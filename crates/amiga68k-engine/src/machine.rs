@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use crate::libtable::{write_slot, Dispatch, LibraryBuilder};
-use crate::{exec, intuition, Refusal};
+use crate::{dos, exec, intuition, memory, process, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
 use retro_hunk::Loaded;
@@ -15,6 +15,8 @@ use retro_m68k::{Cpu, Host, RunStats};
 pub const EXEC_BASE: u32 = 0x1000;
 pub const INTUITION_BASE: u32 = 0x2000;
 pub const GRAPHICS_BASE: u32 = 0x3000;
+/// dos.library's 160 vectors need ~1 KiB below the base; 0x5000 leaves graphics' Library struct room above 0x3000.
+pub const DOS_BASE: u32 = 0x5000;
 pub const EXIT_SLOT: u32 = 0x500;
 /// Bases for libraries opened on demand (OpenLibrary of a known name), each in its own 4 KiB stride: the largest
 /// known table (graphics, 186 functions) needs ~1.2 KiB below its base, the Library struct 34 bytes above it.
@@ -23,6 +25,13 @@ const DYNAMIC_LIB_STRIDE: u32 = 0x1000;
 const DYNAMIC_LIB_END: u32 = 0x8_0000;
 pub const LOAD_BASE: u32 = 0x10000;
 pub const STACK_TOP: u32 = 0x20_0000;
+/// The program's stack: AmigaDOS's default CLI stack is 4 KiB; real programs ask for more, so 64 KiB.
+pub const STACK_SIZE: u32 = 0x1_0000;
+/// The guest heap: everything above the stack, to the end of the 16 MiB guest RAM.
+pub const HEAP_START: u32 = STACK_TOP;
+pub const HEAP_END: u32 = 0x100_0000;
+/// The CLI argument line a program gets when nothing is passed: AmigaDOS always ends it with a newline.
+pub const EMPTY_ARGS: &str = "\n";
 const FIRST_HANDLE: u32 = 0x8000;
 
 pub struct LibInfo { pub name: &'static str, pub base: u32, pub open_count: u32 }
@@ -40,6 +49,10 @@ pub struct Amiga<U: GuestUi> {
     pub refused: Vec<String>,
     /// Census mode: the first call to an unimplemented function halts the guest (the run's last refusal names it).
     pub stop_on_unimplemented: bool,
+    /// The guest heap AllocMem/AllocVec serve from (bookkeeping host-side).
+    pub heap: memory::Heap,
+    /// What the program wrote to its console.
+    pub console: dos::Console,
     next_lib_base: u32,
 }
 
@@ -50,11 +63,36 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), next_handle: FIRST_HANDLE, log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES,
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), console: Default::default(),
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
             .func(exec::LVO_CLOSE_LIBRARY, "CloseLibrary", exec::close_library::<U>)
+            .func(process::LVO_FIND_TASK, "FindTask", process::find_task::<U>)
+            .func(exec::LVO_OLD_OPEN_LIBRARY, "OldOpenLibrary", exec::old_open_library::<U>)
+            .func(memory::LVO_ALLOC_MEM, "AllocMem", memory::alloc_mem::<U>)
+            .func(memory::LVO_FREE_MEM, "FreeMem", memory::free_mem::<U>)
+            .func(memory::LVO_ALLOC_VEC, "AllocVec", memory::alloc_vec::<U>)
+            .func(memory::LVO_FREE_VEC, "FreeVec", memory::free_vec::<U>)
+            .func(memory::LVO_AVAIL_MEM, "AvailMem", memory::avail_mem::<U>)
+            .func(memory::LVO_COPY_MEM, "CopyMem", memory::copy_mem::<U>)
+            .func(memory::LVO_FORBID, "Forbid", memory::forbid::<U>)
+            .func(memory::LVO_PERMIT, "Permit", memory::permit::<U>)
+            .func(memory::LVO_SET_SIGNAL, "SetSignal", memory::set_signal::<U>)
+            .install(&mut a.mem, &mut a.dispatch)?;
+        LibraryBuilder::new("dos.library", DOS_BASE)
+            .func(dos::LVO_READ, "Read", dos::read::<U>)
+            .func(dos::LVO_WRITE, "Write", dos::write::<U>)
+            .func(dos::LVO_INPUT, "Input", dos::input::<U>)
+            .func(dos::LVO_OUTPUT, "Output", dos::output::<U>)
+            .func(dos::LVO_IO_ERR, "IoErr", dos::io_err::<U>)
+            .func(dos::LVO_DELAY, "Delay", dos::delay::<U>)
+            .func(dos::LVO_FPUTS, "FPuts", dos::fputs::<U>)
+            .func(dos::LVO_FLUSH, "Flush", dos::flush::<U>)
+            .func(dos::LVO_SET_IO_ERR, "SetIoErr", dos::set_io_err::<U>)
+            .func(dos::LVO_CLI, "Cli", dos::cli::<U>)
+            .func(dos::LVO_GET_PROGRAM_NAME, "GetProgramName", dos::get_program_name::<U>)
+            .func(dos::LVO_PUT_STR, "PutStr", dos::put_str::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("intuition.library", INTUITION_BASE)
             .func(intuition::LVO_OPEN_WINDOW, "OpenWindow", intuition::open_window::<U>)
@@ -65,7 +103,7 @@ impl<U: GuestUi> Amiga<U> {
         LibraryBuilder::new("graphics.library", GRAPHICS_BASE)
             .stub(-240, "Move")
             .install(&mut a.mem, &mut a.dispatch)?;
-        for (name, base) in [("exec.library", EXEC_BASE), ("intuition.library", INTUITION_BASE), ("graphics.library", GRAPHICS_BASE)] {
+        for (name, base) in [("exec.library", EXEC_BASE), ("dos.library", DOS_BASE), ("intuition.library", INTUITION_BASE), ("graphics.library", GRAPHICS_BASE)] {
             a.libs.push(LibInfo { name, base, open_count: 0 });
         }
         write_slot(&mut a.mem, EXIT_SLOT).map_err(Refusal::mem("exit slot"))?;
@@ -93,7 +131,12 @@ impl<U: GuestUi> Amiga<U> {
     pub fn run_hunk(&mut self, file: &[u8], max_insns: u64) -> Result<RunReport, String> {
         let loaded = retro_hunk::load(&mut self.mem, file, LOAD_BASE).map_err(|e| e.to_string())?;
         self.mem.write_u32(STACK_TOP - 4, EXIT_SLOT).map_err(|e| e.to_string())?; // return address for the final rts
-        let stats = retro_m68k::run(self, loaded.entry, STACK_TOP - 4, max_insns);
+        process::setup(&mut self.mem, EXEC_BASE, STACK_TOP - STACK_SIZE, STACK_TOP, "program", EMPTY_ARGS).map_err(|r| r.0)?;
+        dos::setup(&mut self.mem).map_err(|r| r.0)?;
+        // An AmigaDOS CLI entry: A0 = the argument line, D0 = its length.
+        let regs = [(retro_m68k::REG_A0, process::ARGS), (retro_m68k::REG_D0, EMPTY_ARGS.len() as u32)];
+        let mut ctx = retro_m68k::start_with(self, loaded.entry, STACK_TOP - 4, &regs);
+        let stats = retro_m68k::resume(self, &mut ctx, max_insns);
         Ok(RunReport { stats, loaded })
     }
 }

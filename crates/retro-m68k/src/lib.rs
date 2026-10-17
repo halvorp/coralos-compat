@@ -41,8 +41,8 @@ extern "C" {
     fn m68k_get_context(dst: *mut u8) -> u32;
     fn m68k_set_context(src: *mut u8);
 }
-const REG_D0: u32 = 0;
-const REG_A0: u32 = 8;
+pub const REG_D0: u32 = 0;
+pub const REG_A0: u32 = 8;
 const REG_PC: u32 = 16;
 const CPU_68020: u32 = 4;
 
@@ -101,7 +101,11 @@ pub struct CpuContext(Vec<u8>);
 
 /// Reset a CPU (a 68020) to start at `entry` with stack `sp`, executing nothing, and return its context. Address 4
 /// doubles as the reset PC vector and AbsExecBase, so it is saved and restored around the reset.
-pub fn start<H: Host>(host: &mut H, entry: u32, sp: u32) -> CpuContext {
+pub fn start<H: Host>(host: &mut H, entry: u32, sp: u32) -> CpuContext { start_with(host, entry, sp, &[]) }
+
+/// [`start`], then set the given registers (`(REG_*, value)`, D0..D7 = 0..7, A0..A7 = 8..15) in the new context:
+/// an AmigaDOS CLI program is entered with A0 = its argument string and D0 = that string's length.
+pub fn start_with<H: Host>(host: &mut H, entry: u32, sp: u32, regs: &[(u32, u32)]) -> CpuContext {
     let _g = Guard::take();
     let saved4 = host.mem().read_u32(4).unwrap_or(0);
     let _ = host.mem().write_u32(0, sp);
@@ -114,6 +118,7 @@ pub fn start<H: Host>(host: &mut H, entry: u32, sp: u32) -> CpuContext {
         m68k_pulse_reset();
     });
     let _ = host.mem().write_u32(4, saved4);
+    for &(r, v) in regs { unsafe { m68k_set_reg(r, v) } }
     let mut ctx = CpuContext(vec![0u8; unsafe { m68k_context_size() } as usize]);
     unsafe { m68k_get_context(ctx.0.as_mut_ptr()) };
     ctx

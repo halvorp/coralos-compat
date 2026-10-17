@@ -7,6 +7,7 @@ use retro_m68k::Cpu;
 
 pub const LVO_OPEN_LIBRARY: i32 = -552;
 pub const LVO_CLOSE_LIBRARY: i32 = -414;
+pub const LVO_OLD_OPEN_LIBRARY: i32 = -408;
 
 /// a1 = library name, d0 = minimum version. Returns the base, or 0 for an unknown library
 /// (a legitimate NULL, as on a real machine, so not a refusal).
@@ -34,4 +35,10 @@ pub fn close_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
     if l.open_count == 0 { return Err(Refusal(format!("CloseLibrary: {} closed more times than opened", l.name))); }
     l.open_count -= 1;
     Ok(format!("[exec] CloseLibrary {} base={base:#x}", l.name))
+}
+
+/// OldOpenLibrary(a1 = name): OpenLibrary with no version requirement (exec 1.x; C startups still call it).
+pub fn old_open_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    cpu.set_d0(0);
+    open_library(a, cpu)
 }

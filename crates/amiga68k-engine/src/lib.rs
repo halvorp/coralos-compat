@@ -14,12 +14,15 @@
 extern crate alloc;
 use alloc::string::String;
 use alloc::format;
+pub mod dos;
 pub mod exec;
 pub mod fixture;
 pub mod intuition;
 pub mod libtable;
 pub mod lvo_names;
 pub mod machine;
+pub mod memory;
+pub mod process;
 mod menu;
 
 pub use machine::{Amiga, RunReport};
