@@ -2,7 +2,7 @@
 name = "amiga68k-engine"
 version.workspace = true
 edition.workspace = true
-license = "GPL-2.0-or-later"  # links retro-m68k; see NOTICE
+license.workspace = true
 description = "AmigaOS 68k personality: fake ExecBase, LVO trap bridge, Intuition handlers onto GuestUi"
 
 [dependencies]

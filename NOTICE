@@ -7,16 +7,14 @@ Musashi 4.60, Copyright Karl Stenerud, MIT-style permission notice kept in each 
   m68kconf.h   (MODIFIED by us: ILLEGAL and per-instruction callbacks are set to
                 retro_illg_hook / retro_instr_hook, plus one extern prototype)
 
-Files from the MAME project bundled with Musashi:
-  m68kfpu.c   (68881/68040 FPU, part of Musashi; header carries no separate licence text)
-  m68kmmu.h   (PMMU, R. Belmont, "Copyright Nicola Salmoria and the MAME Team; see
-               mamedev.org for licensing and usage restrictions")
-  Distributed here under the MAME project's licence, GPL-2.0-or-later (LICENSES/GPL-2.0.txt).
-  This makes crates/retro-m68k and every binary linking it GPL-2.0-or-later as a whole.
+Removed 2026-10-17: Musashi's MAME-derived m68kfpu.c and m68kmmu.h (MAME-team copyright, MAME licence). They are
+replaced by crates/retro-m68k/vendor/m68k_nofpu.h (ours, MIT): the engines run a 68020 with no FPU and no PMMU, which
+traps those opcodes (F-line) exactly as the stubs do. m68kcpu.c is MODIFIED by us at its include of those two files.
 
 SoftFloat Release 2b, John R. Hauser (via MAME packaging), own terms in its README:
   softfloat/README.txt  softfloat/mamesf.h  softfloat/milieu.h  softfloat/softfloat.c
   softfloat/softfloat.h  softfloat/softfloat-macros  softfloat/softfloat-specialize
+  (mamesf.h is SoftFloat's porting/typedef header as packaged by MAME; SoftFloat terms.)
   Terms (read 2026-10-17, softfloat.c header): derivative works are acceptable, even commercially, if the
   source carries prominent notice that it is derivative and retains the four legal paragraphs. The files
   are unmodified and keep those paragraphs.

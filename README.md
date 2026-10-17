@@ -16,5 +16,4 @@ The crates are `no_std` + `alloc`, so the same code runs on the host and in Cora
 `cargo test --workspace` runs everything. `cargo run -p amiga68k-engine --bin amiga68k-run -- --fixture`
 runs the built-in demo program and prints the recorded UI calls.
 
-Licensing: see `LICENSES.md`. Our code is MIT; `retro-m68k` bundles MAME-derived files distributed under
-GPL-2.0-or-later, so anything that links it (the engines) is GPL-2.0-or-later as a whole.
+Licensing: MIT (our code, Musashi) plus SoftFloat's own permissive terms; see `LICENSES.md` and `NOTICE`.

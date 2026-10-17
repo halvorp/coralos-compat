@@ -48,8 +48,7 @@ extern void m68ki_build_opcode_table(void);
 #include "m68kops.h"
 #include "m68kcpu.h"
 
-#include "m68kfpu.c"
-#include "m68kmmu.h" // uses some functions from m68kfpu.c which are static !
+#include "m68k_nofpu.h" /* coralos-compat: replaces m68kfpu.c + m68kmmu.h (MAME-derived); 68020, no FPU/PMMU */
 
 /* ======================================================================== */
 /* ================================= DATA ================================= */
