@@ -14,6 +14,7 @@
 extern crate alloc;
 use alloc::string::String;
 use alloc::format;
+pub mod devices;
 pub mod dos;
 pub mod exec;
 pub mod fixture;
@@ -22,6 +23,7 @@ pub mod libtable;
 pub mod lvo_names;
 pub mod machine;
 pub mod memory;
+pub mod ports;
 pub mod process;
 mod menu;
 

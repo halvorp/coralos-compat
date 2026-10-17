@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use crate::libtable::{write_slot, Dispatch, LibraryBuilder};
-use crate::{dos, exec, intuition, memory, process, Refusal};
+use crate::{devices, dos, exec, intuition, memory, ports, process, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
 use retro_hunk::Loaded;
@@ -79,6 +79,14 @@ impl<U: GuestUi> Amiga<U> {
             .func(memory::LVO_FORBID, "Forbid", memory::forbid::<U>)
             .func(memory::LVO_PERMIT, "Permit", memory::permit::<U>)
             .func(memory::LVO_SET_SIGNAL, "SetSignal", memory::set_signal::<U>)
+            .func(ports::LVO_ALLOC_SIGNAL, "AllocSignal", ports::alloc_signal::<U>)
+            .func(ports::LVO_FREE_SIGNAL, "FreeSignal", ports::free_signal::<U>)
+            .func(ports::LVO_CREATE_MSG_PORT, "CreateMsgPort", ports::create_msg_port::<U>)
+            .func(ports::LVO_DELETE_MSG_PORT, "DeleteMsgPort", ports::delete_msg_port::<U>)
+            .func(ports::LVO_CREATE_IO_REQUEST, "CreateIORequest", ports::create_io_request::<U>)
+            .func(ports::LVO_DELETE_IO_REQUEST, "DeleteIORequest", ports::delete_io_request::<U>)
+            .func(devices::LVO_OPEN_DEVICE, "OpenDevice", devices::open_device::<U>)
+            .func(devices::LVO_CLOSE_DEVICE, "CloseDevice", devices::close_device::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("dos.library", DOS_BASE)
             .func(dos::LVO_READ, "Read", dos::read::<U>)
