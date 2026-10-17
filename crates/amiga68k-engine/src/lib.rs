@@ -25,6 +25,7 @@ pub mod machine;
 pub mod memory;
 pub mod ports;
 pub mod process;
+pub mod screen;
 mod menu;
 
 pub use machine::{Amiga, RunReport};

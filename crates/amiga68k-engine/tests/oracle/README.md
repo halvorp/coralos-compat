@@ -10,3 +10,7 @@ at its `Wait` call:
   mp_SigTask = the program's task, an empty mp_MsgList (lh_Head = &lh_Tail, lh_TailPred = &lh_Head, lh_Type 0).
 
 Pointers are AROS's own addresses: compare offsets, field values and invariants, not absolute pointers.
+
+- `screen.bin` (from `scrlock.s`: LockPubScreen(NULL), stopped before UnlockPubScreen): the 346-byte `struct Screen`
+  of the AROS Workbench screen. Left/Top/Width/Height 0/0/640/256, BarHeight 14, BarVBorder 1, BarHBorder 5,
+  MenuVBorder 2, MenuHBorder 4, WBorTop/Left/Right/Bottom 6/4/4/4, Font -> TextAttr { "topaz.font", ta_YSize 8 }.

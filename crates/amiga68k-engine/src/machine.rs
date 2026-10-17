@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use crate::libtable::{write_slot, Dispatch, LibraryBuilder};
-use crate::{devices, dos, exec, intuition, memory, ports, process, Refusal};
+use crate::{devices, dos, exec, intuition, memory, ports, process, screen, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
 use retro_hunk::Loaded;
@@ -53,6 +53,8 @@ pub struct Amiga<U: GuestUi> {
     pub heap: memory::Heap,
     /// What the program wrote to its console.
     pub console: dos::Console,
+    /// Outstanding LockPubScreen locks on the one public screen.
+    pub screen_locks: u32,
     next_lib_base: u32,
 }
 
@@ -63,7 +65,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), next_handle: FIRST_HANDLE, log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), console: Default::default(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), console: Default::default(), screen_locks: 0,
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
@@ -107,6 +109,8 @@ impl<U: GuestUi> Amiga<U> {
             .func(intuition::LVO_CLOSE_WINDOW, "CloseWindow", intuition::close_window::<U>)
             .func(intuition::LVO_SET_MENU_STRIP, "SetMenuStrip", intuition::set_menu_strip::<U>)
             .func(intuition::LVO_CLEAR_MENU_STRIP, "ClearMenuStrip", intuition::clear_menu_strip::<U>)
+            .func(screen::LVO_LOCK_PUB_SCREEN, "LockPubScreen", screen::lock_pub_screen::<U>)
+            .func(screen::LVO_UNLOCK_PUB_SCREEN, "UnlockPubScreen", screen::unlock_pub_screen::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("graphics.library", GRAPHICS_BASE)
             .stub(-240, "Move")
@@ -141,6 +145,7 @@ impl<U: GuestUi> Amiga<U> {
         self.mem.write_u32(STACK_TOP - 4, EXIT_SLOT).map_err(|e| e.to_string())?; // return address for the final rts
         process::setup(&mut self.mem, EXEC_BASE, STACK_TOP - STACK_SIZE, STACK_TOP, "program", EMPTY_ARGS).map_err(|r| r.0)?;
         dos::setup(&mut self.mem).map_err(|r| r.0)?;
+        screen::setup(&mut self.mem).map_err(|r| r.0)?;
         // An AmigaDOS CLI entry: A0 = the argument line, D0 = its length.
         let regs = [(retro_m68k::REG_A0, process::ARGS), (retro_m68k::REG_D0, EMPTY_ARGS.len() as u32)];
         let mut ctx = retro_m68k::start_with(self, loaded.entry, STACK_TOP - 4, &regs);
