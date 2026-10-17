@@ -12,6 +12,8 @@
 //! [`Host`] passed to [`run`].
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+use alloc::vec;
+use alloc::vec::Vec;
 use retro_guest_mem::GuestMem;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -35,6 +37,9 @@ extern "C" {
     fn m68k_end_timeslice();
     fn m68k_get_reg(ctx: *mut u8, r: u32) -> u32;
     fn m68k_set_reg(r: u32, v: u32);
+    fn m68k_context_size() -> u32;
+    fn m68k_get_context(dst: *mut u8) -> u32;
+    fn m68k_set_context(src: *mut u8);
 }
 const REG_D0: u32 = 0;
 const REG_A0: u32 = 8;
@@ -51,7 +56,7 @@ pub trait Host {
 }
 
 /// Register access and run control, valid only inside a callback.
-pub struct Cpu { halted: bool, insns: u64, bus_faults: u32 }
+pub struct Cpu { halted: bool, blocked: bool, insns: u64, bus_faults: u32 }
 
 impl Cpu {
     pub fn dreg(&self, n: u32) -> u32 { debug_assert!(n < 8); unsafe { m68k_get_reg(core::ptr::null_mut(), REG_D0 + n) } }
@@ -60,6 +65,10 @@ impl Cpu {
     pub fn pc(&self) -> u32 { unsafe { m68k_get_reg(core::ptr::null_mut(), REG_PC) } }
     /// Stop after the current instruction.
     pub fn halt(&mut self) { self.halted = true; unsafe { m68k_end_timeslice() } }
+    /// Stop after the current instruction WITHOUT ending the program: the trapped call is left unfinished, and the next
+    /// [`resume`] continues at the instruction after the trap (the library slot's RTS), so the call returns then with
+    /// whatever D0 the host set before resuming. This is how a guest `Wait` with nothing pending suspends.
+    pub fn block(&mut self) { self.blocked = true; unsafe { m68k_end_timeslice() } }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +78,8 @@ pub struct RunStats {
     pub bus_faults: u32,
     /// True if stopped by [`Cpu::halt`], false if the instruction cap was hit.
     pub halted: bool,
+    /// True if stopped by [`Cpu::block`]: the guest is suspended mid-call and the next [`resume`] continues it.
+    pub blocked: bool,
 }
 
 type Active = Option<(*mut (dyn Host + 'static), *mut Cpu)>;
@@ -83,30 +94,63 @@ fn with<R>(f: impl FnOnce(&mut dyn Host, &mut Cpu) -> R) -> R {
     unsafe { f(&mut *h, &mut *c) }
 }
 
-/// Run from `entry` with initial stack `sp` until [`Cpu::halt`] or `max_insns` (counted by
-/// the per-instruction hook). The CPU is a 68020. Address 4 doubles as the reset PC vector
-/// and AbsExecBase, so it is saved and restored around the reset.
-pub fn run<H: Host>(host: &mut H, entry: u32, sp: u32, max_insns: u64) -> RunStats {
+/// One guest CPU's saved registers (Musashi's context). Musashi has ONE live CPU per process, so each guest machine
+/// keeps its own context and [`resume`] swaps it in under CPU_LOCK: two machines (or two parallel tests) can never
+/// run on, or reset, each other's registers between calls.
+pub struct CpuContext(Vec<u8>);
+
+/// Reset a CPU (a 68020) to start at `entry` with stack `sp`, executing nothing, and return its context. Address 4
+/// doubles as the reset PC vector and AbsExecBase, so it is saved and restored around the reset.
+pub fn start<H: Host>(host: &mut H, entry: u32, sp: u32) -> CpuContext {
     let _g = Guard::take();
-    let mut cpu = Cpu { halted: false, insns: 0, bus_faults: 0 };
-    let hp: *mut (dyn Host + '_) = host;
-    // SAFETY: lifetime erased only while ACTIVE is set; cleared before returning.
-    let hp: *mut (dyn Host + 'static) = unsafe { core::mem::transmute(hp) };
-    unsafe { *ACTIVE.0.get() = Some((hp, &mut cpu)); }
     let saved4 = host.mem().read_u32(4).unwrap_or(0);
     let _ = host.mem().write_u32(0, sp);
     let _ = host.mem().write_u32(4, entry);
-    unsafe {
+    let mut cpu = Cpu { halted: false, blocked: false, insns: 0, bus_faults: 0 };
+    // The reset reads the vectors through the memory callbacks, so ACTIVE must be set for it too.
+    activate(host, &mut cpu, |_| unsafe {
         m68k_init();
         m68k_set_cpu_type(CPU_68020);
         m68k_pulse_reset();
-    }
+    });
     let _ = host.mem().write_u32(4, saved4);
-    while !cpu.halted && cpu.insns < max_insns {
-        unsafe { m68k_execute(1000) };
-    }
+    let mut ctx = CpuContext(vec![0u8; unsafe { m68k_context_size() } as usize]);
+    unsafe { m68k_get_context(ctx.0.as_mut_ptr()) };
+    ctx
+}
+
+/// Execute the machine whose registers are `ctx` until [`Cpu::halt`], [`Cpu::block`] or `max_insns` (counted by the
+/// per-instruction hook). No reset: a guest stopped by `block` continues where it stopped.
+pub fn resume<H: Host>(host: &mut H, ctx: &mut CpuContext, max_insns: u64) -> RunStats {
+    let _g = Guard::take();
+    unsafe { m68k_set_context(ctx.0.as_mut_ptr()) };
+    let mut cpu = Cpu { halted: false, blocked: false, insns: 0, bus_faults: 0 };
+    activate(host, &mut cpu, |c| {
+        while !c.halted && !c.blocked && c.insns < max_insns {
+            unsafe { m68k_execute(1000) };
+        }
+    });
+    unsafe { m68k_get_context(ctx.0.as_mut_ptr()) };
+    RunStats { insns: cpu.insns, bus_faults: cpu.bus_faults, halted: cpu.halted, blocked: cpu.blocked }
+}
+
+/// Run from `entry` with initial stack `sp` until [`Cpu::halt`], [`Cpu::block`] or `max_insns`: [`start`] + [`resume`].
+pub fn run<H: Host>(host: &mut H, entry: u32, sp: u32, max_insns: u64) -> RunStats {
+    let mut ctx = start(host, entry, sp);
+    resume(host, &mut ctx, max_insns)
+}
+
+/// Set ACTIVE to (`host`, `cpu`) for the duration of `f` (the only window in which Musashi may call back), then clear
+/// it. Called with CPU_LOCK held.
+fn activate<H: Host>(host: &mut H, cpu: &mut Cpu, f: impl FnOnce(&mut Cpu)) {
+    let hp: *mut (dyn Host + '_) = host;
+    // SAFETY: lifetime erased only while ACTIVE is set; cleared before returning.
+    let hp: *mut (dyn Host + 'static) = unsafe { core::mem::transmute(hp) };
+    let cp: *mut Cpu = cpu;
+    unsafe { *ACTIVE.0.get() = Some((hp, cp)); }
+    // SAFETY: Musashi reaches `cpu` only through ACTIVE inside `f`, never concurrently with `f`'s own use of it.
+    f(unsafe { &mut *cp });
     unsafe { *ACTIVE.0.get() = None; }
-    RunStats { insns: cpu.insns, bus_faults: cpu.bus_faults, halted: cpu.halted }
 }
 
 #[no_mangle] pub extern "C" fn retro_instr_hook(_pc: u32) { with(|_, c| c.insns += 1) }
