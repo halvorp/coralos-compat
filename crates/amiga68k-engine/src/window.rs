@@ -142,10 +142,12 @@ pub fn open_window_tag_list<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Resu
 /// CloseWindow(a0 = window): the native window closes; the UserPort, its signal and the struct go back.
 pub fn close_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let win = cpu.areg(0);
-    let native = a.windows.remove(&win).ok_or_else(|| Refusal(format!("CloseWindow: {win:#x} is not an open window")))?;
+    let native = *a.windows.get(&win).ok_or_else(|| Refusal(format!("CloseWindow: {win:#x} is not an open window")))?;
+    let port = a.mem.read_u32(win + WD_USERPORT).map_err(Refusal::mem("Window.UserPort"))?;
+    if port != 0 { a.drop_window_msgs(win, port)?; }
+    a.windows.remove(&win);
     a.ui.close_window(native).map_err(Refusal::ui)?;
     crate::gadtools::detach(a, win);
-    let port = a.mem.read_u32(win + WD_USERPORT).map_err(Refusal::mem("Window.UserPort"))?;
     if port != 0 {
         let bit = a.mem.read_u8(port + 15).map_err(Refusal::mem("mp_SigBit"))? as i32;
         ports::release_signal_bit(a, bit)?;

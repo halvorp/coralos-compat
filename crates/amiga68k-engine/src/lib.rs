@@ -17,6 +17,7 @@ use alloc::format;
 pub mod devices;
 pub mod dos;
 pub mod exec;
+pub mod exec_wait;
 pub mod gadtools;
 pub mod graphics;
 pub mod fixture;
@@ -28,12 +29,15 @@ pub mod memory;
 pub mod ports;
 pub mod process;
 pub mod rdargs;
+pub mod run;
 pub mod screen;
 pub mod tags;
+pub mod timer;
 pub mod window;
 mod menu;
 
 pub use machine::{Amiga, RunReport};
+pub use run::{Delivered, Step};
 
 /// A handler refused a call (bad guest pointer, unsupported feature, UI refusal).
 #[derive(Debug, Clone, PartialEq, Eq)]

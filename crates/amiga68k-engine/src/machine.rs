@@ -1,12 +1,11 @@
 //! The Amiga machine: guest RAM + fake ExecBase + dispatch table + a [`GuestUi`].
 use alloc::vec::Vec;
 use alloc::vec;
-use alloc::string::ToString;
 use alloc::string::String;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use crate::libtable::{write_slot, Dispatch, LibraryBuilder};
-use crate::{devices, dos, exec, gadtools, graphics, intuition, memory, ports, process, rdargs, screen, window, Refusal};
+use crate::{devices, dos, exec, exec_wait, gadtools, graphics, intuition, memory, ports, process, rdargs, screen, timer, window, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
 use retro_hunk::Loaded;
@@ -41,7 +40,8 @@ pub struct Amiga<U: GuestUi> {
     pub mem: GuestMem,
     pub ui: U,
     pub libs: Vec<LibInfo>,
-    pub(crate) windows: BTreeMap<u32, UiObjectRef>,
+    /// Open guest windows: guest struct Window address -> the native window.
+    pub windows: BTreeMap<u32, UiObjectRef>,
     dispatch: Dispatch<U>,
     /// One line per successful bridged call, in order.
     pub log: Vec<String>,
@@ -59,6 +59,15 @@ pub struct Amiga<U: GuestUi> {
     pub rdargs: Vec<(u32, u32, u32, bool)>,
     /// GadTools gadgets by guest address (gadtools.rs).
     pub gadgets: BTreeMap<u32, gadtools::GadgetInfo>,
+    /// What a blocked guest waits for (exec_wait.rs); None = runnable.
+    pub waiting: Option<exec_wait::Waiting>,
+    /// The virtual clock, microseconds (timer.rs), and the pending TR_ADDREQUEST timers: (deadline, IORequest).
+    pub clock_us: u64,
+    pub timers: Vec<(u64, u32)>,
+    /// Messages the ENGINE sent (IntuiMessages): address -> delivered to the guest (GetMsg) yet?
+    pub engine_msgs: BTreeMap<u32, bool>,
+    /// The running guest's CPU context (run.rs).
+    pub(crate) ctx: Option<retro_m68k::CpuContext>,
     next_lib_base: u32,
 }
 
@@ -70,6 +79,7 @@ impl<U: GuestUi> Amiga<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(),
+            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None,
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
@@ -90,6 +100,17 @@ impl<U: GuestUi> Amiga<U> {
             .func(ports::LVO_FREE_SIGNAL, "FreeSignal", ports::free_signal::<U>)
             .func(ports::LVO_CREATE_MSG_PORT, "CreateMsgPort", ports::create_msg_port::<U>)
             .func(ports::LVO_DELETE_MSG_PORT, "DeleteMsgPort", ports::delete_msg_port::<U>)
+            .func(exec_wait::LVO_SIGNAL, "Signal", exec_wait::signal::<U>)
+            .func(exec_wait::LVO_WAIT, "Wait", exec_wait::wait::<U>)
+            .func(exec_wait::LVO_PUT_MSG, "PutMsg", exec_wait::put_msg_lvo::<U>)
+            .func(exec_wait::LVO_GET_MSG, "GetMsg", exec_wait::get_msg::<U>)
+            .func(exec_wait::LVO_REPLY_MSG, "ReplyMsg", exec_wait::reply_msg::<U>)
+            .func(exec_wait::LVO_WAIT_PORT, "WaitPort", exec_wait::wait_port::<U>)
+            .func(timer::LVO_DO_IO, "DoIO", timer::do_io::<U>)
+            .func(timer::LVO_SEND_IO, "SendIO", timer::send_io::<U>)
+            .func(timer::LVO_CHECK_IO, "CheckIO", timer::check_io::<U>)
+            .func(timer::LVO_WAIT_IO, "WaitIO", timer::wait_io::<U>)
+            .func(timer::LVO_ABORT_IO, "AbortIO", timer::abort_io::<U>)
             .func(ports::LVO_FIND_SEMAPHORE, "FindSemaphore", ports::find_semaphore::<U>)
             .func(ports::LVO_CREATE_IO_REQUEST, "CreateIORequest", ports::create_io_request::<U>)
             .func(ports::LVO_DELETE_IO_REQUEST, "DeleteIORequest", ports::delete_io_request::<U>)
@@ -153,21 +174,6 @@ impl<U: GuestUi> Amiga<U> {
         LibraryBuilder::new(name, base).install(&mut self.mem, &mut self.dispatch)?;
         self.libs.push(LibInfo { name, base, open_count: 1 });
         Ok(base)
-    }
-
-
-    /// Load a Hunk executable and run it to its final RTS (to the exit slot) or `max_insns`.
-    pub fn run_hunk(&mut self, file: &[u8], max_insns: u64) -> Result<RunReport, String> {
-        let loaded = retro_hunk::load(&mut self.mem, file, LOAD_BASE).map_err(|e| e.to_string())?;
-        self.mem.write_u32(STACK_TOP - 4, EXIT_SLOT).map_err(|e| e.to_string())?; // return address for the final rts
-        process::setup(&mut self.mem, EXEC_BASE, STACK_TOP - STACK_SIZE, STACK_TOP, "program", EMPTY_ARGS).map_err(|r| r.0)?;
-        dos::setup(&mut self.mem).map_err(|r| r.0)?;
-        screen::setup(&mut self.mem).map_err(|r| r.0)?;
-        // An AmigaDOS CLI entry: A0 = the argument line, D0 = its length.
-        let regs = [(retro_m68k::REG_A0, process::ARGS), (retro_m68k::REG_D0, EMPTY_ARGS.len() as u32)];
-        let mut ctx = retro_m68k::start_with(self, loaded.entry, STACK_TOP - 4, &regs);
-        let stats = retro_m68k::resume(self, &mut ctx, max_insns);
-        Ok(RunReport { stats, loaded })
     }
 }
 

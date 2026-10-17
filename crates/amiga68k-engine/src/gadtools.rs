@@ -153,20 +153,10 @@ pub fn free_gadgets<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     Ok(format!("[gadtools] FreeGadgets ({n} freed)"))
 }
 
-/// GT_GetIMsg(a0 = UserPort): the next IntuiMessage, or NULL. Nothing delivers IDCMP messages yet (slice 2,
-/// docs/SLICE-2-ENGINE.md), so an empty port is the only case, and a non-empty one is refused rather than misread.
-pub fn get_imsg<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let port = cpu.areg(0);
-    let head = a.mem.read_u32(port + 20).map_err(Refusal::mem("mp_MsgList.lh_Head"))?;
-    if head != port + 24 { return Err(Refusal("GT_GetIMsg: a queued message (IDCMP delivery is slice 2)".into())); }
-    cpu.set_d0(0);
-    Ok("[gadtools] GT_GetIMsg -> NULL".into())
-}
-
-pub fn reply_imsg<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    if cpu.areg(1) != 0 { return Err(Refusal("GT_ReplyIMsg: a message (IDCMP delivery is slice 2)".into())); }
-    Ok("[gadtools] GT_ReplyIMsg NULL".into())
-}
+/// GT_GetIMsg(a0 = UserPort) / GT_ReplyIMsg(a1 = message): exactly exec's GetMsg / ReplyMsg for the gadgets
+/// bridged so far (GadTools only filters messages for kinds that need it: sliders, listviews).
+pub fn get_imsg<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { crate::exec_wait::get_msg(a, cpu) }
+pub fn reply_imsg<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { crate::exec_wait::reply_msg(a, cpu) }
 
 /// GT_RefreshWindow / GT_BeginRefresh / GT_EndRefresh: the native window draws itself; nothing to do.
 pub fn refresh<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {

@@ -101,6 +101,19 @@ fn with<R>(f: impl FnOnce(&mut dyn Host, &mut Cpu) -> R) -> R {
 /// run on, or reset, each other's registers between calls.
 pub struct CpuContext(Vec<u8>);
 
+impl CpuContext {
+    /// Set register `r` (REG_D0.., REG_A0..) in this saved context: how a host completes a blocked call (the D0 a guest
+    /// Wait returns) before resuming it.
+    pub fn set_reg(&mut self, r: u32, v: u32) {
+        let _g = Guard::take();
+        unsafe {
+            m68k_set_context(self.0.as_mut_ptr());
+            m68k_set_reg(r, v);
+            m68k_get_context(self.0.as_mut_ptr());
+        }
+    }
+}
+
 /// Reset a CPU (a 68020) to start at `entry` with stack `sp`, executing nothing, and return its context. Address 4
 /// doubles as the reset PC vector and AbsExecBase, so it is saved and restored around the reset.
 pub fn start<H: Host>(host: &mut H, entry: u32, sp: u32) -> CpuContext { start_with(host, entry, sp, &[]) }
