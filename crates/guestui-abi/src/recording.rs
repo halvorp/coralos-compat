@@ -13,6 +13,7 @@ pub enum UiCall {
     ClearMenuStrip(UiObjectRef),
     AddControl(UiObjectRef, ControlModel),
     RemoveControl(UiObjectRef, UiObjectRef),
+    SetControl(UiObjectRef, UiObjectRef, ControlValue),
 }
 
 #[derive(Default)]
@@ -74,6 +75,12 @@ impl GuestUi for RecordingGuestUi {
         }
         self.calls.push(UiCall::AddControl(win, control));
         Ok(self.alloc())
+    }
+    fn set_control(&mut self, win: UiObjectRef, control: UiObjectRef, value: ControlValue) -> Result<(), UiRefusal> {
+        self.check(win)?;
+        self.check(control)?;
+        self.calls.push(UiCall::SetControl(win, control, value));
+        Ok(())
     }
     fn remove_control(&mut self, win: UiObjectRef, control: UiObjectRef) -> Result<(), UiRefusal> {
         self.check(win)?;

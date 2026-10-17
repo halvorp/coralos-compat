@@ -13,13 +13,14 @@ fn bridged_sequence_reaches_guestui() {
     let (a, r) = run(&build_hunk(None));
     assert_eq!(a.log, vec![
         "[exec] OpenLibrary name=\"intuition.library\" ver=0 -> 0x2000",
-        "[intuition] OpenWindow left=10 top=20 w=320 h=200 title=\"Hello\" -> handle 0x8000",
-        "[intuition] SetMenuStrip handle=0x8000 menus=1",
-        "[intuition] CloseWindow handle=0x8000",
+        "[intuition] OpenWindow left=10 top=20 w=320 h=200 title=\"Hello\" -> 0x200000",
+        "[intuition] SetMenuStrip handle=0x200000 menus=1",
+        "[intuition] CloseWindow 0x200000",
         "[exec] CloseLibrary intuition.library base=0x2000",
     ]);
     assert!(a.refused.is_empty());
-    assert_eq!(a.mem.read_u32(r.loaded.bases[2]).unwrap(), 0x8000, "OpenWindow d0 stored via reloc'd BSS address");
+    assert_eq!(a.mem.read_u32(r.loaded.bases[2]).unwrap(), 0x200000, "OpenWindow d0 (the guest struct Window) stored via reloc'd BSS address");
+    assert_eq!(a.heap.live_blocks(), 0, "CloseWindow gave the struct Window back");
     assert_eq!(r.stats.bus_faults, 0);
     assert!(r.stats.halted && r.stats.insns > 10 && r.stats.insns < 200, "{}", r.stats.insns);
     assert_eq!(a.libs.iter().find(|l| l.name == "intuition.library").unwrap().open_count, 0);
@@ -32,7 +33,7 @@ fn bridged_sequence_reaches_guestui() {
     assert_eq!(a.ui.calls, vec![
         UiCall::OpenWindow(WindowModel {
             title: "Hello".into(), rect: GuestRect { left: 10, top: 20, width: 320, height: 200 },
-            role: WindowRole::Document, closable: true, resizable: true, token: CallbackToken(0x8000),
+            role: WindowRole::Document, closable: true, resizable: true, token: CallbackToken(0x200000),
         }),
         UiCall::SetMenuStrip(win, MenuModel { menus: vec![Menu {
             title: "Project".into(), enabled: true, items: vec![item("Open", 'O', 0), item("Quit", 'Q', 1)],

@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use crate::libtable::{write_slot, Dispatch, LibraryBuilder};
-use crate::{devices, dos, exec, intuition, memory, ports, process, rdargs, screen, Refusal};
+use crate::{devices, dos, exec, gadtools, graphics, intuition, memory, ports, process, rdargs, screen, window, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
 use retro_hunk::Loaded;
@@ -17,6 +17,8 @@ pub const INTUITION_BASE: u32 = 0x2000;
 pub const GRAPHICS_BASE: u32 = 0x3000;
 /// dos.library's 160 vectors need ~1 KiB below the base; 0x5000 leaves graphics' Library struct room above 0x3000.
 pub const DOS_BASE: u32 = 0x5000;
+/// gadtools.library's 19 vectors fit below 0x7000, above the screen block (screen.rs, 0x6400-0x65FF).
+pub const GADTOOLS_BASE: u32 = 0x7000;
 pub const EXIT_SLOT: u32 = 0x500;
 /// Bases for libraries opened on demand (OpenLibrary of a known name), each in its own 4 KiB stride: the largest
 /// known table (graphics, 186 functions) needs ~1.2 KiB below its base, the Library struct 34 bytes above it.
@@ -32,7 +34,6 @@ pub const HEAP_START: u32 = STACK_TOP;
 pub const HEAP_END: u32 = 0x100_0000;
 /// The CLI argument line a program gets when nothing is passed: AmigaDOS always ends it with a newline.
 pub const EMPTY_ARGS: &str = "\n";
-const FIRST_HANDLE: u32 = 0x8000;
 
 pub struct LibInfo { pub name: &'static str, pub base: u32, pub open_count: u32 }
 
@@ -42,7 +43,6 @@ pub struct Amiga<U: GuestUi> {
     pub libs: Vec<LibInfo>,
     pub(crate) windows: BTreeMap<u32, UiObjectRef>,
     dispatch: Dispatch<U>,
-    next_handle: u32,
     /// One line per successful bridged call, in order.
     pub log: Vec<String>,
     /// Refusals (bad guest pointers, unimplemented LVOs ...), in order.
@@ -57,6 +57,8 @@ pub struct Amiga<U: GuestUi> {
     pub screen_locks: u32,
     /// Live ReadArgs results: (RDArgs, value buffer, its size, RDArgs allocated by ReadArgs).
     pub rdargs: Vec<(u32, u32, u32, bool)>,
+    /// GadTools gadgets by guest address (gadtools.rs).
+    pub gadgets: BTreeMap<u32, gadtools::GadgetInfo>,
     next_lib_base: u32,
 }
 
@@ -66,8 +68,8 @@ impl<U: GuestUi> Amiga<U> {
     pub fn new(ui: U) -> Result<Self, Refusal> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
-            dispatch: BTreeMap::new(), next_handle: FIRST_HANDLE, log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), console: Default::default(), screen_locks: 0, rdargs: vec![],
+            dispatch: BTreeMap::new(), log: vec![], refused: vec![],
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(),
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
@@ -88,6 +90,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(ports::LVO_FREE_SIGNAL, "FreeSignal", ports::free_signal::<U>)
             .func(ports::LVO_CREATE_MSG_PORT, "CreateMsgPort", ports::create_msg_port::<U>)
             .func(ports::LVO_DELETE_MSG_PORT, "DeleteMsgPort", ports::delete_msg_port::<U>)
+            .func(ports::LVO_FIND_SEMAPHORE, "FindSemaphore", ports::find_semaphore::<U>)
             .func(ports::LVO_CREATE_IO_REQUEST, "CreateIORequest", ports::create_io_request::<U>)
             .func(ports::LVO_DELETE_IO_REQUEST, "DeleteIORequest", ports::delete_io_request::<U>)
             .func(devices::LVO_OPEN_DEVICE, "OpenDevice", devices::open_device::<U>)
@@ -110,17 +113,31 @@ impl<U: GuestUi> Amiga<U> {
             .func(rdargs::LVO_FREE_ARGS, "FreeArgs", rdargs::free_args::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("intuition.library", INTUITION_BASE)
-            .func(intuition::LVO_OPEN_WINDOW, "OpenWindow", intuition::open_window::<U>)
-            .func(intuition::LVO_CLOSE_WINDOW, "CloseWindow", intuition::close_window::<U>)
+            .func(window::LVO_OPEN_WINDOW, "OpenWindow", window::open_window::<U>)
+            .func(window::LVO_OPEN_WINDOW_TAG_LIST, "OpenWindowTagList", window::open_window_tag_list::<U>)
+            .func(window::LVO_CLOSE_WINDOW, "CloseWindow", window::close_window::<U>)
             .func(intuition::LVO_SET_MENU_STRIP, "SetMenuStrip", intuition::set_menu_strip::<U>)
             .func(intuition::LVO_CLEAR_MENU_STRIP, "ClearMenuStrip", intuition::clear_menu_strip::<U>)
             .func(screen::LVO_LOCK_PUB_SCREEN, "LockPubScreen", screen::lock_pub_screen::<U>)
             .func(screen::LVO_UNLOCK_PUB_SCREEN, "UnlockPubScreen", screen::unlock_pub_screen::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
-        LibraryBuilder::new("graphics.library", GRAPHICS_BASE)
-            .stub(-240, "Move")
+        LibraryBuilder::new("gadtools.library", GADTOOLS_BASE)
+            .func(gadtools::LVO_CREATE_GADGET_A, "CreateGadgetA", gadtools::create_gadget::<U>)
+            .func(gadtools::LVO_FREE_GADGETS, "FreeGadgets", gadtools::free_gadgets::<U>)
+            .func(gadtools::LVO_GT_SET_GADGET_ATTRS_A, "GT_SetGadgetAttrsA", gadtools::set_gadget_attrs::<U>)
+            .func(gadtools::LVO_GT_GET_IMSG, "GT_GetIMsg", gadtools::get_imsg::<U>)
+            .func(gadtools::LVO_GT_REPLY_IMSG, "GT_ReplyIMsg", gadtools::reply_imsg::<U>)
+            .func(gadtools::LVO_GT_REFRESH_WINDOW, "GT_RefreshWindow", gadtools::refresh::<U>)
+            .func(gadtools::LVO_GT_BEGIN_REFRESH, "GT_BeginRefresh", gadtools::refresh::<U>)
+            .func(gadtools::LVO_GT_END_REFRESH, "GT_EndRefresh", gadtools::refresh::<U>)
+            .func(gadtools::LVO_CREATE_CONTEXT, "CreateContext", gadtools::create_context::<U>)
+            .func(gadtools::LVO_GET_VISUAL_INFO_A, "GetVisualInfoA", gadtools::get_visual_info::<U>)
+            .func(gadtools::LVO_FREE_VISUAL_INFO, "FreeVisualInfo", gadtools::free_visual_info::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
-        for (name, base) in [("exec.library", EXEC_BASE), ("dos.library", DOS_BASE), ("intuition.library", INTUITION_BASE), ("graphics.library", GRAPHICS_BASE)] {
+        LibraryBuilder::new("graphics.library", GRAPHICS_BASE)
+            .func(graphics::LVO_TEXT_LENGTH, "TextLength", graphics::text_length::<U>)
+            .install(&mut a.mem, &mut a.dispatch)?;
+        for (name, base) in [("exec.library", EXEC_BASE), ("dos.library", DOS_BASE), ("intuition.library", INTUITION_BASE), ("graphics.library", GRAPHICS_BASE), ("gadtools.library", GADTOOLS_BASE)] {
             a.libs.push(LibInfo { name, base, open_count: 0 });
         }
         write_slot(&mut a.mem, EXIT_SLOT).map_err(Refusal::mem("exit slot"))?;
@@ -138,11 +155,6 @@ impl<U: GuestUi> Amiga<U> {
         Ok(base)
     }
 
-    pub(crate) fn alloc_handle(&mut self) -> u32 {
-        let h = self.next_handle;
-        self.next_handle += 0x40;
-        h
-    }
 
     /// Load a Hunk executable and run it to its final RTS (to the exit slot) or `max_insns`.
     pub fn run_hunk(&mut self, file: &[u8], max_insns: u64) -> Result<RunReport, String> {

@@ -115,3 +115,21 @@ pub fn delete_io_request<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
     a.heap.free(io, size).map_err(|e| Refusal(format!("DeleteIORequest: {e}")))?;
     Ok(format!("[exec] DeleteIORequest {io:#x}"))
 }
+
+/// Give signal `bit` back to the task (a window's UserPort closing); -1 = nothing allocated.
+pub fn release_signal_bit<U: GuestUi>(a: &mut Amiga<U>, bit: i32) -> Result<(), Refusal> {
+    if bit < 0 { return Ok(()); }
+    let map = sig_alloc(a)?;
+    a.mem.write_u32(process::PROCESS + TC_SIG_ALLOC, map & !(1 << bit)).map_err(Refusal::mem("tc_SigAlloc"))
+}
+
+pub const LVO_FIND_SEMAPHORE: i32 = -594;
+
+/// FindSemaphore(a1 = name) -> the public SignalSemaphore of that name, or NULL. No program in this engine has
+/// published one (AddSemaphore is not bridged), so it is always NULL: the answer a program gets on AmigaOS when the
+/// task that owns it (amimon's amiagent) is not running.
+pub fn find_semaphore<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let name = a.mem.read_cstr(cpu.areg(1)).map_err(Refusal::mem("FindSemaphore.name"))?;
+    cpu.set_d0(0);
+    Ok(format!("[exec] FindSemaphore \"{name}\" -> NULL (no public semaphores)"))
+}

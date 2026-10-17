@@ -53,6 +53,8 @@ pub enum ControlKind {
     Checkbox { checked: bool },
     String { text: String, max_len: u32 },
     Slider { min: i32, max: i32, value: i32 },
+    /// Read-only text the guest updates (GadTools TEXT_KIND; `framed` = GTTX_Border's recessed box).
+    Label { text: String, framed: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

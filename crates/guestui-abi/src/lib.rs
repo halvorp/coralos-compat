@@ -28,6 +28,9 @@ pub trait GuestUi {
     fn clear_menu_strip(&mut self, win: UiObjectRef) -> Result<(), UiRefusal>;
     fn add_control(&mut self, win: UiObjectRef, control: ControlModel) -> Result<UiObjectRef, UiRefusal>;
     fn remove_control(&mut self, win: UiObjectRef, control: UiObjectRef) -> Result<(), UiRefusal>;
+    /// The guest changed a control's state (a label's text, a checkbox, a slider level). A value the control's kind
+    /// cannot hold is `UiRefusal::Unsupported`.
+    fn set_control(&mut self, win: UiObjectRef, control: UiObjectRef, value: ControlValue) -> Result<(), UiRefusal>;
     /// Next native event for the guest, if any.
     fn poll_event(&mut self) -> Option<GuestUiEvent>;
 }

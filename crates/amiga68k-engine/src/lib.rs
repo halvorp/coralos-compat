@@ -17,6 +17,8 @@ use alloc::format;
 pub mod devices;
 pub mod dos;
 pub mod exec;
+pub mod gadtools;
+pub mod graphics;
 pub mod fixture;
 pub mod intuition;
 pub mod libtable;
@@ -27,6 +29,8 @@ pub mod ports;
 pub mod process;
 pub mod rdargs;
 pub mod screen;
+pub mod tags;
+pub mod window;
 mod menu;
 
 pub use machine::{Amiga, RunReport};
