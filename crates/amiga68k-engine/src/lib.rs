@@ -10,6 +10,10 @@
 //!
 //! Struct offsets and LVO numbers are written from public NDK-style documentation and
 //! need re-verification against a licence-checked source (see NOTICE).
+#![cfg_attr(not(test), no_std)]
+extern crate alloc;
+use alloc::string::String;
+use alloc::format;
 pub mod exec;
 pub mod fixture;
 pub mod intuition;

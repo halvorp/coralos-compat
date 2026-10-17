@@ -1,5 +1,7 @@
 //! Normalized model types (plan §4: WindowModel, ControlModel, MenuModel, CallbackToken...).
 
+use alloc::vec::Vec;
+use alloc::string::String;
 /// Launch-local object identity plus generation (a stale ref is refused, never aliased).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UiObjectRef { pub id: u32, pub generation: u32 }
@@ -82,8 +84,8 @@ pub enum UiRefusal {
     InvalidGeometry(&'static str),
     Unsupported(&'static str),
 }
-impl std::fmt::Display for UiRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for UiRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             UiRefusal::UnknownObject(r) => write!(f, "unknown UI object {}", r.id),
             UiRefusal::StaleGeneration(r) => write!(f, "stale UI object {} (generation {})", r.id, r.generation),
@@ -92,4 +94,4 @@ impl std::fmt::Display for UiRefusal {
         }
     }
 }
-impl std::error::Error for UiRefusal {}
+impl core::error::Error for UiRefusal {}

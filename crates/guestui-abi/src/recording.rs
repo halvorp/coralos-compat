@@ -1,6 +1,9 @@
 //! A [`GuestUi`] that records every call. Test double and headless runner backend.
+use alloc::vec::Vec;
+use alloc::collections::VecDeque;
+use alloc::collections::BTreeMap;
 use crate::*;
-use std::collections::{HashMap, VecDeque};
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiCall {
@@ -19,7 +22,7 @@ pub struct RecordingGuestUi {
     pub events: VecDeque<GuestUiEvent>,
     next_id: u32,
     /// live object id -> generation
-    live: HashMap<u32, u32>,
+    live: BTreeMap<u32, u32>,
 }
 
 impl RecordingGuestUi {

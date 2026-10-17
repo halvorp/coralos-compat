@@ -1,6 +1,11 @@
 //! Checked big-endian guest RAM. Every access is bounds-checked and returns a named
 //! [`MemError`]; nothing here panics on a guest-controlled address.
-use std::fmt;
+#![cfg_attr(not(test), no_std)]
+extern crate alloc;
+use alloc::vec::Vec;
+use alloc::vec;
+use alloc::string::String;
+use core::fmt;
 
 /// Default guest RAM size (16 MiB, the 24-bit 68000 address space).
 pub const DEFAULT_SIZE: usize = 16 << 20;
@@ -25,7 +30,7 @@ impl fmt::Display for MemError {
         }
     }
 }
-impl std::error::Error for MemError {}
+impl core::error::Error for MemError {}
 
 /// A guest address range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

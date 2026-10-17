@@ -2,7 +2,7 @@
 name = "retro-m68k"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "GPL-2.0-or-later"  # bundles MAME-derived m68kfpu.c / m68kmmu.h; see NOTICE
 description = "Safe Rust wrapper over the vendored Musashi 68k core"
 build = "build.rs"
 

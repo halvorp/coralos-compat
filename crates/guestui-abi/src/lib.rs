@@ -11,6 +11,8 @@
 //! exists to fix the VOCABULARY (windows, menus, controls, events, named refusals).
 //!
 //! Records are pointer-free: no guest address ever crosses this boundary.
+#![cfg_attr(not(test), no_std)]
+extern crate alloc;
 mod model;
 mod recording;
 

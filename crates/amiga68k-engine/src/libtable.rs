@@ -1,4 +1,7 @@
 //! Library vector-table builder and the LVO -> handler dispatch table.
+use alloc::vec::Vec;
+use alloc::vec;
+use alloc::string::String;
 use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_guest_mem::GuestMem;
@@ -11,7 +14,7 @@ pub const RTS: u16 = 0x4E75;
 
 pub type Handler<U> = fn(&mut Amiga<U>, &mut Cpu) -> Result<String, Refusal>;
 /// slot address -> (library, function, handler)
-pub type Dispatch<U> = std::collections::HashMap<u32, (&'static str, &'static str, Handler<U>)>;
+pub type Dispatch<U> = alloc::collections::BTreeMap<u32, (&'static str, &'static str, Handler<U>)>;
 
 /// Write one `ILLEGAL; RTS` slot at `addr`.
 pub fn write_slot(mem: &mut GuestMem, addr: u32) -> Result<(), retro_guest_mem::MemError> {

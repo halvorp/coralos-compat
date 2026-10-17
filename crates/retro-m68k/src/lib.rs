@@ -10,11 +10,22 @@
 //! The core calls back into Rust for memory (`m68k_read_memory_*`) and for the ILLEGAL
 //! opcode ($4AFC), which engines use as the library-call trap. Both go through the
 //! [`Host`] passed to [`run`].
+#![cfg_attr(not(test), no_std)]
+extern crate alloc;
 use retro_guest_mem::GuestMem;
-use std::cell::Cell;
-use std::sync::Mutex;
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, Ordering};
 
-static CPU_LOCK: Mutex<()> = Mutex::new(());
+// no_std: a spin lock replaces std::sync::Mutex (Musashi is one process-wide CPU anyway).
+static CPU_LOCK: AtomicBool = AtomicBool::new(false);
+struct Guard;
+impl Guard {
+    fn take() -> Guard {
+        while CPU_LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { core::hint::spin_loop(); }
+        Guard
+    }
+}
+impl Drop for Guard { fn drop(&mut self) { CPU_LOCK.store(false, Ordering::Release); } }
 
 extern "C" {
     fn m68k_init();
@@ -43,10 +54,10 @@ pub trait Host {
 pub struct Cpu { halted: bool, insns: u64, bus_faults: u32 }
 
 impl Cpu {
-    pub fn dreg(&self, n: u32) -> u32 { debug_assert!(n < 8); unsafe { m68k_get_reg(std::ptr::null_mut(), REG_D0 + n) } }
-    pub fn areg(&self, n: u32) -> u32 { debug_assert!(n < 8); unsafe { m68k_get_reg(std::ptr::null_mut(), REG_A0 + n) } }
+    pub fn dreg(&self, n: u32) -> u32 { debug_assert!(n < 8); unsafe { m68k_get_reg(core::ptr::null_mut(), REG_D0 + n) } }
+    pub fn areg(&self, n: u32) -> u32 { debug_assert!(n < 8); unsafe { m68k_get_reg(core::ptr::null_mut(), REG_A0 + n) } }
     pub fn set_d0(&mut self, v: u32) { unsafe { m68k_set_reg(REG_D0, v) } }
-    pub fn pc(&self) -> u32 { unsafe { m68k_get_reg(std::ptr::null_mut(), REG_PC) } }
+    pub fn pc(&self) -> u32 { unsafe { m68k_get_reg(core::ptr::null_mut(), REG_PC) } }
     /// Stop after the current instruction.
     pub fn halt(&mut self) { self.halted = true; unsafe { m68k_end_timeslice() } }
 }
@@ -60,10 +71,14 @@ pub struct RunStats {
     pub halted: bool,
 }
 
-thread_local! { static ACTIVE: Cell<Option<(*mut (dyn Host + 'static), *mut Cpu)>> = const { Cell::new(None) }; }
+type Active = Option<(*mut (dyn Host + 'static), *mut Cpu)>;
+struct ActiveCell(UnsafeCell<Active>);
+// SAFETY: only touched while CPU_LOCK is held (run) or from Musashi callbacks that run inside run().
+unsafe impl Sync for ActiveCell {}
+static ACTIVE: ActiveCell = ActiveCell(UnsafeCell::new(None));
 
 fn with<R>(f: impl FnOnce(&mut dyn Host, &mut Cpu) -> R) -> R {
-    let (h, c) = ACTIVE.with(|a| a.get()).expect("Musashi callback outside retro_m68k::run");
+    let (h, c) = unsafe { *ACTIVE.0.get() }.expect("Musashi callback outside retro_m68k::run");
     // SAFETY: set by `run` for exactly the duration of m68k_execute on this thread.
     unsafe { f(&mut *h, &mut *c) }
 }
@@ -72,12 +87,12 @@ fn with<R>(f: impl FnOnce(&mut dyn Host, &mut Cpu) -> R) -> R {
 /// the per-instruction hook). The CPU is a 68020. Address 4 doubles as the reset PC vector
 /// and AbsExecBase, so it is saved and restored around the reset.
 pub fn run<H: Host>(host: &mut H, entry: u32, sp: u32, max_insns: u64) -> RunStats {
-    let _g = CPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = Guard::take();
     let mut cpu = Cpu { halted: false, insns: 0, bus_faults: 0 };
     let hp: *mut (dyn Host + '_) = host;
     // SAFETY: lifetime erased only while ACTIVE is set; cleared before returning.
-    let hp: *mut (dyn Host + 'static) = unsafe { std::mem::transmute(hp) };
-    ACTIVE.with(|a| a.set(Some((hp, &mut cpu))));
+    let hp: *mut (dyn Host + 'static) = unsafe { core::mem::transmute(hp) };
+    unsafe { *ACTIVE.0.get() = Some((hp, &mut cpu)); }
     let saved4 = host.mem().read_u32(4).unwrap_or(0);
     let _ = host.mem().write_u32(0, sp);
     let _ = host.mem().write_u32(4, entry);
@@ -90,7 +105,7 @@ pub fn run<H: Host>(host: &mut H, entry: u32, sp: u32, max_insns: u64) -> RunSta
     while !cpu.halted && cpu.insns < max_insns {
         unsafe { m68k_execute(1000) };
     }
-    ACTIVE.with(|a| a.set(None));
+    unsafe { *ACTIVE.0.get() = None; }
     RunStats { insns: cpu.insns, bus_faults: cpu.bus_faults, halted: cpu.halted }
 }
 

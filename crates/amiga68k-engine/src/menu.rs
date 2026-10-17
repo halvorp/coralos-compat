@@ -2,6 +2,8 @@
 //! Offsets (NDK-style): Menu = Next 0, Left 4, Top 6, W 8, H 10, Flags 12(w), Name 14, FirstItem 18.
 //! MenuItem = Next 0, ..., Flags 12(w), MutualExclude 14, ItemFill 18, SelectFill 22,
 //! Command 26(b), SubItem 28. IntuiText = ..., IText 12(ptr).
+use alloc::vec;
+use alloc::string::ToString;
 use crate::Refusal;
 use guestui_abi::{CallbackToken, Menu, MenuItem, MenuModel};
 use retro_guest_mem::GuestMem;

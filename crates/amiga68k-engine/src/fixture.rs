@@ -3,6 +3,8 @@
 //! Program: OpenLibrary("intuition.library"); OpenWindow(NewWindow "Hello" 10,20,320x200);
 //! store the handle in BSS; SetMenuStrip(window, Project{Open ^O, Quit ^Q}); CloseWindow;
 //! CloseLibrary; rts.
+use alloc::vec::Vec;
+use alloc::vec;
 use retro_hunk::writer::{be16, be32, build, Hunk};
 
 /// Data-hunk builder: 4-aligned allocations, plus relocs for pointers into the same hunk.

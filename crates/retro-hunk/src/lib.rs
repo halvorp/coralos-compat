@@ -3,8 +3,11 @@
 //! Every read of the file and every write to guest RAM is bounds-checked; every refusal is
 //! a named [`HunkError`]. Not supported (refused by name, not skipped): overlays, debug and
 //! symbol hunks, RELOC32SHORT, DRELOC32, resident libraries, HUNK_EXT.
+#![cfg_attr(not(test), no_std)]
+extern crate alloc;
+use alloc::vec::Vec;
 use retro_guest_mem::{GuestMem, MemError};
-use std::fmt;
+use core::fmt;
 
 pub mod writer;
 
@@ -54,7 +57,7 @@ impl fmt::Display for HunkError {
         }
     }
 }
-impl std::error::Error for HunkError {}
+impl core::error::Error for HunkError {}
 impl From<MemError> for HunkError { fn from(e: MemError) -> Self { HunkError::Mem(e) } }
 
 #[derive(Debug)]

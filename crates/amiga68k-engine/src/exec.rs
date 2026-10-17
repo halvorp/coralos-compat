@@ -1,4 +1,6 @@
 //! exec.library: OpenLibrary / CloseLibrary by name, over the fake ExecBase.
+use alloc::string::String;
+use alloc::format;
 use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;

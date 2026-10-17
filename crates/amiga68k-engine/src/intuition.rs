@@ -1,5 +1,7 @@
 //! intuition.library handlers that translate onto [`GuestUi`].
 //! NewWindow = Left 0, Top 2, Width 4, Height 6 (words), Flags 14 (long), Title 26 (ptr).
+use alloc::string::String;
+use alloc::format;
 use crate::{machine::Amiga, menu, Refusal};
 use guestui_abi::{CallbackToken, GuestRect, GuestUi, WindowModel, WindowRole};
 use retro_m68k::Cpu;

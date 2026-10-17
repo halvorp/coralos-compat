@@ -1,4 +1,6 @@
 //! Builds Hunk files for fixtures and negative tests. Not a general assembler/linker.
+use alloc::vec::Vec;
+use alloc::vec;
 use crate::*;
 
 pub fn be32(v: &mut Vec<u8>, x: u32) { v.extend_from_slice(&x.to_be_bytes()); }

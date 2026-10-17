@@ -1,11 +1,16 @@
 //! The Amiga machine: guest RAM + fake ExecBase + dispatch table + a [`GuestUi`].
+use alloc::vec::Vec;
+use alloc::vec;
+use alloc::string::ToString;
+use alloc::string::String;
+use alloc::format;
+use alloc::collections::BTreeMap;
 use crate::libtable::{write_slot, Dispatch, LibraryBuilder};
 use crate::{exec, intuition, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
 use retro_hunk::Loaded;
 use retro_m68k::{Cpu, Host, RunStats};
-use std::collections::HashMap;
 
 pub const EXEC_BASE: u32 = 0x1000;
 pub const INTUITION_BASE: u32 = 0x2000;
@@ -21,7 +26,7 @@ pub struct Amiga<U: GuestUi> {
     pub mem: GuestMem,
     pub ui: U,
     pub libs: Vec<LibInfo>,
-    pub(crate) windows: HashMap<u32, UiObjectRef>,
+    pub(crate) windows: BTreeMap<u32, UiObjectRef>,
     dispatch: Dispatch<U>,
     next_handle: u32,
     /// One line per successful bridged call, in order.
@@ -35,8 +40,8 @@ pub struct RunReport { pub stats: RunStats, pub loaded: Loaded }
 impl<U: GuestUi> Amiga<U> {
     pub fn new(ui: U) -> Result<Self, Refusal> {
         let mut a = Amiga {
-            mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: HashMap::new(),
-            dispatch: HashMap::new(), next_handle: FIRST_HANDLE, log: vec![], refused: vec![],
+            mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
+            dispatch: BTreeMap::new(), next_handle: FIRST_HANDLE, log: vec![], refused: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
