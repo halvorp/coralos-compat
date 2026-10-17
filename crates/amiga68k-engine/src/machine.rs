@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use crate::libtable::{write_slot, Dispatch, LibraryBuilder};
-use crate::{devices, dos, exec, intuition, memory, ports, process, screen, Refusal};
+use crate::{devices, dos, exec, intuition, memory, ports, process, rdargs, screen, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
 use retro_hunk::Loaded;
@@ -55,6 +55,8 @@ pub struct Amiga<U: GuestUi> {
     pub console: dos::Console,
     /// Outstanding LockPubScreen locks on the one public screen.
     pub screen_locks: u32,
+    /// Live ReadArgs results: (RDArgs, value buffer, its size, RDArgs allocated by ReadArgs).
+    pub rdargs: Vec<(u32, u32, u32, bool)>,
     next_lib_base: u32,
 }
 
@@ -65,7 +67,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), next_handle: FIRST_HANDLE, log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), console: Default::default(), screen_locks: 0,
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), console: Default::default(), screen_locks: 0, rdargs: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
@@ -81,6 +83,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(memory::LVO_FORBID, "Forbid", memory::forbid::<U>)
             .func(memory::LVO_PERMIT, "Permit", memory::permit::<U>)
             .func(memory::LVO_SET_SIGNAL, "SetSignal", memory::set_signal::<U>)
+            .func(memory::LVO_STACK_SWAP, "StackSwap", memory::stack_swap::<U>)
             .func(ports::LVO_ALLOC_SIGNAL, "AllocSignal", ports::alloc_signal::<U>)
             .func(ports::LVO_FREE_SIGNAL, "FreeSignal", ports::free_signal::<U>)
             .func(ports::LVO_CREATE_MSG_PORT, "CreateMsgPort", ports::create_msg_port::<U>)
@@ -103,6 +106,8 @@ impl<U: GuestUi> Amiga<U> {
             .func(dos::LVO_CLI, "Cli", dos::cli::<U>)
             .func(dos::LVO_GET_PROGRAM_NAME, "GetProgramName", dos::get_program_name::<U>)
             .func(dos::LVO_PUT_STR, "PutStr", dos::put_str::<U>)
+            .func(rdargs::LVO_READ_ARGS, "ReadArgs", rdargs::read_args::<U>)
+            .func(rdargs::LVO_FREE_ARGS, "FreeArgs", rdargs::free_args::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("intuition.library", INTUITION_BASE)
             .func(intuition::LVO_OPEN_WINDOW, "OpenWindow", intuition::open_window::<U>)

@@ -171,3 +171,30 @@ mod tests {
         assert_eq!(h.live_blocks(), 0);
     }
 }
+
+pub const LVO_STACK_SWAP: i32 = -732;
+const TC_SP_LOWER: u32 = 58;
+const TC_SP_UPPER: u32 = 62;
+
+/// StackSwap(a0 = struct StackSwapStruct { stk_Lower, stk_Upper, stk_Pointer }): run on the caller's new stack from
+/// the return onwards. The struct is swapped with the task's current bounds and stack pointer, so a second StackSwap
+/// with the same struct swaps back (exec/tasks.h). The trap runs with A7 at the JSR's return address; it is moved to
+/// the top of the new stack so the slot's RTS returns there.
+pub fn stack_swap<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let m = Refusal::mem;
+    let sss = cpu.areg(0);
+    let (new_lower, new_upper, new_ptr) = (a.mem.read_u32(sss).map_err(m("stk_Lower"))?, a.mem.read_u32(sss + 4).map_err(m("stk_Upper"))?, a.mem.read_u32(sss + 8).map_err(m("stk_Pointer"))?);
+    if !(new_lower < new_ptr && new_ptr <= new_upper) { return Err(Refusal(format!("StackSwap: stk_Pointer {new_ptr:#x} outside [{new_lower:#x}, {new_upper:#x}]"))); }
+    let old_sp = cpu.areg(7);
+    let ret = a.mem.read_u32(old_sp).map_err(m("return address"))?;
+    let task = process::PROCESS;
+    let (old_lower, old_upper) = (a.mem.read_u32(task + TC_SP_LOWER).map_err(m("tc_SPLower"))?, a.mem.read_u32(task + TC_SP_UPPER).map_err(m("tc_SPUpper"))?);
+    a.mem.write_u32(new_ptr - 4, ret).map_err(m("new stack"))?;
+    a.mem.write_u32(task + TC_SP_LOWER, new_lower).map_err(m("tc_SPLower"))?;
+    a.mem.write_u32(task + TC_SP_UPPER, new_upper).map_err(m("tc_SPUpper"))?;
+    a.mem.write_u32(sss, old_lower).map_err(m("stk_Lower"))?;
+    a.mem.write_u32(sss + 4, old_upper).map_err(m("stk_Upper"))?;
+    a.mem.write_u32(sss + 8, old_sp + 4).map_err(m("stk_Pointer"))?; // the caller's SP once the call has returned
+    cpu.set_areg(7, new_ptr - 4);
+    Ok(format!("[exec] StackSwap -> [{new_lower:#x}, {new_upper:#x}] sp={:#x}", new_ptr - 4))
+}
