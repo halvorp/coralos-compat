@@ -1,0 +1,23 @@
+Third-party files in this repository (everything else is original, MIT, see LICENSE).
+All of them live under crates/retro-m68k/vendor/ .
+
+Musashi 4.60, Copyright Karl Stenerud, MIT-style permission notice kept in each file header:
+  m68k.h  m68kcpu.c  m68kcpu.h  m68k_in.c  m68kmake.c
+  m68kconf.h   (MODIFIED by us: ILLEGAL and per-instruction callbacks are set to
+                retro_illg_hook / retro_instr_hook, plus one extern prototype)
+
+Files from the MAME project bundled with Musashi:
+  m68kfpu.c   (68881/68040 FPU, part of Musashi; header carries no separate licence text)
+  m68kmmu.h   (PMMU, R. Belmont, "Copyright Nicola Salmoria and the MAME Team; see
+               mamedev.org for licensing and usage restrictions")
+  UNRESOLVED: the MAME licence text for these two files has not been read and confirmed.
+  Before any public release either confirm the terms or build with FPU/PMMU off and drop them.
+
+SoftFloat Release 2b, John R. Hauser (via MAME packaging), own terms in its README:
+  softfloat/README.txt  softfloat/mamesf.h  softfloat/milieu.h  softfloat/softfloat.c
+  softfloat/softfloat.h  softfloat/softfloat-macros  softfloat/softfloat-specialize
+  UNRESOLVED: terms need a proper read before release (free-use with attribution/no warranty).
+
+No Amiga ROM, AROS, Workbench or Apple code is included. Struct offsets and LVO numbers
+are written from public NDK-style documentation and must be re-verified against a
+licence-checked source before they are relied on (see docs in the CoralOS plan).

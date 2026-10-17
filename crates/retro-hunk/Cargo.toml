@@ -1,0 +1,9 @@
+[package]
+name = "retro-hunk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AmigaOS Hunk executable loader (and a test-only writer)"
+
+[dependencies]
+retro-guest-mem = { path = "../retro-guest-mem" }

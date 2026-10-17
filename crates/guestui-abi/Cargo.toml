@@ -1,0 +1,6 @@
+[package]
+name = "guestui-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FIRST DRAFT of the normalized guest UI interface retro engines call"

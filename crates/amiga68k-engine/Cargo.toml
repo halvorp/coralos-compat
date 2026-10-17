@@ -1,0 +1,12 @@
+[package]
+name = "amiga68k-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AmigaOS 68k personality: fake ExecBase, LVO trap bridge, Intuition handlers onto GuestUi"
+
+[dependencies]
+retro-guest-mem = { path = "../retro-guest-mem" }
+retro-m68k = { path = "../retro-m68k" }
+retro-hunk = { path = "../retro-hunk" }
+guestui-abi = { path = "../guestui-abi" }

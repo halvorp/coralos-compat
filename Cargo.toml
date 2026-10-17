@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/retro-guest-mem", "crates/retro-m68k", "crates/retro-hunk", "crates/guestui-abi", "crates/amiga68k-engine"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"

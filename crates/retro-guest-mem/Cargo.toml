@@ -1,0 +1,6 @@
+[package]
+name = "retro-guest-mem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Checked big-endian guest RAM for retro-compat engines"
