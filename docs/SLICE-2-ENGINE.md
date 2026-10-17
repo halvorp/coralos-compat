@@ -23,6 +23,9 @@ Public API (machine.rs, split files by concern, every file < 1000 lines, no_std 
 
 ```rust
 pub enum Step { Exited, Blocked, BudgetSpent, Fault(String) }
+// Guest state (host side): New -> Runnable <-> Waiting(Wait{set} | WaitPort{port}) -> Exited | Faulted.
+// step(): a Waiting guest whose predicate is still unsatisfied executes NO instruction and returns Blocked.
+// deliver(): queues and updates readiness only; it never executes guest code and never overwrites a pending D0.
 impl<U: GuestUi> Amiga<U> {
     pub fn start_hunk(&mut self, file: &[u8]) -> Result<Loaded, String>; // load + retro_m68k::start
     pub fn step(&mut self, budget: u64) -> Step;     // resume until exit / block / budget
@@ -30,7 +33,10 @@ impl<U: GuestUi> Amiga<U> {
     pub fn is_blocked(&self) -> bool;
 }
 ```
-`run_hunk` stays as a driver over `start_hunk` + `step` (one path, not two).
+`run_hunk` stays as a driver over `start_hunk` + `step` (one path, not two); it returns when the guest blocks, it never
+spins while blocked. `BudgetSpent` means "schedule another host-loop turn"; `Blocked` means "wait for a deliver".
+`Amiga` owns its `retro_m68k::CpuContext`. Sharing with mac68k/macppc is the CPU-neutral boundary only (CpuContext,
+bounded step, stop reason, GuestUi); Exec signals, ports, menu packing and IntuiMessage bytes stay in this crate.
 
 ### Guest structures (offsets from the AmigaOS NDK 3.x includes; each constant names its struct.field)
 - `struct Window`: allocated in guest RAM by OpenWindowTagList (today the handle is only a token; it becomes the
@@ -45,9 +51,11 @@ impl<U: GuestUi> Amiga<U> {
 
 ### Exec LVOs to bridge (exec.library, negative offsets from ExecBase)
 `Wait` (-318, D0 = signal set), `GetMsg` (-372, A0 = port), `ReplyMsg` (-378, A1 = msg), `WaitPort` (-384, A0 = port).
-Signals: one task, a u32 `SigRecvd` the engine owns (host side, not guest RAM). Each window's UserPort gets a signal bit
+Signals are PER TASK (council review 2026-10-17): host-side `tc_SigRecvd` keyed by the guest Task address (one task
+in this slice: the program's own, a zero-filled `struct Task` in guest RAM whose address `FindTask(NULL)` would return).
+`deliver` reads the port's `mp_SigTask` and sets that task's bit. Each window's UserPort gets a signal bit
 (allocate from bit 16 up; 0..15 are system). 
-- `Wait(set)`: if `SigRecvd & set != 0` -> D0 = that, clear those bits, return now. Else record the wait set and
+- `Wait(set)`: if `SigRecvd & set != 0` -> D0 = that, clear ONLY those bits (unrelated bits are kept), return now. Else record the wait set and
   `cpu.block()`; on the matching `deliver`, D0 = matched bits (cleared) and the next `step` resumes the guest.
 - `WaitPort(port)`: if the port's list is non-empty return its head in D0, else block like `Wait(1<<port.sigbit)` and
   return the head on resume.
@@ -59,11 +67,20 @@ Signals: one task, a u32 `SigRecvd` the engine owns (host side, not guest RAM). 
 ### deliver(ev)
 - `CloseRequested{win}` -> an IntuiMessage Class=CLOSEWINDOW, IDCMPWindow = that window, IAddress = window.
 - `MenuCommand{token}` -> Class=MENUPICK, Code = the packed number recovered from the token.
-- Only if the window's IDCMPFlags include that class; otherwise a named Refusal and nothing is queued.
+- Only if the window's IDCMPFlags include that class; otherwise `IgnoredUnsubscribed` (not an error: Intuition simply
+  does not send it) and nothing is queued.
+- TRANSACTIONAL: reserve the message slot and bookkeeping before linking or signalling; a failed delivery (NOMEM, a
+  named Refusal) leaves the queue, signal bits, pending wait, allocator and GuestUi unchanged.
 - Allocate the IntuiMessage from a free list in guest RAM (growable region, NOMEM is a named Refusal), link it at the
   tail of the window's UserPort list, set the port's signal bit in SigRecvd; if the guest is blocked on a set that
   includes it, mark it runnable (the next `step` resumes it).
 - A message for a window that is already closed (CloseWindow retires the window and its port) is a named Refusal.
+
+### Limits stated (not promised)
+Address reuse defeats stale-message detection by address alone: messages carry a host-side incarnation; host events
+carry the window's UiObjectRef generation, so a delayed event for a retired window is refused even if the address is
+reused. Ports are Intuition-private UserPorts only; a guest-supplied or shared port (ModifyIDCMP tricks) is refused
+by name.
 
 ### CloseWindow
 Retire the window: its port must have no Delivered-but-unreplied messages (otherwise named Refusal, as on AmigaOS
@@ -72,8 +89,17 @@ where that is a guest bug); queued unread messages are freed; the GuestUi close_
 ## 3. Fixture: `native_quit` (fixture.rs, hand-assembled with retro-hunk's writer, as the slice-1 fixture is)
 A guest program that: OpenLibrary("intuition.library"); OpenWindowTagList(title "Native Quit", IDCMP
 CLOSEWINDOW|MENUPICK); SetMenuStrip(Project: Open, Quit); then LOOP: WaitPort(win->UserPort); GetMsg; read Class and
-Code; ReplyMsg; increment a SENTINEL long at a fixed guest address; if Class == CLOSEWINDOW or (MENUPICK and Code == the
+Code; ReplyMsg; increment a SENTINEL long at a fixed guest address; check every OpenLibrary/OpenWindow result; drain with GetMsg until it returns 0
+(conventional wait-then-drain); copy Class and Code BEFORE ReplyMsg and never read a replied message; if Class == CLOSEWINDOW or (MENUPICK and Code == the
 Quit item) -> ClearMenuStrip; CloseWindow; CloseLibrary; RTS to the exit slot; else loop.
+
+## 3b. ABI layout ground truth
+Offsets are computed by a compiler with the 68k ABI (4-byte pointers, nothing aligned past 2 bytes: `gcc -m32` +
+`#pragma pack(2)` over the AROS field lists), not hand-counted and not taken from a model: Window.Title 32,
+IDCMPFlags 82, UserPort 86, sizeof 136; MsgPort 34 (mp_SigBit 15, mp_SigTask 16, mp_MsgList 20); Message 20
+(mn_ReplyPort 14, mn_Length 18); IntuiMessage 52 (Class 20, Code 24, IAddress 28, IDCMPWindow 44). The council review
+claimed IDCMPFlags 86 / UserPort 90 / sizeof 140; the compiler refutes it. `tests/abi_layout.rs` pins these against
+the engine's constants. Next ground truth: FS-UAE + an AROS ROM, dumping the real structures from a running guest.
 
 ## 4. Tests first (host, `cargo test --workspace`), each with its negative control
 - `tests/wait_resume.rs`: start native_quit; step -> Blocked; SENTINEL unchanged after any number of further steps while
@@ -82,7 +108,13 @@ Quit item) -> ClearMenuStrip; CloseWindow; CloseLibrary; RTS to the exit slot; e
   fault switch in the engine, `cfg(test)` or a feature `fault-injection`): (a) clear the signal after enqueue -> the
   guest never wakes, the test asserts Blocked forever and the control test asserts THAT fails the happy-path check;
   (b) resume past a blocked call without a delivery -> SENTINEL moves, which the check catches.
-- `tests/idcmp_lifecycle.rs`: double ReplyMsg -> named Refusal; ReplyMsg of a forged address -> named Refusal;
+- More `wait_resume.rs` controls (council review): a delivery whose bit is NOT in the Wait set leaves the guest Blocked;
+  two delivers before one step -> WaitPort returns, GetMsg twice succeeds, the third returns 0; no guest instruction
+  executes while a wait is unsatisfied (instruction counter unchanged across steps).
+- `tests/cpu_context.rs`: two Amiga machines alternated step by step with different programs/registers; neither
+  disturbs the other.
+- `tests/idcmp_lifecycle.rs`: ReplyMsg of a Queued (not yet GetMsg'd) message -> Refusal; exhaust the message pool ->
+  NOMEM Refusal with nothing changed, then one ReplyMsg makes the next deliver succeed; double ReplyMsg -> named Refusal; ReplyMsg of a forged address -> named Refusal;
   deliver after CloseWindow -> named Refusal; deliver a class not in IDCMPFlags -> Refusal; CloseWindow with a
   delivered-unreplied message -> Refusal; 10 000 deliver/reply cycles leave the guest message free list at its
   high-water size (no leak).
