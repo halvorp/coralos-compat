@@ -41,19 +41,53 @@ impl<U: GuestUi> LibraryBuilder<U> {
         self.funcs.push((lvo, name, None));
         self
     }
-    /// Write the vector table into guest RAM and add the handlers to `dispatch`.
+    /// Write the vector table into guest RAM and add the handlers to `dispatch`. Every other function the library is
+    /// known to have (`lvo_names`) gets a slot too, so a call to anything not implemented is a NAMED refusal
+    /// ("dos.library/Open"), never a jump into zeroed memory. The positive side gets a minimal `struct Library`:
+    /// ln_Type = NT_LIBRARY (base+8), lib_Version (base+20), lib_NegSize (base+16).
     pub fn install(self, mem: &mut GuestMem, dispatch: &mut Dispatch<U>) -> Result<(), Refusal> {
-        for (lvo, name, h) in self.funcs {
+        let mut neg = 0u32;
+        for (lvo, name, h) in self.funcs.iter().copied() {
             let slot = self.base.wrapping_add(lvo as u32);
             write_slot(mem, slot).map_err(Refusal::mem("library vector"))?;
             dispatch.insert(slot, (self.name, name, h.unwrap_or(unimplemented_lvo::<U>)));
+            neg = neg.max(lvo.unsigned_abs());
         }
+        for &(lvo, name) in known_functions(self.name) {
+            let slot = self.base.wrapping_add(lvo as u32);
+            if dispatch.contains_key(&slot) { continue; }
+            write_slot(mem, slot).map_err(Refusal::mem("library vector"))?;
+            dispatch.insert(slot, (self.name, name, unimplemented_lvo::<U>));
+            neg = neg.max(lvo.unsigned_abs());
+        }
+        mem.write_u8(self.base + 8, NT_LIBRARY).map_err(Refusal::mem("Library.ln_Type"))?;
+        mem.write_u16(self.base + 16, neg as u16).map_err(Refusal::mem("Library.lib_NegSize"))?;
+        mem.write_u16(self.base + 20, LIB_VERSION).map_err(Refusal::mem("Library.lib_Version"))?;
         Ok(())
     }
 }
 
-fn unimplemented_lvo<U: GuestUi>(_: &mut Amiga<U>, _: &mut Cpu) -> Result<String, Refusal> {
-    Err(Refusal("no bridge implementation".into()))
+/// `struct Node.ln_Type` of a library (exec/nodes.h NT_LIBRARY).
+pub const NT_LIBRARY: u8 = 9;
+/// The version every bridged library reports (AmigaOS 3.1 = 40): programs refuse to run on older ones.
+pub const LIB_VERSION: u16 = 40;
+
+/// The functions `library` (e.g. "dos.library") is known to have, from the generated table; empty if unknown.
+pub fn known_functions(library: &str) -> &'static [(i32, &'static str)] {
+    crate::lvo_names::LIBRARIES.iter().find(|(n, _)| n.eq_ignore_ascii_case(library)).map(|(_, f)| *f).unwrap_or(&[])
+}
+
+/// The table's own spelling of `library`, if it is known (OpenLibrary keeps a `&'static str` name).
+pub fn known_library(library: &str) -> Option<&'static str> {
+    crate::lvo_names::LIBRARIES.iter().find(|(n, _)| n.eq_ignore_ascii_case(library)).map(|(n, _)| *n)
+}
+
+/// The prefix every unimplemented-call refusal starts with (the census runner keys on it).
+pub const UNIMPLEMENTED: &str = "unimplemented";
+
+fn unimplemented_lvo<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    if a.stop_on_unimplemented { cpu.halt(); }
+    Err(Refusal(UNIMPLEMENTED.into()))
 }
 
 #[cfg(test)]

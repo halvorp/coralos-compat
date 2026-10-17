@@ -16,6 +16,11 @@ pub const EXEC_BASE: u32 = 0x1000;
 pub const INTUITION_BASE: u32 = 0x2000;
 pub const GRAPHICS_BASE: u32 = 0x3000;
 pub const EXIT_SLOT: u32 = 0x500;
+/// Bases for libraries opened on demand (OpenLibrary of a known name), each in its own 4 KiB stride: the largest
+/// known table (graphics, 186 functions) needs ~1.2 KiB below its base, the Library struct 34 bytes above it.
+pub const DYNAMIC_LIB_BASES: u32 = 0x4_0000;
+const DYNAMIC_LIB_STRIDE: u32 = 0x1000;
+const DYNAMIC_LIB_END: u32 = 0x8_0000;
 pub const LOAD_BASE: u32 = 0x10000;
 pub const STACK_TOP: u32 = 0x20_0000;
 const FIRST_HANDLE: u32 = 0x8000;
@@ -33,6 +38,9 @@ pub struct Amiga<U: GuestUi> {
     pub log: Vec<String>,
     /// Refusals (bad guest pointers, unimplemented LVOs ...), in order.
     pub refused: Vec<String>,
+    /// Census mode: the first call to an unimplemented function halts the guest (the run's last refusal names it).
+    pub stop_on_unimplemented: bool,
+    next_lib_base: u32,
 }
 
 pub struct RunReport { pub stats: RunStats, pub loaded: Loaded }
@@ -42,6 +50,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), next_handle: FIRST_HANDLE, log: vec![], refused: vec![],
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES,
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
@@ -62,6 +71,16 @@ impl<U: GuestUi> Amiga<U> {
         write_slot(&mut a.mem, EXIT_SLOT).map_err(Refusal::mem("exit slot"))?;
         a.mem.write_u32(4, EXEC_BASE).map_err(Refusal::mem("AbsExecBase"))?; // AbsExecBase
         Ok(a)
+    }
+
+    /// Open a library the name table knows but nothing bridges yet: a fresh base, every vector a named refusal.
+    pub(crate) fn open_known_library(&mut self, name: &'static str) -> Result<u32, Refusal> {
+        let base = self.next_lib_base;
+        if base >= DYNAMIC_LIB_END { return Err(Refusal(format!("OpenLibrary {name}: no library base left (NOMEM)"))); }
+        self.next_lib_base += DYNAMIC_LIB_STRIDE;
+        LibraryBuilder::new(name, base).install(&mut self.mem, &mut self.dispatch)?;
+        self.libs.push(LibInfo { name, base, open_count: 1 });
+        Ok(base)
     }
 
     pub(crate) fn alloc_handle(&mut self) -> u32 {
@@ -90,7 +109,7 @@ impl<U: GuestUi> Host for Amiga<U> {
             Err(Refusal(e)) => {
                 cpu.set_d0(0); // NULL / FALSE
                 self.log.push(format!("[{lib}] {func} REFUSED: {e}"));
-                self.refused.push(e);
+                self.refused.push(format!("{lib}/{func}: {e}"));
             }
         }
         true

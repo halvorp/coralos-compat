@@ -44,14 +44,14 @@ fn bridged_sequence_reaches_guestui() {
 #[test]
 fn out_of_range_title_pointer_is_refused_by_name() {
     let (a, r) = run(&build_hunk(Some(0xFFFF_0000)));
-    assert_eq!(a.refused[0], "NewWindow.Title: pointer 0xffff0000 outside guest RAM");
+    assert_eq!(a.refused[0], "intuition.library/OpenWindow: NewWindow.Title: pointer 0xffff0000 outside guest RAM");
     assert!(a.log[1].starts_with("[intuition.library] OpenWindow REFUSED"));
     assert_eq!(a.mem.read_u32(r.loaded.bases[2]).unwrap(), 0, "refused call returns NULL");
     assert_eq!(r.stats.bus_faults, 0, "the bridge refused it before the guest could fault");
     assert!(a.ui.calls.is_empty(), "nothing reached guestui");
     // the program then passes NULL to SetMenuStrip/CloseWindow: refused by name too, still no crash
-    assert!(a.refused.iter().any(|e| e.starts_with("SetMenuStrip")));
-    assert!(a.refused.iter().any(|e| e.starts_with("CloseWindow")));
+    assert!(a.refused.iter().any(|e| e.starts_with("intuition.library/SetMenuStrip")));
+    assert!(a.refused.iter().any(|e| e.starts_with("intuition.library/CloseWindow")));
     assert!(r.stats.halted);
 }
 
@@ -65,6 +65,28 @@ fn unimplemented_lvo_is_a_named_refusal() {
     be16(&mut c, 0x4EAE); be16(&mut c, 0xFF10);
     be16(&mut c, 0x4E75);
     let (a, _) = run(&build(&[Hunk::code(c, vec![])], None));
-    assert_eq!(a.refused, vec!["no bridge implementation".to_string()]);
-    assert_eq!(a.log, vec!["[graphics.library] Move REFUSED: no bridge implementation".to_string()]);
+    assert_eq!(a.refused, vec!["graphics.library/Move: unimplemented".to_string()]);
+    assert_eq!(a.log, vec!["[graphics.library] Move REFUSED: unimplemented".to_string()]);
+}
+
+#[test]
+fn census_stops_at_the_first_unimplemented_call_and_names_it() {
+    use amiga68k_engine::machine::GRAPHICS_BASE;
+    use retro_hunk::writer::{be16, be32, build, Hunk};
+    // movea.l #GRAPHICS_BASE,a6 ; jsr -240(a6) (Move, unimplemented) ; jsr -246(a6) (Draw) ; rts
+    let mut c = vec![];
+    be16(&mut c, 0x2C7C); be32(&mut c, GRAPHICS_BASE);
+    be16(&mut c, 0x4EAE); be16(&mut c, 0xFF10);
+    be16(&mut c, 0x4EAE); be16(&mut c, 0xFF0A);
+    be16(&mut c, 0x4E75);
+    let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    a.stop_on_unimplemented = true;
+    let r = a.run_hunk(&build(&[Hunk::code(c.clone(), vec![])], None), 10_000).unwrap();
+    assert!(r.stats.halted);
+    assert_eq!(a.refused, vec!["graphics.library/Move: unimplemented".to_string()], "stopped at the FIRST one");
+    // CONTROL: without census mode the same program continues past Move and reaches Draw.
+    let mut b = Amiga::new(RecordingGuestUi::new()).unwrap();
+    b.run_hunk(&build(&[Hunk::code(c, vec![])], None), 10_000).unwrap();
+    assert_eq!(b.refused.len(), 2, "{:?}", b.refused);
+    assert!(b.refused[1].starts_with("graphics.library/Draw"), "{:?}", b.refused);
 }

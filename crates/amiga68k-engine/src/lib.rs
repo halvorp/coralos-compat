@@ -18,6 +18,7 @@ pub mod exec;
 pub mod fixture;
 pub mod intuition;
 pub mod libtable;
+pub mod lvo_names;
 pub mod machine;
 mod menu;
 

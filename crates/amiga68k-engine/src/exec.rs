@@ -15,7 +15,12 @@ pub fn open_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     let ver = cpu.dreg(0);
     let base = match a.libs.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&name)) {
         Some(l) => { l.open_count += 1; l.base }
-        None => 0,
+        // A library the name table knows: open it with every vector a named refusal, so a real program runs until the
+        // first function it needs that is not bridged, and says which. Unknown names stay a legitimate NULL.
+        None => match crate::libtable::known_library(&name) {
+            Some(known) => a.open_known_library(known)?,
+            None => 0,
+        },
     };
     cpu.set_d0(base);
     Ok(format!("[exec] OpenLibrary name=\"{name}\" ver={ver} -> {base:#x}"))
