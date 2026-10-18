@@ -8,7 +8,8 @@ use crate::boopsi_ids::*;
 use crate::boopsi_native::{dispatch_super, image};
 use crate::{machine::Amiga, tags, Refusal};
 use alloc::format;
-use guestui_abi::GuestUi;
+use guestui_abi::{Bevel, GuestUi};
+use retro_raster::{paint::{self, Brush}, Rect};
 
 const FRAME_DEFAULT: u32 = 0;
 const FRAME_BUTTON: u32 = 1;
@@ -108,7 +109,21 @@ fn framebox<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u
     Ok(1)
 }
 
-fn rect<U: GuestUi>(a: &mut Amiga<U>, rp: u32, r: (i32, i32, i32, i32), pen: u8) -> Result<(), Refusal> { crate::boopsi_draw::fill(a, rp, r, pen) }
+/// RectFill with one pen (JAM1), inclusive corners, RastPort coordinates.
+fn rect<U: GuestUi>(a: &mut Amiga<U>, rp: u32, (x0, y0, x1, y1): (i32, i32, i32, i32), pen: u8) -> Result<(), Refusal> {
+    if x1 < x0 || y1 < y0 { return Ok(()); }
+    let (b, r) = (Brush::new(pen, 0, 0), Rect::from_inclusive(x0, y0, x1, y1));
+    crate::graphics::target::paint(a, rp, "frameiclass draw", |bm, clip, (ox, oy)| paint::fill_rect(bm, r.translate(-ox, -oy), &b, None, clip))?;
+    Ok(())
+}
+
+/// The DrawInfo pens (dri_Pens, 12 entries) of the engine screen.
+fn pens<U: GuestUi>(a: &Amiga<U>) -> Result<[u8; 12], Refusal> {
+    let p = a.mem.read_u32(crate::graphics::layout::SCREEN_DRAWINFO + 4).map_err(Refusal::mem("DrawInfo.dri_Pens"))?;
+    let mut out = [0u8; 12];
+    for (i, o) in out.iter_mut().enumerate() { *o = a.mem.read_u16(p + 2 * i as u32).map_err(Refusal::mem("dri_Pens"))? as u8; }
+    Ok(out)
+}
 
 /// DrawFrame with FRAME_SIZE thin: top/left in `shine`, bottom/right in `shadow` (the "thicken" passes do nothing at that size).
 fn bevel<U: GuestUi>(a: &mut Amiga<U>, rp: u32, shine: u8, shadow: u8, (l, t, w, h): (i32, i32, i32, i32)) -> Result<(), Refusal> {
@@ -124,7 +139,7 @@ pub fn draw<U: GuestUi>(a: &mut Amiga<U>, im: u32, rp: u32, x: i32, y: i32, stat
     let fd = data(a, cl, im);
     let (ty, ho, vo) = (r16(a, fd + FD_TYPE)? as u32, r16(a, fd + FD_HOFF)?, r16(a, fd + FD_VOFF)?);
     let (recessed, edges) = (r16(a, fd + FD_RECESSED)? != 0, r16(a, fd + FD_EDGES)? != 0);
-    let pens = crate::boopsi_draw::pens(a)?;
+    let pens = pens(a)?;
     let selected = matches!(state, IDS_SELECTED | IDS_INACTIVESELECTED | IDS_SELECTEDDISABLED);
     let (mut shine, mut shadow) = (pens[SHINEPEN], pens[SHADOWPEN]);
     if recessed ^ selected { core::mem::swap(&mut shine, &mut shadow); }
@@ -147,4 +162,18 @@ pub fn draw<U: GuestUi>(a: &mut Amiga<U>, im: u32, rp: u32, x: i32, y: i32, stat
         a.log.push(format!("[intuition] frameiclass {im:#x}: disabled state at {left},{top}: RenderDisabledPattern is not implemented (drawn as enabled)"));
     }
     Ok(1)
+}
+
+/// The bevel role a frameiclass object stands for (what a gadget framed by it becomes natively), `None` if `im` is not one.
+pub fn bevel_of<U: GuestUi>(a: &Amiga<U>, im: u32) -> Option<Bevel> {
+    let cl = a.classes.class_of(im)?;
+    if a.classes.recs.get(&cl)?.native != Some(crate::iclass::Native::Frame) { return None; }
+    let fd = data(a, cl, im);
+    let recessed = r16(a, fd + FD_RECESSED).ok()? != 0;
+    Some(match r16(a, fd + FD_TYPE).ok()? as u32 {
+        FRAME_RIDGE => Bevel::Ridge,
+        FRAME_ICONDROPBOX => Bevel::DropBox,
+        _ if recessed => Bevel::Recessed,
+        _ => Bevel::Raised,
+    })
 }

@@ -24,6 +24,8 @@ pub mod boopsi_input;
 pub mod boopsi_native;
 pub mod boopsi_send;
 pub mod boopsi_strg;
+pub mod native_gadgets;
+pub mod native_gadgets_input;
 pub mod iclass;
 pub mod utility;
 pub mod census;

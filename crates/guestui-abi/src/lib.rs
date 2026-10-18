@@ -38,6 +38,10 @@ pub trait GuestUi {
     fn set_control_rect(&mut self, _win: UiObjectRef, _control: UiObjectRef, _rect: GuestRect) -> Result<(), UiRefusal> {
         Err(UiRefusal::Unsupported("moving a control (no set_control_rect in this host)"))
     }
+    /// The guest enabled or disabled (ghosted) a control after creating it (GA_Disabled).
+    fn set_control_enabled(&mut self, _win: UiObjectRef, _control: UiObjectRef, _enabled: bool) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("enabling a control (no set_control_enabled in this host)"))
+    }
     /// Guest-DRAWN content: pixels a guest program drew itself (through its graphics library) into the window's
     /// content canvas. `width` x `height` is the whole canvas (the window's inner area); `damage` is the sub-rectangle
     /// that changed, in canvas pixels; `pixels` holds exactly `damage.width * damage.height` values, row-major,

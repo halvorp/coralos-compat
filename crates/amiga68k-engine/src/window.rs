@@ -107,7 +107,10 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal>
     let native = a.ui.open_window(model).map_err(Refusal::ui)?;
     a.windows.insert(win, native);
     crate::graphics::open_window_surface(a, win, (s.left, s.top), (width - bl - br, height - bt - bb), (bl, bt), s.flags & WFLG_GIMMEZEROZERO != 0)?;
-    if s.gadgets != 0 { crate::gadtools::attach(a, win, native, s.gadgets)?; }
+    if s.gadgets != 0 {
+        crate::gadtools::attach(a, win, native, s.gadgets)?;
+        crate::native_gadgets::sync_chain(a, win, &crate::boopsi_glist::chain(a, s.gadgets, -1)?)?;
+    }
     // Intuition's first messages to a new window (AROS inputhandler_support.c WindowNeedsRefresh, the activation): IDCMP_ACTIVEWINDOW
     // when it opens active, IDCMP_REFRESHWINDOW when it is a simple-refresh window that cares about refresh. Unsubscribed classes post nothing.
     if s.flags & WFLG_ACTIVATE != 0 { idcmp::post(a, win, IDCMP_ACTIVEWINDOW, 0, win)?; }
@@ -154,6 +157,7 @@ pub fn close_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     crate::graphics::close_window_surface(a, win)?;
     a.ui.close_window(native).map_err(Refusal::ui)?;
     crate::gadtools::detach(a, win);
+    crate::native_gadgets::detach(a, win);
     idcmp::free_user_port(a, win)?;
     idcmp::free_window_port(a, win)?;
     a.menu_strips.remove(&win);

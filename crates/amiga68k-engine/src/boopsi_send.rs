@@ -37,10 +37,14 @@ pub fn make_msg<U: GuestUi>(a: &mut Amiga<U>, words: &[u32]) -> Result<u32, Refu
 pub fn finish<U: GuestUi>(msg: u32) -> Cont<U> { finish_with(msg, 0) }
 
 /// Like [`finish`], and frees the GadgetInfo `gi` too (0 = none).
-pub fn finish_with<U: GuestUi>(msg: u32, gi: u32) -> Cont<U> {
+pub fn finish_with<U: GuestUi>(msg: u32, gi: u32) -> Cont<U> { finish_gadget(msg, gi, 0) }
+
+/// Like [`finish_with`], and when `g` is a native gadget control (native_gadgets.rs) tells the host what the method changed.
+pub fn finish_gadget<U: GuestUi>(msg: u32, gi: u32, g: u32) -> Cont<U> {
     Box::new(move |a, _cpu, d0| {
         a.heap.free(msg, MSG_BLOCK).map_err(|e| Refusal(format!("BOOPSI message: {e}")))?;
         crate::boopsi_gadget::free_ginfo(a, gi)?;
+        crate::native_gadgets::resync(a, g)?;
         Ok(Next::Return(d0))
     })
 }
@@ -85,7 +89,7 @@ pub fn set_attrs_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     if is_mui(a, obj) { return crate::boopsi::set_attrs_a(a, cpu); }
     let cl = live_class(a, obj, "SetAttrsA")?;
     let msg = make_msg(a, &[OM_SET, tags, 0])?;
-    send(a, cpu, cl, obj, msg, finish(msg))?;
+    send(a, cpu, cl, obj, msg, finish_gadget(msg, 0, obj))?;
     Ok(format!("[intuition] SetAttrsA {obj:#x} ({})", a.classes.name_of(cl)))
 }
 
@@ -109,7 +113,7 @@ pub fn set_gadget_attrs_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result
     let cl = live_class(a, g, "SetGadgetAttrsA")?;
     let gi = if win != 0 || req != 0 { crate::boopsi_gadget::make_ginfo(a, win, req, g)? } else { 0 };
     let msg = make_msg(a, &[OM_SET, tags, gi])?;
-    send(a, cpu, cl, g, msg, finish_with(msg, gi))?;
+    send(a, cpu, cl, g, msg, finish_gadget(msg, gi, g))?;
     Ok(format!("[intuition] SetGadgetAttrsA {g:#x} ({}) win={win:#x}", a.classes.name_of(cl)))
 }
 

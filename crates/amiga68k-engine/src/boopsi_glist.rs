@@ -64,6 +64,7 @@ pub fn add_glist<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
         if ty & GTYP_GTYPEMASK == GTYP_CUSTOMGADGET && fl & (GFLG_RELSPECIAL | GFLG_RELRIGHT | GFLG_RELBOTTOM | GFLG_RELWIDTH | GFLG_RELHEIGHT) != 0
             && a.classes.class_of(x).is_some() { boopsi.push(x); }
     }
+    crate::native_gadgets::sync_chain(a, win, &chain(a, g, num)?)?;
     cpu.set_d0(used);
     let log = format!("[intuition] AddGList {g:#x} into {win:#x} at {used} ({} laid out)", boopsi.len());
     run_methods(a, cpu, Job { win, gadgets: boopsi, i: 0, method: GM_LAYOUT, result: used })?;
@@ -78,6 +79,7 @@ pub fn add_gadget<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     a.mem.write_u32(g + GAD_NEXT, 0).map_err(Refusal::mem("Gadget.NextGadget"))?;
     let used = link_in(a, win, g, pos, 1);
     let used = match used { Ok(u) => u, Err(e) => { let _ = a.mem.write_u32(g + GAD_NEXT, nxt); return Err(e) } };
+    crate::native_gadgets::sync_chain(a, win, &[g])?;
     cpu.set_d0(used);
     Ok(format!("[intuition] AddGadget {g:#x} into {win:#x} at {used}"))
 }
@@ -87,6 +89,7 @@ fn unlink<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32, num: i32) -> Result<u3
     let all = window_gadgets(a, win)?;
     let Some(at) = all.iter().position(|x| *x == g) else { return Ok(0xFFFF) };
     let take = chain(a, g, num)?;
+    crate::native_gadgets::forget(a, &take)?;
     let after = rd(a, take.last().unwrap() + GAD_NEXT, "Gadget.NextGadget")?;
     if at == 0 { a.mem.write_u32(win + WD_FIRST_GADGET, after).map_err(Refusal::mem("Window.FirstGadget"))?; }
     else { a.mem.write_u32(all[at - 1] + GAD_NEXT, after).map_err(Refusal::mem("Gadget.NextGadget"))?; }

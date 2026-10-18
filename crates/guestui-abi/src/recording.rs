@@ -16,6 +16,7 @@ pub enum UiCall {
     RemoveControl(UiObjectRef, UiObjectRef),
     SetControl(UiObjectRef, UiObjectRef, ControlValue),
     SetControlRect(UiObjectRef, UiObjectRef, GuestRect),
+    SetControlEnabled(UiObjectRef, UiObjectRef, bool),
     /// `present_content`: the window, the damage rectangle, the canvas size, and an FNV-1a 64 hash over the damage pixels.
     PresentContent { win: UiObjectRef, damage: GuestRect, width: i32, height: i32, hash: u64 },
 }
@@ -114,6 +115,13 @@ impl GuestUi for RecordingGuestUi {
         if rect.width < 0 || rect.height < 0 { return Err(UiRefusal::InvalidGeometry("control rect with a negative size")); }
         if let Some((_, m)) = self.controls.get_mut(&control.id) { m.rect = rect; }
         self.calls.push(UiCall::SetControlRect(win, control, rect));
+        Ok(())
+    }
+    fn set_control_enabled(&mut self, win: UiObjectRef, control: UiObjectRef, enabled: bool) -> Result<(), UiRefusal> {
+        self.check(win)?;
+        self.check(control)?;
+        if let Some((_, m)) = self.controls.get_mut(&control.id) { m.enabled = enabled; }
+        self.calls.push(UiCall::SetControlEnabled(win, control, enabled));
         Ok(())
     }
     fn remove_control(&mut self, win: UiObjectRef, control: UiObjectRef) -> Result<(), UiRefusal> {

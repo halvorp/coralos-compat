@@ -92,14 +92,16 @@ pub struct ControlModel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ControlValue { Pressed, Checked(bool), Text(String), Level(i32), Scroll { total: u32, visible: u32, top: u32 } }
+pub enum ControlValue { Pressed, Checked(bool), Text(String), Level(i32), Scroll { total: u32, visible: u32, top: u32 },
+    /// Only in a `ControlDriven` `Up`: the gesture ended outside the control (no activation, nothing changed).
+    Cancelled }
 
 impl ControlModel {
     /// Apply `value` to this model the way a host applies `set_control`: the shared rule for what each kind can hold.
     /// A value the kind cannot hold is `UiRefusal::Unsupported`; a `Scroll` with `top` past the end is clamped to it.
     pub fn apply(&mut self, value: &ControlValue) -> Result<(), UiRefusal> {
         match (&mut self.kind, value) {
-            (_, ControlValue::Pressed) => {}
+            (_, ControlValue::Pressed | ControlValue::Cancelled) => {}
             (ControlKind::Checkbox { checked }, ControlValue::Checked(b)) => *checked = *b,
             (ControlKind::ToggleButton { on }, ControlValue::Checked(b)) => *on = *b,
             (ControlKind::String { text, .. } | ControlKind::Label { text, .. } | ControlKind::Field { text, .. }, ControlValue::Text(t)) => *text = t.clone(),

@@ -1,8 +1,8 @@
 //! strgclass: a gadgetclass whose instance data is a `StrGData` = `struct StringInfo` (36) + `struct StringExtend` (36)
 //! + flags, with `Gadget.SpecialInfo` pointing at the StringInfo (GFLG_STRINGEXTEND set). OM_NEW/OM_SET/OM_GET/OM_DISPOSE
-//! are real (buffers allocated when the tags give none, STRINGA_TextVal / LongVal, ...). The EDITING (GM_RENDER,
-//! GM_GOACTIVE, GM_HANDLEINPUT, GM_GOINACTIVE: cursor, insertion, undo) is NOT implemented: those methods are a named
-//! refusal, not a silent 0. Facts: AROS rom/intuition strgclass.c strg_set / OM_NEW / OM_GET / OM_DISPOSE,
+//! are real (buffers allocated when the tags give none, STRINGA_TextVal / LongVal, ...). GM_RENDER puts / updates the NATIVE
+//! field (native_gadgets.rs); the EDITING (GM_GOACTIVE, GM_HANDLEINPUT, GM_GOINACTIVE) is the host's, so those methods are a
+//! named refusal, not a silent 0. Facts: AROS rom/intuition strgclass.c strg_set / OM_NEW / OM_GET / OM_DISPOSE,
 //! intuition/intuition.h StringInfo / StringExtend.
 use alloc::format;
 use alloc::string::String;
@@ -16,6 +16,7 @@ const SI_UNDO: u32 = 4;
 const SI_BUFFER_POS: u32 = 8;
 const SI_MAX_CHARS: u32 = 10;
 const SI_DISP_POS: u32 = 12;
+const SI_NUM_CHARS: u32 = 16;
 const SI_EXTENSION: u32 = 24;
 const SI_LONG_INT: u32 = 28;
 const EXT: u32 = 36; // StringExtend inside the instance
@@ -23,7 +24,7 @@ const EXT_PENS: u32 = 4;
 const EXT_ACTIVE_PENS: u32 = 6;
 const EXT_WORK_BUFFER: u32 = 16;
 const GFLG_STRINGEXTEND: u32 = 1 << 10;
-const GACT_LONGINT: u32 = 1 << 11;
+pub(crate) const GACT_LONGINT: u32 = 1 << 11;
 const STRINGA: u32 = tags::TAG_USER + 0x32000;
 pub const STRINGA_MAX_CHARS: u32 = STRINGA + 1;
 pub const STRINGA_BUFFER: u32 = STRINGA + 2;
@@ -47,6 +48,18 @@ fn put_str<U: GuestUi>(a: &mut Amiga<U>, si: u32, s: &str) -> Result<(), Refusal
     let n = s.len().min(max.saturating_sub(1));
     a.mem.write_bytes(buf, &s.as_bytes()[..n]).map_err(Refusal::mem("string buffer"))?;
     a.mem.write_u8(buf + n as u32, 0).map_err(Refusal::mem("string buffer"))
+}
+
+/// Store `text` as the gadget's string the way Intuition's UpdateStrGadget does: into the buffer (cut to MaxChars), NumChars, the
+/// cursor at the end, and LongInt when the gadget is a number field.
+pub(crate) fn store_text<U: GuestUi>(a: &mut Amiga<U>, si: u32, text: &str, long: bool) -> Result<(), Refusal> {
+    put_str(a, si, text)?;
+    let buf = r32(a, si + SI_BUFFER)?;
+    let n = a.mem.read_cstr(buf).map_err(Refusal::mem("string buffer"))?.len() as u32;
+    w16(a, si + SI_NUM_CHARS, n)?;
+    w16(a, si + SI_BUFFER_POS, n)?;
+    if long { w32(a, si + SI_LONG_INT, text.trim().parse::<i32>().unwrap_or(0) as u32)?; }
+    Ok(())
 }
 
 /// strg_set: the STRINGA_ tags. Non-zero when something visible changed.
@@ -139,8 +152,8 @@ pub fn strg<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u
             for (b, n) in a.classes.strg_bufs.remove(&o).unwrap_or_default() { a.heap.free(b, n).map_err(|e| Refusal(format!("strgclass buffer: {e}")))?; }
             dispatch_super(a, cl, o, msg)
         }
-        GM_RENDER | GM_GOACTIVE | GM_HANDLEINPUT | GM_GOINACTIVE =>
-            if id == GM_RENDER { crate::boopsi_draw::strg_render(a, o, msg) } else { Err(Refusal(format!("strgclass method {id}: string editing and input are not implemented (a subclass must handle input itself)"))) },
+        GM_RENDER => crate::native_gadgets::render(a, o, msg),
+        GM_GOACTIVE | GM_HANDLEINPUT | GM_GOINACTIVE => Err(Refusal(format!("strgclass method {id}: the string field is a native control, its editing is the host's (native_gadgets.rs)"))),
         _ => dispatch_super(a, cl, o, msg),
     }
 }

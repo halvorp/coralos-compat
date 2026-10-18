@@ -17,6 +17,7 @@ use retro_m68k::Cpu;
 pub const LVO_MODIFY_IDCMP: i32 = -150;
 
 pub const IDCMP_MOUSEMOVE: u32 = 0x10;
+pub const IDCMP_GADGETDOWN: u32 = 0x20;
 pub const IDCMP_GADGETUP: u32 = 0x40;
 pub const IDCMP_MENUPICK: u32 = 0x100;
 pub const IDCMP_CLOSEWINDOW: u32 = 0x200;
@@ -156,6 +157,10 @@ pub fn deliver<U: GuestUi>(a: &mut Amiga<U>, ev: GuestUiEvent) -> Result<Deliver
         },
         GuestUiEvent::Pointer { win, x, y, phase } => match guest_window(a, win) {
             Some(w) => crate::boopsi_input::queue(a, w, x, y, phase),
+            None => Ok(Delivered::NotForAGuestWindow),
+        },
+        GuestUiEvent::ControlDriven { win, control, token, phase, value } => match guest_window(a, win) {
+            Some(w) => crate::native_gadgets_input::driven(a, w, win, control, token, phase, value),
             None => Ok(Delivered::NotForAGuestWindow),
         },
         ev @ GuestUiEvent::Resized { .. } => Err(Refusal(format!("deliver: {ev:?} not bridged yet"))),
