@@ -176,9 +176,13 @@ fn gadget_set<U: GuestUi>(a: &mut Amiga<U>, g: u32, tag_list: u32, method: u32) 
             }
             GA_NEXT => w32(a, GAD_NEXT, d)?,
             GA_PREVIOUS => if on && method == OM_NEW {
+                // Link after `previous` once: the tag list reaches gadgetclass again when a subclass re-applies it, and a second
+                // pass would make the gadget its own successor.
                 let n = rd(a, d + GAD_NEXT, "previous gadget")?;
-                w32(a, GAD_NEXT, n)?;
-                a.mem.write_u32(d + GAD_NEXT, g).map_err(Refusal::mem("previous gadget"))?;
+                if n != g {
+                    w32(a, GAD_NEXT, n)?;
+                    a.mem.write_u32(d + GAD_NEXT, g).map_err(Refusal::mem("previous gadget"))?;
+                }
             },
             GA_INTUI_TEXT | GA_TEXT | GA_LABEL_IMAGE => {
                 w32(a, GAD_TEXT, d)?;

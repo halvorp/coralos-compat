@@ -99,6 +99,10 @@ pub fn init<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
         a.mem.zero(cl, CL_SIZE).map_err(Refusal::mem("IClass"))?;
         wr(&mut a.mem, cl + CL_H_ENTRY, crate::boopsi::trap_entry())?;
         wr(&mut a.mem, cl + CL_H_DATA, i as u32)?;
+        // cl_ID: the public name as a guest C string (programs read it: DOpus's FindBOOPSIGadget compares cl_Super->cl_ID to "gadgetclass")
+        let id = crate::fs::alloc_zeroed_sys(a, name.len() as u32 + 1)?.ok_or_else(|| Refusal("native class names: engine arena full (NOMEM)".into()))?;
+        a.mem.write_bytes(id, name.as_bytes()).map_err(Refusal::mem("IClass cl_ID"))?;
+        wr(&mut a.mem, cl + CL_ID, id)?;
         a.mem.write_u32(cl + CL_FLAGS, CLF_INLIST).map_err(Refusal::mem("IClass"))?;
         fill(a, cl, ClassRec { name: Some((*name).into()), native: Some(*native), sup: sup_addr, inst_offset: off, inst_size: *size as u32, subclasses: 0, objects: 0, public: true })?;
     }
