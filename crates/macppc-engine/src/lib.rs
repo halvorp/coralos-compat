@@ -15,6 +15,7 @@
 //! return goes through LR.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+pub mod asm;
 pub mod census;
 pub mod cfm;
 pub mod cfrg;
@@ -24,9 +25,11 @@ pub mod glue;
 pub mod host;
 pub mod machine;
 pub mod natives;
+pub mod run;
 pub mod source;
 pub mod symbols;
 
 pub use error::CfmError;
 pub use host::{GlueOutcome, PpcHost};
 pub use machine::MacPpc;
+pub use retro_common::Step;

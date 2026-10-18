@@ -23,12 +23,13 @@ pub struct MacPpc<U: GuestUi> {
     pub strict_imports: bool,
     pub(crate) connections: Vec<String>,
     pub(crate) qd: Option<u32>,
+    pub(crate) rt: crate::run::Runtime,
 }
 
 impl<U: GuestUi> MacPpc<U> {
     pub fn new(ui: U) -> Result<Self, CfmError> {
         let mac = Mac::new(ui).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default() })
     }
 
     /// The binding for `name`, computed once against the handlers `mac` has registered.

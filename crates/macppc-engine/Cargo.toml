@@ -12,3 +12,7 @@ retro-pef = { path = "../retro-pef" }
 retro-resfork = { path = "../retro-resfork" }
 mac68k-engine = { path = "../mac68k-engine" }
 guestui-abi = { path = "../guestui-abi" }
+retro-ppc = { path = "../retro-ppc" }
+
+[dev-dependencies]
+retro-raster = { path = "../retro-raster" }

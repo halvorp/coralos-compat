@@ -13,17 +13,21 @@ use mac68k_engine::mixed::{os_sig, trap_opcode, OsSig};
 use mac68k_engine::traps::describe;
 use mac68k_engine::Mac;
 
+/// `SysBeep` is here because the 68k engine has not registered it (its tests use it as their example of an unimplemented
+/// trap); it moves to a shared handler when the 68k side gets one.
 /// Host functions that have no 68k trap (the Code Fragment Manager's API, C-level helpers), or whose 68k form cannot be
 /// used as it is: `WaitNextEvent` / `GetNextEvent` suspend a 68k guest through its run loop, so a PowerPC call polls
 /// instead (the same as `WaitNextEvent` with `sleep = 0`, which real Mac OS allows to return the null event at once).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent }
+pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent, SysBeep,
+    /// The return address of a fragment's init routine: a pseudo-call the run loop answers by starting `main`.
+    InitDone }
 
 impl Native {
     pub fn by_name(name: &str) -> Option<Native> {
         Some(match name {
             "GetSharedLibrary" => Native::GetSharedLibrary, "FindSymbol" => Native::FindSymbol, "CloseConnection" => Native::CloseConnection,
-            "MemError" => Native::MemError, "WaitNextEvent" => Native::WaitNextEvent, "GetNextEvent" => Native::GetNextEvent, "BlockZero" => Native::BlockZero, "ExitToShell" => Native::Exit,
+            "MemError" => Native::MemError, "WaitNextEvent" => Native::WaitNextEvent, "GetNextEvent" => Native::GetNextEvent, "BlockZero" => Native::BlockZero, "SysBeep" => Native::SysBeep, "ExitToShell" => Native::Exit,
             _ => return None,
         })
     }
