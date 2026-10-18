@@ -49,3 +49,47 @@ An application file is MacBinary, or an AppleDouble header file (`%name`/`._name
 4. UPP/routine descriptors (68k <-> PPC callbacks both ways) once a CPU exists to hand control between the two.
 5. `WaitNextEvent` with a non-zero sleep is a poll today (the run loop cannot suspend a PowerPC caller), so an idle PPC event loop busy-spins the host; the call logs the ignored sleep. Needs an idle outcome in `GlueOutcome` once the CPU lane exists.
 6. Bindings are keyed by symbol and only honoured for `InterfaceLib` (other libraries are Unbound by name); a second provided library needs a per-library binding table.
+
+
+---
+
+# macppc RUNS (2026-10-18, ppcrun lane)
+
+`retro-ppc` is now the CPU. `MacPpc::start(&frag)` builds the CFM entry state (fresh 256 KiB stack, r1 16-byte aligned over a
+zero back chain, r2 = RTOC of the main TVector, r12 = the TVector address, LR = the ExitToShell glue); a fragment with an
+`init` routine runs it first (LR = the `$InitDone` pseudo-glue, which switches the CPU to `main`; r3 = 0 where real CFM passes a
+`CFragInitBlock *`; term routines are not run). `MacPpc::step(budget) -> (Step, RunStats)` has the 68k engines' shape:
+`Exited | Blocked | BudgetSpent | Fault(String)`; `run_loop(max)` drives it. Faults are sticky and named: a CPU trap
+(`PowerPC fault: unimplemented ... at pc`), a refused import (`NEXT-NEEDED <symbol>: why`), a bus fault on the placeholder
+address of an unbound DATA import (names the unbound data imports).
+
+How a Toolbox call happens: every glue stub address is bound with `Cpu::bind_native`; the interpreter calls `Host::native`, which
+copies r0..r31 into `glue_call`, runs the same Rust handler the 68k personality runs, and writes r3/r4 back; the CPU then
+returns through LR. Arguments past r10 are read from the stack parameter area (r1 + 24 + 4*i). Results: INTEGER sign-extended,
+Boolean zero-extended. Pascal strings, VAR parameters and Rect/Point pointers are identical to the 68k conventions (a pointer is a
+pointer; a Point is the two shorts packed in one register). `qd` is the real QDGlobals block; `InitGraf(&qd.thePort)` fills it in place.
+`WaitNextEvent` (sleep != 0) and `GetNextEvent` with no matching event return `GlueOutcome::Idle`: the CPU is parked ON the call
+(`Step::Blocked`, no instructions run) and the call is retried when a queued event matches its mask. The sleep's tick count is not
+honoured (no timer wakes the guest).
+
+Not handled, each a named limit: floating-point arguments/results (f1..f13; no InterfaceLib import this engine binds takes one),
+64-bit results in r3:r4, Mixed Mode UPPs/RoutineDescriptors (callbacks into PPC or 68k code), `longjmp`, `atexit`, term routines.
+`SysBeep` is a macppc native that logs only (GuestUi has no beep; a UI-side beep event is the missing piece); the 68k engine does not
+register it yet (its tests use SysBeep as their unimplemented-trap example).
+
+InterfaceLib export names that differ from the 68k trap table's spelling are aliased (`GetMenu`=`GetRMenu`, `BeginUpdate`=
+`BeginUpDate`, `EndUpdate`=`EndUpDate`, `XorRgn`=`XOrRgn`); found by importing a real PEF.
+
+`stdclib.rs` serves the 8 StdCLib symbols the real showcase PEF imports: `_IntEnv`, `__C_phase`, `_exit_status`, `__NubAt3`,
+`__target_for_exit` (zeroed guest blocks), `__setjmp` (private 23-word layout), `exit` (stores `_exit_status`, ends the run),
+`_BreakPoint` (logged). Other StdCLib names are NEXT-NEEDED by name.
+
+`fixture::startup_app()` is a real program assembled with `asm.rs`: InitGraf(&qd.thePort), the Init calls, NewWindow, SetPort,
+MoveTo, DrawString, a WaitNextEvent loop, FindWindow/TrackGoAway on the native close, SysBeep, ExitToShell.
+`tests/run.rs` pins it with pixels (every glyph of the string through `present_content`), and negative controls.
+
+Real application: the Systemless "Toolbox Showcase" (PEF + resource fork from `toolbox-showcase.sit`), see `tests/real_app.rs`.
+`macppc-run --census --rsrc showcase.rsrc showcase.pef` (`--rsrc` attaches a raw resource fork; a MacBinary/AppleDouble file's own
+fork is attached automatically): 249 imports, 95 bound (StdCLib 8/8). It runs 261 PowerPC instructions through its C startup, the
+Init calls, `GetNewMBar 128` (menus 128..131 from its REAL resource fork), four `GetMenu`/`InsertMenu`, `DrawMenuBar`, and stops at
+`NEXT-NEEDED GetNewCWindow` (Color QuickDraw windows). Without the resource fork it stops earlier: no MBAR 128, the app quits.

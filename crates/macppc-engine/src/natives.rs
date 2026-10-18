@@ -21,7 +21,7 @@ pub const FRAG_LIB_NOT_FOUND: i16 = -2804;
 pub const SYMBOL_CLASS_DATA: u8 = 1;
 pub const SYMBOL_CLASS_TVECTOR: u8 = 2;
 /// The libraries `GetSharedLibrary` can hand out: the ones whose symbols the binding table resolves.
-pub const PROVIDED_LIBRARIES: &[&str] = &["InterfaceLib"];
+pub const PROVIDED_LIBRARIES: &[&str] = &["InterfaceLib", crate::stdclib::NAME];
 
 fn err(e: i16) -> u32 { e as i32 as u32 }
 
@@ -61,6 +61,7 @@ impl<U: GuestUi> MacPpc<U> {
                 GlueOutcome::Return
             }
             Native::InitDone => GlueOutcome::Return,
+            Native::SetJmp | Native::CExit | Native::BreakPoint => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
             Native::WaitNextEvent | Native::GetNextEvent => {
                 // eventMask, EventRecord*, [sleep, mouseRgn]. The handler is polled with sleep 0 (it pumps the GuestUi and
                 // returns a queued event or the null event). A null event for a caller that asked to sleep (WaitNextEvent
@@ -110,10 +111,10 @@ impl<U: GuestUi> MacPpc<U> {
                     return GlueOutcome::Return;
                 };
                 let name = match self.pstr(name_p) { Ok(n) => n, Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) };
-                let b = self.bind(&name);
+                let b = self.bind_from(&lib, &name);
                 let (addr, class) = match &b {
                     Binding::Unbound(_) => { self.mac.log.push(format!("[cfm] FindSymbol {lib}/{name} -> fragSymbolNotFound")); regs[3] = err(FRAG_SYMBOL_NOT_FOUND); return GlueOutcome::Return; }
-                    Binding::Qd => match self.qd_block() { Ok(p) => (p, SYMBOL_CLASS_DATA), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
+                    Binding::Qd | Binding::CData(_) => match self.data_block(&name, &b) { Ok(p) => (p, SYMBOL_CLASS_DATA), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
                     _ => match self.glue.intern(&mut self.mac, &lib, &name) { Ok(id) => (self.glue.entry(id).map_or(0, |e| e.tvector), SYMBOL_CLASS_TVECTOR), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
                 };
                 let ok = self.mac.mem.write_u32(addr_p, addr).is_ok() && (class_p == 0 || self.mac.mem.write_u8(class_p, class).is_ok());
@@ -154,7 +155,7 @@ impl<U: GuestUi> PpcHost for MacPpc<U> {
                 self.finish(symbol, r, result, regs)
             }
             Binding::Native(n) => self.native(n, regs),
-            Binding::Qd => GlueOutcome::Refused(format!("{symbol} is a data symbol, it cannot be called")),
+            Binding::Qd | Binding::CData(_) => GlueOutcome::Refused(format!("{symbol} is a data symbol, it cannot be called")),
             Binding::Unbound(why) => {
                 let line = format!("{UNIMPLEMENTED} import {symbol}: {why}");
                 self.mac.log.push(format!("[toolbox] REFUSED: {line}"));

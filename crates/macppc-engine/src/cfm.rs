@@ -7,7 +7,6 @@
 //! NAME when called (or [`CfmError::UnresolvedImport`] in strict mode) and, for data, an address outside guest RAM.
 use crate::error::CfmError;
 use crate::machine::{MacPpc, UNBOUND_DATA};
-use crate::natives::PROVIDED_LIBRARIES;
 use crate::symbols::Binding;
 use alloc::format;
 use alloc::string::String;
@@ -94,7 +93,7 @@ impl<U: GuestUi> MacPpc<U> {
             let lib = &loader.libraries[imp.library];
             // the value a function import relocates to: a TVector for TVector class, the code address (the stub) for Code class
             let fn_value = |glue: &crate::glue::Glue, id: usize| glue.entry(id).map_or(0, |e| if imp.class == SymbolClass::Code { e.stub } else { e.tvector });
-            let b = if PROVIDED_LIBRARIES.contains(&lib.name.as_str()) { self.bind(&imp.name) } else { Binding::Unbound(format!("library {} is not provided by the engine", lib.name)) };
+            let b = self.bind_from(&lib.name, &imp.name);
             let weak = imp.weak || lib.weak;
             // Why this import cannot be served as declared, if it cannot.
             let why = match (&b, imp.class) {
@@ -107,13 +106,16 @@ impl<U: GuestUi> MacPpc<U> {
             let (status, value) = match why {
                 Some(why) if weak => (ImportStatus::WeakAbsent(why), 0),
                 Some(why) if self.strict_imports => return Err(CfmError::UnresolvedImport { library: lib.name.clone(), symbol: imp.name.clone(), why }),
-                Some(why) if imp.class == SymbolClass::Data || !matches!(b, Binding::Unbound(_)) => (ImportStatus::Unbound(why), UNBOUND_DATA),
+                Some(why) if imp.class == SymbolClass::Data || !matches!(b, Binding::Unbound(_)) => {
+                    if imp.class == SymbolClass::Data { self.unbound_data.push(format!("{}/{}", lib.name, imp.name)); }
+                    (ImportStatus::Unbound(why), UNBOUND_DATA)
+                }
                 Some(why) => {
                     // a function nobody provides: calling it refuses by name
                     let id = self.glue.intern(&mut self.mac, &lib.name, &imp.name)?;
                     (ImportStatus::Unbound(why), fn_value(&self.glue, id))
                 }
-                None if b.is_data() => (ImportStatus::Bound(b.describe()), self.qd_block()?),
+                None if b.is_data() => (ImportStatus::Bound(b.describe()), self.data_block(&imp.name, &b)?),
                 None => {
                     let id = self.glue.intern(&mut self.mac, &lib.name, &imp.name)?;
                     (ImportStatus::Bound(b.describe()), fn_value(&self.glue, id))

@@ -20,6 +20,8 @@ use mac68k_engine::Mac;
 /// instead (the same as `WaitNextEvent` with `sleep = 0`, which real Mac OS allows to return the null event at once).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent, SysBeep,
+    /// StdCLib `__setjmp`, `exit`, `_BreakPoint`: they need the CPU's registers, so [`crate::run`] serves them, not `glue_call`.
+    SetJmp, CExit, BreakPoint,
     /// The return address of a fragment's init routine: a pseudo-call the run loop answers by starting `main`.
     InitDone }
 
@@ -42,13 +44,15 @@ pub enum Binding {
     Native(Native),
     /// The QuickDraw globals record `qd` (a data import).
     Qd,
+    /// A zero-initialised variable of this many bytes in guest memory (StdCLib's runtime state).
+    CData(u32),
     /// No binding; the string says why.
     Unbound(String),
 }
 
 impl Binding {
     pub fn is_bound(&self) -> bool { !matches!(self, Binding::Unbound(_)) }
-    pub fn is_data(&self) -> bool { matches!(self, Binding::Qd) }
+    pub fn is_data(&self) -> bool { matches!(self, Binding::Qd | Binding::CData(_)) }
     /// A short description for the census.
     pub fn describe(&self) -> String {
         match self {
@@ -56,6 +60,7 @@ impl Binding {
             Binding::Os(op, s) => format!("OS trap {} as C routine {}", describe(*op), s.name),
             Binding::Native(n) => format!("native {n:?}"),
             Binding::Qd => "data: QuickDraw globals".into(),
+            Binding::CData(n) => format!("data: {n} zeroed bytes of C runtime state"),
             Binding::Unbound(why) => why.clone(),
         }
     }
@@ -68,8 +73,14 @@ const NEEDS_68K_RUN_LOOP: &[(&str, &str)] = &[
     ("UnLoadSeg", "68k segment loader: PowerPC fragments have no CODE segments"),
 ];
 
+/// InterfaceLib exports whose C name differs from the name the 68k trap table gives the same trap (the table keeps the
+/// trap-era spelling). Found by importing the real Systemless toolbox-showcase PEF and matching the unnamed imports to
+/// trap words case-insensitively; `GetMenu` is the Menu Manager's `_GetRMenu` (menu.rs registers it under that word).
+pub const INTERFACELIB_ALIASES: &[(&str, &str)] = &[("GetMenu", "GetRMenu"), ("BeginUpdate", "BeginUpDate"), ("EndUpdate", "EndUpDate"), ("XorRgn", "XOrRgn")];
+
 /// How `name` would be served, given the handlers `mac` has registered.
 pub fn lookup<U: GuestUi>(mac: &Mac<U>, name: &str) -> Binding {
+    let name = INTERFACELIB_ALIASES.iter().find(|(from, _)| *from == name).map_or(name, |&(_, trap)| trap);
     if let Some(n) = Native::by_name(name) { return Binding::Native(n); }
     if name == "qd" { return Binding::Qd; }
     if let Some((_, why)) = NEEDS_68K_RUN_LOOP.iter().find(|(n, _)| *n == name) { return Binding::Unbound(format!("{name}: {why}")); }

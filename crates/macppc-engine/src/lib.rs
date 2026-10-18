@@ -27,6 +27,7 @@ pub mod machine;
 pub mod natives;
 pub mod run;
 pub mod source;
+pub mod stdclib;
 pub mod symbols;
 
 pub use error::CfmError;

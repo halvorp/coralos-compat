@@ -216,3 +216,29 @@ fn budget_spent_resumes_where_it_stopped() {
     assert_eq!(m.mac.windows.len(), 1, "one window, not two: the run resumed instead of restarting");
 }
 
+
+#[test]
+fn stdclib_runtime_state_setjmp_and_exit() {
+    // __setjmp(&__target_for_exit) ; exit(7): the jmp_buf holds r1, r2 and the caller's LR; _exit_status becomes 7; the run ends
+    let libs: &[fixture::Lib] = &[("StdCLib", false, &[("__target_for_exit", SymbolClass::Data, false), ("_exit_status", SymbolClass::Data, false), ("__setjmp", SymbolClass::TVector, false), ("exit", SymbolClass::TVector, false), ("memcpy", SymbolClass::TVector, false)])];
+    let mut a = Asm::new();
+    a.mflr(0).stw(0, 8, 1).stwu(1, -64, 1);
+    a.lwz(3, 8, 2).call_toc(16).stw(3, 40, 1); // r3 = &jmp_buf; __setjmp returns 0
+    a.li(3, 7).call_toc(20).blr();
+    let bytes = fixture::app_with(libs, &a.finish(), &[]);
+    let (mut m, frag) = boot(&bytes);
+    let r1 = m.cpu().unwrap().gpr[1];
+    assert_eq!(m.step(10_000).0, Step::Exited, "{:?}\n{:#?}", m.fault(), m.mac.log);
+    let imp = |n: &str| frag.imports.iter().find(|i| i.symbol == n).unwrap().value;
+    assert_eq!(m.mac.mem.read_u32(imp("_exit_status")).unwrap(), 7);
+    let buf = imp("__target_for_exit");
+    assert_eq!(m.mac.mem.read_u32(buf).unwrap(), r1 - 64, "saved r1 is main's frame");
+    assert_eq!(m.mac.mem.read_u32(buf + 4).unwrap(), frag.main.unwrap().toc, "saved r2");
+    assert!(m.mac.log.iter().any(|l| l == "[stdclib] exit(7)"), "{:#?}", m.mac.log);
+    // negative controls: the two C runtime variables are distinct blocks, and a StdCLib function this engine does not
+    // provide is NEXT-NEEDED by name rather than being served by a Toolbox handler of the same name
+    assert_ne!(imp("_exit_status"), buf);
+    let c = macppc_engine::census::Census::of(&frag);
+    assert_eq!(c.next_needed, ["StdCLib/memcpy"]);
+    assert!(c.lines.iter().any(|l| l.contains("memcpy") && l.contains("not in the part of StdCLib")), "{:?}", c.lines);
+}

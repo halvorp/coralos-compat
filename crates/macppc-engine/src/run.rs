@@ -16,7 +16,7 @@
 use crate::cfm::{Fragment, StartState};
 use crate::error::CfmError;
 use crate::host::{GlueOutcome, PpcHost};
-use crate::machine::MacPpc;
+use crate::machine::{MacPpc, UNBOUND_DATA};
 use crate::symbols::{Binding, Native};
 use alloc::format;
 use alloc::string::String;
@@ -91,7 +91,15 @@ impl<U: GuestUi> MacPpc<U> {
         self.sync_natives(&mut cpu);
         let stats = retro_ppc::resume(self, &mut cpu, budget);
         mac68k_engine::qd::flush(&mut self.mac);
-        if let Some(t) = stats.trap { self.rt.fault = Some(format!("PowerPC fault: {t}")); }
+        if let Some(t) = stats.trap {
+            let mut why = format!("PowerPC fault: {t}");
+            if let retro_ppc::Trap::BusFault { addr, .. } = t {
+                if addr >= UNBOUND_DATA && addr - UNBOUND_DATA < 0x1000 && !self.unbound_data.is_empty() {
+                    why = format!("{why} -- the placeholder address of an unbound DATA import; unbound data imports of this fragment: {}", self.unbound_data.join(", "));
+                }
+            }
+            self.rt.fault = Some(why);
+        }
         let step = if let Some(f) = &self.rt.fault { Step::Fault(f.clone()) }
             else if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked } else { Step::BudgetSpent };
         if step != Step::Exited { self.rt.cpu = Some(cpu); }
@@ -105,6 +113,30 @@ impl<U: GuestUi> MacPpc<U> {
             let (step, s) = self.step(max_insns.saturating_sub(total));
             total += s.insns;
             if step != Step::BudgetSpent || total >= max_insns { return (step, total); }
+        }
+    }
+}
+
+impl<U: GuestUi> MacPpc<U> {
+    /// StdCLib functions that read or write the CPU's own registers (see [`crate::stdclib`]).
+    fn cpu_native(&mut self, n: Native, cpu: &mut Cpu) {
+        match n {
+            Native::SetJmp => {
+                let buf = cpu.gpr[3];
+                // a glue stub is entered with r2 = 0 (its TVector's toc), so the CALLER's RTOC is the one it saved at 20(r1)
+                let rtoc = self.mac.mem.read_u32(cpu.gpr[1].wrapping_add(20)).unwrap_or(cpu.gpr[2]);
+                let saved = [cpu.gpr[1], rtoc, cpu.lr, cpu.cr].into_iter().chain(cpu.gpr[13..32].iter().copied());
+                let ok = saved.enumerate().all(|(i, w)| self.mac.mem.write_u32(buf.wrapping_add(4 * i as u32), w).is_ok());
+                if !ok { self.rt.fault = Some(format!("__setjmp: the jmp_buf at {buf:#x} leaves guest RAM")); cpu.halt(); }
+                cpu.gpr[3] = 0;
+            }
+            Native::CExit => {
+                let status = cpu.gpr[3];
+                if let Some(&p) = self.cdata.get("_exit_status") { let _ = self.mac.mem.write_u32(p, status); }
+                self.mac.log.push(format!("[stdclib] exit({})", status as i32));
+                cpu.halt();
+            }
+            _ => self.mac.log.push("[stdclib] _BreakPoint (no debugger: ignored)".into()),
         }
     }
 }
@@ -123,6 +155,7 @@ impl<U: GuestUi> Host for MacPpc<U> {
             cpu.set_pc(m.pc);
             return true;
         }
+        if let Some(Binding::Native(n @ (Native::SetJmp | Native::CExit | Native::BreakPoint))) = self.bindings.get(&symbol).cloned() { self.cpu_native(n, cpu); return true; }
         let mut regs = cpu.gpr;
         let outcome = self.glue_call(&symbol, &mut regs);
         // a host call changes the result registers only; anything else it touched would be a bug in the adapter
