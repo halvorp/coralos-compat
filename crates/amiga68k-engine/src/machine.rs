@@ -57,6 +57,10 @@ pub struct Amiga<U: GuestUi> {
     pub heap: memory::Heap,
     /// The engine's own arena (see SYS_ARENA_START).
     pub sys_heap: memory::Heap,
+    /// The default Locale and its strings (locale.rs).
+    pub locale: crate::locale::State,
+    /// The CACR bits CacheControl reports (cache.rs).
+    pub cache_bits: u32,
     /// The guest tasks and who runs (sched.rs).
     pub sched: crate::sched::Sched<U>,
     /// What the program wrote to its console.
@@ -100,7 +104,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), gfx: Default::default(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
@@ -117,6 +121,8 @@ impl<U: GuestUi> Amiga<U> {
             .func(memory::LVO_AVAIL_MEM, "AvailMem", memory::avail_mem::<U>)
             .func(memory::LVO_COPY_MEM, "CopyMem", memory::copy_mem::<U>)
             .with(crate::exec_task::register::<U>)
+            .with(crate::exec_patch::register::<U>)
+            .with(crate::cache::register::<U>)
             .func(memory::LVO_SET_SIGNAL, "SetSignal", memory::set_signal::<U>)
             .func(memory::LVO_STACK_SWAP, "StackSwap", memory::stack_swap::<U>)
             .func(memory::LVO_CREATE_POOL, "CreatePool", memory::create_pool::<U>)
@@ -243,6 +249,9 @@ impl<U: GuestUi> Amiga<U> {
         a.mem.write_u32(4, EXEC_BASE).map_err(Refusal::mem("AbsExecBase"))?; // AbsExecBase
         Ok(a)
     }
+
+    /// The library/function/handler trapped at `addr`, if it is a bridged vector slot.
+    pub(crate) fn dispatch_entry(&self, addr: u32) -> Option<(&'static str, &'static str, crate::libtable::Handler<U>)> { self.dispatch.get(&addr).copied() }
 
     /// Make `addr` an `ILLEGAL; RTS` slot whose trap runs `h` (the engine's own return traps).
     pub(crate) fn install_slot(&mut self, addr: u32, lib: &'static str, func: &'static str, h: crate::libtable::Handler<U>) -> Result<(), Refusal> {
