@@ -38,7 +38,7 @@ pub fn blt_bit_map<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     let (s, d) = (cpu.areg(0), cpu.areg(1));
     let (sxy, dxy, wh) = ((sx(cpu.dreg(0)), sx(cpu.dreg(1))), (sx(cpu.dreg(2)), sx(cpu.dreg(3))), (sx(cpu.dreg(4)), sx(cpu.dreg(5))));
     let (mt, planes) = (cpu.dreg(6) as u8, cpu.dreg(7) as u8);
-    bitmaps::ensure(a, s)?; bitmaps::ensure(a, d)?;
+    bitmaps::ensure_source(a, s)?; bitmaps::ensure(a, d)?;
     let window = a.gfx.bitmaps[&d].window;
     let n = a.gfx.bitmaps[&s].bm.depth().min(a.gfx.bitmaps[&d].bm.depth());
     do_blit(a, s, sxy, Dest::Bitmap { bm: d, origin: (0, 0), window, region: None }, dxy, wh, mt, planes, None)?;
@@ -50,7 +50,7 @@ pub fn blt_bit_map<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
 pub fn blt_bit_map_rast_port<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (s, rp) = (cpu.areg(0), cpu.areg(1));
     let (sxy, dxy, wh, mt) = ((sx(cpu.dreg(0)), sx(cpu.dreg(1))), (sx(cpu.dreg(2)), sx(cpu.dreg(3))), (sx(cpu.dreg(4)), sx(cpu.dreg(5))), cpu.dreg(6) as u8);
-    bitmaps::ensure(a, s)?;
+    bitmaps::ensure_source(a, s)?;
     let dst = target::resolve(a, rp)?;
     do_blit(a, s, sxy, dst, dxy, wh, mt, 0xFF, None)?;
     Ok(format!("[graphics] BltBitMapRastPort {s:#x} -> rp {rp:#x} ({},{}) {}x{} minterm {mt:#x}", dxy.0, dxy.1, wh.0, wh.1))
@@ -80,7 +80,7 @@ fn bit(rows: &[u8], bpr: u32, x: i32, y: i32) -> bool {
 pub fn blt_mask_bit_map_rast_port<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (s, rp, mp) = (cpu.areg(0), cpu.areg(1), cpu.areg(2));
     let (sxy, dxy, wh, mt) = ((sx(cpu.dreg(0)), sx(cpu.dreg(1))), (sx(cpu.dreg(2)), sx(cpu.dreg(3))), (sx(cpu.dreg(4)), sx(cpu.dreg(5))), cpu.dreg(6) as u8);
-    bitmaps::ensure(a, s)?;
+    bitmaps::ensure_source(a, s)?;
     let dst = target::resolve(a, rp)?;
     let origin = match &dst { Dest::Bitmap { origin, .. } => *origin, Dest::Dropped(_) => (0, 0) };
     let bpr = a.mem.read_u16(s + BM_BYTES_PER_ROW).map_err(Refusal::mem("BitMap"))? as u32;

@@ -1,7 +1,8 @@
 //! BitMaps: a guest `struct BitMap` (real: BytesPerRow, Rows, Flags, Depth, Planes[8]) in guest memory, backed by a
 //! host-side CHUNKY bitmap of pen indices. QUALIFIED LAYOUT: chunky, depth 1..=8. The struct's Planes[] are NULL: the
 //! pixels do not live in guest planes, so a program that reads or writes plane memory directly sees nothing (it is
-//! not mirrored; a plane store is not observed). Programs that go through graphics.library calls, which is nearly all
+//! not mirrored; a plane store is not observed). EXCEPTION: a BitMap whose Planes[] point at guest memory (a program's own
+//! planar data, e.g. a DiskObject's icon Image through InitBitMap) is a blit SOURCE read from those planes ([`ensure_source`]). Programs that go through graphics.library calls, which is nearly all
 //! of them, never notice. AllocRaster/FreeRaster still hand out real guest memory for programs that build their own
 //! planes; a BitMap they InitBitMap is adopted by its Rows/BytesPerRow/Depth on first use.
 use super::layout::*;
@@ -25,6 +26,32 @@ pub fn write_struct<U: GuestUi>(a: &mut Amiga<U>, bm: u32, w: i32, h: i32, depth
     a.mem.write_u16(bm + BM_BYTES_PER_ROW, bytes_per_row(w) as u16).map_err(&m)?;
     a.mem.write_u16(bm + BM_ROWS, h as u16).map_err(&m)?;
     a.mem.write_u8(bm + BM_DEPTH, depth).map_err(&m)
+}
+
+/// [`ensure`] for a blit SOURCE: when the struct's Planes[] hold guest pointers (not NULL, not -1) the pixels live in guest planes
+/// the program may have changed, so the host bitmap is rebuilt from them first (plane i = bit i of the pen; a NULL plane reads as
+/// 0 and a -1 plane as all ones, graphics.library's convention).
+pub fn ensure_source<U: GuestUi>(a: &mut Amiga<U>, bm: u32) -> Result<(), Refusal> {
+    ensure(a, bm)?;
+    let m = Refusal::mem("BitMap");
+    let depth = a.mem.read_u8(bm + BM_DEPTH).map_err(&m)? as u32;
+    let mut planes = alloc::vec::Vec::new();
+    for i in 0..depth.min(8) { planes.push(a.mem.read_u32(bm + BM_PLANES + 4 * i).map_err(&m)?); }
+    if !planes.iter().any(|&p| p != 0 && p != u32::MAX) { return Ok(()); }
+    let (bpr, rows) = (a.mem.read_u16(bm + BM_BYTES_PER_ROW).map_err(&m)? as u32, a.mem.read_u16(bm + BM_ROWS).map_err(&m)? as u32);
+    let mut pens = alloc::vec![0u8; (bpr * 8 * rows) as usize];
+    for (i, &p) in planes.iter().enumerate() {
+        if p == 0 { continue; }
+        for y in 0..rows {
+            for xb in 0..bpr {
+                let byte = if p == u32::MAX { 0xFF } else { a.mem.read_u8(p + y * bpr + xb).map_err(&m)? };
+                for bit in 0..8u32 { if byte & (0x80 >> bit) != 0 { pens[(y * bpr * 8 + xb * 8 + bit) as usize] |= 1 << i; } }
+            }
+        }
+    }
+    let g = a.gfx.bitmaps.get_mut(&bm).expect("ensured");
+    for y in 0..rows as i32 { for x in 0..(bpr * 8) as i32 { g.bm.set(x, y, pens[(y as u32 * bpr * 8 + x as u32) as usize]); } }
+    Ok(())
 }
 
 /// A new guest BitMap struct plus its host bitmap; returns the struct's address.
