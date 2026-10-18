@@ -43,6 +43,8 @@ pub struct FsState {
     pub disk_libs: Vec<crate::disklib::DiskLib>,
     /// The Amiga-epoch day the virtual clock starts on (dos_misc.rs).
     pub start_day: i32,
+    /// Live DiskObjects icon.library made: address -> size of the one heap block holding all of it (icon.rs).
+    pub icons: BTreeMap<u32, u32>,
 }
 
 impl FsState {
@@ -101,6 +103,6 @@ pub fn new_lock<U: GuestUi>(a: &mut Amiga<U>, node: NodeId, exclusive: bool) -> 
 
 impl Default for FsState {
     fn default() -> Self {
-        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026 }
+        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, icons: BTreeMap::new() }
     }
 }
