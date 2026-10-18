@@ -115,6 +115,22 @@ pub fn flush<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
     Ok("[dos] Flush".into())
 }
 
+/// SetVBuf(d1 = file, d2 = buffer, d3 = type, d4 = size) -> 0 on success, -1 (EOF) on failure. The engine's file and console
+/// writes are host-side and unbuffered, so the buffering mode and size change nothing observable; what the call still owes
+/// the guest is AROS's checks (dos/setvbuf.c): a NULL handle or a buffer that is not longword aligned fails with EOF, and a
+/// handle that is not open is a named refusal. stdc/stdcio startup code sets the mode of Output() before main().
+pub fn set_vbuf<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (file, buff, ty, size) = (cpu.dreg(1), cpu.dreg(2), cpu.dreg(3), cpu.dreg(4) as i32);
+    if file == 0 || buff & 3 != 0 {
+        cpu.set_d0(-1i32 as u32);
+        return Ok(format!("[dos] SetVBuf file={:#x} buff={buff:#x} -> EOF ({})", file << 2, if file == 0 { "NULL handle" } else { "buffer not longword aligned" }));
+    }
+    let at = file << 2;
+    if at != STDIN_FH && at != STDOUT_FH { crate::dos_io::handle(a, file, "SetVBuf")?; }
+    cpu.set_d0(0);
+    Ok(format!("[dos] SetVBuf file={at:#x} type={ty} size={size} -> 0"))
+}
+
 /// IoErr() -> the Process's pr_Result2.
 pub fn io_err<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let v = a.mem.read_u32(a.sched.cur + PR_RESULT2).map_err(Refusal::mem("pr_Result2"))?;

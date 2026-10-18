@@ -35,7 +35,7 @@ pub fn open_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
 pub fn close_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let base = cpu.areg(1);
     if base == 0 { return Ok("[exec] CloseLibrary NULL (a no-op, as exec's autodoc allows)".into()); }
-    if let Some(i) = crate::disklib::index_of_base(a, base) { return crate::disklib::close(a, cpu, i); }
+    if let Some(i) = crate::disklib::index_of_base(a, base) { return crate::disklib::close(a, cpu, i, base); }
     let l = a.libs.iter_mut().find(|l| l.base == base)
         .ok_or_else(|| Refusal(format!("CloseLibrary: {base:#x} is not an open library base")))?;
     if l.open_count == 0 { return Err(Refusal(format!("CloseLibrary: {} closed more times than opened", l.name))); }

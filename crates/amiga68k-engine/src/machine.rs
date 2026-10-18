@@ -204,6 +204,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(dos::LVO_DELAY, "Delay", dos::delay::<U>)
             .func(dos::LVO_FPUTS, "FPuts", dos::fputs::<U>)
             .func(dos::LVO_FLUSH, "Flush", dos::flush::<U>)
+            .named("SetVBuf", dos::set_vbuf::<U>)
             .func(dos::LVO_SET_IO_ERR, "SetIoErr", dos::set_io_err::<U>)
             .func(dos::LVO_CLI, "Cli", dos::cli::<U>)
             .func(dos::LVO_GET_PROGRAM_NAME, "GetProgramName", dos::get_program_name::<U>)

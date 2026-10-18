@@ -43,3 +43,13 @@ fn timer_device_get_sys_time_reads_the_virtual_clock_the_same_way_as_tr_getsysti
     assert_eq!((r[4], r[5]), (2, 500_000), "after a 2.5 s TR_ADDREQUEST");
     assert_eq!((r[6], r[7], r[8]), (2, 500_000, 1), "GetUpTime reports the same clock");
 }
+
+#[test]
+fn dos_set_vbuf_accepts_the_console_and_fails_like_aros_on_null_or_a_misaligned_buffer() {
+    let mut a = machine();
+    let r = run_refusing(&mut a, include_bytes!("guest/setvbuf.bin"));
+    assert_eq!((r[0], r[1], r[2], r[3], r[4]), (0, u32::MAX, u32::MAX, 0, 1), "{r:x?}");
+    let refused: Vec<&str> = a.refused.iter().map(String::as_str).collect();
+    assert_eq!(refused.len(), 1, "only the never-opened handle is refused: {refused:?}");
+    assert!(refused[0].contains("SetVBuf on 0x48d0: not an open file"), "{refused:?}");
+}

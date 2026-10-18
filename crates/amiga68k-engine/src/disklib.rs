@@ -44,6 +44,9 @@ pub struct DiskLib {
     pub base: u32,
     pub seglist: u32,
     pub open_count: u32,
+    /// Bases its Open vector returned that are not `base`: a library that gives every opener its own base (AROS rellibs such as
+    /// stdc.library build one with MakeLibrary) is closed through THAT base, so CloseLibrary must recognise it.
+    pub openers: Vec<u32>,
 }
 
 /// Where a library name is searched: a name with a volume is taken as given, otherwise LIBS:, then PROGDIR:Libs.
@@ -70,7 +73,14 @@ fn open_next<U: GuestUi>(a: &mut Amiga<U>, i: usize, want: u32) -> Result<Next<U
     }
     Ok(Next::Call {
         target: base - LVO_OPEN, d0: want, aregs: alloc::vec![(6, base)],
-        then: Box::new(move |a, _, d0| { if d0 != 0 { a.fs.disk_libs[i].open_count += 1; } Ok(Next::Return(d0)) }),
+        then: Box::new(move |a, _, d0| {
+            if d0 != 0 {
+                let l = &mut a.fs.disk_libs[i];
+                l.open_count += 1;
+                if d0 != l.base && !l.openers.contains(&d0) { l.openers.push(d0); }
+            }
+            Ok(Next::Return(d0))
+        }),
     })
 }
 
@@ -92,7 +102,7 @@ fn load_new<U: GuestUi>(a: &mut Amiga<U>, name: &str, key: String, path: String,
     let rt_name = a.mem.read_cstr(rd(a, tag + RT_NAME, "rt_Name")?).map_err(Refusal::mem("rt_Name"))?;
     let init = rd(a, tag + RT_INIT, "rt_Init")?;
     let record = move |a: &mut Amiga<U>, base: u32| -> usize {
-        a.fs.disk_libs.push(DiskLib { key, name: rt_name, path, base, seglist: seg.bptr, open_count: 0 });
+        a.fs.disk_libs.push(DiskLib { key, name: rt_name, path, base, seglist: seg.bptr, open_count: 0, openers: Vec::new() });
         let _ = crate::execlists::add_tail(&mut a.mem, crate::execlists::LIB_LIST, base); // AddLibrary
         a.fs.disk_libs.len() - 1
     };
@@ -140,10 +150,10 @@ pub fn try_open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, name: &str, want: u
 }
 
 /// CloseLibrary of a disk library: its Close vector runs in the guest; a segment list it returns is unloaded.
-pub fn close<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, i: usize) -> Result<String, Refusal> {
+pub fn close<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, i: usize, opened: u32) -> Result<String, Refusal> {
     let l = &a.fs.disk_libs[i];
     if l.open_count == 0 { return Err(Refusal(format!("CloseLibrary: {} closed more times than opened", l.name))); }
-    let (base, name) = (l.base, l.name.clone());
+    let (base, name) = (opened, l.name.clone()); // the Close vector of the base the program passed, with A6 = that base (exec's CloseLibrary)
     let next = Next::Call { target: base - LVO_CLOSE, d0: 0, aregs: alloc::vec![(6, base)], then: Box::new(move |a, _, d0| {
         a.fs.disk_libs[i].open_count -= 1;
         if d0 != 0 { loadseg::unload(a, d0)?; }
@@ -154,4 +164,4 @@ pub fn close<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, i: usize) -> Result<St
 }
 
 /// The disk library whose base is `base`.
-pub fn index_of_base<U: GuestUi>(a: &Amiga<U>, base: u32) -> Option<usize> { a.fs.disk_libs.iter().position(|l| l.base == base) }
+pub fn index_of_base<U: GuestUi>(a: &Amiga<U>, base: u32) -> Option<usize> { a.fs.disk_libs.iter().position(|l| l.base == base || l.openers.contains(&base)) }

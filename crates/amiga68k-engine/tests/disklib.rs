@@ -89,3 +89,25 @@ fn an_init_routine_that_returns_null_discards_the_library() {
     assert_eq!(a.heap.live_blocks(), heap, "library memory and segments were given back");
     assert_eq!([r[1], r[2], r[3]], [0xD2D2D2D2, 0xD3D3D3D3, 0xA3A3A3A3], "registers restored on the failure path too");
 }
+
+#[test]
+fn a_library_that_gives_every_opener_its_own_base_is_closed_through_that_base() {
+    // AROS rellibs (stdc.library, posixc.library) build a base per opener with MakeLibrary in their Open vector; the program
+    // closes THAT base. Before disklib remembered it, every AROS program ended with "CloseLibrary: 0x... is not an open library base".
+    use retro_hunk::writer::{build, Hunk};
+    let relocs = include_str!("guest/perlib.relocs").lines().map(|l| (0, l.trim().parse().unwrap())).collect();
+    let lib = build(&[Hunk::code(include_bytes!("guest/perlib.bin").to_vec(), relocs)], None);
+    let prog = build(&[Hunk::code(include_bytes!("guest/perlibprog.bin").to_vec(), vec![])], None);
+    let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    a.fs.vol.put_file("LIBS:per.library", lib.clone()).unwrap();
+    let r = a.run_hunk(&prog, 500_000).unwrap();
+    assert!(r.stats.halted, "{:?} {:?}\n{:#?}", r.stats, a.refused, a.log);
+    let res: Vec<u32> = (0..3).map(|i| a.mem.read_u32(0x1F000 + 4 * i).unwrap()).collect();
+    assert_eq!(res, [1, 12, 1], "opened, the opener's own function table works (7 + 5), and the close was accepted");
+    assert_eq!(a.fs.disk_libs[0].openers.len(), 1, "the per-opener base was recorded");
+    assert_ne!(a.fs.disk_libs[0].openers[0], a.fs.disk_libs[0].base);
+    assert_eq!(a.fs.disk_libs[0].open_count, 0, "its Close vector ran");
+    // NEGATIVE CONTROL (in the guest): CloseLibrary of lib+6, which is no base, is the ONE refusal, by name.
+    assert_eq!(a.refused.len(), 1, "{:?}", a.refused);
+    assert!(a.refused[0].contains("is not an open library base"), "{:?}", a.refused);
+}
