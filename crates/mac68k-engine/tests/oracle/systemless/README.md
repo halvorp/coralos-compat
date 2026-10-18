@@ -25,7 +25,7 @@ The window content sits at screen (61, 27), not a multiple of 8, so pattern and 
 ## Reproduce
 
 ```sh
-# 1. build systemless once, OUTSIDE this repo (it is GPL-3)
+# 1. build systemless once, OUTSIDE this repo (it is GPL-3); any checkout directory works (cells.txt was made from a copy at /data/build/systemless/src_copy, same revision)
 git clone https://github.com/benletchford/systemless /data/build/systemless/src && cd /data/build/systemless/src && cargo build --release
 # 2. the application as a MacBinary file, and our rendering of it
 cargo run -p mac68k-engine --bin mac68k-oracle -- app oracle.bin

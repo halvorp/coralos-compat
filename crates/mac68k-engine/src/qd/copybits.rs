@@ -42,12 +42,12 @@ fn port_for_bits<U: GuestUi>(m: &Mac<U>, db: u32) -> Result<u32, Refusal> {
 }
 
 fn blit_them<U: GuestUi>(m: &Mac<U>, clip_port: u32, dt: &mut Target, st: Option<&mut Target>, sr: Rect, dr: Rect, mt: u8, mask: Option<&retro_raster::Region>) -> Result<Rect, Refusal> {
-    if (sr.width(), sr.height()) != (dr.width(), dr.height()) { return stretch_them(m, clip_port, dt, st, sr, dr, mt, mask); }
     let clip_region = clip_region_via(m, clip_port, dt)?;
     let c = clip_of(&clip_region, dt);
     let (l0, d) = (dt.local0, dt.to_pixels(dr));
     let maskf = |x: i32, y: i32| mask.map_or(true, |g| g.contains(x + l0.0, y + l0.1));
     let mf: retro_raster::blit::MaskFn = if mask.is_some() { Some(&maskf) } else { None };
+    if (sr.width(), sr.height()) != (dr.width(), dr.height()) { return stretch_them(dt, st, sr, d, mt, mf, &c); }
     Ok(match st {
         Some(s) => { let sp = s.to_pixels(sr); blit(&mut dt.bm, d.x0, d.y0, &s.bm, sp.x0, sp.y0, sp.width(), sp.height(), mt, 0xFF, mf, &c) }
         None => { let sp = dt.to_pixels(sr); blit_within(&mut dt.bm, d.x0, d.y0, sp.x0, sp.y0, sp.width(), sp.height(), mt, 0xFF, mf, &c) }
@@ -55,22 +55,20 @@ fn blit_them<U: GuestUi>(m: &Mac<U>, clip_port: u32, dt: &mut Target, st: Option
 }
 
 /// StretchBits: each destination row of the DDA is blitted as a one-row source through the same mode, mask and clip.
-fn stretch_them<U: GuestUi>(m: &Mac<U>, clip_port: u32, dt: &mut Target, st: Option<&mut Target>, sr: Rect, dr: Rect, mt: u8, mask: Option<&retro_raster::Region>) -> Result<Rect, Refusal> {
-    let clip_region = clip_region_via(m, clip_port, dt)?;
-    let c = clip_of(&clip_region, dt);
-    let (l0, d) = (dt.local0, dt.to_pixels(dr));
-    let maskf = |x: i32, y: i32| mask.map_or(true, |g| g.contains(x + l0.0, y + l0.1));
-    let mf: retro_raster::blit::MaskFn = if mask.is_some() { Some(&maskf) } else { None };
-    let sp = match &st { Some(s) => s.to_pixels(sr), None => dt.to_pixels(sr) };
-    let source = match st { Some(s) => s.bm.clone(), None => dt.bm.clone() }; // a scaled copy within one bitmap must not overlap itself: read the original
+fn stretch_them(dt: &mut Target, st: Option<&mut Target>, sr: Rect, d: Rect, mt: u8, mf: retro_raster::blit::MaskFn, c: &retro_raster::paint::Clip) -> Result<Rect, Refusal> {
     let mut touched = Rect::default();
-    stretch(&source, sp, d.width(), d.height(), |row, pens| {
+    let mut emit_into = |dst: &mut retro_raster::Bitmap, row: i32, pens: &[u8]| -> Result<(), Refusal> {
         let mut one = retro_raster::Bitmap::new(pens.len() as i32, 1, 1).ok_or_else(|| Refusal("CopyBits: scaled row too wide".into()))?;
         for (x, &p) in pens.iter().enumerate() { one.set(x as i32, 0, p); }
-        let t = blit(&mut dt.bm, d.x0, d.y0 + row, &one, 0, 0, pens.len() as i32, 1, mt, 0xFF, mf, &c);
+        let t = blit(dst, d.x0, d.y0 + row, &one, 0, 0, pens.len() as i32, 1, mt, 0xFF, mf, c);
         touched = if touched.is_empty() { t } else { touched.union(&t) };
         Ok(())
-    })?;
+    };
+    match st {
+        Some(s) => { let sp = s.to_pixels(sr); stretch(&s.bm, sp, d.width(), d.height(), |row, pens| emit_into(&mut dt.bm, row, pens))?; }
+        // a scaled copy within one bitmap must not read what it has drawn: only then is the source snapshotted
+        None => { let sp = dt.to_pixels(sr); let source = dt.bm.clone(); stretch(&source, sp, d.width(), d.height(), |row, pens| emit_into(&mut dt.bm, row, pens))?; }
+    }
     Ok(touched)
 }
 

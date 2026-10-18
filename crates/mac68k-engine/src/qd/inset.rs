@@ -23,27 +23,38 @@ fn intersect(a: &Spans, b: &Spans) -> Spans {
     merge(out)
 }
 
-/// The region's scan rows from `top` for `n` rows.
-fn rows_of(g: &Region, top: i32, n: i32) -> Vec<Spans> {
-    (top..top + n).map(|y| merge(g.rects().iter().filter(|r| r.y0 <= y && y < r.y1).map(|r| (r.x0, r.x1)).collect())).collect()
-}
-
 /// `g` shrunk by `dh` left and right and `dv` top and bottom (grown if negative).
+///
+/// Cost depends on the region's number of bands, never on the distance: the region is constant between its band edges, so
+/// the vertical window [y-|dv|, y+|dv|] only changes at an edge +/- |dv|; one window is evaluated per such change.
 pub fn inset_region(g: &Region, dh: i32, dv: i32) -> Region {
     if g.is_empty() || (dh == 0 && dv == 0) { return g.clone(); }
-    let b = g.bounds();
-    let pad_v = dv.min(0).abs(); // growing vertically adds rows above and below
-    let (top, n) = (b.y0 - pad_v, b.height() + 2 * pad_v);
-    // horizontal pass: every maximal run [l, r) of every row becomes [l + dh, r - dh)
-    let h: Vec<Spans> = rows_of(g, top, n).into_iter().map(|row| merge(row.into_iter().map(|(l, r)| (l + dh, r - dh)).collect())).collect();
-    // vertical pass: row y is the intersection (shrink) or union (grow) of rows y-|dv| ..= y+|dv|
+    let mut ys: Vec<i32> = g.rects().iter().flat_map(|r| [r.y0, r.y1]).collect();
+    ys.sort_unstable();
+    ys.dedup();
+    // horizontal pass per band: every maximal run [l, r) becomes [l + dh, r - dh)
+    let bands: Vec<(i32, i32, Spans)> = ys.windows(2).map(|w| {
+        let row = merge(g.rects().iter().filter(|r| r.y0 <= w[0] && w[0] < r.y1).map(|r| (r.x0 + dh, r.x1 - dh)).collect());
+        (w[0], w[1], row)
+    }).collect();
     let k = dv.abs();
-    let rows = (0..n).map(|i| {
-        let window = (i - k..=i + k).map(|j| if j >= 0 && j < n { h[j as usize].clone() } else { Spans::new() });
-        let spans = if dv >= 0 { window.reduce(|a, b| intersect(&a, &b)).unwrap_or_default() } else { merge(window.flatten().collect()) };
-        (top + i, spans)
-    });
-    Region::from_rows(rows)
+    let (first, last) = (ys[0], ys[ys.len() - 1]);
+    let mut cuts: Vec<i32> = ys.iter().flat_map(|&b| [b - k, b + k]).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out: Vec<(i32, i32, Spans)> = Vec::new();
+    for w in cuts.windows(2) {
+        let (lo, hi) = (w[0] - k, w[0] + k + 1); // the rows [lo, hi) this segment's output depends on
+        let touching = bands.iter().filter(|b| b.0 < hi && lo < b.1);
+        let spans = if dv >= 0 {
+            if lo < first || hi > last { Spans::new() } else { touching.map(|b| b.2.clone()).reduce(|a, b| intersect(&a, &b)).unwrap_or_default() }
+        } else { merge(touching.flat_map(|b| b.2.iter().copied()).collect()) };
+        if spans.is_empty() { continue; }
+        match out.last_mut() { Some(l) if l.1 == w[0] && l.2 == spans => l.1 = w[1], _ => out.push((w[0], w[1], spans)) }
+    }
+    let mut r = Region::new();
+    for (y0, y1, spans) in out { for (x0, x1) in spans { r.or_rect(retro_raster::Rect::new(x0, y0, x1, y1)); } }
+    r
 }
 
 /// FrameRgn's pixels: the region minus itself inset by the pen (`DiffRgn(rgn, InsetRgn(copy, pnSize))`).
@@ -78,6 +89,16 @@ mod tests {
     }
     /// A frame is the region minus its inset: the one-pixel ring inside the L (hand-derived above: the inset keeps rows 1-2 at
     /// [1,9) and rows 3-8 at [1,3)), and a pen too thick to leave a core frames the whole shape.
+    /// A guest-chosen huge dv costs per band, not per row: this finished in ~14 s before the fix (and a timeout is the failure).
+    #[test]
+    fn a_huge_inset_distance_is_cheap_and_still_right() {
+        let g = l_shape();
+        let big = inset_region(&g, -1, -32767);
+        assert_eq!(big.bounds(), Rect::new(-1, -32767, 11, 32767 + 10));
+        assert!(big.contains(5, 0) && big.contains(2, 32767 + 9) && !big.contains(5, 32767 + 9), "grown columns follow the shape");
+        assert!(inset_region(&g, 0, 32767).is_empty(), "negative control: shrinking by more than the height leaves nothing");
+        assert_eq!(frame_region(&g, 1, 20000), g, "a tall pen frames the whole shape");
+    }
     #[test]
     fn a_frame_is_the_ring_inside_the_region() {
         let f = frame_region(&l_shape(), 1, 1);

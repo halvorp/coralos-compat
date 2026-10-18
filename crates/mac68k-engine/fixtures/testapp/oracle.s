@@ -13,7 +13,7 @@
 |   row 6  line geometry on white (black pen): slopes, pen sizes, directions
 |   row 5  four DrawString slots 80 px wide in the system font (12 pt, 12 pt, 12 pt, 9 pt); after each string a 4 px tick
 |          is drawn below the baseline at the pen's x, so the pen advance is visible in the pixels
-| Window content origin on screen: (left 61, top 43): not a multiple of 8, so pattern and bit-shift alignment is exercised.
+| Window content origin on screen: (left 61, top 27): not a multiple of 8, so pattern and bit-shift alignment is exercised.
 | A5 world: QuickDraw globals fill A5-206..A5; the application's own variables are below them.
 |   m68k-linux-gnu-as -m68020 oracle.s -o oracle.o && m68k-linux-gnu-objcopy -O binary -j .text oracle.o oracle.bin
         .include "traps.inc"
@@ -143,7 +143,7 @@ main:   pea     -4(%a5)                | &qd.thePort
         RCALL   _FrameOval,18,16,31,31     | an oval in the lower right, and a diagonal
         MOVETO  20,20
         LINETO  30,26                      | a slope off 1.0: see geom-X for the 45-degree case
-        | ---- the window (WIND 128, content 320x240 at global top 43 left 61)
+        | ---- the window (WIND 128, content 320x280 at global top 27 left 61)
         clr.l   -(%sp)
         move.w  #128,-(%sp)
         clr.l   -(%sp)
