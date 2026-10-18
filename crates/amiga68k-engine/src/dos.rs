@@ -56,14 +56,18 @@ fn read_bytes<U: GuestUi>(a: &Amiga<U>, at: u32, n: u32, what: &str) -> Result<V
     (0..n).map(|i| a.mem.read_u8(at + i).map_err(Refusal::mem(what))).collect()
 }
 
-pub fn input<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    cpu.set_d0(STDIN_FH >> 2);
-    Ok("[dos] Input -> console".into())
+/// Input() -> the Process's pr_CIS: the console until SelectInput() redirects it.
+pub fn input<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let fh = a.mem.read_u32(process::PROCESS + PR_CIS).map_err(Refusal::mem("pr_CIS"))?;
+    cpu.set_d0(fh);
+    Ok(if fh == STDIN_FH >> 2 { "[dos] Input -> console".into() } else { format!("[dos] Input -> {:#x} (redirected)", fh << 2) })
 }
 
-pub fn output<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    cpu.set_d0(STDOUT_FH >> 2);
-    Ok("[dos] Output -> console".into())
+/// Output() -> the Process's pr_COS: the console until SelectOutput() redirects it.
+pub fn output<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let fh = a.mem.read_u32(process::PROCESS + PR_COS).map_err(Refusal::mem("pr_COS"))?;
+    cpu.set_d0(fh);
+    Ok(if fh == STDOUT_FH >> 2 { "[dos] Output -> console".into() } else { format!("[dos] Output -> {:#x} (redirected)", fh << 2) })
 }
 
 /// Write(d1 = file, d2 = buffer, d3 = length) -> bytes written, or -1. Only the console is a file so far.
