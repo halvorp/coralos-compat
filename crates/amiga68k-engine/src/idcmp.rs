@@ -10,8 +10,8 @@
 //! gives it back, so a refused delivery leaves the queue, the signal bits and the window untouched.
 use alloc::string::String;
 use alloc::format;
-use crate::{exec_wait, gt_kinds, machine::Amiga, memory, menu_nav, ports, run::Delivered, Refusal};
-use guestui_abi::{GuestUi, GuestUiEvent};
+use crate::{exec_wait, machine::Amiga, memory, menu_nav, ports, run::Delivered, Refusal};
+use guestui_abi::{GuestUi, GuestUiEvent, PointerButton};
 use retro_m68k::Cpu;
 
 pub const LVO_MODIFY_IDCMP: i32 = -150;
@@ -151,18 +151,16 @@ pub fn deliver<U: GuestUi>(a: &mut Amiga<U>, ev: GuestUiEvent) -> Result<Deliver
             Some(w) => menu_nav::menu_pick(a, w, token),
             None => Ok(Delivered::NotForAGuestWindow),
         },
-        GuestUiEvent::ControlChanged { win, control, token, value } => match guest_window(a, win) {
-            Some(w) => gt_kinds::control_changed(a, w, win, control, token, value),
+        GuestUiEvent::Intent { win, control, token, generation, intent } => match guest_window(a, win) {
+            Some(w) => crate::native_gadgets_input::intent(a, w, win, control, token, generation, intent),
             None => Ok(Delivered::NotForAGuestWindow),
         },
-        GuestUiEvent::Pointer { win, x, y, phase } => match guest_window(a, win) {
+        GuestUiEvent::Pointer { win, x, y, button, phase, .. } => match guest_window(a, win) {
+            Some(_) if !matches!(button, PointerButton::Primary | PointerButton::None) =>
+                Err(Refusal(format!("deliver: a {button:?} pointer button is not bridged (Intuition gadgets use the primary button)"))),
             Some(w) => crate::boopsi_input::queue(a, w, x, y, phase),
             None => Ok(Delivered::NotForAGuestWindow),
         },
-        GuestUiEvent::ControlDriven { win, control, token, phase, value } => match guest_window(a, win) {
-            Some(w) => crate::native_gadgets_input::driven(a, w, win, control, token, phase, value),
-            None => Ok(Delivered::NotForAGuestWindow),
-        },
-        ev @ GuestUiEvent::Resized { .. } => Err(Refusal(format!("deliver: {ev:?} not bridged yet"))),
+        ev @ (GuestUiEvent::Resized { .. } | GuestUiEvent::Key { .. }) => Err(Refusal(format!("deliver: {ev:?} not bridged yet"))),
     }
 }

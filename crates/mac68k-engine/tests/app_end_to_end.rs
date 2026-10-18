@@ -138,7 +138,7 @@ fn events_for_other_windows_and_bad_menu_tokens_do_not_wake_the_program() {
     assert!(e.0.contains("no menu 77"), "{e:?}");
     assert_eq!(m.step(10_000).0, Step::Blocked);
     // a control event has no classic Mac meaning
-    let ctl = GuestUiEvent::ControlChanged { win: WIN, control: WIN, token: CallbackToken(0), value: ControlValue::Pressed };
+    let ctl = GuestUiEvent::intent(WIN, WIN, CallbackToken(0), guestui_abi::Intent::Activate);
     assert!(m.deliver(ctl).unwrap_err().0.contains("no classic Mac event"));
 }
 

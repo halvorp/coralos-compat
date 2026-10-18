@@ -48,13 +48,13 @@ mod tests {
         std::fs::write(d.join("Libs/mui/X.mcc"), b"x").unwrap();
         std::fs::write(d.join("bad:name"), b"y").unwrap();
         let mut v = Volume::new();
-        v.add_device("DOpus5", false);
-        let l = load_dir(&mut v, "DOpus5:", &d).unwrap();
+        v.add_device("Prog5", false);
+        let l = load_dir(&mut v, "Prog5:", &d).unwrap();
         assert_eq!((l.files, l.bytes), (3, 5));
         assert_eq!(l.skipped.len(), 1, "the name with a colon is reported: {:?}", l.skipped);
-        let n = v.resolve(amiga68k_engine::volume::ROOT, "dopus5:libs/mui/x.mcc").unwrap();
+        let n = v.resolve(amiga68k_engine::volume::ROOT, "prog5:libs/mui/x.mcc").unwrap();
         assert_eq!(v.file_data(n).unwrap(), b"x");
-        assert!(v.resolve(amiga68k_engine::volume::ROOT, "dopus5:bad").is_err());
+        assert!(v.resolve(amiga68k_engine::volume::ROOT, "prog5:bad").is_err());
         std::fs::remove_dir_all(d).unwrap();
     }
 }

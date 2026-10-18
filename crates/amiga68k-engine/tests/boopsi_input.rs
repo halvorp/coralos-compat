@@ -19,7 +19,7 @@ fn start() -> (Amiga<RecordingGuestUi>, u32) {
 fn c(a: &Amiga<RecordingGuestUi>, b: u32, i: u32) -> u32 { a.mem.read_u32(b + 8 + 4 * i).unwrap() }
 fn point(a: &mut Amiga<RecordingGuestUi>, x: i32, y: i32, phase: PointerPhase) -> Delivered {
     let win = *a.windows.values().next().expect("an open window");
-    let d = a.deliver(GuestUiEvent::Pointer { win, x, y, phase }).unwrap();
+    let d = a.deliver(GuestUiEvent::primary(win, x, y, phase)).unwrap();
     let (s, _) = a.step(2_000_000);
     assert!(matches!(s, Step::Blocked | Step::Exited), "{s:?} {:?}", a.refused);
     assert!(a.refused.is_empty(), "{:?}", a.refused);
@@ -73,7 +73,7 @@ fn a_click_reaches_the_gadget_of_a_parked_task_while_another_task_runs() {
     assert!(w0 > 0, "the worker ran while the owner was parked");
     let win = *a.windows.values().next().unwrap();
     for (x, y, ph) in [(15, 8, PointerPhase::Down), (16, 8, PointerPhase::Up)] {
-        assert_eq!(a.deliver(GuestUiEvent::Pointer { win, x, y, phase: ph }).unwrap(), Delivered::Handled);
+        assert_eq!(a.deliver(GuestUiEvent::primary(win, x, y, ph)).unwrap(), Delivered::Handled);
         let (s, _) = a.step(300_000);
         assert!(matches!(s, Step::BudgetSpent | Step::Exited), "{s:?} {:?}", a.refused);
         assert!(a.refused.is_empty(), "{:?}", a.refused);

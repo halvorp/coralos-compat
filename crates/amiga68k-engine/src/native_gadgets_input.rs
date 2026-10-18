@@ -1,29 +1,30 @@
 //! What the user does to a NATIVE gadget control, mapped back to the guest exactly as Intuition would report it
-//! (`GuestUiEvent::ControlDriven`, native_gadgets.rs). The guest-visible state changes FIRST, whether or not the window listens:
+//! (`GuestUiEvent::Intent`, native_gadgets.rs). The guest-visible state changes FIRST, whether or not the window listens:
 //!
-//! | control | phase | guest state | IDCMP message (IAddress = the Gadget) |
+//! | control | intent | guest state | IDCMP message (IAddress = the Gadget) |
 //! |---|---|---|---|
-//! | button / arrow / hotspot | Down | GFLG_SELECTED set | GADGETDOWN if GACT_IMMEDIATE |
-//! | | Up (`Pressed`) | GFLG_SELECTED cleared | GADGETUP if GACT_RELVERIFY |
-//! | | Up (`Cancelled`) | GFLG_SELECTED cleared | none (released outside) |
-//! | toggle | Down | none | GADGETDOWN if GACT_IMMEDIATE |
-//! | | Up (`Checked(b)`) | GFLG_SELECTED = b | GADGETUP if GACT_RELVERIFY |
-//! | scrollbar | Down | none | GADGETDOWN if GACT_IMMEDIATE |
-//! | | Move (`Scroll`) | pot/body (and PGA_Top) follow `top` | MOUSEMOVE if GACT_FOLLOWMOUSE |
-//! | | Up (`Scroll`) | same | GADGETUP if GACT_RELVERIFY |
-//! | field | Down | none | GADGETDOWN if GACT_IMMEDIATE |
-//! | | Move (`Text`) | buffer, NumChars, cursor, LongInt follow the text | none |
-//! | | Up (`Text`) = Return | same | GADGETUP (Code 0x0D, the key that ended the edit) if GACT_RELVERIFY |
+//! | button / arrow / hotspot | `Press` | GFLG_SELECTED set | GADGETDOWN if GACT_IMMEDIATE |
+//! | | `Release{inside:true}` | GFLG_SELECTED cleared | GADGETUP if GACT_RELVERIFY |
+//! | | `Release{inside:false}` | GFLG_SELECTED cleared | none (released outside) |
+//! | toggle | `Press` | none | GADGETDOWN if GACT_IMMEDIATE |
+//! | | `SetValue(Checked(b))` | GFLG_SELECTED = b | GADGETUP if GACT_RELVERIFY |
+//! | scrollbar | `Press` | none | GADGETDOWN if GACT_IMMEDIATE |
+//! | | `Drag(Scroll)` | pot/body (and PGA_Top) follow `top` | MOUSEMOVE if GACT_FOLLOWMOUSE |
+//! | | `ScrollTo(top)` | same | GADGETUP if GACT_RELVERIFY |
+//! | field | `Press` | none | GADGETDOWN if GACT_IMMEDIATE |
+//! | | `Drag(Text)` | buffer, NumChars, cursor, LongInt follow the text | none |
+//! | | `CommitText` = Return | same | GADGETUP (Code 0x0D, the key that ended the edit) if GACT_RELVERIFY |
 //!
 //! Facts: AROS rom/intuition strgadgets.c (IntuiMessage.Code of an ended edit = the mapped key, 0x0D for Return), inputhandler
 //! gadget code (GADGETDOWN needs GACT_IMMEDIATE, GADGETUP needs GACT_RELVERIFY, MOUSEMOVE needs GACT_FOLLOWMOUSE and the window's
-//! IDCMP_MOUSEMOVE). Every other phase / value pairing is a named refusal.
+//! IDCMP_MOUSEMOVE). Every other intent is a named refusal.
 use alloc::format;
 use crate::boopsi_ids::*;
 use crate::idcmp::{self, IDCMP_GADGETDOWN, IDCMP_GADGETUP, IDCMP_MOUSEMOVE};
 use crate::native_gadgets::{FREEVERT, PI_FLAGS, PI_HBODY, PI_HPOT, PI_TOP, PI_TOTAL, PI_VBODY, PI_VISIBLE, PI_VPOT};
 use crate::{machine::Amiga, run::Delivered, Refusal};
-use guestui_abi::{CallbackToken, ControlKind, ControlValue, GuestUi, PointerPhase, UiObjectRef};
+use crate::gt_kinds;
+use guestui_abi::{CallbackToken, ControlKind, ControlValue, GuestUi, Intent, UiObjectRef};
 
 const RETURN_KEY: u16 = 0x0D;
 
@@ -57,48 +58,60 @@ fn scroll_to<U: GuestUi>(a: &mut Amiga<U>, g: u32, top: u32) -> Result<(), Refus
     a.mem.write_u16(pi + body_at, body as u16).map_err(&m)
 }
 
-/// A host gesture on a native gadget control (idcmp::deliver's arm for `ControlDriven`).
-pub fn driven<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, phase: PointerPhase, value: ControlValue) -> Result<Delivered, Refusal> {
+/// A user intent on a control (idcmp::deliver's arm for `GuestUiEvent::Intent`): the token says whether it is a native gadget
+/// (here) or a GadTools gadget (`gt_kinds`). A `control` / `generation` that is not the live control of the token is refused by name.
+pub fn intent<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, generation: u32, intent: Intent) -> Result<Delivered, Refusal> {
+    if generation != control.generation {
+        return Err(Refusal(format!("deliver: Intent for token {:#x} carries generation {generation}, but its control ref has {} (stale)", token.0, control.generation)));
+    }
+    let native_gadget = u32::try_from(token.0).is_ok_and(|g| a.native_gads.map.contains_key(&g));
+    if native_gadget { driven(a, win, native, control, token, intent) } else { gt_kinds::control_changed(a, win, native, control, token, intent) }
+}
+
+fn driven<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, intent: Intent) -> Result<Delivered, Refusal> {
     let g = u32::try_from(token.0).ok().filter(|g| a.native_gads.map.contains_key(g))
-        .ok_or_else(|| Refusal(format!("deliver: ControlDriven token {:#x} is not a native gadget", token.0)))?;
+        .ok_or_else(|| Refusal(format!("deliver: Intent token {:#x} is not a native gadget", token.0)))?;
     let ng = a.native_gads.map[&g].clone();
     if (ng.win, ng.native, ng.ctl) != (win, native, control) {
-        return Err(Refusal(format!("deliver: ControlDriven for gadget {g:#x}, which is not that native control of that window (stale?)")));
+        return Err(Refusal(format!("deliver: Intent for gadget {g:#x}, which is not that native control of that window (stale?)")));
     }
     let act = a.mem.read_u16(g + GAD_ACTIVATION).map_err(Refusal::mem("Gadget.Activation"))? as u32;
-    let bad = |why: &str| Refusal(format!("deliver: ControlDriven {phase:?} {value:?} on a {:?} control: {why}", ng.model.kind));
+    let bad = |why: &str| Refusal(format!("deliver: Intent {intent:?} on a {:?} control: {why}", ng.model.kind));
     let mut post = None; // (IDCMP class, Code)
-    match (&ng.model.kind, phase, &value) {
-        (ControlKind::Button | ControlKind::ArrowButton { .. } | ControlKind::Hotspot, PointerPhase::Down, _) => {
+    match (&ng.model.kind, &intent) {
+        (ControlKind::Button | ControlKind::ArrowButton { .. } | ControlKind::Hotspot, Intent::Press) => {
             set_selected(a, g, true)?;
             if act & GACT_IMMEDIATE != 0 { post = Some((IDCMP_GADGETDOWN, 0)); }
         }
-        (ControlKind::Button | ControlKind::ArrowButton { .. } | ControlKind::Hotspot, PointerPhase::Up, ControlValue::Pressed) => {
+        (ControlKind::Button | ControlKind::ArrowButton { .. } | ControlKind::Hotspot, Intent::Release { inside: true }) => {
             set_selected(a, g, false)?;
             if act & GACT_RELVERIFY != 0 { post = Some((IDCMP_GADGETUP, 0)); }
         }
-        (ControlKind::Button | ControlKind::ArrowButton { .. } | ControlKind::Hotspot | ControlKind::ToggleButton { .. }, PointerPhase::Up, ControlValue::Cancelled) => {
+        (ControlKind::Button | ControlKind::ArrowButton { .. } | ControlKind::Hotspot | ControlKind::ToggleButton { .. }, Intent::Release { inside: false }) => {
             if !matches!(ng.model.kind, ControlKind::ToggleButton { .. }) { set_selected(a, g, false)?; }
         }
-        (ControlKind::ToggleButton { .. }, PointerPhase::Down, _) | (ControlKind::ScrollBar { .. } | ControlKind::Field { .. }, PointerPhase::Down, _) => {
+        (ControlKind::ToggleButton { .. } | ControlKind::ScrollBar { .. } | ControlKind::Field { .. }, Intent::Press) => {
             if act & GACT_IMMEDIATE != 0 { post = Some((IDCMP_GADGETDOWN, 0)); }
         }
-        (ControlKind::ToggleButton { .. }, PointerPhase::Up, ControlValue::Checked(on)) => {
+        (ControlKind::ToggleButton { .. }, Intent::SetValue(ControlValue::Checked(on))) => {
             set_selected(a, g, *on)?;
             if act & GACT_RELVERIFY != 0 { post = Some((IDCMP_GADGETUP, 0)); }
         }
-        (ControlKind::ScrollBar { .. }, PointerPhase::Move | PointerPhase::Up, ControlValue::Scroll { top, .. }) => {
+        (ControlKind::ScrollBar { .. }, Intent::Drag(ControlValue::Scroll { top, .. })) => {
             scroll_to(a, g, *top)?;
-            if phase == PointerPhase::Move && act & GACT_FOLLOWMOUSE != 0 { post = Some((IDCMP_MOUSEMOVE, 0)); }
-            if phase == PointerPhase::Up && act & GACT_RELVERIFY != 0 { post = Some((IDCMP_GADGETUP, 0)); }
+            if act & GACT_FOLLOWMOUSE != 0 { post = Some((IDCMP_MOUSEMOVE, 0)); }
         }
-        (ControlKind::Field { .. }, PointerPhase::Move | PointerPhase::Up, ControlValue::Text(t)) => {
+        (ControlKind::ScrollBar { .. }, Intent::ScrollTo(top)) => {
+            scroll_to(a, g, *top)?;
+            if act & GACT_RELVERIFY != 0 { post = Some((IDCMP_GADGETUP, 0)); }
+        }
+        (ControlKind::Field { .. }, Intent::Drag(ControlValue::Text(t)) | Intent::CommitText(t)) => {
             let si = a.mem.read_u32(g + GAD_SPECIAL).map_err(Refusal::mem("Gadget.SpecialInfo"))?;
             if si == 0 { return Err(bad("the gadget has no StringInfo")); }
             crate::boopsi_strg::store_text(a, si, t, act & crate::boopsi_strg::GACT_LONGINT != 0)?;
-            if phase == PointerPhase::Up && act & GACT_RELVERIFY != 0 { post = Some((IDCMP_GADGETUP, RETURN_KEY)); }
+            if matches!(intent, Intent::CommitText(_)) && act & GACT_RELVERIFY != 0 { post = Some((IDCMP_GADGETUP, RETURN_KEY)); }
         }
-        _ => return Err(bad("this phase / value pair means nothing for the control")),
+        _ => return Err(bad("this intent means nothing for the control")),
     }
     // The host's picture already shows what it just did; bring the engine's copy of it in line without a call back.
     crate::native_gadgets::absorb(a, g)?;

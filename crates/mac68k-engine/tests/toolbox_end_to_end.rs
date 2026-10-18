@@ -92,7 +92,7 @@ fn deliver_close_request_queues_for_a_guest_window_only() {
     // Negative controls: someone else's window, and an event kind with no classic Mac meaning (a MenuCommand is bridged now: see app_end_to_end).
     let other = UiObjectRef { id: 99, generation: 1 };
     assert_eq!(m.deliver(GuestUiEvent::CloseRequested { win: other, token: CallbackToken(0) }), Ok(Delivered::NotForAGuestWindow));
-    let ctl = GuestUiEvent::ControlChanged { win: native, control: native, token: CallbackToken(0), value: guestui_abi::ControlValue::Pressed };
+    let ctl = GuestUiEvent::intent(native, native, CallbackToken(0), guestui_abi::Intent::Activate);
     assert!(m.deliver(ctl).is_err());
 }
 

@@ -178,7 +178,11 @@ fn gadget_events_become_gadgetup_with_the_gadget_and_update_what_the_program_rea
     let (check, ct) = fx.control(1);
     let (string, st) = fx.control(2);
     let (slider, lt) = fx.control(3);
-    let ev = |control, token, value| GuestUiEvent::ControlChanged { win: native, control, token, value };
+    let ev = |control, token, value: ControlValue| GuestUiEvent::intent(native, control, token, match value {
+        ControlValue::Pressed => Intent::Activate,
+        ControlValue::Text(t) => Intent::CommitText(t),
+        v => Intent::SetValue(v),
+    });
     // Button -> GADGETUP, IAddress = the guest Gadget, Code 0.
     assert!(matches!(fx.deliver_and_run(ev(button, bt, ControlValue::Pressed)), Delivered::Queued(_)));
     let r = fx.records().1;
@@ -230,7 +234,7 @@ fn a_window_that_did_not_ask_for_a_class_gets_no_message_but_the_state_still_mov
     let UiCall::SetMenuStrip(_, m) = fx.a.ui.calls.last().unwrap() else { panic!("the native menu was re-sent") };
     assert_eq!(m.menus[1].items[0].check, Some(false), "Intuition moves the check even when no MENUPICK is wanted");
     // Gadget: SELECTED follows the native checkbox.
-    let d = fx.a.deliver(GuestUiEvent::ControlChanged { win: native, control: check, token: ct, value: ControlValue::Checked(false) }).unwrap();
+    let d = fx.a.deliver(GuestUiEvent::intent(native, check, ct, Intent::SetValue(ControlValue::Checked(false)))).unwrap();
     assert_eq!(d, Delivered::IgnoredUnsubscribed);
     assert_eq!(fx.a.mem.read_u16(ct.0 as u32 + 12).unwrap() & 0x80, 0);
     assert!(fx.a.engine_msgs.is_empty(), "nothing queued, nothing allocated");
@@ -238,7 +242,7 @@ fn a_window_that_did_not_ask_for_a_class_gets_no_message_but_the_state_still_mov
     assert_eq!((s, st.insns), (Step::Blocked, 0), "the program was not woken");
     // CONTROL: subscribe again and the same event is delivered.
     fx.a.mem.write_u32(w + 82, 0x340).unwrap();
-    let d = fx.a.deliver(GuestUiEvent::ControlChanged { win: native, control: check, token: ct, value: ControlValue::Checked(true) }).unwrap();
+    let d = fx.a.deliver(GuestUiEvent::intent(native, check, ct, Intent::SetValue(ControlValue::Checked(true)))).unwrap();
     assert!(matches!(d, Delivered::Queued(_)));
     fx.run();
     fx.close();
@@ -251,7 +255,7 @@ fn events_for_a_window_that_is_gone_are_not_for_a_guest_window() {
     let (check, ct) = fx.control(1);
     fx.close();
     assert_eq!(fx.a.deliver(GuestUiEvent::MenuCommand { win: native, token: menu_token(0, 0, None) }).unwrap(), Delivered::NotForAGuestWindow);
-    let ev = GuestUiEvent::ControlChanged { win: native, control: check, token: ct, value: ControlValue::Pressed };
+    let ev = GuestUiEvent::intent(native, check, ct, Intent::Activate);
     assert_eq!(fx.a.deliver(ev).unwrap(), Delivered::NotForAGuestWindow);
     let e = fx.a.deliver(GuestUiEvent::Resized { win: native, rect: GuestRect { left: 0, top: 0, width: 1, height: 1 } }).unwrap_err();
     assert!(e.0.contains("not bridged yet"), "{e:?}");

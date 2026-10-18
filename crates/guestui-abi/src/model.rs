@@ -90,7 +90,7 @@ pub struct ControlModel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlValue { Pressed, Checked(bool), Text(String), Level(i32), Scroll { total: u32, visible: u32, top: u32 },
-    /// Only in a `ControlDriven` `Up`: the gesture ended outside the control (no activation, nothing changed).
+    /// The gesture ended outside the control (no activation, nothing changed). Legacy value form; `Intent::Release { inside: false }` is the event.
     Cancelled }
 
 impl ControlModel {
@@ -115,28 +115,6 @@ impl ControlModel {
         Ok(())
     }
 }
-
-/// Native events back to the guest. Tokens identify the guest-side object.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GuestUiEvent {
-    CloseRequested { win: UiObjectRef, token: CallbackToken },
-    ControlChanged { win: UiObjectRef, control: UiObjectRef, token: CallbackToken, value: ControlValue },
-    MenuCommand { win: UiObjectRef, token: CallbackToken },
-    Resized { win: UiObjectRef, rect: GuestRect },
-    /// The pointer's primary button or motion, in the window's own coordinates (0,0 = its top-left corner). The smallest
-    /// generic pointer input: a guest-drawn gadget (BOOPSI) needs it to be hit-tested and driven.
-    Pointer { win: UiObjectRef, x: i32, y: i32, phase: PointerPhase },
-    /// The user is driving a native control, with its two-ended gesture (what Intuition reports as GADGETDOWN / MOUSEMOVE /
-    /// GADGETUP): `Down` = pressed (a button or arrow goes down, a scrollbar drag starts, a field takes focus); `Move` = the
-    /// value changed while the gesture is held (a scrollbar knob drag, a field edit; `value` is the new value); `Up` =
-    /// released / committed (a button release inside it, a scrollbar drag ends, a field's Return; `value` is the final one,
-    /// `Pressed` for a plain button). A toggle's `Up` carries its new `Checked`. Tokens are the guest's own.
-    ControlDriven { win: UiObjectRef, control: UiObjectRef, token: CallbackToken, phase: PointerPhase, value: ControlValue },
-}
-
-/// What the primary pointer button / motion did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PointerPhase { Down, Move, Up }
 
 /// Named refusals (the plan: refuse by name, never silently discard).
 #[derive(Debug, Clone, PartialEq, Eq)]

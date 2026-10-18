@@ -22,7 +22,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
 use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, idcmp::{self, IDCMP_GADGETUP}, machine::Amiga, memory, run::Delivered, tags, Refusal};
-use guestui_abi::{CallbackToken, ControlKind, ControlValue, GuestUi, UiObjectRef};
+use guestui_abi::{CallbackToken, ControlKind, ControlValue, GuestUi, Intent, UiObjectRef};
 use retro_m68k::Cpu;
 
 pub const LVO_GT_GET_GADGET_ATTRS_A: i32 = -174;
@@ -212,13 +212,19 @@ fn store<U: GuestUi>(a: &mut Amiga<U>, g: u32, v: &ControlValue) -> Result<(), R
 }
 
 /// A native control changed: update the gadget's state and post IDCMP_GADGETUP (IAddress = the gadget).
-pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, value: ControlValue) -> Result<Delivered, Refusal> {
+pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, intent: Intent) -> Result<Delivered, Refusal> {
     let g = u32::try_from(token.0).ok().filter(|g| a.gadgets.contains_key(g))
-        .ok_or_else(|| Refusal(format!("deliver: ControlChanged token {:#x} is not a GadTools gadget", token.0)))?;
+        .ok_or_else(|| Refusal(format!("deliver: Intent token {:#x} is not a GadTools gadget", token.0)))?;
     let info = a.gadgets[&g].clone();
     if info.attached != Some((win, native, control)) {
-        return Err(Refusal(format!("deliver: ControlChanged for gadget {g:#x}, which is not that native control of that window (stale?)")));
+        return Err(Refusal(format!("deliver: Intent for gadget {g:#x}, which is not that native control of that window (stale?)")));
     }
+    let value = match intent {
+        Intent::Activate => ControlValue::Pressed,
+        Intent::SetValue(v) => v,
+        Intent::CommitText(t) => ControlValue::Text(t),
+        other => return Err(Refusal(format!("deliver: a GadTools gadget has no meaning for {other:?}"))),
+    };
     let (code, value) = match (info.kind, value) {
         (BUTTON_KIND, ControlValue::Pressed) => (0u16, None),
         (BUTTON_KIND, v) => return Err(Refusal(format!("deliver: a {v:?} value from a button"))),
