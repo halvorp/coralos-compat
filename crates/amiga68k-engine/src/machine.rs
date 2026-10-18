@@ -92,6 +92,8 @@ pub struct Amiga<U: GuestUi> {
     pub gfx: graphics::state::State,
     /// BOOPSI/MUI objects (boopsi.rs, mui/).
     pub objects: crate::boopsi::Objects,
+    /// BOOPSI classes and objects made by the class core (iclass.rs, boopsi_native.rs).
+    pub classes: crate::iclass::Classes,
     /// Functions the census runner was told to pretend exist (`--stub lib/Func`, census.rs).
     pub census_stubs: Vec<(String, String)>,
     next_lib_base: u32,
@@ -105,7 +107,7 @@ impl<U: GuestUi> Amiga<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
-            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), gfx: Default::default(),
+            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), gfx: Default::default(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
@@ -208,10 +210,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(screen::LVO_LOCK_PUB_SCREEN, "LockPubScreen", screen::lock_pub_screen::<U>)
             .func(screen::LVO_UNLOCK_PUB_SCREEN, "UnlockPubScreen", screen::unlock_pub_screen::<U>)
             .with(graphics::register_intuition::<U>)
-            .func(crate::boopsi::LVO_NEW_OBJECT_A, "NewObjectA", crate::boopsi::new_object_a::<U>)
-            .func(crate::boopsi::LVO_DISPOSE_OBJECT, "DisposeObject", crate::boopsi::dispose_object::<U>)
-            .func(crate::boopsi::LVO_SET_ATTRS_A, "SetAttrsA", crate::boopsi::set_attrs_a::<U>)
-            .func(crate::boopsi::LVO_GET_ATTR, "GetAttr", crate::boopsi::get_attr::<U>)
+            .with(crate::boopsi_send::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("gadtools.library", GADTOOLS_BASE)
             .func(gadtools::LVO_CREATE_GADGET_A, "CreateGadgetA", gadtools::create_gadget::<U>)
@@ -232,6 +231,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(gadtools::LVO_FREE_VISUAL_INFO, "FreeVisualInfo", gadtools::free_visual_info::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         crate::boopsi::install(&mut a.mem, &mut a.dispatch)?;
+        crate::iclass::init(&mut a)?;
         LibraryBuilder::new("graphics.library", GRAPHICS_BASE)
             .with(graphics::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
