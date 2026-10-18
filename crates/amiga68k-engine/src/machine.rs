@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use crate::libtable::{write_slot, Dispatch, LibraryBuilder};
-use crate::{devices, dos, exec, exec_wait, gadtools, graphics, gt_kinds, gt_menus, idcmp, intuition, memory, menu_nav, ports, process, rdargs, screen, timer, window, Refusal};
+use crate::{devices, dos, exec, exec_wait, lists, memheader, semaphores, gadtools, graphics, gt_kinds, gt_menus, idcmp, intuition, memory, menu_nav, ports, process, rdargs, screen, timer, window, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
 use retro_hunk::Loaded;
@@ -75,6 +75,11 @@ pub struct Amiga<U: GuestUi> {
     pub(crate) ctx: Option<retro_m68k::CpuContext>,
     /// exec memory pools: handle -> (requirements, live blocks address -> size).
     pub pools: BTreeMap<u32, (u32, BTreeMap<u32, u32>)>,
+    /// SignalSemaphores by guest address -> the one task's nest count; the public list by name (semaphores.rs).
+    pub semaphores: BTreeMap<u32, u16>,
+    pub public_semaphores: BTreeMap<String, u32>,
+    /// BOOPSI/MUI objects (boopsi.rs, mui/).
+    pub objects: crate::boopsi::Objects,
     next_lib_base: u32,
 }
 
@@ -86,13 +91,14 @@ impl<U: GuestUi> Amiga<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
-            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(),
+            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(),
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
             .func(exec::LVO_CLOSE_LIBRARY, "CloseLibrary", exec::close_library::<U>)
             .func(process::LVO_FIND_TASK, "FindTask", process::find_task::<U>)
             .func(exec::LVO_OLD_OPEN_LIBRARY, "OldOpenLibrary", exec::old_open_library::<U>)
+            .func(exec::LVO_ALERT, "Alert", exec::alert::<U>)
             .func(memory::LVO_ALLOC_MEM, "AllocMem", memory::alloc_mem::<U>)
             .func(memory::LVO_FREE_MEM, "FreeMem", memory::free_mem::<U>)
             .func(memory::LVO_ALLOC_VEC, "AllocVec", memory::alloc_vec::<U>)
@@ -122,7 +128,25 @@ impl<U: GuestUi> Amiga<U> {
             .func(timer::LVO_CHECK_IO, "CheckIO", timer::check_io::<U>)
             .func(timer::LVO_WAIT_IO, "WaitIO", timer::wait_io::<U>)
             .func(timer::LVO_ABORT_IO, "AbortIO", timer::abort_io::<U>)
-            .func(ports::LVO_FIND_SEMAPHORE, "FindSemaphore", ports::find_semaphore::<U>)
+            .func(memheader::LVO_ALLOCATE, "Allocate", memheader::allocate_lvo::<U>)
+            .func(memheader::LVO_DEALLOCATE, "Deallocate", memheader::deallocate_lvo::<U>)
+            .func(lists::LVO_INSERT, "Insert", lists::insert::<U>)
+            .func(lists::LVO_ADD_HEAD, "AddHead", lists::add_head::<U>)
+            .func(lists::LVO_ADD_TAIL, "AddTail", lists::add_tail::<U>)
+            .func(lists::LVO_REMOVE, "Remove", lists::remove::<U>)
+            .func(lists::LVO_REM_HEAD, "RemHead", lists::rem_head::<U>)
+            .func(lists::LVO_REM_TAIL, "RemTail", lists::rem_tail::<U>)
+            .func(lists::LVO_ENQUEUE, "Enqueue", lists::enqueue::<U>)
+            .func(lists::LVO_FIND_NAME, "FindName", lists::find_name::<U>)
+            .func(semaphores::LVO_FIND_SEMAPHORE, "FindSemaphore", semaphores::find::<U>)
+            .func(semaphores::LVO_INIT_SEMAPHORE, "InitSemaphore", semaphores::init::<U>)
+            .func(semaphores::LVO_OBTAIN_SEMAPHORE, "ObtainSemaphore", semaphores::obtain::<U>)
+            .func(semaphores::LVO_RELEASE_SEMAPHORE, "ReleaseSemaphore", semaphores::release::<U>)
+            .func(semaphores::LVO_ATTEMPT_SEMAPHORE, "AttemptSemaphore", semaphores::attempt::<U>)
+            .func(semaphores::LVO_OBTAIN_SEMAPHORE_SHARED, "ObtainSemaphoreShared", semaphores::obtain_shared::<U>)
+            .func(semaphores::LVO_ATTEMPT_SEMAPHORE_SHARED, "AttemptSemaphoreShared", semaphores::attempt_shared::<U>)
+            .func(semaphores::LVO_ADD_SEMAPHORE, "AddSemaphore", semaphores::add::<U>)
+            .func(semaphores::LVO_REM_SEMAPHORE, "RemSemaphore", semaphores::rem::<U>)
             .func(ports::LVO_CREATE_IO_REQUEST, "CreateIORequest", ports::create_io_request::<U>)
             .func(ports::LVO_DELETE_IO_REQUEST, "DeleteIORequest", ports::delete_io_request::<U>)
             .func(devices::LVO_OPEN_DEVICE, "OpenDevice", devices::open_device::<U>)
@@ -164,6 +188,10 @@ impl<U: GuestUi> Amiga<U> {
             .func(intuition::LVO_REFRESH_GLIST, "RefreshGList", intuition::refresh_gadgets::<U>)
             .func(screen::LVO_LOCK_PUB_SCREEN, "LockPubScreen", screen::lock_pub_screen::<U>)
             .func(screen::LVO_UNLOCK_PUB_SCREEN, "UnlockPubScreen", screen::unlock_pub_screen::<U>)
+            .func(crate::boopsi::LVO_NEW_OBJECT_A, "NewObjectA", crate::boopsi::new_object_a::<U>)
+            .func(crate::boopsi::LVO_DISPOSE_OBJECT, "DisposeObject", crate::boopsi::dispose_object::<U>)
+            .func(crate::boopsi::LVO_SET_ATTRS_A, "SetAttrsA", crate::boopsi::set_attrs_a::<U>)
+            .func(crate::boopsi::LVO_GET_ATTR, "GetAttr", crate::boopsi::get_attr::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("gadtools.library", GADTOOLS_BASE)
             .func(gadtools::LVO_CREATE_GADGET_A, "CreateGadgetA", gadtools::create_gadget::<U>)
@@ -183,6 +211,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(gadtools::LVO_GET_VISUAL_INFO_A, "GetVisualInfoA", gadtools::get_visual_info::<U>)
             .func(gadtools::LVO_FREE_VISUAL_INFO, "FreeVisualInfo", gadtools::free_visual_info::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
+        crate::boopsi::install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("graphics.library", GRAPHICS_BASE)
             .func(graphics::LVO_TEXT_LENGTH, "TextLength", graphics::text_length::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
@@ -199,7 +228,8 @@ impl<U: GuestUi> Amiga<U> {
         let base = self.next_lib_base;
         if base >= DYNAMIC_LIB_END { return Err(Refusal(format!("OpenLibrary {name}: no library base left (NOMEM)"))); }
         self.next_lib_base += DYNAMIC_LIB_STRIDE;
-        LibraryBuilder::new(name, base).install(&mut self.mem, &mut self.dispatch)?;
+        let lib = if name == "muimaster.library" { crate::mui::library(base) } else { LibraryBuilder::new(name, base) };
+        lib.install(&mut self.mem, &mut self.dispatch)?;
         self.libs.push(LibInfo { name, base, open_count: 1 });
         Ok(base)
     }

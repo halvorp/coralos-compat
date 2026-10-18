@@ -117,6 +117,7 @@ pub fn guest_window<U: GuestUi>(a: &Amiga<U>, native: guestui_abi::UiObjectRef) 
 
 /// A native event for the guest ([`Amiga::deliver`]).
 pub fn deliver<U: GuestUi>(a: &mut Amiga<U>, ev: GuestUiEvent) -> Result<Delivered, Refusal> {
+    if let Some(d) = crate::mui::try_deliver(a, &ev)? { return Ok(d); }
     match ev {
         GuestUiEvent::CloseRequested { win, .. } => match guest_window(a, win) {
             Some(w) => post(a, w, IDCMP_CLOSEWINDOW, 0, w),

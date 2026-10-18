@@ -19,7 +19,8 @@ use retro_m68k::RunStats;
 
 /// What [`Amiga::deliver`] did with an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Delivered { Queued(u32), IgnoredUnsubscribed, NotForAGuestWindow }
+pub enum Delivered { Queued(u32), IgnoredUnsubscribed, NotForAGuestWindow, /// A MUI object took it (mui::try_deliver).
+    Handled }
 
 use crate::idcmp::INTUIMESSAGE_SIZE;
 
