@@ -10,6 +10,8 @@ mod bitmaps;
 mod blits;
 pub mod content;
 mod diskfont;
+mod flood;
+mod modes;
 mod draw;
 mod drawinfo;
 pub mod fonts;
@@ -33,7 +35,7 @@ pub const TOPAZ8_WIDTH: u32 = 8;
 
 /// graphics.library's implemented vectors.
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
-    b.named("InitRastPort", rastport::init_rast_port::<U>)
+    b.with(modes::register::<U>).named("Flood", flood::flood::<U>).named("InitRastPort", rastport::init_rast_port::<U>)
         .named("SetAPen", rastport::set_a_pen::<U>)
         .named("SetBPen", rastport::set_b_pen::<U>)
         .named("SetDrMd", rastport::set_dr_md::<U>)

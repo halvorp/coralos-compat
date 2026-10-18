@@ -97,6 +97,7 @@ pub mod timer;
 pub mod vars;
 pub mod volume;
 pub mod window;
+pub mod workbench;
 mod menu;
 
 pub use machine::{Amiga, RunReport};

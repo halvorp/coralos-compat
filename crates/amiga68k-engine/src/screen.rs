@@ -59,3 +59,15 @@ pub fn unlock_pub_screen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
     a.screen_locks = a.screen_locks.checked_sub(1).ok_or_else(|| Refusal("UnlockPubScreen without LockPubScreen".into()))?;
     Ok(format!("[intuition] UnlockPubScreen (locks {})", a.screen_locks))
 }
+
+pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
+    b.named("ScreenToFront", |a, c| screen_depth(a, c, "ScreenToFront")).named("ScreenToBack", |a, c| screen_depth(a, c, "ScreenToBack"))
+}
+
+/// ScreenToFront / ScreenToBack(a0 = screen): there is one screen, so its depth order cannot change; the call is accepted for
+/// that screen and a named refusal for any other pointer.
+fn screen_depth<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu, name: &str) -> Result<String, Refusal> {
+    let s = cpu.areg(0);
+    if s != SCREEN { return Err(Refusal(format!("{name} {s:#x}: not the screen (there is one screen)"))); }
+    Ok(format!("[intuition] {name} (the only screen: nothing to reorder)"))
+}
