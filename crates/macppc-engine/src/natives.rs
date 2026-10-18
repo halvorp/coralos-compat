@@ -46,9 +46,12 @@ impl<U: GuestUi> MacPpc<U> {
             Native::Exit => GlueOutcome::Exit,
             Native::WaitNextEvent | Native::GetNextEvent => {
                 // eventMask, EventRecord*, [sleep, mouseRgn]: the sleep is dropped so the call never suspends the caller
+                // (a poll; the PowerPC run loop cannot idle yet, see docs/MACPPC-PLUMBING.md), and a non-zero sleep is logged
+                let name = if n == Native::WaitNextEvent { "WaitNextEvent" } else { "GetNextEvent" };
                 let Some(op) = mac68k_engine::mixed::trap_opcode("WaitNextEvent") else { return GlueOutcome::Refused("WaitNextEvent has no trap word".into()) };
+                if n == Native::WaitNextEvent && a(2) != 0 { self.mac.log.push(format!("[cfm] WaitNextEvent sleep={} ticks polled, not slept", a(2))); }
                 let r = self.mac.pascal_call(op, &[a(0), a(1), 0, 0]);
-                self.finish("WaitNextEvent", r, Some(Arg::B), regs)
+                self.finish(name, r, Some(Arg::B), regs)
             }
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
             Native::BlockZero => {
@@ -77,7 +80,7 @@ impl<U: GuestUi> MacPpc<U> {
             }
             Native::FindSymbol => {
                 let (conn, name_p, addr_p, class_p) = (a(0), a(1), a(2), a(3));
-                let Some(lib) = conn.checked_sub(1).and_then(|i| self.connections.get(i as usize)).cloned() else {
+                let Some(lib) = conn.checked_sub(1).and_then(|i| self.connections.get(i as usize)).filter(|n| !n.is_empty()).cloned() else {
                     regs[3] = err(FRAG_CONNECTION_ID_NOT_FOUND);
                     return GlueOutcome::Return;
                 };
@@ -96,7 +99,9 @@ impl<U: GuestUi> MacPpc<U> {
             Native::CloseConnection => {
                 let p = a(0);
                 let id = self.mac.mem.read_u32(p).unwrap_or(0);
-                if id == 0 || id as usize > self.connections.len() { regs[3] = err(FRAG_CONNECTION_ID_NOT_FOUND); return GlueOutcome::Return; }
+                if id == 0 || self.connections.get(id as usize - 1).map_or(true, |n| n.is_empty()) { regs[3] = err(FRAG_CONNECTION_ID_NOT_FOUND); return GlueOutcome::Return; }
+                // a closed connection keeps its slot (ids are never reused) but has no name, so FindSymbol refuses it
+                self.connections[id as usize - 1].clear();
                 let _ = self.mac.mem.write_u32(p, 0);
                 regs[3] = 0;
                 GlueOutcome::Return

@@ -82,7 +82,7 @@ fn wrong_arity_wrong_convention_and_unimplemented_are_named_errors_not_calls() {
     assert!(matches!(m.pascal_call(trap_opcode("NewWindow").unwrap(), &[0]), Err(MixedError::ArgCount { want: 8, got: 1, .. })));
     let sysbeep = trap_opcode("SysBeep").unwrap();
     assert!(matches!(m.pascal_call(sysbeep, &[1]), Err(MixedError::Unimplemented(n)) if n == "SysBeep"));
-    assert!(m.log.is_empty() || m.refused.is_empty(), "structural errors never reach a handler");
+    assert!(m.log.is_empty() && m.refused.is_empty(), "structural errors never reach a handler");
 }
 
 /// The proof of reuse: the program HELLO runs NewWindow through the 68k A-line bridge; the same call made by value
@@ -134,4 +134,17 @@ fn get_resource_and_exit_to_shell_by_value() {
     let exit = m.pascal_call(trap_opcode("ExitToShell").unwrap(), &[]).unwrap();
     assert!(exit.halted);
     assert!(!m.pascal_call(trap_opcode("InitWindows").unwrap(), &[]).unwrap().halted, "negative control: other calls do not halt");
+}
+
+#[test]
+fn a_blocking_handler_called_without_68k_registers_is_refused_and_leaves_no_wait_behind() {
+    let mut m = mac();
+    let wne = trap_opcode("WaitNextEvent").unwrap();
+    // sleep > 0 and nothing pending would block the (nonexistent) 68k caller: refused by name, no pending wait remains
+    let e = m.pascal_call(wne, &[0xFFFF, 0x6000, 30, 0]).unwrap_err();
+    assert!(matches!(e, MixedError::NeedsCpuRegisters(ref n) if n == "WaitNextEvent"), "{e}");
+    assert!(m.ev.waiting.is_none(), "a later 68k step must not deliver an event into low memory");
+    // negative control: sleep 0 polls and returns the null event without touching registers
+    let r = m.pascal_call(wne, &[0xFFFF, 0x6000, 0, 0]).unwrap();
+    assert!(!r.blocked && r.value == 0);
 }

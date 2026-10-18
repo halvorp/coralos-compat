@@ -178,8 +178,8 @@ impl Loader {
                 let nb = strings.get(off..off + len).ok_or(bad("an exported symbol's name is outside the string table"))?;
                 let (value, section) = (be32(s, 4).unwrap(), be16(s, 8).unwrap() as i16);
                 let target = match section {
-                    -1 => ExportTarget::Absolute(value),
-                    -2 => ExportTarget::Reexport { import: value },
+                    -2 => ExportTarget::Absolute(value), // kPEFAbsoluteSection
+                    -3 => ExportTarget::Reexport { import: value }, // kPEFReexportedImportSection
                     n if n >= 0 && (n as usize) < sections => ExportTarget::Section { index: n as u16, offset: value },
                     _ => return Err(bad("an exported symbol names a section that does not exist")),
                 };

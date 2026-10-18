@@ -3,8 +3,7 @@ use alloc::vec::Vec;
 use alloc::vec;
 use crate::*;
 
-pub fn be32(v: &mut Vec<u8>, x: u32) { v.extend_from_slice(&x.to_be_bytes()); }
-pub fn be16(v: &mut Vec<u8>, x: u16) { v.extend_from_slice(&x.to_be_bytes()); }
+pub use retro_common::bytes::{put_be16 as be16, put_be32 as be32};
 pub fn pad4(v: &mut Vec<u8>) { while v.len() % 4 != 0 { v.push(0); } }
 
 pub enum Kind { Code, Data, Bss }

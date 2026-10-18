@@ -7,6 +7,7 @@
 //! NAME when called (or [`CfmError::UnresolvedImport`] in strict mode) and, for data, an address outside guest RAM.
 use crate::error::CfmError;
 use crate::machine::{MacPpc, UNBOUND_DATA};
+use crate::natives::PROVIDED_LIBRARIES;
 use crate::symbols::Binding;
 use alloc::format;
 use alloc::string::String;
@@ -64,6 +65,8 @@ pub struct StartState {
 }
 
 pub const STACK_SIZE: u32 = 256 * 1024;
+/// Sections may ask for at most 4 KiB alignment (a page); more is refused by name, never silently reduced.
+pub const MAX_ALIGNMENT_EXPONENT: u8 = 12;
 
 fn mem_err(what: &'static str) -> impl Fn(retro_guest_mem::MemError) -> CfmError { move |e| CfmError::Memory(format!("{what}: {e}")) }
 
@@ -75,11 +78,13 @@ impl<U: GuestUi> MacPpc<U> {
         let mut bases: Vec<Option<u32>> = alloc::vec![None; pef.sections.len()];
         for (i, s) in pef.sections.iter().enumerate() {
             if !s.kind.instantiated() { continue; }
-            let image = pef.section_image(i)?;
-            let align = 1u32 << s.alignment.min(12);
-            let bytes = (image.len() as u32).max(1).saturating_add(align);
+            if s.alignment > MAX_ALIGNMENT_EXPONENT { return Err(CfmError::AlignmentTooLarge { section: i, exponent: s.alignment }); }
+            let align = 1u32 << s.alignment;
+            // guest memory first: totalSize is guest-controlled, so the host-side image is only built once it fits
+            let bytes = s.total_size.max(1).saturating_add(align);
             let raw = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, bytes, true).map_err(|_| CfmError::NoMemory { what: "a PEF section", bytes })?;
             let base = raw.next_multiple_of(align);
+            let image = pef.section_image(i)?;
             self.mac.mem.write_bytes(base, &image).map_err(mem_err("placing a section"))?;
             bases[i] = Some(base);
         }
@@ -87,7 +92,9 @@ impl<U: GuestUi> MacPpc<U> {
         let mut resolved = Vec::with_capacity(loader.imports.len());
         for imp in &loader.imports {
             let lib = &loader.libraries[imp.library];
-            let b = self.bind(&imp.name);
+            // the value a function import relocates to: a TVector for TVector class, the code address (the stub) for Code class
+            let fn_value = |glue: &crate::glue::Glue, id: usize| glue.entry(id).map_or(0, |e| if imp.class == SymbolClass::Code { e.stub } else { e.tvector });
+            let b = if PROVIDED_LIBRARIES.contains(&lib.name.as_str()) { self.bind(&imp.name) } else { Binding::Unbound(format!("library {} is not provided by the engine", lib.name)) };
             let weak = imp.weak || lib.weak;
             // Why this import cannot be served as declared, if it cannot.
             let why = match (&b, imp.class) {
@@ -104,12 +111,12 @@ impl<U: GuestUi> MacPpc<U> {
                 Some(why) => {
                     // a function nobody provides: calling it refuses by name
                     let id = self.glue.intern(&mut self.mac, &lib.name, &imp.name)?;
-                    (ImportStatus::Unbound(why), self.glue.entry(id).map_or(0, |e| e.tvector))
+                    (ImportStatus::Unbound(why), fn_value(&self.glue, id))
                 }
                 None if b.is_data() => (ImportStatus::Bound(b.describe()), self.qd_block()?),
                 None => {
                     let id = self.glue.intern(&mut self.mac, &lib.name, &imp.name)?;
-                    (ImportStatus::Bound(b.describe()), self.glue.entry(id).map_or(0, |e| e.tvector))
+                    (ImportStatus::Bound(b.describe()), fn_value(&self.glue, id))
                 }
             };
             resolved.push(ResolvedImport { library: lib.name.clone(), symbol: imp.name.clone(), class: imp.class, weak, status, value });

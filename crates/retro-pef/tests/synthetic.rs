@@ -169,15 +169,46 @@ fn repeat_instructions_expand_the_preceding_instructions() {
     let got = run(&w, &BASES, &[]).unwrap();
     assert_eq!(got.len(), 6);
     assert_eq!(got.iter().map(|&(_, o, a)| (o, a)).collect::<Vec<_>>(), [(0, 0x1000), (4, 0x2000), (8, 0x1000), (12, 0x2000), (16, 0x1000), (20, 0x2000)]);
-    // LgRepeat: 1 block, 3 more times (field 2 -> +1)
+    // LgRepeat: 1 chunk (ImportRun of 1), 2 more times; the stored count is used as is, no +1
     let got = run(&[0x4A00, 0xB000, 2], &BASES, &[1, 2, 3, 4]).unwrap();
-    assert_eq!(got.iter().map(|&(_, _, a)| a).collect::<Vec<_>>(), [1, 2, 3, 4]);
-    // a two-word instruction counts as ONE instruction for the block size
-    let got = run(&[0xA400, 1, 0x9000], &BASES, &[0, 6]).unwrap();
+    assert_eq!(got.iter().map(|&(_, _, a)| a).collect::<Vec<_>>(), [1, 2, 3]);
+    // negative control: count 0 repeats nothing
+    let got = run(&[0x4A00, 0xB000, 0], &BASES, &[1, 2, 3, 4]).unwrap();
+    assert_eq!(got.iter().map(|&(_, _, a)| a).collect::<Vec<_>>(), [1]);
+    // blockCount counts 16-bit CHUNKS: a two-chunk block (field 1) covers the whole two-word LgByImport
+    let got = run(&[0xA400, 1, 0x9100], &BASES, &[0, 6]).unwrap();
     assert_eq!(got.iter().map(|&(_, o, a)| (o, a)).collect::<Vec<_>>(), [(0, 6), (4, 6)]);
+    // ... and a one-chunk block would rewind into the middle of it, which is refused by name
+    assert!(matches!(run(&[0xA400, 1, 0x9000], &BASES, &[0, 6]), Err(PefError::BadReloc(w)) if w.contains("middle")));
+    // a SetPosition (two chunks) before a one-chunk instruction: repeating 3 chunks covers both
+    let got = run(&[0xA000, 8, 0x4000, 0x9200], &BASES, &[]).unwrap();
+    assert_eq!(got.iter().map(|&(_, o, _)| o).collect::<Vec<_>>(), [8, 8]);
     // negative controls
     assert!(matches!(run(&[0x9000 | 0x100], &BASES, &[]), Err(PefError::BadReloc(w)) if w.contains("reaches back")));
-    assert_eq!(run(&[0x4000, 0xB03F, 0xFFFF], &BASES, &[]).unwrap_err(), PefError::RelocTooLarge);
+    assert_eq!(run(&[0x4000, 0x4000, 0xB07F, 0xFFFF], &BASES, &[]).unwrap_err(), PefError::RelocTooLarge);
+}
+
+#[test]
+fn a_repeat_cannot_multiply_run_ops_into_unbounded_work() {
+    // BySectC(512) repeated 0x3FFFFF times is ~2G word writes in 6 bytes of relocation program
+    let r = run(&[0x41FF, 0xB03F, 0xFFFE], &BASES, &[]);
+    assert!(matches!(r, Err(PefError::BadReloc(w)) if w.contains("safety bound")), "{r:?}");
+}
+
+#[test]
+fn export_pseudo_sections_are_minus_two_absolute_and_minus_three_reexport() {
+    let mut b = PefBuilder::new();
+    b.code(&[0; 4]);
+    b.export("abs", SymbolClass::Data, -2, 0x1234).export("re", SymbolClass::Code, -3, 1);
+    let bytes = b.build();
+    let l = Pef::parse(&bytes).unwrap().loader().unwrap();
+    assert_eq!(l.find_export("abs").unwrap().target, ExportTarget::Absolute(0x1234));
+    assert_eq!(l.find_export("re").unwrap().target, ExportTarget::Reexport { import: 1 });
+    // negative control: -1 names no section at all
+    let mut b = PefBuilder::new();
+    b.code(&[0; 4]);
+    b.export("x", SymbolClass::Data, -1, 0);
+    assert!(Pef::parse(&b.build()).unwrap().loader().is_err());
 }
 
 #[test]

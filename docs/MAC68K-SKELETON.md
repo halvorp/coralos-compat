@@ -89,7 +89,7 @@ Tests: `tests/app_end_to_end.rs` is a hand-assembled application (CODE 0/1/2, WI
    then `NewControl`/`GetDialogItem`/`HiliteControl`/`GetControlValue`), Gestalt/SysEnvirons/GetTrapAddress, File Manager
    (`GetVolInfo`, `OpenResFile`, `PBxxx`), TextEdit, Scrap, Sound.
 2. MacPaint-class apps additionally need CopyBits/regions/patterns/PICT, `GetNextEvent` key events with modifiers, `MenuKey`.
-3. macppc (PEF reader, CFM, glue and the Mixed Mode seam are DONE: docs/MACPPC-PLUMBING.md; the CPU is the open part). Original note: `retro-resfork` already reads the fork (`cfrg`, `pef`-bearing data forks come via the same containers); add a PEF
+3. macppc (PEF reader, CFM, glue and the by-value Mixed Mode seam (Toolbox/Memory Manager handlers callable from PowerPC) are DONE; UPPs/RoutineDescriptors for Toolbox callbacks into PPC code (filterProcs, actionProcs) and the CPU are OPEN: docs/MACPPC-PLUMBING.md). Original note: `retro-resfork` already reads the fork (`cfrg`, `pef`-bearing data forks come via the same containers); add a PEF
    reader + CFM, a PowerPC core (Moira is 68k; PowerCore/Dingusppc are references only), the Mixed Mode Manager so PPC code
    can call the same trap handlers through routine descriptors, and reuse this engine's Toolbox handlers unchanged
    (they are keyed on the trap table, not on the CPU).

@@ -4,3 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Preferred Executable Format (Mac OS PowerPC CFM containers): parser, pattern-data unpacker, relocation decoder, writer (no_std)"
+
+[dependencies]
+retro-common = { path = "../retro-common" }

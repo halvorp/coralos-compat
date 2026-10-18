@@ -45,6 +45,9 @@ pub enum MixedError {
     WrongConvention(String),
     /// The wrong number of arguments for the signature.
     ArgCount { name: String, want: usize, got: usize },
+    /// The handler needs 68k registers (a stack pointer, the PC) that a PowerPC caller does not have: the call is refused
+    /// and any wait it started is cancelled.
+    NeedsCpuRegisters(String),
 }
 
 impl core::fmt::Display for MixedError {
@@ -54,6 +57,7 @@ impl core::fmt::Display for MixedError {
             MixedError::Unimplemented(n) => write!(f, "unimplemented trap _{n}"),
             MixedError::WrongConvention(n) => write!(f, "{n} is registered with the other calling convention"),
             MixedError::ArgCount { name, want, got } => write!(f, "{name} takes {want} arguments, {got} given"),
+            MixedError::NeedsCpuRegisters(n) => write!(f, "{n} needs 68k registers (it blocks or reads the stack), which a PowerPC caller cannot give it"),
         }
     }
 }
@@ -127,6 +131,7 @@ impl<U: GuestUi> Mac<U> {
         if layout.len() != values.len() { return Err(MixedError::ArgCount { name: name.into(), want: layout.len(), got: values.len() }); }
         let mut cpu = Cpu::detached();
         let outcome = Args::from_values(layout, values).and_then(|args| handler(self, &mut cpu, &Call { opcode, pc: 0, name, args }));
+        if cpu.touched_registers() { self.ev.waiting = None; return Err(MixedError::NeedsCpuRegisters(name.into())); }
         let raw = self.finish_pascal(name, outcome);
         let value = match rkind { Some(Arg::B) => raw & 0xFF, Some(Arg::W) => raw & 0xFFFF, _ => raw };
         Ok(Return { value, halted: cpu.is_halted(), blocked: cpu.is_blocked() })
@@ -144,6 +149,7 @@ impl<U: GuestUi> Mac<U> {
         }
         let mut cpu = Cpu::detached();
         let outcome = handler(self, &mut cpu, &mut regs);
+        if cpu.touched_registers() { self.ev.waiting = None; return Err(MixedError::NeedsCpuRegisters(name.into())); }
         self.finish_os(name, outcome, &mut regs);
         let value = match sig.result { Some(Reg::D0) => regs.d0, Some(Reg::A0) => regs.a0, Some(Reg::A1) => regs.a1, Some(Reg::D1) => regs.d1, None => 0 };
         Ok(Return { value, halted: cpu.is_halted(), blocked: cpu.is_blocked() })

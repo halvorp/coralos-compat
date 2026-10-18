@@ -43,8 +43,7 @@ impl fmt::Display for CfrgError {
 }
 impl core::error::Error for CfrgError {}
 
-fn be16(b: &[u8], at: usize) -> Option<u16> { Some(u16::from_be_bytes(b.get(at..at + 2)?.try_into().ok()?)) }
-fn be32(b: &[u8], at: usize) -> Option<u32> { Some(u32::from_be_bytes(b.get(at..at + 4)?.try_into().ok()?)) }
+use retro_common::bytes::{be16, be32};
 
 pub fn parse(b: &[u8]) -> Result<Vec<Member>, CfrgError> {
     let t = CfrgError::Truncated("header");

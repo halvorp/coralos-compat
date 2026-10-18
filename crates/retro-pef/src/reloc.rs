@@ -15,10 +15,10 @@
 //! 0110010 index:9                  RelocSmSetSectD
 //! 0110011 index:9                  RelocSmBySection       one word += base of section index
 //! 1000 offset:12 (+1)              RelocIncrPosition      skip offset bytes
-//! 1001 blocks:4 (+1) count:8 (+1)  RelocSmRepeat          repeat the preceding `blocks` instructions `count` more times
+//! 1001 blocks:4 (+1) count:8 (+1)  RelocSmRepeat          repeat the preceding `blocks` 16-bit chunks `count` more times
 //! 101000 off:10 | off:16           RelocSetPosition       position := 26-bit byte offset into the section
 //! 101001 idx:10 | idx:16           RelocLgByImport        one word += import[26-bit index]
-//! 101100 blocks:4 (+1) cnt:6 | cnt:16 (+1)  RelocLgRepeat  as SmRepeat with a 22-bit count
+//! 101100 blocks:4 (+1) cnt:6 | cnt:16  RelocLgRepeat  as SmRepeat with a 22-bit count (no +1)
 //! 101101 sub:4 idx:6 | idx:16      RelocLgSetOrBySection  sub 0 = BySection, 1 = SetSectC, 2 = SetSectD (22-bit index)
 //! ```
 //! Initial state per relocation header: position 0 in the header's section, sectionC = section 0's base, sectionD =
@@ -29,6 +29,9 @@ use alloc::vec::Vec;
 
 /// A repeat that would expand beyond this many ops is refused (a corrupt count, not a real fragment).
 pub const MAX_OPS: usize = 1 << 22;
+/// One relocation header may write at most this many words: a run op covers up to 512 words and repeats multiply, so the
+/// op bound alone does not bound the work (a few hundred bytes could otherwise ask for ~10^9 writes).
+pub const MAX_WORK: u64 = 1 << 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelocOp {
@@ -56,12 +59,14 @@ fn next_word(words: &[u16], at: &mut usize, end: usize) -> Result<u16, PefError>
 /// Decode `count` 16-bit relocation words starting at word `first` into ops.
 pub fn decode(words: &[u16], first: usize, count: usize) -> Result<Vec<RelocOp>, PefError> {
     let end = first.checked_add(count).filter(|&e| e <= words.len()).ok_or(PefError::BadReloc("relocation run past the instruction area"))?;
-    // one entry per INSTRUCTION, so a repeat's block count is in instructions, not words
-    let mut instrs: Vec<Vec<RelocOp>> = Vec::new();
+    // one entry per INSTRUCTION, tagged with its first 16-bit chunk: a repeat's blockCount counts CHUNKS, so it may only
+    // rewind onto an instruction's first chunk
+    let mut instrs: Vec<(usize, Vec<RelocOp>)> = Vec::new();
     let mut total = 0usize;
     let mut at = first;
     while at < end {
         let index = (at - first) as u32;
+        let here = at - first;
         let op = next_word(words, &mut at, end)?;
         let unknown = PefError::UnknownRelocOpcode { opcode: op, index };
         let ops: Vec<RelocOp> = match op >> 14 {
@@ -82,14 +87,14 @@ pub fn decode(words: &[u16], first: usize, count: usize) -> Result<Vec<RelocOp>,
                 0x33 => alloc::vec![RelocOp::BySection(u32::from(op & 0x1FF))],
                 _ => match op >> 12 {
                     8 => alloc::vec![RelocOp::Skip(u32::from(op & 0xFFF) + 1)],
-                    9 => repeat(&instrs, usize::from((op >> 8) & 0xF) + 1, u32::from(op & 0xFF) + 1, &mut total)?,
+                    9 => repeat(&instrs, here, usize::from((op >> 8) & 0xF) + 1, u32::from(op & 0xFF) + 1, &mut total)?,
                     _ => match op >> 10 {
                         0x28 => { let lo = next_word(words, &mut at, end)?; alloc::vec![RelocOp::SetPosition((u32::from(op & 0x3FF) << 16) | u32::from(lo))] }
                         0x29 => { let lo = next_word(words, &mut at, end)?; alloc::vec![RelocOp::ByImport((u32::from(op & 0x3FF) << 16) | u32::from(lo))] }
                         0x2C => {
                             let lo = next_word(words, &mut at, end)?;
-                            let n = ((u32::from(op & 0x3F) << 16) | u32::from(lo)) + 1;
-                            repeat(&instrs, usize::from((op >> 6) & 0xF) + 1, n, &mut total)?
+                            let n = (u32::from(op & 0x3F) << 16) | u32::from(lo);
+                            repeat(&instrs, here, usize::from((op >> 6) & 0xF) + 1, n, &mut total)?
                         }
                         0x2D => {
                             let lo = next_word(words, &mut at, end)?;
@@ -103,15 +108,17 @@ pub fn decode(words: &[u16], first: usize, count: usize) -> Result<Vec<RelocOp>,
         };
         total += ops.len();
         if total > MAX_OPS { return Err(PefError::RelocTooLarge); }
-        instrs.push(ops);
+        instrs.push((here, ops));
     }
-    Ok(instrs.into_iter().flatten().collect())
+    Ok(instrs.into_iter().flat_map(|(_, o)| o).collect())
 }
 
-/// Expand a repeat: the ops of the last `blocks` instructions, `times` more times.
-fn repeat(instrs: &[Vec<RelocOp>], blocks: usize, times: u32, total: &mut usize) -> Result<Vec<RelocOp>, PefError> {
-    if blocks > instrs.len() { return Err(PefError::BadReloc("a repeat reaches back past the first instruction")); }
-    let block: Vec<RelocOp> = instrs[instrs.len() - blocks..].iter().flatten().copied().collect();
+/// Expand a repeat at chunk `here`: the ops of the instructions in the `chunks` 16-bit chunks before it, `times` more
+/// times. The rewind must land on an instruction's first chunk (never inside a two-word opcode).
+fn repeat(instrs: &[(usize, Vec<RelocOp>)], here: usize, chunks: usize, times: u32, total: &mut usize) -> Result<Vec<RelocOp>, PefError> {
+    let from = here.checked_sub(chunks).ok_or(PefError::BadReloc("a repeat reaches back past the first instruction"))?;
+    let start = instrs.iter().position(|(c, _)| *c == from).ok_or(PefError::BadReloc("a repeat rewinds into the middle of a two-word instruction"))?;
+    let block: Vec<RelocOp> = instrs[start..].iter().flat_map(|(_, o)| o.iter().copied()).collect();
     let n = block.len().checked_mul(times as usize).filter(|&n| total.saturating_add(n) <= MAX_OPS).ok_or(PefError::RelocTooLarge)?;
     let mut out = Vec::with_capacity(n);
     for _ in 0..times { out.extend_from_slice(&block); }
@@ -122,6 +129,12 @@ fn repeat(instrs: &[Vec<RelocOp>], blocks: usize, times: u32, total: &mut usize)
 /// not instantiated); `imports[i]` is the resolved value of import `i`. `add(section, offset, addend)` must add `addend`
 /// to the big-endian word at `offset` in `section`.
 pub fn apply(ops: &[RelocOp], section: u16, bases: &[Option<u32>], imports: &[u32], add: &mut dyn FnMut(u16, u32, u32) -> Result<(), PefError>) -> Result<(), PefError> {
+    let mut work = 0u64;
+    let add = &mut |s: u16, o: u32, a: u32| -> Result<(), PefError> {
+        work += 1;
+        if work > MAX_WORK { return Err(PefError::BadReloc("a relocation header writes more words than the safety bound")); }
+        add(s, o, a)
+    };
     let base = |i: u32| bases.get(i as usize).copied().flatten().ok_or(PefError::BadReloc("an opcode names a section that is not instantiated"));
     let (mut c, mut d) = (base(0).ok(), base(1).ok());
     let (mut pos, mut next_import) = (0u32, 0usize);

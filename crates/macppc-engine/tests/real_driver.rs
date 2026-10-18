@@ -1,6 +1,7 @@
 //! Instantiating a REAL CodeWarrior-built PEF: SheepShaver's `ethernet.ndrv` (a Mac OS network driver, a PowerPC code
 //! fragment with 6 InterfaceLib imports and 5 exports). Not in this repository; `PEF_CORPUS` (default
-//! `/data/refs/retro/macemu/SheepShaver/src/EthernetDriver`) names the directory, a missing file SKIPS loudly.
+//! `/data/refs/retro/macemu/SheepShaver/src/EthernetDriver`) names the directory, a missing file FAILS unless
+//! `RETRO_ALLOW_MISSING_REFS` is set (a skip must be chosen, never silent).
 use guestui_abi::RecordingGuestUi;
 use macppc_engine::census::Census;
 use macppc_engine::cfm::{Fragment, ImportStatus};
@@ -11,7 +12,8 @@ fn ndrv() -> Option<Vec<u8>> {
     let root = std::env::var("PEF_CORPUS").unwrap_or_else(|_| "/data/refs/retro/macemu/SheepShaver/src/EthernetDriver".into());
     match std::fs::read(format!("{root}/ethernet.ndrv")) {
         Ok(b) => Some(b),
-        Err(e) => { eprintln!("SKIPPED: real PEF {root}/ethernet.ndrv not available ({e})"); None }
+        Err(e) if std::env::var("RETRO_ALLOW_MISSING_REFS").is_ok() => { eprintln!("SKIPPED (RETRO_ALLOW_MISSING_REFS set): real PEF {root}/ethernet.ndrv not available ({e})"); None }
+        Err(e) => panic!("the real PEF {root}/ethernet.ndrv is not available ({e}); set PEF_CORPUS, or RETRO_ALLOW_MISSING_REFS=1 to skip these tests knowingly"),
     }
 }
 

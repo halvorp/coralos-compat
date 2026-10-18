@@ -39,4 +39,4 @@ test inputs read from the reference tree, not copied into this repository.
 crates/retro-pef: the PEF container format (headers, loader section, pattern-data and relocation opcodes, export hash) is
 written from Apple's "Mac OS Runtime Architectures" facts, cross-read against Apple's CFMLateImport sample (opcode
 numbering, TVector12/8 strides) and Executor's MIT cfm.cpp / pef_hash.cpp (hash word, pattern data semantics); no code
-from them is included. Executor's loader leaves RelocSmRepeat/LgRepeat/LgSetOrBySection unimplemented; ours implements them.
+from them is included. Executor's loader implements RelocSmRepeat (chunk rewind, which ours matches) but asserts on RelocLgRepeat/LgSetOrBySection; ours implements all three.

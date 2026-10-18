@@ -47,3 +47,5 @@ An application file is MacBinary, or an AppleDouble header file (`%name`/`._name
 2. Float arguments (MathLib, `Fixed`/`Fract` helpers) need f1..f13 in the glue contract.
 3. Imports from other fragments (an app's own shared libraries) via `instantiate` of a second PEF and export lookup.
 4. UPP/routine descriptors (68k <-> PPC callbacks both ways) once a CPU exists to hand control between the two.
+5. `WaitNextEvent` with a non-zero sleep is a poll today (the run loop cannot suspend a PowerPC caller), so an idle PPC event loop busy-spins the host; the call logs the ignored sleep. Needs an idle outcome in `GlueOutcome` once the CPU lane exists.
+6. Bindings are keyed by symbol and only honoured for `InterfaceLib` (other libraries are Unbound by name); a second provided library needs a per-library binding table.

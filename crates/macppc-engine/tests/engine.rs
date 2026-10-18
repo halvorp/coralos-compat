@@ -313,3 +313,63 @@ fn pattern_data_and_alignment_are_honoured_at_instantiation() {
     assert_eq!(m.mac.mem.bytes(m.mac.mem.span(base, 32).unwrap()).unwrap()[..9], [1, 2, 3, 0, 0, 0, 0, 0, 0]);
     assert_eq!(frag.exports, vec![("table".to_string(), base)]);
 }
+
+#[test]
+fn a_huge_total_size_is_refused_before_any_host_allocation_and_over_alignment_is_named() {
+    let mut m = machine();
+    // totalSize 0xF0000000 from a few bytes of file: refused by the guest allocator (the image is only built after it fits)
+    let mut b = retro_pef::writer::PefBuilder::new();
+    b.code(&fixture::MAIN_CODE);
+    b.data(&[], 0xF000_0000);
+    let e = m.instantiate("huge", &Pef::parse(&b.build()).unwrap()).unwrap_err();
+    assert!(matches!(e, CfmError::NoMemory { what: "a PEF section", .. }), "{e}");
+    // alignment 2^13 is more than the loader provides: refused, not reduced to 2^12
+    let mut b = retro_pef::writer::PefBuilder::new();
+    let c = b.code(&fixture::MAIN_CODE);
+    b.align(c, 13);
+    let e = m.instantiate("al", &Pef::parse(&b.build()).unwrap()).unwrap_err();
+    assert_eq!(e, CfmError::AlignmentTooLarge { section: c, exponent: 13 });
+    // negative control: 2^12 is the largest that loads, and lands aligned
+    let mut b = retro_pef::writer::PefBuilder::new();
+    let c = b.code(&fixture::MAIN_CODE);
+    b.align(c, 12);
+    let frag = m.instantiate("al12", &Pef::parse(&b.build()).unwrap()).unwrap();
+    assert_eq!(frag.section_bases[c].unwrap() % 4096, 0);
+}
+
+#[test]
+fn code_class_imports_get_a_code_address_tvector_class_imports_a_tvector() {
+    let mut m = machine();
+    let frag = load(&mut m, &fixture::app(&[("InterfaceLib", false, &[("NewPtr", SymbolClass::Code, false), ("NewHandle", SymbolClass::TVector, false)])]));
+    let code = frag.imports[index_of(&frag, "NewPtr")].value;
+    assert_eq!(m.glue_symbol_at(code).as_deref(), Some("NewPtr"), "a Code-class import is the stub itself");
+    let tv = frag.imports[index_of(&frag, "NewHandle")].value;
+    assert_eq!(m.glue_symbol_at(tv), None, "negative control: a TVector-class import is not a stub address");
+    assert_eq!(m.glue_symbol_at(m.mac.mem.read_u32(tv).unwrap()).as_deref(), Some("NewHandle"));
+}
+
+#[test]
+fn imports_from_a_library_the_engine_does_not_provide_do_not_bind_by_symbol_name() {
+    let mut m = machine();
+    let frag = load(&mut m, &fixture::app(&[("SomeOtherLib", false, &[("NewPtr", SymbolClass::TVector, false)])]));
+    assert!(matches!(&frag.imports[0].status, ImportStatus::Unbound(w) if w.contains("SomeOtherLib")), "{:?}", frag.imports[0].status);
+    // negative control: the same symbol from InterfaceLib binds
+    let frag = load(&mut m, &fixture::app(&[("InterfaceLib", false, &[("NewPtr", SymbolClass::TVector, false)])]));
+    assert!(matches!(frag.imports[0].status, ImportStatus::Bound(_)));
+}
+
+#[test]
+fn a_closed_connection_is_gone_for_find_symbol_and_ids_are_not_reused() {
+    let mut m = machine();
+    let frag = load(&mut m, &fixture::app(&[("InterfaceLib", false, &[("GetSharedLibrary", SymbolClass::TVector, false), ("FindSymbol", SymbolClass::TVector, false), ("CloseConnection", SymbolClass::TVector, false)])]));
+    let pstr = |m: &mut M, at: u32, s: &str| { m.mac.mem.write_u8(at, s.len() as u8).unwrap(); m.mac.mem.write_bytes(at + 1, s.as_bytes()).unwrap(); };
+    pstr(&mut m, 0x6000, "InterfaceLib");
+    pstr(&mut m, 0x6300, "NewPtr");
+    call(&mut m, &frag, "GetSharedLibrary", &[0x6000, 0, 0, 0x6100, 0x6104, 0x6200]);
+    let conn = m.mac.mem.read_u32(0x6100).unwrap();
+    assert_eq!(call(&mut m, &frag, "FindSymbol", &[conn, 0x6300, 0x6400, 0x6404]).1, 0, "open: found");
+    assert_eq!(call(&mut m, &frag, "CloseConnection", &[0x6100]).1, 0);
+    assert_eq!(call(&mut m, &frag, "FindSymbol", &[conn, 0x6300, 0x6400, 0x6404]).1 as i32, -2801, "closed: connection id not found");
+    call(&mut m, &frag, "GetSharedLibrary", &[0x6000, 0, 0, 0x6100, 0x6104, 0x6200]);
+    assert_ne!(m.mac.mem.read_u32(0x6100).unwrap(), conn, "a reopened library gets a fresh id");
+}

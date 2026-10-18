@@ -1,7 +1,8 @@
 //! Preferred Executable Format (PEF), the Code Fragment Manager's container for classic Mac OS PowerPC code
 //! (no_std + alloc). Facts are from Apple's "Mac OS Runtime Architectures" (the PEF chapter) and cross-checked against
-//! Apple's CFMLateImport sample source and the MIT-licensed Executor loader (`src/cfm.cpp`, which is incomplete: it
-//! asserts on RelocSmRepeat/RelocLgRepeat/RelocLgSetOrBySection, which are implemented here from the spec). No code is
+//! Apple's CFMLateImport sample source and the MIT-licensed Executor loader (`src/cfm.cpp`, whose loader
+//! implements RelocSmRepeat (rewinding by 16-bit chunks, as here) but asserts on RelocLgRepeat/RelocLgSetOrBySection,
+//! which are implemented here from the spec). No code is
 //! copied from either.
 //!
 //! * [`header`]: the 40-byte container header, the 28-byte section headers, section names and section images.
@@ -73,5 +74,4 @@ impl fmt::Display for PefError {
 }
 impl core::error::Error for PefError {}
 
-pub(crate) fn be16(b: &[u8], at: usize) -> Option<u16> { Some(u16::from_be_bytes(b.get(at..at.checked_add(2)?)?.try_into().ok()?)) }
-pub(crate) fn be32(b: &[u8], at: usize) -> Option<u32> { Some(u32::from_be_bytes(b.get(at..at.checked_add(4)?)?.try_into().ok()?)) }
+pub(crate) use retro_common::bytes::{be16, be32};

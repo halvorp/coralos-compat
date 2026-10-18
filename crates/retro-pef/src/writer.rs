@@ -22,8 +22,7 @@ pub struct PefBuilder {
     term: Option<(i32, u32)>,
 }
 
-fn push32(v: &mut Vec<u8>, x: u32) { v.extend_from_slice(&x.to_be_bytes()); }
-fn push16(v: &mut Vec<u8>, x: u16) { v.extend_from_slice(&x.to_be_bytes()); }
+use retro_common::bytes::{put_be16 as push16, put_be32 as push32};
 
 impl PefBuilder {
     pub fn new() -> Self { Self::default() }
@@ -37,6 +36,8 @@ impl PefBuilder {
         self.sections.push(Sec { kind, total, unpacked, data, align: 2 });
         self.sections.len() - 1
     }
+    /// Set a section's alignment exponent (2^exp bytes).
+    pub fn align(&mut self, section: usize, exp: u8) -> &mut Self { self.sections[section].align = exp; self }
     /// Add an imported library and its symbols `(name, class, weak)`.
     pub fn import_library(&mut self, name: &str, weak: bool, syms: &[(&str, SymbolClass, bool)]) -> &mut Self {
         self.libs.push(Lib { name: name.into(), weak, syms: syms.iter().map(|&(n, c, w)| (n.into(), c, w)).collect() });
