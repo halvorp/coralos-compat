@@ -5,6 +5,7 @@
 //! FileInfoBlock32 field list (2026-10-18): fib_DiskKey 0, fib_DirEntryType 4, fib_FileName 8 (108 bytes),
 //! fib_Protection 116, fib_EntryType 120, fib_Size 124, fib_NumBlocks 128, fib_Date 132 (3 longs), fib_Comment 144
 //! (80 bytes), fib_OwnerUID 224, fib_OwnerGID 226, 260 bytes in all.
+use crate::volume::AmigaDate;
 use alloc::string::String;
 use alloc::format;
 use crate::dos_err::*;
@@ -53,7 +54,7 @@ pub(crate) fn fill_fib<U: GuestUi>(a: &mut Amiga<U>, fib: u32, node: NodeId) -> 
         Kind::Dir(_) => (if v.is_device(node) { ST_ROOT } else { ST_USERDIR }, 0),
         Kind::File(d) => (ST_FILE, d.len()),
     };
-    let (name, comment, prot, date) = (String::from(v.name(node)), v.get(node).comment.clone(), v.get(node).protection, v.get(node).date);
+    let (name, comment, prot, date) = (String::from(v.name(node)), v.get(node).comment.clone(), v.get(node).attrs, v.get(node).date());
     a.mem.write_u32(fib, node as u32).map_err(m("fib_DiskKey"))?;
     a.mem.write_u32(fib + FIB_DIR_ENTRY_TYPE, ty as u32).map_err(m("fib_DirEntryType"))?;
     put_cstr(a, fib + FIB_FILE_NAME, &name, NAME_MAX, "fib_FileName")?;
@@ -164,7 +165,7 @@ pub fn delete_file<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     let what = format!("[dos] DeleteFile \"{name}\"");
     let node = match a.fs.vol.resolve(cur_dir(a), &name) { Ok(n) => n, Err(e) => return fail(a, cpu, e, 0, what) };
     if a.fs.node_in_use(node) { return fail(a, cpu, ERROR_OBJECT_IN_USE, 0, what); }
-    if a.fs.vol.get(node).protection & FIBF_DELETE != 0 { return fail(a, cpu, ERROR_DELETE_PROTECTED, 0, what); }
+    if a.fs.vol.get(node).attrs & FIBF_DELETE != 0 { return fail(a, cpu, ERROR_DELETE_PROTECTED, 0, what); }
     match a.fs.vol.remove(node) { Ok(()) => ok(a, cpu, DOSTRUE, what), Err(e) => fail(a, cpu, e, 0, what) }
 }
 
@@ -175,7 +176,7 @@ pub fn create_dir<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     let made = a.fs.vol.resolve_parent(cur_dir(a), &name).and_then(|(d, leaf)| a.fs.vol.create_dir(d, &leaf));
     match made {
         Err(e) => fail(a, cpu, e, 0, what),
-        Ok(n) => { let d = crate::dos_misc::now(a); a.fs.vol.get_mut(n).date = d; match new_lock(a, n, true)? { Some(p) => ok(a, cpu, p >> 2, what), None => fail(a, cpu, ERROR_NO_FREE_STORE, 0, what) } }
+        Ok(n) => { let d = crate::dos_misc::now(a); a.fs.vol.get_mut(n).set_date(d); match new_lock(a, n, true)? { Some(p) => ok(a, cpu, p >> 2, what), None => fail(a, cpu, ERROR_NO_FREE_STORE, 0, what) } }
     }
 }
 
@@ -200,7 +201,7 @@ pub fn set_protection<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Str
     match a.fs.vol.resolve(cur_dir(a), &name) {
         Err(e) => fail(a, cpu, e, 0, what),
         Ok(n) if !a.fs.vol.is_writable(n) => fail(a, cpu, ERROR_DISK_WRITE_PROTECTED, 0, what),
-        Ok(n) => { a.fs.vol.get_mut(n).protection = mask; ok(a, cpu, DOSTRUE, what) }
+        Ok(n) => { a.fs.vol.get_mut(n).attrs = mask; ok(a, cpu, DOSTRUE, what) }
     }
 }
 

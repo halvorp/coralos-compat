@@ -4,6 +4,7 @@
 //! Locks and file handles are REAL structs in guest RAM (so a program that inspects them sees plausible fields),
 //! but everything that matters (which node, the position, the access mode) is host-side bookkeeping keyed by the
 //! struct's address: a guest cannot corrupt it, and a BPTR the engine never issued is a clean ERROR_INVALID_LOCK.
+use crate::volume::AmigaDate;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -141,7 +142,7 @@ pub fn write_file<U: GuestUi>(a: &mut Amiga<U>, path: &str, bytes: Vec<u8>) -> R
     };
     let date = crate::dos_misc::now(a);
     *a.fs.vol.file_data_mut(f).expect("a file") = bytes;
-    a.fs.vol.get_mut(f).date = date;
+    a.fs.vol.get_mut(f).set_date(date);
     Ok(f)
 }
 

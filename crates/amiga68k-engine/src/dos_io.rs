@@ -1,6 +1,7 @@
 //! dos.library file I/O on the [`Volume`](crate::volume::Volume): Open, Close, Read, Write, Seek, SetFileSize and the
 //! calls that go between locks and handles. The console streams stay in dos.rs; Read/Write/FPuts there forward any
 //! other handle here. A handle is a real 44-byte guest FileHandle; its state (node, position, access) is host-side.
+use crate::volume::AmigaDate;
 use alloc::string::String;
 use alloc::format;
 use crate::dos_err::*;
@@ -41,7 +42,7 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
         (Ok(n), _) => n,
         (Err(_), _) => {
             let made = a.fs.vol.resolve_parent(cwd, &name).and_then(|(d, leaf)| a.fs.vol.create_file(d, &leaf));
-            match made { Ok(n) => { let d = crate::dos_misc::now(a); a.fs.vol.get_mut(n).date = d; n } Err(e) => return fail(a, cpu, e, 0, what) }
+            match made { Ok(n) => { let d = crate::dos_misc::now(a); a.fs.vol.get_mut(n).set_date(d); n } Err(e) => return fail(a, cpu, e, 0, what) }
         }
     };
     let excl = mode == MODE_NEWFILE;
@@ -114,7 +115,7 @@ pub(crate) fn write_bytes_to<U: GuestUi>(a: &mut Amiga<U>, b: u32, bytes: &[u8])
     data[at..at + bytes.len()].copy_from_slice(bytes);
     handle(a, b, "Write")?.pos = (at + bytes.len()) as u32;
     let d = crate::dos_misc::now(a);
-    a.fs.vol.get_mut(node).date = d;
+    a.fs.vol.get_mut(node).set_date(d);
     Ok(true)
 }
 
