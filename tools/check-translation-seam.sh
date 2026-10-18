@@ -5,7 +5,11 @@
 #   (b) APP NAME: no application identity in crates/*/src outside crates/*/src/bindings/ (comments are provenance, not code).
 # Usage: tools/check-translation-seam.sh [--root DIR]   (default: the repo this script lives in)
 #        tools/check-translation-seam.sh --selftest      (plants one violation of each kind in a scratch copy; each must go RED)
-set -u
+set -u -o pipefail
+# A gate that cannot run must say RED, never GREEN: find cargo the way the test matrix does, and require jq.
+PATH="$HOME/.cargo/bin:$PATH"
+command -v "${CARGO:-cargo}" >/dev/null 2>&1 || { echo "RED  seam/deps: cargo not found (PATH=$PATH): the dependency check cannot run"; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "RED  seam/deps: jq not found: the dependency check cannot run"; exit 1; }
 ENGINES="amiga68k-engine mac68k-engine macppc-engine"
 # Pure crates an engine may use besides guestui-abi and retro-*: the interpreter cores' soft-float and the engine chain.
 ALLOWED_EXTRA="mac68k-engine musashi softfloat soft-float rustc_apfloat"
@@ -55,11 +59,13 @@ selftest() {
   mkdir -p "$tmp/w/crates/gadget-library/src" && printf '[package]\nname = "gadget-library"\nversion = "0.0.0"\nedition = "2021"\n' > "$tmp/w/crates/gadget-library/Cargo.toml" && : > "$tmp/w/crates/gadget-library/src/lib.rs"
   sed -i 's#^members = \[#members = ["crates/gadget-library", #' "$tmp/w/Cargo.toml"
   sed -i '0,/^\[dependencies\]/s##[dependencies]\ngadget-library = { path = "../gadget-library" }#' "$tmp/w/crates/mac68k-engine/Cargo.toml"
-  if check_deps "$tmp/w" | grep -q "mac68k-engine depends on 'gadget-library'"; then echo "selftest ok: planted gadget-library dependency is RED"; else echo "selftest FAIL: gadget-library dependency not caught"; rc=1; fi
+  out=$(check_deps "$tmp/w")   # captured first: under pipefail `grep -q` closing the pipe early would fail the pipeline
+  if grep -q "mac68k-engine depends on 'gadget-library'" <<<"$out"; then echo "selftest ok: planted gadget-library dependency is RED"; else echo "selftest FAIL: gadget-library dependency not caught"; rc=1; fi
   # control 2: an application name in engine code, then the same name under bindings/ (allowed) and in a comment (allowed)
   mkdir -p "$tmp/w/crates/amiga68k-engine/src/bindings"
   printf 'pub const X: &str = "DirectoryOpus";\n' > "$tmp/w/crates/amiga68k-engine/src/planted.rs"
-  if check_names "$tmp/w" | grep -q "planted.rs"; then echo "selftest ok: planted app name is RED"; else echo "selftest FAIL: app name not caught"; rc=1; fi
+  out=$(check_names "$tmp/w")
+  if grep -q "planted.rs" <<<"$out"; then echo "selftest ok: planted app name is RED"; else echo "selftest FAIL: app name not caught"; rc=1; fi
   mv "$tmp/w/crates/amiga68k-engine/src/planted.rs" "$tmp/w/crates/amiga68k-engine/src/bindings/planted.rs"
   printf '// provenance: iGame did this\npub const Y: u8 = 1; // Finder too\n' > "$tmp/w/crates/amiga68k-engine/src/commented.rs"
   if check_names "$tmp/w" >/dev/null; then echo "selftest ok: the name under bindings/ and in comments is allowed"; else echo "selftest FAIL: bindings/ or comment wrongly RED"; check_names "$tmp/w"; rc=1; fi

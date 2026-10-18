@@ -16,7 +16,7 @@ fn layout_of<U: GuestUi>(a: &Amiga<U>, win: u32) -> Layout {
     let border = |i: u32| a.mem.read_u8(win + 54 + i).map_or(0, i32::from);
     let (bl, bt) = (border(0), border(1));
     let rects = crate::native_gadgets::of_window(a, win).into_iter().map(|(_, m)| m.rect)
-        .chain(a.gadgets.values().filter(|g| g.attached.is_some_and(|(w, ..)| w == win)).map(|g| g.rect));
+        .chain(a.gt_ctls.iter().filter(|(_, p)| p.meta == win).map(|(_, p)| p.model.rect));
     let exclude: Vec<Rect> = rects.map(|r| Rect::from_size(r.left - bl, r.top - bt, r.width, r.height)).collect();
     Layout { offset: (bl, bt), exclude }
 }

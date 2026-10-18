@@ -32,6 +32,28 @@ impl Prog {
     pub fn pop_w(&mut self, addr: u32) -> &mut Self { self.raw(&[0x33DF, (addr >> 16) as u16, addr as u16]) }
     /// move.l (sp)+,addr.l
     pub fn pop_l(&mut self, addr: u32) -> &mut Self { self.raw(&[0x23DF, (addr >> 16) as u16, addr as u16]) }
+    /// push the word at `at` (move.w at.l,-(sp))
+    pub fn mem_w(&mut self, at: u32) -> &mut Self { self.raw(&[0x3F39, (at >> 16) as u16, at as u16]) }
+    /// Assemble scripted Toolbox calls (by name, Pascal frames from the machine's own signatures) into this program.
+    pub fn script(&mut self, m: &Mac<RecordingGuestUi>, calls: &[mac68k_engine::fixture::ScriptCall]) -> &mut Self {
+        use mac68k_engine::fixture::ScriptArg::{Lit, Mem};
+        use mac68k_engine::pascal::Arg;
+        for c in calls {
+            let op = mac68k_engine::mixed::trap_opcode(c.name).unwrap_or_else(|| panic!("{} is not a trap", c.name));
+            let (layout, result) = m.pascal_signature(op).unwrap_or_else(|| panic!("{} is not implemented", c.name));
+            match result { Some(Arg::L) => { self.clr_l(); } Some(_) => { self.clr_w(); } None => {} }
+            for (k, a) in layout.iter().zip(&c.args) {
+                match (k, a) {
+                    (Arg::L, Lit(v)) => { self.l(*v); } (Arg::W, Lit(v)) => { self.w(*v as i16); } (Arg::B, Lit(v)) => { self.b(*v as u8); }
+                    (Arg::L, Mem(a)) => { self.rgn_arg(*a); } (_, Mem(a)) => { self.mem_w(*a); }
+                }
+            }
+            assert_eq!(layout.len(), c.args.len(), "{}: argument count", c.name);
+            self.trap(op);
+            match (result, c.save) { (Some(Arg::L), s) => { self.pop_l(s.unwrap_or(0x3F80)); } (Some(_), s) => { self.pop_w(s.unwrap_or(0x3F80)); } (None, _) => {} }
+        }
+        self
+    }
     pub fn exit(&mut self) -> &mut Self { self.trap(0xA9F4) }
     // ---- named calls (trap words verified by Mac::new through qd::reg) ----
     pub fn set_port(&mut self, p: u32) -> &mut Self { self.l(p).trap(0xA873) }
@@ -63,6 +85,9 @@ pub fn pstr(s: &str) -> Vec<u8> { let mut v = vec![s.len() as u8]; v.extend_from
 pub struct Rig { pub m: Mac<RecordingGuestUi>, pub win: u32 }
 impl Rig {
     pub fn new() -> Rig { Rig::with(true) }
+    /// The CANVAS route (the safe mode a host without plane replay gets): the window is published as pixels, not a display list.
+    pub fn canvas() -> Rig { Rig::canvas_with(true) }
+    pub fn canvas_with(visible: bool) -> Rig { let mut r = Rig::with(visible); r.m.qd.plane.unsupported = true; r }
     pub fn with(visible: bool) -> Rig {
         let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
         mac68k_engine::quickdraw::fill_globals(&mut m, GLOBALS).unwrap();

@@ -4,8 +4,10 @@ One seam (`guestui-abi`), per-TOOLKIT tables, no application names (`tools/check
 
 ## Intents back: `src/translate/`
 
-* `translate/mod.rs` is the whole generic mapper: a `Row { role, on, effect, post }`, `lookup(table, control kind, intent)` and
-  `message(row, Gadget.Activation, value)`. It knows no toolkit and no application.
+* The generic mapper is the ONE `retro-translate` crate (shared with mac68k/macppc): the row tables (`Row { role, on, effect, post }`,
+  `lookup(table, control kind, intent)`) and the projection registry (`Projections`: sync / retire / resolve, the one stale-intent
+  rule). `translate/mod.rs` holds only the Amiga payloads (`Effect`, `Post`) and `message(row, Gadget.Activation, value)`.
+  Native gadgets AND GadTools gadgets are both projected through `Projections<u32>` (`native_gads`, `gt_ctls`).
 * `translate/boopsi.rs` is the Intuition / BOOPSI system-class table (what `native_gadgets` made into controls),
   `translate/gadtools.rs` the GadTools table. A row says: which guest state is written FIRST (`Effect`), then which IntuiMessage
   follows (`Post`: class, the Activation bit that gates it, the Code). Procedural effects (PropInfo pots, StringInfo, a GadTools

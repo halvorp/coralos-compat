@@ -254,7 +254,10 @@ pub fn set_gadget_attrs<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
             _ => continue,
         };
         let v = normalize(&info, v)?;
-        if let Some((_, native, ctl)) = info.attached { a.ui.set_control(native, ctl, v.clone()).map_err(Refusal::ui)?; }
+        if let Some((win, ctl)) = a.gt_ctls.get(u64::from(g)).map(|p| (p.window, p.native)) {
+            a.ui.set_control(win, ctl, v.clone()).map_err(Refusal::ui)?;
+            a.gt_ctls.adopt(u64::from(g), &v);
+        }
         store(a, g, &v)?;
         changed += &format!(" {v:?}");
     }

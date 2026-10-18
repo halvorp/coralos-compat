@@ -48,12 +48,14 @@ name = "mac68k-engine"
 version = "0.1.0"
 dependencies = [
  "guestui-abi",
+ "mac68k-engine",
  "retro-common",
  "retro-guest-mem",
  "retro-m68k",
  "retro-present",
  "retro-raster",
  "retro-resfork",
+ "retro-translate",
 ]
 
 [[package]]

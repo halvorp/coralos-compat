@@ -30,7 +30,10 @@ pub fn brush_for(mode: u16) -> Brush {
 }
 
 /// Draw `region` (LOCAL coordinates) into `port` with transfer `mode` and pattern `pat`, through the port's clip.
-pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16, pat: &[u8; 8]) -> Result<(), Refusal> {
+pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16, pat: &[u8; 8]) -> Result<(), Refusal> { paint_with(m, port, region, mode, pat, None) }
+
+/// [`paint`], recording a pen line as ONE line op (`line`: its end points, LOCAL coordinates) when nothing of it is clipped.
+fn paint_with<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16, pat: &[u8; 8], line: Option<((i32, i32), (i32, i32))>) -> Result<(), Refusal> {
     if m.mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(Refusal::mem("pnVis"))? < 0 { return Ok(()); }
     let (pt, brush) = (pattern(pat), brush_for(mode));
     target::with(m, port, |m, t| {
@@ -40,6 +43,11 @@ pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16, 
         let c = clip_of(&clip, t);
         let mut touched = Rect::default();
         for r in g.rects() { touched = touched.union(&stencil(&mut t.bm, *r, &brush, &c, |x, y| pt.bit(x + ph.0, y + ph.1))); }
+        let mut seen = g.clone();
+        seen.and_region(&clip);
+        let l0 = t.local0;
+        let as_line = line.is_some_and(|(a, b)| seen.rects() == g.rects() && super::plane::record_line(&mut m.qd.plane, t, (a.0 - l0.0, a.1 - l0.1), (b.0 - l0.0, b.1 - l0.1), mode, pat));
+        if !as_line { super::plane::record_fill(&mut m.qd.plane, t, &seen, mode, pat); }
         Ok(touched)
     })
 }
@@ -233,7 +241,8 @@ fn line_to<U: GuestUi>(m: &mut Mac<U>, h: i16, v: i16, name: &str) -> Result<Don
     let pen = read_pen(&m.mem, port)?;
     if pen.width > 0 && pen.height > 0 {
         let g = line_region((i32::from(pen.h), i32::from(pen.v)), (i32::from(h), i32::from(v)), i32::from(pen.width), i32::from(pen.height));
-        paint(m, port, &g, pen.mode, &pen.pat)?;
+        let line = (pen.width == 1 && pen.height == 1).then_some(((i32::from(pen.h), i32::from(pen.v)), (i32::from(h), i32::from(v))));
+        paint_with(m, port, &g, pen.mode, &pen.pat, line)?;
     }
     set_pen_loc(&mut m.mem, port, v, h)?;
     done(&format!("{name} ({},{}) -> ({v},{h})", pen.v, pen.h))

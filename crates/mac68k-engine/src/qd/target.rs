@@ -15,7 +15,11 @@ use retro_raster::{paint::Clip, Bitmap, Rect, Region};
 
 pub enum Home { Canvas, Guest { addr: u32, row_bytes: u16 } }
 
-pub struct Target { pub port: u32, pub bm: Bitmap, pub local0: (i32, i32), pub home: Home }
+pub struct Target {
+    pub port: u32, pub bm: Bitmap, pub local0: (i32, i32), pub home: Home,
+    /// A display-list recorder (plane.rs) already accounted for this drawing; `finish` records the touched pixels when none did.
+    pub recorded: bool,
+}
 
 impl Target {
     /// Local rectangle -> pixel rectangle.
@@ -64,12 +68,12 @@ pub fn open_bits<U: GuestUi>(m: &mut Mac<U>, bm_addr: u32) -> Result<Target, Ref
         let r = port_rect(&m.mem, port);
         let g = m.windows.get(&port).map(|w| w.rect);
         return match (r, g) {
-            (Ok(r), Some(_)) => Ok(Target { port, bm, local0: (i32::from(r.left), i32::from(r.top)), home: Home::Canvas }),
+            (Ok(r), Some(_)) => Ok(Target { port, bm, local0: (i32::from(r.left), i32::from(r.top)), home: Home::Canvas, recorded: false }),
             (r, _) => { m.qd.canvases.insert(port, bm); Err(r.err().unwrap_or_else(|| Refusal(format!("{port:#x}: a canvas without a window record")))) }
         };
     }
     let (bm, base, row, bounds) = read_bitmap(m, bm_addr)?;
-    Ok(Target { port: 0, bm, local0: (bounds.x0, bounds.y0), home: Home::Guest { addr: base, row_bytes: row } })
+    Ok(Target { port: 0, bm, local0: (bounds.x0, bounds.y0), home: Home::Guest { addr: base, row_bytes: row }, recorded: false })
 }
 
 /// Open the destination of `port`'s drawing.
@@ -83,7 +87,12 @@ pub fn open<U: GuestUi>(m: &mut Mac<U>, port: u32) -> Result<Target, Refusal> {
 /// Put the destination back; `touched` (PIXEL coordinates) becomes damage for a window canvas.
 pub fn finish<U: GuestUi>(m: &mut Mac<U>, t: Target, touched: Rect) -> Result<(), Refusal> {
     match t.home {
-        Home::Canvas => { m.qd.canvases.insert(t.port, t.bm); m.qd.present.add_damage(t.port, touched); Ok(()) }
+        Home::Canvas => {
+            if !t.recorded && !touched.is_empty() { super::plane::record_pixels(&mut m.qd.plane, &t, touched); }
+            m.qd.canvases.insert(t.port, t.bm);
+            m.qd.present.add_damage(t.port, touched);
+            Ok(())
+        }
         Home::Guest { addr, row_bytes } => if touched.is_empty() { Ok(()) } else { write_bitmap(m, &t.bm, addr, row_bytes) },
     }
 }

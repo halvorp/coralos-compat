@@ -80,6 +80,18 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 self.finish(name, r, Some(Arg::B), regs)
             }
+            Native::ModalDialog => {
+                // filterProc, VAR itemHit. The shared handler returns a queued hit or asks to block; a blocked call parks the CPU
+                // ON the call and the run loop retries it once the front dialog has a hit (`Mac::modal_ready`).
+                let Some(op) = mac68k_engine::mixed::trap_opcode("ModalDialog") else { return GlueOutcome::Refused("ModalDialog has no trap word".into()) };
+                let r = self.mac.pascal_call(op, &[a(0), a(1)]);
+                if matches!(r, Ok(rr) if rr.blocked) {
+                    self.rt.wait_dialog = true;
+                    self.mac.log.push("[cfm] ModalDialog: no item hit yet, the caller waits".into());
+                    return GlueOutcome::Idle;
+                }
+                self.finish("ModalDialog", r, None, regs)
+            }
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
             Native::BlockZero => {
                 let (dest, n) = (a(0), a(1));

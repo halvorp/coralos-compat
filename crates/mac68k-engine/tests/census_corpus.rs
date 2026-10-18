@@ -16,8 +16,8 @@ fn census(rel: &str) -> Option<Mac<RecordingGuestUi>> {
 #[test]
 fn retro68_68k_samples_get_through_their_startup_trap_probe_and_stop_at_the_next_missing_trap() {
     // The Retro68 runtime asks GetToolTrapAddress/GetOSTrapAddress what exists (traptable.rs) and then patches a Toolbox trap
-    // (_SetToolBoxTrapAddress $A647, not modelled): seven of the eight samples stop there; Dialog stops at _GetNewDialog.
-    for (app, stop) in [("HelloWorld", "_SetToolBoxTrapAddress ($A647)"), ("Raytracer", "_SetToolBoxTrapAddress ($A647)"), ("Dialog", "_GetNewDialog ($A97C)")] {
+    // (_SetToolBoxTrapAddress $A647, not modelled): seven of the eight samples stop there; Dialog (GetNewDialog and ModalDialog now exist: the Dialog Manager lane) stops at _SelectDialogItemText.
+    for (app, stop) in [("HelloWorld", "_SetToolBoxTrapAddress ($A647)"), ("Raytracer", "_SetToolBoxTrapAddress ($A647)"), ("Dialog", "_SelectDialogItemText ($A97E)")] {
         let Some(m) = census(&format!("mac-retro68/68k/{app}.bin")) else { return };
         assert_eq!(m.refused, vec![format!("unimplemented trap {stop}")], "{app}: {:#?}", m.log);
         if app != "Dialog" { assert!(m.log.iter().any(|l| l.contains("GetTrapAddress")), "{app}: the startup probe was answered: {:#?}", m.log); }

@@ -28,7 +28,6 @@
 //! GadTools gadgets are bridged by gadtools.rs / gt_kinds.rs and are not touched here. Native gadgets take their pointer input from
 //! the host, so they are never offered GM_HITTEST / GM_GOACTIVE (boopsi_input.rs); a guest subclass that edits input itself is not
 //! supported on a natively registered gadget.
-use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -36,7 +35,8 @@ use crate::boopsi_draw::{sysi_which, DOWNIMAGE, LEFTIMAGE, RIGHTIMAGE, UPIMAGE};
 use crate::boopsi_ids::*;
 use crate::iclass::Native;
 use crate::{machine::Amiga, Refusal};
-use guestui_abi::{ArrowDir, CallbackToken, ControlKind, ControlModel, ControlValue, GuestRect, GuestUi, UiObjectRef};
+use guestui_abi::{ArrowDir, CallbackToken, ControlKind, ControlModel, GuestRect, GuestUi};
+use retro_translate::Projections;
 
 // struct PropInfo (intuition.h): Flags 0, HorizPot 2, VertPot 4, HorizBody 6, VertBody 8; propgclass appends Total/Visible/Top.
 pub(crate) const PI_FLAGS: u32 = 0;
@@ -60,12 +60,9 @@ const WD_HEIGHT: u32 = 10;
 const WD_BORDER_LEFT: u32 = 54;
 const GACT_LONGINT: u32 = crate::boopsi_strg::GACT_LONGINT;
 
-/// What the engine remembers of a gadget it registered: where the host holds it and what the host was last told.
-#[derive(Clone, Debug)]
-pub struct Ng { pub win: u32, pub native: UiObjectRef, pub ctl: UiObjectRef, pub model: ControlModel }
-
-#[derive(Default)]
-pub struct NativeGadgets { pub map: BTreeMap<u32, Ng> }
+/// The gadgets the engine registered, in the generic mapper's registry (retro-translate): token = the gadget's address, the
+/// engine's own metadata = its guest window. Where the host holds each and what it was last told live there.
+pub type NativeGadgets = Projections<u32>;
 
 fn r16<U: GuestUi>(a: &Amiga<U>, at: u32, what: &'static str) -> Result<u32, Refusal> { a.mem.read_u16(at).map(u32::from).map_err(Refusal::mem(what)) }
 fn r32<U: GuestUi>(a: &Amiga<U>, at: u32, what: &'static str) -> Result<u32, Refusal> { a.mem.read_u32(at).map_err(Refusal::mem(what)) }
@@ -173,34 +170,10 @@ fn plan<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32) -> Result<Option<(Contro
 /// A gadget that is not a system-look gadget is left alone. Returns whether `g` is (now) a native control.
 pub fn ensure<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32) -> Result<bool, Refusal> {
     let Some(&native) = a.windows.get(&win) else { return Ok(false) };
-    let Some((kind, label, rect, enabled)) = plan(a, win, g)? else { return Ok(a.native_gads.map.contains_key(&g)) };
-    match a.native_gads.map.get(&g).cloned() {
-        None => {
-            let model = ControlModel { kind, label, rect, enabled, token: CallbackToken(g as u64) };
-            let ctl = a.ui.add_control(native, model.clone()).map_err(Refusal::ui)?;
-            a.native_gads.map.insert(g, Ng { win, native, ctl, model });
-        }
-        Some(ng) => {
-            let mut model = ng.model.clone();
-            if model.rect != rect { a.ui.set_control_rect(ng.native, ng.ctl, rect).map_err(Refusal::ui)?; model.rect = rect; }
-            if core::mem::discriminant(&model.kind) == core::mem::discriminant(&kind) && model.kind != kind {
-                if let Some(v) = value_of(&kind) { a.ui.set_control(ng.native, ng.ctl, v).map_err(Refusal::ui)?; model.kind = kind; }
-            }
-            if model.enabled != enabled { a.ui.set_control_enabled(ng.native, ng.ctl, enabled).map_err(Refusal::ui)?; model.enabled = enabled; }
-            a.native_gads.map.get_mut(&g).map(|n| n.model = model);
-        }
-    }
+    let Some((kind, label, rect, enabled)) = plan(a, win, g)? else { return Ok(a.native_gads.get(u64::from(g)).is_some()) };
+    let model = ControlModel { kind, label, rect, enabled, token: CallbackToken(u64::from(g)) };
+    a.native_gads.sync(&mut a.ui, Some(native), u64::from(g), win, Some(model)).map_err(Refusal::ui)?;
     Ok(true)
-}
-
-/// The value a `set_control` carries for a control of this kind, if the kind has one.
-fn value_of(k: &ControlKind) -> Option<ControlValue> {
-    Some(match k {
-        ControlKind::ScrollBar { total, visible, top, .. } => ControlValue::Scroll { total: *total, visible: *visible, top: *top },
-        ControlKind::Field { text, .. } => ControlValue::Text(text.clone()),
-        ControlKind::ToggleButton { on } => ControlValue::Checked(*on),
-        _ => return None,
-    })
 }
 
 /// GM_RENDER of a system gadget class (`msg` = gpRender): the host paints, the engine registers or refreshes the native control.
@@ -214,7 +187,7 @@ pub fn render<U: GuestUi>(a: &mut Amiga<U>, g: u32, msg: u32) -> Result<u32, Ref
 
 /// The guest changed gadget `g` (OM_SET, SetGadgetAttrs): if it is a native control, tell the host what changed.
 pub fn resync<U: GuestUi>(a: &mut Amiga<U>, g: u32) -> Result<(), Refusal> {
-    match a.native_gads.map.get(&g).map(|n| n.win) { Some(win) => ensure(a, win, g).map(|_| ()), None => Ok(()) }
+    match a.native_gads.get(u64::from(g)).map(|n| n.meta) { Some(win) => ensure(a, win, g).map(|_| ()), None => Ok(()) }
 }
 
 /// Register every system-look gadget of the chain (AddGList / AddGadget / WA_Gadgets) that stands directly on a system class or is a
@@ -229,28 +202,28 @@ pub fn sync_chain<U: GuestUi>(a: &mut Amiga<U>, win: u32, gadgets: &[u32]) -> Re
 /// The gadget left its window (RemoveGList / RemoveGadget): its control goes.
 pub fn forget<U: GuestUi>(a: &mut Amiga<U>, gadgets: &[u32]) -> Result<(), Refusal> {
     for g in gadgets {
-        if let Some(ng) = a.native_gads.map.remove(g) { a.ui.remove_control(ng.native, ng.ctl).map_err(Refusal::ui)?; }
+        a.native_gads.retire(&mut a.ui, u64::from(*g)).map_err(Refusal::ui)?;
     }
     Ok(())
 }
 
 /// The window closed: its controls went with it.
-pub fn detach<U: GuestUi>(a: &mut Amiga<U>, win: u32) { a.native_gads.map.retain(|_, n| n.win != win); }
+pub fn detach<U: GuestUi>(a: &mut Amiga<U>, win: u32) { a.native_gads.forget_where(|n| n.meta == win); }
 
 /// Is `g` a propgclass gadget (its PropInfo is followed by PGA_Total / Visible / Top)?
 pub(crate) fn is_propgclass<U: GuestUi>(a: &Amiga<U>, g: u32) -> bool { system_class(a, g) == Some(Native::Prop) }
 
 /// The host just changed the control itself: take the guest state it produced as what the host shows now (no call back to the host).
 pub(crate) fn absorb<U: GuestUi>(a: &mut Amiga<U>, g: u32) -> Result<(), Refusal> {
-    let Some(win) = a.native_gads.map.get(&g).map(|n| n.win) else { return Ok(()) };
-    if let Some((kind, ..)) = plan(a, win, g)? { if let Some(n) = a.native_gads.map.get_mut(&g) { n.model.kind = kind; } }
+    let Some(win) = a.native_gads.get(u64::from(g)).map(|n| n.meta) else { return Ok(()) };
+    if let Some((kind, ..)) = plan(a, win, g)? { if let Some(n) = a.native_gads.get_mut(u64::from(g)) { n.model.kind = kind; } }
     Ok(())
 }
 
 /// Is `g` a native control (so the guest dispatcher never sees its pointer input)?
-pub fn is_native<U: GuestUi>(a: &Amiga<U>, g: u32) -> bool { a.native_gads.map.contains_key(&g) }
+pub fn is_native<U: GuestUi>(a: &Amiga<U>, g: u32) -> bool { a.native_gads.get(u64::from(g)).is_some() }
 
 /// The registered gadgets of `win` with the control each is, in gadget address order (tests, diagnostics).
 pub fn of_window<U: GuestUi>(a: &Amiga<U>, win: u32) -> Vec<(u32, ControlModel)> {
-    a.native_gads.map.iter().filter(|(_, n)| n.win == win).map(|(&g, n)| (g, n.model.clone())).collect()
+    a.native_gads.iter().filter(|(_, n)| n.meta == win).map(|(g, n)| (g as u32, n.model.clone())).collect()
 }

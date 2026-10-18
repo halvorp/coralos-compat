@@ -79,7 +79,7 @@ impl<U: GuestUi> Mac<U> {
         Ok(())
     }
 
-    fn open_native(&mut self, win: u32) -> Result<(), Refusal> {
+    pub(crate) fn open_native(&mut self, win: u32) -> Result<(), Refusal> {
         let w = self.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?;
         let (r, role) = (w.rect, role_of(w.proc_id));
         let model = WindowModel {
@@ -95,6 +95,7 @@ impl<U: GuestUi> Mac<U> {
         self.ev.queue.back_mut().map(|e| e.modifiers = 1); // bit 0: activate
         self.post(UPDATE_EVT, win, 0, 0);
         crate::qd::lifecycle::window_shown(self, win);
+        self.project_window(win)?;
         Ok(())
     }
 
@@ -215,23 +216,43 @@ fn get_new_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<D
 
 fn dispose_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let win = c.args.get(0);
-    let w = m.windows.remove(&win).ok_or_else(|| Refusal(format!("DisposeWindow: {win:#x} is not an open window")))?;
-    crate::qd::lifecycle::window_disposed(m, win);
-    if let Some(n) = w.native { m.ui.close_window(n).map_err(Refusal::ui)?; }
-    if w.owned { m.mm.dispose_ptr(&mut m.heap, win).map_err(|e| Refusal(format!("DisposeWindow: {e}")))?; }
-    m.z.retain(|&z| z != win);
-    m.ev.queue.retain(|e| !(matches!(e.what, UPDATE_EVT | ACTIVATE_EVT) && e.message == win));
-    if m.qd_globals != 0 && m.mem.read_u32(m.qd_globals).unwrap_or(0) == win { set_the_port(m, 0)?; }
-    m.relink_windows()?;
+    m.dispose_window(win)?;
     done(format!("[toolbox] DisposeWindow {win:#x}"))
 }
 
 fn show_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let win = c.args.get(0);
-    let w = m.windows.get_mut(&win).ok_or_else(|| Refusal(format!("ShowWindow: {win:#x} is not an open window")))?;
-    w.visible = true;
-    if w.native.is_none() { m.open_native(win)?; }
+    m.show_window(win)?;
     done(format!("[toolbox] ShowWindow {win:#x}"))
+}
+
+impl<U: GuestUi> Mac<U> {
+    /// Close a window and everything it owns: its controls and dialog items (the host retires them with the window), its
+    /// canvas, its record when the engine allocated it. Shared by `DisposeWindow` and `DisposeDialog`.
+    pub(crate) fn dispose_window(&mut self, win: u32) -> Result<(), Refusal> {
+        if !self.windows.contains_key(&win) { return Err(Refusal(format!("DisposeWindow: {win:#x} is not an open window"))); }
+        self.kill_controls(win, false)?;
+        self.forget_window_projections(win);
+        let dialog_storage = self.release_dialog(win);
+        let w = self.windows.remove(&win).ok_or_else(|| Refusal(format!("DisposeWindow: {win:#x} is not an open window")))?;
+        crate::qd::lifecycle::window_disposed(self, win);
+        if let Some(n) = w.native { self.ui.close_window(n).map_err(Refusal::ui)?; }
+        if w.owned { self.mm.dispose_ptr(&mut self.heap, win).map_err(|e| Refusal(format!("DisposeWindow: {e}")))?; }
+        self.z.retain(|&z| z != win);
+        self.ev.queue.retain(|e| !(matches!(e.what, UPDATE_EVT | ACTIVATE_EVT) && e.message == win));
+        if self.qd_globals != 0 && self.mem.read_u32(self.qd_globals).unwrap_or(0) == win { set_the_port(self, 0)?; }
+        self.relink_windows()?;
+        if let Some(p) = dialog_storage { self.mm.dispose_ptr(&mut self.heap, p).map_err(|e| Refusal(format!("DisposeDialog: {e}")))?; }
+        Ok(())
+    }
+
+    /// `ShowWindow`: the window becomes visible and gets its native window the first time.
+    pub(crate) fn show_window(&mut self, win: u32) -> Result<(), Refusal> {
+        let w = self.windows.get_mut(&win).ok_or_else(|| Refusal(format!("ShowWindow: {win:#x} is not an open window")))?;
+        w.visible = true;
+        if w.native.is_none() { self.open_native(win)?; }
+        Ok(())
+    }
 }
 
 fn select_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
@@ -255,7 +276,7 @@ fn front_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Don
 }
 
 /// A Point passed by value is one long: v in the high word, h in the low.
-fn point(v: u32) -> (i16, i16) { ((v >> 16) as i16, v as i16) }
+pub(crate) fn point(v: u32) -> (i16, i16) { ((v >> 16) as i16, v as i16) }
 
 fn find_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (v, h) = point(c.args.get(0));

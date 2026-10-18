@@ -16,6 +16,7 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 pub mod events;
+#[cfg(feature = "fixtures")]
 pub mod fixture;
 pub mod lowmem;
 pub mod machine;
@@ -33,6 +34,7 @@ pub mod run;
 pub mod segment;
 pub mod toolbox;
 pub mod traptable;
+pub mod translate;
 pub mod trap_names;
 pub mod traps;
 

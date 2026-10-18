@@ -21,7 +21,7 @@ fn gray(x: i32, y: i32) -> bool { // qd.gray = $AA55AA55 AA55AA55, aligned to th
 
 #[test]
 fn the_application_draws_on_its_update_event_and_the_host_gets_one_frame() {
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     let win = g.win;
     g.m.post(6, win, 0, 0); // updateEvt
     g.m.start(QDAPP, 0).unwrap();

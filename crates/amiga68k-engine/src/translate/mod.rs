@@ -15,7 +15,7 @@ pub mod gadtools;
 
 use guestui_abi::ControlValue;
 use crate::Refusal;
-pub use retro_translate::{check_live, row, On, Role};
+pub use retro_translate::{row, On, Role};
 
 /// The guest state written first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

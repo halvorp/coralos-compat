@@ -36,7 +36,7 @@ const GTTX_BORDER: u32 = tags::TAG_USER + 0x0008_0000 + 57;
 
 /// What the host knows about one gadget.
 #[derive(Debug, Clone)]
-pub struct GadgetInfo { pub kind: u32, pub rect: GuestRect, pub label: String, pub text: String, pub framed: bool, pub attached: Option<(u32, UiObjectRef, UiObjectRef)>, pub state: gt_kinds::KindState }
+pub struct GadgetInfo { pub kind: u32, pub rect: GuestRect, pub label: String, pub text: String, pub framed: bool, pub state: gt_kinds::KindState }
 
 fn opt_str<U: GuestUi>(a: &Amiga<U>, p: u32, what: &str) -> Result<String, Refusal> {
     if p == 0 { Ok(String::new()) } else { a.mem.read_cstr(p).map_err(Refusal::mem(what)) }
@@ -66,7 +66,7 @@ fn new_gadget<U: GuestUi>(a: &mut Amiga<U>, info: GadgetInfo) -> Result<u32, Ref
 /// CreateContext(a0 = &glist) -> the context gadget, also stored in *glist.
 pub fn create_context<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let slot = cpu.areg(0);
-    let g = new_gadget(a, GadgetInfo { kind: CONTEXT, rect: GuestRect { left: 0, top: 0, width: 0, height: 0 }, label: String::new(), text: String::new(), framed: false, attached: None, state: Default::default() })?;
+    let g = new_gadget(a, GadgetInfo { kind: CONTEXT, rect: GuestRect { left: 0, top: 0, width: 0, height: 0 }, label: String::new(), text: String::new(), framed: false, state: Default::default() })?;
     a.mem.write_u32(slot, g).map_err(Refusal::mem("CreateContext glistptr"))?;
     cpu.set_d0(g);
     Ok(format!("[gadtools] CreateContext -> {g:#x}"))
@@ -87,7 +87,7 @@ pub fn create_gadget<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
     let t = tags::walk(&a.mem, cpu.areg(2))?;
     let (state, text) = gt_kinds::state_from_tags(a, kind, &t)?;
     let framed = tags::get(&t, GTTX_BORDER).unwrap_or(0) != 0;
-    let g = new_gadget(a, GadgetInfo { kind, rect, label: label.clone(), text: text.clone(), framed, attached: None, state })?;
+    let g = new_gadget(a, GadgetInfo { kind, rect, label: label.clone(), text: text.clone(), framed, state })?;
     let made = (|| {
         a.mem.write_u16(g + 38, id).map_err(Refusal::mem("Gadget.GadgetID"))?;
         a.mem.write_u32(g + 40, user).map_err(Refusal::mem("Gadget.UserData"))?;
@@ -116,8 +116,7 @@ pub fn attach<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, first
         if let Some(info) = a.gadgets.get(&g).cloned() {
             if info.kind != CONTEXT {
                 let model = ControlModel { kind: gt_kinds::control_kind(&info), label: info.label.clone(), rect: info.rect, enabled: !info.state.disabled, token: CallbackToken(g as u64) };
-                let ctl = a.ui.add_control(native, model).map_err(Refusal::ui)?;
-                if let Some(i) = a.gadgets.get_mut(&g) { i.attached = Some((win, native, ctl)); }
+                a.gt_ctls.sync(&mut a.ui, Some(native), u64::from(g), win, Some(model)).map_err(Refusal::ui)?;
             }
         }
         g = a.mem.read_u32(g).map_err(Refusal::mem("Gadget.NextGadget"))?;
@@ -127,7 +126,7 @@ pub fn attach<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, first
 
 /// The window closed: its controls went with it.
 pub fn detach<U: GuestUi>(a: &mut Amiga<U>, win: u32) {
-    for i in a.gadgets.values_mut() { if matches!(i.attached, Some((w, _, _)) if w == win) { i.attached = None; } }
+    a.gt_ctls.forget_where(|p| p.meta == win);
 }
 
 /// FreeGadgets(a0 = glist): the chain goes back. Freeing gadgets still attached to an open window is refused (on
@@ -138,7 +137,7 @@ pub fn free_gadgets<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     while g != 0 {
         let next = a.mem.read_u32(g).map_err(Refusal::mem("Gadget.NextGadget"))?;
         match a.gadgets.get(&g) {
-            Some(i) if i.attached.is_some() => return Err(Refusal(format!("FreeGadgets: {g:#x} is still in an open window"))),
+            Some(_) if a.gt_ctls.get(u64::from(g)).is_some() => return Err(Refusal(format!("FreeGadgets: {g:#x} is still in an open window"))),
             Some(_) => { drop_gadget(a, g)?; n += 1; }
             None => {}
         }

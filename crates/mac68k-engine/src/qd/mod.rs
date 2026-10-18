@@ -17,6 +17,7 @@ pub mod copybits;
 pub mod draw;
 pub mod inset;
 pub mod lifecycle;
+pub mod plane;
 pub mod port;
 pub mod regions;
 pub mod shapes;
@@ -48,11 +49,13 @@ pub struct Qd {
     pub update: BTreeMap<u32, Region>,
     /// Per window between BeginUpdate and EndUpdate: the visRgn to restore.
     pub saved_vis: BTreeMap<u32, Region>,
+    /// Per window: the retained display list the host replays (plane.rs).
+    pub plane: plane::Planes,
 }
 
 impl Default for Qd {
     fn default() -> Self {
-        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new() }
+        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default() }
     }
 }
 
@@ -74,8 +77,10 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     lifecycle::register(m)
 }
 
-/// Publish every window's accumulated drawing: one `present_content` per damaged window. Called by `Mac::step`.
+/// Publish every window's accumulated drawing: one `present_plane` per changed window (the display list), or, for a host
+/// without plane replay, one `present_content` per damaged window. Called by `Mac::step`.
 pub fn flush<U: GuestUi>(m: &mut Mac<U>) {
+    plane::flush(m);
     let mut presenter = core::mem::take(&mut m.qd.present);
     let (windows, canvases) = (&m.windows, &m.qd.canvases);
     presenter.flush(&mut m.ui, "[quickdraw]", &mut m.log, &mut m.refused, |win| {

@@ -23,7 +23,7 @@ fn run(name: &str) -> Option<(Census, Vec<String>, Vec<String>)> {
 #[test]
 fn retro68_ppc_samples_bind_their_interfacelib_imports_and_stop_at_the_first_routine_without_a_handler() {
     // (sample, an import that IS bound, an import that is NEXT-NEEDED, the routine the run stops at)
-    for (app, bound, needed, stop) in [("Dialog", "InitDialogs", "ModalDialog", "GetNewDialog"), ("Raytracer", "InitWindows", "Button", "Button"), ("HelloWorld", "InitWindows", "GetFPos", "NGetTrapAddress"), ("WDEFShell", "InitWindows", "OpenDeskAcc", "NewRoutineDescriptor")] {
+    for (app, bound, needed, stop) in [("Dialog", "ModalDialog", "SelectDialogItemText", "SelectDialogItemText"), ("Raytracer", "InitWindows", "Button", "Button"), ("HelloWorld", "InitWindows", "GetFPos", "NGetTrapAddress"), ("WDEFShell", "InitWindows", "OpenDeskAcc", "NewRoutineDescriptor")] {
         let Some((c, log, refused)) = run(app) else { return };
         assert!(!c.next_needed.iter().any(|n| n.ends_with(&format!("/{bound}"))), "{app}: {bound} is bound: {:?}", c.next_needed);
         assert!(c.next_needed.iter().any(|n| n.ends_with(&format!("/{needed}"))), "{app}: {needed} is unbound (named, not silent): {:?}", c.next_needed);

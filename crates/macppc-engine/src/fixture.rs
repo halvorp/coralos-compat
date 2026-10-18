@@ -78,6 +78,25 @@ fn startup_program() -> (Vec<u8>, Vec<u8>) {
 }
 
 
+/// What [`dialog_app`] imports from `InterfaceLib`, in TOC order.
+pub const DIALOG_IMPORTS: &[(&str, SymbolClass, bool)] = &[("GetNewDialog", SymbolClass::TVector, false), ("ModalDialog", SymbolClass::TVector, false), ("ExitToShell", SymbolClass::TVector, false)];
+/// Byte offset (from r2, the data section base) of the word [`dialog_app`] leaves `ModalDialog`'s `itemHit` in.
+pub const DIALOG_HIT_AT: i32 = (TOC_FIRST + 4 * 3) as i32;
+
+/// A REAL PowerPC dialog application: `GetNewDialog(128, nil, -1)`, `ModalDialog(nil, &itemHit)`, store `itemHit` (a 16-bit
+/// halfword) at [`DIALOG_HIT_AT`](r2), `ExitToShell`. Every instruction runs in retro-ppc; the Toolbox calls go through the glue.
+pub fn dialog_app() -> Vec<u8> {
+    let toc = |i: i32| (TOC_FIRST as i32) + 4 * i;
+    let mut a = Asm::new();
+    a.mflr(0).stw(0, 8, 1).stwu(1, -64, 1);
+    a.li(3, 128).li(4, 0).li(5, -1).call_toc(toc(0)); // GetNewDialog(128, nil, behind = -1)
+    a.li(3, 0).addi(4, 1, 30).call_toc(toc(1)); // ModalDialog(nil, &itemHit at 30(r1))
+    a.lhz(0, 30, 1).sth(0, DIALOG_HIT_AT + 2, 2); // the low halfword of the big-endian word
+    a.call_toc(toc(2)); // ExitToShell
+    a.addi(1, 1, 64).lwz(0, 8, 1).mtlr(0).blr();
+    app_with(&[("InterfaceLib", false, DIALOG_IMPORTS)], &a.finish(), &[0; 4])
+}
+
 /// An application fragment importing `libs`, with `main` at data offset 0 (`li r3,0; blr`).
 pub fn app(libs: &[Lib]) -> Vec<u8> { app_with(libs, &MAIN_CODE, &[]) }
 

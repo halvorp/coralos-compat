@@ -114,6 +114,8 @@ pub struct Amiga<U: GuestUi> {
     pub input: crate::boopsi_input::Input,
     /// System-look gadgets registered as native controls, by gadget address (native_gadgets.rs).
     pub native_gads: crate::native_gadgets::NativeGadgets,
+    /// The GadTools gadgets shown as controls, in the same registry type (token = the gadget's address, meta = its guest window).
+    pub gt_ctls: retro_translate::Projections<u32>,
     /// Functions the census runner was told to pretend exist (`--stub lib/Func`, census.rs).
     pub census_stubs: Vec<(String, String)>,
     next_lib_base: u32,
@@ -127,7 +129,7 @@ impl<U: GuestUi> Amiga<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), workbench: Default::default(), notify: Default::default(), task_res: Default::default(), asl: Default::default(), cx: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, ibase_locks: 0, pub_list: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
-            clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), native_gads: Default::default(), gfx: graphics::state::State::new(),
+            clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), native_gads: Default::default(), gt_ctls: Default::default(), gfx: graphics::state::State::new(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
