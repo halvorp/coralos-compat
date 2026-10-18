@@ -66,6 +66,7 @@ pub mod lvo_names;
 pub mod guest_str;
 pub mod icon;
 pub mod icon_format;
+pub mod icon_host;
 pub mod libfactory;
 pub mod lists;
 pub mod lowlevel;

@@ -2,6 +2,7 @@
 //! engine and checked against what the AROS m68k oracle saw (tests/oracle/dopus5/EXPECTATIONS.md): the processes it starts,
 //! the ports it publishes, the windows it opens and that they were really drawn.
 use amiga68k_engine::Amiga;
+use guestui_abi::IconRole;
 use guestui_abi::{RecordingGuestUi, UiCall};
 
 const DOPUS: &str = "/data/build/corpus-bin/dopus5/DOpus5";
@@ -15,9 +16,14 @@ fn load(a: &mut Amiga<RecordingGuestUi>, prefix: &str, dir: &std::path::Path) {
 }
 
 /// Boot DirectoryOpus and run it, advancing the virtual clock whenever every task sleeps, until `seconds` of virtual time passed.
-fn run(seconds: u64) -> Option<Amiga<RecordingGuestUi>> {
+fn run(seconds: u64) -> Option<Amiga<RecordingGuestUi>> { run_with(seconds, |_| {}) }
+
+/// [`run`] with the host's `RecordingGuestUi` prepared first (e.g. with icon artwork).
+fn run_with(seconds: u64, prep: impl FnOnce(&mut RecordingGuestUi)) -> Option<Amiga<RecordingGuestUi>> {
     let file = std::fs::read(format!("{DOPUS}/DirectoryOpus")).ok().or_else(|| { eprintln!("skipped: corpus not present"); None })?;
-    let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    let mut ui = RecordingGuestUi::new();
+    prep(&mut ui);
+    let mut a = Amiga::new(ui).unwrap();
     a.fs.vol.add_device("DOpus5", false);
     load(&mut a, "DOpus5:", std::path::Path::new(DOPUS));
     a.fs.vol.assign_add("LIBS", "DOpus5:Libs");
@@ -178,4 +184,23 @@ fn the_lister_matches_the_oracle_where_the_oracle_is_ground_truth() {
     assert!(!mismatches(lister, (1, 9), &cells).is_empty(), "control: the toolbar comparison shifted by one pixel must fail");
     // Negative control: shifting the SRCE comparison by one pixel must fail (the check is not vacuous).
     assert!(!mismatches(lister, (388, 0), &srce).is_empty());
+}
+
+/// Host icon artwork reaches DOpus: its three volume icons are GetDefDiskObject(WBDISK) defaults, so the host is asked for Disk art.
+/// (DOpus puts them in gadgets; the engine does not paint GADGIMAGE gadget Images into the canvas, so the canvas dump is unchanged.)
+#[test]
+fn directory_opus_disk_icons_come_from_the_host_when_it_has_artwork() {
+    let art: Vec<u32> = (0..32 * 32u32).map(|i| { let (x, y) = (i % 32, i / 32); if (x + y) % 8 < 2 { 0xFF00_0000 } else if x > 4 && x < 28 && y > 6 { 0xFF44_88DD } else { 0 } }).collect();
+    let Some(a) = run_with(5, |ui| { for r in [IconRole::Disk, IconRole::Drawer, IconRole::Device, IconRole::Tool, IconRole::Project, IconRole::Trash, IconRole::Kick] { ui.icon_art.insert(r, (32, 32, art.clone())); } }) else { return };
+    let icon_calls: Vec<&String> = a.log.iter().filter(|l| l.starts_with("[icon]")).collect();
+    eprintln!("DOpus icon calls: {icon_calls:#?}\nhost requests: {:?}", a.ui.icon_requests);
+    assert!(a.ui.icon_requests.iter().any(|(r, ..)| *r == IconRole::Disk), "DOpus's volume icons were asked of the host: {:?}", a.ui.icon_requests);
+    assert!(icon_calls.iter().any(|l| l.contains("[host artwork: Disk]")), "{icon_calls:?}");
+    if let Ok(dir) = std::env::var("DOPUS_DUMP") {
+        for (id, (w, h, px)) in &a.ui.canvases {
+            let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+            for p in px { out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]); }
+            std::fs::write(format!("{dir}/hostart-window{id}-{w}x{h}.ppm"), out).unwrap();
+        }
+    }
 }

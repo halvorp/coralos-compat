@@ -19,6 +19,27 @@ mod recording;
 pub use model::*;
 pub use recording::{pixel_hash, RecordingGuestUi, UiCall};
 
+/// What an icon depicts, in generic terms (a host maps each to its own artwork).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum IconRole {
+    /// A mounted volume with a root directory (Workbench WBDISK).
+    Disk,
+    /// A removable or secondary volume (the engine asks `Disk`; reserved for hosts/engines that can tell).
+    Volume,
+    /// A directory (WBDRAWER).
+    Drawer,
+    /// An executable (WBTOOL).
+    Tool,
+    /// A document (WBPROJECT).
+    Project,
+    /// The trashcan (WBGARBAGE).
+    Trash,
+    /// A device (WBDEVICE).
+    Device,
+    /// A boot/Kickstart disk (WBKICK).
+    Kick,
+}
+
 /// What the engines call. One implementation per host (real CoralOS, recording, headless).
 pub trait GuestUi {
     fn open_window(&mut self, model: WindowModel) -> Result<UiObjectRef, UiRefusal>;
@@ -42,6 +63,10 @@ pub trait GuestUi {
     fn present_content(&mut self, _win: UiObjectRef, _damage: GuestRect, _width: i32, _height: i32, _pixels: &[u32]) -> Result<(), UiRefusal> {
         Err(UiRefusal::Unsupported("guest-drawn content (no canvas part in this host)"))
     }
+    /// A host-drawn icon for a generic object `role`, `width` x `height` pixels, row-major `0xAARRGGBB` (alpha >= 0x80 is
+    /// opaque, below it transparent), exactly `width * height` values. `None` = this host has no artwork for the role
+    /// (the engine then draws its own plain placeholder and logs that). Engines own no icon artwork: it lives host-side.
+    fn icon_image(&mut self, _role: IconRole, _width: u32, _height: u32) -> Option<alloc::vec::Vec<u32>> { None }
     /// Next native event for the guest, if any.
     fn poll_event(&mut self) -> Option<GuestUiEvent>;
 }

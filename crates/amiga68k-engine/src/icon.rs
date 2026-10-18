@@ -55,6 +55,23 @@ fn info_path(name: &str) -> String { if name.ends_with(':') { format!("{name}Dis
 /// The engine's own stand-in for Workbench's default icon of `ty`: a 24x16 one-plane outlined box (not Commodore
 /// artwork), at no position, with the 4 KiB default stack; drawer-like types carry DrawerData (a 400x150 window).
 pub fn default_icon(ty: u8) -> Icon {
+    box_icon(ty)
+}
+
+/// The default icon the guest gets: the host's artwork for the type's role (icon_host.rs) when it has some, else the
+/// placeholder box. Returns the log suffix naming which one, and why the box (FALLBACK-BOX) when it is the box.
+fn default_for<U: GuestUi>(a: &mut Amiga<U>, ty: u8) -> (Icon, String) {
+    let boxed = box_icon(ty);
+    let Some(role) = crate::icon_host::role_of(ty) else { return (boxed, " [placeholder box: no icon role for this type]".into()) };
+    let fresh;
+    let pal = match a.gfx.palette.as_ref() { Some(p) => p, None => { fresh = crate::graphics::state::Palette::new(); &fresh } };
+    match crate::icon_host::host_image(&mut a.ui, role, pal) {
+        Ok(img) => (crate::icon_host::with_image(boxed, img), format!(" [host artwork: {role:?}]")),
+        Err(why) => (boxed, format!(" [FALLBACK-BOX: {why}]")),
+    }
+}
+
+fn box_icon(ty: u8) -> Icon {
     let mut head = [0u8; HEAD];
     let w16 = |h: &mut [u8], at: usize, v: u16| h[at..at + 2].copy_from_slice(&v.to_be_bytes());
     let w32 = |h: &mut [u8], at: usize, v: u32| h[at..at + 4].copy_from_slice(&v.to_be_bytes());
@@ -202,7 +219,7 @@ fn get_disk_object_new<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
                 Kind::File(d) if d.starts_with(&[0, 0, 3, 0xF3]) => WBTOOL, // HUNK_HEADER: an executable
                 Kind::File(_) => WBPROJECT,
             };
-            deliver(a, cpu, &default_icon(ty), format!("{what} (no .info: default)"))
+            { let (i, note) = default_for(a, ty); deliver(a, cpu, &i, format!("{what} (no .info: default){note}")) }
         }
         Err((e, why)) => fail(a, cpu, e, 0, format!("{what} ({why})")),
     }
@@ -213,7 +230,7 @@ fn get_def_disk_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
     let ty = cpu.dreg(0);
     let what = format!("[icon] GetDefDiskObject {ty}");
     if !(u32::from(WBDISK)..=u32::from(WBKICK)).contains(&ty) { return fail(a, cpu, ERROR_OBJECT_WRONG_TYPE, 0, what); }
-    deliver(a, cpu, &default_icon(ty as u8), what)
+    { let (i, note) = default_for(a, ty as u8); deliver(a, cpu, &i, format!("{what}{note}")) }
 }
 
 /// NewDiskObject(d0 = type) -> a fresh icon of that type (the default one: the engine has no blank-icon variant).
@@ -221,7 +238,7 @@ fn new_disk_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     let ty = cpu.dreg(0);
     let what = format!("[icon] NewDiskObject {ty}");
     if !(u32::from(WBDISK)..=u32::from(WBAPPICON)).contains(&ty) { return fail(a, cpu, ERROR_OBJECT_WRONG_TYPE, 0, what); }
-    deliver(a, cpu, &default_icon(ty as u8), what)
+    { let (i, note) = default_for(a, ty as u8); deliver(a, cpu, &i, format!("{what}{note}")) }
 }
 
 /// DupDiskObjectA(a0 = icon, a1 = tags): an independent copy (the tag list is not interpreted; any tag is logged).

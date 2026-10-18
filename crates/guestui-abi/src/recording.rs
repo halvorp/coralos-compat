@@ -33,6 +33,10 @@ pub struct RecordingGuestUi {
     pub events: VecDeque<GuestUiEvent>,
     /// The canvas each window shows: (width, height, 0x00RRGGBB pixels), composed from every `present_content`.
     pub canvases: BTreeMap<u32, (i32, i32, Vec<u32>)>,
+    /// Test artwork `icon_image` hands out per role (width, height, pixels); a role not in the map has none.
+    pub icon_art: BTreeMap<crate::IconRole, (u32, u32, Vec<u32>)>,
+    /// Every `icon_image` request seen, in order.
+    pub icon_requests: Vec<(crate::IconRole, u32, u32)>,
     next_id: u32,
     /// live object id -> generation
     live: BTreeMap<u32, u32>,
@@ -55,6 +59,10 @@ impl RecordingGuestUi {
 }
 
 impl GuestUi for RecordingGuestUi {
+    fn icon_image(&mut self, role: crate::IconRole, width: u32, height: u32) -> Option<Vec<u32>> {
+        self.icon_requests.push((role, width, height));
+        self.icon_art.get(&role).filter(|(w, h, _)| (*w, *h) == (width, height)).map(|a| a.2.clone())
+    }
     fn open_window(&mut self, model: WindowModel) -> Result<UiObjectRef, UiRefusal> {
         if model.rect.width <= 0 || model.rect.height <= 0 {
             return Err(UiRefusal::InvalidGeometry("window width/height must be positive"));
