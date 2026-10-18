@@ -22,9 +22,10 @@ fn boot(bytes: &[u8]) -> (M, Fragment) {
 fn win(m: &M) -> u32 { *m.mac.windows.keys().next().expect("the program opened a window") }
 fn native(m: &M) -> guestui_abi::UiObjectRef { m.mac.windows[&win(m)].native.unwrap() }
 fn black(m: &M, x: i32, y: i32) -> bool { m.mac.qd.canvases[&win(m)].get(x, y) == Some(1) }
+/// QuickDraw's baseline is a line between rows: a glyph without descender ends on row baseline-1 (mac68k qd/text.rs).
 fn glyph_at(m: &M, ch: u8, x: i32, baseline: i32) -> bool {
     let f = Font::topaz8();
-    (0..8).all(|gy| (0..8).all(|gx| black(m, x + gx, baseline - 6 + gy) == f.glyph_bit(f.slot(ch), gx, gy)))
+    (0..8).all(|gy| (0..8).all(|gx| black(m, x + gx, baseline - 7 + gy) == f.glyph_bit(f.slot(ch), gx, gy)))
 }
 fn frames(m: &M) -> usize { m.mac.ui.calls.iter().filter(|c| matches!(c, UiCall::PresentContent { .. })).count() }
 fn close(m: &mut M) { let win = native(m); m.mac.ui.events.push_back(GuestUiEvent::CloseRequested { win, token: CallbackToken(0) }); }
