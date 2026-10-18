@@ -7,6 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
 use crate::{machine::Amiga, process, Refusal};
+use crate::fs::{DOSTRUE, FH_SIZE};
 use guestui_abi::GuestUi;
 use retro_guest_mem::GuestMem;
 use retro_m68k::Cpu;
@@ -27,11 +28,8 @@ pub const LVO_PUT_STR: i32 = -948;
 /// The two console FileHandles (44 bytes each, longword aligned: a BPTR is the address / 4).
 pub const STDIN_FH: u32 = 0x6300;
 pub const STDOUT_FH: u32 = 0x6340;
-const FH_SIZE: u32 = 44;
-/// dos/dos.h DOSTRUE (BOOL success from dos calls).
-const DOSTRUE: u32 = 0xFFFF_FFFF;
 /// Process fields this module owns the meaning of (offsets: see process.rs).
-const PR_RESULT2: u32 = 148;
+use crate::dos_err::PR_RESULT2;
 const PR_CIS: u32 = 156;
 const PR_COS: u32 = 160;
 const PR_CLI: u32 = 172;
@@ -49,7 +47,7 @@ pub fn setup(mem: &mut GuestMem) -> Result<(), Refusal> {
 #[derive(Default)]
 pub struct Console { pub stdout: Vec<u8> }
 
-fn emit<U: GuestUi>(a: &mut Amiga<U>, bytes: &[u8]) -> String {
+pub(crate) fn emit<U: GuestUi>(a: &mut Amiga<U>, bytes: &[u8]) -> String {
     a.console.stdout.extend_from_slice(bytes);
     String::from_utf8_lossy(bytes).trim_end_matches('\n').replace('\n', "\\n")
 }
@@ -71,7 +69,7 @@ pub fn output<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Ref
 /// Write(d1 = file, d2 = buffer, d3 = length) -> bytes written, or -1. Only the console is a file so far.
 pub fn write<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (fh, buf, n) = (cpu.dreg(1), cpu.dreg(2), cpu.dreg(3));
-    if fh != STDOUT_FH >> 2 { return Err(Refusal(format!("Write to file {fh:#x}: only the console is a file so far"))); }
+    if fh != STDOUT_FH >> 2 { return crate::dos_io::write(a, cpu); }
     let bytes = read_bytes(a, buf, n, "Write.buffer")?;
     let shown = emit(a, &bytes);
     cpu.set_d0(n);
@@ -79,8 +77,8 @@ pub fn write<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
 }
 
 /// Read(d1 = file, d2 = buffer, d3 = length): the console's stdin has nothing to give (EOF, 0).
-pub fn read<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    if cpu.dreg(1) != STDIN_FH >> 2 { return Err(Refusal(format!("Read from file {:#x}: only the console is a file so far", cpu.dreg(1)))); }
+pub fn read<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    if cpu.dreg(1) != STDIN_FH >> 2 { return crate::dos_io::read(a, cpu); }
     cpu.set_d0(0);
     Ok("[dos] Read console -> 0 (EOF)".into())
 }
@@ -95,7 +93,7 @@ pub fn put_str<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Re
 
 /// FPuts(d1 = file, d2 = string) -> 0 on success.
 pub fn fputs<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    if cpu.dreg(1) != STDOUT_FH >> 2 { return Err(Refusal(format!("FPuts to file {:#x}: only the console is a file so far", cpu.dreg(1)))); }
+    if cpu.dreg(1) != STDOUT_FH >> 2 { return crate::dos_io::fputs(a, cpu); }
     let s = a.mem.read_cstr(cpu.dreg(2)).map_err(Refusal::mem("FPuts.str"))?;
     let shown = emit(a, s.as_bytes());
     cpu.set_d0(0);

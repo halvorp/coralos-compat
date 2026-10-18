@@ -75,6 +75,10 @@ pub struct Amiga<U: GuestUi> {
     pub(crate) ctx: Option<retro_m68k::CpuContext>,
     /// exec memory pools: handle -> (requirements, live blocks address -> size).
     pub pools: BTreeMap<u32, (u32, BTreeMap<u32, u32>)>,
+    /// The guest's filesystem and what hangs off it: locks, files, seglists, disk libraries (fs.rs).
+    pub fs: crate::fs::FsState,
+    /// Guest calls in flight, innermost last (guest_call.rs).
+    pub(crate) calls: Vec<crate::guest_call::Frame<U>>,
     /// SignalSemaphores by guest address -> the one task's nest count; the public list by name (semaphores.rs).
     pub semaphores: BTreeMap<u32, u16>,
     pub public_semaphores: BTreeMap<String, u32>,
@@ -92,6 +96,7 @@ impl<U: GuestUi> Amiga<U> {
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(),
+            fs: Default::default(), calls: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
@@ -151,6 +156,8 @@ impl<U: GuestUi> Amiga<U> {
             .func(ports::LVO_DELETE_IO_REQUEST, "DeleteIORequest", ports::delete_io_request::<U>)
             .func(devices::LVO_OPEN_DEVICE, "OpenDevice", devices::open_device::<U>)
             .func(devices::LVO_CLOSE_DEVICE, "CloseDevice", devices::close_device::<U>)
+            .with(crate::makelib::register::<U>)
+            .with(crate::execlists::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("dos.library", DOS_BASE)
             .func(dos::LVO_READ, "Read", dos::read::<U>)
@@ -168,6 +175,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(dos::LVO_IS_INTERACTIVE, "IsInteractive", dos::is_interactive::<U>)
             .func(rdargs::LVO_READ_ARGS, "ReadArgs", rdargs::read_args::<U>)
             .func(rdargs::LVO_FREE_ARGS, "FreeArgs", rdargs::free_args::<U>)
+            .with(crate::dos_fs::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("intuition.library", INTUITION_BASE)
             .func(window::LVO_OPEN_WINDOW, "OpenWindow", window::open_window::<U>)
@@ -218,10 +226,16 @@ impl<U: GuestUi> Amiga<U> {
         for (name, base) in [("exec.library", EXEC_BASE), ("dos.library", DOS_BASE), ("intuition.library", INTUITION_BASE), ("graphics.library", GRAPHICS_BASE), ("gadtools.library", GADTOOLS_BASE)] {
             a.libs.push(LibInfo { name, base, open_count: 0 });
         }
+        crate::execlists::init(&mut a.mem)?;
+        crate::guest_call::install(&mut a.mem)?;
+        a.dispatch.insert(crate::guest_call::RET_SLOT, ("exec.library", "GuestCallReturn", crate::guest_call::on_return::<U>));
         write_slot(&mut a.mem, EXIT_SLOT).map_err(Refusal::mem("exit slot"))?;
         a.mem.write_u32(4, EXEC_BASE).map_err(Refusal::mem("AbsExecBase"))?; // AbsExecBase
         Ok(a)
     }
+
+    /// Guest calls in flight (guest_call.rs): 0 when no host-started guest call is outstanding.
+    pub fn calls_in_flight(&self) -> usize { self.calls.len() }
 
     /// Open a library the name table knows but nothing bridges yet: a fresh base, every vector a named refusal.
     pub(crate) fn open_known_library(&mut self, name: &'static str) -> Result<u32, Refusal> {

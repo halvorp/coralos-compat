@@ -18,10 +18,14 @@ pub fn open_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
         Some(l) => { l.open_count += 1; l.base }
         // A library the name table knows: open it with every vector a named refusal, so a real program runs until the
         // first function it needs that is not bridged, and says which. Unknown names stay a legitimate NULL.
-        None => match crate::libtable::known_library(&name) {
-            Some(known) => a.open_known_library(known)?,
-            None => 0,
-        },
+        None => {
+            // A library on disk (LIBS:, PROGDIR:Libs): loaded and initialised in the guest, which sets D0 itself.
+            if let Some(line) = crate::disklib::try_open(a, cpu, &name, ver)? { return Ok(line); }
+            match crate::libtable::known_library(&name) {
+                Some(known) => a.open_known_library(known)?,
+                None => 0,
+            }
+        }
     };
     cpu.set_d0(base);
     Ok(format!("[exec] OpenLibrary name=\"{name}\" ver={ver} -> {base:#x}"))
@@ -30,6 +34,7 @@ pub fn open_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
 /// a1 = library base.
 pub fn close_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let base = cpu.areg(1);
+    if let Some(i) = crate::disklib::index_of_base(a, base) { return crate::disklib::close(a, cpu, i); }
     let l = a.libs.iter_mut().find(|l| l.base == base)
         .ok_or_else(|| Refusal(format!("CloseLibrary: {base:#x} is not an open library base")))?;
     if l.open_count == 0 { return Err(Refusal(format!("CloseLibrary: {} closed more times than opened", l.name))); }

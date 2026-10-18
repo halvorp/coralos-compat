@@ -153,9 +153,18 @@ fn process_reloc(
     Ok(())
 }
 
-/// Load a Hunk executable into guest RAM starting at `base`, relocations applied.
-pub fn load(mem: &mut GuestMem, file: &[u8], base: u32) -> Result<Loaded, HunkError> {
+/// The declared size in bytes of every hunk of an executable, in file order (memory-type flags masked off): what a
+/// loader must reserve before it calls [`load_spaced`].
+pub fn hunk_sizes(file: &[u8]) -> Result<Vec<u32>, HunkError> {
     let mut r = Rd { b: file, p: 0 };
+    let table = read_header(&mut r, file.len())?;
+    let mut sizes = Vec::with_capacity(table);
+    for _ in 0..table { sizes.push((r.u32()? & 0x3FFF_FFFF).checked_mul(4).ok_or(HunkError::AddressOverflow)?); }
+    Ok(sizes)
+}
+
+/// Check the HUNK_HEADER and return the number of hunks, leaving the reader at the first size word.
+fn read_header(r: &mut Rd, file_len: usize) -> Result<usize, HunkError> {
     if r.u32()? != HUNK_HEADER { return Err(HunkError::NotAHunkFile); }
     if r.u32()? != 0 { return Err(HunkError::ResidentLibrariesUnsupported); }
     let table = r.u32()? as usize;
@@ -163,13 +172,25 @@ pub fn load(mem: &mut GuestMem, file: &[u8], base: u32) -> Result<Loaded, HunkEr
     if table == 0 { return Err(HunkError::NoHunks); }
     if last.checked_add(1).and_then(|l| l.checked_sub(first)) != Some(table) { return Err(HunkError::InconsistentTable); }
     // a table larger than the file could possibly hold is truncation, not an allocation request
-    if table > file.len() / 4 { return Err(HunkError::Truncated); }
+    if table > file_len / 4 { return Err(HunkError::Truncated); }
+    Ok(table)
+}
+
+/// Load a Hunk executable into guest RAM starting at `base`, relocations applied.
+pub fn load(mem: &mut GuestMem, file: &[u8], base: u32) -> Result<Loaded, HunkError> { load_spaced(mem, file, base, 0) }
+
+/// [`load`] with `gap` bytes of room BEFORE every hunk: a hunk's base is the end of the previous one plus `gap`. An
+/// AmigaDOS seglist keeps its size and next-segment links in that room (8 bytes: size at base-8, next BPTR at base-4).
+pub fn load_spaced(mem: &mut GuestMem, file: &[u8], base: u32, gap: u32) -> Result<Loaded, HunkError> {
+    let mut r = Rd { b: file, p: 0 };
+    let table = read_header(&mut r, file.len())?;
     let (mut bases, mut sizes, mut cur) = (Vec::with_capacity(table), Vec::with_capacity(table), base);
     for _ in 0..table {
         let sz = (r.u32()? & 0x3FFF_FFFF).checked_mul(4).ok_or(HunkError::AddressOverflow)?; // top 2 bits = memory flags
-        bases.push(cur);
+        let at = cur.checked_add(gap).ok_or(HunkError::AddressOverflow)?;
+        bases.push(at);
         sizes.push(sz);
-        cur = cur.checked_add(sz).ok_or(HunkError::AddressOverflow)?;
+        cur = at.checked_add(sz).ok_or(HunkError::AddressOverflow)?;
     }
     let mut idx = 0usize;
     while !r.at_end() {
