@@ -14,6 +14,7 @@ dependencies = [
  "retro-present",
  "retro-raster",
  "retro-theme",
+ "retro-translate",
 ]
 
 [[package]]
@@ -138,6 +139,13 @@ dependencies = [
 [[package]]
 name = "retro-theme"
 version = "0.1.0"
+
+[[package]]
+name = "retro-translate"
+version = "0.1.0"
+dependencies = [
+ "guestui-abi",
+]
 
 [[package]]
 name = "shlex"

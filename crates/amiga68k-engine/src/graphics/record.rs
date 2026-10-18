@@ -12,12 +12,15 @@ use alloc::vec::Vec;
 use guestui_abi::{DrawOp, FontRole, GuestPoint, GuestRect, GuestUi, IconRole, PenRole};
 use retro_raster::Rect;
 
-/// Pen number -> theme role, from `dri_Pens` (graphics/layout.rs `SCREEN_DRAWINFO`). When one pen number serves several
-/// DrawInfo slots the first in this order names it (TEXT before HIGHLIGHTTEXT, SHINE before SHADOW on a flat theme).
+/// Pen number -> theme role, from `dri_Pens` (graphics/layout.rs `SCREEN_DRAWINFO`). One pen number can serve several DrawInfo
+/// slots; the guest's own table then says those roles are ONE colour, so the order below only decides which of the equal-coloured
+/// roles the host paints it with: TEXT first, then SHADOW before SHINE (a shared hairline IS the shaded-edge colour, the border;
+/// the light edge is the one a theme gives its own pen), then the rest. Because the order is documented and the pens equal, nothing
+/// is guessed about the picture; and a Shine and a Shadow that share a pen are a FLAT edge: they never coalesce into a bevel.
 pub struct PenRoles([Option<PenRole>; 256]);
 
 const BY_SLOT: [(usize, PenRole); 7] = [
-    (2, PenRole::Text), (3, PenRole::Shine), (4, PenRole::Shadow), (5, PenRole::Fill), (6, PenRole::FillText), (7, PenRole::Background), (8, PenRole::Highlight),
+    (2, PenRole::Text), (4, PenRole::Shadow), (3, PenRole::Shine), (5, PenRole::Fill), (6, PenRole::FillText), (7, PenRole::Background), (8, PenRole::Highlight),
 ];
 
 impl PenRoles {

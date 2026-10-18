@@ -16,7 +16,8 @@ use crate::{Presenter, Source};
 
 /// The id of a window's content plane.
 pub const CONTENT_PLANE: u32 = 0;
-/// A display list longer than this after occlusion pruning is collapsed into one hole over the canvas (the honest raw fallback).
+/// A display list longer than this after occlusion pruning has its OLDEST half collapsed into one hole over their union (the honest
+/// raw fallback: those pixels are read from the canvas). Newer recs stay named, and an opaque rec that later covers the hole prunes it.
 const MAX_RECS: usize = 4096;
 
 /// One recorded drawing step.
@@ -30,8 +31,11 @@ pub enum Rec {
 
 impl Rec {
     fn bbox(&self) -> Rect { match self { Rec::Op { bbox, .. } => *bbox, Rec::Hole(r) => *r } }
-    /// Does this rec paint every pixel of its box opaquely (so anything under it is dead)?
-    fn opaque(&self) -> bool { matches!(self, Rec::Hole(_) | Rec::Op { op: DrawOp::Fill { .. }, .. }) }
+    /// Does this rec paint every pixel of its box opaquely (so anything under it is dead)? A fill, a hole, and a text run that
+    /// paints its cell first (`bg_role` Some: JAM2) do; a JAM1 run, a line, a bevel edge or an icon leave pixels under them.
+    fn opaque(&self) -> bool {
+        matches!(self, Rec::Hole(_) | Rec::Op { op: DrawOp::Fill { .. } | DrawOp::Text { bg_role: Some(_), .. }, .. })
+    }
 }
 
 /// How a window's canvas sits in its window: the canvas -> window offset, and the canvas rectangles native controls cover.
@@ -74,7 +78,10 @@ pub fn coalesce_bevels(ops: Vec<Rec>) -> Vec<Rec> {
         let (left, top, right, bottom) = (whole.x0, whole.y0, whole.x1 - 1, whole.y1 - 1);
         let lit_edge = |b: &Rect| (b.x0 == left && b.x1 - 1 == left) || (b.y0 == top && b.y1 - 1 == top);
         let dark_edge = |b: &Rect| (b.x0 == right && b.x1 - 1 == right) || (b.y0 == bottom && b.y1 - 1 == bottom);
-        if k > j && whole.width() > 2 && whole.height() > 2 && on_edges(&ops[i..j], &lit_edge) && on_edges(&ops[j..k], &dark_edge) {
+        // the pair must DRAW the whole outline (the four corner pixels aside): a lone lit row with a lone shaded column is not a box
+        let drawn = |x: i32, y: i32| ops[i..k].iter().any(|r| line(r).is_some_and(|(b, _)| b.x0 <= x && x < b.x1 && b.y0 <= y && y < b.y1));
+        let outline = (left + 1..right).all(|x| drawn(x, top) && drawn(x, bottom)) && (top + 1..bottom).all(|y| drawn(left, y) && drawn(right, y));
+        if k > j && whole.width() > 2 && whole.height() > 2 && on_edges(&ops[i..j], &lit_edge) && on_edges(&ops[j..k], &dark_edge) && outline {
             out.push(Rec::Op { op: DrawOp::Bevel { rect: grect(&whole), raised: first == PenRole::Shine }, bbox: whole });
             i = k;
         } else { out.push(ops[i].clone()); i += 1; }
@@ -106,7 +113,11 @@ impl Presenter {
         }
         let mut it = keep.iter();
         v.retain(|_| *it.next().unwrap());
-        if v.len() > MAX_RECS { *v = alloc::vec![Rec::Hole(canvas)]; }
+        if v.len() > MAX_RECS {
+            let old: Vec<Rec> = v.drain(..v.len() - MAX_RECS / 2).collect();
+            let hole = old.iter().fold(Rect::default(), |u, r| u.union(&r.bbox())).intersect(&canvas);
+            if !hole.is_empty() { v.insert(0, Rec::Hole(hole)); }
+        }
     }
 
     /// Flush every damaged window as one `present_plane` carrying the display list for the damage rectangle. A host that
@@ -187,6 +198,35 @@ mod tests {
         let stray = alloc::vec![line(5, 5, 5, 9, PenRole::Shine), line(2, 8, 4, 8, PenRole::Shadow)];
         assert_eq!(coalesce_bevels(stray.clone()), stray);
         assert_eq!(coalesce_bevels(alloc::vec![line(1, 1, 5, 1, PenRole::Text)]).len(), 1);
+        // negative control: a lone lit row and a lone shaded column lie on the right edges of their union but draw no box
+        let lone = alloc::vec![line(2, 2, 11, 2, PenRole::Shine), line(12, 2, 12, 9, PenRole::Shadow)];
+        assert_eq!(coalesce_bevels(lone.clone()), lone, "a pair that does not draw the whole outline is not a bevel");
+    }
+
+    #[test]
+    fn a_text_row_redrawn_in_place_does_not_grow_the_list_and_an_overflow_keeps_the_newest_named() {
+        let text = |s: &str, bg: Option<PenRole>| (DrawOp::Text { at: GuestPoint { x: 0, y: 0 }, string: s.into(), font_role: guestui_abi::FontRole::Ui, px: 8, pen_role: PenRole::Text, bg_role: bg }, Rect::new(0, 0, 40, 8));
+        let canvas = Rect::new(0, 0, 100, 100);
+        let (mut jam2, mut jam1) = (Presenter::default(), Presenter::default());
+        for i in 0..50 {
+            let (op, bb) = text(&alloc::format!("{i}"), Some(PenRole::Background));
+            jam2.record(1, op, bb);
+            let (op, bb) = text(&alloc::format!("{i}"), None);
+            jam1.record(1, op, bb);
+        }
+        jam2.prune(1, canvas); jam1.prune(1, canvas);
+        assert_eq!(jam2.recs(1).len(), 1, "a JAM2 run paints its cell, so the run under it is dead");
+        assert_eq!(jam1.recs(1).len(), 50, "NEGATIVE CONTROL: a JAM1 run leaves what is under it");
+        // Overflow: the oldest half becomes ONE hole over its union, the newest recs stay named, and an opaque fill over the hole clears it.
+        let mut p = Presenter::default();
+        for i in 0..(MAX_RECS as i32 + 10) { p.record(1, DrawOp::Line { a: GuestPoint { x: 0, y: i % 90 }, b: GuestPoint { x: 9, y: i % 90 }, pen_role: PenRole::Text }, Rect::new(0, i % 90, 10, i % 90 + 1)); }
+        p.prune(1, canvas);
+        assert!(p.recs(1).len() <= MAX_RECS / 2 + 1);
+        assert!(matches!(p.recs(1)[0], Rec::Hole(_)), "the oldest recs became a hole");
+        assert!(matches!(p.recs(1)[1], Rec::Op { .. }) && matches!(p.recs(1).last(), Some(Rec::Op { .. })), "the newest stay named");
+        p.record(1, DrawOp::Fill { rect: grect(&canvas), pen_role: PenRole::Background }, canvas);
+        p.prune(1, canvas);
+        assert_eq!(p.recs(1).len(), 1, "the window recovers: one opaque rec over the canvas removes the hole");
     }
 
     #[test]

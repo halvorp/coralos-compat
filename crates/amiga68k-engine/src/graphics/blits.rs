@@ -30,7 +30,8 @@ fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: 
         a.gfx.bitmaps.insert(src, s);
         r?
     };
-    if let Some(win) = window { a.gfx.add_damage(win, hit); }
+    // A blit is drawing the engine cannot name: damage AND a hole, so the plane route never loses it.
+    if let Some(win) = window { a.gfx.add_damage(win, hit); super::record::note(a, win, None, hit, (0, 0)); }
     bitmaps::export_planes(a, bm)?;
     Ok(hit)
 }

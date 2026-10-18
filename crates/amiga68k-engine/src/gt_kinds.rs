@@ -22,7 +22,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
 use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, idcmp, machine::Amiga, memory, run::Delivered, tags, translate::{self, gadtools}, Refusal};
-use guestui_abi::{CallbackToken, ControlKind, ControlValue, GuestUi, Intent, UiObjectRef};
+use guestui_abi::{ControlKind, ControlValue, GuestUi, Intent};
 use retro_m68k::Cpu;
 
 pub const LVO_GT_GET_GADGET_ATTRS_A: i32 = -174;
@@ -212,13 +212,8 @@ fn store<U: GuestUi>(a: &mut Amiga<U>, g: u32, v: &ControlValue) -> Result<(), R
 }
 
 /// A native control changed: update the gadget's state and post IDCMP_GADGETUP (IAddress = the gadget).
-pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, intent: Intent) -> Result<Delivered, Refusal> {
-    let g = u32::try_from(token.0).ok().filter(|g| a.gadgets.contains_key(g))
-        .ok_or_else(|| Refusal(format!("deliver: Intent token {:#x} is not a GadTools gadget", token.0)))?;
+pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32, intent: Intent) -> Result<Delivered, Refusal> {
     let info = a.gadgets[&g].clone();
-    if info.attached != Some((win, native, control)) {
-        return Err(Refusal(format!("deliver: Intent for gadget {g:#x}, which is not that native control of that window (stale?)")));
-    }
     let row = translate::lookup(gadtools::TABLE, &control_kind(&info), &intent)?;
     let value = match intent {
         Intent::SetValue(v) => Some(normalize(&info, v)?),
@@ -226,6 +221,8 @@ pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectR
         _ => None,
     };
     let (class, code) = translate::message(row, 0, value.as_ref()).ok_or_else(|| Refusal("deliver: a GadTools row sent no message".into()))?;
+    let changed = matches!(&value, Some(ControlValue::Level(l)) if *l != info.state.level);
+    let class = gadtools::filter_class(class, info.kind, changed);
     let msg = if idcmp::subscribed(a, win, class)? { Some(idcmp::reserve(a)?) } else { None };
     if let Some(v) = &value {
         if let Err(e) = store(a, g, v) { if let Some(m) = msg { let _ = a.heap.free(m, idcmp::INTUIMESSAGE_SIZE); } return Err(e); }

@@ -15,7 +15,7 @@
 //! MouseX / MouseY are window-relative (the event's own coordinates), Seconds / Micros the virtual clock. Facts: AROS
 //! rom/intuition inputhandler, intuition/intuition.h (IDCMP_*, IEQUALIFIER_*, WFLG_REPORTMOUSE / RMBTRAP), devices/inputevent.h.
 use alloc::format;
-use crate::idcmp::{self, Stamp};
+use crate::idcmp::{self, Stamp, WD_MOUSE_X, WD_MOUSE_Y};
 use crate::{machine::Amiga, run::Delivered, Refusal};
 use guestui_abi::{GuestUi, Modifiers, PointerButton, PointerPhase};
 
@@ -36,8 +36,6 @@ const IEQUALIFIER_MIDBUTTON: u16 = 0x1000;
 const IEQUALIFIER_RBUTTON: u16 = 0x2000;
 const IEQUALIFIER_LEFTBUTTON: u16 = 0x4000;
 
-const WD_MOUSE_Y: u32 = 12;
-const WD_MOUSE_X: u32 = 14;
 const WD_FLAGS: u32 = 24;
 const WFLG_REPORTMOUSE: u32 = 0x200;
 const WFLG_RMBTRAP: u32 = 0x1_0000;
@@ -69,7 +67,7 @@ pub fn pointer<U: GuestUi>(a: &mut Amiga<U>, win: u32, x: i32, y: i32, button: P
         PointerPhase::Up => *held &= !button_bit(button),
         PointerPhase::Move => {}
     }
-    let stamp = Stamp { qualifier: *held | qualifier(a.input.modifiers), mouse: (x as i16, y as i16) };
+    let stamp = Stamp { qualifier: *held | qualifier(a.input.modifiers),  };
     let flags = a.mem.read_u32(win + WD_FLAGS).map_err(Refusal::mem("Window.Flags"))?;
     let down = match button { PointerButton::Primary => SELECTDOWN, PointerButton::Middle => MIDDLEDOWN, PointerButton::Secondary => MENUDOWN, PointerButton::None => 0 };
     match phase {
@@ -83,19 +81,24 @@ pub fn pointer<U: GuestUi>(a: &mut Amiga<U>, win: u32, x: i32, y: i32, button: P
     }
 }
 
-/// A key for the window: VANILLAKEY for a typed character, RAWKEY for the key itself.
+/// The qualifier of the input state right now: the modifiers held plus the pointer buttons held over `win`.
+pub fn current_stamp<U: GuestUi>(a: &Amiga<U>, win: u32) -> Stamp {
+    Stamp { qualifier: qualifier(a.input.modifiers) | a.input.buttons.get(&win).copied().unwrap_or(0) }
+}
+
+/// A key for the window, the way Intuition's input handler routes it: a key DOWN that types one character is VANILLAKEY when the
+/// window listens for it, and that is all (AROS rom/intuition/inputhandler.c: `MapRawKey(..) == 1` fires VANILLAKEY and breaks); a
+/// key that types nothing, a release, or a window without VANILLAKEY falls through to RAWKEY. A raw code past 0x7F is refused by
+/// name BEFORE anything is queued.
 pub fn key<U: GuestUi>(a: &mut Amiga<U>, win: u32, code: u32, text: &str, mods: Modifiers, down: bool) -> Result<Delivered, Refusal> {
     a.input.modifiers = mods;
-    let stamp = Stamp { qualifier: qualifier(mods) | a.input.buttons.get(&win).copied().unwrap_or(0), mouse: (0, 0) };
-    let mut out = Delivered::IgnoredUnsubscribed;
-    if down {
+    let stamp = current_stamp(a, win);
+    if down && idcmp::subscribed(a, win, IDCMP_VANILLAKEY)? {
         if let Some(c) = text.chars().next().filter(|c| (*c as u32) < 0x100) {
-            out = post(a, win, IDCMP_VANILLAKEY, c as u16, stamp)?;
+            return post(a, win, IDCMP_VANILLAKEY, c as u16, stamp);
         }
     }
-    if idcmp::subscribed(a, win, IDCMP_RAWKEY)? {
-        if code > 0x7F { return Err(Refusal(format!("deliver: key code {code:#x} has no Amiga raw key code (0..=0x7F)"))); }
-        out = post(a, win, IDCMP_RAWKEY, code as u16 | if down { 0 } else { UP }, stamp)?;
-    }
-    Ok(out)
+    if !idcmp::subscribed(a, win, IDCMP_RAWKEY)? { return Ok(Delivered::IgnoredUnsubscribed); }
+    if code > 0x7F { return Err(Refusal(format!("deliver: key code {code:#x} has no Amiga raw key code (0..=0x7F)"))); }
+    post(a, win, IDCMP_RAWKEY, code as u16 | if down { 0 } else { UP }, stamp)
 }

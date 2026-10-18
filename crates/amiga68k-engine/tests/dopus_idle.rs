@@ -33,7 +33,11 @@ fn run_prep(seconds: u64, prep: impl FnOnce(&mut RecordingGuestUi)) -> Option<Am
 fn run_cfg(seconds: u64, topaz: bool, prep: impl FnOnce(&mut RecordingGuestUi)) -> Option<Amiga<RecordingGuestUi>> { run_route(seconds, topaz, false, prep) }
 
 fn run_route(seconds: u64, topaz: bool, plane: bool, prep: impl FnOnce(&mut RecordingGuestUi)) -> Option<Amiga<RecordingGuestUi>> {
-    let file = std::fs::read(format!("{DOPUS}/DirectoryOpus")).ok().or_else(|| { eprintln!("skipped: corpus not present"); None })?;
+    let file = std::fs::read(format!("{DOPUS}/DirectoryOpus")).ok().or_else(|| {
+        // A gate that must prove the claim sets RETRO_REQUIRE_CORPUS: an absent corpus is then a failure, not a silent pass.
+        assert!(std::env::var_os("RETRO_REQUIRE_CORPUS").is_none(), "RETRO_REQUIRE_CORPUS is set but {DOPUS} is absent");
+        eprintln!("skipped: corpus not present"); None
+    })?;
     let mut ui = RecordingGuestUi::new();
     prep(&mut ui);
     let mut a = Amiga::new(ui).unwrap();
@@ -300,6 +304,8 @@ fn op_box(o: &DrawOp) -> Option<GuestRect> {
         DrawOp::Text { .. } => None,
     }
 }
+/// Do the two rectangles share any pixel (full containment is not required: a PARTLY covered pixel op is still under the control)?
+fn overlaps(o: &GuestRect, c: &GuestRect) -> bool { o.left < c.left + c.width && c.left < o.left + o.width && o.top < c.top + c.height && c.top < o.top + o.height }
 fn inside(o: &GuestRect, c: &GuestRect) -> bool { o.left >= c.left && o.top >= c.top && o.left + o.width <= c.left + c.width && o.top + o.height <= c.top + c.height }
 
 /// First slice item 3 (17-TRANSLATION-ARCHITECTURE.md): the real DOpus lister is a PLANE. Its rows are text runs with pen ROLES, its
@@ -333,6 +339,15 @@ fn the_lister_is_a_plane_of_row_text_runs_with_pen_roles_and_no_ops_under_its_na
     // NEGATIVE CONTROL for the check: a fill hand-placed inside the path field IS found.
     let planted = DrawOp::Fill { rect: GuestRect { left: 10, top: 570, width: 5, height: 4 }, pen_role: PenRole::Fill };
     assert_eq!(under(&[&planted]), 1);
+    // RETRO-NATIVE-IS-A-MEASURED-CLAIM: no GUEST PIXEL is presented under a native role, not even one that only overlaps it. (A named
+    // op that merely overlaps is theme-role geometry the host paints beneath the control; a Pixels op is the guest's own picture.)
+    let pixel_boxes: Vec<GuestRect> = ops.iter().filter_map(|o| if let DrawOp::Pixels { rect, .. } = o { Some(*rect) } else { None }).collect();
+    assert!(!pixel_boxes.is_empty(), "the lister carries pixel holes (its disk icon art, the cleared list area), so the check below is not vacuous");
+    let under_px = |boxes: &[GuestRect]| boxes.iter().filter(|b| controls.iter().any(|c| overlaps(b, c))).count();
+    assert_eq!(under_px(&pixel_boxes), 0, "guest pixels overlap a native control: {pixel_boxes:?} vs {controls:?}");
+    let straddling = [GuestRect { left: controls[0].left - 2, top: controls[0].top - 2, width: 4, height: 4 }];
+    assert_eq!(under_px(&straddling), 1, "negative control: a pixel op straddling a control's edge is found, though it is not inside it");
+    assert_eq!(under(&[&DrawOp::Pixels { rect: straddling[0], rgb: vec![0; 16] }]), 0, "and full containment alone would have missed it");
 
     // RETRO-ROLES-REQUIRE-A-CONTRACT negative control: rows that look like a list are NOT a list. The lister's controls are exactly the
     // system gadgets it made (scrollbars, arrows, the drag strip, the path field); no control kind names a list, and no row text is a control label.
@@ -340,11 +355,11 @@ fn the_lister_is_a_plane_of_row_text_runs_with_pen_roles_and_no_ops_under_its_na
     assert!(kinds.iter().all(|k| !k.contains("List")), "{kinds:?}");
     assert!(a.ui.controls.values().filter(|(w, _)| *w == native).all(|(_, m)| !m.label.starts_with("Env") && !matches!(&m.kind, ControlKind::Label { text, .. } if text.starts_with("Env"))));
 
-    // The census: 8 native controls and one plane (replayed, or raw if it carries a pixel hole).
+    // The census: 8 native controls and ONE plane, and it is RAW: the lister's disk icon art and cleared list area are pixel holes. The
+    // census is read from what the host still shows (every frame a later one did not fully repaint), and it must agree with the
+    // pixel ops actually presented, which are counted here independently from the call log.
     let c = a.ui.route_census(native);
     eprintln!("DOpus lister route census: {c:?}; {} ops in {} frames", ops.len(), planes.len());
-    assert_eq!(c.native, 8);
-    assert_eq!(c.replayed + c.raw, 1, "{c:?}");
-    // The claim is measured, not assumed: the lister carries pixel holes (its disk icon art, the cleared list area), so it counts as raw.
-    assert!(ops.iter().any(|o| o.is_raw()) == (c.raw == 1), "{c:?}");
+    assert_eq!((c.native, c.replayed, c.raw), (8, 0, 1), "{c:?}");
+    assert!(ops.iter().any(|o| o.is_raw()), "raw=1 is because pixel holes were presented");
 }

@@ -13,4 +13,5 @@ retro-hunk = { path = "../retro-hunk" }
 guestui-abi = { path = "../guestui-abi" }
 retro-raster = { path = "../retro-raster" }
 retro-present = { path = "../retro-present" }
+retro-translate = { path = "../retro-translate" }
 retro-theme = { path = "../retro-theme" }

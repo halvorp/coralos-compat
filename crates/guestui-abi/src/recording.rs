@@ -46,6 +46,9 @@ pub struct RecordingGuestUi {
     pub controls: BTreeMap<u32, (UiObjectRef, ControlModel)>,
     /// The current content planes: (window id, plane id) -> the latest frame (a later frame replaces the earlier).
     pub planes: BTreeMap<(u32, u32), Plane>,
+    /// What the host still shows of each plane: every frame not fully repainted by a later one (a frame replaces the frames its rect
+    /// covers entirely). A hole that a later PARTIAL frame did not repaint is still on screen, so the census reads this, not `planes`.
+    pub plane_frames: BTreeMap<(u32, u32), Vec<Plane>>,
     next_id: u32,
     /// live object id -> generation
     live: BTreeMap<u32, u32>,
@@ -95,8 +98,8 @@ impl RecordingGuestUi {
     pub fn route_census(&self, win: UiObjectRef) -> RouteCensus {
         let native = self.controls.values().filter(|(w, _)| *w == win).count() as u32;
         let (mut replayed, mut raw) = (0, self.canvases.contains_key(&win.id) as u32);
-        for p in self.planes.iter().filter(|((w, _), _)| *w == win.id).map(|(_, p)| p) {
-            if p.is_raw() { raw += 1 } else { replayed += 1 }
+        for frames in self.plane_frames.iter().filter(|((w, _), _)| *w == win.id).map(|(_, f)| f) {
+            if frames.iter().any(Plane::is_raw) { raw += 1 } else { replayed += 1 }
         }
         RouteCensus { native, replayed, raw }
     }
@@ -121,6 +124,7 @@ impl GuestUi for RecordingGuestUi {
         let gone: Vec<u32> = self.controls.iter().filter(|(_, (w, _))| *w == win).map(|(&id, _)| id).collect();
         for id in gone { self.retire(id); }
         self.planes.retain(|(w, _), _| *w != win.id);
+        self.plane_frames.retain(|(w, _), _| *w != win.id);
         self.canvases.remove(&win.id);
         self.calls.push(UiCall::CloseWindow(win));
         Ok(())
@@ -199,6 +203,9 @@ impl GuestUi for RecordingGuestUi {
     fn present_plane(&mut self, win: UiObjectRef, plane_damage: Plane) -> Result<(), UiRefusal> {
         self.check(win)?;
         plane_damage.validate()?;
+        let (new, old) = (plane_damage.rect, self.plane_frames.entry((win.id, plane_damage.id)).or_default());
+        old.retain(|f| !(f.rect.left >= new.left && f.rect.top >= new.top && f.rect.left + f.rect.width <= new.left + new.width && f.rect.top + f.rect.height <= new.top + new.height));
+        old.push(plane_damage.clone());
         self.planes.insert((win.id, plane_damage.id), plane_damage.clone());
         self.calls.push(UiCall::PresentPlane(win, plane_damage));
         Ok(())
@@ -294,5 +301,22 @@ mod tests {
         assert!(matches!(ui.controls[&t.id].1.kind, ControlKind::ToggleButton { on: true }));
         ui.close_window(w).unwrap();
         assert!(ui.controls.is_empty());
+    }
+
+    #[test]
+    fn the_census_keeps_a_hole_a_later_partial_frame_did_not_repaint() {
+        let mut ui = RecordingGuestUi::new();
+        let w = ui.open_window(win()).unwrap();
+        let r = |left, width| GuestRect { left, top: 0, width, height: 2 };
+        let fill = |rect| DrawOp::Fill { rect, pen_role: PenRole::Background };
+        let hole = DrawOp::Pixels { rect: r(0, 1), rgb: alloc::vec![0; 2] };
+        ui.present_plane(w, Plane { id: 0, rect: r(0, 8), ops: alloc::vec![fill(r(0, 8)), hole] }).unwrap();
+        assert_eq!(ui.route_census(w), RouteCensus { native: 0, replayed: 0, raw: 1 });
+        // A later frame over another part, with no hole, does not clear the hole still on screen.
+        ui.present_plane(w, Plane { id: 0, rect: r(4, 2), ops: alloc::vec![fill(r(4, 2))] }).unwrap();
+        assert_eq!(ui.route_census(w), RouteCensus { native: 0, replayed: 0, raw: 1 }, "the hole at x=0 is still shown");
+        // CONTROL: a frame that repaints the hole's frame entirely replaces it, and the plane is replayed.
+        ui.present_plane(w, Plane { id: 0, rect: r(0, 8), ops: alloc::vec![fill(r(0, 8))] }).unwrap();
+        assert_eq!(ui.route_census(w), RouteCensus { native: 0, replayed: 1, raw: 0 });
     }
 }

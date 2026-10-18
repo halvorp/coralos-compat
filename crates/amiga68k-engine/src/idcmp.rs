@@ -105,13 +105,18 @@ pub fn subscribed<U: GuestUi>(a: &Amiga<U>, win: u32, class: u32) -> Result<bool
 /// A zeroed message block, not yet visible to the guest.
 pub fn reserve<U: GuestUi>(a: &mut Amiga<U>) -> Result<u32, Refusal> { memory::alloc_zeroed(a, INTUIMESSAGE_SIZE, "deliver: IntuiMessage") }
 
-/// The input-state fields of an IntuiMessage (Qualifier, MouseX, MouseY: window-relative); zero for a gadget message.
+/// The input state an IntuiMessage carries besides the pointer position: its Qualifier. MouseX / MouseY are ALWAYS the window's own
+/// `Window.MouseX/MouseY` (AROS inputhandler_support.c stamps every non-DELTAMOVE message with them).
 #[derive(Clone, Copy, Default)]
-pub struct Stamp { pub qualifier: u16, pub mouse: (i16, i16) }
+pub struct Stamp { pub qualifier: u16 }
+
+pub const WD_MOUSE_Y: u32 = 12;
+pub const WD_MOUSE_X: u32 = 14;
 
 /// Fill the reserved `msg` and link it on `win`'s UserPort (signalling the task). Any failure gives the block back.
 pub fn queue<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, code: u16, iaddress: u32) -> Result<Delivered, Refusal> {
-    queue_stamped(a, win, msg, class, code, iaddress, Stamp::default())
+    let stamp = crate::content_input::current_stamp(a, win);
+    queue_stamped(a, win, msg, class, code, iaddress, stamp)
 }
 
 /// [`queue`] with the input state the message carries.
@@ -131,8 +136,9 @@ fn fill_and_link<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, c
     a.mem.write_u32(msg + IM_CLASS, class).map_err(m("Class"))?;
     a.mem.write_u16(msg + IM_CODE, code).map_err(m("Code"))?;
     a.mem.write_u16(msg + IM_QUALIFIER, stamp.qualifier).map_err(m("Qualifier"))?;
-    a.mem.write_u16(msg + IM_MOUSE_X, stamp.mouse.0 as u16).map_err(m("MouseX"))?;
-    a.mem.write_u16(msg + IM_MOUSE_Y, stamp.mouse.1 as u16).map_err(m("MouseY"))?;
+    let (mx, my) = (a.mem.read_u16(win + WD_MOUSE_X).map_err(m("Window.MouseX"))?, a.mem.read_u16(win + WD_MOUSE_Y).map_err(m("Window.MouseY"))?);
+    a.mem.write_u16(msg + IM_MOUSE_X, mx).map_err(m("MouseX"))?;
+    a.mem.write_u16(msg + IM_MOUSE_Y, my).map_err(m("MouseY"))?;
     a.mem.write_u32(msg + IM_IADDRESS, iaddress).map_err(m("IAddress"))?;
     a.mem.write_u32(msg + IM_SECONDS, (a.clock_us / 1_000_000) as u32).map_err(m("Seconds"))?;
     a.mem.write_u32(msg + IM_MICROS, (a.clock_us % 1_000_000) as u32).map_err(m("Micros"))?;

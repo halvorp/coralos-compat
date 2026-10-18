@@ -66,6 +66,23 @@ fn drawing_is_one_plane_per_step_with_roles_from_the_pen_table_and_holes_for_wha
 }
 
 #[test]
+fn a_flat_theme_edge_is_the_shadow_colour_and_never_a_bevel() {
+    // The shipped Gute Form table has SHINEPEN == SHADOWPEN == 4: one hairline. Both edges are the border colour (Shadow), and a box
+    // whose two edges are the SAME pen is a flat outline, not a raised bevel the guest never drew.
+    let mut g = G::new_plane();
+    let (win, _) = open(&mut g, 0, 0);
+    let rp = g.r32(win + 50);
+    g.run(&[
+        gfx(SET_APEN, &[a(1, rp), d(0, 4)]),
+        gfx(MOVE, &[a(1, rp), d(0, 10), d(1, 40)]), gfx(DRAW, &[a(1, rp), d(0, 10), d(1, 20)]), gfx(DRAW, &[a(1, rp), d(0, 49), d(1, 20)]),
+        gfx(MOVE, &[a(1, rp), d(0, 50), d(1, 20)]), gfx(DRAW, &[a(1, rp), d(0, 50), d(1, 40)]), gfx(DRAW, &[a(1, rp), d(0, 10), d(1, 40)]),
+    ]);
+    let ops = &planes(&g)[0].ops;
+    assert!(!ops.iter().any(|o| matches!(o, DrawOp::Bevel { .. } | DrawOp::Line { pen_role: PenRole::Shine, .. })), "{ops:?}");
+    assert!(ops.iter().filter(|o| matches!(o, DrawOp::Line { pen_role: PenRole::Shadow, .. })).count() >= 4, "{ops:?}");
+}
+
+#[test]
 fn a_write_mask_makes_a_hole_not_a_guess() {
     let mut g = G::new_plane();
     let (win, _) = open(&mut g, 0, 0);
@@ -77,6 +94,22 @@ fn a_write_mask_makes_a_hole_not_a_guess() {
     let p = planes(&g);
     assert!(!p[1].ops.iter().any(|o| matches!(o, DrawOp::Fill { .. })), "a write mask changes what the fill means: {:?}", p[1].ops);
     assert!(p[1].ops.iter().any(|o| matches!(o, DrawOp::Pixels { .. })), "{:?}", p[1].ops);
+}
+
+#[test]
+fn a_minterm_blit_into_a_window_reaches_the_plane_as_pixels() {
+    let mut g = G::new_plane();
+    let (win, _) = open(&mut g, 0, 0);
+    let rp = g.r32(win + 50);
+    g.run(&[gfx(SET_APEN, &[a(1, rp), d(0, 1)]), gfx(RECT_FILL, &[a(1, rp), d(0, 0), d(1, 0), d(2, 9), d(3, 9)])]);
+    g.run(&[gfx(CLIP_BLIT, &[a(0, rp), d(0, 0), d(1, 0), a(1, rp), d(2, 50), d(3, 50), d(4, 10), d(5, 10), d(6, 0xC0)])]);
+    let p = planes(&g);
+    assert_eq!(p.len(), 2, "the blit damaged the window, so a plane is published");
+    assert!(p[1].ops.iter().any(|o| matches!(o, DrawOp::Pixels { rect, .. } if *rect == GuestRect { left: 50, top: 50, width: 10, height: 10 })),
+        "the blitted rectangle is a hole of canvas pixels: {:?}", p[1].ops);
+    // NEGATIVE CONTROL: a blit entirely outside the canvas damages nothing and publishes nothing.
+    g.run(&[gfx(CLIP_BLIT, &[a(0, rp), d(0, 0), d(1, 0), a(1, rp), d(2, 500), d(3, 500), d(4, 10), d(5, 10), d(6, 0xC0)])]);
+    assert_eq!(planes(&g).len(), 2);
 }
 
 fn message(g: &mut G, win: u32) -> Option<(u32, u16, u16, i16, i16, u32, u32)> {
@@ -121,22 +154,31 @@ fn a_press_a_move_and_a_release_in_content_are_mousebuttons_and_mousemove_with_p
 }
 
 #[test]
-fn keys_are_vanillakey_for_the_character_and_rawkey_for_the_key_with_qualifiers() {
+fn a_typed_key_is_vanillakey_alone_and_falls_back_to_rawkey_the_way_intuition_routes_it() {
     let mut g = G::new_plane();
     let (win, native) = open(&mut g, 0x400 | 0x20_0000, 0); // RAWKEY | VANILLAKEY
     let key = |code, text: &str, m, down| GuestUiEvent::Key { win: native, code, text: text.into(), modifiers: Modifiers(m), down };
+    g.a.deliver(GuestUiEvent::primary(native, 12, 34, PointerPhase::Move)).unwrap(); // Window.MouseX / MouseY follow the pointer
     g.a.deliver(key(0x20, "a", Modifiers::SHIFT, true)).unwrap();
     g.a.deliver(key(0x20, "", Modifiers::SHIFT, false)).unwrap();
-    assert_eq!(message(&mut g, win).map(|m| (m.0, m.1, m.2)), Some((0x20_0000, 0x61, 1)), "VANILLAKEY: the character, LSHIFT");
-    assert_eq!(message(&mut g, win).map(|m| (m.0, m.1, m.2)), Some((0x400, 0x20, 1)), "RAWKEY down: the raw code");
-    assert_eq!(message(&mut g, win).map(|m| (m.0, m.1)), Some((0x400, 0xA0)), "RAWKEY up: raw code + 0x80, and no VANILLAKEY for a release");
-    assert_eq!(message(&mut g, win), None);
-    // NEGATIVE CONTROLS: a host key code that is not an Amiga raw code is refused by name; a non-character key sends no VANILLAKEY.
+    let full = |g: &mut G| { let m = message(g, win); m.map(|m| (m.0, m.1, m.2, m.3, m.4)) };
+    assert_eq!(full(&mut g), Some((0x20_0000, 0x61, 1, 12, 34)), "VANILLAKEY: the character, LSHIFT, stamped with the window's MouseX/MouseY");
+    assert_eq!(full(&mut g), Some((0x400, 0xA0, 1, 12, 34)), "the release is RAWKEY (raw code + 0x80): a release types nothing");
+    assert_eq!(message(&mut g, win), None, "and the press sent NO RAWKEY after its VANILLAKEY");
+    // A key that types no character is RAWKEY even with VANILLAKEY on.
+    g.a.deliver(key(0x4F, "", 0, true)).unwrap();
+    assert_eq!(message(&mut g, win).map(|m| (m.0, m.1)), Some((0x400, 0x4F)));
+    // NEGATIVE CONTROLS: a window without VANILLAKEY gets the same press as RAWKEY; one with neither ignores it.
+    g.a.mem.write_u32(win + 82, 0x400).unwrap();
+    g.a.deliver(key(0x20, "a", 0, true)).unwrap();
+    assert_eq!(message(&mut g, win).map(|m| (m.0, m.1)), Some((0x400, 0x20)));
+    g.a.mem.write_u32(win + 82, 0x10).unwrap();
+    assert_eq!(g.a.deliver(key(0x20, "a", 0, true)).unwrap(), Delivered::IgnoredUnsubscribed);
+    // A host key code that is not an Amiga raw code is refused by name BEFORE anything is queued, even when a character was typed.
+    g.a.mem.write_u32(win + 82, 0x400 | 0x20_0000).unwrap();
     let e = g.a.deliver(key(0x1_0041, "", 0, true)).unwrap_err();
     assert!(e.0.contains("no Amiga raw key code"), "{e:?}");
-    g.a.deliver(key(0x4F, "", 0, true)).unwrap();
-    assert_eq!(message(&mut g, win).map(|m| m.0), Some(0x400));
-    assert_eq!(message(&mut g, win), None);
+    assert_eq!(message(&mut g, win), None, "a refused key queued nothing");
 }
 
 /// The REAL amimon (unmodified GadTools program) through the v2 seam: its eight controls are native roles, its window needs no content plane
