@@ -16,13 +16,17 @@ fn load(a: &mut Amiga<RecordingGuestUi>, prefix: &str, dir: &std::path::Path) {
 }
 
 /// Start the AROS program `rel` on the trimmed AROS volume (docs/CORPUS.md "the mini volume") and run it until it blocks.
-fn start(rel: &str) -> Option<Amiga<RecordingGuestUi>> {
+fn start(rel: &str) -> Option<Amiga<RecordingGuestUi>> { start_with(rel, Default::default()) }
+
+/// [`start`] with the host's control metrics set before the program runs (its window is laid out for them).
+fn start_with(rel: &str, metrics: amiga68k_engine::mui::layout::Metrics) -> Option<Amiga<RecordingGuestUi>> {
     let file = std::fs::read(format!("{ROOT}/aros-m68k/sys/{rel}")).ok().or_else(|| { eprintln!("SKIPPED: {ROOT}/aros-m68k/sys/{rel} not present (see docs/CORPUS.md)"); None })?;
     let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
     load(&mut a, "SYS:", std::path::Path::new(&format!("{ROOT}/aros-m68k/mini")));
     a.fs.vol.assign("LIBS", "SYS:Libs");
     a.stop_on_unimplemented = true;
-    a.start_hunk(&file).unwrap();
+    a.objects.mui_metrics = metrics;
+    a.start_hunk_as(&file, rel.rsplit('/').next().unwrap()).unwrap();
     let (s, _) = a.step(20_000_000);
     assert_eq!(s, Step::Blocked, "{rel}: {:?} {:?}", a.refused, a.log.iter().rev().take(6).collect::<Vec<_>>());
     Some(a)
@@ -175,4 +179,85 @@ fn the_zune_notify_demo_runs_the_notify_class_through_set_get_and_a_self_notific
     let mut bare = Amiga::new(RecordingGuestUi::new()).unwrap();
     let _ = bare.run_hunk(&file, 20_000_000);
     assert!(!String::from_utf8_lossy(&bare.console.stdout).contains("should be"), "{:?}", bare.console.stdout);
+}
+
+// ---- the layout of real programs: nothing overlaps, everything fits the window, labels are the program's own strings ----
+
+/// Every pair of leaf controls (groups frame their children, so they are exempt) that intersect, as a diagnostic list.
+fn overlaps(ctls: &[(String, guestui_abi::GuestRect)]) -> Vec<String> {
+    let hit = |a: &guestui_abi::GuestRect, b: &guestui_abi::GuestRect| a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
+    let mut out = Vec::new();
+    for (i, (na, ra)) in ctls.iter().enumerate() {
+        for (nb, rb) in &ctls[i + 1..] { if hit(ra, rb) { out.push(format!("{na} {ra:?} x {nb} {rb:?}")); } }
+    }
+    out
+}
+
+fn leaves(a: &Amiga<RecordingGuestUi>) -> Vec<(String, guestui_abi::GuestRect)> {
+    a.ui.controls.values().filter(|(_, m)| !matches!(m.kind, ControlKind::Group { .. })).map(|(_, m)| (format!("{:?}/{}", m.kind, m.label), m.rect)).collect()
+}
+
+fn window(a: &Amiga<RecordingGuestUi>) -> guestui_abi::WindowModel { a.ui.calls.iter().find_map(|c| match c { UiCall::OpenWindow(m) => Some(m.clone()), _ => None }).unwrap() }
+
+fn assert_laid_out(p: &str, a: &Amiga<RecordingGuestUi>) {
+    let win = window(a);
+    assert!(!win.title.is_empty(), "{p}: an untitled MUI window shows the program's name");
+    let ov = overlaps(&leaves(a));
+    assert!(ov.is_empty(), "{p}: controls overlap: {ov:?}");
+    for (_, m) in a.ui.controls.values() {
+        let r = m.rect;
+        assert!(r.left >= 0 && r.top >= 0 && r.left + r.width <= win.rect.width && r.top + r.height <= win.rect.height, "{p}: {:?} {:?} is outside the window {:?}", m.kind, r, win.rect);
+    }
+}
+
+#[test]
+fn the_overlap_check_sees_overlaps() {
+    let r = |l, t, w, h| guestui_abi::GuestRect { left: l, top: t, width: w, height: h };
+    assert!(overlaps(&[("a".into(), r(0, 0, 10, 10)), ("b".into(), r(10, 0, 10, 10))]).is_empty(), "touching is not overlapping");
+    assert_eq!(overlaps(&[("a".into(), r(0, 0, 10, 10)), ("b".into(), r(9, 9, 10, 10))]).len(), 1);
+}
+
+#[test]
+fn zune_snoopy_is_laid_out_without_overlap_titled_by_its_program_and_labelled_with_its_own_strings() {
+    let Some(a) = start("System/Snoopy") else { return };
+    assert_laid_out("Snoopy", &a);
+    assert_eq!(window(&a).title, "Snoopy", "no MUIA_Window_Title: the program's name");
+    let labels: Vec<String> = a.ui.controls.values().map(|(_, m)| m.label.clone()).collect();
+    for l in ["FindPort", "OpenLibrary", "LoadSeg"] { assert!(labels.iter().any(|x| x == l), "{l} in {labels:?}"); }
+    // NEGATIVE CONTROL: locale.library's GetLocaleStr names (weekdays, months) are never a Snoopy label; the catalog ids the program asks
+    // GetCatalogStr for fall back to ITS default strings.
+    for bad in ["Sunday", "Monday", "Thursday", "January", "July", "Sat"] { assert!(!labels.iter().any(|x| x == bad) && !a.ui.controls.values().any(|(_, m)| matches!(&m.kind, ControlKind::Group { title, .. } if title == bad)), "{bad} is a locale string, not Snoopy's"); }
+    assert_eq!(a.ui.controls.values().filter(|(_, m)| matches!(m.kind, ControlKind::Checkbox { .. })).count(), 29, "one checkbox per monitored function");
+}
+
+#[test]
+fn zune_calculator_and_screengrabber_are_laid_out_without_overlap() {
+    for p in ["Tools/Calculator", "Tools/ScreenGrabber"] {
+        let Some(a) = start(p) else { continue };
+        assert_laid_out(p, &a);
+        let labels: Vec<String> = a.ui.controls.values().map(|(_, m)| m.label.clone()).collect();
+        assert!(!labels.iter().any(|l| l == "Sunday" || l == "Monday"), "{p}: {labels:?}");
+    }
+}
+
+/// The CoralOS kit's controls are bigger than Zune's (toggle 56x28, 28 px fields and buttons, 12 px insets): MUI's own layout grows
+/// every cell and the window for them, so the kit's parts never overlap and never leave the window.
+#[test]
+fn a_host_metrics_profile_grows_the_layout_so_larger_native_controls_still_never_overlap() {
+    let kit = amiga68k_engine::mui::layout::Metrics { toggle: (56, 28), control_h: 28, pad_w: 24, label_right: Some(8) };
+    for p in ["System/Snoopy", "Tools/Calculator", "Tools/ScreenGrabber"] {
+        let (Some(zune), Some(a)) = (start(p), start_with(p, kit)) else { continue };
+        assert_laid_out(p, &a);
+        assert!(window(&a).rect.width > window(&zune).rect.width && window(&a).rect.height > window(&zune).rect.height, "{p}: the window grew for the kit's controls");
+        for (_, m) in a.ui.controls.values() {
+            match m.kind {
+                ControlKind::Checkbox { .. } => assert!(m.rect.height >= 28 && m.rect.width >= 56 + if m.label.is_empty() { 0 } else { 8 + 8 }, "{p}: the toggle, the gap and the label fit the rect: {:?} {:?}", m.rect, m.label),
+                ControlKind::Button | ControlKind::Field { .. } => assert!(m.rect.height >= 28, "{p}: {:?} {:?}", m.kind, m.rect),
+                _ => {}
+            }
+        }
+        // NEGATIVE CONTROL: the same tree laid out for Zune's sizes is NOT big enough for kit parts (a 15 px box under a 56 px toggle).
+        let tight = zune.ui.controls.values().filter(|(_, m)| matches!(m.kind, ControlKind::Checkbox { .. })).count();
+        assert!(tight == 0 || zune.ui.controls.values().any(|(_, m)| matches!(m.kind, ControlKind::Checkbox { .. }) && m.rect.width < 56), "{p}");
+    }
 }

@@ -47,7 +47,7 @@ fn lay_out<U: GuestUi>(a: &mut Amiga<U>, w: u32, avail: (i32, i32)) -> Result<la
     fonts::install_rom_font(a)?; // a MUI program may never have opened graphics.library: the screen font is installed on first need
     let tf = fonts::default_font(a)?;
     let font = fonts::font_at(a, tf)?;
-    Ok(layout::compute(&a.objects, root, &font, avail))
+    Ok(layout::compute(&a.objects, root, &font, avail, a.objects.mui_metrics))
 }
 
 fn model_of(e: &Elem) -> ControlModel {
@@ -55,9 +55,16 @@ fn model_of(e: &Elem) -> ControlModel {
     ControlModel { kind: e.kind.clone(), label: e.label.clone(), rect, enabled: e.enabled, token: CallbackToken(e.obj as u64) }
 }
 
+/// The title the native window shows: MUIA_Window_Title, and for an untitled window the program's own name (what Intuition's
+/// window.rs / intuition.rs do for an untitled window: `gfx.program_name`, set by `start_hunk_as`), so it never shows empty.
+fn shown_title<U: GuestUi>(a: &Amiga<U>, w: u32) -> alloc::string::String {
+    let t = a.objects.text(w, MUIA_Window_Title);
+    if t.is_empty() { a.gfx.program_name.clone() } else { alloc::string::String::from(t) }
+}
+
 fn open_window<U: GuestUi>(a: &mut Amiga<U>, w: u32) -> Result<(), Refusal> {
     let l = lay_out(a, w, (0, 0))?;
-    let title = alloc::string::String::from(a.objects.text(w, MUIA_Window_Title));
+    let title = shown_title(a, w);
     // Placement is the native window manager's job: the engine asks for 0,0.
     let model = WindowModel { title, rect: GuestRect { left: 0, top: 0, width: l.width + BORDER_W, height: l.height + BORDER_H },
         role: WindowRole::Document, closable: true, resizable: true, token: CallbackToken(w as u64) };
@@ -118,7 +125,7 @@ pub fn close_if_open<U: GuestUi>(a: &mut Amiga<U>, w: u32) -> Result<(), Refusal
 /// The window's title changed: tell the host if it is open.
 pub fn push_title<U: GuestUi>(a: &mut Amiga<U>, w: u32) -> Result<(), Refusal> {
     let Some(native) = native_of(a, w) else { return Ok(()) };
-    let title = alloc::string::String::from(a.objects.text(w, MUIA_Window_Title));
+    let title = shown_title(a, w);
     a.ui.set_window_title(native, title).map_err(Refusal::ui)
 }
 

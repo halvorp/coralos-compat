@@ -52,6 +52,8 @@ pub struct Objects {
     pub proj: retro_translate::Projections<u32>,
     /// `MUIM_CallHook` follow-ups waiting to run as guest calls (mui/hooks.rs).
     pub hooks: VecDeque<crate::mui::hooks::HookCall>,
+    /// The host's control metrics for MUI's layout (mui/layout.rs `Metrics`); default = Zune's own sizes.
+    pub mui_metrics: crate::mui::layout::Metrics,
 }
 
 fn class_addr(k: Kind) -> u32 { crate::iclass::native_addr(crate::iclass::Native::Mui(k)) }
