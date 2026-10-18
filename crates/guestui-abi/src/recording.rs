@@ -93,6 +93,11 @@ impl RecordingGuestUi {
         self.events.push_back(GuestUiEvent::intent(win, control, token, intent));
         Ok(())
     }
+    /// The live control whose model satisfies `pred`, as the refs a host would address it by: (window, control, model). Tests drive
+    /// a program's controls through this (the first match in creation order).
+    pub fn find_control(&self, pred: impl Fn(&ControlModel) -> bool) -> Option<(UiObjectRef, UiObjectRef, ControlModel)> {
+        self.controls.iter().find(|(_, (_, m))| pred(m)).map(|(&id, (w, m))| (*w, UiObjectRef { id, generation: self.live[&id] }, m.clone()))
+    }
     /// How the window's content reaches the host right now (see [`RouteCensus`]), from what this host holds. A closed or
     /// unknown window holds nothing and counts zero.
     pub fn route_census(&self, win: UiObjectRef) -> RouteCensus {

@@ -1,30 +1,27 @@
-//! Menustrip / Menu / Menuitem objects -> a GuestUi MenuModel; a menu command back to its application.
-use alloc::string::String;
+//! Menustrip / Menu / Menuitem objects -> a GuestUi MenuModel; a menu command back to its item's `MUIA_UserData`.
 use alloc::vec::Vec;
-use super::{ids::*, notify::root};
-use crate::boopsi::{Kind, Objects};
+use super::classes::Kind;
+use super::ids_gen::*;
+use crate::boopsi::Objects;
 use crate::machine::Amiga;
 use guestui_abi::{CallbackToken, GuestUi, Menu, MenuItem, MenuModel};
 
-fn text(objs: &Objects, o: u32, attr: u32) -> String { objs.map.get(&o).and_then(|x| x.strs.get(&attr).cloned()).unwrap_or_default() }
-
-fn item(objs: &Objects, o: u32) -> MenuItem {
-    let sub = objs.map.get(&o).map(|x| x.children.clone()).unwrap_or_default();
-    MenuItem { label: text(objs, o, MUIA_MENUITEM_TITLE), enabled: true, shortcut: text(objs, o, MUIA_MENUITEM_SHORTCUT).chars().next(), check: None,
-        sub_items: sub.into_iter().map(|c| item(objs, c)).collect(), token: CallbackToken(o as u64) }
+fn item(o: &Objects, i: u32) -> MenuItem {
+    let checkit = o.flag(i, MUIA_Menuitem_Checkit);
+    MenuItem { label: o.text(i, MUIA_Menuitem_Title).into(), enabled: o.num(i, MUIA_Menuitem_Enabled) != Some(0),
+        shortcut: o.text(i, MUIA_Menuitem_Shortcut).chars().next(), check: checkit.then(|| o.flag(i, MUIA_Menuitem_Checked)),
+        sub_items: o.children(i).iter().map(|&c| item(o, c)).collect(), token: CallbackToken(i as u64) }
 }
 
-pub fn model(objs: &Objects, strip: u32) -> MenuModel {
-    let menus = objs.map.get(&strip).map(|s| s.children.clone()).unwrap_or_default();
-    MenuModel { menus: menus.into_iter().map(|m| {
-        let items: Vec<MenuItem> = objs.map.get(&m).map(|x| x.children.clone()).unwrap_or_default().into_iter().map(|i| item(objs, i)).collect();
-        Menu { title: text(objs, m, MUIA_MENU_TITLE), enabled: true, items }
+pub fn model(o: &Objects, strip: u32) -> MenuModel {
+    MenuModel { menus: o.children(strip).iter().map(|&m| {
+        let items: Vec<MenuItem> = o.children(m).iter().map(|&i| item(o, i)).collect();
+        Menu { title: o.text(m, MUIA_Menu_Title).into(), enabled: o.num(m, MUIA_Menu_Enabled) != Some(0), items }
     }).collect() }
 }
 
-/// The menu item `token` names -> (its application, its MUIA_UserData).
-pub fn item_action<U: GuestUi>(a: &Amiga<U>, token: u32) -> Option<(u32, u32)> {
+/// The menu item `token` names -> its `MUIA_UserData` (what `MUIA_Application_MenuAction` is set to), if it is one.
+pub fn item_action<U: GuestUi>(a: &Amiga<U>, token: u32) -> Option<u32> {
     let it = a.objects.map.get(&token).filter(|o| o.kind == Kind::Menuitem)?;
-    let app = root(a, token);
-    (a.objects.map.get(&app)?.kind == Kind::Application).then(|| (app, it.attrs.get(&MUIA_USER_DATA).copied().unwrap_or(0)))
+    Some(it.attrs.get(&MUIA_UserData).copied().unwrap_or(0))
 }

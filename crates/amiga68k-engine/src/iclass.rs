@@ -22,8 +22,8 @@ use retro_m68k::Cpu;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Native { Root, Image, Gadget, Button, Strg, Prop, Sysi, Frame, Mui(Kind) }
 
-/// (public name, superclass name, implementation, instance size). Supers come first.
-pub const NATIVE: [(&str, &str, Native, u16); 15] = [
+/// (public name, superclass name, implementation, instance size). Supers come first. The MUI classes follow, from `mui::classes`.
+pub const NATIVE: [(&str, &str, Native, u16); 8] = [
     ("rootclass", "", Native::Root, 0),
     ("imageclass", "rootclass", Native::Image, IMG_SIZE as u16),
     ("gadgetclass", "rootclass", Native::Gadget, GDATA_SIZE as u16),
@@ -32,20 +32,17 @@ pub const NATIVE: [(&str, &str, Native, u16); 15] = [
     ("propgclass", "gadgetclass", Native::Prop, PROP_DATA as u16),
     ("sysiclass", "imageclass", Native::Sysi, 0),
     ("frameiclass", "imageclass", Native::Frame, FRAME_DATA as u16),
-    ("Application.mui", "rootclass", Native::Mui(Kind::Application), 0),
-    ("Window.mui", "rootclass", Native::Mui(Kind::Window), 0),
-    ("Group.mui", "rootclass", Native::Mui(Kind::Group), 0),
-    ("Text.mui", "rootclass", Native::Mui(Kind::Text), 0),
-    ("Menustrip.mui", "rootclass", Native::Mui(Kind::Menustrip), 0),
-    ("Menu.mui", "rootclass", Native::Mui(Kind::Menu), 0),
-    ("Menuitem.mui", "rootclass", Native::Mui(Kind::Menuitem), 0),
 ];
+/// Every native class in table order: the system classes, then the MUI tree. A MUI root class sits on `rootclass`.
+fn all_native() -> impl Iterator<Item = (&'static str, &'static str, Native, u16)> {
+    NATIVE.into_iter().chain(crate::mui::classes::CLASSES.iter().map(|c| (c.name, c.sup.map_or("rootclass", |s| s.name()), Native::Mui(c.kind), 0)))
+}
 const CLASS_TABLE: u32 = BOOPSI_BASE + 0x100;
 const CLASS_SLOT: u32 = 64;
 
 /// The guest address of a native class.
 pub fn native_addr(n: Native) -> u32 {
-    CLASS_TABLE + CLASS_SLOT * NATIVE.iter().position(|e| e.2 == n).unwrap_or(0) as u32
+    CLASS_TABLE + CLASS_SLOT * all_native().position(|e| e.2 == n).unwrap_or(0) as u32
 }
 
 pub struct ClassRec {
@@ -94,7 +91,7 @@ fn fill<U: GuestUi>(a: &mut Amiga<U>, cl: u32, rec: ClassRec) -> Result<(), Refu
 
 /// Build the native classes (called once from machine construction, after boopsi::install made the trap slot).
 pub fn init<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
-    for (i, (name, sup, native, size)) in NATIVE.iter().enumerate() {
+    for (i, (name, sup, native, size)) in all_native().enumerate() {
         let cl = CLASS_TABLE + CLASS_SLOT * i as u32;
         let sup_addr = if sup.is_empty() { 0 } else { a.classes.find(sup).ok_or_else(|| Refusal(format!("native class {name}: superclass {sup} missing")))? };
         let off = a.classes.recs.get(&sup_addr).map(|s| s.inst_offset + s.inst_size).unwrap_or(0);
@@ -106,7 +103,7 @@ pub fn init<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
         a.mem.write_bytes(id, name.as_bytes()).map_err(Refusal::mem("IClass cl_ID"))?;
         wr(&mut a.mem, cl + CL_ID, id)?;
         a.mem.write_u32(cl + CL_FLAGS, CLF_INLIST).map_err(Refusal::mem("IClass"))?;
-        fill(a, cl, ClassRec { name: Some((*name).into()), native: Some(*native), sup: sup_addr, inst_offset: off, inst_size: *size as u32, subclasses: 0, objects: 0, public: true })?;
+        fill(a, cl, ClassRec { name: Some(name.into()), native: Some(native), sup: sup_addr, inst_offset: off, inst_size: size as u32, subclasses: 0, objects: 0, public: true })?;
     }
     Ok(())
 }
