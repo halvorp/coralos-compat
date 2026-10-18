@@ -31,7 +31,7 @@ pub const NATIVE: [(&str, &str, Native, u16); 15] = [
     ("strgclass", "gadgetclass", Native::Strg, STRG_DATA as u16),
     ("propgclass", "gadgetclass", Native::Prop, PROP_DATA as u16),
     ("sysiclass", "imageclass", Native::Sysi, 0),
-    ("frameiclass", "imageclass", Native::Frame, 0),
+    ("frameiclass", "imageclass", Native::Frame, FRAME_DATA as u16),
     ("Application.mui", "rootclass", Native::Mui(Kind::Application), 0),
     ("Window.mui", "rootclass", Native::Mui(Kind::Window), 0),
     ("Group.mui", "rootclass", Native::Mui(Kind::Group), 0),

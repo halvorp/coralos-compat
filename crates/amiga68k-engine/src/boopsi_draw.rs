@@ -31,7 +31,7 @@ const BACKGROUNDPEN: usize = 7;
 const TEXTPEN: usize = 2;
 const DEFAULT_ARROW: i32 = 14;
 
-fn pens<U: GuestUi>(a: &Amiga<U>) -> Result<[u8; 12], Refusal> {
+pub(crate) fn pens<U: GuestUi>(a: &Amiga<U>) -> Result<[u8; 12], Refusal> {
     let p = a.mem.read_u32(SCREEN_DRAWINFO + 4).map_err(Refusal::mem("DrawInfo.dri_Pens"))?;
     let mut out = [0u8; 12];
     for (i, o) in out.iter_mut().enumerate() { *o = a.mem.read_u16(p + 2 * i as u32).map_err(Refusal::mem("dri_Pens"))? as u8; }
@@ -39,7 +39,7 @@ fn pens<U: GuestUi>(a: &Amiga<U>) -> Result<[u8; 12], Refusal> {
 }
 
 /// RectFill with one pen (JAM1), inclusive corners, RastPort coordinates.
-fn fill<U: GuestUi>(a: &mut Amiga<U>, rp: u32, (x0, y0, x1, y1): (i32, i32, i32, i32), pen: u8) -> Result<(), Refusal> {
+pub(crate) fn fill<U: GuestUi>(a: &mut Amiga<U>, rp: u32, (x0, y0, x1, y1): (i32, i32, i32, i32), pen: u8) -> Result<(), Refusal> {
     if x1 < x0 || y1 < y0 { return Ok(()); }
     let b = Brush::new(pen, 0, 0);
     let r = Rect::from_inclusive(x0, y0, x1, y1);
@@ -124,6 +124,11 @@ pub fn sysi_new<U: GuestUi>(a: &mut Amiga<U>, im: u32, tag_list: u32) -> Result<
 /// IM_DRAW on a native image object `im` at (x, y) (DrawImageState / impDraw): the arrows; other sysiclass images draw nothing
 /// yet (logged).
 pub fn draw_native_image<U: GuestUi>(a: &mut Amiga<U>, im: u32, rp: u32, x: i32, y: i32, state: u32) -> Result<(), Refusal> {
+    if a.classes.class_of(im).and_then(|c| a.classes.recs.get(&c)).and_then(|r| r.native) == Some(crate::iclass::Native::Frame) {
+        let (w, h) = (a.mem.read_u16(im + IMG_WIDTH).map_err(Refusal::mem("Image"))? as i16 as i32, a.mem.read_u16(im + IMG_HEIGHT).map_err(Refusal::mem("Image"))? as i16 as i32);
+        crate::boopsi_frame::draw(a, im, rp, x, y, state, (w, h))?;
+        return Ok(());
+    }
     let Some(which) = sysi_which(a, im) else { return Err(Refusal(format!("DrawImageState: image object {im:#x} is of a class without native drawing"))) };
     let m = Refusal::mem("Image");
     let r = |o| a.mem.read_u16(im + o).map(|v| v as i16 as i32).map_err(&m);

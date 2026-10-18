@@ -22,7 +22,7 @@ fn bit<U: GuestUi>(a: &mut Amiga<U>, at: u32, bit: u32, on: bool) -> Result<(), 
 pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, native: Native, cl: u32, obj: u32, msg: u32) -> Result<u32, Refusal> {
     // Native drawing (boopsi_draw.rs): buttongclass / propgclass render, sysiclass arrows. Their input methods and frameiclass drawing are
     // still named refusals.
-    if matches!(native, Native::Button | Native::Prop | Native::Sysi | Native::Frame) {
+    if matches!(native, Native::Button | Native::Prop | Native::Sysi) {
         let id = rd(a, msg, "method id")?;
         match (native, id) {
             (Native::Button, GM_RENDER) => return crate::boopsi_draw::button_render(a, obj, msg),
@@ -40,7 +40,8 @@ pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, native: Native, cl: u32, obj: u32,
     }
     match native {
         Native::Root => root(a, cl, obj, msg),
-        Native::Image | Native::Sysi | Native::Frame => image(a, cl, obj, msg),
+        Native::Image | Native::Sysi => image(a, cl, obj, msg),
+        Native::Frame => crate::boopsi_frame::frame(a, cl, obj, msg),
         Native::Gadget | Native::Button => gadget(a, cl, obj, msg),
         Native::Prop => crate::boopsi_prop::prop(a, cl, obj, msg),
         Native::Strg => crate::boopsi_strg::strg(a, cl, obj, msg),
@@ -80,7 +81,7 @@ fn root<U: GuestUi>(a: &mut Amiga<U>, _cl: u32, obj: u32, msg: u32) -> Result<u3
     }
 }
 
-fn image<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u32, Refusal> {
+pub(crate) fn image<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u32, Refusal> {
     match rd(a, msg, "method id")? {
         OM_NEW => {
             let im = dispatch_super(a, cl, o, msg)?;

@@ -194,5 +194,6 @@ pub const ICA_MAP: u32 = TAG_USER + 0x40000 + 2;
 
 /// strgclass instance (`StrGData`): `struct StringInfo`: Buffer 0, UndoBuffer 4, BufferPos 8, MaxChars 10, DispPos 12, UndoPos 14,
 /// NumChars 16, DispCount 18, CLeft 20, CTop 22, Extension 24, LongInt 28, AltKeyMap 32 = 36 bytes.
+pub const FRAME_DATA: u32 = 10; // type, HOffset, VOffset, Recessed, EdgesOnly (UWORDs)
 pub const PROP_DATA: u32 = 36; // PropInfo 22 + pad 2 + Total, Visible, Top (u32 each)
 pub const STRG_DATA: u32 = 76; // StringInfo 36 + StringExtend 36 + flags 4
