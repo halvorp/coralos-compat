@@ -113,3 +113,12 @@ fn directory_opus_starts_its_processes_ports_and_windows() {
     // Negative control for the check itself: a canvas nobody drew on is one colour.
     assert_eq!(distinct_pens(&vec![0u32; 100]), 1);
 }
+
+#[test]
+#[ignore]
+fn explore_idle_tasks() {
+    let Some(a) = run(std::env::var("SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(5)) else { return };
+    for (addr, t) in &a.sched.tasks { eprintln!("TASK {addr:#x} {} {:?} {:?}", t.name, t.state, t.waiting); }
+    eprintln!("clock {} timers {:?}", a.clock_us, a.timers);
+    eprintln!("sem owners {:x?} nest {:x?}", a.sched.sem_owner, a.semaphores.iter().filter(|(_, &n)| n > 0).collect::<Vec<_>>());
+}
