@@ -14,3 +14,10 @@ Pointers are AROS's own addresses: compare offsets, field values and invariants,
 - `screen.bin` (from `scrlock.s`: LockPubScreen(NULL), stopped before UnlockPubScreen): the 346-byte `struct Screen`
   of the AROS Workbench screen. Left/Top/Width/Height 0/0/640/256, BarHeight 14, BarVBorder 1, BarHBorder 5,
   MenuVBorder 2, MenuHBorder 4, WBorTop/Left/Right/Bottom 6/4/4/4, Font -> TextAttr { "topaz.font", ta_YSize 8 }.
+
+- `gfxprobe.s` / `gfxprobe.bin` / `gfxprobe.aros` (graphics, 2026-10-18): the program draws a rectangle, "AB" in topaz 8 and two
+  lines on a private 64x32x3 bitmap (AllocBitMap + InitRastPort defaults) and dumps the 100-byte RastPort plus every pixel
+  (ReadPixel) into `out`. Run with `copperline --config aros.toml --run <hunk>` under `--control`, a pc breakpoint on the final
+  `spin` loop, then `mem.read` of `out`. `tests/gfx_oracle.rs` runs the same binary here and requires identical pixels and
+  RastPort pen/mode/cursor fields. Differences found and left: `linpatcnt` after multi-segment Draw (AROS 13, here 10) and
+  `minterms[]` (not mirrored).

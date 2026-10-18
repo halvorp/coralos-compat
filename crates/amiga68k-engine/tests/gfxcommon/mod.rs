@@ -113,3 +113,4 @@ pub const SET_RAST: i32 = -234;
 pub const CLEAR_EOL: i32 = -42;
 pub const OPEN_WINDOW: i32 = -204;
 pub const CLOSE_WINDOW: i32 = -72;
+pub const SET_RGB32: i32 = -852;

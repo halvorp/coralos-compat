@@ -51,7 +51,7 @@ pub fn setup<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
     a.mem.write_u8(SCREEN_COLORMAP + 1, COLORMAP_TYPE_V39).map_err(&m)?;
     a.mem.write_u16(SCREEN_COLORMAP + CM_COUNT, 256).map_err(&m)?;
     a.mem.write_u32(SCREEN_COLORMAP + CM_COLOR_TABLE, SCREEN_COLOR_TABLE).map_err(&m)?;
-    palette::changed(a)?;
+    palette::write_table(a)?;
     // The DrawInfo.
     a.mem.zero(SCREEN_DRAWINFO, DRI_SIZE).map_err(&m)?;
     a.mem.write_u16(SCREEN_DRAWINFO + DRI_VERSION, DRI_VERSION_V).map_err(&m)?;

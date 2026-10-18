@@ -22,10 +22,16 @@ fn dist(c: u32, r: u32, g: u32, b: u32) -> u32 {
     dr * dr + dg * dg + db * db
 }
 
-/// Write the whole palette into the guest ColorTable and damage every window canvas.
-pub fn changed<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
+/// Write the whole palette into the guest ColorTable.
+pub fn write_table<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
     let table: alloc::vec::Vec<u16> = a.gfx.palette().rgb.iter().map(|&c| ((c >> 20 & 15) << 8 | (c >> 12 & 15) << 4 | (c >> 4 & 15)) as u16).collect();
     for (i, w) in table.into_iter().enumerate() { a.mem.write_u16(SCREEN_COLOR_TABLE + 2 * i as u32, w).map_err(Refusal::mem("ColorTable"))?; }
+    Ok(())
+}
+
+/// The palette changed: mirror it to the guest and damage every window canvas (the host gets resolved pixels).
+pub fn changed<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
+    write_table(a)?;
     let canvases: alloc::vec::Vec<(u32, Rect)> = a.gfx.layers.values().filter_map(|l| a.gfx.bitmaps.get(&l.canvas).map(|g| (l.window, g.bm.rect()))).collect();
     for (w, r) in canvases { a.gfx.add_damage(w, r); }
     Ok(())
