@@ -81,12 +81,14 @@ pub struct Sched<U: GuestUi> {
     pub sem_owner: BTreeMap<u32, u32>,
     /// MUI Application object -> the task that created it (its ReturnID signal goes there).
     pub app_task: BTreeMap<u32, u32>,
+    /// Low-memory handlers (exec_misc.rs), in the order added.
+    pub mem_handlers: Vec<u32>,
     /// Tasks dropped when the main program exited.
     pub dropped: Vec<String>,
 }
 
 impl<U: GuestUi> Default for Sched<U> {
-    fn default() -> Self { Sched { tasks: BTreeMap::new(), cur: crate::process::PROCESS, next_seq: 1, sem_owner: BTreeMap::new(), app_task: BTreeMap::new(), dropped: Vec::new() } }
+    fn default() -> Self { Sched { tasks: BTreeMap::new(), cur: crate::process::PROCESS, next_seq: 1, sem_owner: BTreeMap::new(), app_task: BTreeMap::new(), mem_handlers: Vec::new(), dropped: Vec::new() } }
 }
 
 impl<U: GuestUi> Sched<U> {

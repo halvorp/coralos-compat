@@ -76,6 +76,8 @@ pub mod rdargs;
 pub mod run;
 pub mod screen;
 pub mod cache;
+pub mod commodities;
+pub mod exec_misc;
 pub mod exec_patch;
 pub mod fmt;
 pub mod rawdofmt;
