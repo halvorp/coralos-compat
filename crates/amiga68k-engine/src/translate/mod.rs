@@ -3,6 +3,7 @@
 //!
 //! * [`boopsi`] — Intuition gadget types and BOOPSI system classes (what `native_gadgets` instantiated as controls).
 //! * [`gadtools`] — GadTools gadget kinds.
+//! * [`mui`] — MUI controls (a row is the `set` calls MUI's own classes make).
 //!
 //! A table row says, for one ROLE and one INTENT, what guest state is written first ([`Effect`]) and which IntuiMessage then
 //! follows ([`Post`]: class, the Gadget.Activation bit that must be set for Intuition to send it, and the Code). Roles, intent
@@ -12,6 +13,7 @@
 //! table never becomes a programming language. A role / intent pair with no row is a named refusal, never a guess.
 pub mod boopsi;
 pub mod gadtools;
+pub mod mui;
 
 use guestui_abi::ControlValue;
 use crate::Refusal;

@@ -201,7 +201,7 @@ fn store<U: GuestUi>(a: &mut Amiga<U>, g: u32, v: &ControlValue) -> Result<(), R
         ControlValue::Checked(b) => info.state.checked = *b,
         ControlValue::Text(t) => info.text = t.clone(),
         ControlValue::Level(l) => info.state.level = *l,
-        ControlValue::Pressed | ControlValue::Scroll { .. } | ControlValue::Cancelled => {}
+        ControlValue::Pressed | ControlValue::Scroll { .. } | ControlValue::Cancelled | ControlValue::Choice(_) | ControlValue::Rows { .. } => {}
     }
     let (kind, st) = (info.kind, info.state.clone());
     match v {

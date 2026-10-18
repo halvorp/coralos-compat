@@ -25,6 +25,9 @@ pub fn state(k: &ControlKind) -> Option<ControlValue> {
         ControlKind::ScrollBar { total, visible, top, .. } => ControlValue::Scroll { total: *total, visible: *visible, top: *top },
         ControlKind::Field { text, .. } | ControlKind::Label { text, .. } | ControlKind::String { text, .. } => ControlValue::Text(text.clone()),
         ControlKind::Slider { value, .. } => ControlValue::Level(*value),
+        ControlKind::Choice { selected, .. } => ControlValue::Choice(*selected),
+        ControlKind::List { rows, selected, top, .. } => ControlValue::Rows { rows: rows.clone(), selected: *selected, top: *top },
+        ControlKind::Gauge { value, .. } => ControlValue::Level(*value as i32),
         _ => return None,
     })
 }
@@ -40,6 +43,9 @@ pub fn same_shape(a: &ControlModel, b: &ControlModel) -> bool {
         (K::Group { title: t, style: s }, K::Group { title: u, style: v }) => (t, s) == (u, v),
         (K::ArrowButton { dir: x }, K::ArrowButton { dir: y }) => x == y,
         (K::Slider { min: a0, max: a1, .. }, K::Slider { min: b0, max: b1, .. }) => (a0, a1) == (b0, b1),
+        (K::Choice { style: x, labels: l, .. }, K::Choice { style: y, labels: m, .. }) => (x, l) == (y, m),
+        (K::List { columns: x, .. }, K::List { columns: y, .. }) => x == y,
+        (K::Gauge { max: x, .. }, K::Gauge { max: y, .. }) => x == y,
         (x, y) => core::mem::discriminant(x) == core::mem::discriminant(y),
     }
 }

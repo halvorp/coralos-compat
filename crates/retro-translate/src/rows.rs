@@ -9,11 +9,11 @@ use guestui_abi::{ControlKind, Intent};
 
 /// The roles that take intents (`guestui-abi::ControlKind` seen as what the user does to it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role { Button, Toggle, Check, Scroll, Field, Slider }
+pub enum Role { Button, Toggle, Check, Scroll, Field, Slider, Choice, List }
 
 /// An intent without its payload: the row key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum On { Activate, SetValue, ScrollTo, CommitText, Press, ReleaseInside, ReleaseOutside, Drag }
+pub enum On { Activate, SetValue, ScrollTo, CommitText, Press, ReleaseInside, ReleaseOutside, Drag, SelectRow }
 
 /// One table row: guest effect `E` first, then the optional guest message `P`.
 #[derive(Debug, Clone, Copy)]
@@ -31,7 +31,9 @@ pub fn role_of(kind: &ControlKind) -> Option<Role> {
         ControlKind::ScrollBar { .. } => Role::Scroll,
         ControlKind::Field { .. } | ControlKind::String { .. } => Role::Field,
         ControlKind::Slider { .. } => Role::Slider,
-        ControlKind::Label { .. } | ControlKind::Group { .. } => return None,
+        ControlKind::Choice { .. } => Role::Choice,
+        ControlKind::List { .. } => Role::List,
+        ControlKind::Label { .. } | ControlKind::Group { .. } | ControlKind::Gauge { .. } => return None,
     })
 }
 
@@ -45,7 +47,7 @@ pub fn on_of(i: &Intent) -> Option<On> {
         Intent::Release { inside: true } => On::ReleaseInside,
         Intent::Release { inside: false } => On::ReleaseOutside,
         Intent::Drag(_) => On::Drag,
-        Intent::SelectRow(_) => return None,
+        Intent::SelectRow(_) => On::SelectRow,
     })
 }
 
@@ -73,6 +75,7 @@ mod tests {
         assert_eq!(lookup(T, &ControlKind::Button, &Intent::Press).unwrap().post, Some(7));
         assert!(lookup(T, &ControlKind::Button, &Intent::Activate).is_err(), "no row: a named refusal");
         assert!(lookup(T, &ControlKind::Label { text: "x".into(), framed: false }, &Intent::Press).is_err());
-        assert!(lookup(T, &ControlKind::Button, &Intent::SelectRow(1)).is_err());
+        assert!(lookup(T, &ControlKind::Button, &Intent::SelectRow(1)).is_err(), "no row for a row selection on a button");
+        assert_eq!(role_of(&ControlKind::Gauge { value: 0, max: 1 }), None, "a gauge takes no intent");
     }
 }

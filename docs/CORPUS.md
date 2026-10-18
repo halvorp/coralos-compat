@@ -13,6 +13,7 @@ in the table below). `tests/census_corpus.rs` in `amiga68k-engine`, `mac68k-engi
 
 ```
 tools/corpus-census.py APPS.tsv --out census.json     # amiga68k-run --census per app; keeps going with --stub to record the NEXT-NEEDED chain
+tools/corpus-mui.py [--json out.json]                 # only the MUI programs: first NEXT-NEEDED, named refusals, native controls per window (route census)
 tools/corpus-strings.py APPS.tsv > strings.json       # static name evidence: libraries, MUI classes/MCCs, BOOPSI classes in the hunk
 tools/corpus-census-mac.py MAC_APPS.tsv --out mac.json # mac68k-run / macppc-run --census
 tools/corpus-traps-mac.py FILE...                     # static: resource types + Toolbox traps in CODE, by manager
@@ -99,10 +100,10 @@ AROS-built code at all; it is the only source of MUI/Zune programs, and AROS-bui
 
 | gap | apps | owner lane |
 |---|---|---|
-| `dos Open("NIL:")` is "not modelled yet", then `Close(0)` ("not an open file") in stdcio/posixc cleanup | 30 / 26 | dos |
-| MUI custom classes: `muimaster/MUI_CreateCustomClass` (NEXT-NEEDED), disk classes `Clock.mcc`, `SystemPrefsWindow.mcc`, `PrefsEditor.mcc`, MCCs from `LIBS:mui/` | 16 + 8 | mui |
-| MUI attributes: `MUIA_Application_SingleTask` 0x8042a2c8 (10 apps), `_DiskObject` 0x804235cb, `_BrokerPri` 0x8042c8d0, `_UseCommodities` 0x80425ee5, `_UsedClasses` 0x8042e9a7, `MUIA_Window_Activate` 0x80428d2f, `_Window_AppWindow` 0x804280cf, `MUIA_Group_PageMode` 0x80421a5f (the Register/page layouts), `MUIA_Frame` | 3-10 each | mui |
-| `MUI_MakeObjectA` types other than `MUIO_Label`: 2 `Button` (6 apps), 13 `MenustripNM` (4), 3 `Checkmark`, 4 `Cycle`, 8 `PopButton` (2 each) | 6+4+2+2+2 | mui |
+| ~~`dos Open("NIL:")` is "not modelled yet", then `Close(0)` ("not an open file") in stdcio/posixc cleanup~~ DONE (mui2 lane) | 30 / 26 | dos |
+| MUI custom classes: ~~`muimaster/MUI_CreateCustomClass`~~ DONE (mui2 lane); disk classes `Clock.mcc`, `SystemPrefsWindow.mcc`, `PrefsEditor.mcc`, MCCs from `LIBS:mui/` remain | 16 + 8 | mui |
+| ~~MUI attributes~~ DONE (mui2 lane): `MUIA_Application_SingleTask` 0x8042a2c8 (10 apps), `_DiskObject` 0x804235cb, `_BrokerPri` 0x8042c8d0, `_UseCommodities` 0x80425ee5, `_UsedClasses` 0x8042e9a7, `MUIA_Window_Activate` 0x80428d2f, `_Window_AppWindow` 0x804280cf, `MUIA_Group_PageMode` 0x80421a5f (the Register/page layouts), `MUIA_Frame` | 3-10 each | mui |
+| ~~`MUI_MakeObjectA` types other than `MUIO_Label`~~ DONE (mui2 lane): 2 `Button` (6 apps), 13 `MenustripNM` (4), 3 `Checkmark`, 4 `Cycle`, 8 `PopButton` (2 each) | 6+4+2+2+2 | mui |
 | `intuition/EasyRequestArgs` (3), `DupLockFromFH` on the console handles (3), `WindowAction` (1), `iffparse/AllocIFF` (2), `MUI_RequestA` (2), `exec/RawPutChar` (2, AROS debug output) | 1-3 each | intuition / dos |
 | YAM: `AllocDosObject type 5` (DOS_CLI), `locale/ParseDate` with a hook | 1 | dos / locale |
 
@@ -122,6 +123,80 @@ And three things about the *classic* binaries:
 
 The AROS m68k *contrib* archive is ELF relocatable (`ET_REL`), not Hunk: an AROS ELF loader would unlock 10,213 files (BGUI,
 MCC_TheBar, Scout, MultiMedia, games...) and is worth a lane of its own.
+
+## The MUI lane (2026-10-18, branch push-mui2): the 47 MUI programs before and after
+
+`tools/corpus-mui.py` runs every MUI row of `corpus-apps.tsv` once (`amiga68k-run --census`) and reports the first unimplemented call, the
+first named refusals and, per window, which controls reached the seam (the route census: native roles; no program here draws a content
+plane yet). "Before" is compat main 4844fac, "after" this branch. The MUI work is `docs/MUI-NATIVE.md`; the dos fix (`Open("NIL:")`,
+`Close(0)`) moved about 30 programs past their C-library startup.
+
+| app | NEXT-NEEDED before | NEXT-NEEDED after | window before | window after (native roles) | first named gap left |
+|---|---|---|---|---|---|
+| amimon-mui | none | none | opened | opened: 8 Label |  |
+| iGame | muimaster.library/MUI_CreateCustomClass | none | no | no |  |
+| YAM | none | none | no | no | ParseDate: the hook 0x14 has no h_Entry |
+| aros-Clock | none | none | no | no | MUI class "Clock.mcc" is not implemented |
+| aros-Installer | none | none | no | no |  |
+| aros-Calculator | none | none | no | opened: 20 Button, 1 Label |  |
+| aros-KeyShow | muimaster.library/MUI_CreateCustomClass | keymap.library/AskKeyMapDefault | no | no |  |
+| aros-HDToolBox | none | none | no | no |  |
+| aros-ScreenGrabber | muimaster.library/MUI_RequestA | none | no | opened: 4 Button, 4 Group, 3 Label, 1 List, 1 Slider, 1 Checkbox, 1 Field, 1 Gauge |  |
+| aros-SysExplorer | none | none | no | no |  |
+| aros-WiMP | none | none | no | opened: 13 Button, 1 Group, 1 List |  |
+| aros-Exchange | commodities.library/BrokerCommand | commodities.library/BrokerCommand | no | no |  |
+| aros-ASCIITable | muimaster.library/MUI_CreateCustomClass | none | no | no |  |
+| aros-FKey | none | none | no | no | MUI class "HotkeyString.mcc" is not implemented |
+| aros-QuickPart | none | none | no | no |  |
+| aros-Find | muimaster.library/MUI_CreateCustomClass | intuition.library/EasyRequestArgs | no | no | MUI class "NList.mcc" is not implemented |
+| aros-Format | none | none | no | no |  |
+| aros-SysMon | muimaster.library/MUI_DeleteCustomClass | none | no | no |  |
+| aros-VMM | exec.library/RawPutChar | exec.library/RawPutChar | no | no |  |
+| aros-Snoopy | none | none | no | opened: 29 Checkbox, 6 Button, 4 Group, 4 Slider, 1 Field |  |
+| aros-About | muimaster.library/MUI_CreateCustomClass | aros.library/ArosInquireA | no | no |  |
+| aros-Wanderer | intuition.library/EasyRequestArgs | intuition.library/EasyRequestArgs | no | no | DupLockFromFH on 0x6300: not an open file |
+| aros-Info | none | none | no | no |  |
+| aros-DiskInfo | muimaster.library/MUI_CreateCustomClass | none | no | no |  |
+| aros-WBRename | none | none | no | no | DisposeObject: 0x0 is not a MUI object (or already disposed) |
+| aros-prefs-Appearance | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI_CreateCustomClass: the superclass "PrefsEditor.mcc" is not impleme |
+| aros-prefs-Font | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI_CreateCustomClass: the superclass "PrefsEditor.mcc" is not impleme |
+| aros-prefs-Palette | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI_CreateCustomClass: the superclass "PrefsEditor.mcc" is not impleme |
+| aros-prefs-Input | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI_CreateCustomClass: the superclass "PrefsEditor.mcc" is not impleme |
+| aros-prefs-Time | none | none | no | no |  |
+| aros-prefs-ScreenMode | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI_CreateCustomClass: the superclass "PrefsEditor.mcc" is not impleme |
+| aros-prefs-Zune | none | none | no | no |  |
+| aros-prefs-Locale | none | none | no | no | OpenLibrary "codesets.library": LIBS:codesets.library has no RomTag in |
+| aros-prefs-Editor | iffparse.library/AllocIFF | iffparse.library/AllocIFF | no | no |  |
+| aros-prefs-Pointer | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI_CreateCustomClass: the superclass "PrefsEditor.mcc" is not impleme |
+| aros-prefs-IControl | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI_CreateCustomClass: the superclass "PrefsEditor.mcc" is not impleme |
+| aros-prefs-Wanderer | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI_CreateCustomClass: the superclass "PrefsEditor.mcc" is not impleme |
+| aros-prefs-ReqTools | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI_CreateCustomClass: the superclass "PrefsEditor.mcc" is not impleme |
+| aros-prefs-OpenURL | muimaster.library/MUI_RequestA | muimaster.library/MUI_RequestA | no | no | OpenLibrary "openurl.library": LIBS:openurl.library has no RomTag in i |
+| aros-mui_notify1 | none | none | no | no |  |
+| aros-mui_layout1 | none | none | no | opened:  |  |
+| aros-mui_pages | none | none | no | opened: 5 Button, 2 Group, 1 Label |  |
+| aros-mui_slider | none | none | no | opened: 1 Slider |  |
+| aros-NList-Demo | muimaster.library/MUI_CreateCustomClass | none | no | no | MUI class "NList.mcc" is not implemented |
+| aros-NListtree-Demo | none | none | no | no | MUI class "NListtree.mcc" is not implemented |
+| aros-RequestString | none | none | no | opened: 1 Label, 1 Field |  |
+| aros-MountHDF | none | none | no | no |  |
+
+windows opened: 1 of 47 before, 9 of 47 after
+
+
+What stops the programs that open no window now (all NAMED; none is a MUI-table gap):
+* **Disk MCC classes** (`LIBS:Zune/*.mcc`, `MCC_Query`): the eleven Prefs editors ("Could not create Zune custom class `XEditor'": their
+  superclass is `PrefsEditor.mcc`), `Clock.mcc`, `HotkeyString.mcc`, `NList*.mcc`, YAM/iGame's MCCs. Loading a disk class is OpenLibrary +
+  `MCC_Query(0)` as guest calls from inside `MUI_NewObjectA` / `MUI_CreateCustomClass`: the next MUI step.
+* **Libraries the volume lacks** (not MUI): `render.library` (iGame), `uuid.library` and partition libraries (HDToolBox, QuickPart, MountHDF,
+  SysExplorer), `muiscreen.library` (Prefs/Zune), `codesets.library`, `openurl.library`, `dos64.library` v50 (the AROS-only 64-bit dos).
+* **`exec.library` v50** (Format, SysMon, Prefs/Time refuse to start: `Requires exec.library v50, found v40`): AROS's exec ABI version; the
+  engine reports AmigaOS 3.1 (40). Reporting 50 would make every program take AmigaOS 4 paths, so it is left to the exec lane. Also
+  `exec/VNewRawDoFmt` behind it.
+* Other lanes: `intuition/EasyRequestArgs` (Find, Wanderer), `aros/ArosInquireA` (About), `keymap/AskKeyMapDefault` (KeyShow),
+  `commodities/BrokerCommand` (Exchange), `iffparse/AllocIFF` (Prefs/Editor), `MUI_RequestA` (Prefs/OpenURL), `exec/RawPutChar` (VMM),
+  `locale/ParseDate` with a hook and `AllocDosObject` type 5 (YAM).
+* mui_notify1 is not a window program: it runs the Notify class and prints; `tests/mui_real.rs` checks its output.
 
 ## The top rows the translation layer must cover first
 

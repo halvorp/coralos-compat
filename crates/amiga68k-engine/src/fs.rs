@@ -27,7 +27,8 @@ const FL_ACCESS: u32 = 8;
 const PR_CURRENT_DIR: u32 = 152;
 
 pub struct LockRec { pub node: NodeId, pub exclusive: bool }
-pub struct OpenFile { pub node: NodeId, pub pos: u32, pub read: bool, pub write: bool, pub exclusive: bool }
+/// `nil`: the NIL: device (reads are EOF, writes are accepted and discarded); its `node` is the volume root, which holds no file data.
+pub struct OpenFile { pub node: NodeId, pub pos: u32, pub read: bool, pub write: bool, pub exclusive: bool, pub nil: bool }
 
 pub struct FsState {
     pub vol: Volume,

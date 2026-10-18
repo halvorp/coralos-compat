@@ -70,7 +70,37 @@ pub enum ControlKind {
     ArrowButton { dir: ArrowDir },
     /// An invisible hit area: no visuals, but pointer press/release inside it are events (a gadget with nothing to draw).
     Hotspot,
+    /// One choice among `labels` (a MUI Cycle / Radio / Register, a Mac pop-up): `selected` indexes `labels`, which are
+    /// the guest's own strings in the guest's own order. The `style` is how the host offers them.
+    Choice { style: ChoiceStyle, labels: Vec<String>, selected: u32 },
+    /// A table of text rows under optional `columns` headings (a MUI List/Listview): every row has one cell per column
+    /// (a headless single-column list has one). `selected` is a row index into `rows`; `top` the first row in view.
+    List { columns: Vec<String>, rows: Vec<Vec<String>>, selected: Option<u32>, top: u32 },
+    /// A read-only progress bar: `value` of `max` (a MUI Gauge). `max` is at least 1.
+    Gauge { value: u32, max: u32 },
 }
+
+impl ControlKind {
+    /// The shape rules a host enforces when a control is added (`add_control` refuses a kind that breaks them, by name).
+    pub fn validate(&self) -> Result<(), UiRefusal> {
+        match self {
+            ControlKind::Slider { min, max, value } if min > max || value < min || value > max => Err(UiRefusal::InvalidGeometry("slider range")),
+            ControlKind::Choice { labels, selected, .. } if !labels.is_empty() && *selected as usize >= labels.len() => Err(UiRefusal::InvalidGeometry("choice index past its labels")),
+            ControlKind::List { columns, rows, selected, .. } => {
+                let width = columns.len().max(1);
+                if rows.iter().any(|r| r.len() != width) { return Err(UiRefusal::InvalidGeometry("list row with the wrong number of cells")); }
+                if selected.is_some_and(|i| i as usize >= rows.len()) { return Err(UiRefusal::InvalidGeometry("list selection past its rows")); }
+                Ok(())
+            }
+            ControlKind::Gauge { value, max } if *max == 0 || value > max => Err(UiRefusal::InvalidGeometry("gauge value outside 0..=max")),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// How a [`ControlKind::Choice`] is offered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChoiceStyle { Cycle, Radio, Popup, Tabs }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrowDir { Up, Down, Left, Right }
@@ -90,6 +120,10 @@ pub struct ControlModel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlValue { Pressed, Checked(bool), Text(String), Level(i32), Scroll { total: u32, visible: u32, top: u32 },
+    /// The selected index of a [`ControlKind::Choice`].
+    Choice(u32),
+    /// The whole content of a [`ControlKind::List`].
+    Rows { rows: Vec<Vec<String>>, selected: Option<u32>, top: u32 },
     /// The gesture ended outside the control (no activation, nothing changed). Legacy value form; `Intent::Release { inside: false }` is the event.
     Cancelled }
 
@@ -109,6 +143,20 @@ impl ControlModel {
             (ControlKind::ScrollBar { total: t, visible: v, top: p, .. }, ControlValue::Scroll { total, visible, top }) => {
                 (*t, *v) = (*total, *visible);
                 *p = (*top).min(total.saturating_sub(*visible));
+            }
+            (ControlKind::Choice { labels, selected, .. }, ControlValue::Choice(i)) => {
+                if (*i as usize) >= labels.len() { return Err(UiRefusal::InvalidGeometry("choice index past its labels")); }
+                *selected = *i;
+            }
+            (ControlKind::List { columns, rows: r, selected, top }, ControlValue::Rows { rows, selected: sel, top: t }) => {
+                let width = columns.len().max(1);
+                if rows.iter().any(|row| row.len() != width) { return Err(UiRefusal::InvalidGeometry("list row with the wrong number of cells")); }
+                if sel.is_some_and(|i| i as usize >= rows.len()) { return Err(UiRefusal::InvalidGeometry("list selection past its rows")); }
+                (*r, *selected, *top) = (rows.clone(), *sel, (*t).min(rows.len().saturating_sub(1) as u32));
+            }
+            (ControlKind::Gauge { value, max }, ControlValue::Level(l)) => {
+                if *l < 0 || *l as u32 > *max { return Err(UiRefusal::InvalidGeometry("gauge value outside 0..=max")); }
+                *value = *l as u32;
             }
             _ => return Err(UiRefusal::Unsupported("a value the control's kind cannot hold")),
         }

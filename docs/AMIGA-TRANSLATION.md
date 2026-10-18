@@ -12,6 +12,8 @@ One seam (`guestui-abi`), per-TOOLKIT tables, no application names (`tools/check
   `translate/gadtools.rs` the GadTools table. A row says: which guest state is written FIRST (`Effect`), then which IntuiMessage
   follows (`Post`: class, the Activation bit that gates it, the Code). Procedural effects (PropInfo pots, StringInfo, a GadTools
   kind's value) are the adapters' `apply` code next to `lookup`: `native_gadgets_input.rs` and `gt_kinds::control_changed`.
+* `translate/mui.rs` is the MUI table (a row's guest effect is the list of `set` calls MUI's own classes make; see `docs/MUI-NATIVE.md`):
+  MUI windows are projected through the same `Projections<u32>` (`Objects::proj`), with MUI's own layout over the real screen-font metrics.
 * A role / intent pair without a row is a named refusal. Adding a gadget kind is adding rows, not a new code path.
 
 ## Content out: planes (`graphics/record.rs`, `retro-present/src/plane.rs`)
