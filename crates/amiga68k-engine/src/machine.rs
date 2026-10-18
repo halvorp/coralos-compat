@@ -30,7 +30,11 @@ pub const STACK_TOP: u32 = 0x20_0000;
 pub const STACK_SIZE: u32 = 0x1_0000;
 /// The guest heap: everything above the stack, to the end of the 16 MiB guest RAM.
 pub const HEAP_START: u32 = STACK_TOP;
-pub const HEAP_END: u32 = 0x100_0000;
+pub const HEAP_END: u32 = SYS_ARENA_START;
+/// The engine's own arena, the top 256 KiB of guest RAM: structs the ENGINE keeps for the guest (the DOS list and its
+/// locks) live here so that publishing them never moves the addresses the program's own allocations get.
+pub const SYS_ARENA_START: u32 = 0x100_0000 - 0x4_0000;
+pub const SYS_ARENA_END: u32 = 0x100_0000;
 /// The CLI argument line a program gets when nothing is passed: AmigaDOS always ends it with a newline.
 pub const EMPTY_ARGS: &str = "\n";
 
@@ -51,6 +55,8 @@ pub struct Amiga<U: GuestUi> {
     pub stop_on_unimplemented: bool,
     /// The guest heap AllocMem/AllocVec serve from (bookkeeping host-side).
     pub heap: memory::Heap,
+    /// The engine's own arena (see SYS_ARENA_START).
+    pub sys_heap: memory::Heap,
     /// Forbid nesting depth (counted, not enforced: one task).
     pub forbid: u32,
     /// What the program wrote to its console.
@@ -86,6 +92,8 @@ pub struct Amiga<U: GuestUi> {
     pub gfx: graphics::state::State,
     /// BOOPSI/MUI objects (boopsi.rs, mui/).
     pub objects: crate::boopsi::Objects,
+    /// Functions the census runner was told to pretend exist (`--stub lib/Func`, census.rs).
+    pub census_stubs: Vec<(String, String)>,
     next_lib_base: u32,
 }
 
@@ -96,9 +104,9 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), gfx: Default::default(),
-            fs: Default::default(), calls: vec![],
+            fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
@@ -178,6 +186,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(rdargs::LVO_READ_ARGS, "ReadArgs", rdargs::read_args::<U>)
             .func(rdargs::LVO_FREE_ARGS, "FreeArgs", rdargs::free_args::<U>)
             .with(crate::dos_fs::register::<U>)
+            .with(crate::dos2::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("intuition.library", INTUITION_BASE)
             .func(window::LVO_OPEN_WINDOW, "OpenWindow", window::open_window::<U>)
@@ -230,6 +239,7 @@ impl<U: GuestUi> Amiga<U> {
             a.libs.push(LibInfo { name, base, open_count: 0 });
         }
         crate::execlists::init(&mut a.mem)?;
+        crate::doslist::init(&mut a)?;
         crate::guest_call::install(&mut a.mem)?;
         a.dispatch.insert(crate::guest_call::RET_SLOT, ("exec.library", "GuestCallReturn", crate::guest_call::on_return::<U>));
         write_slot(&mut a.mem, EXIT_SLOT).map_err(Refusal::mem("exit slot"))?;
@@ -249,7 +259,7 @@ impl<U: GuestUi> Amiga<U> {
             "muimaster.library" => crate::mui::library(base),
             "layers.library" => graphics::layers_library(base),
             "diskfont.library" => graphics::diskfont_library(base),
-            _ => LibraryBuilder::new(name, base),
+            _ => crate::libfactory::library(name, base),
         };
         lib.install(&mut self.mem, &mut self.dispatch)?;
         self.libs.push(LibInfo { name, base, open_count: 1 });
@@ -263,6 +273,7 @@ impl<U: GuestUi> Host for Amiga<U> {
     fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool {
         if pc == EXIT_SLOT { cpu.halt(); return true; }
         let Some((lib, func, handler)) = self.dispatch.get(&pc).copied() else { return false };
+        let handler = if self.census_stubs.iter().any(|(l, f)| l == lib && f == func) { crate::census::stub::<U> } else { handler };
         match handler(self, cpu) {
             Ok(line) => self.log.push(line),
             Err(Refusal(e)) => {

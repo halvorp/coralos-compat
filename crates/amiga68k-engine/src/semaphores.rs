@@ -38,9 +38,8 @@ fn mirror<U: GuestUi>(a: &mut Amiga<U>, ss: u32, nest: u16) -> Result<(), Refusa
     a.mem.write_u32(ss + SS_OWNER, if nest == 0 { 0 } else { process::PROCESS }).map_err(m("ss_Owner"))
 }
 
-/// InitSemaphore(a0 = semaphore): zero, NT_SIGNALSEM, an empty wait queue (a MinList: mlh_Head = &mlh_Tail).
-pub fn init<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let ss = cpu.areg(0);
+/// Initialise the semaphore at `ss` as exec's InitSemaphore does (the engine's own structs, e.g. the DosInfo locks, use it too).
+pub(crate) fn init_struct<U: GuestUi>(a: &mut Amiga<U>, ss: u32) -> Result<(), Refusal> {
     let name = a.mem.read_u32(ss + LN_NAME).map_err(m("ln_Name"))?; // InitSemaphore keeps the caller's name
     for i in 0..SS_SIZE { a.mem.write_u8(ss + i, 0).map_err(m("SignalSemaphore"))?; }
     a.mem.write_u8(ss + LN_TYPE, NT_SIGNALSEM).map_err(m("ln_Type"))?;
@@ -49,6 +48,13 @@ pub fn init<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     a.mem.write_u32(ss + SS_WAITQUEUE + 8, ss + SS_WAITQUEUE).map_err(m("ss_WaitQueue"))?;
     a.mem.write_u16(ss + SS_QUEUECOUNT, 0xFFFF).map_err(m("ss_QueueCount"))?; // -1: free, as exec initialises it
     a.semaphores.insert(ss, 0);
+    Ok(())
+}
+
+/// InitSemaphore(a0 = semaphore): zero, NT_SIGNALSEM, an empty wait queue (a MinList: mlh_Head = &mlh_Tail).
+pub fn init<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let ss = cpu.areg(0);
+    init_struct(a, ss)?;
     Ok(format!("[exec] InitSemaphore {ss:#x}"))
 }
 

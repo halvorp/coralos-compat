@@ -45,7 +45,8 @@ fn a_program_walks_reads_writes_and_deletes_files_with_the_right_errors() {
     assert_eq!(r[21], 0xFFFF_FFFF);
     assert_eq!(a.mem.read_cstr(base + NAME).unwrap(), "SYS:Libs", "[21] NameFromLock");
     assert_eq!((r[22], r[23]), (8, 7), "[22,23] FilePart / PathPart offsets into xxx:yyy/zzz");
-    assert!(a.fs.locks.is_empty() || a.fs.locks.len() == 1, "only the Lock([0]) the program kept: {}", a.fs.locks.len());
+    let mine = a.fs.locks.len() - a.fs.dos.engine_locks(); // the DOS list holds a lock per published assign
+    assert!(mine <= 1, "only the Lock([0]) the program kept: {mine}");
     assert!(a.fs.files.is_empty(), "every handle closed");
     assert!(a.fs.vol.resolve(0, "RAM:test").is_err());
 }

@@ -21,7 +21,7 @@ const MAX_WALK: u32 = 1 << 20;
 fn m(what: &'static str) -> impl Fn(retro_guest_mem::MemError) -> Refusal { Refusal::mem(what) }
 
 /// Link `node` after `pred` (Insert's core; pred = the list header for AddHead).
-fn link_after<U: GuestUi>(a: &mut Amiga<U>, pred: u32, node: u32) -> Result<(), Refusal> {
+pub(crate) fn link_after<U: GuestUi>(a: &mut Amiga<U>, pred: u32, node: u32) -> Result<(), Refusal> {
     let succ = a.mem.read_u32(pred).map_err(m("pred.ln_Succ"))?;
     a.mem.write_u32(node, succ).map_err(m("ln_Succ"))?;
     a.mem.write_u32(node + 4, pred).map_err(m("ln_Pred"))?;
