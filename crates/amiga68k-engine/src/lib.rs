@@ -28,6 +28,7 @@ pub mod dos_io;
 pub mod dos_match;
 pub mod dos_misc;
 pub mod dos_path;
+pub mod exall;
 pub mod exec;
 pub mod execlists;
 pub mod exec_wait;

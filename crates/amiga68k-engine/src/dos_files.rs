@@ -25,13 +25,15 @@ const FIB_COMMENT: u32 = 144;
 const NAME_MAX: usize = 108;
 const COMMENT_MAX: usize = 80;
 /// dos/dosextens.h ST_ROOT, ST_USERDIR, ST_FILE.
-const ST_ROOT: i32 = 1;
-const ST_USERDIR: i32 = 2;
-const ST_FILE: i32 = -3;
+pub(crate) const ST_ROOT: i32 = 1;
+pub(crate) const ST_USERDIR: i32 = 2;
+pub(crate) const ST_FILE: i32 = -3;
 /// dos/dos.h EXCLUSIVE_LOCK (-1); ACCESS_READ / SHARED_LOCK is -2.
 const EXCLUSIVE_LOCK: i32 = -1;
 const FIBF_DELETE: u32 = 1;
-const DOS_FILEHANDLE: u32 = 0;
+pub(crate) const DOS_FILEHANDLE: u32 = 0;
+pub(crate) const DOS_EXALLCONTROL: u32 = 1;
+pub(crate) const EXALLCONTROL_SIZE: u32 = 16;
 const DOS_FIB: u32 = 2;
 const BLOCK: usize = 512;
 
@@ -80,7 +82,7 @@ pub fn lock<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
 pub(crate) fn free_lock<U: GuestUi>(a: &mut Amiga<U>, bptr: u32, call: &str) -> Result<(), Refusal> {
     if bptr == 0 { return Ok(()); }
     if a.fs.locks.remove(&(bptr << 2)).is_none() { return Err(Refusal(format!("{call}: {:#x} is not a live lock", bptr << 2))); }
-    a.heap.free(bptr << 2, LOCK_SIZE).map_err(|e| Refusal(format!("{call}: {e}")))
+    free_block(a, bptr << 2, LOCK_SIZE).map_err(|e| Refusal(format!("{call}: {e}")))
 }
 
 /// UnLock(d1 = lock). The current directory's own lock cannot be released under the program.
@@ -251,7 +253,7 @@ pub fn same_lock<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
 /// AllocDosObject(d1 = type, d2 = tags): DOS_FIB and DOS_FILEHANDLE are modelled; the rest are named refusals.
 pub fn alloc_dos_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let ty = cpu.dreg(1);
-    let size = match ty { DOS_FIB => FIB_SIZE, DOS_FILEHANDLE => FH_SIZE, t => return Err(Refusal(format!("AllocDosObject type {t} not modelled"))) };
+    let size = match ty { DOS_FIB => FIB_SIZE, DOS_FILEHANDLE => FH_SIZE, DOS_EXALLCONTROL => EXALLCONTROL_SIZE, t => return Err(Refusal(format!("AllocDosObject type {t} not modelled"))) };
     let p = alloc_zeroed(a, size)?.unwrap_or(0);
     cpu.set_d0(p);
     Ok(format!("[dos] AllocDosObject {ty} -> {p:#x}"))
@@ -260,8 +262,8 @@ pub fn alloc_dos_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
 /// FreeDosObject(d1 = type, d2 = object).
 pub fn free_dos_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (ty, p) = (cpu.dreg(1), cpu.dreg(2));
-    let size = match ty { DOS_FIB => FIB_SIZE, DOS_FILEHANDLE => FH_SIZE, t => return Err(Refusal(format!("FreeDosObject type {t} not modelled"))) };
-    if p != 0 { a.heap.free(p, size).map_err(|e| Refusal(format!("FreeDosObject: {e}")))?; a.fs.scans.remove(&p); }
+    let size = match ty { DOS_FIB => FIB_SIZE, DOS_FILEHANDLE => FH_SIZE, DOS_EXALLCONTROL => EXALLCONTROL_SIZE, t => return Err(Refusal(format!("FreeDosObject type {t} not modelled"))) };
+    if p != 0 { a.heap.free(p, size).map_err(|e| Refusal(format!("FreeDosObject: {e}")))?; a.fs.scans.remove(&p); a.fs.exall.remove(&p); }
     Ok(format!("[dos] FreeDosObject {ty} {p:#x}"))
 }
 

@@ -5,12 +5,13 @@
 #include "lvo.h"
 typedef unsigned int u32; typedef unsigned short u16; typedef unsigned char u8; typedef int i32; typedef short i16;
 #define RES ((volatile u32 *)0x1F000)
-#define LVO5(base, off, D0, D1, D2, D3, D4, A0, A1) ({ \
+#define LVO6(base, off, D0, D1, D2, D3, D4, D5, A0, A1) ({ \
   register u32 _d0 asm("d0") = (u32)(D0); register u32 _d1 asm("d1") = (u32)(D1); \
   register u32 _d2 asm("d2") = (u32)(D2); register u32 _d3 asm("d3") = (u32)(D3); register u32 _d4 asm("d4") = (u32)(D4); \
-  register u32 _a0 asm("a0") = (u32)(A0); register u32 _a1 asm("a1") = (u32)(A1); \
+  register u32 _d5 asm("d5") = (u32)(D5); register u32 _a0 asm("a0") = (u32)(A0); register u32 _a1 asm("a1") = (u32)(A1); \
   asm volatile("move.l %%a6,-(%%sp)\n\tmove.l %[b],%%a6\n\tjsr %c[o](%%a6)\n\tmove.l (%%sp)+,%%a6" : "+r"(_d0), "+r"(_d1), "+r"(_a0), "+r"(_a1) \
-               : "r"(_d2), "r"(_d3), "r"(_d4), [b] "r"((u32)(base)), [o] "i"(off) : "cc", "memory"); _d0; })
+               : "r"(_d2), "r"(_d3), "r"(_d4), "r"(_d5), [b] "r"((u32)(base)), [o] "i"(off) : "cc", "memory"); _d0; })
+#define LVO5(base, off, D0, D1, D2, D3, D4, A0, A1) LVO6(base, off, D0, D1, D2, D3, D4, 0, A0, A1)
 #define LVO(base, off, D0, D1, D2, D3, A0, A1) LVO5(base, off, D0, D1, D2, D3, 0, A0, A1)
 #define SYSBASE (*(volatile u32 *)4)
 #define OPENLIB(name) LVO(SYSBASE, LVO_exec_OpenLibrary, 0, 0, 0, 0, 0, name)

@@ -53,6 +53,8 @@ pub struct FsState {
     pub devs: crate::devproc::DevState,
     /// MatchFirst/MatchNext walks in progress, by AnchorPath address (dos_match.rs).
     pub anchors: crate::dos_match::Anchors,
+    /// ExAll scans in progress: ExAllControl address -> (directory, next child index) (exall.rs).
+    pub exall: BTreeMap<u32, (NodeId, usize)>,
 }
 
 impl FsState {
@@ -100,9 +102,24 @@ pub fn alloc_zeroed<U: GuestUi>(a: &mut Amiga<U>, size: u32) -> Result<Option<u3
     Ok(Some(p))
 }
 
+/// Return a block to whichever heap it came from (the program's, or the engine's own arena above SYS_ARENA_START).
+pub fn free_block<U: GuestUi>(a: &mut Amiga<U>, at: u32, size: u32) -> Result<(), alloc::string::String> {
+    if at >= crate::machine::SYS_ARENA_START { a.sys_heap.free(at, size) } else { a.heap.free(at, size) }
+}
+
+/// Allocate a zeroed struct from the engine's own arena (None = it is full).
+pub fn alloc_zeroed_sys<U: GuestUi>(a: &mut Amiga<U>, size: u32) -> Result<Option<u32>, Refusal> {
+    let Some(p) = a.sys_heap.alloc(size) else { return Ok(None) };
+    a.mem.zero(p, size).map_err(Refusal::mem("alloc_zeroed_sys"))?;
+    Ok(Some(p))
+}
+
 /// Make a guest FileLock on `node`; None = out of guest memory.
-pub fn new_lock<U: GuestUi>(a: &mut Amiga<U>, node: NodeId, exclusive: bool) -> Result<Option<u32>, Refusal> {
-    let Some(p) = alloc_zeroed(a, LOCK_SIZE)? else { return Ok(None) };
+pub fn new_lock<U: GuestUi>(a: &mut Amiga<U>, node: NodeId, exclusive: bool) -> Result<Option<u32>, Refusal> { new_lock_in(a, node, exclusive, false) }
+
+/// [`new_lock`], optionally from the engine's own arena (locks the engine holds for its DOS list and AChains).
+pub fn new_lock_in<U: GuestUi>(a: &mut Amiga<U>, node: NodeId, exclusive: bool, sys: bool) -> Result<Option<u32>, Refusal> {
+    let Some(p) = (if sys { alloc_zeroed_sys(a, LOCK_SIZE)? } else { alloc_zeroed(a, LOCK_SIZE)? }) else { return Ok(None) };
     a.mem.write_u32(p + FL_KEY, node as u32).map_err(Refusal::mem("fl_Key"))?;
     a.mem.write_u32(p + FL_ACCESS, if exclusive { -1i32 as u32 } else { -2i32 as u32 }).map_err(Refusal::mem("fl_Access"))?;
     a.fs.locks.insert(p, LockRec { node, exclusive });
@@ -130,6 +147,6 @@ pub fn write_file<U: GuestUi>(a: &mut Amiga<U>, path: &str, bytes: Vec<u8>) -> R
 
 impl Default for FsState {
     fn default() -> Self {
-        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, icons: BTreeMap::new(), vars: Default::default(), dos: Default::default(), devs: Default::default(), anchors: Default::default() }
+        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, icons: BTreeMap::new(), vars: Default::default(), dos: Default::default(), devs: Default::default(), anchors: Default::default(), exall: BTreeMap::new() }
     }
 }

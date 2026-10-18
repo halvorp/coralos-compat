@@ -30,7 +30,11 @@ pub const STACK_TOP: u32 = 0x20_0000;
 pub const STACK_SIZE: u32 = 0x1_0000;
 /// The guest heap: everything above the stack, to the end of the 16 MiB guest RAM.
 pub const HEAP_START: u32 = STACK_TOP;
-pub const HEAP_END: u32 = 0x100_0000;
+pub const HEAP_END: u32 = SYS_ARENA_START;
+/// The engine's own arena, the top 256 KiB of guest RAM: structs the ENGINE keeps for the guest (the DOS list and its
+/// locks) live here so that publishing them never moves the addresses the program's own allocations get.
+pub const SYS_ARENA_START: u32 = 0x100_0000 - 0x4_0000;
+pub const SYS_ARENA_END: u32 = 0x100_0000;
 /// The CLI argument line a program gets when nothing is passed: AmigaDOS always ends it with a newline.
 pub const EMPTY_ARGS: &str = "\n";
 
@@ -51,6 +55,8 @@ pub struct Amiga<U: GuestUi> {
     pub stop_on_unimplemented: bool,
     /// The guest heap AllocMem/AllocVec serve from (bookkeeping host-side).
     pub heap: memory::Heap,
+    /// The engine's own arena (see SYS_ARENA_START).
+    pub sys_heap: memory::Heap,
     /// Forbid nesting depth (counted, not enforced: one task).
     pub forbid: u32,
     /// What the program wrote to its console.
@@ -96,7 +102,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };

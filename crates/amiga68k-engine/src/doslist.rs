@@ -63,6 +63,8 @@ pub struct DosListState {
 impl DosListState {
     /// (read locks held, write lock held).
     pub fn lock_counts(&self) -> (u32, bool) { (self.readers, self.writer) }
+    /// FileLocks the engine itself holds for the assigns it publishes (not the program's).
+    pub fn engine_locks(&self) -> usize { self.entries.iter().map(|e| e.locks.len()).sum() }
 }
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
@@ -84,7 +86,7 @@ fn pad4(n: u32) -> u32 { (n + 3) & !3 }
 fn port<U: GuestUi>(a: &mut Amiga<U>, dev: &str) -> Result<u32, Refusal> {
     let k = dev.to_ascii_uppercase();
     if let Some(&p) = a.fs.dos.ports.get(&k) { return Ok(p); }
-    let p = a.heap.alloc(PORT_SIZE).ok_or_else(|| Refusal("DOS list: out of guest memory (NOMEM)".into()))?;
+    let p = a.sys_heap.alloc(PORT_SIZE).ok_or_else(|| Refusal("DOS list: out of guest memory (NOMEM)".into()))?;
     a.mem.zero(p, PORT_SIZE).map_err(Refusal::mem("device port"))?;
     a.mem.write_u8(p + 8, NT_MSGPORT).map_err(Refusal::mem("device port"))?;
     a.fs.dos.ports.insert(k, p);
@@ -117,7 +119,7 @@ fn build<U: GuestUi>(a: &mut Amiga<U>, w: &Want) -> Result<Entry, Refusal> {
     let late_at = name_at + pad4(1 + w.name.len() as u32);
     let list_at = late_at + if w.ty == DLT_LATE { pad4(late.len() as u32 + 1) } else { 0 };
     let size = list_at + 8 * targets.len().saturating_sub(1) as u32;
-    let addr = a.heap.alloc(size).ok_or_else(nomem)?;
+    let addr = a.sys_heap.alloc(size).ok_or_else(nomem)?;
     a.mem.zero(addr, size).map_err(&m)?;
     a.mem.write_u32(addr + DL_TYPE, w.ty).map_err(&m)?;
     a.mem.write_u8(addr + name_at, w.name.len().min(255) as u8).map_err(&m)?;
@@ -136,7 +138,7 @@ fn build<U: GuestUi>(a: &mut Amiga<U>, w: &Want) -> Result<Entry, Refusal> {
         DLT_DIRECTORY => {
             let mut prev_next_field = None;
             for (i, &n) in targets.iter().enumerate() {
-                let l = new_lock(a, n, false)?.ok_or_else(nomem)?;
+                let l = new_lock_in(a, n, false, true)?.ok_or_else(nomem)?;
                 locks.push(l);
                 if i == 0 {
                     a.mem.write_u32(addr + DL_LOCK, l >> 2).map_err(&m)?;
@@ -162,7 +164,7 @@ fn build<U: GuestUi>(a: &mut Amiga<U>, w: &Want) -> Result<Entry, Refusal> {
 
 fn release<U: GuestUi>(a: &mut Amiga<U>, e: Entry) -> Result<(), Refusal> {
     for l in e.locks { if a.fs.locks.contains_key(&l) { crate::dos_files::free_lock(a, l >> 2, "DOS list")?; } }
-    a.heap.free(e.addr, e.size).map_err(|x| Refusal(format!("DOS list entry: {x}")))
+    a.sys_heap.free(e.addr, e.size).map_err(|x| Refusal(format!("DOS list entry: {x}")))
 }
 
 /// Make the guest-visible list match the volume (see the module doc).
