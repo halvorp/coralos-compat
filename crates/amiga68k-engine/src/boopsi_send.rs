@@ -17,7 +17,7 @@ use crate::{machine::Amiga, memory, Refusal};
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
-const MSG_BLOCK: u32 = 16;
+pub const MSG_BLOCK: u32 = 32;
 
 /// Start a guest call of `class`'s dispatcher on `obj` with `msg`; `then` receives the dispatcher's D0.
 pub fn send<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, class: u32, obj: u32, msg: u32, then: Cont<U>) -> Result<(), Refusal> {
@@ -26,7 +26,7 @@ pub fn send<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, class: u32, obj: u32, m
     guest_call::start(a, cpu, Next::Call { target: entry, d0: 0, aregs: vec![(0, class), (1, msg), (2, obj)], then })
 }
 
-/// A scratch message of up to 16 bytes, longwords from `words`.
+/// A scratch message of up to 32 bytes, longwords from `words`.
 pub fn make_msg<U: GuestUi>(a: &mut Amiga<U>, words: &[u32]) -> Result<u32, Refusal> {
     let m = memory::alloc_zeroed(a, MSG_BLOCK, "BOOPSI message")?;
     for (i, w) in words.iter().enumerate() { a.mem.write_u32(m + 4 * i as u32, *w).map_err(Refusal::mem("BOOPSI message"))?; }

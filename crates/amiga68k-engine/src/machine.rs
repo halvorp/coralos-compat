@@ -205,12 +205,11 @@ impl<U: GuestUi> Amiga<U> {
             .func(intuition::LVO_WINDOW_TO_FRONT, "WindowToFront", intuition::window_to_front::<U>)
             .func(intuition::LVO_WINDOW_TO_BACK, "WindowToBack", intuition::window_to_back::<U>)
             .func(intuition::LVO_SET_WINDOW_TITLES, "SetWindowTitles", intuition::set_window_titles::<U>)
-            .func(intuition::LVO_REFRESH_GADGETS, "RefreshGadgets", intuition::refresh_gadgets::<U>)
-            .func(intuition::LVO_REFRESH_GLIST, "RefreshGList", intuition::refresh_gadgets::<U>)
             .func(screen::LVO_LOCK_PUB_SCREEN, "LockPubScreen", screen::lock_pub_screen::<U>)
             .func(screen::LVO_UNLOCK_PUB_SCREEN, "UnlockPubScreen", screen::unlock_pub_screen::<U>)
             .with(graphics::register_intuition::<U>)
             .with(crate::boopsi_send::register::<U>)
+            .with(crate::boopsi_glist::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("gadtools.library", GADTOOLS_BASE)
             .func(gadtools::LVO_CREATE_GADGET_A, "CreateGadgetA", gadtools::create_gadget::<U>)
