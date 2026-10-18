@@ -34,10 +34,10 @@ fn load(a: &mut Amiga<RecordingGuestUi>, prefix: &str, dir: &std::path::Path) {
 }
 
 #[test]
-fn viewfont_and_directory_opus_run_until_they_need_a_second_process() {
+fn viewfont_and_directory_opus_run_until_their_launcher_process_needs_setfunction() {
     for (prog, progdir) in [("C/viewfont", "DOpus5:C"), ("DirectoryOpus", "DOpus5:")] {
         let Some((_, unimpl)) = census(prog, progdir) else { return };
-        assert_eq!(unimpl.last().map(String::as_str), Some("dos.library/CreateNewProc: unimplemented"), "{prog}: the first dos2-lane function still missing; all of {unimpl:?}");
+        assert_eq!(unimpl.last().map(String::as_str), Some("exec.library/SetFunction: unimplemented"), "{prog}: the first function still missing (CreateNewProc now works: the child process stops it); all of {unimpl:?}");
         assert!(unimpl.iter().all(|u| !u.starts_with("icon.library") && !u.starts_with("lowlevel.library")), "{prog}: {unimpl:?}");
     }
 }

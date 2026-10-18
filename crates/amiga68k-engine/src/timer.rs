@@ -4,7 +4,8 @@
 //!
 //! TR_ADDREQUEST queues a request that completes when the clock passes its deadline; completing = io_Error 0 and the
 //! request replied to its mn_ReplyPort (which signals the waiting program). DoIO / WaitIO on a still-pending timer
-//! fast-forward the clock to its deadline: one task, so nothing else could have run in between.
+//! park the calling task until it completes when other tasks exist (the host then advances the clock only when all
+//! are blocked); with ONE task nothing else could run in between, so the clock is fast-forwarded to the deadline.
 use alloc::string::String;
 use alloc::format;
 use crate::{exec_wait, machine::Amiga, Refusal};
@@ -45,7 +46,7 @@ impl<U: GuestUi> Amiga<U> {
         let now = self.clock_us;
         let (due, keep): (alloc::vec::Vec<_>, alloc::vec::Vec<_>) = self.timers.drain(..).partition(|x| x.0 <= now);
         self.timers = keep;
-        for (_, io) in due { complete(self, io, 0)?; }
+        for (_, io) in due { if io != 0 { complete(self, io, 0)?; } } // io 0 = a Delay() deadline: the clock reaching it is the wake-up
         Ok(())
     }
 }
@@ -58,6 +59,16 @@ fn complete<U: GuestUi>(a: &mut Amiga<U>, io: u32, err: i8) -> Result<(), Refusa
     let rp = a.mem.read_u32(io + MN_REPLYPORT).map_err(m("mn_ReplyPort"))?;
     if rp == 0 { return a.mem.write_u8(io + LN_TYPE, NT_REPLYMSG).map_err(m("ln_Type")); }
     exec_wait::put_msg(a, rp, io, NT_REPLYMSG)
+}
+
+/// Has `io` completed? Some(io_Error) if so; `remove` also takes the reply off its reply port (WaitIO).
+pub(crate) fn io_done<U: GuestUi>(a: &mut Amiga<U>, io: u32, remove: bool) -> Result<Option<u32>, Refusal> {
+    if a.mem.read_u8(io + LN_TYPE).map_err(m("ln_Type"))? != NT_REPLYMSG { return Ok(None); }
+    if remove {
+        let rp = a.mem.read_u32(io + MN_REPLYPORT).map_err(m("mn_ReplyPort"))?;
+        if rp != 0 && a.mem.read_u32(io).map_err(m("ln_Succ"))? != 0 { exec_wait::remove(a, io)?; }
+    }
+    Ok(Some(a.mem.read_u8(io + IO_ERROR).map_err(m("io_Error"))? as i8 as i32 as u32))
 }
 
 /// Start `io` on its device. Ok(true) = done already (completed in `start`), Ok(false) = queued.
@@ -101,7 +112,10 @@ fn finish_pending<U: GuestUi>(a: &mut Amiga<U>, io: u32) -> Result<(), Refusal> 
 pub fn do_io<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let io = cpu.areg(1);
     a.mem.write_u8(io + IO_FLAGS, a.mem.read_u8(io + IO_FLAGS).map_err(m("io_Flags"))? | IOF_QUICK).map_err(m("io_Flags"))?;
-    if !start(a, io)? { finish_pending(a, io)?; }
+    if !start(a, io)? {
+        if a.sched.tasks.len() > 1 { return crate::exec_wait::block_on(a, cpu, crate::exec_wait::Waiting::Io { io, remove: false }, format!("DoIO {io:#x}")); }
+        finish_pending(a, io)?;
+    }
     let err = a.mem.read_u8(io + IO_ERROR).map_err(m("io_Error"))? as i8;
     cpu.set_d0(err as i32 as u32);
     Ok(format!("[exec] DoIO {io:#x} -> {err} (clock {} us)", a.clock_us))
@@ -118,6 +132,7 @@ pub fn check_io<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
 /// WaitIO(a1 = io) -> io_Error, with the reply removed from the reply port.
 pub fn wait_io<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let io = cpu.areg(1);
+    if a.sched.tasks.len() > 1 { return crate::exec_wait::block_on(a, cpu, crate::exec_wait::Waiting::Io { io, remove: true }, format!("WaitIO {io:#x}")); }
     finish_pending(a, io)?;
     let rp = a.mem.read_u32(io + MN_REPLYPORT).map_err(m("mn_ReplyPort"))?;
     let queued = rp != 0 && a.mem.read_u8(io + LN_TYPE).map_err(m("ln_Type"))? == NT_REPLYMSG && a.mem.read_u32(io).map_err(m("ln_Succ"))? != 0;

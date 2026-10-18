@@ -7,12 +7,10 @@
 //! Offsets: m68k-linux-gnu-gcc -mno-align-int (the Amiga ABI) over AROS's exec/tasks.h and dos/dosextens.h field lists
 //! (2026-10-17): Task is 92 bytes; tc_SigAlloc 18, tc_SigRecvd 26, tc_SPLower 58, tc_SPUpper 62; pr_MsgPort 92,
 //! pr_StackSize 132, pr_CIS 156, pr_COS 160, pr_CLI 172. ExecBase.ThisTask is 276 (exec/execbase.h).
-use alloc::string::String;
 use alloc::format;
 use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_guest_mem::GuestMem;
-use retro_m68k::Cpu;
 
 pub const LVO_FIND_TASK: i32 = -294;
 
@@ -23,6 +21,8 @@ const CLI: u32 = 0x6100;
 const CLI_SIZE: u32 = 64;
 const COMMAND_NAME: u32 = 0x6180;
 pub const ARGS: u32 = 0x6200;
+/// The longest command name the engine's CLI BSTR buffers hold (COMMAND_NAME..ARGS leaves 127 bytes after the length).
+pub const CLI_NAME_MAX: usize = 127;
 
 const NT_PROCESS: u8 = 13;
 const NT_MSGPORT: u8 = 4;
@@ -45,6 +45,7 @@ const TC_SP_UPPER: u32 = 62;
 const PR_MSGPORT: u32 = 92;
 const PR_STACKSIZE: u32 = 132;
 const PR_CLI: u32 = 172;
+const PR_ARGUMENTS: u32 = 204;
 /// struct CommandLineInterface.cli_CommandName (a BSTR), dos/dosextens.h.
 const CLI_COMMAND_NAME: u32 = 16;
 
@@ -80,14 +81,8 @@ pub fn setup(mem: &mut GuestMem, exec_base: u32, stack_lower: u32, stack_upper: 
     Ok(PROCESS)
 }
 
-/// FindTask(a1 = name): NULL means "this task" (the program's Process). A named task is not modelled: one task.
-pub fn find_task<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let name = cpu.areg(1);
-    if name != 0 {
-        let n = a.mem.read_cstr(name).map_err(Refusal::mem("FindTask.name"))?;
-        cpu.set_d0(0);
-        return Ok(format!("[exec] FindTask name=\"{n}\" -> 0 (only the program's own task exists)"));
-    }
-    cpu.set_d0(PROCESS);
-    Ok(format!("[exec] FindTask NULL -> {PROCESS:#x} (this Process)"))
+/// The argument line of the running process: its `pr_Arguments` (CreateNewProc's NP_Arguments, SetArgStr) or, for the
+/// program started from the "CLI", the line at [`ARGS`].
+pub fn arg_ptr<U: GuestUi>(a: &Amiga<U>) -> u32 {
+    match a.mem.read_u32(a.sched.cur + PR_ARGUMENTS) { Ok(p) if p != 0 => p, _ => ARGS }
 }

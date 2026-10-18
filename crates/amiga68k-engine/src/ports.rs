@@ -1,11 +1,11 @@
 //! exec.library signals and message ports: AllocSignal / FreeSignal / CreateMsgPort / DeleteMsgPort.
 //!
-//! One task: its tc_SigAlloc (Task offset 18) is the allocation map, signals 0..15 are exec's own. A port is the
+//! Per task (the running one, `Amiga::sched.cur`): its tc_SigAlloc (Task offset 18) is the allocation map, signals 0..15 are exec's own. A port is the
 //! shape the AROS oracle shows for a live one (tests/oracle/msgport.bin): NT_MSGPORT, PA_SIGNAL, the first free user
-//! signal, mp_SigTask = the task, an empty list (lh_Head = &lh_Tail, lh_TailPred = &lh_Head, lh_Type 0).
+//! signal, mp_SigTask = the task that created it (PutMsg signals THAT task, exec_wait.rs), an empty list (lh_Head = &lh_Tail, lh_TailPred = &lh_Head, lh_Type 0).
 use alloc::string::String;
 use alloc::format;
-use crate::{machine::Amiga, process, Refusal};
+use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
@@ -20,14 +20,14 @@ const NT_MSGPORT: u8 = 4;
 const PA_SIGNAL: u8 = 0;
 
 fn sig_alloc<U: GuestUi>(a: &Amiga<U>) -> Result<u32, Refusal> {
-    a.mem.read_u32(process::PROCESS + TC_SIG_ALLOC).map_err(Refusal::mem("tc_SigAlloc"))
+    a.mem.read_u32(a.sched.cur + TC_SIG_ALLOC).map_err(Refusal::mem("tc_SigAlloc"))
 }
 
 /// Allocate `wanted` (-1 = any) of the task's signals; Some(bit) or None (all taken / that one taken).
 pub fn alloc_signal_bit<U: GuestUi>(a: &mut Amiga<U>, wanted: i32) -> Result<Option<u32>, Refusal> {
     let map = sig_alloc(a)?;
     let bit = if wanted < 0 { (0..32).find(|b| map & (1 << b) == 0) } else if wanted < 32 && map & (1 << wanted) == 0 { Some(wanted as u32) } else { None };
-    if let Some(b) = bit { a.mem.write_u32(process::PROCESS + TC_SIG_ALLOC, map | (1 << b)).map_err(Refusal::mem("tc_SigAlloc"))?; }
+    if let Some(b) = bit { a.mem.write_u32(a.sched.cur + TC_SIG_ALLOC, map | (1 << b)).map_err(Refusal::mem("tc_SigAlloc"))?; }
     Ok(bit)
 }
 
@@ -45,7 +45,7 @@ pub fn free_signal<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     if n == -1 { return Ok("[exec] FreeSignal -1".into()); }
     let map = sig_alloc(a)?;
     if !(16..32).contains(&n) || map & (1 << n) == 0 { return Err(Refusal(format!("FreeSignal {n}: not an allocated user signal"))); }
-    a.mem.write_u32(process::PROCESS + TC_SIG_ALLOC, map & !(1 << n)).map_err(Refusal::mem("tc_SigAlloc"))?;
+    a.mem.write_u32(a.sched.cur + TC_SIG_ALLOC, map & !(1 << n)).map_err(Refusal::mem("tc_SigAlloc"))?;
     Ok(format!("[exec] FreeSignal {n}"))
 }
 
@@ -56,7 +56,7 @@ pub fn init_port<U: GuestUi>(a: &mut Amiga<U>, port: u32, bit: u32) -> Result<()
     a.mem.write_u8(port + 8, NT_MSGPORT).map_err(m("mp_Node.ln_Type"))?;
     a.mem.write_u8(port + 14, PA_SIGNAL).map_err(m("mp_Flags"))?;
     a.mem.write_u8(port + 15, bit as u8).map_err(m("mp_SigBit"))?;
-    a.mem.write_u32(port + 16, process::PROCESS).map_err(m("mp_SigTask"))?;
+    a.mem.write_u32(port + 16, a.sched.cur).map_err(m("mp_SigTask"))?;
     a.mem.write_u32(port + 20, port + 24).map_err(m("lh_Head"))?;
     a.mem.write_u32(port + 28, port + 20).map_err(m("lh_TailPred"))?;
     Ok(())
@@ -67,7 +67,7 @@ pub fn create_msg_port<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
     let Some(bit) = alloc_signal_bit(a, -1)? else { cpu.set_d0(0); return Ok("[exec] CreateMsgPort -> 0 (no free signal)".into()) };
     let Some(port) = a.heap.alloc(MSGPORT_SIZE) else {
         let map = sig_alloc(a)?;
-        a.mem.write_u32(process::PROCESS + TC_SIG_ALLOC, map & !(1 << bit)).map_err(Refusal::mem("tc_SigAlloc"))?;
+        a.mem.write_u32(a.sched.cur + TC_SIG_ALLOC, map & !(1 << bit)).map_err(Refusal::mem("tc_SigAlloc"))?;
         cpu.set_d0(0);
         return Ok("[exec] CreateMsgPort -> 0 (no memory)".into());
     };
@@ -83,7 +83,7 @@ pub fn delete_msg_port<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
     let bit = a.mem.read_u8(port + 15).map_err(Refusal::mem("mp_SigBit"))? as u32;
     a.heap.free(port, MSGPORT_SIZE).map_err(|e| Refusal(format!("DeleteMsgPort: {e}")))?;
     let map = sig_alloc(a)?;
-    a.mem.write_u32(process::PROCESS + TC_SIG_ALLOC, map & !(1 << bit)).map_err(Refusal::mem("tc_SigAlloc"))?;
+    a.mem.write_u32(a.sched.cur + TC_SIG_ALLOC, map & !(1 << bit)).map_err(Refusal::mem("tc_SigAlloc"))?;
     Ok(format!("[exec] DeleteMsgPort {port:#x} (signal {bit})"))
 }
 
@@ -120,5 +120,5 @@ pub fn delete_io_request<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
 pub fn release_signal_bit<U: GuestUi>(a: &mut Amiga<U>, bit: i32) -> Result<(), Refusal> {
     if bit < 0 { return Ok(()); }
     let map = sig_alloc(a)?;
-    a.mem.write_u32(process::PROCESS + TC_SIG_ALLOC, map & !(1 << bit)).map_err(Refusal::mem("tc_SigAlloc"))
+    a.mem.write_u32(a.sched.cur + TC_SIG_ALLOC, map & !(1 << bit)).map_err(Refusal::mem("tc_SigAlloc"))
 }

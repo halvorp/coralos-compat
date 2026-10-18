@@ -3,8 +3,9 @@
 //!
 //! - [`Amiga::start_hunk`] loads a Hunk executable and positions the CPU at its entry, as an AmigaDOS CLI start
 //!   (A0 = the argument line, D0 = its length), returning to the exit slot.
-//! - [`Amiga::step`] runs at most `budget` instructions. A guest blocked in Wait / WaitPort executes NOTHING until its
-//!   wait is satisfied; then D0 is set to the call's result and the guest continues after the trap.
+//! - [`Amiga::step`] (sched.rs) runs at most `budget` instructions over all guest tasks. A task blocked in Wait /
+//!   WaitPort executes NOTHING until its wait is satisfied; then D0 is set to the call's result and it continues after
+//!   the trap.
 //! - [`Amiga::deliver`] turns a native event into what the guest expects (an IntuiMessage on the window's UserPort).
 //!   It never runs guest code: the next `step` does.
 //! - [`Amiga::run_hunk`] is one driver over those (tests, the census runner): it steps, and while the guest is blocked
@@ -34,29 +35,11 @@ impl<U: GuestUi> Amiga<U> {
         crate::graphics::setup(self).map_err(|r| r.0)?;
         crate::doslist::sync(self).map_err(|r| r.0)?; // the volumes are mounted by now: publish them in DosInfo
         let regs = [(retro_m68k::REG_A0, process::ARGS), (retro_m68k::REG_D0, EMPTY_ARGS.len() as u32)];
-        self.ctx = Some(retro_m68k::start_with(self, loaded.entry, STACK_TOP - 4, &regs));
-        self.waiting = None;
+        // The main program is the first task; its registers are created at its first dispatch (sched.rs).
+        self.sched = Default::default();
+        self.add_sched_task(process::PROCESS, "program".into(), true, crate::sched::Start { pc: loaded.entry, sp: STACK_TOP - 4, regs: regs.to_vec() }, None);
+        self.sched.cur = process::PROCESS;
         Ok(loaded)
-    }
-
-    /// Run at most `budget` instructions; the stats of what ran come back too.
-    pub fn step(&mut self, budget: u64) -> (Step, RunStats) {
-        let idle = RunStats { insns: 0, bus_faults: 0, halted: false, blocked: true, stalled_at: None };
-        let Some(mut ctx) = self.ctx.take() else { return (Step::Exited, RunStats { blocked: false, halted: true, ..idle }) };
-        if let Some(w) = self.waiting {
-            match self.try_satisfy(w) {
-                Ok(None) => { self.ctx = Some(ctx); return (Step::Blocked, idle); }
-                Ok(Some(v)) => { ctx.set_reg(retro_m68k::REG_D0, v); self.waiting = None; }
-                Err(Refusal(e)) => { self.ctx = Some(ctx); return (Step::Fault(e), idle); }
-            }
-        }
-        let stats = retro_m68k::resume(self, &mut ctx, budget);
-        crate::graphics::content::flush(self);
-        let step = if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked }
-            else if let Some(pc) = stats.stalled_at { Step::Fault(format!("the 68k stopped making progress at pc={pc:#x} (STOP, or halted after a double fault)")) }
-            else { Step::BudgetSpent };
-        if step != Step::Exited { self.ctx = Some(ctx); }
-        (step, stats)
     }
 
     /// A native event for the guest (idcmp.rs): a close request, a menu command or a control change becomes an

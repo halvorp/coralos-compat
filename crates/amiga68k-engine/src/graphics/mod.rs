@@ -134,7 +134,7 @@ pub fn register_intuition<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U>
         .named("GetScreenData", drawinfo::get_screen_data::<U>)
 }
 
-/// layers.library, opened on demand: clip regions are real; locking is a no-op (one task).
+/// layers.library, opened on demand: clip regions are real; locking is a no-op (tasks switch only after a library call, so a lock is never contended).
 pub fn layers_library<U: GuestUi>(base: u32) -> LibraryBuilder<U> {
     LibraryBuilder::new("layers.library", base)
         .named("InstallClipRegion", regions::install_clip_region::<U>)

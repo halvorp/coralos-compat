@@ -1,9 +1,10 @@
-//! Process-level dos.library services of a one-task machine: the standard streams a program can redirect, the
+//! Process-level dos.library services of the RUNNING process (`Amiga::sched.cur`): the standard streams a program can redirect, the
 //! argument string, the console and filesystem task ports, signals, console modes, record locks, parent of a handle.
 //!
 //! Offsets: m68k gcc -m68020 -mno-align-int over AROS dosextens.h (see process.rs): Process.pr_ConsoleTask 164,
 //! pr_FileSystemTask 168, pr_CIS 156, pr_COS 160, pr_Arguments 204; Task.tc_SigRecvd 26. There is exactly ONE CLI
-//! (number 1) and no other process, so MaxCli is 1 and record locks cannot collide with anybody: they succeed and say so.
+//! (number 1; processes made with NP_Cli are not entered in the root's CLI table), so MaxCli is 1. Record locks are
+//! always granted: contention between tasks is not enforced, and the log says so.
 use alloc::format;
 use alloc::string::String;
 use crate::dos_err::*;
@@ -35,8 +36,8 @@ pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
         .named("LockRecord", record_lock::<U>).named("LockRecords", record_lock::<U>).named("UnLockRecord", record_lock::<U>).named("UnLockRecords", record_lock::<U>)
 }
 
-fn field<U: GuestUi>(a: &Amiga<U>, off: u32) -> Result<u32, Refusal> { a.mem.read_u32(process::PROCESS + off).map_err(Refusal::mem("Process")) }
-fn set_field<U: GuestUi>(a: &mut Amiga<U>, off: u32, v: u32) -> Result<(), Refusal> { a.mem.write_u32(process::PROCESS + off, v).map_err(Refusal::mem("Process")) }
+fn field<U: GuestUi>(a: &Amiga<U>, off: u32) -> Result<u32, Refusal> { a.mem.read_u32(a.sched.cur + off).map_err(Refusal::mem("Process")) }
+fn set_field<U: GuestUi>(a: &mut Amiga<U>, off: u32, v: u32) -> Result<(), Refusal> { a.mem.write_u32(a.sched.cur + off, v).map_err(Refusal::mem("Process")) }
 
 /// Swap a Process stream field, returning the previous value. Input()/Output() read these fields.
 fn select<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, off: u32, name: &str) -> Result<String, Refusal> {
@@ -81,9 +82,9 @@ fn get_fs_task<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Re
 fn set_fs_task<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { set_task(a, cpu, PR_FILESYSTEM_TASK, "SYS") }
 
 fn max_cli<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { cpu.set_d0(1); Ok("[dos] MaxCli -> 1 (one CLI)".into()) }
-fn find_cli_proc<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+fn find_cli_proc<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let n = cpu.dreg(1);
-    cpu.set_d0(if n == 1 { process::PROCESS } else { 0 });
+    cpu.set_d0(if n == 1 { a.sched.cur } else { 0 });
     Ok(format!("[dos] FindCliProc {n}"))
 }
 
@@ -160,8 +161,8 @@ fn read_link<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
     match a.fs.vol.resolve(base, &path) { Ok(_) => fail(a, cpu, ERROR_OBJECT_WRONG_TYPE, u32::MAX, what), Err(e) => fail(a, cpu, e, u32::MAX, what) }
 }
 
-/// LockRecord / LockRecords / UnLockRecord / UnLockRecords: there is no second task to collide with, so every request
-/// succeeds (logged, so a program relying on contention shows why it never sees any).
+/// LockRecord / LockRecords / UnLockRecord / UnLockRecords: record contention between tasks is not
+/// enforced, so every request succeeds (logged, so a program relying on contention shows why it never sees any).
 fn record_lock<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    ok(a, cpu, DOSTRUE, "[dos] record lock request granted (no other task can hold a conflicting lock)".into())
+    ok(a, cpu, DOSTRUE, "[dos] record lock request granted (record contention between tasks is not enforced)".into())
 }

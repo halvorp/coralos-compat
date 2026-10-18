@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use alloc::format;
 use crate::dos_err::{set_ioerr, DosErr, ERROR_INVALID_LOCK};
 use crate::volume::{NodeId, Volume};
-use crate::{machine::Amiga, process, Refusal};
+use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
@@ -85,13 +85,13 @@ pub fn lock_node<U: GuestUi>(a: &Amiga<U>, bptr: u32) -> Result<NodeId, DosErr> 
 
 /// The directory relative paths resolve against: the Process's current directory.
 pub fn cur_dir<U: GuestUi>(a: &Amiga<U>) -> NodeId {
-    let b = a.mem.read_u32(process::PROCESS + PR_CURRENT_DIR).unwrap_or(0);
+    let b = a.mem.read_u32(a.sched.cur + PR_CURRENT_DIR).unwrap_or(0);
     lock_node(a, b).unwrap_or_else(|_| a.fs.vol.boot_device())
 }
 
 pub fn set_cur_dir<U: GuestUi>(a: &mut Amiga<U>, bptr: u32) -> Result<u32, Refusal> {
-    let old = a.mem.read_u32(process::PROCESS + PR_CURRENT_DIR).map_err(Refusal::mem("pr_CurrentDir"))?;
-    a.mem.write_u32(process::PROCESS + PR_CURRENT_DIR, bptr).map_err(Refusal::mem("pr_CurrentDir"))?;
+    let old = a.mem.read_u32(a.sched.cur + PR_CURRENT_DIR).map_err(Refusal::mem("pr_CurrentDir"))?;
+    a.mem.write_u32(a.sched.cur + PR_CURRENT_DIR, bptr).map_err(Refusal::mem("pr_CurrentDir"))?;
     Ok(old)
 }
 

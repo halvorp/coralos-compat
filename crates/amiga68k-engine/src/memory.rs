@@ -1,14 +1,13 @@
-//! exec.library memory: AllocMem / FreeMem / AllocVec / FreeVec / AvailMem / CopyMem over a guest heap, plus the
-//! single-task trivia C startups call next (Forbid / Permit / SetSignal).
+//! exec.library memory: AllocMem / FreeMem / AllocVec / FreeVec / AvailMem / CopyMem over a guest heap, plus SetSignal and StackSwap.
 //!
 //! (The heap itself is retro_guest_mem::heap, shared with the other engines.) Its bookkeeping lives HOST-side (the guest cannot corrupt it): a first-fit free list and the set of live
 //! blocks. A FreeMem of an address this heap never returned, or with a size other than the one allocated, is a named
-//! refusal, not a silent corruption. One task only: Forbid/Permit are counted, not enforced.
+//! refusal, not a silent corruption. Forbid/Permit/Disable/Enable live in exec_task.rs.
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
 use alloc::format;
-use crate::{machine::Amiga, process, Refusal};
+use crate::{machine::Amiga, Refusal};
 pub use retro_guest_mem::heap::Heap;
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
@@ -90,20 +89,10 @@ pub fn copy_mem<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
     Ok(format!("[exec] CopyMem {src:#x} -> {dst:#x} n={n}"))
 }
 
-pub fn forbid<U: GuestUi>(a: &mut Amiga<U>, _: &mut Cpu) -> Result<String, Refusal> {
-    a.forbid += 1;
-    Ok(format!("[exec] Forbid (depth {})", a.forbid))
-}
-
-pub fn permit<U: GuestUi>(a: &mut Amiga<U>, _: &mut Cpu) -> Result<String, Refusal> {
-    a.forbid = a.forbid.checked_sub(1).ok_or_else(|| Refusal("Permit without Forbid".into()))?;
-    Ok(format!("[exec] Permit (depth {})", a.forbid))
-}
-
-/// SetSignal(d0 = newSignals, d1 = signalMask) -> d0 = the old signals: the program's own tc_SigRecvd.
+/// SetSignal(d0 = newSignals, d1 = signalMask) -> d0 = the old signals: the running task's own tc_SigRecvd.
 pub fn set_signal<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (new, mask) = (cpu.dreg(0), cpu.dreg(1));
-    let at = process::PROCESS + TC_SIG_RECVD;
+    let at = a.sched.cur + TC_SIG_RECVD;
     let old = a.mem.read_u32(at).map_err(Refusal::mem("tc_SigRecvd"))?;
     a.mem.write_u32(at, (old & !mask) | (new & mask)).map_err(Refusal::mem("tc_SigRecvd"))?;
     cpu.set_d0(old);
@@ -137,7 +126,7 @@ pub fn stack_swap<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     if !(new_lower < new_ptr && new_ptr <= new_upper) { return Err(Refusal(format!("StackSwap: stk_Pointer {new_ptr:#x} outside [{new_lower:#x}, {new_upper:#x}]"))); }
     let old_sp = cpu.areg(7);
     let ret = a.mem.read_u32(old_sp).map_err(m("return address"))?;
-    let task = process::PROCESS;
+    let task = a.sched.cur;
     let (old_lower, old_upper) = (a.mem.read_u32(task + TC_SP_LOWER).map_err(m("tc_SPLower"))?, a.mem.read_u32(task + TC_SP_UPPER).map_err(m("tc_SPUpper"))?);
     a.mem.write_u32(new_ptr - 4, ret).map_err(m("new stack"))?;
     a.mem.write_u32(task + TC_SP_LOWER, new_lower).map_err(m("tc_SPLower"))?;

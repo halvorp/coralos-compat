@@ -58,14 +58,14 @@ fn read_bytes<U: GuestUi>(a: &Amiga<U>, at: u32, n: u32, what: &str) -> Result<V
 
 /// Input() -> the Process's pr_CIS: the console until SelectInput() redirects it.
 pub fn input<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let fh = a.mem.read_u32(process::PROCESS + PR_CIS).map_err(Refusal::mem("pr_CIS"))?;
+    let fh = a.mem.read_u32(a.sched.cur + PR_CIS).map_err(Refusal::mem("pr_CIS"))?;
     cpu.set_d0(fh);
     Ok(if fh == STDIN_FH >> 2 { "[dos] Input -> console".into() } else { format!("[dos] Input -> {:#x} (redirected)", fh << 2) })
 }
 
 /// Output() -> the Process's pr_COS: the console until SelectOutput() redirects it.
 pub fn output<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let fh = a.mem.read_u32(process::PROCESS + PR_COS).map_err(Refusal::mem("pr_COS"))?;
+    let fh = a.mem.read_u32(a.sched.cur + PR_COS).map_err(Refusal::mem("pr_COS"))?;
     cpu.set_d0(fh);
     Ok(if fh == STDOUT_FH >> 2 { "[dos] Output -> console".into() } else { format!("[dos] Output -> {:#x} (redirected)", fh << 2) })
 }
@@ -111,14 +111,14 @@ pub fn flush<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
 
 /// IoErr() -> the Process's pr_Result2.
 pub fn io_err<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let v = a.mem.read_u32(process::PROCESS + PR_RESULT2).map_err(Refusal::mem("pr_Result2"))?;
+    let v = a.mem.read_u32(a.sched.cur + PR_RESULT2).map_err(Refusal::mem("pr_Result2"))?;
     cpu.set_d0(v);
     Ok(format!("[dos] IoErr -> {v}"))
 }
 
 /// SetIoErr(d1 = code) -> the previous code.
 pub fn set_io_err<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let at = process::PROCESS + PR_RESULT2;
+    let at = a.sched.cur + PR_RESULT2;
     let old = a.mem.read_u32(at).map_err(Refusal::mem("pr_Result2"))?;
     a.mem.write_u32(at, cpu.dreg(1)).map_err(Refusal::mem("pr_Result2"))?;
     cpu.set_d0(old);
@@ -127,7 +127,7 @@ pub fn set_io_err<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
 
 /// Cli() -> the CommandLineInterface (an APTR, not a BPTR).
 pub fn cli<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let b = a.mem.read_u32(process::PROCESS + PR_CLI).map_err(Refusal::mem("pr_CLI"))?;
+    let b = a.mem.read_u32(a.sched.cur + PR_CLI).map_err(Refusal::mem("pr_CLI"))?;
     cpu.set_d0(b << 2);
     Ok(format!("[dos] Cli -> {:#x}", b << 2))
 }
@@ -135,7 +135,7 @@ pub fn cli<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusa
 /// GetProgramName(d1 = buffer, d2 = length) -> DOSTRUE: the CLI's cli_CommandName as a C string, truncated to fit.
 pub fn get_program_name<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (buf, len) = (cpu.dreg(1), cpu.dreg(2));
-    let cli = a.mem.read_u32(process::PROCESS + PR_CLI).map_err(Refusal::mem("pr_CLI"))? << 2;
+    let cli = a.mem.read_u32(a.sched.cur + PR_CLI).map_err(Refusal::mem("pr_CLI"))? << 2;
     let bstr = a.mem.read_u32(cli + CLI_COMMAND_NAME).map_err(Refusal::mem("cli_CommandName"))? << 2;
     let n = a.mem.read_u8(bstr).map_err(Refusal::mem("cli_CommandName"))? as u32;
     if len == 0 { cpu.set_d0(0); return Ok("[dos] GetProgramName buffer of 0 bytes -> FALSE".into()); }
@@ -146,10 +146,29 @@ pub fn get_program_name<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
     Ok(format!("[dos] GetProgramName -> \"{}\"", String::from_utf8_lossy(&name)))
 }
 
-/// Delay(d1 = ticks): one task and no clock source yet, so it returns at once (logged so a timing-dependent program
-/// shows why it misbehaves).
-pub fn delay<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    Ok(format!("[dos] Delay {} ticks (not modelled: returns at once)", cpu.dreg(1)))
+/// SetProgramName(d1 = name) -> DOSTRUE: rewrite the CLI's cli_CommandName in place (AROS rom/dos/setprogramname.c); FALSE
+/// without a CLI (a process made without NP_Cli) or for a name that does not fit the 127-byte BSTR buffers the engine
+/// gives a CLI (AROS's are 255).
+pub fn set_program_name<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let name = a.mem.read_cstr(cpu.dreg(1)).map_err(Refusal::mem("SetProgramName.name"))?;
+    let cli = a.mem.read_u32(a.sched.cur + PR_CLI).map_err(Refusal::mem("pr_CLI"))? << 2;
+    if cli == 0 || name.len() > crate::process::CLI_NAME_MAX { cpu.set_d0(0); return Ok(format!("[dos] SetProgramName \"{name}\" -> FALSE ({})", if cli == 0 { "no CLI" } else { "name too long" })); }
+    let bstr = a.mem.read_u32(cli + CLI_COMMAND_NAME).map_err(Refusal::mem("cli_CommandName"))? << 2;
+    a.mem.write_u8(bstr, name.len() as u8).map_err(Refusal::mem("cli_CommandName"))?;
+    a.mem.write_bytes(bstr + 1, name.as_bytes()).map_err(Refusal::mem("cli_CommandName"))?;
+    cpu.set_d0(DOSTRUE);
+    Ok(format!("[dos] SetProgramName \"{name}\""))
+}
+
+/// Delay(d1 = ticks of 1/50 s): with other tasks in the machine the caller sleeps until the VIRTUAL clock reaches the
+/// deadline (the host advances it when every task is blocked, run.rs), so the others run meanwhile. With ONE task there
+/// is nothing to run meanwhile and no clock source driving `step`, so it returns at once (logged).
+pub fn delay<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let ticks = cpu.dreg(1);
+    if a.sched.tasks.len() < 2 { return Ok(format!("[dos] Delay {ticks} ticks (the only task: returns at once)")); }
+    let until = a.clock_us + ticks as u64 * crate::dos_misc::TICK_US;
+    a.timers.push((until, 0));
+    crate::exec_wait::block_on(a, cpu, crate::exec_wait::Waiting::Until(until), format!("Delay {ticks} ticks"))
 }
 
 pub const LVO_IS_INTERACTIVE: i32 = -216;

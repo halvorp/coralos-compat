@@ -7,7 +7,7 @@
 //! instruction runs while a wait is unsatisfied.
 use alloc::string::String;
 use alloc::format;
-use crate::{machine::Amiga, process, Refusal};
+use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
@@ -19,24 +19,46 @@ pub const LVO_REPLY_MSG: i32 = -378;
 pub const LVO_WAIT_PORT: i32 = -384;
 
 const TC_SIG_RECVD: u32 = 26;
+const TC_SIG_ALLOC: u32 = 18;
 const MP_SIGBIT: u32 = 15;
+const MP_FLAGS: u32 = 14;
+const MP_SIGTASK: u32 = 16;
+const PA_SIGNAL: u8 = 0;
+const PA_IGNORE: u8 = 2;
 const MP_MSGLIST: u32 = 20;
 const MN_REPLYPORT: u32 = 14;
 const LN_TYPE: u32 = 8;
 const NT_MESSAGE: u8 = 5;
 const NT_REPLYMSG: u8 = 7;
 
-/// What a blocked guest is waiting for.
+/// What a blocked task is waiting for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Waiting { Signals(u32), Port(u32) }
+pub enum Waiting {
+    /// Wait(set).
+    Signals(u32),
+    /// WaitPort(port): the port's first message.
+    Port(u32),
+    /// DoIO / WaitIO on a request still in flight: done when it is replied; `remove` takes the reply off its port.
+    Io { io: u32, remove: bool },
+    /// Delay(): until the virtual clock reaches this many microseconds.
+    Until(u64),
+    /// ObtainSemaphore on one another task holds: done when it is free (and then it is the task's).
+    Sem(u32),
+}
 
 fn m(what: &'static str) -> impl Fn(retro_guest_mem::MemError) -> Refusal { Refusal::mem(what) }
 
-pub fn sig_recvd<U: GuestUi>(a: &Amiga<U>) -> Result<u32, Refusal> { a.mem.read_u32(process::PROCESS + TC_SIG_RECVD).map_err(m("tc_SigRecvd")) }
-fn set_sig_recvd<U: GuestUi>(a: &mut Amiga<U>, v: u32) -> Result<(), Refusal> { a.mem.write_u32(process::PROCESS + TC_SIG_RECVD, v).map_err(m("tc_SigRecvd")) }
+pub fn sig_recvd<U: GuestUi>(a: &Amiga<U>, task: u32) -> Result<u32, Refusal> { a.mem.read_u32(task + TC_SIG_RECVD).map_err(m("tc_SigRecvd")) }
+fn set_sig_recvd<U: GuestUi>(a: &mut Amiga<U>, task: u32, v: u32) -> Result<(), Refusal> { a.mem.write_u32(task + TC_SIG_RECVD, v).map_err(m("tc_SigRecvd")) }
 
-/// Raise `sigs` on the (one) task.
-pub fn signal_task<U: GuestUi>(a: &mut Amiga<U>, sigs: u32) -> Result<(), Refusal> { let r = sig_recvd(a)?; set_sig_recvd(a, r | sigs) }
+/// Raise `sigs` on `task` and wake it if that satisfies its wait. A `task` the scheduler does not know is a named
+/// refusal (a port whose mp_SigTask died, or a made-up address), never a write into arbitrary memory.
+pub fn signal_task<U: GuestUi>(a: &mut Amiga<U>, task: u32, sigs: u32) -> Result<(), Refusal> {
+    if !a.known_task(task) { return Err(Refusal(format!("Signal: {task:#x} is not a task"))); }
+    let r = sig_recvd(a, task)?;
+    set_sig_recvd(a, task, r | sigs)?;
+    a.wake(task)
+}
 
 /// AddTail(list, node).
 pub fn add_tail<U: GuestUi>(a: &mut Amiga<U>, list: u32, node: u32) -> Result<(), Refusal> {
@@ -71,10 +93,17 @@ pub fn port_head<U: GuestUi>(a: &Amiga<U>, port: u32) -> Result<u32, Refusal> {
 
 /// PutMsg semantics: queue `msg` on `port` and signal the port's task (PA_SIGNAL: the only kind made here).
 pub fn put_msg<U: GuestUi>(a: &mut Amiga<U>, port: u32, msg: u32, ty: u8) -> Result<(), Refusal> {
+    let (flags, task) = (a.mem.read_u8(port + MP_FLAGS).map_err(m("mp_Flags"))? & 3, a.mem.read_u32(port + MP_SIGTASK).map_err(m("mp_SigTask"))?);
+    match flags {
+        PA_SIGNAL if !a.known_task(task) => return Err(Refusal(format!("PutMsg: port {port:#x}'s mp_SigTask {task:#x} is not a live task"))),
+        PA_SIGNAL | PA_IGNORE => {}
+        f => return Err(Refusal(format!("PutMsg: port {port:#x} has mp_Flags {f} (PA_SOFTINT is not modelled)"))),
+    }
     a.mem.write_u8(msg + LN_TYPE, ty).map_err(m("ln_Type"))?;
     add_tail(a, port + MP_MSGLIST, msg)?;
+    if flags == PA_IGNORE { return Ok(()); }
     let bit = a.mem.read_u8(port + MP_SIGBIT).map_err(m("mp_SigBit"))? as u32;
-    signal_task(a, 1 << bit)
+    signal_task(a, task, 1 << bit)
 }
 
 /// PutMsg(a0 = port, a1 = message).
@@ -105,49 +134,64 @@ pub fn reply_msg<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     Ok(format!("[exec] ReplyMsg {msg:#x} -> port {rp:#x}"))
 }
 
-/// Signal(a1 = task, d0 = signals): one task, so `task` must be it.
+/// Signal(a1 = task, d0 = signals).
 pub fn signal<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    if cpu.areg(1) != process::PROCESS { return Err(Refusal(format!("Signal: {:#x} is not a task (one task only)", cpu.areg(1)))); }
-    signal_task(a, cpu.dreg(0))?;
-    Ok(format!("[exec] Signal {:#x}", cpu.dreg(0)))
+    let (task, sigs) = (cpu.areg(1), cpu.dreg(0));
+    signal_task(a, task, sigs)?;
+    Ok(format!("[exec] Signal {task:#x} {sigs:#x}"))
 }
 
-/// Wait(d0 = signal set) -> the received signals of that set (cleared). Blocks while none is set.
+/// Wait(d0 = signal set) -> the received signals of that set (cleared). Blocks while none is set. Waiting for a signal
+/// the task never allocated could never end by exec's own doing (only an explicit Signal() with that mask could),
+/// so it is refused by name instead of hanging the task.
 pub fn wait<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let set = cpu.dreg(0);
-    match a.try_satisfy(Waiting::Signals(set))? {
-        Some(got) => { cpu.set_d0(got); Ok(format!("[exec] Wait {set:#x} -> {got:#x}")) }
-        None => { a.waiting = Some(Waiting::Signals(set)); cpu.block(); Ok(format!("[exec] Wait {set:#x} (blocked)")) }
+    let alloc = a.mem.read_u32(a.sched.cur + TC_SIG_ALLOC).map_err(m("tc_SigAlloc"))?;
+    if set == 0 || set & !alloc != 0 {
+        return Err(Refusal(format!("Wait {set:#x}: signals {:#x} are not allocated to this task (AllocSignal); it could never wake", if set == 0 { 0 } else { set & !alloc })));
     }
+    block_on(a, cpu, Waiting::Signals(set), format!("Wait {set:#x}"))
 }
 
 /// WaitPort(a0 = port) -> the first message (left queued). Blocks while the port is empty.
 pub fn wait_port<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let port = cpu.areg(0);
-    match a.try_satisfy(Waiting::Port(port))? {
-        Some(head) => { cpu.set_d0(head); Ok(format!("[exec] WaitPort {port:#x} -> {head:#x}")) }
-        None => { a.waiting = Some(Waiting::Port(port)); cpu.block(); Ok(format!("[exec] WaitPort {port:#x} (blocked)")) }
+    block_on(a, cpu, Waiting::Port(port), format!("WaitPort {port:#x}"))
+}
+
+/// Complete `w` now if it holds, else park the running task on it and end its slice.
+pub fn block_on<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, w: Waiting, what: String) -> Result<String, Refusal> {
+    let cur = a.sched.cur;
+    match a.satisfy(cur, w, true)? {
+        Some(v) => { cpu.set_d0(v); Ok(format!("[exec] {what} -> {v:#x}")) }
+        None => { a.park(w); cpu.block(); Ok(format!("[exec] {what} (blocked)")) }
     }
 }
 
 impl<U: GuestUi> Amiga<U> {
-    /// Is `w` satisfied now? Some(the call's result), consuming the matched signals; None = still waiting.
-    pub fn try_satisfy(&mut self, w: Waiting) -> Result<Option<u32>, Refusal> {
+    /// Does `w` hold for `task`? Some(the call's result) if so; with `commit`, consuming what the call consumes
+    /// (the matched signals, the semaphore). None = still waiting.
+    pub fn satisfy(&mut self, task: u32, w: Waiting, commit: bool) -> Result<Option<u32>, Refusal> {
         match w {
             Waiting::Signals(set) => {
-                let r = sig_recvd(self)?;
+                let r = sig_recvd(self, task)?;
                 if r & set == 0 { return Ok(None); }
-                set_sig_recvd(self, r & !set)?;
+                if commit { set_sig_recvd(self, task, r & !set)?; }
                 Ok(Some(r & set))
             }
             Waiting::Port(port) => {
                 let head = port_head(self, port)?;
                 if head == 0 { return Ok(None); }
-                let bit = self.mem.read_u8(port + MP_SIGBIT).map_err(m("mp_SigBit"))? as u32;
-                let r = sig_recvd(self)?;
-                set_sig_recvd(self, r & !(1 << bit))?;
+                if commit {
+                    let bit = self.mem.read_u8(port + MP_SIGBIT).map_err(m("mp_SigBit"))? as u32;
+                    let r = sig_recvd(self, task)?;
+                    set_sig_recvd(self, task, r & !(1 << bit))?;
+                }
                 Ok(Some(head))
             }
+            Waiting::Io { io, remove } => crate::timer::io_done(self, io, remove && commit),
+            Waiting::Until(t) => Ok(if self.clock_us >= t { Some(0) } else { None }),
+            Waiting::Sem(ss) => crate::semaphores::try_take(self, task, ss, commit),
         }
     }
 }

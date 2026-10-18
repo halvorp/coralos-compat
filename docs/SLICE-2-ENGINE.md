@@ -51,9 +51,8 @@ bounded step, stop reason, GuestUi); Exec signals, ports, menu packing and Intui
 
 ### Exec LVOs to bridge (exec.library, negative offsets from ExecBase)
 `Wait` (-318, D0 = signal set), `GetMsg` (-372, A0 = port), `ReplyMsg` (-378, A1 = msg), `WaitPort` (-384, A0 = port).
-Signals are PER TASK (council review 2026-10-17): host-side `tc_SigRecvd` keyed by the guest Task address (one task
-in this slice: the program's own, a zero-filled `struct Task` in guest RAM whose address `FindTask(NULL)` would return).
-`deliver` reads the port's `mp_SigTask` and sets that task's bit. Each window's UserPort gets a signal bit
+Signals are PER TASK (council review 2026-10-17): host-side `tc_SigRecvd` keyed by the guest Task address (slice 2 had one task; the tasks lane added more: see "Tasks" below). `deliver` reads the port's `mp_SigTask` and sets that task's bit.
+Each window's UserPort gets a signal bit
 (allocate from bit 16 up; 0..15 are system). 
 - `Wait(set)`: if `SigRecvd & set != 0` -> D0 = that, clear ONLY those bits (unrelated bits are kept), return now. Else record the wait set and
   `cpu.block()`; on the matching `deliver`, D0 = matched bits (cleared) and the next `step` resumes the guest.
@@ -123,3 +122,28 @@ the engine's constants. Next ground truth: FS-UAE + an AROS ROM, dumping the rea
 ## Out of scope (named, not promised)
 Multiple guest tasks, Forbid/Permit, timer.device, any IDCMP class but the two above, controls/gadgets, real
 binaries (amimon is the next step after the CoralOS frontend lands).
+
+## Tasks (exec multitasking in one engine)
+
+`sched.rs` is the scheduler behind the one host entry `Amiga::step(budget)`. Every guest task (the program's Process,
+`AddTask` tasks, `CreateNewProc`/`CreateProc` processes) has a real `struct Task`/`Process` in guest RAM, its own stack and
+`CpuContext`, and host-side state (`sched::Task`): wait condition, Forbid/Disable nesting, local variables and host-started
+guest calls (swapped in while it runs), and what a dos process owns. `ExecBase.ThisTask`, `TDNestCnt`/`IDNestCnt` and the
+`TaskReady`/`TaskWait` lists (rebuilt from the host table at every switch) are real. The rules:
+
+- highest `ln_Pri` first; equal priorities round-robin on a quantum of 20 000 instructions; a Signal/PutMsg/ReleaseSemaphore
+  or timer wake that makes a higher-priority task ready ends the running task's slice at the end of that library call;
+- Forbid()/Disable() stop both switches (a task that Waits inside one is switched away anyway). Disable/Enable act as
+  Forbid/Permit: interrupts are not modelled;
+- a task parks in Wait / WaitPort / WaitIO / DoIO / Delay / ObtainSemaphore (`exec_wait::Waiting`); with ONE task DoIO/Delay
+  keep their old shortcuts (fast-forward / return at once), with more they sleep on the virtual clock the host advances;
+- `step` returns `Blocked` when every task is parked, `BudgetSpent`, or `Exited` when the MAIN program ends. The other
+  tasks are then dropped and named in the log and `sched.dropped` (AmigaOS would keep running them);
+- signals and ports follow `mp_SigTask`, never a global; Signal/PutMsg to an address that is not a live task is a named
+  refusal. `Wait` for a signal the task never allocated is refused (it could never wake);
+- created processes get the argument line in A0/D0, return into a finalizer that runs `NP_ExitCode`, and give back their
+  stack, streams (`NP_Close*`), seglist (`NP_FreeSeglist`), current/home directory locks and variables when they end or are
+  `RemTask`ed. Not modelled, refused by name: `NP_Synchronous`, `NP_NotifyOnDeath`, `NP_Affinity`.
+
+Sources of the facts: AROS rom/exec (addtask/newaddtask/remtask/wait/signal/settaskpri) and rom/dos (createnewproc,
+createproc, exit) as interface facts; the DOpus 5 IPC layer (Library/ipc.c) for the startup handshake the real binary does.

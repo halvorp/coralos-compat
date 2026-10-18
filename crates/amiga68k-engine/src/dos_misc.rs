@@ -18,6 +18,8 @@ use retro_m68k::Cpu;
 const TICKS_PER_SEC: u64 = 50;
 const SECS_PER_DAY: u64 = 86_400;
 /// 2026-01-01 as days since 1978-01-01 (the Amiga epoch): 48 years, 12 leap days.
+/// One dos tick, 1/50 s, in microseconds of the virtual clock.
+pub const TICK_US: u64 = 20_000;
 pub const EPOCH_DAYS_2026: i32 = 48 * 365 + 12;
 const BLOCK_SIZE: u32 = 512;
 const ID_DOS_DISK: u32 = 0x444F_5300; // 'DOS\0'

@@ -20,7 +20,7 @@ use crate::dos_err::*;
 use crate::fs::*;
 use crate::guest_str::{read_bytes_z, write_z};
 use crate::libtable::LibraryBuilder;
-use crate::{exec_wait, lists, machine::Amiga, process, Refusal};
+use crate::{exec_wait, lists, machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
@@ -49,7 +49,7 @@ pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
 fn key(n: &[u8]) -> Vec<u8> { n.to_ascii_lowercase() }
 
 fn list_ready<U: GuestUi>(a: &mut Amiga<U>) -> Result<u32, Refusal> {
-    let l = process::PROCESS + PR_LOCAL_VARS;
+    let l = a.sched.cur + PR_LOCAL_VARS;
     if a.mem.read_u32(l).map_err(Refusal::mem("pr_LocalVars"))? == 0 {
         a.mem.write_u32(l, l + 4).map_err(Refusal::mem("pr_LocalVars"))?;
         a.mem.write_u32(l + 4, 0).map_err(Refusal::mem("pr_LocalVars"))?;
@@ -89,6 +89,14 @@ fn drop_local<U: GuestUi>(a: &mut Amiga<U>, i: usize) -> Result<(), Refusal> {
     exec_wait::remove(a, r.node)?;
     let size = LV_SIZE + r.name.len() as u32 + 1 + r.value.len() as u32 + 1;
     a.heap.free(r.block, size).map_err(|e| Refusal(format!("variable node: {e}")))
+}
+
+/// Free every local variable of a process that ended (`vars` is its host-side table; the nodes are heap blocks).
+pub fn free_locals<U: GuestUi>(a: &mut Amiga<U>, vars: Vars) {
+    for r in vars.locals {
+        let size = LV_SIZE + r.name.len() as u32 + 1 + r.value.len() as u32 + 1;
+        if let Err(e) = a.heap.free(r.block, size) { a.log.push(format!("[dos] variable node {:#x} not freed: {e}", r.block)); }
+    }
 }
 
 /// The value of a local variable.

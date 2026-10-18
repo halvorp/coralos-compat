@@ -30,7 +30,9 @@ pub(crate) const PR_RESULT2: u32 = 148;
 
 /// Store `e` as the program's secondary error (what IoErr() returns).
 pub fn set_ioerr(mem: &mut GuestMem, e: DosErr) {
-    let _ = mem.write_u32(crate::process::PROCESS + PR_RESULT2, e.0);
+    // The running task's Process: ExecBase.ThisTask, as FindTask(0) would say.
+    let task = mem.read_u32(crate::machine::EXEC_BASE + crate::sched::EXECBASE_THIS_TASK).unwrap_or(crate::process::PROCESS);
+    let _ = mem.write_u32(task + PR_RESULT2, e.0);
 }
 pub const ERROR_DELETE_PROTECTED: DosErr = DosErr(222);
 pub const ERROR_COMMENT_TOO_BIG: DosErr = DosErr(220);

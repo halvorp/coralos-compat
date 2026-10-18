@@ -1,14 +1,15 @@
 //! exec.library SignalSemaphores (exec/semaphores.h): Init / Obtain / Release / Attempt (exclusive and shared) and the
 //! public list (AddSemaphore / RemSemaphore / FindSemaphore).
 //!
-//! One task, so a semaphore never blocks: Obtain by the owner nests, and the only failure is a Release by a task that
+//! A semaphore is owned by one task (host-side `Sched::sem_owner`, mirrored into ss_Owner): Obtain by the owner nests, by
+//! another task parks the caller until it is released (sched.rs), and the failures are a Release by a task that
 //! does not hold it - a named refusal. Ownership and nesting are kept HOST-side and mirrored into the guest struct
 //! (ss_NestCount 14, ss_Owner 40; layout: ss_Link Node 0..14, ss_NestCount WORD 14, ss_WaitQueue MinList 16..28,
 //! ss_MultipleLink SemaphoreRequest 28..40, ss_Owner 40, ss_QueueCount WORD 44 = 46 bytes; AROS exec/semaphores.h,
 //! m68k ABI).
 use alloc::string::String;
 use alloc::format;
-use crate::{machine::Amiga, process, Refusal};
+use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
@@ -33,9 +34,9 @@ const NT_SIGNALSEM: u8 = 15;
 
 fn m(what: &'static str) -> impl Fn(retro_guest_mem::MemError) -> Refusal { Refusal::mem(what) }
 
-fn mirror<U: GuestUi>(a: &mut Amiga<U>, ss: u32, nest: u16) -> Result<(), Refusal> {
+fn mirror<U: GuestUi>(a: &mut Amiga<U>, ss: u32, nest: u16, owner: u32) -> Result<(), Refusal> {
     a.mem.write_u16(ss + SS_NEST, nest).map_err(m("ss_NestCount"))?;
-    a.mem.write_u32(ss + SS_OWNER, if nest == 0 { 0 } else { process::PROCESS }).map_err(m("ss_Owner"))
+    a.mem.write_u32(ss + SS_OWNER, if nest == 0 { 0 } else { owner }).map_err(m("ss_Owner"))
 }
 
 /// Initialise the semaphore at `ss` as exec's InitSemaphore does (the engine's own structs, e.g. the DosInfo locks, use it too).
@@ -58,37 +59,63 @@ pub fn init<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     Ok(format!("[exec] InitSemaphore {ss:#x}"))
 }
 
-fn obtain_one<U: GuestUi>(a: &mut Amiga<U>, ss: u32, what: &str) -> Result<String, Refusal> {
+/// `task` takes (one more level of) `ss` if it is free or already its own. Ok(false) = another task holds it.
+fn take<U: GuestUi>(a: &mut Amiga<U>, task: u32, ss: u32, what: &str) -> Result<bool, Refusal> {
     let n = a.semaphores.get(&ss).copied().ok_or_else(|| Refusal(format!("{what}: {ss:#x} was never InitSemaphore'd")))?;
+    if n != 0 && a.sched.sem_owner.get(&ss) != Some(&task) { return Ok(false); }
     let n = n.checked_add(1).ok_or_else(|| Refusal(format!("{what}: {ss:#x} nested past 65535")))?;
     a.semaphores.insert(ss, n);
-    mirror(a, ss, n)?;
-    Ok(format!("[exec] {what} {ss:#x} (nest {n})"))
+    a.sched.sem_owner.insert(ss, task);
+    mirror(a, ss, n, task)?;
+    Ok(true)
 }
 
-pub fn obtain<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { obtain_one(a, cpu.areg(0), "ObtainSemaphore") }
-pub fn obtain_shared<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { obtain_one(a, cpu.areg(0), "ObtainSemaphoreShared") }
-
-/// AttemptSemaphore(a0) -> TRUE: with one task nothing else can hold it.
-pub fn attempt<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let line = obtain_one(a, cpu.areg(0), "AttemptSemaphore")?;
-    cpu.set_d0(1);
-    Ok(line)
+/// The scheduler's check for a task parked in ObtainSemaphore (`Waiting::Sem`): take it when it is free.
+pub(crate) fn try_take<U: GuestUi>(a: &mut Amiga<U>, task: u32, ss: u32, commit: bool) -> Result<Option<u32>, Refusal> {
+    let n = a.semaphores.get(&ss).copied().unwrap_or(0);
+    if n != 0 && a.sched.sem_owner.get(&ss) != Some(&task) { return Ok(None); }
+    if commit { take(a, task, ss, "ObtainSemaphore")?; }
+    Ok(Some(0))
 }
 
-pub fn attempt_shared<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let line = obtain_one(a, cpu.areg(0), "AttemptSemaphoreShared")?;
-    cpu.set_d0(1);
-    Ok(line)
+/// ObtainSemaphore / ObtainSemaphoreShared. A semaphore another task holds parks the caller until it is released.
+/// SHARED obtains are treated as exclusive (a second shared reader waits for the first): less concurrent than exec,
+/// never wrong.
+fn obtain_one<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, what: &str) -> Result<String, Refusal> {
+    let (ss, cur) = (cpu.areg(0), a.sched.cur);
+    if take(a, cur, ss, what)? {
+        let n = a.semaphores[&ss];
+        return Ok(format!("[exec] {what} {ss:#x} (nest {n})"));
+    }
+    a.park(crate::exec_wait::Waiting::Sem(ss));
+    cpu.block();
+    Ok(format!("[exec] {what} {ss:#x} (held by task {:#x}; blocked)", a.sched.sem_owner.get(&ss).copied().unwrap_or(0)))
 }
 
-/// ReleaseSemaphore(a0): one level of the holder's nesting; releasing one that is not held is the guest's bug, named.
+pub fn obtain<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { obtain_one(a, cpu, "ObtainSemaphore") }
+pub fn obtain_shared<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { obtain_one(a, cpu, "ObtainSemaphoreShared") }
+
+/// AttemptSemaphore(a0) -> TRUE if taken, FALSE if another task holds it.
+fn attempt_one<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, what: &str) -> Result<String, Refusal> {
+    let (ss, cur) = (cpu.areg(0), a.sched.cur);
+    let got = take(a, cur, ss, what)?;
+    cpu.set_d0(got as u32);
+    Ok(format!("[exec] {what} {ss:#x} -> {got}"))
+}
+pub fn attempt<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { attempt_one(a, cpu, "AttemptSemaphore") }
+pub fn attempt_shared<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { attempt_one(a, cpu, "AttemptSemaphoreShared") }
+
+/// ReleaseSemaphore(a0): one level of the holder's nesting; releasing one that is not held, or that another task holds,
+/// is the guest's bug, named. A task parked on it wakes (and preempts, if it outranks the releaser).
 pub fn release<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let ss = cpu.areg(0);
+    let (ss, cur) = (cpu.areg(0), a.sched.cur);
     let n = a.semaphores.get(&ss).copied().ok_or_else(|| Refusal(format!("ReleaseSemaphore: {ss:#x} was never InitSemaphore'd")))?;
     let n = n.checked_sub(1).ok_or_else(|| Refusal(format!("ReleaseSemaphore: {ss:#x} is not held")))?;
+    if let Some(&o) = a.sched.sem_owner.get(&ss) { if o != cur { return Err(Refusal(format!("ReleaseSemaphore: {ss:#x} is held by task {o:#x}, not by {cur:#x}"))); } }
     a.semaphores.insert(ss, n);
-    mirror(a, ss, n)?;
+    if n == 0 { a.sched.sem_owner.remove(&ss); }
+    mirror(a, ss, n, cur)?;
+    if n == 0 { a.wake_all()?; }
     Ok(format!("[exec] ReleaseSemaphore {ss:#x} (nest {n})"))
 }
 

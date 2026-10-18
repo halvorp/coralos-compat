@@ -11,7 +11,7 @@
 //! returned sets APF_DODIR; if the program leaves it set, the next MatchNext enters the directory and returns ALL of
 //! its entries (recursively, each directory again honouring APF_DODIR), then returns the directory a second time with
 //! APF_DIDDIR. A program clears APF_DODIR to list one level. An assign with several directories is searched in its
-//! first directory only. ap_BreakBits are not polled: one task, nothing can raise a break.
+//! first directory only. ap_BreakBits are not polled: nothing raises a break signal (no console, no Break command).
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
