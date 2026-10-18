@@ -13,16 +13,26 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 pub mod devices;
+pub mod disklib;
 pub mod dos;
+pub mod dos_err;
+pub mod dos_files;
+pub mod dos_fs;
+pub mod dos_io;
+pub mod dos_path;
 pub mod exec;
 pub mod exec_wait;
+pub mod fs;
 pub mod gadtools;
 pub mod graphics;
+pub mod guest_call;
 pub mod fixture;
 pub mod intuition;
 pub mod libtable;
+pub mod loadseg;
 pub mod lvo_names;
 pub mod machine;
+pub mod makelib;
 pub mod memory;
 pub mod ports;
 pub mod process;
@@ -31,6 +41,7 @@ pub mod run;
 pub mod screen;
 pub mod tags;
 pub mod timer;
+pub mod volume;
 pub mod window;
 mod menu;
 

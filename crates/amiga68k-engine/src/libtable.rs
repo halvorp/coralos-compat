@@ -36,6 +36,8 @@ impl<U: GuestUi> LibraryBuilder<U> {
         self.funcs.push((lvo, name, Some(h)));
         self
     }
+    /// Apply a registration helper (a module's own list of functions) in the middle of a chain.
+    pub fn with(self, f: impl FnOnce(Self) -> Self) -> Self { f(self) }
     /// Reserve a slot with no implementation: calling it is a named refusal, never a silent d0=0.
     pub fn stub(mut self, lvo: i32, name: &'static str) -> Self {
         self.funcs.push((lvo, name, None));
