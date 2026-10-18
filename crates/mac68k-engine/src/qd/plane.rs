@@ -174,7 +174,7 @@ pub fn record_text(planes: &mut Planes, t: &mut Target, run: &Run, clip: &Region
     };
     let px = if run.size == 0 { DEFAULT_PX } else { run.size };
     let font_role = if run.face & 1 != 0 { FontRole::Title } else if MONO_FONTS.contains(&run.font) { FontRole::Mono } else { FontRole::Ui };
-    let op = DrawOp::Text { at: GuestPoint { x: b.x0, y: b.y0 }, string: to_string(run.text), font_role, px, pen_role, bg_role };
+    let op = DrawOp::Text { at: GuestPoint { x: b.x0, y: b.y0 }, string: to_string(run.text), font_role, px, width: b.x1 - b.x0, pen_role, bg_role };
     planes.push(win, op, b, bg_role.is_some());
 }
 

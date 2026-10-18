@@ -79,7 +79,7 @@ fn borders(flags: u32, has_title: bool) -> (i32, i32, i32, i32) {
 /// The one open path: a real struct Window, its UserPort, the native window, its gadgets as native controls.
 pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal> {
     let m = Refusal::mem;
-    let title = if s.title == 0 { String::new() } else { a.mem.read_cstr(s.title).map_err(m("Window title"))? };
+    let title = if s.title == 0 { a.gfx.program_name.clone() } else { a.mem.read_cstr(s.title).map_err(m("Window title"))? };
     let (bl, bt, br, bb) = borders(s.flags, s.title != 0);
     let width = s.inner.0.map(|w| w + bl + br).unwrap_or(s.width);
     let height = s.inner.1.map(|h| h + bt + bb).unwrap_or(s.height);

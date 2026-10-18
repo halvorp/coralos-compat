@@ -67,7 +67,9 @@ pub fn set_window_titles<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
     let mut shown = String::from("unchanged");
     if title != u32::MAX {
         let text = if title == 0 { String::new() } else { a.mem.read_cstr(title).map_err(Refusal::mem("SetWindowTitles window title"))? };
-        a.ui.set_window_title(native, text.clone()).map_err(Refusal::ui)?;
+        // A native window always has a name: a title the guest cleared is the program's own name (see `Amiga::start_hunk_as`), as at open.
+        let shown_title = if text.is_empty() { a.gfx.program_name.clone() } else { text.clone() };
+        a.ui.set_window_title(native, shown_title).map_err(Refusal::ui)?;
         a.mem.write_u32(h + WD_TITLE, title).map_err(Refusal::mem("Window.Title"))?;
         shown = format!("{text:?}");
     }

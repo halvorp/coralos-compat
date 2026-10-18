@@ -22,8 +22,11 @@ pub struct GuestPoint { pub x: i32, pub y: i32 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrawOp {
     Fill { rect: GuestRect, pen_role: PenRole },
-    /// A text run with its top-left at `at`; `bg_role` `Some` paints the run's box first (an opaque text mode).
-    Text { at: GuestPoint, string: String, font_role: FontRole, px: u16, pen_role: PenRole, bg_role: Option<PenRole> },
+    /// A text run with its top-left at `at`; `bg_role` `Some` paints the run's box first (an opaque text mode). `px` is the guest
+    /// font's HEIGHT (the cell), `width` the run's advance in the GUEST's font (`TextLength`): the box `width x px` is where the guest
+    /// drew it. The host replays with the kit's typography at a kit size (>= `px`, TEXT-FITS-BY-WIDTH) and FITS the run into `width`,
+    /// so columns stay aligned and nothing overlaps; `width == 0` = the engine has no guest advance (the host then does not fit).
+    Text { at: GuestPoint, string: String, font_role: FontRole, px: u16, width: i32, pen_role: PenRole, bg_role: Option<PenRole> },
     Line { a: GuestPoint, b: GuestPoint, pen_role: PenRole },
     /// A bevel pair (Shine/Shadow edges) the kit draws as its own bevel.
     Bevel { rect: GuestRect, raised: bool },
@@ -43,6 +46,7 @@ impl DrawOp {
             DrawOp::Pixels { rect, rgb } if bad(rect) || rgb.len() != (rect.width as usize) * (rect.height as usize) =>
                 Err(UiRefusal::InvalidGeometry("pixel op: count is not the rect's area")),
             DrawOp::Text { px: 0, .. } => Err(UiRefusal::InvalidGeometry("text with a zero pixel size")),
+            DrawOp::Text { width, .. } if *width < 0 => Err(UiRefusal::InvalidGeometry("text with a negative run width")),
             _ => Ok(()),
         }
     }

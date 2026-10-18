@@ -26,10 +26,19 @@ pub enum Delivered { Queued(u32), IgnoredUnsubscribed, NotForAGuestWindow, /// A
 use crate::idcmp::INTUIMESSAGE_SIZE;
 
 impl<U: GuestUi> Amiga<U> {
-    pub fn start_hunk(&mut self, file: &[u8]) -> Result<Loaded, String> {
+    pub fn start_hunk(&mut self, file: &[u8]) -> Result<Loaded, String> { self.start(file, "program") }
+
+    /// [`start_hunk`](Self::start_hunk) for a program with a name (its file name): it is the guest task's and the CLI's command name, and
+    /// the title of every window the guest opens without one (a NULL title), never a runtime default. A later `SetWindowTitles` wins.
+    pub fn start_hunk_as(&mut self, file: &[u8], name: &str) -> Result<Loaded, String> {
+        self.gfx.program_name = name.to_string();
+        self.start(file, name)
+    }
+
+    fn start(&mut self, file: &[u8], name: &str) -> Result<Loaded, String> {
         let loaded = retro_hunk::load(&mut self.mem, file, LOAD_BASE).map_err(|e| e.to_string())?;
         self.mem.write_u32(STACK_TOP - 4, EXIT_SLOT).map_err(|e| e.to_string())?; // return address for the final rts
-        process::setup(&mut self.mem, EXEC_BASE, STACK_TOP - STACK_SIZE, STACK_TOP, "program", EMPTY_ARGS).map_err(|r| r.0)?;
+        process::setup(&mut self.mem, EXEC_BASE, STACK_TOP - STACK_SIZE, STACK_TOP, name, EMPTY_ARGS).map_err(|r| r.0)?;
         dos::setup(&mut self.mem).map_err(|r| r.0)?;
         screen::setup(&mut self.mem).map_err(|r| r.0)?;
         crate::graphics::setup(self).map_err(|r| r.0)?;
@@ -37,7 +46,7 @@ impl<U: GuestUi> Amiga<U> {
         let regs = [(retro_m68k::REG_A0, process::ARGS), (retro_m68k::REG_D0, EMPTY_ARGS.len() as u32)];
         // The main program is the first task; its registers are created at its first dispatch (sched.rs).
         self.sched = Default::default();
-        self.add_sched_task(process::PROCESS, "program".into(), true, crate::sched::Start { pc: loaded.entry, sp: STACK_TOP - 4, regs: regs.to_vec() }, None);
+        self.add_sched_task(process::PROCESS, name.into(), true, crate::sched::Start { pc: loaded.entry, sp: STACK_TOP - 4, regs: regs.to_vec() }, None);
         self.sched.cur = process::PROCESS;
         Ok(loaded)
     }

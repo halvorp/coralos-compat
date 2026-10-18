@@ -1,7 +1,8 @@
 //! What a drawing call MEANS, for the plane route (ruling 17, piece 5): the graphics layer keeps the guest bitmap
 //! authoritative and, next to it, records a display list per window in terms the host can replay with its own typography
 //! and theme. A pen is a theme ROLE, found through the DrawInfo pen table the guest itself reads (`dri_Pens`: which pen
-//! number is TEXTPEN, SHINEPEN, ...); a pen number outside the table has no role, so the call is recorded as a HOLE (pixels).
+//! number is TEXTPEN, SHINEPEN, ...); a pen number outside the table has no role, so a fill/line/background in it is recorded as a HOLE (pixels). A TEXT pen is the exception
+//! ([`PenRoles::ink`]): text replays in the kit's ink, so the pen is classified by COLOUR in the screen palette the guest sees.
 //! Nothing is inferred from how the picture looks. A call whose effect is not exactly a named op (a write mask, COMPLEMENT /
 //! INVERSVID, an AreaPtrn, soft styles, an installed clip region) is a hole too.
 use super::layout::*;
@@ -17,24 +18,62 @@ use retro_raster::Rect;
 /// roles the host paints it with: TEXT first, then SHADOW before SHINE (a shared hairline IS the shaded-edge colour, the border;
 /// the light edge is the one a theme gives its own pen), then the rest. Because the order is documented and the pens equal, nothing
 /// is guessed about the picture; and a Shine and a Shadow that share a pen are a FLAT edge: they never coalesce into a bevel.
-pub struct PenRoles([Option<PenRole>; 256]);
+pub struct PenRoles { by_pen: [Option<PenRole>; 256], rgb: [u32; 256] }
 
 const BY_SLOT: [(usize, PenRole); 7] = [
     (2, PenRole::Text), (4, PenRole::Shadow), (3, PenRole::Shine), (5, PenRole::Fill), (6, PenRole::FillText), (7, PenRole::Background), (8, PenRole::Highlight),
 ];
 
+/// The INK roles: what a text run may be drawn in, with the theme colour each one is (the kit's Gute Form tokens). Text on a surface is
+/// TEXT (dark ink) or FILLTEXT (light ink, for text on a fill); `Shine` (a DrawInfo role, the emboss light) and `Highlight`
+/// (HIGHLIGHTTEXTPEN) are ink only when the guest's own DrawInfo says so, they are never chosen by colour.
+const INK: [(PenRole, retro_theme::Rgb); 2] = [(PenRole::Text, retro_theme::GUTE_FORM.text), (PenRole::FillText, retro_theme::GUTE_FORM.text_on_accent)];
+/// A pen the guest's DrawInfo does not list is classified by colour only when it is this close to an ink colour (squared RGB distance,
+/// 3 * 90^2): a colour further than that from every ink stays a hole (pixels), because naming it would be a guess.
+const INK_MAX_DIST: u32 = 3 * 90 * 90;
+
+fn dist(a: u32, b: retro_theme::Rgb) -> u32 {
+    let d = |x: u32, y: u8| (x as i32 - y as i32).unsigned_abs();
+    let (r, g, bl) = (d(a >> 16 & 0xFF, b.0), d(a >> 8 & 0xFF, b.1), d(a & 0xFF, b.2));
+    r * r + g * g + bl * bl
+}
+
 impl PenRoles {
-    pub fn read<U: GuestUi>(a: &Amiga<U>) -> Result<PenRoles, Refusal> {
+    pub fn read<U: GuestUi>(a: &mut Amiga<U>) -> Result<PenRoles, Refusal> {
         let m = Refusal::mem("DrawInfo.dri_Pens");
         let table = a.mem.read_u32(SCREEN_DRAWINFO + DRI_PENS).map_err(&m)?;
-        let mut roles = [None; 256];
-        for (slot, role) in BY_SLOT {
-            let pen = a.mem.read_u16(table + 2 * slot as u32).map_err(&m)? as usize;
-            if pen < 256 && roles[pen].is_none() { roles[pen] = Some(role); }
-        }
-        Ok(PenRoles(roles))
+        let mut dri = [0u16; 9];
+        for (slot, d) in dri.iter_mut().enumerate() { *d = a.mem.read_u16(table + 2 * slot as u32).map_err(&m)?; }
+        Ok(Self::from_parts(&dri, &a.gfx.palette().rgb))
     }
-    pub fn role(&self, pen: u8) -> Option<PenRole> { self.0[pen as usize] }
+    /// The roles of a DrawInfo pen array (`dri_Pens[0..9]`) over a screen palette (`0x00RRGGBB`, 256 entries).
+    pub fn from_parts(dri: &[u16; 9], palette: &[u32]) -> PenRoles {
+        let mut by_pen = [None; 256];
+        for (slot, role) in BY_SLOT {
+            let pen = dri[slot] as usize;
+            if pen < 256 && by_pen[pen].is_none() { by_pen[pen] = Some(role); }
+        }
+        let mut rgb = [0u32; 256];
+        for (d, s) in rgb.iter_mut().zip(palette) { *d = *s; }
+        PenRoles { by_pen, rgb }
+    }
+    /// The role of a pen the guest's DrawInfo lists, for FILLS, LINES and backgrounds: exact, `None` = no DrawInfo slot.
+    pub fn role(&self, pen: u8) -> Option<PenRole> { self.by_pen[pen as usize] }
+    /// The INK role of a TEXT pen (piece 5: text replays in the kit's text colours). In order:
+    /// 1. a DrawInfo pen whose role is an ink role (TEXTPEN, FILLTEXTPEN, HIGHLIGHTTEXTPEN, SHINEPEN) is that role;
+    /// 2. a DrawInfo pen of an AREA role (FILLPEN, BACKGROUNDPEN, SHADOWPEN: programs hard-code them as text colours, e.g. a directory
+    ///    ink) is the nearest ink role by colour in the screen palette the guest sees (the Gute Form one): dark -> Text, light -> FillText;
+    /// 3. a pen with no DrawInfo slot at all (ObtainPen / ObtainBestPen with an RGB the program chose) is the same nearest-colour
+    ///    choice when within `INK_MAX_DIST` of an ink colour, else `None` (a hole: the colour is the guest's and is not named).
+    pub fn ink(&self, pen: u8) -> Option<PenRole> {
+        let rgb = self.rgb[pen as usize];
+        let nearest = || INK.iter().min_by_key(|(_, c)| dist(rgb, *c)).map(|(r, c)| (*r, dist(rgb, *c)));
+        match self.by_pen[pen as usize] {
+            Some(r @ (PenRole::Text | PenRole::FillText | PenRole::Shine | PenRole::Highlight)) => Some(r),
+            Some(_) => nearest().map(|(r, _)| r),
+            None => nearest().filter(|(_, d)| *d <= INK_MAX_DIST).map(|(r, _)| r),
+        }
+    }
 }
 
 /// A drawing call as the graphics layer describes it, in RASTPORT coordinates and guest pens.
@@ -66,7 +105,7 @@ impl Prim {
             Prim::Text { x, top, w, h, text, fg, bg, font } => {
                 let bg_role = match bg { Some(p) => Some(roles.role(*p)?), None => None };
                 let r = Rect::from_size(x - ox, top - oy, *w, *h);
-                alloc::vec![(DrawOp::Text { at: GuestPoint { x: r.x0, y: r.y0 }, string: text.clone(), font_role: *font, px: (*h).max(1) as u16, pen_role: roles.role(*fg)?, bg_role }, r)]
+                alloc::vec![(DrawOp::Text { at: GuestPoint { x: r.x0, y: r.y0 }, string: text.clone(), font_role: *font, px: (*h).max(1) as u16, width: *w, pen_role: roles.ink(*fg)?, bg_role }, r)]
             }
             Prim::Icon { rect, role } => alloc::vec![(DrawOp::Icon { rect: g(rect), role: *role }, rect.translate(-ox, -oy))],
         })
@@ -102,5 +141,37 @@ pub fn note<U: GuestUi>(a: &mut Amiga<U>, win: u32, prim: Option<Prim>, hit: Rec
     match ops {
         Some(v) => for (op, bbox) in v { a.gfx.present.record(win, op, bbox); },
         None => a.gfx.present.record_hole(win, hit),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use retro_theme::amiga::{system_palette, DRI_PENS};
+
+    fn roles(palette: &[u32]) -> PenRoles { PenRoles::from_parts(&DRI_PENS[..9].try_into().unwrap(), palette) }
+    fn palette_with(pen: usize, rgb: u32) -> [u32; 256] { let mut p = [0u32; 256]; p[..8].copy_from_slice(&system_palette()); p[pen] = rgb; p }
+
+    #[test]
+    fn text_in_the_system_pens_is_text_ink_whatever_drawinfo_calls_the_pen() {
+        let r = roles(&palette_with(9, 0));
+        assert_eq!(r.ink(1), Some(PenRole::Text), "TEXTPEN");
+        assert_eq!(r.ink(2), Some(PenRole::FillText), "FILLTEXTPEN: white on the accent");
+        // pen 3 is FILLPEN (accent) in DrawInfo, yet a program that prints in it prints on its surface: dark ink, Text, not the accent
+        assert_eq!(r.role(3), Some(PenRole::Fill), "as a FILL the pen stays exact");
+        assert_eq!(r.ink(3), Some(PenRole::Text), "as INK the area pen 3 is the nearest ink colour");
+        assert_eq!(r.ink(4), Some(PenRole::FillText), "SHADOWPEN is the light border colour: light ink stays light (a guest that prints in it meant it faint)");
+        assert_eq!(r.ink(0), Some(PenRole::FillText), "pen 0 (the light surface) as ink is light ink");
+    }
+
+    #[test]
+    fn a_pen_the_program_obtained_itself_is_named_by_colour_and_a_far_colour_stays_a_hole() {
+        // ObtainPen(RGB) pens have no DrawInfo slot: black-ish -> Text, white -> FillText.
+        assert_eq!(roles(&palette_with(9, 0x101010)).ink(9), Some(PenRole::Text));
+        assert_eq!(roles(&palette_with(9, 0xFAFAFA)).ink(9), Some(PenRole::FillText));
+        // NEGATIVE CONTROL: pure red is nowhere near an ink colour: no role is invented, the text is a hole.
+        let r = roles(&palette_with(9, 0xFF0000));
+        assert_eq!(r.ink(9), None);
+        assert_eq!(r.role(9), None, "and the exact fill role of an unlisted pen is none either");
     }
 }
