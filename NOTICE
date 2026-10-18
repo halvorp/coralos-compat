@@ -35,3 +35,8 @@ crates/mac68k-engine, crates/retro-resfork: low-memory addresses, QDGlobals layo
 AppleDouble layouts are interface facts read from metamage_1 (v68k-lowmem, ams-qd, ams-seg, macbinary) and executor's source
 (wind, menu, appledouble), cited in the file headers; no code from them is included. Executor's apps (packages/go) are used only as
 test inputs read from the reference tree, not copied into this repository.
+
+crates/retro-pef: the PEF container format (headers, loader section, pattern-data and relocation opcodes, export hash) is
+written from Apple's "Mac OS Runtime Architectures" facts, cross-read against Apple's CFMLateImport sample (opcode
+numbering, TVector12/8 strides) and Executor's MIT cfm.cpp / pef_hash.cpp (hash word, pattern data semantics); no code
+from them is included. Executor's loader leaves RelocSmRepeat/LgRepeat/LgSetOrBySection unimplemented; ours implements them.

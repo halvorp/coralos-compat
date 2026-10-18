@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/retro-guest-mem", "crates/retro-m68k", "crates/retro-hunk", "crates/guestui-abi", "crates/retro-common", "crates/amiga68k-engine", "crates/mac68k-engine", "crates/retro-raster", "crates/retro-resfork"]
+members = ["crates/retro-guest-mem", "crates/retro-m68k", "crates/retro-hunk", "crates/guestui-abi", "crates/retro-common", "crates/amiga68k-engine", "crates/mac68k-engine", "crates/retro-raster", "crates/retro-resfork", "crates/retro-pef"]
 
 [workspace.package]
 version = "0.1.0"
