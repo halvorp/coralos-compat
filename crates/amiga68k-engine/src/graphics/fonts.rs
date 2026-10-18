@@ -1,9 +1,9 @@
-//! Fonts: a REAL guest `struct TextFont` for topaz 8 (tf_YSize, tf_XSize, tf_Baseline, CharData/CharLoc, tf_Modulo,
+//! Fonts: REAL guest `struct TextFont`s for the Gute Form UI face (the default) and topaz 8 (tf_YSize, tf_XSize, tf_Baseline, CharData/CharLoc, tf_Modulo,
 //! tf_LoChar/HiChar) at a fixed guest address, so programs that read the metrics directly work; OpenFont/CloseFont/
 //! AddFont/RemFont/AskFont/SetFont over the registered fonts; and the parser that turns ANY guest TextFont (a disk font,
 //! a program's own) into the renderer's [`Font`].
 //!
-//! FONT DATA: topaz 8 is the AROS ROM font data (APL; retro-raster/src/topaz8.rs, noted in LICENSES.md and NOTICE).
+//! FONT DATA: the Gute Form face is Nunito Sans (SIL OFL) rasterised by tools/gen-gute-form-font.py (crates/retro-theme); topaz 8 is the AROS ROM font data (APL; retro-raster/src/topaz8.rs, noted in LICENSES.md and NOTICE).
 //! No Amiga ROM font is used. Other sizes/names resolve only from FONTS: through diskfont.library (diskfont.rs).
 use super::layout::*;
 use crate::{machine::{Amiga, GRAPHICS_BASE}, Refusal};
@@ -18,39 +18,68 @@ use retro_raster::font::Font;
 const FSF_TAGGED: u8 = 0x80;
 const FPF_ROMFONT: u8 = 0x01;
 const FPF_DESIGNED: u8 = 0x40;
+const FPF_PROPORTIONAL: u8 = 0x20;
 
-/// Lay the ROM font out in guest memory (once per machine: its accessor count must survive a restart) and register it
-/// as the default.
-pub fn install_rom_font<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
-    use retro_raster::topaz8 as t;
-    if a.gfx.fonts.contains(&ROM_FONT) { return Ok(()); }
+/// One resident ROM face: where its pieces live in guest memory and what they hold.
+struct Face<'a> {
+    tf: u32, name: &'a str, name_at: u32, data_at: u32, loc_at: u32, space_at: u32, kern_at: u32,
+    y: u16, x: u16, baseline: u16, smear: u16, flags: u8, lo: u8, hi: u8, modulo: u16, data: &'a [u8], loc: &'a [u32], space: &'a [i16], kern: &'a [i16],
+}
+
+fn install_face<U: GuestUi>(a: &mut Amiga<U>, f: &Face) -> Result<(), Refusal> {
     let m = Refusal::mem("ROM font");
-    a.mem.zero(ROM_FONT, TF_SIZE).map_err(&m)?;
-    for (i, b) in b"topaz.font\0".iter().enumerate() { a.mem.write_u8(ROM_FONT_NAME + i as u32, *b).map_err(&m)?; }
-    a.mem.write_bytes(ROM_FONT_DATA, &t::CHAR_DATA).map_err(&m)?;
-    for (i, l) in t::CHAR_LOC.iter().enumerate() { a.mem.write_u32(ROM_FONT_LOC + 4 * i as u32, *l).map_err(&m)?; }
-    a.mem.write_u8(ROM_FONT + TF_NODE_TYPE, NT_FONT).map_err(&m)?;
-    a.mem.write_u32(ROM_FONT + TF_NODE_NAME, ROM_FONT_NAME).map_err(&m)?;
-    a.mem.write_u16(ROM_FONT + TF_Y_SIZE, t::Y_SIZE).map_err(&m)?;
-    a.mem.write_u8(ROM_FONT + TF_STYLE, FSF_TAGGED).map_err(&m)?;
-    a.mem.write_u8(ROM_FONT + TF_FLAGS, FPF_ROMFONT | FPF_DESIGNED).map_err(&m)?;
-    a.mem.write_u16(ROM_FONT + TF_X_SIZE, t::X_SIZE).map_err(&m)?;
-    a.mem.write_u16(ROM_FONT + TF_BASELINE, t::BASELINE).map_err(&m)?;
-    a.mem.write_u16(ROM_FONT + TF_BOLD_SMEAR, t::BOLD_SMEAR).map_err(&m)?;
-    a.mem.write_u8(ROM_FONT + TF_LO_CHAR, t::LO_CHAR).map_err(&m)?;
-    a.mem.write_u8(ROM_FONT + TF_HI_CHAR, t::HI_CHAR).map_err(&m)?;
-    a.mem.write_u32(ROM_FONT + TF_CHAR_DATA, ROM_FONT_DATA).map_err(&m)?;
-    a.mem.write_u16(ROM_FONT + TF_MODULO, t::MODULO).map_err(&m)?;
-    a.mem.write_u32(ROM_FONT + TF_CHAR_LOC, ROM_FONT_LOC).map_err(&m)?;
-    a.mem.write_u32(GRAPHICS_BASE + GB_DEFAULT_FONT, ROM_FONT).map_err(&m)?;
-    a.gfx.fonts.insert(0, ROM_FONT);
+    let tf = f.tf;
+    a.mem.zero(tf, TF_SIZE).map_err(&m)?;
+    for (i, b) in f.name.bytes().chain(Some(0)).enumerate() { a.mem.write_u8(f.name_at + i as u32, b).map_err(&m)?; }
+    a.mem.write_bytes(f.data_at, f.data).map_err(&m)?;
+    for (i, l) in f.loc.iter().enumerate() { a.mem.write_u32(f.loc_at + 4 * i as u32, *l).map_err(&m)?; }
+    for (i, v) in f.space.iter().enumerate() { a.mem.write_u16(f.space_at + 2 * i as u32, *v as u16).map_err(&m)?; }
+    for (i, v) in f.kern.iter().enumerate() { a.mem.write_u16(f.kern_at + 2 * i as u32, *v as u16).map_err(&m)?; }
+    a.mem.write_u8(tf + TF_NODE_TYPE, NT_FONT).map_err(&m)?;
+    a.mem.write_u32(tf + TF_NODE_NAME, f.name_at).map_err(&m)?;
+    a.mem.write_u16(tf + TF_Y_SIZE, f.y).map_err(&m)?;
+    a.mem.write_u8(tf + TF_STYLE, FSF_TAGGED).map_err(&m)?;
+    a.mem.write_u8(tf + TF_FLAGS, f.flags).map_err(&m)?;
+    a.mem.write_u16(tf + TF_X_SIZE, f.x).map_err(&m)?;
+    a.mem.write_u16(tf + TF_BASELINE, f.baseline).map_err(&m)?;
+    a.mem.write_u16(tf + TF_BOLD_SMEAR, f.smear).map_err(&m)?;
+    a.mem.write_u8(tf + TF_LO_CHAR, f.lo).map_err(&m)?;
+    a.mem.write_u8(tf + TF_HI_CHAR, f.hi).map_err(&m)?;
+    a.mem.write_u32(tf + TF_CHAR_DATA, f.data_at).map_err(&m)?;
+    a.mem.write_u16(tf + TF_MODULO, f.modulo).map_err(&m)?;
+    a.mem.write_u32(tf + TF_CHAR_LOC, f.loc_at).map_err(&m)?;
+    if !f.space.is_empty() { a.mem.write_u32(tf + TF_CHAR_SPACE, f.space_at).map_err(&m)?; }
+    if !f.kern.is_empty() { a.mem.write_u32(tf + TF_CHAR_KERN, f.kern_at).map_err(&m)?; }
+    a.gfx.fonts.push(tf);
     Ok(())
 }
 
+/// Lay the two ROM faces out in guest memory (once per machine: their accessor counts must survive a restart) and register
+/// them: the Gute Form UI face (`guteform.font`) becomes GfxBase's DEFAULT font; topaz 8 stays resident for programs that ask
+/// for `topaz.font` BY NAME (see the POLICY note on [`default_font`]).
+pub fn install_rom_font<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
+    use retro_raster::topaz8 as t;
+    use retro_theme::uifont as g;
+    if a.gfx.fonts.contains(&ROM_FONT) { return Ok(()); }
+    install_face(a, &Face { tf: ROM_FONT, name: "topaz.font", name_at: ROM_FONT_NAME, data_at: ROM_FONT_DATA, loc_at: ROM_FONT_LOC, space_at: 0, kern_at: 0,
+        y: t::Y_SIZE, x: t::X_SIZE, baseline: t::BASELINE, smear: t::BOLD_SMEAR, flags: FPF_ROMFONT | FPF_DESIGNED, lo: t::LO_CHAR, hi: t::HI_CHAR, modulo: t::MODULO,
+        data: &t::CHAR_DATA, loc: &t::CHAR_LOC, space: &[], kern: &[] })?;
+    install_face(a, &Face { tf: GF_FONT, name: g::NAME, name_at: GF_FONT_NAME, data_at: GF_FONT_DATA, loc_at: GF_FONT_LOC, space_at: GF_FONT_SPACE, kern_at: GF_FONT_KERN,
+        y: g::Y_SIZE, x: g::X_SIZE, baseline: g::BASELINE, smear: g::BOLD_SMEAR, flags: FPF_ROMFONT | FPF_DESIGNED | FPF_PROPORTIONAL, lo: g::LO_CHAR, hi: g::HI_CHAR, modulo: g::MODULO,
+        data: &g::CHAR_DATA, loc: &g::CHAR_LOC, space: &g::CHAR_SPACE, kern: &g::CHAR_KERN })?;
+    a.mem.write_u32(GRAPHICS_BASE + GB_DEFAULT_FONT, GF_FONT).map_err(Refusal::mem("ROM font"))?;
+    Ok(())
+}
+
+/// GfxBase->DefaultFont: the Gute Form UI face. POLICY (Peter 2026-10-18, all retro apps in the CoralOS style): the screen font,
+/// DrawInfo's dri_Font, a RastPort's NULL font and every program that follows the default are the Gute Form face; a program
+/// that asks for a font we do not hold falls back to it too (OpenFont NULL -> the caller uses the default). The ONE exception
+/// is an explicit `OpenFont("topaz.font", 8)`: topaz stays resident, because programs that name it want the fixed 8x8 cell
+/// (column layouts, terminals, hex views, hard-coded 8-px pitches) and a proportional 11-px face would break them.
 /// GfxBase->DefaultFont.
 pub fn default_font<U: GuestUi>(a: &Amiga<U>) -> Result<u32, Refusal> {
     let f = a.mem.read_u32(GRAPHICS_BASE + GB_DEFAULT_FONT).map_err(Refusal::mem("GfxBase.DefaultFont"))?;
-    Ok(if f == 0 { ROM_FONT } else { f })
+    Ok(if f == 0 { GF_FONT } else { f })
 }
 
 /// The renderer's view of the guest TextFont at `tf`. Validated: a malformed font is a named refusal.
@@ -74,10 +103,10 @@ pub fn parse(mem: &GuestMem, tf: u32) -> Result<Font, Refusal> {
 
 /// The renderer font for the guest TextFont `tf` (the ROM font is parsed once).
 pub fn font_at<U: GuestUi>(a: &mut Amiga<U>, tf: u32) -> Result<Rc<Font>, Refusal> {
-    if tf == ROM_FONT {
-        if let Some(f) = &a.gfx.rom_font { return Ok(f.clone()); }
+    if tf == ROM_FONT || tf == GF_FONT {
+        if let Some(f) = a.gfx.rom_fonts.get(&tf) { return Ok(f.clone()); }
         let f = Rc::new(parse(&a.mem, tf)?);
-        a.gfx.rom_font = Some(f.clone());
+        a.gfx.rom_fonts.insert(tf, f.clone());
         return Ok(f);
     }
     Ok(Rc::new(parse(&a.mem, tf)?))
@@ -140,7 +169,7 @@ pub fn add_font<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
 
 pub fn rem_font<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let tf = cpu.areg(1);
-    if tf == ROM_FONT { return Err(Refusal("RemFont: the ROM font cannot be removed".into())); }
+    if tf == ROM_FONT || tf == GF_FONT { return Err(Refusal("RemFont: the ROM fonts cannot be removed".into())); }
     a.gfx.fonts.retain(|&f| f != tf);
     Ok(format!("[graphics] RemFont {tf:#x}"))
 }

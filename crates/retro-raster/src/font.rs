@@ -38,6 +38,12 @@ impl Font {
         Font { y_size: Y_SIZE, x_size: X_SIZE, baseline: BASELINE, bold_smear: BOLD_SMEAR, flags: 0x01 | 0x40, lo: LO_CHAR, hi: HI_CHAR,
             modulo: MODULO, data: CHAR_DATA.to_vec(), loc: CHAR_LOC.to_vec(), space: None, kern: None }
     }
+    /// The Gute Form UI face (Nunito Sans at 12 px, proportional) from `retro-theme`'s generated strip.
+    pub fn gute_form() -> Font {
+        use retro_theme::uifont::*;
+        Font { y_size: Y_SIZE, x_size: X_SIZE, baseline: BASELINE, bold_smear: BOLD_SMEAR, flags: FPF_PROPORTIONAL | 0x01 | 0x40, lo: LO_CHAR, hi: HI_CHAR,
+            modulo: MODULO, data: CHAR_DATA.to_vec(), loc: CHAR_LOC.to_vec(), space: Some(CHAR_SPACE.to_vec()), kern: Some(CHAR_KERN.to_vec()) }
+    }
     /// Glyph slot for a character: itself inside lo..=hi, else the default glyph.
     pub fn slot(&self, ch: u8) -> usize {
         if ch >= self.lo && ch <= self.hi { (ch - self.lo) as usize } else { (self.hi - self.lo) as usize + 1 }

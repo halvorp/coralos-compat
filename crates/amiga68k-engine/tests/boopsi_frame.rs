@@ -1,5 +1,5 @@
 //! frameiclass drawing through DrawImageState (AROS frameiclass.c draw_frameiclass / DrawFrame): the bevel pens, the selected and recessed
-//! swaps, the ridge's inner bevel, EdgesOnly. Pens of the engine screen: SHINEPEN white (2), SHADOWPEN black (1), FILLPEN blue (3),
+//! swaps, the ridge's inner bevel, EdgesOnly. Pens of the engine screen: SHINEPEN white (2), SHADOWPEN the border colour (4), FILLPEN blue (3),
 //! BACKGROUNDPEN grey (0).
 mod gfxcommon;
 use gfxcommon::*;
@@ -8,7 +8,7 @@ const NEW_OBJECT_A: i32 = -636;
 const DRAW_IMAGE_STATE: i32 = -618;
 const IA: u32 = TAG_USER + 0x20000;
 const SHINE: u8 = 2;
-const SHADOW: u8 = 1;
+const SHADOW: u8 = retro_theme::amiga::DRI_PENS[retro_theme::amiga::SHADOWPEN] as u8; // 4 (AROS: 1)
 const FILL: u8 = 3;
 const BG: u8 = 0;
 

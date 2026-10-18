@@ -8,10 +8,11 @@ use guestui_abi::*;
 use retro_hunk::writer::{build, Hunk};
 
 const GFXDRAW: &[u8] = include_bytes!("guest/gfxdraw.bin");
-const GREY0: u32 = 0xAAAAAA; // pen 0
-const BLACK: u32 = 0x000000; // pen 1
-const WHITE: u32 = 0xFFFFFF; // pen 2
-const BLUE: u32 = 0x6688BB; // pen 3
+// The screen's pens 0..3 are the Gute Form surface, text, shine and accent (retro-theme/src/amiga.rs), not the AROS grey/black/white/blue.
+const GREY0: u32 = retro_theme::amiga::system_palette()[0]; // pen 0: the window surface
+const BLACK: u32 = retro_theme::amiga::system_palette()[1]; // pen 1: text
+const WHITE: u32 = retro_theme::amiga::system_palette()[2]; // pen 2: shine
+const BLUE: u32 = retro_theme::amiga::system_palette()[3]; // pen 3: accent
 
 fn run_fixture(mode: u32, wflags: u32) -> Amiga<RecordingGuestUi> {
     let mut code = GFXDRAW.to_vec();
@@ -44,23 +45,32 @@ fn a_program_draws_a_rect_and_text_and_the_host_receives_one_frame_with_the_pixe
     // RectFill(10,10)-(29,19) in pen 2
     assert_eq!((at(&c, 10, 10), at(&c, 29, 19), at(&c, 9, 10), at(&c, 30, 10), at(&c, 10, 20)), (WHITE, WHITE, GREY0, GREY0, GREY0));
     assert_eq!(c.2.iter().filter(|&&p| p == WHITE).count(), 20 * 10);
-    // Text "AB" at (40,30), JAM2 pen 1 on pen 3: cells x 40..56, y 24..32
-    assert_eq!(at(&c, 40, 24), BLUE, "the cell's paper is the background pen");
-    assert_eq!(at(&c, 43, 25), BLACK, "row 1 of 'A' (0x18) sets x=3,4");
-    assert_eq!(at(&c, 56, 24), GREY0, "control: right of the last cell");
-    let ink: u32 = (b"AB").iter().map(|&ch| (0..8u32).map(|row| (retro_raster::topaz8::CHAR_DATA[(row * 192 + (ch as u32 - 32)) as usize]).count_ones()).sum::<u32>()).sum();
-    assert_eq!(c.2.iter().filter(|&&p| p == BLACK).count() as u32, ink, "exactly the glyph ink bits of 'A' and 'B' in topaz 8");
-    assert_eq!(c.2.iter().filter(|&&p| p == BLUE).count() as u32, 16 * 8 - ink);
+    // Text "AB" at (40,30) in the DEFAULT font (the Gute Form face), JAM2 pen 1 on pen 3: the cells span TextLength, top = baseline - tf_Baseline.
+    let f = retro_raster::font::Font::gute_form();
+    let (adv, top) = (f.text_length(b"AB"), 30 - f.baseline as i32);
+    assert_eq!(at(&c, 40, top), BLUE, "the cell's paper is the background pen");
+    assert_eq!(at(&c, 40 + adv, top), GREY0, "control: right of the last cell");
+    let ink = |ch: u8| (0..f.y_size as i32).flat_map(|y| (0..64).map(move |x| (x, y))).filter(|&(x, y)| f.glyph_bit(f.slot(ch), x, y)).count() as u32;
+    let ink = ink(b'A') + ink(b'B');
+    assert!(ink > 20, "control: the glyphs have ink");
+    let (cells, kern) = (adv * f.y_size as i32, |ch: u8| f.advance(ch));
+    assert_eq!(kern(b'A') + kern(b'B'), adv);
+    assert_eq!(c.2.iter().filter(|&&p| p == BLACK).count() as u32, ink, "exactly the glyph ink bits of 'A' and 'B' in the Gute Form face");
+    assert_eq!(c.2.iter().filter(|&&p| p == BLUE).count() as u32, cells as u32 - ink);
     // the golden fingerprint of the whole frame (pin; re-derive by dumping the canvas if the font or palette is changed on purpose)
-    assert_eq!(pixel_hash(&c.2), 4293717206870754438, "golden hash of the whole 200x100 frame (the pixel assertions above pin its content)");
+    assert_eq!(pixel_hash(&c.2), 7210240583585732937, "golden hash of the whole 200x100 frame (the pixel assertions above pin its content)");
 }
 
 #[test]
 fn jam1_text_leaves_the_background_unlike_jam2() {
     let j2 = canvas(&run_fixture(1, 0x800));
     let j1 = canvas(&run_fixture(0, 0x800));
-    assert_eq!((at(&j2, 40, 24), at(&j1, 40, 24)), (BLUE, GREY0));
-    assert_eq!(at(&j1, 43, 25), BLACK, "the ink is the same");
+    let f = retro_raster::font::Font::gute_form();
+    let top = 30 - f.baseline as i32;
+    assert_eq!((at(&j2, 40, top), at(&j1, 40, top)), (BLUE, GREY0));
+    let (ix, iy) = (0..f.y_size as i32).flat_map(|y| (0..9).map(move |x| (x, y))).find(|&(x, y)| f.glyph_bit(f.slot(b'A'), x, y)).unwrap();
+    let (px, py) = (40 + f.kern.as_ref().unwrap()[f.slot(b'A')] as i32 + ix, top + iy);
+    assert_eq!((at(&j1, px, py), at(&j2, px, py)), (BLACK, BLACK), "the ink is the same");
     assert_ne!(pixel_hash(&j1.2), pixel_hash(&j2.2));
 }
 

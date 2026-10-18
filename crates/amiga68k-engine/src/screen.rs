@@ -30,10 +30,10 @@ pub fn setup(mem: &mut GuestMem) -> Result<(), Refusal> {
     for (off, v) in [(30, 14u8), (31, 1), (32, 5), (33, 2), (34, 4), (35, 6), (36, 4), (37, 4), (38, 4)] {
         mem.write_u8(SCREEN + off, v).map_err(m("Screen bar/border sizes"))?;
     }
-    for (i, b) in b"topaz.font\0".iter().enumerate() { mem.write_u8(FONT_NAME + i as u32, *b).map_err(m("font name"))?; }
+    for (i, b) in b"guteform.font\0".iter().enumerate() { mem.write_u8(FONT_NAME + i as u32, *b).map_err(m("font name"))?; }
     for (i, b) in b"Workbench Screen\0".iter().enumerate() { mem.write_u8(TITLE + i as u32, *b).map_err(m("screen title"))?; }
     mem.write_u32(TEXT_ATTR, FONT_NAME).map_err(m("ta_Name"))?;
-    mem.write_u16(TEXT_ATTR + 4, 8).map_err(m("ta_YSize"))?;
+    mem.write_u16(TEXT_ATTR + 4, retro_theme::uifont::Y_SIZE).map_err(m("ta_YSize"))?;
     mem.write_u32(SCREEN + 22, TITLE).map_err(m("Screen.Title"))?;
     mem.write_u32(SCREEN + 26, TITLE).map_err(m("Screen.DefaultTitle"))?;
     mem.write_u32(SCREEN + 40, TEXT_ATTR).map_err(m("Screen.Font"))?;

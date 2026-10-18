@@ -165,6 +165,13 @@ pub const ROM_FONT: u32 = 0x8000;
 pub const ROM_FONT_NAME: u32 = 0x8040;
 pub const ROM_FONT_DATA: u32 = 0x8100;
 pub const ROM_FONT_LOC: u32 = 0x8700;
+/// The Gute Form UI TextFont (the DEFAULT font): struct, name, glyph strip, CharLoc, CharSpace, CharKern.
+pub const GF_FONT: u32 = 0x9000;
+pub const GF_FONT_NAME: u32 = 0x9040;
+pub const GF_FONT_DATA: u32 = 0x9100;
+pub const GF_FONT_LOC: u32 = 0x9800;
+pub const GF_FONT_SPACE: u32 = 0x9C00;
+pub const GF_FONT_KERN: u32 = 0x9E00;
 /// The screen's ColorMap and its RGB4 ColorTable (256 words).
 pub const SCREEN_COLORMAP: u32 = 0x8B00;
 pub const SCREEN_COLOR_TABLE: u32 = 0x8C00;

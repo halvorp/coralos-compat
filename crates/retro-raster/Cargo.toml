@@ -6,3 +6,4 @@ license.workspace = true
 description = "Raster semantics shared by the retro engines: chunky bitmaps, rectangles, regions, minterm blits, bitmap fonts"
 
 [dependencies]
+retro-theme = { path = "../retro-theme" }

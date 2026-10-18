@@ -78,8 +78,9 @@ fn an_installed_clip_region_limits_window_drawing_and_removing_it_restores_full_
     g.run(&[(layers, INSTALL_CLIP_REGION, vec![a(0, layer), a(1, rg)]), gfx(SET_APEN, &[a(1, rp), d(0, 2)]), gfx(RECT_FILL, &[a(1, rp), d(0, 0), d(1, 0), d(2, 39), d(3, 0)])]);
     assert_eq!(g.result(0), 0, "no previous clip region");
     let id = *g.a.ui.canvases.keys().next().unwrap();
+    const P: [u32; 8] = retro_theme::amiga::system_palette();
     let row: Vec<u32> = g.a.ui.canvases[&id].2[..40].to_vec();
-    assert_eq!((row[9], row[10], row[14], row[15]), (0xFFFFFF, 0xAAAAAA, 0xAAAAAA, 0xFFFFFF), "the hole x=10..14 stays unpainted");
+    assert_eq!((row[9], row[10], row[14], row[15]), (P[2], P[0], P[0], P[2]), "the hole x=10..14 stays unpainted");
     g.run(&[(layers, INSTALL_CLIP_REGION, vec![a(0, layer), a(1, 0)]), gfx(RECT_FILL, &[a(1, rp), d(0, 0), d(1, 1), d(2, 39), d(3, 1)])]);
     assert_eq!(g.result(0), rg, "InstallClipRegion returns the previously installed region");
     assert_eq!(g.a.ui.canvases[&id].2[40 + 12], 0xFFFFFF, "control: with the region removed the same x is painted");
@@ -116,8 +117,17 @@ fn the_screen_draw_info_is_a_real_struct_with_pens_and_the_default_font() {
     assert_eq!((g.r16(dri), g.r16(dri + 2), g.r16(dri + 12)), (3, 12, 8), "DRI_VERSION 3, NUMDRIPENS 12, depth 8");
     let pens = g.r32(dri + 4);
     let p: Vec<u16> = (0..12).map(|i| g.r16(pens + 2 * i)).collect();
-    assert_eq!(p, [1, 0, 1, 2, 1, 3, 1, 0, 2, 1, 2, 1], "TEXTPEN black, SHINEPEN white, FILLPEN blue, BACKGROUNDPEN grey");
-    assert_eq!(g.r32(dri + 8), 0x8000, "dri_Font is the ROM topaz");
+    use retro_theme::{amiga as am, GUTE_FORM as T};
+    assert_eq!(p, am::DRI_PENS, "dri_Pens is the Gute Form map");
+    assert_ne!(p, am::AROS_DRI_PENS, "control: not the AROS default pens");
+    // each pen resolves, through the screen palette the guest reads (ViewPort ColorMap -> RGB4 table), to its Gute Form token (RGB4 = the top nibble)
+    let rgb4 = |c: retro_theme::Rgb| ((c.0 as u32 >> 4) << 8 | (c.1 as u32 >> 4) << 4 | c.2 as u32 >> 4) as u16;
+    let table = 0x8C00; // SCREEN_COLOR_TABLE (graphics/layout.rs)
+    for (pen, want) in [(am::TEXTPEN, T.text), (am::BACKGROUNDPEN, T.surface), (am::FILLPEN, T.accent), (am::FILLTEXTPEN, T.text_on_accent), (am::SHINEPEN, T.shine), (am::SHADOWPEN, T.border), (am::BARBLOCKPEN, T.surface)] {
+        assert_eq!(g.r16(table + 2 * p[pen] as u32), rgb4(want), "{} -> {:?}", am::DRI_PEN_NAMES[pen], want);
+    }
+    assert_ne!(g.r16(table + 2 * p[am::FILLPEN] as u32), 0x68B, "control: the AROS FILLPEN blue 6688BB is not what the guest reads");
+    assert_eq!(g.r32(dri + 8), 0x9000, "dri_Font is the Gute Form UI face (topaz stays at 0x8000 for explicit requests)");
     assert_ne!(g.r32(dri + 22), 0, "dri_CheckMark is an Image");
     g.run(&[intu(GET_SCREEN_DRAW_INFO, &[a(0, 0x1234)])]);
     assert!(g.a.refused[0].contains("not the public screen"), "{:?}", g.a.refused);
@@ -148,7 +158,10 @@ fn images_borders_and_intuitext_draw_with_their_own_pens() {
     g.a.mem.write_u8(it, 6).unwrap(); g.a.mem.write_u8(it + 1, 1).unwrap(); g.a.mem.write_u8(it + 2, 0).unwrap();
     g.a.mem.write_u16(it + 4, 2).unwrap(); g.a.mem.write_u16(it + 6, 1).unwrap(); g.a.mem.write_u32(it + 12, hi).unwrap();
     g.run(&[intu(PRINT_ITEXT, &[a(0, rp), a(1, it), d(0, 4), d(1, 12)]), intu(INTUI_TEXT_LENGTH, &[a(0, it)])]);
-    assert_eq!(g.result(1), 16);
-    // 'H' glyph (0x66 at rows 1..): box top = 12+1 = 13, left = 6; row 1 of 'H' -> y 14: x=6+1,6+2
-    assert_eq!((g.px(bm, 7, 14), g.px(bm, 6, 14), g.px(bm, 20, 14)), (Some(6), Some(0), Some(0)), "ink in FrontPen 6, JAM1 leaves the paper");
+    let f = retro_raster::font::Font::gute_form();
+    assert_eq!(g.result(1) as i32, f.text_length(b"Hi"), "IntuiTextLength in the default (Gute Form) face");
+    // 'H': box top = 12+1 = 13, left = 4+2 = 6; the first inked pixel of the glyph, shifted by its CharKern
+    let (ix, iy) = (0..f.y_size as i32).flat_map(|y| (0..9).map(move |x| (x, y))).find(|&(x, y)| f.glyph_bit(f.slot(b'H'), x, y)).unwrap();
+    let (px, py) = (6 + f.kern.as_ref().unwrap()[f.slot(b'H')] as i32 + ix, 13 + iy);
+    assert_eq!((g.px(bm, px, py), g.px(bm, px, py - 1 - iy), g.px(bm, 30, py)), (Some(6), Some(0), Some(0)), "ink in FrontPen 6, JAM1 leaves the paper (and nothing above the box)");
 }

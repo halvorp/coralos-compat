@@ -6,8 +6,8 @@ use guestui_abi::RecordingGuestUi;
 use retro_hunk::writer::{build, Hunk};
 
 const BIN: &[u8] = include_bytes!("guest/boopsigad.bin");
-const WHITE: u32 = 0xFFFFFF; // pen 2
-const GREY: u32 = 0xAAAAAA; // pen 0, the window background
+const WHITE: u32 = retro_theme::amiga::system_palette()[2]; // pen 2 (shine)
+const GREY: u32 = retro_theme::amiga::system_palette()[0]; // pen 0, the window background (Gute Form surface)
 
 fn run(doref: u32) -> (Amiga<RecordingGuestUi>, u32) {
     let mut code = BIN.to_vec();
