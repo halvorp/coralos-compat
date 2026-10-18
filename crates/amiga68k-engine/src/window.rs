@@ -99,6 +99,7 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal>
     };
     let native = a.ui.open_window(model).map_err(Refusal::ui)?;
     a.windows.insert(win, native);
+    crate::graphics::open_window_surface(a, win, (s.left, s.top), (width - bl - br, height - bt - bb), (bl, bt), s.flags & WFLG_GIMMEZEROZERO != 0)?;
     if s.gadgets != 0 { crate::gadtools::attach(a, win, native, s.gadgets)?; }
     Ok(win)
 }
@@ -138,6 +139,7 @@ pub fn close_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     let port = a.mem.read_u32(win + WD_USERPORT).map_err(Refusal::mem("Window.UserPort"))?;
     if port != 0 { a.drop_window_msgs(win, port)?; }
     a.windows.remove(&win);
+    crate::graphics::close_window_surface(a, win)?;
     a.ui.close_window(native).map_err(Refusal::ui)?;
     crate::gadtools::detach(a, win);
     idcmp::free_user_port(a, win)?;

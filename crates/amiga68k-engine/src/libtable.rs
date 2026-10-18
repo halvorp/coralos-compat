@@ -36,6 +36,13 @@ impl<U: GuestUi> LibraryBuilder<U> {
         self.funcs.push((lvo, name, Some(h)));
         self
     }
+    /// Register an implemented function by its NAME: the vector comes from the generated `lvo_names` table (never hand-typed).
+    /// An unknown name is a programmer error and panics at machine construction, so any test catches it.
+    pub fn named(self, name: &'static str, h: Handler<U>) -> Self {
+        let lvo = known_functions(self.name).iter().find(|(_, n)| *n == name).map(|(l, _)| *l)
+            .unwrap_or_else(|| panic!("{} has no function named {name} in lvo_names", self.name));
+        self.func(lvo, name, h)
+    }
     /// Apply a registration helper (a module's own list of functions) in the middle of a chain.
     pub fn with(self, f: impl FnOnce(Self) -> Self) -> Self { f(self) }
     /// Reserve a slot with no implementation: calling it is a named refusal, never a silent d0=0.

@@ -35,7 +35,7 @@ impl Font {
     /// topaz 8 from the AROS ROM font data (`topaz8.rs`).
     pub fn topaz8() -> Font {
         use crate::topaz8::*;
-        Font { y_size: Y_SIZE, x_size: X_SIZE, baseline: BASELINE, bold_smear: BOLD_SMEAR, flags: 0x01 | 0x02, lo: LO_CHAR, hi: HI_CHAR,
+        Font { y_size: Y_SIZE, x_size: X_SIZE, baseline: BASELINE, bold_smear: BOLD_SMEAR, flags: 0x01 | 0x40, lo: LO_CHAR, hi: HI_CHAR,
             modulo: MODULO, data: CHAR_DATA.to_vec(), loc: CHAR_LOC.to_vec(), space: None, kern: None }
     }
     /// Glyph slot for a character: itself inside lo..=hi, else the default glyph.

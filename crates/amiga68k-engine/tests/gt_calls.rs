@@ -251,7 +251,7 @@ fn free_menus_refuses_what_it_did_not_make_and_what_a_window_still_shows() {
         "gadtools.library/FreeMenus: FreeMenus: 0x1234 was not made by CreateMenusA".to_string(),
         format!("gadtools.library/FreeMenus: FreeMenus: {:#x} was not made by CreateMenusA", m.result(1)),
     ]);
-    assert_eq!(m.a.heap.live_blocks(), 2, "only the window and its UserPort are left");
+    assert_eq!(m.a.heap.live_blocks(), 2 + 4, "only the window, its UserPort and its drawing surface (canvas BitMap, Layer, RPort, BorderRPort) are left");
     assert!(m.a.menu_allocs.is_empty() && m.a.menu_strips.is_empty());
 }
 

@@ -31,6 +31,7 @@ impl<U: GuestUi> Amiga<U> {
         process::setup(&mut self.mem, EXEC_BASE, STACK_TOP - STACK_SIZE, STACK_TOP, "program", EMPTY_ARGS).map_err(|r| r.0)?;
         dos::setup(&mut self.mem).map_err(|r| r.0)?;
         screen::setup(&mut self.mem).map_err(|r| r.0)?;
+        crate::graphics::setup(self).map_err(|r| r.0)?;
         let regs = [(retro_m68k::REG_A0, process::ARGS), (retro_m68k::REG_D0, EMPTY_ARGS.len() as u32)];
         self.ctx = Some(retro_m68k::start_with(self, loaded.entry, STACK_TOP - 4, &regs));
         self.waiting = None;
@@ -49,6 +50,7 @@ impl<U: GuestUi> Amiga<U> {
             }
         }
         let stats = retro_m68k::resume(self, &mut ctx, budget);
+        crate::graphics::content::flush(self);
         let step = if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked }
             else if let Some(pc) = stats.stalled_at { Step::Fault(format!("the 68k stopped making progress at pc={pc:#x} (STOP, or halted after a double fault)")) }
             else { Step::BudgetSpent };

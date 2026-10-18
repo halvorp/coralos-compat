@@ -82,6 +82,8 @@ pub struct Amiga<U: GuestUi> {
     /// SignalSemaphores by guest address -> the one task's nest count; the public list by name (semaphores.rs).
     pub semaphores: BTreeMap<u32, u16>,
     pub public_semaphores: BTreeMap<String, u32>,
+    /// graphics.library's host-side state: bitmaps, layers, regions, fonts, palette, content damage (graphics/).
+    pub gfx: graphics::state::State,
     /// BOOPSI/MUI objects (boopsi.rs, mui/).
     pub objects: crate::boopsi::Objects,
     next_lib_base: u32,
@@ -95,7 +97,7 @@ impl<U: GuestUi> Amiga<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
-            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(),
+            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), gfx: Default::default(),
             fs: Default::default(), calls: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
@@ -196,6 +198,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(intuition::LVO_REFRESH_GLIST, "RefreshGList", intuition::refresh_gadgets::<U>)
             .func(screen::LVO_LOCK_PUB_SCREEN, "LockPubScreen", screen::lock_pub_screen::<U>)
             .func(screen::LVO_UNLOCK_PUB_SCREEN, "UnlockPubScreen", screen::unlock_pub_screen::<U>)
+            .with(graphics::register_intuition::<U>)
             .func(crate::boopsi::LVO_NEW_OBJECT_A, "NewObjectA", crate::boopsi::new_object_a::<U>)
             .func(crate::boopsi::LVO_DISPOSE_OBJECT, "DisposeObject", crate::boopsi::dispose_object::<U>)
             .func(crate::boopsi::LVO_SET_ATTRS_A, "SetAttrsA", crate::boopsi::set_attrs_a::<U>)
@@ -221,7 +224,7 @@ impl<U: GuestUi> Amiga<U> {
             .install(&mut a.mem, &mut a.dispatch)?;
         crate::boopsi::install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("graphics.library", GRAPHICS_BASE)
-            .func(graphics::LVO_TEXT_LENGTH, "TextLength", graphics::text_length::<U>)
+            .with(graphics::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         for (name, base) in [("exec.library", EXEC_BASE), ("dos.library", DOS_BASE), ("intuition.library", INTUITION_BASE), ("graphics.library", GRAPHICS_BASE), ("gadtools.library", GADTOOLS_BASE)] {
             a.libs.push(LibInfo { name, base, open_count: 0 });
@@ -242,7 +245,12 @@ impl<U: GuestUi> Amiga<U> {
         let base = self.next_lib_base;
         if base >= DYNAMIC_LIB_END { return Err(Refusal(format!("OpenLibrary {name}: no library base left (NOMEM)"))); }
         self.next_lib_base += DYNAMIC_LIB_STRIDE;
-        let lib = if name == "muimaster.library" { crate::mui::library(base) } else { LibraryBuilder::new(name, base) };
+        let lib = match name {
+            "muimaster.library" => crate::mui::library(base),
+            "layers.library" => graphics::layers_library(base),
+            "diskfont.library" => graphics::diskfont_library(base),
+            _ => LibraryBuilder::new(name, base),
+        };
         lib.install(&mut self.mem, &mut self.dispatch)?;
         self.libs.push(LibInfo { name, base, open_count: 1 });
         Ok(base)

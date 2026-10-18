@@ -11,3 +11,4 @@ retro-guest-mem = { path = "../retro-guest-mem" }
 retro-m68k = { path = "../retro-m68k" }
 retro-hunk = { path = "../retro-hunk" }
 guestui-abi = { path = "../guestui-abi" }
+retro-raster = { path = "../retro-raster" }

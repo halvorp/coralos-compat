@@ -15,6 +15,15 @@ pub enum UiCall {
     AddControl(UiObjectRef, ControlModel),
     RemoveControl(UiObjectRef, UiObjectRef),
     SetControl(UiObjectRef, UiObjectRef, ControlValue),
+    /// `present_content`: the window, the damage rectangle, the canvas size, and an FNV-1a 64 hash over the damage pixels.
+    PresentContent { win: UiObjectRef, damage: GuestRect, width: i32, height: i32, hash: u64 },
+}
+
+/// FNV-1a 64 over pixels as big-endian bytes: the stable fingerprint tests pin.
+pub fn pixel_hash(pixels: &[u32]) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for p in pixels { for b in p.to_be_bytes() { h = (h ^ b as u64).wrapping_mul(0x100000001b3); } }
+    h
 }
 
 #[derive(Default)]
@@ -22,6 +31,8 @@ pub struct RecordingGuestUi {
     pub calls: Vec<UiCall>,
     /// Events queued by tests; handed out by `poll_event` in order.
     pub events: VecDeque<GuestUiEvent>,
+    /// The canvas each window shows: (width, height, 0x00RRGGBB pixels), composed from every `present_content`.
+    pub canvases: BTreeMap<u32, (i32, i32, Vec<u32>)>,
     next_id: u32,
     /// live object id -> generation
     live: BTreeMap<u32, u32>,
@@ -95,6 +106,21 @@ impl GuestUi for RecordingGuestUi {
         self.calls.push(UiCall::RemoveControl(win, control));
         Ok(())
     }
+    fn present_content(&mut self, win: UiObjectRef, damage: GuestRect, width: i32, height: i32, pixels: &[u32]) -> Result<(), UiRefusal> {
+        self.check(win)?;
+        let inside = damage.left >= 0 && damage.top >= 0 && damage.width > 0 && damage.height > 0
+            && damage.left + damage.width <= width && damage.top + damage.height <= height;
+        if !inside { return Err(UiRefusal::InvalidGeometry("content damage outside the canvas")); }
+        if pixels.len() != (damage.width * damage.height) as usize { return Err(UiRefusal::InvalidGeometry("content pixel count != damage area")); }
+        let c = self.canvases.entry(win.id).or_insert_with(|| (width, height, alloc::vec![0; (width * height) as usize]));
+        if (c.0, c.1) != (width, height) { *c = (width, height, alloc::vec![0; (width * height) as usize]); }
+        for row in 0..damage.height {
+            let d = ((damage.top + row) * width + damage.left) as usize;
+            c.2[d..d + damage.width as usize].copy_from_slice(&pixels[(row * damage.width) as usize..((row + 1) * damage.width) as usize]);
+        }
+        self.calls.push(UiCall::PresentContent { win, damage, width, height, hash: pixel_hash(pixels) });
+        Ok(())
+    }
     fn poll_event(&mut self) -> Option<GuestUiEvent> { self.events.pop_front() }
 }
 
@@ -137,6 +163,24 @@ mod tests {
         assert_eq!(ui.close_window(w), Err(UiRefusal::UnknownObject(w)));
         assert_eq!(ui.set_window_title(w, "x".into()), Err(UiRefusal::UnknownObject(w)));
         assert_eq!(ui.clear_menu_strip(UiObjectRef { id: 99, generation: 1 }), Err(UiRefusal::UnknownObject(UiObjectRef { id: 99, generation: 1 })));
+    }
+
+    #[test]
+    fn content_frames_compose_into_a_canvas_and_bad_frames_are_refused() {
+        let mut ui = RecordingGuestUi::new();
+        let w = ui.open_window(win()).unwrap();
+        let r = |l, t, w_, h| GuestRect { left: l, top: t, width: w_, height: h };
+        ui.present_content(w, r(0, 0, 4, 2), 4, 2, &[1; 8]).unwrap();
+        ui.present_content(w, r(1, 1, 2, 1), 4, 2, &[7, 8]).unwrap();
+        assert_eq!(ui.canvases[&w.id].2, vec![1, 1, 1, 1, 1, 7, 8, 1]);
+        assert_eq!(ui.calls.last(), Some(&UiCall::PresentContent { win: w, damage: r(1, 1, 2, 1), width: 4, height: 2, hash: pixel_hash(&[7, 8]) }));
+        assert_ne!(pixel_hash(&[7, 8]), pixel_hash(&[8, 7]), "the hash depends on order");
+        let n = ui.calls.len();
+        assert!(matches!(ui.present_content(w, r(3, 0, 2, 1), 4, 2, &[1, 1]), Err(UiRefusal::InvalidGeometry(_))), "outside the canvas");
+        assert!(matches!(ui.present_content(w, r(0, 0, 2, 2), 4, 2, &[1]), Err(UiRefusal::InvalidGeometry(_))), "wrong pixel count");
+        assert_eq!(ui.calls.len(), n, "refused frames are not recorded");
+        ui.close_window(w).unwrap();
+        assert!(ui.present_content(w, r(0, 0, 1, 1), 4, 2, &[1]).is_err());
     }
 
     #[test]

@@ -17,7 +17,7 @@ mod model;
 mod recording;
 
 pub use model::*;
-pub use recording::{RecordingGuestUi, UiCall};
+pub use recording::{pixel_hash, RecordingGuestUi, UiCall};
 
 /// What the engines call. One implementation per host (real CoralOS, recording, headless).
 pub trait GuestUi {
@@ -33,6 +33,15 @@ pub trait GuestUi {
     /// The guest changed a control's state (a label's text, a checkbox, a slider level). A value the control's kind
     /// cannot hold is `UiRefusal::Unsupported`.
     fn set_control(&mut self, win: UiObjectRef, control: UiObjectRef, value: ControlValue) -> Result<(), UiRefusal>;
+    /// Guest-DRAWN content: pixels a guest program drew itself (through its graphics library) into the window's
+    /// content canvas. `width` x `height` is the whole canvas (the window's inner area); `damage` is the sub-rectangle
+    /// that changed, in canvas pixels; `pixels` holds exactly `damage.width * damage.height` values, row-major,
+    /// `0x00RRGGBB` (the engine resolved its own palette, so the host needs no palette semantics; a palette change
+    /// arrives as a full-canvas damage). The first frame for a window is always the full canvas. One call per
+    /// engine step per window, never per drawing primitive. Hosts without a canvas part refuse by name.
+    fn present_content(&mut self, _win: UiObjectRef, _damage: GuestRect, _width: i32, _height: i32, _pixels: &[u32]) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("guest-drawn content (no canvas part in this host)"))
+    }
     /// Next native event for the guest, if any.
     fn poll_event(&mut self) -> Option<GuestUiEvent>;
 }
