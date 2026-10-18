@@ -76,6 +76,13 @@ pub fn read_pstring(mem: &GuestMem, addr: u32) -> Result<alloc::string::String, 
     Ok(mem.bytes(span).map_err(Refusal::mem("Str255"))?.iter().map(|&b| char::from(b)).collect())
 }
 
+/// The raw bytes of a Str255 at `addr` (no character mapping), for byte-exact name matching.
+pub fn read_pstring_bytes(mem: &GuestMem, addr: u32) -> Result<Vec<u8>, Refusal> {
+    let len = mem.read_u8(addr).map_err(Refusal::mem("Str255 length"))? as u32;
+    let span = mem.span(addr + 1, len).map_err(Refusal::mem("Str255"))?;
+    Ok(mem.bytes(span).map_err(Refusal::mem("Str255"))?.to_vec())
+}
+
 /// A classic Mac `Rect`: four 16-bit INTEGERs, top, left, bottom, right (the reverse of x,y habit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect { pub top: i16, pub left: i16, pub bottom: i16, pub right: i16 }

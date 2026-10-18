@@ -14,18 +14,20 @@ fn hello_mac_opens_then_closes_a_window_on_guestui() {
     assert_eq!(r.stats.bus_faults, 0);
     assert!(m.refused.is_empty(), "{:?}", m.refused);
     let win = UiObjectRef { id: 1, generation: 1 };
+    // the WindowPtr: the WindowRecord is a Ptr from the Memory Manager (after InitMenus' MenuList handle and its master block)
+    let wptr: u64 = m.log.iter().find(|l| l.contains("NewWindow")).and_then(|l| l.rsplit("-> 0x").next()).map(|h| u64::from_str_radix(h, 16).unwrap()).unwrap();
     assert_eq!(m.ui.calls, vec![
         UiCall::OpenWindow(WindowModel {
             title: "Hello Mac".into(),
             // Rect is top,left,bottom,right = 40,30,240,350
             rect: GuestRect { left: 30, top: 40, width: 320, height: 200 },
             role: WindowRole::Document, closable: true, resizable: true,
-            token: CallbackToken(0x20_0000), // the WindowPtr: first heap block
+            token: CallbackToken(wptr),
         }),
         UiCall::CloseWindow(win),
     ]);
     // The Pascal frames balanced: NewWindow's result reached the program's A3 and DisposeWindow found that very window.
-    assert_eq!(m.heap.live_blocks(), 0, "DisposeWindow gave the WindowRecord back");
+    assert_eq!(m.mm.live_ptrs(), 0, "DisposeWindow gave the WindowRecord back");
     assert!(m.windows.is_empty());
     assert_eq!(m.log.len(), 10, "{:#?}", m.log);
     assert!(m.log[0].contains("InitGraf") && m.log[8].starts_with("[toolbox] DisposeWindow"), "{:#?}", m.log);
@@ -86,7 +88,7 @@ fn deliver_close_request_queues_for_a_guest_window_only() {
     let win = *m.windows.keys().next().unwrap();
     let native = UiObjectRef { id: 1, generation: 1 };
     assert_eq!(m.deliver(GuestUiEvent::CloseRequested { win: native, token: CallbackToken(0) }), Ok(Delivered::Queued));
-    assert_eq!(m.pending, vec![(1, win)]);
+    assert_eq!(m.ev.queue.back().map(|e| (e.what, e.message)), Some((1, win)), "mouseDown carrying the WindowPtr's go-away point");
     // Negative controls: someone else's window, and an event kind not bridged yet.
     let other = UiObjectRef { id: 99, generation: 1 };
     assert_eq!(m.deliver(GuestUiEvent::CloseRequested { win: other, token: CallbackToken(0) }), Ok(Delivered::NotForAGuestWindow));
