@@ -123,6 +123,9 @@ impl CpuContext {
     }
 }
 
+/// Read a Cpu field the callbacks may have written during the last m68k_execute (see `activate`).
+macro_rules! live { ($p:expr, $f:ident) => { unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*$p).$f)) } }; }
+
 /// Reset a CPU (a 68020) to start at `entry` with stack `sp`, executing nothing, and return its context. Address 4
 /// doubles as the reset PC vector and AbsExecBase, so it is saved and restored around the reset.
 pub fn start<H: Host>(host: &mut H, entry: u32, sp: u32) -> CpuContext { start_with(host, entry, sp, &[]) }
@@ -155,12 +158,12 @@ pub fn resume<H: Host>(host: &mut H, ctx: &mut CpuContext, max_insns: u64) -> Ru
     unsafe { m68k_set_context(ctx.0.as_mut_ptr()) };
     let mut cpu = Cpu { halted: false, blocked: false, insns: 0, bus_faults: 0 };
     let mut stalled = None;
-    activate(host, &mut cpu, |c| {
-        while !c.halted && !c.blocked && c.insns < max_insns {
-            let before = c.insns;
+    activate(host, &mut cpu, |p| {
+        while !live!(p, halted) && !live!(p, blocked) && live!(p, insns) < max_insns {
+            let before = live!(p, insns);
             unsafe { m68k_execute(1000) };
-            if c.insns == before && !c.halted && !c.blocked {
-                stalled = Some(c.pc());
+            if live!(p, insns) == before && !live!(p, halted) && !live!(p, blocked) {
+                stalled = Some(unsafe { (*p).pc() });
                 break;
             }
         }
@@ -177,14 +180,16 @@ pub fn run<H: Host>(host: &mut H, entry: u32, sp: u32, max_insns: u64) -> RunSta
 
 /// Set ACTIVE to (`host`, `cpu`) for the duration of `f` (the only window in which Musashi may call back), then clear
 /// it. Called with CPU_LOCK held.
-fn activate<H: Host>(host: &mut H, cpu: &mut Cpu, f: impl FnOnce(&mut Cpu)) {
+fn activate<H: Host>(host: &mut H, cpu: &mut Cpu, f: impl FnOnce(*mut Cpu)) {
     let hp: *mut (dyn Host + '_) = host;
     // SAFETY: lifetime erased only while ACTIVE is set; cleared before returning.
     let hp: *mut (dyn Host + 'static) = unsafe { core::mem::transmute(hp) };
     let cp: *mut Cpu = cpu;
     unsafe { *ACTIVE.0.get() = Some((hp, cp)); }
-    // SAFETY: Musashi reaches `cpu` only through ACTIVE inside `f`, never concurrently with `f`'s own use of it.
-    f(unsafe { &mut *cp });
+    // `f` gets the RAW pointer, never a `&mut Cpu`: Musashi's callbacks write the Cpu through ACTIVE while `f` waits in
+    // m68k_execute, and a `&mut` held across that call lets the optimiser assume the fields cannot change (2026-10-18:
+    // in release builds the run loop never saw `insns` move, and a guest that ran fine in debug spun forever).
+    f(cp);
     unsafe { *ACTIVE.0.get() = None; }
 }
 
