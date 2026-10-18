@@ -16,6 +16,19 @@
 //! host already completed; with none pending it answers the part under the start point (a click released at once).
 //! Dialog controls report through the Dialog Manager instead ([`super::dialogs`]).
 //!
+//! **Radio buttons** (`radioButProc`, 2) are check-box-shaped on the Mac: the CDEF only draws, the PROGRAM keeps the group (it clears
+//! the others itself), and a click is `inCheckBox` with the value untouched. They therefore take the check box's role and rows. The
+//! seam's `Choice` cannot stand for ONE radio: it holds an index into its labels and has no "none selected", so a lone radio that
+//! is off could not be said (`ControlKind::validate`); the round look is the host's to choose for a boolean part.
+//!
+//! **Pop-up menus** (`popupMenuProc`, 1008 + variation bits 1/2/4/8 = fixed width / reserved / `popupUseAddResMenu` / `useWFont`)
+//! are a `Choice{Popup}`. Facts (systemless as behaviour oracle, Macintosh Toolbox Essentials 5-25..5-27): `NewControl`'s
+//! `minValue` is the MENU resource ID and its `maxValue` the title width; the standard CDEF then publishes `contrlMin` 1 and
+//! `contrlMax` = the item count, and `contrlValue` is the chosen item (1-based). A choice is the user's complete click: a
+//! `mouseDown` in the control and `TrackControl` returning **`inButton` (10)** with `contrlValue` already the item, exactly as a
+//! scroll bar drag leaves its value. (Not `inMenu`: that is a `FindWindow` code.) A menu that is not a MENU resource
+//! (`popupUseAddResMenu` builds it from a resource TYPE at run time) or is missing stays in the content plane, named in the log.
+//!
 //! Scroll bar geometry (classic CDEF 16): orientation from the rect (height >= width is vertical), a 16-pixel arrow box at
 //! each end, a 16-pixel thumb moving over the rest in proportion to `(value - min) / (max - min)`. systemless (the oracle
 //! this table was compared with) uses an 8-pixel thumb; the 16-pixel box is the System 7 scroll box.
@@ -25,9 +38,9 @@ use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_pstring, read_rect, Arg, Rect};
 use crate::Refusal;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use guestui_abi::{CallbackToken, ControlKind, ControlModel, ControlValue, GuestUi, Intent};
+use guestui_abi::{CallbackToken, ChoiceStyle, ControlKind, ControlModel, ControlValue, GuestUi, Intent};
 use retro_translate::{row, On, Role};
 use retro_m68k::Cpu;
 
@@ -56,16 +69,23 @@ pub const IN_DOWN_BUTTON: u16 = 21;
 pub const IN_PAGE_UP: u16 = 22;
 pub const IN_PAGE_DOWN: u16 = 23;
 pub const IN_THUMB: u16 = 129;
+/// `popupMenuProc` and its variation bits (the `useWFont` bit 8 is masked like for every procID).
+const POPUP_PROC: u16 = 1008;
+const POPUP_USE_ADD_RES_MENU: u16 = 4;
 
 /// The definition functions the Control Manager ships (the Toolbox's own vocabulary; [`Cdef::role`] maps it onto the shared one).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Cdef { PushButton, CheckBox, RadioButton, ScrollBar }
+pub enum Cdef { PushButton, CheckBox, RadioButton, ScrollBar, PopupMenu }
 
 impl Cdef {
-    /// The shared role a CDEF is shown as; `None` = the closed vocabulary has no role for it yet. A radio button is a CHOICE,
-    /// which is reserved until a host consumer exists, so it has no kit part yet.
+    /// The shared role a CDEF is shown as (see the module docs for why a radio button is a check-box-shaped boolean).
     pub fn role(self) -> Option<Role> {
-        match self { Cdef::PushButton => Some(Role::Button), Cdef::CheckBox => Some(Role::Check), Cdef::ScrollBar => Some(Role::Scroll), Cdef::RadioButton => None }
+        Some(match self {
+            Cdef::PushButton => Role::Button,
+            Cdef::CheckBox | Cdef::RadioButton => Role::Check,
+            Cdef::ScrollBar => Role::Scroll,
+            Cdef::PopupMenu => Role::Choice,
+        })
     }
 }
 
@@ -78,9 +98,15 @@ pub const PROCS: &[Proc] = &[
     Proc { proc_id: 1, name: "checkBoxProc", cdef: Cdef::CheckBox },
     Proc { proc_id: 2, name: "radioButProc", cdef: Cdef::RadioButton },
     Proc { proc_id: 16, name: "scrollBarProc", cdef: Cdef::ScrollBar },
+    Proc { proc_id: POPUP_PROC, name: "popupMenuProc", cdef: Cdef::PopupMenu },
 ];
 
-pub fn row_of(proc_id: u16) -> Option<&'static Proc> { let p = proc_id & !8; PROCS.iter().find(|r| r.proc_id == p) }
+/// The row of a `procID`: the useWFont bit is masked, and a pop-up's variation bits 1/2/4 select the same CDEF.
+pub fn row_of(proc_id: u16) -> Option<&'static Proc> {
+    let p = proc_id & !8;
+    let p = if p >> 3 == POPUP_PROC >> 3 { POPUP_PROC } else { p };
+    PROCS.iter().find(|r| r.proc_id == p)
+}
 
 /// What a gesture writes into the guest FIRST (the shared row's effect).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +117,8 @@ pub enum Effect {
     Checked,
     /// `contrlValue` becomes the dragged / scrolled-to position before `TrackControl` returns.
     Value,
+    /// `contrlValue` becomes the chosen pop-up item (the choice's 0-based index + 1) before `TrackControl` returns.
+    Item,
 }
 
 /// What the original OS reports after the effect: the part code `FindControl` / `TrackControl` answer for the gesture.
@@ -108,11 +136,14 @@ pub const TABLE: &[Row] = &[
     row(Role::Check, On::SetValue, Effect::Checked, post(IN_CHECK_BOX)),
     row(Role::Scroll, On::ScrollTo, Effect::Value, post(IN_THUMB)),
     row(Role::Scroll, On::Drag, Effect::Value, post(IN_THUMB)),
+    row(Role::Choice, On::SetValue, Effect::Item, post(IN_BUTTON)),
 ];
 
 /// What the record says right now.
 #[derive(Debug, Clone)]
-pub struct Facts { pub owner: u32, pub rect: Rect, pub vis: bool, pub hilite: u8, pub value: i16, pub min: i16, pub max: i16, pub proc_id: u16, pub title: String }
+pub struct Facts { pub owner: u32, pub rect: Rect, pub vis: bool, pub hilite: u8, pub value: i16, pub min: i16, pub max: i16, pub proc_id: u16, pub title: String,
+    /// A pop-up's item titles (read from its MENU resource when it was made); empty for every other control.
+    pub items: Vec<String> }
 
 /// The attribute map, as data over the record: facts -> the role's model. `None`: the role has no kit part yet.
 fn model(row: &Proc, f: &Facts, token: u32) -> Option<ControlModel> {
@@ -122,6 +153,11 @@ fn model(row: &Proc, f: &Facts, token: u32) -> Option<ControlModel> {
         Role::Check => ControlKind::Checkbox { checked: f.value != 0 },
         // The Control Manager has no "visible amount": the value ranges min..=max one unit at a time.
         Role::Scroll => ControlKind::ScrollBar { vertical: h >= w, total: (i32::from(f.max) - i32::from(f.min)).max(0) as u32 + 1, visible: 1, top: (i32::from(f.value) - i32::from(f.min)).max(0) as u32 },
+        // a pop-up whose menu could not be read has no kit part: the plane draws it (named in the log at creation)
+        Role::Choice if !f.items.is_empty() => {
+            let last = f.items.len() as i32 - 1;
+            ControlKind::Choice { style: ChoiceStyle::Popup, labels: f.items.clone(), selected: (i32::from(f.value) - 1).clamp(0, last) as u32 }
+        }
         _ => return None,
     };
     let label = if row.cdef == Cdef::ScrollBar { String::new() } else { f.title.clone() };
@@ -153,6 +189,7 @@ pub fn part_at(row: &Proc, f: &Facts, v: i16, h: i16) -> u16 {
     match row.cdef {
         Cdef::PushButton => IN_BUTTON,
         Cdef::CheckBox | Cdef::RadioButton => IN_CHECK_BOX,
+        Cdef::PopupMenu => IN_BUTTON,
         Cdef::ScrollBar => {
             let (start, end, at) = if bottom - top >= right - left { (top, bottom, v) } else { (left, right, h) };
             let arrow = arrow_len(end - start);
@@ -189,6 +226,10 @@ fn gesture(row: &Proc, f: &Facts, intent: &Intent) -> Result<Gesture, Refusal> {
             let v = (i32::from(f.min) + (*top).min(i32::MAX as u32) as i32).clamp(i32::from(f.min), i32::from(f.max).max(i32::from(f.min)));
             Ok(Gesture { part, value: Some(v as i16) })
         }
+        (Effect::Item, Intent::SetValue(ControlValue::Choice(i))) => {
+            if *i as usize >= f.items.len() { return Err(name(&format!("item {i} outside the pop-up's {} items", f.items.len()))); }
+            Ok(Gesture { part, value: Some(*i as i16 + 1) })
+        }
         _ => Err(name("the row's effect does not take this value")),
     }
 }
@@ -207,6 +248,7 @@ impl<U: GuestUi> Mac<U> {
             vis: self.mem.read_u8(p + C_VIS).map_err(&e)? != 0, hilite: self.mem.read_u8(p + C_HILITE).map_err(&e)?,
             value: self.mem.read_i16(p + C_VALUE).map_err(&e)?, min: self.mem.read_i16(p + C_MIN).map_err(&e)?, max: self.mem.read_i16(p + C_MAX).map_err(&e)?,
             proc_id: self.tr.procs[&ctl], title: read_pstring(&self.mem, p + C_TITLE)?,
+            items: self.tr.popups.get(&ctl).map(|(_, items)| items.clone()).unwrap_or_default(),
         })
     }
 
@@ -255,11 +297,32 @@ impl<U: GuestUi> Mac<U> {
         self.tr.procs.insert(ctl, proc_id);
         match row_of(proc_id) {
             None => self.log.push(format!("[control] procID {proc_id} has no row in the Control Manager table: drawn into the content plane as the default look")),
-            Some(r) if r.cdef == Cdef::RadioButton => self.log.push(format!("[control] {} has no kit role yet (choice is reserved): drawn into the content plane as the default look", r.name)),
+            Some(r) if r.cdef == Cdef::PopupMenu => self.make_popup(ctl, proc_id, min)?,
             Some(_) => {}
         }
         self.sync_control(ctl)?;
         Ok(ctl)
+    }
+
+    /// A pop-up's menu: `minValue` was the MENU resource ID; the CDEF publishes `contrlMin` 1 and `contrlMax` = the item count.
+    fn make_popup(&mut self, ctl: u32, proc_id: u16, menu_id: i16) -> Result<(), Refusal> {
+        let why = if proc_id & POPUP_USE_ADD_RES_MENU != 0 { Some("popupUseAddResMenu builds its menu from a resource TYPE at run time".to_string()) } else {
+            match self.get_resource(*b"MENU", menu_id, false) {
+                Err(e) => Some(format!("no MENU resource {menu_id} (ResErr {e})")),
+                Ok(h) => match crate::menu::parse_block(&self.handle_bytes(h).unwrap_or_default()) {
+                    Err(e) => Some(e.0),
+                    Ok(menu) => {
+                        let items: Vec<String> = menu.items.iter().map(|i| crate::menu::mac_text(&i.text)).collect();
+                        self.set_control_field(ctl, C_MIN, 1)?;
+                        self.set_control_field(ctl, C_MAX, items.len().min(i16::MAX as usize) as i16)?;
+                        self.tr.popups.insert(ctl, (menu_id, items));
+                        None
+                    }
+                },
+            }
+        };
+        if let Some(why) = why { self.log.push(format!("[control] popupMenuProc {ctl:#x}: {why}; drawn into the content plane as the default look")); }
+        Ok(())
     }
 
     /// `DisposeControl`: unlink, retire its projection (unless the whole window is going), free the record.
@@ -277,6 +340,7 @@ impl<U: GuestUi> Mac<U> {
         }
         if retire { self.sync_projection(f.owner, Obj::Control(ctl), None)?; }
         self.tr.procs.remove(&ctl);
+        self.tr.popups.remove(&ctl);
         self.tr.tracks.remove(&ctl);
         self.dispose_handle(ctl).map_err(|e| Refusal(format!("DisposeControl: memory manager error {e}")))
     }

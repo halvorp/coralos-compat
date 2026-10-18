@@ -5,6 +5,8 @@ use mac68k_engine::pascal::Rect;
 use mac68k_engine::toolbox::WindowSpec;
 use mac68k_engine::Mac;
 
+pub mod ctl;
+
 pub const GLOBALS: u32 = 0x3F00; // qd.thePort; the globals sit below it
 pub const WIN_TOP: i16 = 100;
 pub const WIN_LEFT: i16 = 50;

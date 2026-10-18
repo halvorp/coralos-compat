@@ -10,7 +10,7 @@ OS produced. Nothing here names an application or looks at what pixels look like
 |---|---|
 | `retro-translate/src/project.rs` + `rows.rs` | THE generic mapper (`guestui-abi` stays the seam types only), shared by all three engines (amiga68k, mac68k, macppc): `Projections::sync` (add / diff-push / retire a native control), `check_ref` (the single stale-intent rule: token + generation + window), `restore`, `adopt`; plus the role x intent row tables (`Row`, `lookup_role`) |
 | `translate/mod.rs` | the Mac engine's thin use of it: which guest object (`Meta`) is which token, `sync_projection`, `deliver_intent` |
-| `translate/fallback.rs` | a control the kit has no part for (radio until the vocabulary has a choice, a `procID` with no row) is drawn as the role's default look into the content plane, never dropped |
+| `translate/fallback.rs` | a control the kit has no part for (a `procID` with no row, a pop-up whose MENU cannot be read) is drawn as the role's default look into the content plane, never dropped |
 | `translate/controls.rs` | ONE `procID` -> CDEF table (`PROCS`) and ONE role x intent row table (`TABLE`: effect, then the `TrackControl` part code), the attribute map into the real `ControlRecord`, part geometry, the Control Manager traps |
 | `translate/dialogs.rs` | ONE table: DITL item type -> item (`ITEM_TABLE`) and the text-intent row table (`TABLE`), `DialogRecord` + DITL copy with item handles, `ModalDialog` and the item traps |
 | `translate/input.rs` | pointer and key events for content (`mouseDown/Up`, `keyDown/autoKey`, low-memory `Mouse`/`MBState`) |
@@ -39,7 +39,7 @@ named refusal and produces NO guest input.
 
 ## Honest limits (all named in the log, none silent)
 
-* `radioButProc` has no kit role yet (the closed vocabulary reserves "choice"), and a `procID` with no table row has none at all: the control exists in guest memory and is DRAWN into the content plane as its default look (`fallback.rs`), so it is visible and the census counts it as `replayed`. A custom CDEF's own art is not run.
+* `radioButProc` is a check-box-shaped boolean part (a lone radio cannot be a `Choice`: it has no "none selected"; the app keeps the group), `popupMenuProc` (1008 + variation bits) is a `Choice{Popup}` over its MENU resource and a choice returns `inButton` with the value set, `_Pack0` is the List Manager (`translate/lists.rs`: a real `ListRec`, standard text LDEF shown as a native `List`, a custom LDEF stays a plane). A `procID` with no table row has no part at all: the control exists in guest memory and is DRAWN into the content plane as its default look (`fallback.rs`), so it is visible and the census counts it as `replayed`. A custom CDEF's own art is not run.
 * `ModalDialog`'s `filterProc` and `TrackControl`'s `actionProc` are guest callbacks the trap bridge cannot run from inside a trap: a non-NIL one is named, never ignored silently.
 * A program's own CDEF, icon / picture / user dialog items: no contract to translate; they stay content (a user item is a plane).
 * Press / Release / Drag gestures are not bridged: a complete click arrives as `Activate`.

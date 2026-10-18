@@ -6,6 +6,7 @@
 //!   memory and the part-code geometry (`FindControl`/`TrackControl`).
 //! * [`dialogs`]: ONE table, DITL item type -> role; push buttons, check boxes and `resCtrl` items reuse the control
 //!   table, static and editable text are fields of their own.
+//! * [`lists`]: the List Manager (`_Pack0`): a real `ListRec`, the selector dispatch, and the standard text LDEF shown as a native list.
 //! * [`fallback`]: a control the kit has no part for is drawn into the content plane, never dropped.
 //! * [`input`]: plain pointer and key input for content (a plane is fully usable before it has any binding).
 //! * this file: the generic mapper both tables feed: project / update / retire an object, and the single stale-intent
@@ -21,6 +22,7 @@ pub mod controls;
 pub mod dialogs;
 pub mod fallback;
 pub mod input;
+pub mod lists;
 
 use crate::events::Delivered;
 use crate::machine::Mac;
@@ -42,10 +44,12 @@ pub enum Obj {
     Control(u32),
     /// The `Handle` of a dialog's static or editable text item.
     Text(u32),
+    /// The `ListHandle` of a List Manager list.
+    List(u32),
 }
 
 impl Obj {
-    pub fn handle(self) -> u32 { match self { Obj::Control(h) | Obj::Text(h) => h } }
+    pub fn handle(self) -> u32 { match self { Obj::Control(h) | Obj::Text(h) | Obj::List(h) => h } }
 }
 
 /// What the engine adds to the shared registry's entry: which guest object, in which guest window.
@@ -58,9 +62,13 @@ pub struct Translate {
     live: Projections<Meta>,
     /// `ControlHandle` -> its `procID` (a ControlRecord holds only a CDEF handle, so the id lives host-side).
     pub procs: BTreeMap<u32, u16>,
+    /// A pop-up control's MENU resource ID and item titles (read when it was made; the menu resource is the CDEF's private data).
+    pub popups: BTreeMap<u32, (i16, alloc::vec::Vec<alloc::string::String>)>,
     /// A native gesture waiting for its `TrackControl`: control -> (the part code the user's release is in, the value the drag leaves).
     /// It lives until that call, or until the next input supersedes it ([`Translate::supersede`]).
     pub tracks: BTreeMap<u32, (u16, Option<i16>)>,
+    /// The List Manager lists: ListHandle -> the cells and selection the engine holds (the ListRec itself is guest memory).
+    pub lists: BTreeMap<u32, lists::ListState>,
     pub dlg: dialogs::State,
     pub input: input::State,
 }
@@ -103,6 +111,7 @@ impl<U: GuestUi> Mac<U> {
     /// A window just got its native window: show every control and item it already holds.
     pub(crate) fn project_window(&mut self, win: u32) -> Result<(), Refusal> {
         self.project_controls(win)?;
+        self.project_lists(win)?;
         self.project_dialog_text(win)
     }
 
@@ -111,14 +120,16 @@ impl<U: GuestUi> Mac<U> {
         match obj {
             Obj::Control(h) => self.control_intent(h, intent)?,
             Obj::Text(h) => self.text_intent(h, intent)?,
+            Obj::List(h) => self.list_intent(h, intent)?,
         }
         Ok(Delivered::Queued)
     }
 }
 
-/// Register the Control Manager and Dialog Manager traps.
+/// Register the Control Manager, Dialog Manager and List Manager traps.
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     controls::register(m)?;
     dialogs::register(m)?;
-    alerts::register(m)
+    alerts::register(m)?;
+    lists::register(m)
 }
