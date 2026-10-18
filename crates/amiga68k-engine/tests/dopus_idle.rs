@@ -3,7 +3,7 @@
 //! the ports it publishes, the windows it opens and that they were really drawn.
 use amiga68k_engine::Amiga;
 use guestui_abi::IconRole;
-use guestui_abi::{RecordingGuestUi, UiCall};
+use guestui_abi::{ControlKind, DrawOp, GuestPoint, GuestRect, PenRole, Plane, RecordingGuestUi, UiCall};
 
 const DOPUS: &str = "/data/build/corpus-bin/dopus5/DOpus5";
 
@@ -18,6 +18,9 @@ fn load(a: &mut Amiga<RecordingGuestUi>, prefix: &str, dir: &std::path::Path) {
 /// Boot DirectoryOpus and run it, advancing the virtual clock whenever every task sleeps, until `seconds` of virtual time passed.
 fn run(seconds: u64) -> Option<Amiga<RecordingGuestUi>> { run_cfg(seconds, true, |_| {}) }
 
+/// [`run`] with the plane route (the default of the engine): the windows are presented as display-list planes, not canvases.
+fn run_plane(seconds: u64) -> Option<Amiga<RecordingGuestUi>> { run_route(seconds, true, true, |_| {}) }
+
 /// [`run`] with the font choice explicit: with `topaz` the screen's font is topaz 8, as on the AROS oracle that EXPECTATIONS.md and the
 /// region fixtures come from (AROS is the BEHAVIOUR reference, not the pixel target): window sizes follow the font DOpus reads from the
 /// screen, so the oracle's geometry holds only under it. Without it the engine is as shipped: the Gute Form face and pens.
@@ -26,11 +29,15 @@ fn run_with(seconds: u64, topaz: bool) -> Option<Amiga<RecordingGuestUi>> { run_
 /// [`run`] with the host's `RecordingGuestUi` prepared first (e.g. with icon artwork).
 fn run_prep(seconds: u64, prep: impl FnOnce(&mut RecordingGuestUi)) -> Option<Amiga<RecordingGuestUi>> { run_cfg(seconds, true, prep) }
 
-fn run_cfg(seconds: u64, topaz: bool, prep: impl FnOnce(&mut RecordingGuestUi)) -> Option<Amiga<RecordingGuestUi>> {
+/// The canvas route: the pixel-level checks below read `present_content` canvases.
+fn run_cfg(seconds: u64, topaz: bool, prep: impl FnOnce(&mut RecordingGuestUi)) -> Option<Amiga<RecordingGuestUi>> { run_route(seconds, topaz, false, prep) }
+
+fn run_route(seconds: u64, topaz: bool, plane: bool, prep: impl FnOnce(&mut RecordingGuestUi)) -> Option<Amiga<RecordingGuestUi>> {
     let file = std::fs::read(format!("{DOPUS}/DirectoryOpus")).ok().or_else(|| { eprintln!("skipped: corpus not present"); None })?;
     let mut ui = RecordingGuestUi::new();
     prep(&mut ui);
     let mut a = Amiga::new(ui).unwrap();
+    a.gfx.present.set_plane_route(plane);
     a.fs.vol.add_device("DOpus5", false);
     load(&mut a, "DOpus5:", std::path::Path::new(DOPUS));
     a.fs.vol.assign_add("LIBS", "DOpus5:Libs");
@@ -282,4 +289,62 @@ fn as_shipped_directory_opus_draws_in_gute_form_colours_and_the_gute_form_face()
         l.ends_with(&format!("(+{})", f.text_length(text.as_bytes()))) && f.text_length(text.as_bytes()) != 8 * text.len() as i32
     });
     assert!(proportional, "some drawn text advanced by the Gute Form TextLength: {:?}", &rows[..rows.len().min(5)]);
+}
+
+/// The bounding box of an op (window coordinates), `None` for a text run (its width is the host's font's).
+fn op_box(o: &DrawOp) -> Option<GuestRect> {
+    let line = |a: &GuestPoint, b: &GuestPoint| GuestRect { left: a.x.min(b.x), top: a.y.min(b.y), width: (a.x - b.x).abs() + 1, height: (a.y - b.y).abs() + 1 };
+    match o {
+        DrawOp::Fill { rect, .. } | DrawOp::Bevel { rect, .. } | DrawOp::Icon { rect, .. } | DrawOp::Pixels { rect, .. } => Some(*rect),
+        DrawOp::Line { a, b, .. } => Some(line(a, b)),
+        DrawOp::Text { .. } => None,
+    }
+}
+fn inside(o: &GuestRect, c: &GuestRect) -> bool { o.left >= c.left && o.top >= c.top && o.left + o.width <= c.left + c.width && o.top + o.height <= c.top + c.height }
+
+/// First slice item 3 (17-TRANSLATION-ARCHITECTURE.md): the real DOpus lister is a PLANE. Its rows are text runs with pen ROLES, its
+/// native scrollbars / path field are controls with no drawing under them, and no list role is invented from the rows.
+#[test]
+fn the_lister_is_a_plane_of_row_text_runs_with_pen_roles_and_no_ops_under_its_native_controls() {
+    let Some(a) = run_plane(5) else { return };
+    assert!(a.refused.is_empty(), "{:#?}", a.refused);
+    let lister = a.ui.calls.iter().find_map(|c| match c { UiCall::OpenWindow(m) if (m.rect.width, m.rect.height) == (443, 583) => Some(m.token), _ => None }).expect("the lister window");
+    let native = *a.windows.get(&(lister.0 as u32)).expect("open lister");
+    assert_eq!(a.ui.calls.iter().filter(|c| matches!(c, UiCall::PresentContent { .. })).count(), 0, "the plane route replaces present_content");
+    let planes: Vec<&Plane> = a.ui.calls.iter().filter_map(|c| match c { UiCall::PresentPlane(w, p) if *w == native => Some(p), _ => None }).collect();
+    assert!(!planes.is_empty() && planes.iter().all(|p| p.validate().is_ok()), "the lister was presented as valid planes");
+    let ops: Vec<&DrawOp> = planes.iter().flat_map(|p| p.ops.iter()).collect();
+
+    // The rows: DOpus draws "Env    ", "EnvArc ", "T      " (name column, then date and protection) with Text(); each row is ONE text run
+    // with a pen ROLE (no pen number exists in the seam) over the BACKGROUNDPEN, drawn in JAM2.
+    for name in ["Env    ", "EnvArc ", "T      "] {
+        let run = ops.iter().find_map(|o| match o { DrawOp::Text { string, pen_role, bg_role, .. } if string.starts_with(name) => Some((*pen_role, *bg_role)), _ => None });
+        let Some((_, bg)) = run else { panic!("no text run for row {name:?}; texts: {:?}", ops.iter().filter_map(|o| if let DrawOp::Text { string, .. } = o { Some(string.trim_end()) } else { None }).filter(|s| !s.is_empty()).take(12).collect::<Vec<_>>()) };
+        assert_eq!(bg, Some(PenRole::Background), "row {name:?} is drawn over the window background");
+    }
+    let named_texts = ops.iter().filter(|o| matches!(o, DrawOp::Text { .. })).count();
+    assert!(named_texts >= 3, "{named_texts}");
+
+    // Nothing is published under a native control: the host draws the scrollbars, arrows, drag strip and path field itself.
+    let controls: Vec<GuestRect> = a.ui.controls.values().filter(|(w, _)| *w == native).map(|(_, m)| m.rect).collect();
+    assert_eq!(controls.len(), 8, "{controls:?}");
+    let under = |ops: &[&DrawOp]| ops.iter().filter_map(|o| op_box(o)).filter(|b| controls.iter().any(|c| inside(b, c))).count();
+    assert_eq!(under(&ops), 0, "ops lie inside native control rectangles");
+    // NEGATIVE CONTROL for the check: a fill hand-placed inside the path field IS found.
+    let planted = DrawOp::Fill { rect: GuestRect { left: 10, top: 570, width: 5, height: 4 }, pen_role: PenRole::Fill };
+    assert_eq!(under(&[&planted]), 1);
+
+    // RETRO-ROLES-REQUIRE-A-CONTRACT negative control: rows that look like a list are NOT a list. The lister's controls are exactly the
+    // system gadgets it made (scrollbars, arrows, the drag strip, the path field); no control kind names a list, and no row text is a control label.
+    let kinds: Vec<String> = a.ui.controls.values().filter(|(w, _)| *w == native).map(|(_, m)| format!("{:?}", m.kind)).collect();
+    assert!(kinds.iter().all(|k| !k.contains("List")), "{kinds:?}");
+    assert!(a.ui.controls.values().filter(|(w, _)| *w == native).all(|(_, m)| !m.label.starts_with("Env") && !matches!(&m.kind, ControlKind::Label { text, .. } if text.starts_with("Env"))));
+
+    // The census: 8 native controls and one plane (replayed, or raw if it carries a pixel hole).
+    let c = a.ui.route_census(native);
+    eprintln!("DOpus lister route census: {c:?}; {} ops in {} frames", ops.len(), planes.len());
+    assert_eq!(c.native, 8);
+    assert_eq!(c.replayed + c.raw, 1, "{c:?}");
+    // The claim is measured, not assumed: the lister carries pixel holes (its disk icon art, the cleared list area), so it counts as raw.
+    assert!(ops.iter().any(|o| o.is_raw()) == (c.raw == 1), "{c:?}");
 }

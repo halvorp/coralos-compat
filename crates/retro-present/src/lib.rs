@@ -2,8 +2,13 @@
 //! once per engine step each damaged window gets ONE `GuestUi::present_content` carrying that rectangle as resolved
 //! `0x00RRGGBB` pixels. The first frame of a window is its whole canvas. Both `amiga68k-engine` and `mac68k-engine`
 //! call this; neither has its own copy.
+//!
+//! The plane route ([`plane`], ruling 17 piece 5): an engine that records a display list per window publishes
+//! `present_plane` instead; a host that answers `Unsupported` falls back to the canvas route, so the fallback is the design.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+
+pub mod plane;
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -22,6 +27,11 @@ pub struct Presenter {
     presented: BTreeSet<u32>,
     /// A host without a canvas part refused a frame; logged once.
     refused_once: bool,
+    /// The display list of each window (plane route; empty and unused by an engine that does not record).
+    pub(crate) recs: BTreeMap<u32, Vec<plane::Rec>>,
+    /// Plane route on: damaged windows go out as `present_plane` (canvas pixels only where a `Rec::Hole` says so).
+    pub(crate) plane_route: bool,
+    pub(crate) plane_refused_once: bool,
 }
 
 impl Presenter {
@@ -32,7 +42,7 @@ impl Presenter {
         *e = e.union(&r);
     }
     /// The window is gone: forget its damage and its first-frame state.
-    pub fn forget(&mut self, win: u32) { self.damage.remove(&win); self.presented.remove(&win); }
+    pub fn forget(&mut self, win: u32) { self.damage.remove(&win); self.presented.remove(&win); self.recs.remove(&win); }
     pub fn pending(&self, win: u32) -> Option<Rect> { self.damage.get(&win).copied() }
     pub fn has_presented(&self, win: u32) -> bool { self.presented.contains(&win) }
 

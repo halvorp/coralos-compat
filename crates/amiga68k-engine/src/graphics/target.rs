@@ -1,5 +1,6 @@
 //! Where a RastPort draws: its Layer's canvas (a window), or the bitmap it points at.
 use super::layout::*;
+use super::record::Prim;
 use super::state::GBitmap;
 use crate::{machine::Amiga, Refusal};
 use alloc::format;
@@ -37,6 +38,12 @@ pub fn resolve<U: GuestUi>(a: &mut Amiga<U>, rp: u32) -> Result<Dest, Refusal> {
 /// Run `f` on the destination bitmap with its clip and origin; the rectangle it returns (bitmap coordinates) becomes
 /// damage. A dropped destination logs and does nothing.
 pub fn paint<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, f: impl FnOnce(&mut Bitmap, &Clip, (i32, i32)) -> Rect) -> Result<Rect, Refusal> {
+    paint_as(a, rp, what, None, f)
+}
+
+/// [`paint`] for a call the plane route can NAME (`prim`: what was drawn, in RastPort coordinates and guest pens); `None`, a pen
+/// without a role, or an installed clip region record the damage as a hole of canvas pixels instead (record.rs).
+pub fn paint_as<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, prim: Option<Prim>, f: impl FnOnce(&mut Bitmap, &Clip, (i32, i32)) -> Rect) -> Result<Rect, Refusal> {
     match resolve(a, rp)? {
         Dest::Dropped(why) => { a.log.push(format!("[graphics] {what} on {rp:#x} dropped: {why}")); Ok(Rect::default()) }
         Dest::Bitmap { bm, origin, window, region } => {
@@ -44,7 +51,10 @@ pub fn paint<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, f: impl FnOnce(&
             let g: &mut GBitmap = a.gfx.bitmaps.get_mut(&bm).ok_or_else(|| Refusal(format!("{what}: BitMap {bm:#x} vanished")))?;
             let clip = Clip { rect: g.bm.rect(), region: region.as_ref() };
             let r = f(&mut g.bm, &clip, origin);
-            if let Some(w) = window { a.gfx.add_damage(w, r); }
+            if let Some(w) = window {
+                a.gfx.add_damage(w, r);
+                super::record::note(a, w, if region.is_some() { None } else { prim }, r, origin);
+            }
             super::bitmaps::export_planes(a, bm)?;
             Ok(r)
         }

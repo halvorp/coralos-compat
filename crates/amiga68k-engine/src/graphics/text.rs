@@ -23,7 +23,8 @@ pub fn text<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     let (_, font) = fonts::rp_font(a, rp)?;
     let (brush, algo, (x, y)) = (st.brush(), st.algo, st.cp);
     let adv = font.text_length(&bytes);
-    target::paint(a, rp, "Text", |bm, clip, (ox, oy)| draw_text(bm, &font, &bytes, x - ox, y - oy, &brush, algo, clip).1)?;
+    let prim = super::record::text(&st, &font, &bytes, (x, y));
+    target::paint_as(a, rp, "Text", prim, |bm, clip, (ox, oy)| draw_text(bm, &font, &bytes, x - ox, y - oy, &brush, algo, clip).1)?;
     rastport::set_cp(a, rp, x + adv, y)?;
     Ok(format!("[graphics] Text {:?} at {x},{y} (+{adv})", String::from_utf8_lossy(&bytes[..bytes.len().min(48)])))
 }

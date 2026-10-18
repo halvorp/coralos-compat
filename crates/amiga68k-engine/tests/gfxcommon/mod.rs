@@ -47,7 +47,10 @@ pub fn d_res(n: u32, i: u32) -> (R, V) { (R::D(n), V::Res(i)) }
 pub struct G { pub a: Amiga<RecordingGuestUi>, pub next: u32, /// Overrides dri_Pens[SHINEPEN] after every start (setup rewrites the DrawInfo per run).
     pub shine_pen: Option<u16> }
 impl G {
-    pub fn new() -> G { G { a: Amiga::new(RecordingGuestUi::new()).unwrap(), next: DATA, shine_pen: None } }
+    /// A machine on the CANVAS route (`present_content`): the pixel-level tests read canvases. See [`G::new_plane`].
+    pub fn new() -> G { let mut g = G::new_plane(); g.a.gfx.present.set_plane_route(false); g }
+    /// A machine on the engine's default PLANE route (`present_plane`: a display list per window).
+    pub fn new_plane() -> G { G { a: Amiga::new(RecordingGuestUi::new()).unwrap(), next: DATA, shine_pen: None } }
     pub fn bytes(&mut self, b: &[u8]) -> u32 {
         let at = (self.next + 3) & !3;
         self.a.mem.write_bytes(at, b).unwrap();
