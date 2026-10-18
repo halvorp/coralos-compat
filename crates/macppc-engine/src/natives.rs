@@ -65,12 +65,13 @@ impl<U: GuestUi> MacPpc<U> {
             Native::WaitNextEvent | Native::GetNextEvent => {
                 // eventMask, EventRecord*, [sleep, mouseRgn]. The handler is polled with sleep 0 (it pumps the GuestUi and
                 // returns a queued event or the null event). A null event for a caller that asked to sleep (WaitNextEvent
-                // sleep != 0, or GetNextEvent, which has no timeout) is `Idle`: the run loop parks the CPU on this very call
-                // and retries it when a matching event is queued. No timer wakes it: the sleep's tick count is not honoured
+                // sleep != 0) is `Idle`: the run loop parks the CPU on this very call
+                // and retries it when a matching event is queued. GetNextEvent never waits (Inside Macintosh): with nothing
+                // pending it returns FALSE with a null event at once, so idle loops built on it keep running. No timer wakes it: the sleep's tick count is not honoured
                 // (a sleeping caller that wants its idle work done on time would not get it; named in docs/MACPPC-PLUMBING.md).
                 let name = if n == Native::WaitNextEvent { "WaitNextEvent" } else { "GetNextEvent" };
                 let Some(op) = mac68k_engine::mixed::trap_opcode("WaitNextEvent") else { return GlueOutcome::Refused("WaitNextEvent has no trap word".into()) };
-                let sleeps = n == Native::GetNextEvent || a(2) != 0;
+                let sleeps = n == Native::WaitNextEvent && a(2) != 0;
                 let r = self.mac.pascal_call(op, &[a(0), a(1), 0, 0]);
                 if sleeps && matches!(r, Ok(rr) if rr.value == 0 && !rr.halted) {
                     self.rt.wait_mask = Some(a(0) as u16);
@@ -165,7 +166,7 @@ impl<U: GuestUi> PpcHost for MacPpc<U> {
         }
     }
 
-    fn glue_symbol_at(&self, pc: u32) -> Option<String> { self.glue.at_stub(pc).map(|e| e.symbol.clone()) }
+    fn glue_symbol_at(&self, pc: u32) -> Option<String> { self.glue.at_stub(pc).map(|e| e.key()) }
 }
 
 #[cfg(test)]

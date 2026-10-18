@@ -61,7 +61,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn bind_from(&mut self, lib: &str, name: &str) -> Binding {
         match lib {
             crate::stdclib::NAME => match crate::stdclib::lookup(name) {
-                Some(b) => { self.bindings.insert(name.into(), b.clone()); b }
+                Some(b) => { self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
                 None => Binding::Unbound(alloc::format!("{name} is not in the part of StdCLib this engine provides")),
             },
             l if crate::natives::PROVIDED_LIBRARIES.contains(&l) => self.bind(name),

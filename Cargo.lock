@@ -60,9 +60,12 @@ version = "0.1.0"
 dependencies = [
  "guestui-abi",
  "mac68k-engine",
+ "macppc-engine",
  "retro-common",
  "retro-guest-mem",
  "retro-pef",
+ "retro-ppc",
+ "retro-raster",
  "retro-resfork",
 ]
 

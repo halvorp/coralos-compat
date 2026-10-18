@@ -16,8 +16,8 @@ use mac68k_engine::Mac;
 /// `SysBeep` is here because the 68k engine has not registered it (its tests use it as their example of an unimplemented
 /// trap); it moves to a shared handler when the 68k side gets one.
 /// Host functions that have no 68k trap (the Code Fragment Manager's API, C-level helpers), or whose 68k form cannot be
-/// used as it is: `WaitNextEvent` / `GetNextEvent` suspend a 68k guest through its run loop, so a PowerPC call polls
-/// instead (the same as `WaitNextEvent` with `sleep = 0`, which real Mac OS allows to return the null event at once).
+/// used as it is: the 68k event calls suspend a 68k guest through its run loop, so the PowerPC adapter ([`crate::natives`]) polls
+/// the handler with `sleep = 0` and parks the CPU itself (`WaitNextEvent` with a sleep); `GetNextEvent` never waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent, SysBeep,
     /// StdCLib `__setjmp`, `exit`, `_BreakPoint`: they need the CPU's registers, so [`crate::run`] serves them, not `glue_call`.

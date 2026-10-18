@@ -16,3 +16,14 @@ retro-ppc = { path = "../retro-ppc" }
 
 [dev-dependencies]
 retro-raster = { path = "../retro-raster" }
+macppc-engine = { path = ".", features = ["fixtures"] }
+
+[features]
+# The test-only PowerPC assembler and the built-in fixture applications. Off for the product library (CoralOS user mode);
+# the tests and the `macppc-run` CLI turn it on.
+fixtures = []
+
+[[bin]]
+name = "macppc-run"
+path = "src/bin/macppc-run.rs"
+required-features = ["fixtures"]

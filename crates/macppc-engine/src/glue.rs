@@ -19,6 +19,15 @@ pub struct GlueEntry { pub library: String, pub symbol: String, pub tvector: u32
 #[derive(Default)]
 pub struct Glue { chunks: Vec<u32>, entries: Vec<GlueEntry>, by_key: BTreeMap<(String, String), usize> }
 
+/// The key a symbol's [`crate::symbols::Binding`] is stored under: the bare name for InterfaceLib (the Toolbox) and the
+/// engine's own pseudo-library, `Library::name` for every other provided library, so two libraries exporting one name
+/// keep separate bindings.
+pub fn binding_key(library: &str, symbol: &str) -> String {
+    if library == "InterfaceLib" || library == "CFM" { symbol.into() } else { alloc::format!("{library}::{symbol}") }
+}
+
+impl GlueEntry { pub fn key(&self) -> String { binding_key(&self.library, &self.symbol) } }
+
 impl Glue {
     pub fn len(&self) -> usize { self.entries.len() }
     pub fn is_empty(&self) -> bool { self.entries.is_empty() }

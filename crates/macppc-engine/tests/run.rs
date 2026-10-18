@@ -58,7 +58,10 @@ fn the_application_opens_its_window_draws_its_string_and_waits_for_an_event() {
     }
     // the same pixels reached the GuestUi canvas (present_content), not only the engine's own bitmap
     let canvas = &m.mac.ui.canvases[&native(&m).id];
-    assert_eq!(canvas.2.iter().filter(|&&p| p == 0).count(), m.mac.qd.canvases[&win(&m)].pixels().iter().filter(|&&p| p == 1).count());
+    let bitmap = m.mac.qd.canvases[&win(&m)].pixels();
+    assert_eq!(canvas.2.len(), bitmap.len(), "the canvas and the engine bitmap have the same extent");
+    assert!(canvas.2.iter().zip(bitmap.iter()).all(|(&c, &q)| (c == 0) == (q == 1)), "every black pixel is at the same POSITION in both");
+    assert!(bitmap.iter().any(|&q| q == 1), "control: the comparison is not between two blank images");
     // NEGATIVE controls: the check is not vacuous (a different glyph at the same place fails), and nothing is drawn
     // outside the string's row
     assert!(!glyph_at(&m, b'Z', h, v), "'H' is not 'Z'");
@@ -241,4 +244,77 @@ fn stdclib_runtime_state_setjmp_and_exit() {
     let c = macppc_engine::census::Census::of(&frag);
     assert_eq!(c.next_needed, ["StdCLib/memcpy"]);
     assert!(c.lines.iter().any(|l| l.contains("memcpy") && l.contains("not in the part of StdCLib")), "{:?}", c.lines);
+}
+
+#[test]
+fn an_init_routine_that_returns_an_error_stops_the_fragment_before_main() {
+    // init returns OSErr -5 (r3 = -5): main (data[16] += 1) must NOT run. The positive control is the test above (init returns 0).
+    let mut main = Asm::new();
+    main.lwz(4, 16, 2).addi(4, 4, 1).stw(4, 16, 2).li(3, 0).blr();
+    let main_len = main.here();
+    let mut both = main;
+    both.li(3, -5).blr();
+    let bytes = tiny(&both, &[], true);
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let frag = m.instantiate("badinit", &Pef::parse(&bytes).unwrap()).unwrap();
+    let (data, code) = (frag.section_bases[1].unwrap(), frag.section_bases[0].unwrap());
+    let init = macppc_engine::cfm::Tv { address: data + 8, code: code + main_len, toc: data };
+    m.start(&Fragment { init: Some(init), ..frag }).unwrap();
+    let (step, _) = m.step(10_000);
+    assert!(matches!(&step, Step::Fault(w) if w.contains("OSErr -5")), "{step:?}");
+    assert_eq!(m.mac.mem.read_u32(data + 16).unwrap(), 0, "main did not run");
+    assert!(matches!(m.step(10).0, Step::Fault(_)), "the fault is sticky");
+}
+
+/// `<call>(everyEvent, &event, 60, nil)` once with an empty event queue, storing the Boolean result in the tail word
+/// (preset to 0xFFFFFFFF), then returning from main.
+fn poll_once(call: &str) -> (Step, u32) {
+    let libs: &[fixture::Lib] = &[("InterfaceLib", false, &[(call, SymbolClass::TVector, false)])];
+    let mut a = Asm::new();
+    a.mflr(0).stw(0, 8, 1).stwu(1, -96, 1);
+    a.li(3, -1).addi(4, 1, 30).li(5, 60).li(6, 0).call_toc(fixture::TOC_FIRST as i32).stw(3, 12, 2);
+    a.addi(1, 1, 96).lwz(0, 8, 1).mtlr(0).blr();
+    let bytes = fixture::app_with(libs, &a.finish(), &[0xFF; 4]);
+    let (mut m, frag) = boot(&bytes);
+    let data = frag.main.unwrap().toc;
+    let step = m.step(10_000).0;
+    (step, m.mac.mem.read_u32(data + 12).unwrap())
+}
+
+#[test]
+fn getnextevent_never_waits_but_waitnextevent_with_a_sleep_does() {
+    // Inside Macintosh: GetNextEvent returns FALSE with a null event at once; the program goes on and finishes.
+    assert_eq!(poll_once("GetNextEvent"), (Step::Exited, 0));
+    // control: WaitNextEvent with sleep 60 and nothing queued parks the CPU on the call (the result word is untouched)
+    assert_eq!(poll_once("WaitNextEvent"), (Step::Blocked, 0xFFFF_FFFF));
+}
+
+#[test]
+fn an_event_code_beyond_the_mask_width_matches_no_mask_instead_of_overflowing() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    m.mac.post(20, 0, 0, 0);
+    assert!(!m.mac.event_pending(0xFFFF));
+    m.mac.post(1, 0, 0, 0);
+    assert!(m.mac.event_pending(0x0002), "mouseDown (1) is accepted by its bit");
+    assert!(!m.mac.event_pending(0x0001), "control: not by another bit");
+}
+
+#[test]
+fn stdclib_data_has_the_real_layout_and_bindings_are_per_library() {
+    use macppc_engine::symbols::Binding;
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    // _IntEnv is the 14-byte packed struct (argc/argv/envp at +2/+6/+10): its block must not run into __C_phase
+    let env = m.bind_from("StdCLib", "_IntEnv");
+    let phase = m.bind_from("StdCLib", "__C_phase");
+    assert!(matches!(env, Binding::CData(n) if n >= 14), "{env:?}");
+    let (e, p) = (m.data_block("_IntEnv", &env).unwrap(), m.data_block("__C_phase", &phase).unwrap());
+    assert!(p >= e + 14 || e >= p + 4, "_IntEnv {e:#x} (14 bytes) overlaps __C_phase {p:#x}");
+    for off in [2, 6, 10] { assert_eq!(m.mac.mem.read_u32(e + off).unwrap(), 0, "argc/argv/envp start as zeros (+{off})"); }
+    assert!(matches!(m.bind_from("StdCLib", "__target_for_exit"), Binding::CData(256)), "a 64-word jump buffer");
+    assert!(matches!(m.bind_from("StdCLib", "__NubAt3"), Binding::CData(4)), "one function-pointer word");
+    // StdCLib's `exit` does not leak into InterfaceLib (and so into any other library) through a shared by-name table
+    assert!(matches!(m.bind_from("StdCLib", "exit"), Binding::Native(_)));
+    assert!(matches!(m.bind_from("InterfaceLib", "exit"), Binding::Unbound(_)), "InterfaceLib exports no `exit`");
+    assert!(matches!(m.bindings.get("exit"), None | Some(Binding::Unbound(_))), "the by-name entry never holds StdCLib's");
+    assert!(matches!(m.bindings.get("StdCLib::exit"), Some(Binding::Native(_))));
 }

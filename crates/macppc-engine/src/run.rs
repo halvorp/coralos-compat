@@ -5,7 +5,8 @@
 //! entry TVector, r12 = the TVector's own address (the pointer-glue convention: a callee may rely on it), LR = the
 //! `ExitToShell` glue so returning from `main` ends the program. A fragment with an init routine runs it first: LR is
 //! then a pseudo-glue (`$InitDone`) that, when reached, switches the CPU to `main`. The init routine gets r3 = 0 where
-//! the real CFM passes a `CFragInitBlock *` (not built: nothing here reads it; named, not hidden). Term routines are not
+//! the real CFM passes a `CFragInitBlock *` (not built: nothing here reads it; named, not hidden). Its OSErr result (r3) is
+//! honoured: nonzero is a fault and `main` does not run. Term routines are not
 //! run (ExitToShell of a classic application tears the whole process down).
 //!
 //! [`MacPpc::step`] is the same resumable shape as the 68k engines: `Exited | Blocked | BudgetSpent | Fault`.
@@ -85,7 +86,7 @@ impl<U: GuestUi> MacPpc<U> {
         let Some(mut cpu) = self.rt.cpu.take() else { return (Step::Exited, gone) };
         if let Some(mask) = self.rt.wait_mask {
             self.mac.pump_ui();
-            if !self.mac.ev.queue.iter().any(|e| mask & (1u16 << e.what) != 0) { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
+            if !self.mac.event_pending(mask) { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
             self.rt.wait_mask = None;
         }
         self.sync_natives(&mut cpu);
@@ -148,6 +149,13 @@ impl<U: GuestUi> Host for MacPpc<U> {
         let Some(symbol) = self.glue_symbol_at(addr) else { return false };
         if symbol == INIT_DONE {
             let Some(m) = self.rt.after_init.take() else { self.rt.fault = Some("the init routine returned twice".into()); cpu.halt(); return true };
+            // a CFM initialization function returns an OSErr (16 bits); nonzero fails the fragment's preparation, so main never runs
+            let status = cpu.gpr[3] as u16 as i16;
+            if status != 0 {
+                self.rt.fault = Some(format!("the fragment's init routine failed with OSErr {status}: the fragment is not prepared, main does not run"));
+                cpu.halt();
+                return true;
+            }
             cpu.gpr[1] = m.r1;
             cpu.gpr[2] = m.r2;
             cpu.gpr[12] = self.rt.main_tvector;

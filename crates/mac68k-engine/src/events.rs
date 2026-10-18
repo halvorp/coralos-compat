@@ -101,8 +101,12 @@ impl<U: GuestUi> Mac<U> {
         }
     }
 
+    /// Is an event the `mask` accepts queued? (The same predicate [`Mac::take_event`] removes by; a non-event code of 16 or
+    /// more matches no mask bit rather than overflowing the shift.)
+    pub fn event_pending(&self, mask: u16) -> bool { self.ev.queue.iter().any(|e| mask_accepts(mask, e.what)) }
+
     fn take_event(&mut self, mask: u16, remove: bool) -> Option<MacEvent> {
-        let i = self.ev.queue.iter().position(|e| mask & (1u16 << e.what) != 0)?;
+        let i = self.ev.queue.iter().position(|e| mask_accepts(mask, e.what))?;
         if remove { self.ev.queue.remove(i) } else { self.ev.queue.get(i).copied() }
     }
 
@@ -128,6 +132,9 @@ impl<U: GuestUi> Mac<U> {
         true
     }
 }
+
+/// Does an event mask accept event code `what`?
+fn mask_accepts(mask: u16, what: u16) -> bool { what < 16 && mask & (1u16 << what) != 0 }
 
 /// What [`Mac::deliver`] did with an event.
 #[derive(Debug, Clone, PartialEq, Eq)]

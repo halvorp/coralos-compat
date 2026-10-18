@@ -15,11 +15,13 @@
 //! return goes through LR.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+#[cfg(feature = "fixtures")]
 pub mod asm;
 pub mod census;
 pub mod cfm;
 pub mod cfrg;
 pub mod error;
+#[cfg(feature = "fixtures")]
 pub mod fixture;
 pub mod glue;
 pub mod host;
