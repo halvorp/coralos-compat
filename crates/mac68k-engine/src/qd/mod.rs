@@ -73,7 +73,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
 }
 
 /// Publish every window's accumulated drawing: one `present_content` per damaged window. Called by `Mac::step`.
-pub(crate) fn flush<U: GuestUi>(m: &mut Mac<U>) {
+pub fn flush<U: GuestUi>(m: &mut Mac<U>) {
     let mut presenter = core::mem::take(&mut m.qd.present);
     let (windows, canvases) = (&m.windows, &m.qd.canvases);
     presenter.flush(&mut m.ui, "[quickdraw]", &mut m.log, &mut m.refused, |win| {

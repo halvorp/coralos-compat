@@ -49,7 +49,7 @@ fn sections_tvectors_and_imports_are_placed_and_relocated() {
     // main's TVector {code, toc} was relocated by sectionC and sectionD
     let main = frag.main.unwrap();
     assert_eq!((main.address, main.code, main.toc), (data, code, data));
-    assert_eq!(m.mac.mem.read_u32(code).unwrap(), 0x3860_0000, "li r3,0 is in guest memory");
+    assert_eq!(m.mac.mem.read_u32(code).unwrap(), 0x7C08_02A6, "the program's first word (mflr r0) is in guest memory");
     // every TOC word is the TVector of its import, whose code word is that import's own stub
     for (i, imp) in frag.imports.iter().enumerate() {
         let (tv, stub) = stub_for(&m, &frag, i);
@@ -94,23 +94,25 @@ fn the_census_binds_the_startup_calls_and_names_what_is_next() {
     let mut m = machine();
     let frag = load(&mut m, &fixture::startup_app());
     let c = Census::of(&frag);
-    assert_eq!(c.lines.len(), 19);
+    assert_eq!(c.lines.len(), 21);
     for must in ["InitGraf", "InitFonts", "InitWindows", "InitMenus", "TEInit", "InitDialogs", "InitCursor", "NewHandle", "GetResource", "GetNewWindow", "NewWindow", "ShowWindow", "SetPort", "WaitNextEvent", "ExitToShell", "qd"] {
         let i = frag.imports.iter().find(|i| i.symbol == must).unwrap();
         assert!(matches!(i.status, ImportStatus::Bound(_)), "{must}: {:?}", i.status);
     }
     // MoveTo/DrawString bind to the qd lane's QuickDraw handlers by trap name, with no macppc-side change (the reuse
-    // this seam exists for); SysBeep has no handler yet and the census says so by name
-    for must in ["MoveTo", "DrawString"] {
+    // this seam exists for); SysBeep is a macppc native (the 68k side has no beep either)
+    for must in ["MoveTo", "DrawString", "SysBeep", "FindWindow", "TrackGoAway"] {
         let i = frag.imports.iter().find(|i| i.symbol == must).unwrap();
         assert!(matches!(i.status, ImportStatus::Bound(_)), "{must}: {:?}", i.status);
     }
-    assert_eq!(c.next_needed.iter().map(String::as_str).collect::<Vec<_>>(), ["InterfaceLib/SysBeep"]);
-    assert_eq!(c.summary(), "19 imports: 18 bound, 1 NEXT-NEEDED, 0 weak-absent");
+    assert!(c.next_needed.is_empty(), "{:?}", c.next_needed);
+    assert_eq!(c.summary(), "21 imports: 21 bound, 0 NEXT-NEEDED, 0 weak-absent");
     // negative control: calling a NEXT-NEEDED import refuses by name and is recorded like the 68k's unimplemented trap
-    let (o, _) = call(&mut m, &frag, "SysBeep", &[1]);
-    assert!(matches!(&o, GlueOutcome::Refused(w) if w.starts_with("NEXT-NEEDED SysBeep")), "{o:?}");
-    assert!(m.mac.refused.iter().any(|r| r.starts_with("unimplemented trap import SysBeep")), "{:?}", m.mac.refused);
+    let mut m = machine();
+    let frag = load(&mut m, &fixture::app(&[("InterfaceLib", false, &[("PlayNoteForever", SymbolClass::TVector, false)])]));
+    let (o, _) = call(&mut m, &frag, "PlayNoteForever", &[1]);
+    assert!(matches!(&o, GlueOutcome::Refused(w) if w.starts_with("NEXT-NEEDED PlayNoteForever")), "{o:?}");
+    assert!(m.mac.refused.iter().any(|r| r.starts_with("unimplemented trap import PlayNoteForever")), "{:?}", m.mac.refused);
 }
 
 #[test]
@@ -174,10 +176,13 @@ fn integer_results_are_sign_extended_and_booleans_are_not() {
     assert_eq!(r, 0xFFFF_FF40, "an INTEGER result is sign-extended to the register");
     m.mac.mem.write_u16(mac68k_engine::lowmem::MEM_ERR, (-108i16) as u16).unwrap();
     assert_eq!(call(&mut m, &frag, "MemError", &[]).1, (-108i32) as u32);
-    // WaitNextEvent never suspends a PowerPC caller: with nothing pending it answers FALSE and writes the null event
-    let (o, r) = call(&mut m, &frag, "WaitNextEvent", &[0xFFFF, 0x5000, 600, 0]);
+    // with nothing pending: a poll (sleep 0) answers FALSE and writes the null event; a caller that asks to sleep is
+    // IDLE (the run loop parks it on the call -- see tests/run.rs), r3 untouched
+    let (o, r) = call(&mut m, &frag, "WaitNextEvent", &[0xFFFF, 0x5000, 0, 0]);
     assert_eq!((o, r), (GlueOutcome::Return, 0));
     assert_eq!(m.mac.mem.read_u16(0x5000).unwrap(), 0, "null event");
+    let (o, _) = call(&mut m, &frag, "WaitNextEvent", &[0xFFFF, 0x5000, 600, 0]);
+    assert_eq!(o, GlueOutcome::Idle);
     // negative control: with an event pending the same call answers TRUE (1, not sign-extended junk)
     m.mac.post(1, 0, 5, 5); // a mouseDown
     let (_, r) = call(&mut m, &frag, "WaitNextEvent", &[0xFFFF, 0x5000, 600, 0]);

@@ -21,7 +21,7 @@ pub const FRAG_LIB_NOT_FOUND: i16 = -2804;
 pub const SYMBOL_CLASS_DATA: u8 = 1;
 pub const SYMBOL_CLASS_TVECTOR: u8 = 2;
 /// The libraries `GetSharedLibrary` can hand out: the ones whose symbols the binding table resolves.
-pub const PROVIDED_LIBRARIES: &[&str] = &["InterfaceLib"];
+pub const PROVIDED_LIBRARIES: &[&str] = &["InterfaceLib", crate::stdclib::NAME];
 
 fn err(e: i16) -> u32 { e as i32 as u32 }
 
@@ -35,6 +35,16 @@ impl<U: GuestUi> MacPpc<U> {
         if r.halted { GlueOutcome::Exit } else { GlueOutcome::Return }
     }
 
+    /// The first `n` integer/pointer arguments: r3..r10, then the parameter area of the caller's frame, which starts
+    /// 24 bytes above r1 (the linkage area: back chain, CR, LR, two reserved words, saved RTOC) with one word per
+    /// argument (Mac OS Runtime Architectures, PowerPC calling conventions).
+    fn arg_values(&self, n: usize, regs: &[u32; 32]) -> Result<alloc::vec::Vec<u32>, String> {
+        (0..n).map(|i| if i < 8 { Ok(regs[3 + i]) } else {
+            let at = regs[1].wrapping_add(24 + 4 * i as u32);
+            self.mac.mem.read_u32(at).map_err(|e| format!("argument {i} is in the stack parameter area at {at:#x}: {e}"))
+        }).collect()
+    }
+
     /// A Pascal string argument (library or symbol names are ASCII).
     fn pstr(&self, at: u32) -> Result<String, String> {
         read_pstring_bytes(&self.mac.mem, at).map(|b| b.iter().map(|&c| char::from(c)).collect()).map_err(|e| e.0)
@@ -43,14 +53,31 @@ impl<U: GuestUi> MacPpc<U> {
     fn native(&mut self, n: Native, regs: &mut [u32; 32]) -> GlueOutcome {
         let a = |i: usize| regs[3 + i];
         match n {
-            Native::Exit => GlueOutcome::Exit,
+            Native::Exit => { self.mac.log.push("[toolbox] ExitToShell".into()); GlueOutcome::Exit }
+            Native::SysBeep => {
+                // SysBeep(short duration): the GuestUi trait has no beep or sound call, so it is LOGGED, not played; the call
+                // is accepted so programs that beep when they finish keep running. Missing piece: a UI-side beep event.
+                self.mac.log.push(format!("[toolbox] SysBeep duration {} (logged only: GuestUi has no beep)", a(0) as u16 as i16));
+                GlueOutcome::Return
+            }
+            Native::InitDone => GlueOutcome::Return,
+            Native::SetJmp | Native::CExit | Native::BreakPoint => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
             Native::WaitNextEvent | Native::GetNextEvent => {
-                // eventMask, EventRecord*, [sleep, mouseRgn]: the sleep is dropped so the call never suspends the caller
-                // (a poll; the PowerPC run loop cannot idle yet, see docs/MACPPC-PLUMBING.md), and a non-zero sleep is logged
+                // eventMask, EventRecord*, [sleep, mouseRgn]. The handler is polled with sleep 0 (it pumps the GuestUi and
+                // returns a queued event or the null event). A null event for a caller that asked to sleep (WaitNextEvent
+                // sleep != 0) is `Idle`: the run loop parks the CPU on this very call
+                // and retries it when a matching event is queued. GetNextEvent never waits (Inside Macintosh): with nothing
+                // pending it returns FALSE with a null event at once, so idle loops built on it keep running. No timer wakes it: the sleep's tick count is not honoured
+                // (a sleeping caller that wants its idle work done on time would not get it; named in docs/MACPPC-PLUMBING.md).
                 let name = if n == Native::WaitNextEvent { "WaitNextEvent" } else { "GetNextEvent" };
                 let Some(op) = mac68k_engine::mixed::trap_opcode("WaitNextEvent") else { return GlueOutcome::Refused("WaitNextEvent has no trap word".into()) };
-                if n == Native::WaitNextEvent && a(2) != 0 { self.mac.log.push(format!("[cfm] WaitNextEvent sleep={} ticks polled, not slept", a(2))); }
+                let sleeps = n == Native::WaitNextEvent && a(2) != 0;
                 let r = self.mac.pascal_call(op, &[a(0), a(1), 0, 0]);
+                if sleeps && matches!(r, Ok(rr) if rr.value == 0 && !rr.halted) {
+                    self.rt.wait_mask = Some(a(0) as u16);
+                    self.mac.log.push(format!("[cfm] {name} mask {:#06x}: no event, the caller waits", a(0) as u16));
+                    return GlueOutcome::Idle;
+                }
                 self.finish(name, r, Some(Arg::B), regs)
             }
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
@@ -85,10 +112,10 @@ impl<U: GuestUi> MacPpc<U> {
                     return GlueOutcome::Return;
                 };
                 let name = match self.pstr(name_p) { Ok(n) => n, Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) };
-                let b = self.bind(&name);
+                let b = self.bind_from(&lib, &name);
                 let (addr, class) = match &b {
                     Binding::Unbound(_) => { self.mac.log.push(format!("[cfm] FindSymbol {lib}/{name} -> fragSymbolNotFound")); regs[3] = err(FRAG_SYMBOL_NOT_FOUND); return GlueOutcome::Return; }
-                    Binding::Qd => match self.qd_block() { Ok(p) => (p, SYMBOL_CLASS_DATA), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
+                    Binding::Qd | Binding::CData(_) => match self.data_block(&name, &b) { Ok(p) => (p, SYMBOL_CLASS_DATA), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
                     _ => match self.glue.intern(&mut self.mac, &lib, &name) { Ok(id) => (self.glue.entry(id).map_or(0, |e| e.tvector), SYMBOL_CLASS_TVECTOR), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
                 };
                 let ok = self.mac.mem.write_u32(addr_p, addr).is_ok() && (class_p == 0 || self.mac.mem.write_u8(class_p, class).is_ok());
@@ -118,19 +145,18 @@ impl<U: GuestUi> PpcHost for MacPpc<U> {
         match b {
             Binding::Pascal(op) => {
                 let Some((layout, result)) = self.mac.pascal_signature(op) else { return GlueOutcome::Refused(format!("{symbol}: registered with the other calling convention")) };
-                if layout.len() > 8 { return GlueOutcome::Refused(format!("{symbol}: {} arguments need the PowerPC stack parameter area (only r3..r10 are handled)", layout.len())); }
-                let values: alloc::vec::Vec<u32> = regs[3..3 + layout.len()].to_vec();
+                let values = match self.arg_values(layout.len(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{symbol}: {e}")) };
                 let r = self.mac.pascal_call(op, &values);
                 self.finish(symbol, r, result, regs)
             }
             Binding::Os(op, sig) => {
-                let values: alloc::vec::Vec<u32> = regs[3..3 + sig.args.len()].to_vec();
+                let values = match self.arg_values(sig.args.len(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{symbol}: {e}")) };
                 let r = self.mac.os_call(op, sig, &values);
                 let result = sig.result.map(|_| Arg::L);
                 self.finish(symbol, r, result, regs)
             }
             Binding::Native(n) => self.native(n, regs),
-            Binding::Qd => GlueOutcome::Refused(format!("{symbol} is a data symbol, it cannot be called")),
+            Binding::Qd | Binding::CData(_) => GlueOutcome::Refused(format!("{symbol} is a data symbol, it cannot be called")),
             Binding::Unbound(why) => {
                 let line = format!("{UNIMPLEMENTED} import {symbol}: {why}");
                 self.mac.log.push(format!("[toolbox] REFUSED: {line}"));
@@ -140,5 +166,29 @@ impl<U: GuestUi> PpcHost for MacPpc<U> {
         }
     }
 
-    fn glue_symbol_at(&self, pc: u32) -> Option<String> { self.glue.at_stub(pc).map(|e| e.symbol.clone()) }
+    fn glue_symbol_at(&self, pc: u32) -> Option<String> { self.glue.at_stub(pc).map(|e| e.key()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use guestui_abi::RecordingGuestUi;
+
+    #[test]
+    fn arguments_past_r10_come_from_the_parameter_area_above_the_linkage_area() {
+        let m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+        let sp = mac68k_engine::machine::STACK_TOP - 256;
+        let mut m = m;
+        // parameter word i (i >= 8) lives at sp + 24 + 4*i
+        m.mac.mem.write_u32(sp + 24 + 4 * 8, 0xAAAA_0008).unwrap();
+        m.mac.mem.write_u32(sp + 24 + 4 * 9, 0xAAAA_0009).unwrap();
+        let mut regs = [0u32; 32];
+        regs[1] = sp;
+        for i in 0..8 { regs[3 + i] = 100 + i as u32; }
+        assert_eq!(m.arg_values(10, &regs).unwrap(), [100, 101, 102, 103, 104, 105, 106, 107, 0xAAAA_0008, 0xAAAA_0009]);
+        // negative control: only r3..r10 are consulted for 8 arguments, and a stack pointer outside RAM is a named error
+        assert_eq!(m.arg_values(8, &regs).unwrap().len(), 8);
+        regs[1] = 0xF000_0000;
+        assert!(m.arg_values(9, &regs).unwrap_err().contains("argument 8 is in the stack parameter area"));
+    }
 }

@@ -15,14 +15,21 @@ fn census_of_an_appledouble_application_finds_the_sibling_data_fork() {
     std::fs::write(dir.join("Startup"), startup_app()).unwrap();
     let (ok, out, err) = run(&["--census", dir.join("%Startup").to_str().unwrap()]);
     assert!(ok, "{err}");
-    assert!(out.contains("19 imports: 18 bound, 1 NEXT-NEEDED, 0 weak-absent") && out.contains("NEXT-NEEDED InterfaceLib/SysBeep"), "{out}");
+    assert!(out.contains("21 imports: 21 bound, 0 NEXT-NEEDED, 0 weak-absent") && out.contains("NEXT-NEEDED none"), "{out}");
     // negative control: without the data fork file the run says so and fails
     std::fs::remove_file(dir.join("Startup")).unwrap();
     let (ok, _, err) = run(&["--census", dir.join("%Startup").to_str().unwrap()]);
     assert!(!ok && err.contains("pass the data fork file"), "{err}");
     // the built-in fixture works with no files, and --strict turns the NEXT-NEEDED imports into a load failure
     let (ok, out, _) = run(&["--census", "--fixture"]);
-    assert!(ok && out.contains("18 bound"), "{out}");
+    assert!(ok && out.contains("21 bound"), "{out}");
+    // --strict passes the fixture (every import is bound) and fails a fragment importing a call nothing serves
     let (ok, _, err) = run(&["--strict", "--fixture"]);
-    assert!(!ok && err.contains("unresolved strong import InterfaceLib/SysBeep"), "{err}");
+    assert!(ok, "{err}");
+    let bogus = macppc_engine::fixture::app(&[("InterfaceLib", false, &[("PlayNoteForever", retro_pef::loader::SymbolClass::TVector, false)])]);
+    std::fs::write(dir.join("bogus.pef"), bogus).unwrap();
+    let (ok, out, err) = run(&["--census", dir.join("bogus.pef").to_str().unwrap()]);
+    assert!(ok && out.contains("NEXT-NEEDED InterfaceLib/PlayNoteForever"), "{out}{err}");
+    let (ok, _, err) = run(&["--strict", dir.join("bogus.pef").to_str().unwrap()]);
+    assert!(!ok && err.contains("unresolved strong import InterfaceLib/PlayNoteForever"), "{err}");
 }

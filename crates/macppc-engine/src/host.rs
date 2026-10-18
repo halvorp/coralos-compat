@@ -16,6 +16,9 @@ pub enum GlueOutcome {
     Return,
     /// The program called ExitToShell (or returned from main): stop, successfully.
     Exit,
+    /// The call has nothing to return yet (a `WaitNextEvent` with no event): park the CPU on the call and retry it when
+    /// the machine can make progress. `regs` is untouched.
+    Idle,
     /// The call cannot be made (an import with no binding, a floating-point signature ...). The reason names the
     /// library/symbol; the guest cannot continue past it. This is the census's NEXT-NEEDED.
     Refused(String),
