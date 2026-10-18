@@ -15,6 +15,7 @@ dependencies = [
  "retro-raster",
  "retro-theme",
  "retro-translate",
+ "retro-volume",
 ]
 
 [[package]]
@@ -56,6 +57,7 @@ dependencies = [
  "retro-raster",
  "retro-resfork",
  "retro-translate",
+ "retro-volume",
 ]
 
 [[package]]
@@ -148,6 +150,10 @@ version = "0.1.0"
 dependencies = [
  "guestui-abi",
 ]
+
+[[package]]
+name = "retro-volume"
+version = "0.1.0"
 
 [[package]]
 name = "shlex"

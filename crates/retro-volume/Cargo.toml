@@ -1,0 +1,6 @@
+[package]
+name = "retro-volume"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The platform-neutral in-memory volume tree shared by the Amiga and Mac engines: volumes, directories, files with data and resource forks, Finder info, dates (no_std)"

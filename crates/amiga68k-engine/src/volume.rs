@@ -1,40 +1,53 @@
-//! The guest's filesystem: an in-memory tree of devices, directories and files the HOST fills and the guest's
-//! dos.library reads (and, where a device is writable, changes). Names are case-insensitive like AmigaOS but keep
-//! their spelling. Assigns (`LIBS:` -> `SYS:Libs`) are plain path expansions.
-//!
-//! The root is a pseudo-directory whose children are the devices (`SYS`, `RAM`, ...); a lock on `SYS:` is the device
-//! directory, whose parent is nobody (ParentDir -> 0).
+//! The guest's filesystem as AmigaOS sees it: the shared [`retro_volume::Tree`] (volumes = devices `SYS`, `RAM`, ...,
+//! directories, files) plus what is AmigaDOS's own: assigns (`LIBS:` -> `SYS:Libs`), `Dev:a/b` path syntax, and the
+//! IoErr codes the tree's [`VolErr`] maps to. The HOST fills the tree and the guest's dos.library reads (and, on a
+//! writable device, changes) it. A lock on `SYS:` is the device directory, whose parent is nobody (ParentDir -> 0).
+//! The tree itself (names, forks, Finder info, dates) is shared with the Mac engine: `Volume` derefs to it.
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::ops::{Deref, DerefMut};
 use crate::dos_err::*;
+pub use retro_volume::{Kind, Node, NodeId, ROOT};
+use retro_volume::{Tree, VolErr};
 
-pub type NodeId = usize;
-/// The pseudo-root that holds the devices.
-pub const ROOT: NodeId = 0;
 /// The device a lock of 0 means (the boot volume).
 pub const BOOT_DEVICE: &str = "SYS";
 const MAX_NAME: usize = 107; // fib_FileName is 108 bytes (dos/dos.h MAXFILENAMELENGTH)
 const MAX_ASSIGN_DEPTH: u32 = 8;
+/// 1978-01-01 (the AmigaDOS epoch) in milliseconds since the Unix epoch.
+const AMIGA_EPOCH_MS: i64 = 252_460_800_000;
 
-pub enum Kind { Dir(Vec<NodeId>), File(Vec<u8>) }
+/// AmigaDOS DateStamps on a shared node: `[days, minutes, ticks]` since 1978-01-01 (a tick is 1/50 s) <-> milliseconds.
+pub trait AmigaDate {
+    fn date(&self) -> [i32; 3];
+    fn set_date(&mut self, d: [i32; 3]);
+}
+impl AmigaDate for Node {
+    fn date(&self) -> [i32; 3] {
+        let ms = self.modified_ms - AMIGA_EPOCH_MS;
+        let (min, rem) = (ms.div_euclid(60_000), ms.rem_euclid(60_000));
+        [min.div_euclid(1440) as i32, min.rem_euclid(1440) as i32, (rem / 20) as i32]
+    }
+    fn set_date(&mut self, d: [i32; 3]) {
+        self.modified_ms = AMIGA_EPOCH_MS + (i64::from(d[0]) * 1440 + i64::from(d[1])) * 60_000 + i64::from(d[2]) * 20;
+    }
+}
 
-pub struct Node {
-    pub name: String,
-    pub parent: NodeId,
-    pub kind: Kind,
-    /// fib_Protection bits (active-low owner rwed: 0 = everything allowed).
-    pub protection: u32,
-    pub comment: String,
-    /// DateStamp days, minutes, ticks.
-    pub date: [i32; 3],
-    writable: bool,
+fn err(e: VolErr) -> DosErr {
+    match e {
+        VolErr::NotFound => ERROR_OBJECT_NOT_FOUND, VolErr::Exists => ERROR_OBJECT_EXISTS, VolErr::WrongType => ERROR_OBJECT_WRONG_TYPE,
+        VolErr::ReadOnly => ERROR_DISK_WRITE_PROTECTED, VolErr::InvalidName => ERROR_INVALID_COMPONENT_NAME, VolErr::NotEmpty => ERROR_DIRECTORY_NOT_EMPTY,
+        VolErr::AcrossVolumes => ERROR_RENAME_ACROSS_DEVICES, VolErr::InUse => ERROR_OBJECT_IN_USE,
+    }
 }
 
 pub struct Volume {
-    nodes: Vec<Option<Node>>,
+    tree: Tree,
     assigns: BTreeMap<String, Vec<String>>,
 }
+impl Deref for Volume { type Target = Tree; fn deref(&self) -> &Tree { &self.tree } }
+impl DerefMut for Volume { fn deref_mut(&mut self) -> &mut Tree { &mut self.tree } }
 
 fn same(a: &str, b: &str) -> bool { a.eq_ignore_ascii_case(b) }
 
@@ -43,8 +56,7 @@ impl Default for Volume { fn default() -> Self { Self::new() } }
 impl Volume {
     /// SYS: (read-only for the guest), RAM: (writable) and the usual assigns with their directories.
     pub fn new() -> Volume {
-        let root = Node { name: String::new(), parent: ROOT, kind: Kind::Dir(Vec::new()), protection: 0, comment: String::new(), date: [0; 3], writable: false };
-        let mut v = Volume { nodes: alloc::vec![Some(root)], assigns: BTreeMap::new() };
+        let mut v = Volume { tree: Tree::new(MAX_NAME), assigns: BTreeMap::new() };
         v.add_device(BOOT_DEVICE, false);
         v.add_device("RAM", true);
         for (name, target) in [("LIBS", "SYS:Libs"), ("DEVS", "SYS:Devs"), ("C", "SYS:C"), ("S", "SYS:S"), ("L", "SYS:L"), ("ENV", "RAM:Env"), ("ENVARC", "RAM:EnvArc"), ("T", "RAM:T")] {
@@ -55,37 +67,13 @@ impl Volume {
         v
     }
 
-    fn node(&self, id: NodeId) -> &Node { self.nodes[id].as_ref().expect("live node id") }
-    fn node_mut(&mut self, id: NodeId) -> &mut Node { self.nodes[id].as_mut().expect("live node id") }
-    pub fn is_live(&self, id: NodeId) -> bool { self.nodes.get(id).map_or(false, |n| n.is_some()) }
-    pub fn get(&self, id: NodeId) -> &Node { self.node(id) }
-    pub fn get_mut(&mut self, id: NodeId) -> &mut Node { self.node_mut(id) }
-    pub fn name(&self, id: NodeId) -> &str { &self.node(id).name }
-    pub fn is_dir(&self, id: NodeId) -> bool { matches!(self.node(id).kind, Kind::Dir(_)) }
-    pub fn is_device(&self, id: NodeId) -> bool { id != ROOT && self.node(id).parent == ROOT }
-    pub fn children(&self, id: NodeId) -> &[NodeId] { match &self.node(id).kind { Kind::Dir(c) => c, Kind::File(_) => &[] } }
-    pub fn file_data(&self, id: NodeId) -> Option<&[u8]> { match &self.node(id).kind { Kind::File(d) => Some(d), Kind::Dir(_) => None } }
-    pub fn file_data_mut(&mut self, id: NodeId) -> Option<&mut Vec<u8>> { match &mut self.node_mut(id).kind { Kind::File(d) => Some(d), Kind::Dir(_) => None } }
-
+    pub fn is_device(&self, id: NodeId) -> bool { self.tree.is_volume(id) }
     /// The device directory `id` lives on.
-    pub fn device_of(&self, mut id: NodeId) -> NodeId {
-        while id != ROOT && self.node(id).parent != ROOT { id = self.node(id).parent; }
-        id
-    }
-    pub fn is_writable(&self, id: NodeId) -> bool { let d = self.device_of(id); d != ROOT && self.node(d).writable }
+    pub fn device_of(&self, id: NodeId) -> NodeId { self.tree.volume_of(id) }
     pub fn boot_device(&self) -> NodeId { self.device(BOOT_DEVICE).expect("SYS exists") }
-    pub fn device(&self, name: &str) -> Option<NodeId> { self.children(ROOT).iter().copied().find(|&c| same(self.name(c), name)) }
-
+    pub fn device(&self, name: &str) -> Option<NodeId> { self.tree.volume(name) }
     /// Add (or find) a device. `writable` is what the GUEST may do; host population ignores it.
-    pub fn add_device(&mut self, name: &str, writable: bool) -> NodeId {
-        if let Some(d) = self.device(name) { self.node_mut(d).writable = writable; return d; }
-        let id = self.push(Node { name: name.to_string(), parent: ROOT, kind: Kind::Dir(Vec::new()), protection: 0, comment: String::new(), date: [0; 3], writable });
-        self.link(ROOT, id);
-        id
-    }
-
-    fn push(&mut self, n: Node) -> NodeId { self.nodes.push(Some(n)); self.nodes.len() - 1 }
-    fn link(&mut self, dir: NodeId, id: NodeId) { if let Kind::Dir(c) = &mut self.node_mut(dir).kind { c.push(id); } }
+    pub fn add_device(&mut self, name: &str, writable: bool) -> NodeId { self.tree.add_volume(name, writable) }
 
     /// Define `name:` as an alias for the path `target` (replaces an earlier assign).
     pub fn assign(&mut self, name: &str, target: &str) {
@@ -118,8 +106,6 @@ impl Volume {
     /// Every assign with its directories, in name order.
     pub fn assign_list(&self) -> Vec<(String, Vec<String>)> { self.assigns.iter().map(|(k, v)| (k.clone(), v.clone())).collect() }
     pub fn assign_targets(&self, name: &str) -> Option<&[String]> { self.assigns.iter().find(|(k, _)| same(k, name)).map(|(_, v)| v.as_slice()) }
-
-    pub fn find_child(&self, dir: NodeId, name: &str) -> Option<NodeId> { self.children(dir).iter().copied().find(|&c| same(self.name(c), name)) }
 
     fn child(&self, dir: NodeId, name: &str) -> Result<NodeId, DosErr> {
         if !self.is_dir(dir) { return Err(ERROR_OBJECT_WRONG_TYPE); }
@@ -166,7 +152,7 @@ impl Volume {
 
     /// The directory containing `id`; a device (or the root) has none.
     pub fn parent_of(&self, id: NodeId) -> Result<NodeId, DosErr> {
-        if id == ROOT || self.node(id).parent == ROOT { Err(ERROR_OBJECT_NOT_FOUND) } else { Ok(self.node(id).parent) }
+        if id == ROOT || self.tree.is_volume(id) { Err(ERROR_OBJECT_NOT_FOUND) } else { Ok(self.tree.parent(id)) }
     }
 
     /// Resolve everything but the last component of `path`: (the directory it would live in, the leaf name).
@@ -184,66 +170,26 @@ impl Volume {
         if n.is_empty() || n.len() > MAX_NAME || n.contains(|c| c == '/' || c == ':') { Err(ERROR_INVALID_COMPONENT_NAME) } else { Ok(()) }
     }
 
-    fn may_change(&self, dir: NodeId) -> Result<(), DosErr> {
-        if dir == ROOT || !self.is_dir(dir) { return Err(ERROR_OBJECT_WRONG_TYPE); }
-        if self.is_writable(dir) { Ok(()) } else { Err(ERROR_DISK_WRITE_PROTECTED) }
-    }
-
     /// Guest-side create: a new empty file in `dir`.
-    pub fn create_file(&mut self, dir: NodeId, name: &str) -> Result<NodeId, DosErr> { self.may_change(dir)?; self.create(dir, name, Kind::File(Vec::new())) }
+    pub fn create_file(&mut self, dir: NodeId, name: &str) -> Result<NodeId, DosErr> { Self::check_name(name)?; self.tree.create_file(dir, name).map_err(err) }
     /// Guest-side create: a new empty directory in `dir`.
-    pub fn create_dir(&mut self, dir: NodeId, name: &str) -> Result<NodeId, DosErr> { self.may_change(dir)?; self.create(dir, name, Kind::Dir(Vec::new())) }
-
-    fn create(&mut self, dir: NodeId, name: &str, kind: Kind) -> Result<NodeId, DosErr> {
-        Self::check_name(name)?;
-        if self.find_child(dir, name).is_some() { return Err(ERROR_OBJECT_EXISTS); }
-        let id = self.push(Node { name: name.to_string(), parent: dir, kind, protection: 0, comment: String::new(), date: [0; 3], writable: false });
-        self.link(dir, id);
-        Ok(id)
-    }
+    pub fn create_dir(&mut self, dir: NodeId, name: &str) -> Result<NodeId, DosErr> { Self::check_name(name)?; self.tree.create_dir(dir, name).map_err(err) }
 
     /// Guest-side delete of a file or an empty directory.
-    pub fn remove(&mut self, id: NodeId) -> Result<(), DosErr> {
-        if self.is_device(id) || id == ROOT { return Err(ERROR_OBJECT_WRONG_TYPE); }
-        let parent = self.node(id).parent;
-        self.may_change(parent)?;
-        if !self.children(id).is_empty() { return Err(ERROR_DIRECTORY_NOT_EMPTY); }
-        if let Kind::Dir(c) = &mut self.node_mut(parent).kind { c.retain(|&x| x != id); }
-        self.nodes[id] = None;
-        Ok(())
-    }
+    pub fn remove(&mut self, id: NodeId) -> Result<(), DosErr> { self.tree.remove(id).map_err(err) }
 
-    /// Guest-side rename/move within one device.
+    /// Guest-side move and/or rename within one device.
     pub fn rename(&mut self, id: NodeId, new_dir: NodeId, new_name: &str) -> Result<(), DosErr> {
-        if self.is_device(id) || id == ROOT { return Err(ERROR_OBJECT_WRONG_TYPE); }
         Self::check_name(new_name)?;
-        let old_dir = self.node(id).parent;
-        self.may_change(old_dir)?;
-        self.may_change(new_dir)?;
-        if self.device_of(old_dir) != self.device_of(new_dir) { return Err(ERROR_RENAME_ACROSS_DEVICES); }
-        if self.find_child(new_dir, new_name).map_or(false, |x| x != id) { return Err(ERROR_OBJECT_EXISTS); }
-        let mut up = new_dir; // a directory cannot move into itself
-        while up != ROOT { if up == id { return Err(ERROR_OBJECT_IN_USE); } up = self.node(up).parent; }
-        if let Kind::Dir(c) = &mut self.node_mut(old_dir).kind { c.retain(|&x| x != id); }
-        self.link(new_dir, id);
-        let n = self.node_mut(id);
-        n.parent = new_dir;
-        n.name = new_name.to_string();
-        Ok(())
+        self.tree.rename(id, new_dir, new_name).map_err(err)
     }
 
     /// Host-side: make every directory of `path` (`Dev:a/b`), ignoring device protection. The device must exist.
     pub fn mkdirs(&mut self, path: &str) -> Result<NodeId, DosErr> {
         let (starts, from) = self.starts(ROOT, path, 0)?;
-        let mut cur = starts[0];
-        for comp in path[from..].split('/').filter(|c| !c.is_empty()) {
-            cur = match self.find_child(cur, comp) {
-                Some(c) if self.is_dir(c) => c,
-                Some(_) => return Err(ERROR_OBJECT_WRONG_TYPE),
-                None => self.create(cur, comp, Kind::Dir(Vec::new()))?,
-            };
-        }
-        Ok(cur)
+        let comps: Vec<String> = path[from..].split('/').filter(|c| !c.is_empty()).map(|c| c.to_string()).collect();
+        for c in &comps { Self::check_name(c)?; }
+        self.tree.mkdirs(starts[0], comps.iter().map(|c| c.as_str())).map_err(err)
     }
 
     /// Host-side: put a file at `path` (`Dev:a/b/file`), making directories and replacing an existing file.
@@ -252,21 +198,16 @@ impl Volume {
         let dir = self.mkdirs(&path[..=i])?;
         let leaf = &path[i + 1..];
         Self::check_name(leaf)?;
-        match self.find_child(dir, leaf) {
-            Some(f) => match self.file_data_mut(f) { Some(d) => { *d = data; Ok(f) } None => Err(ERROR_OBJECT_WRONG_TYPE) },
-            None => self.create(dir, leaf, Kind::File(data)),
-        }
+        self.tree.put_file(dir, leaf, data).map_err(err)
     }
 
     /// `Dev:dir/file` for a node (`Dev:` for a device).
     pub fn full_path(&self, id: NodeId) -> String {
-        let mut parts = Vec::new();
-        let mut cur = id;
-        while cur != ROOT && !self.is_device(cur) { parts.push(self.name(cur)); cur = self.node(cur).parent; }
+        let parts = self.tree.path_components(id);
         let mut s = String::new();
-        if cur != ROOT { s.push_str(self.name(cur)); }
+        if let Some(dev) = parts.first() { s.push_str(dev); }
         s.push(':');
-        for (i, p) in parts.iter().rev().enumerate() { if i > 0 { s.push('/'); } s.push_str(p); }
+        for (i, p) in parts.iter().skip(1).enumerate() { if i > 0 { s.push('/'); } s.push_str(p); }
         s
     }
 }

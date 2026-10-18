@@ -5,6 +5,7 @@
 //! `struct DateStamp` is 3 longs (days since 1978-01-01, minutes, ticks of 1/50 s). `struct InfoData` is 36 bytes
 //! (m68k-linux-gnu-gcc -mno-align-int over AROS dos/dos.h): id_NumSoftErrors 0, id_UnitNumber 4, id_DiskState 8,
 //! id_NumBlocks 12, id_NumBlocksUsed 16, id_BytesPerBlock 20, id_DiskType 24, id_VolumeNode 28, id_InUse 32.
+use crate::volume::AmigaDate;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
@@ -68,7 +69,7 @@ pub fn set_file_date<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
     match a.fs.vol.resolve(cur_dir(a), &name) {
         Err(e) => fail(a, cpu, e, 0, what),
         Ok(n) if !a.fs.vol.is_writable(n) => fail(a, cpu, ERROR_DISK_WRITE_PROTECTED, 0, what),
-        Ok(n) => { a.fs.vol.get_mut(n).date = d; ok(a, cpu, DOSTRUE, what) }
+        Ok(n) => { a.fs.vol.get_mut(n).set_date(d); ok(a, cpu, DOSTRUE, what) }
     }
 }
 

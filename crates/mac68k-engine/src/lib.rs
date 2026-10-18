@@ -15,7 +15,11 @@
 //! licence-checked source before they are relied on (see NOTICE).
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+pub mod addrmode;
 pub mod events;
+pub mod fm;
+pub mod gestalt;
+pub mod guestcall;
 #[cfg(feature = "fixtures")]
 pub mod fixture;
 pub mod lowmem;
@@ -28,10 +32,13 @@ pub mod osconv;
 pub mod pascal;
 pub mod qd;
 pub mod quickdraw;
+pub mod pack2;
 pub mod rects;
 pub mod resmgr;
 pub mod run;
+pub mod scrap;
 pub mod segment;
+pub mod sysenv;
 pub mod toolbox;
 pub mod traptable;
 pub mod translate;

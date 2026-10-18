@@ -165,11 +165,11 @@ impl<U: GuestUi> Mac<U> {
         let mut bytes = encode_block(p, 0, 0, 0);
         if keep.len() == 10 { bytes[2..10].copy_from_slice(&keep[2..10]); } // width, height, proc survive an edit
         let was_locked = old.locked;
-        if was_locked { self.mm.set_lock(h, false).map_err(|e| Refusal(format!("menu unlock {e}")))?; }
+        if was_locked { self.mm.set_lock(&mut self.mem, h, false).map_err(|e| Refusal(format!("menu unlock {e}")))?; }
         self.mm.set_handle_size(&mut self.mem, &mut self.heap, h, bytes.len() as u32).map_err(|e| Refusal(format!("menu SetHandleSize {e}")))?;
         let ptr = self.mm.block(h).map(|b| b.ptr).unwrap_or(0);
         self.mem.write_bytes(ptr, &bytes).map_err(Refusal::mem("menu"))?;
-        if was_locked { let _ = self.mm.set_lock(h, true); }
+        if was_locked { let _ = self.mm.set_lock(&mut self.mem, h, true); }
         Ok(())
     }
 

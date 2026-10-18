@@ -129,7 +129,7 @@ fn get_ptr_size<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
 
 fn lock_common<U: GuestUi>(m: &mut Mac<U>, r: &mut Regs, name: &str, locked: bool) -> R {
     let h = r.a0;
-    let res = m.mm.set_lock(h, locked);
+    let res = m.mm.set_lock(&mut m.mem, h, locked);
     m.mem_result(r, name, &format!("{h:#x}"), res);
     Ok(format!("[mem] {name} {h:#x}"))
 }
@@ -139,7 +139,7 @@ fn hunlock<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R { lock_co
 fn purge_common<U: GuestUi>(m: &mut Mac<U>, r: &mut Regs, name: &str, purgeable: bool) -> R {
     let h = r.a0;
     let res = match m.mm.block_mut(h) {
-        Some(b) => { b.purgeable = purgeable; Ok(()) }
+        Some(b) => { b.purgeable = purgeable; m.mm.sync_master(&mut m.mem, h) }
         None => Err(if h == 0 { NIL_HANDLE_ERR } else { MEM_WZ_ERR }),
     };
     m.mem_result(r, name, &format!("{h:#x}"), res);
@@ -158,7 +158,7 @@ fn hget_state<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
 
 fn hset_state<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
     let (h, s) = (r.a0, r.d0 as u8);
-    let res = m.mm.set_state(h, s);
+    let res = m.mm.set_state(&mut m.mem, h, s);
     m.mem_result(r, "HSetState", &format!("{h:#x}"), res);
     Ok(format!("[mem] HSetState {h:#x} {s:#04x}"))
 }
@@ -184,8 +184,13 @@ fn free_mem<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
     Ok(format!("[mem] FreeMem -> {}", r.d0))
 }
 
-/// The 24-bit-era address strip: this engine's addresses are 32-bit clean and below 16 MiB, so it returns D0 unchanged.
-fn strip_address<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R { Ok(format!("[mem] StripAddress {:#x}", r.d0)) }
+/// `StripAddress(D0)`: the address as the bus sees it. On a 24-bit machine the top byte (the application's flag bits)
+/// goes; on a 32-bit one the address is returned unchanged (Inside Macintosh: Memory).
+fn strip_address<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let was = r.d0;
+    r.d0 = m.mem.strip(was);
+    Ok(format!("[mem] StripAddress {was:#x} -> {:#x}", r.d0))
+}
 
 // ---- zone-level calls: the heap is one fixed zone that never compacts or purges ------------------------------------
 

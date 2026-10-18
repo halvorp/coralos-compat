@@ -93,6 +93,15 @@ pub struct Mac<U: GuestUi> {
     /// (trap word, address of the A-line word) for every call to an unimplemented trap, in order.
     pub unimplemented_at: Vec<(u16, u32)>,
     pub heap: Heap,
+    /// The File Manager's volumes, open forks and working directories (fm/).
+    pub fm: crate::fm::FileMgr,
+    /// The desk scrap (scrap.rs).
+    pub scrap: crate::scrap::Scrap,
+    /// A guest routine a handler asked for; the A-line bridge enters it after the handler returns (guestcall.rs).
+    pub(crate) pending_call: Option<crate::guestcall::GuestCall>,
+    pub(crate) call_stack: Vec<(u32, u32)>,
+    /// Trap patches (`_SetTrapAddress`): trap key -> the guest routine that replaces it.
+    pub patches: BTreeMap<u16, u32>,
     pub(crate) ctx: Option<retro_m68k::CpuContext>,
 }
 
@@ -106,8 +115,12 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], patches: BTreeMap::new(),
         };
         lowmem::init(&mut m.mem)?;
+        m.set_address_mode(crate::addrmode::AddrMode::Bit24)?; // a classic 68k Mac boots in 24-bit mode
+        crate::addrmode::register(&mut m)?;
+        m.install_trampoline()?;
         toolbox::register(&mut m)?;
         quickdraw::register(&mut m)?;
         rects::register(&mut m)?;
@@ -115,6 +128,13 @@ impl<U: GuestUi> Mac<U> {
         memtraps::register(&mut m)?;
         resmgr::register(&mut m)?;
         segment::register(&mut m)?;
+        crate::fm::traps::register(&mut m)?;
+        crate::fm::fsspec::register(&mut m)?;
+        crate::fm::resfiles::register(&mut m)?;
+        crate::scrap::register(&mut m)?;
+        crate::sysenv::register(&mut m)?;
+        crate::gestalt::register(&mut m)?;
+        crate::pack2::register(&mut m)?;
         menu::register(&mut m)?;
         events::register(&mut m)?;
         crate::traptable::register(&mut m)?;
@@ -172,10 +192,21 @@ impl<U: GuestUi> Mac<U> {
 impl<U: GuestUi> Host for Mac<U> {
     fn mem(&mut self) -> &mut GuestMem { &mut self.mem }
 
-    /// The Mac engine has no `$4AFC` bridge slots: ILLEGAL stays the 68k exception.
-    fn illegal(&mut self, _cpu: &mut Cpu, _pc: u32) -> bool { false }
+    /// The only `$4AFC` is the completion trampoline ([`crate::guestcall::TRAMPOLINE`]); any other ILLEGAL stays the 68k exception.
+    fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool { pc == crate::guestcall::TRAMPOLINE && self.leave_guest(cpu) }
 
     fn aline(&mut self, cpu: &mut Cpu, opcode: u16, pc: u32) -> bool {
+        let pc = self.mem.strip(pc);
+        let via_stub = crate::traptable::in_stub(pc);
+        // A patched trap (`_SetTrapAddress`) runs the guest routine first; the routine chains to the original through the
+        // stub `GetTrapAddress` gave it, and that stub's own trap word (`via_stub`) is not patched again.
+        if !via_stub {
+            if let Some(&target) = self.patches.get(&trap_key(opcode)) {
+                self.log.push(format!("[toolbox] {} -> patched routine {target:#x}", trap_name(opcode).unwrap_or("trap")));
+                self.enter_guest(cpu, pc, crate::guestcall::GuestCall { target, d0: None, a0: None, d1: Some(u32::from(opcode)), restore: None });
+                return true;
+            }
+        }
         let Some(entry) = self.table.get(&trap_key(opcode)).copied() else {
             // Unknown frame layout: the stack is left as the guest made it; D0 = 0 (noErr / NIL) and execution goes on.
             self.unimplemented_at.push((opcode, pc));
@@ -189,22 +220,39 @@ impl<U: GuestUi> Host for Mac<U> {
         let name = trap_name(opcode).unwrap_or(entry.name);
         match entry.conv {
             Conv::Pascal { args: layout, result: rkind, handler } => {
-                let sp = cpu.areg(7);
-                let outcome = pascal::read_args(&self.mem, sp, layout).and_then(|args| handler(self, cpu, &Call { opcode, pc, name, args }));
+                // Reached through a stub (`JSR` to a GetTrapAddress answer): the return address is on top of the arguments.
+                let stub_ret = if via_stub { self.mem.read_u32(cpu.areg(7)).ok() } else { None };
+                let sp = cpu.areg(7).wrapping_add(if stub_ret.is_some() { 4 } else { 0 });
+                // Entered through a stub, the trap's own address is the original call site: just before the return address.
+                let site = stub_ret.map_or(pc, |r| r.wrapping_sub(2));
+                let pc_before = cpu.pc();
+                let outcome = pascal::read_args(&self.mem, sp, layout).and_then(|args| handler(self, cpu, &Call { opcode, pc: site, name, args }));
+                let redirected = cpu.pc() != pc_before; // a handler that moves the PC (LoadSeg) takes the return address with it
                 let result = self.finish_pascal(name, outcome);
                 // The convention is applied once, here: pop the arguments whatever the handler did, store the result.
                 match pascal::complete(&mut self.mem, sp, layout, rkind.map(|k| (k, result))) {
-                    Ok(new_sp) => cpu.set_areg(7, new_sp),
+                    Ok(mut new_sp) => {
+                        if let (Some(ret), false) = (stub_ret, redirected) { new_sp = new_sp.wrapping_sub(4); let _ = self.mem.write_u32(new_sp, ret); }
+                        cpu.set_areg(7, new_sp)
+                    }
                     Err(Refusal(e)) => { self.note_refusal(name, e); cpu.halt(); }
                 }
             }
             Conv::Os(handler) => {
                 let mut regs = Regs::read(cpu, opcode);
+                // A0/A1 carry pointers and handles whose high byte a 24-bit application may use for flags: the bus ignores it.
+                regs.a0 = self.mem.strip(regs.a0);
+                regs.a1 = self.mem.strip(regs.a1);
                 let outcome = handler(self, cpu, &mut regs);
                 self.finish_os(name, outcome, &mut regs);
                 cpu.set_d0(regs.d0);
                 cpu.set_areg(0, regs.a0);
                 set_flags(cpu, regs.d0);
+                // A handler may ask for guest code to run before the program resumes (a completion routine).
+                if let Some(mut call) = self.pending_call.take() {
+                    if call.restore.is_some() { call.restore = Some((regs.d0, regs.a0)); }
+                    self.enter_guest(cpu, pc, call);
+                }
             }
         }
         true

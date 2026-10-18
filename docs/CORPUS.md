@@ -575,12 +575,34 @@ Tools: `tools/corpus-apps-mac-garden.tsv` (the app list; feed it to `corpus-cens
 | garden-moving-van | 68k | _SetToolBoxTrapAddress ($A647) at pc=0x2007e4 | res: GetResource,ReleaseResource; toolbox: GetTrapAddress,REFUSED |
 | garden-glider-pro-ppc | ppc | unimplemented trap import FlushEvents: _FlushEvents ($A032) is an OS trap with no C prototype in OS_SIGS yet | 155 unbound imports; run stops: see NEXT-NEEDED |
 
-Findings the census exposed (not fixed in this lane):
+Findings the census exposed, and what happened to them (macfm lane, 2026-10-18):
 
-* **WriteNow 2.0 and 2.2 report no missing trap but never finish**: after `GetResource('CODE', 2)` they spin to the 5M-instruction cap with ~10M bus faults (jump through memory the loader never mapped). A census row that says "none" is not a clean run; `census_corpus.rs` pins the symptom. Likely a segment-loader gap (the app loads CODE itself instead of via `_LoadSeg`).
-* **MacWrite 4.5** hands `_OpenPort` a GrafPort pointer `0x8020a9fa` the engine rejects as outside guest RAM before it reaches `_SetTrapAddress`: probably a 24-bit-address flag in the high byte of a Handle or Ptr that must be stripped before use (unverified).
-* **Glider PRO** is a FAT application: its PEF ('cfrg') binds 312 InterfaceLib imports (155 unbound today; the run stops at `_FlushEvents`, an OS trap with no C prototype in OS_SIGS) while its 68k half stops at `_SetToolBoxTrapAddress` like every Retro68 sample and Glider Edit / Moving Van.
-* `_SetToolBoxTrapAddress ($A647)` stops 4 of the 13 new rows (the trap-patching idiom); `_HFSDispatch` and `_UnloadScrap` two each.
+* **MacWrite 4.5 `_OpenPort $8020a9fa` — FIXED: 24-bit addressing.** The classic Mac of that era has 24 address lines; applications keep flags in the high byte of pointers and handles. The machine now boots in 24-bit mode (`addrmode.rs`; `GuestMem` drops the top byte of EVERY access, the 68k bus and the host handlers alike; `_StripAddress` strips; `HLock`/`HPurge`/`HSetRBit`/`HSetState` mirror the lock/purge/resource bits into the master pointer's high byte, `_HGetState` and `**h` see them; `_SwapMMUMode` and the `MMU32Bit` global ($CB2) switch modes; `mac68k-run --32bit` / `Mac::set_address_mode(Bit32)` select 32-bit for a 32-bit-clean app). MacWrite's GrafPort pointer is now a good address; the 32-bit control still reproduces the old refusal.
+* **WriteNow 2.0 / 2.2 ~10M bus faults — CAUSE FOUND AND FIXED (the same 24-bit issue).** Found with `mac68k-run --32bit --insns N --pcs N --dump` (the recent-PCs ring): after `GetResource('CODE',2)` the app's segment-call glue builds a RETURN ADDRESS, `move.l (a0),-(sp); addq.l #4,(sp); move.b #$80,(sp)`, i.e. it sets bit 31 of the return address as a flag, and returns through it with `RTR`. The 24-bit bus ignores that byte; with a 32-bit bus the PC became `$80208a32` (RAM is 16 MiB) and every fetch faulted (`pc` ran `$802091..` for 5M instructions). It was NOT a segment-loader gap. With 24-bit addressing both run on (to `_Pack6`, the International Utilities package).
+* **Glider PRO** is a FAT application: its PEF ('cfrg') binds InterfaceLib imports (see the PPC row below) while its 68k half now stops at `_Pack7` (it passed `_SetToolBoxTrapAddress`).
+* `_SetToolBoxTrapAddress`/`_SetTrapAddress` — IMPLEMENTED: a patched trap enters the guest routine as a `JSR` from the trapping instruction (`guestcall.rs`), which chains to the original through the `GetTrapAddress` stub; Pascal traps reached through a stub keep their frame (the return address sits on top of it). `_HFSDispatch`/`_FSDispatch`/`_HighLevelFSDispatch` and the whole File Manager (`fm/`, over the shared `retro-volume` tree), `_UnloadScrap` and the Scrap Manager (`scrap.rs`), `_Alert`/`_StopAlert`/`_NoteAlert`/`_CautionAlert` (`translate/alerts.rs`), `_Pack2` (`pack2.rs`, named refusals), `_SysEnvirons`, `_Gestalt`, `_DragWindow`, `_GetCursor`, `_PortSize`, `CountTypes`/`Count1Types`/`GetIndType`, `_SetResLoad`, `OpenResFile`/`CreateResFile`/`CloseResFile` landed too.
+* **Open finding (next lane): ResEdit 2.1.3 and SimpleText 1.3** now run past every trap but stop at a SEGMENT LOADER refusal: they walk their own CODE resources (`Get1IxResource`, `GetResAttrs`, `ReleaseResource`) and the engine disposes a segment that is still resident (their `UnloadSeg` is accepted but segments stay resident), so the next `LoadSeg` reads freed memory. A real `UnloadSeg` (restore the jump-table entries, unlock the handle) is the fix.
+
+Census, mac68k-run --census, before (971d664) and after this lane:
+
+| app | NEXT-NEEDED before | NEXT-NEEDED after |
+|---|---|---|
+| WriteNow 2.0 | none: 10M bus faults | `_Pack6` ($A9ED) |
+| WriteNow 2.2 | none: 10M bus faults | `_Pack6` ($A9ED) |
+| WriteNow installer 4.0 | `_UnloadScrap` | `_GetFNum` ($A900) |
+| WriteNow updater 4.02 | `_HFSDispatch` | `_Pack7` ($A9EE) |
+| MacWrite 4.6 | `_Pack2` | `_SetCursor` ($A851) |
+| MacWrite 4.5 | `_SetTrapAddress` (after a refused OpenPort) | `_SetCursor` ($A851) |
+| MacPaint 2.1F | `_UnloadScrap` | `_SetWRefCon` ($A918) (88k instructions in) |
+| ResEdit 2.1.3 | `_Alert` | none missing; LoadSeg refusal (see above) |
+| SimpleText 1.4 | `_HFSDispatch` | `_OSDispatch` ($A88F) |
+| SimpleText 1.3 | `_SetToolBoxTrapAddress` | none missing; LoadSeg refusal (see above) |
+| Glider PRO (68k) | `_SetToolBoxTrapAddress` | `_Pack7` ($A9EE) |
+| Glider Edit | `_SetToolBoxTrapAddress` | `_ParamText` ($A98B) |
+| Moving Van | `_SetToolBoxTrapAddress` | `_GetNewCWindow` ($AA46) |
+| Retro68 HelloWorld | `_SetToolBoxTrapAddress` | event loop: **opens its "Retro68 Console" window** |
+| Retro68 Raytracer | `_SetToolBoxTrapAddress` | `_Button` ($A974) |
+| Toolbox Showcase (68k) | `_HFSDispatch` | `_GetNewCWindow` ($AA46) |
 
 ### The next 10 traps by app count, whole Mac corpus (68k, static)
 
@@ -588,14 +610,16 @@ Findings the census exposed (not fixed in this lane):
 
 | rank | apps | trap |
 |---|---|---|
-| 1 | 18 | _Close ($A001) |
-| 2 | 18 | _Read ($A002) |
-| 3 | 18 | _Write ($A003) |
-| 4 | 17 | _GetFileInfo ($A00C) |
-| 5 | 17 | _DragWindow ($A925) |
-| 6 | 17 | _SysEnvirons ($A090) |
-| 7 | 16 | _SetTrapAddress ($A047) |
-| 8 | 16 | _FSDispatch ($A060) |
-| 9 | 15 | _Open ($A000) |
-| 10 | 15 | _Create ($A008) |
+| 1 | 15 | _SizeWindow ($A91D) |
+| 2 | 15 | _Pack7 ($A9EE) (NumToString / StringToNum) |
+| 3 | 14 | _SetWTitle ($A91A) |
+| 4 | 13 | _ScrollRect ($A8EF) |
+| 5 | 13 | _GrowWindow ($A92B) |
+| 6 | 13 | _MenuKey ($A93E) |
+| 7 | 13 | _ParamText ($A98B) |
+| 8 | 13 | _SystemClick ($A9B3) |
+| 9 | 13 | _DebugStr ($ABFF) |
+| 10 | 12 | _DrawPicture ($A8F6) |
+
+(Re-ranked after the macfm lane over the 24 68k applications of `corpus-apps-mac*.tsv`, with `mac68k-run --implemented` as the table; the File Manager traps, `_DragWindow`, `_SysEnvirons` and `_SetTrapAddress` that headed the previous ranking are all implemented now, so the first ten above are what comes next. The previous ranking counted 32 files, so the counts are not comparable one to one.)
 

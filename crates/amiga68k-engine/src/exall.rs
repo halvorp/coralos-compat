@@ -12,6 +12,7 @@
 //! The match string is a ParsePattern result and is matched case-insensitively, as file names are. The match hook is
 //! called as A0 = hook, A1 = the record just built, A2 = a pointer to the `data` level, and keeps the record iff D0 is
 //! nonzero.
+use crate::volume::AmigaDate;
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
@@ -47,7 +48,7 @@ fn align4(x: u32) -> u32 { (x + 3) & !3 }
 fn build<U: GuestUi>(a: &mut Amiga<U>, r: &Run, node: NodeId) -> Result<Option<u32>, Refusal> {
     let m = Refusal::mem("ExAllData");
     let n = a.fs.vol.get(node);
-    let (name, comment, prot, date) = (String::from(&n.name), n.comment.clone(), n.protection, n.date);
+    let (name, comment, prot, date) = (String::from(&n.name), n.comment.clone(), n.attrs, n.date());
     let (ty, size) = match &n.kind { Kind::Dir(_) => (ST_USERDIR, 0), Kind::File(d) => (ST_FILE, d.len() as u32) };
     let rec = RECORD_SIZE[r.data as usize];
     let name_at = r.cur + rec;

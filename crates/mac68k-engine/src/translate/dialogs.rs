@@ -92,7 +92,12 @@ pub struct State {
     pub hits: VecDeque<(u32, i16)>,
     /// A blocked `ModalDialog`: where its `itemHit` result goes.
     pub modal: Option<u32>,
+    /// The alert a blocked `Alert` call is showing: disposed when its hit arrives (alerts are not the program's to dispose).
+    pub alert: Option<u32>,
 }
+
+/// What a dialog or alert window is built from.
+pub(crate) struct Def { pub what: String, pub rect: Rect, pub title: String, pub proc_id: u16, pub go_away: bool, pub ref_con: u32, pub ditl: i16, pub show: bool }
 
 struct Raw { rect: Rect, ty: u8, data: Vec<u8>, at: usize }
 
@@ -187,7 +192,7 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// The frontmost dialog window.
-    fn front_dialog(&self) -> Option<u32> { self.z.iter().copied().find(|w| self.tr.dlg.dialogs.contains_key(w)) }
+    pub(crate) fn front_dialog(&self) -> Option<u32> { self.z.iter().copied().find(|w| self.tr.dlg.dialogs.contains_key(w)) }
 
     /// A key typed into dialog `win` (never the program's event queue): applied to the edit field like `TEKey`, and the
     /// field's item is reported. Command-key equivalents and keys with no edit field are consumed by name.
@@ -207,7 +212,7 @@ impl<U: GuestUi> Mac<U> {
         Ok(true)
     }
 
-    fn take_hit(&mut self, win: u32) -> Option<i16> {
+    pub(crate) fn take_hit(&mut self, win: u32) -> Option<i16> {
         let i = self.tr.dlg.hits.iter().position(|&(w, _)| w == win)?;
         self.tr.dlg.hits.remove(i).map(|(_, item)| item)
     }
@@ -225,6 +230,7 @@ impl<U: GuestUi> Mac<U> {
         let Some(item) = self.front_dialog().and_then(|w| self.take_hit(w)) else { return false };
         if let Err(Refusal(why)) = self.mem.write_u16(at, item as u16).map_err(Refusal::mem("itemHit")) { self.note_refusal("ModalDialog", why); }
         self.tr.dlg.modal = None;
+        if let Some(w) = self.tr.dlg.alert.take() { if let Err(Refusal(why)) = self.dispose_window(w) { self.note_refusal("Alert", why); } }
         true
     }
 
@@ -234,7 +240,16 @@ impl<U: GuestUi> Mac<U> {
         let b = self.handle_bytes(dh).unwrap_or_default();
         if b.len() < 21 || b.len() < 21 + b[20] as usize { return Err(Refusal(format!("GetNewDialog {id}: DLOG resource is {} bytes, too short for its fields and title", b.len()))); }
         let be = |i: usize| i16::from_be_bytes([b[i], b[i + 1]]);
-        let ditl = self.get_resource(*b"DITL", be(18), false).map_err(|e| Refusal(format!("GetNewDialog {id}: DITL {} is missing (resError {e})", be(18))))?;
+        let title: String = b[21..21 + b[20] as usize].iter().map(|&x| char::from(x)).collect();
+        let def = Def { what: format!("GetNewDialog {id}"), rect: Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) }, title, proc_id: be(8) as u16, go_away: b[12] != 0,
+            ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]), ditl: be(18), show: b[10] != 0 };
+        self.build_dialog(def, storage, behind).map(Some)
+    }
+
+    /// Build a dialog window from its definition (a `DLOG`, or an `ALRT` for [`super::alerts`]) and its `DITL`.
+    pub(crate) fn build_dialog(&mut self, d: Def, storage: u32, behind: u32) -> Result<u32, Refusal> {
+        let id = &d.what;
+        let ditl = self.get_resource(*b"DITL", d.ditl, false).map_err(|e| Refusal(format!("{id}: DITL {} is missing (resError {e})", d.ditl)))?;
         let src = self.handle_bytes(ditl).unwrap_or_default();
         let raw = parse_ditl(&src)?;
         let own = if storage == 0 { Some(self.mm.new_ptr(&mut self.mem, &mut self.heap, RECORD_SIZE, true).map_err(|e| Refusal(format!("GetNewDialog: no memory for a DialogRecord (memFullErr {e})")))?) } else { None };
@@ -243,8 +258,7 @@ impl<U: GuestUi> Mac<U> {
         let items = self.mm.new_handle(&mut self.mem, &mut self.heap, src.len() as u32, false).map_err(|e| Refusal(format!("GetNewDialog: no memory for the item list (memFullErr {e})")))?;
         let ip = self.mm.block(items).map(|b| b.ptr).ok_or_else(|| Refusal("GetNewDialog: the item list has no block".into()))?;
         self.mem.write_bytes(ip, &src).map_err(Refusal::mem("DITL"))?;
-        let title: String = b[21..21 + b[20] as usize].iter().map(|&x| char::from(x)).collect();
-        let spec = WindowSpec { storage: record, rect: Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) }, title, visible: false, proc_id: be(8) as u16, behind, go_away: b[12] != 0, ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]) };
+        let spec = WindowSpec { storage: record, rect: d.rect, title: d.title, visible: false, proc_id: d.proc_id, behind, go_away: d.go_away, ref_con: d.ref_con };
         let win = self.make_window(spec)?;
         let e = Refusal::mem("DialogRecord");
         self.mem.write_u32(win + DR_ITEMS, items).map_err(&e)?;
@@ -257,8 +271,8 @@ impl<U: GuestUi> Mac<U> {
             if slot.item == Item::EditText && self.mem.read_i16(win + DR_EDIT_FIELD).unwrap_or(-1) < 0 { self.mem.write_u16(win + DR_EDIT_FIELD, n as u16).map_err(&e)?; }
             if let Some(d) = self.tr.dlg.dialogs.get_mut(&win) { d.list.push(slot); }
         }
-        if b[10] != 0 { self.show_window(win)?; }
-        Ok(Some(win))
+        if d.show { self.show_window(win)?; }
+        Ok(win)
     }
 
     /// One DITL item -> its guest object (a control, or a text handle) and its slot.
