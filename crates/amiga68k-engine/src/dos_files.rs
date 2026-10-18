@@ -173,7 +173,7 @@ pub fn create_dir<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     let made = a.fs.vol.resolve_parent(cur_dir(a), &name).and_then(|(d, leaf)| a.fs.vol.create_dir(d, &leaf));
     match made {
         Err(e) => fail(a, cpu, e, 0, what),
-        Ok(n) => match new_lock(a, n, true)? { Some(p) => ok(a, cpu, p >> 2, what), None => fail(a, cpu, ERROR_NO_FREE_STORE, 0, what) },
+        Ok(n) => { let d = crate::dos_misc::now(a); a.fs.vol.get_mut(n).date = d; match new_lock(a, n, true)? { Some(p) => ok(a, cpu, p >> 2, what), None => fail(a, cpu, ERROR_NO_FREE_STORE, 0, what) } }
     }
 }
 
@@ -265,3 +265,31 @@ pub fn free_dos_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
     Ok(format!("[dos] FreeDosObject {ty} {p:#x}"))
 }
 
+
+/// `Process.pr_HomeDir`: field order of dos/dosextens.h after pr_CLI (172): pr_ReturnAddr 176, pr_PktWait 180,
+/// pr_WindowPtr 184, pr_HomeDir 188.
+const PR_HOME_DIR: u32 = 188;
+
+/// GetProgramDir() -> the lock on the directory the program was started from (what `PROGDIR:` names), made on first use.
+pub fn get_program_dir<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let mut home = a.mem.read_u32(crate::process::PROCESS + PR_HOME_DIR).map_err(Refusal::mem("pr_HomeDir"))?;
+    if home == 0 {
+        if let Ok(n) = a.fs.vol.resolve(a.fs.vol.boot_device(), "PROGDIR:") {
+            if let Some(p) = new_lock(a, n, false)? {
+                home = p >> 2;
+                a.mem.write_u32(crate::process::PROCESS + PR_HOME_DIR, home).map_err(Refusal::mem("pr_HomeDir"))?;
+            }
+        }
+    }
+    ok(a, cpu, home, format!("[dos] GetProgramDir -> {:#x}", home << 2))
+}
+
+/// SetProgramDir(d1 = lock) -> the previous program directory lock.
+pub fn set_program_dir<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let b = cpu.dreg(1);
+    if let Err(e) = lock_node(a, b) { return Err(Refusal(format!("SetProgramDir {:#x}: not a lock (IoErr {})", b << 2, e.0))); }
+    let old = a.mem.read_u32(crate::process::PROCESS + PR_HOME_DIR).map_err(Refusal::mem("pr_HomeDir"))?;
+    a.mem.write_u32(crate::process::PROCESS + PR_HOME_DIR, b).map_err(Refusal::mem("pr_HomeDir"))?;
+    cpu.set_d0(old);
+    Ok(format!("[dos] SetProgramDir {:#x}", b << 2))
+}

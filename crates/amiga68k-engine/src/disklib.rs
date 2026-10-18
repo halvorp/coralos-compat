@@ -93,6 +93,7 @@ fn load_new<U: GuestUi>(a: &mut Amiga<U>, name: &str, key: String, path: String,
     let init = rd(a, tag + RT_INIT, "rt_Init")?;
     let record = move |a: &mut Amiga<U>, base: u32| -> usize {
         a.fs.disk_libs.push(DiskLib { key, name: rt_name, path, base, seglist: seg.bptr, open_count: 0 });
+        let _ = crate::execlists::add_tail(&mut a.mem, crate::execlists::LIB_LIST, base); // AddLibrary
         a.fs.disk_libs.len() - 1
     };
     if flags & RTF_AUTOINIT == 0 {

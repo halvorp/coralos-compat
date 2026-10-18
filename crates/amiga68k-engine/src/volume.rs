@@ -89,16 +89,31 @@ impl Volume {
 
     /// Define `name:` as an alias for the path `target` (replaces an earlier assign).
     pub fn assign(&mut self, name: &str, target: &str) {
+        // `DOpus5:` assigned to the root of device DOpus5: is the device itself; an assign of that name would shadow it
+        // and point back at itself.
+        if target.strip_suffix(':').map_or(false, |t| same(t, name)) && self.device(name).is_some() { return; }
         self.assigns.retain(|k, _| !same(k, name));
         self.assigns.insert(name.to_string(), alloc::vec![target.to_string()]);
     }
     /// Add another directory to a multi-directory assign (`Assign LIBS: DOpus5:Libs ADD`): a path under it resolves
     /// in the first directory that has it.
     pub fn assign_add(&mut self, name: &str, target: &str) {
+        if target.strip_suffix(':').map_or(false, |t| same(t, name)) && self.device(name).is_some() { return; }
         match self.assigns.iter_mut().find(|(k, _)| same(k, name)) {
             Some((_, v)) => v.push(target.to_string()),
             None => self.assign(name, target),
         }
+    }
+    /// Remove an assign; false if it was not one.
+    pub fn remove_assign(&mut self, name: &str) -> bool { let n = self.assigns.len(); self.assigns.retain(|k, _| !same(k, name)); self.assigns.len() != n }
+    /// Drop one directory from an assign (the assign goes when it was the last).
+    pub fn assign_remove_target(&mut self, name: &str, target: &str) -> bool {
+        let Some((k, v)) = self.assigns.iter_mut().find(|(k, _)| same(k, name)) else { return false };
+        let n = v.len();
+        v.retain(|t| !same(t, target));
+        let (gone, k) = (v.len() != n, k.clone());
+        if self.assigns[&k].is_empty() { self.assigns.remove(&k); }
+        gone
     }
     pub fn assign_targets(&self, name: &str) -> Option<&[String]> { self.assigns.iter().find(|(k, _)| same(k, name)).map(|(_, v)| v.as_slice()) }
 
@@ -315,9 +330,25 @@ mod tests {
         let f = v.put_file("SYS:Libs/Foo.library", b"new".to_vec()).unwrap();
         assert_eq!(v.file_data(f).unwrap(), b"new");
         let ram = v.device("RAM").unwrap();
+        let dh0 = v.add_device("DH0", true);
+        let t = v.create_file(ram, "x").unwrap();
+        assert_eq!(v.rename(t, dh0, "y"), Err(ERROR_RENAME_ACROSS_DEVICES));
+        assert_eq!(v.rename(f, ram, "y"), Err(ERROR_DISK_WRITE_PROTECTED), "moving out of read-only SYS: is refused too");
         let env = v.resolve(ROOT, "ENV:").unwrap();
-        let t = v.create_file(env, "x").unwrap();
-        assert_eq!(v.rename(t, ram, "y"), Ok(()));
-        assert_eq!(v.rename(f, ram, "y"), Err(ERROR_DISK_WRITE_PROTECTED));
+        assert_eq!(v.rename(t, env, "y"), Ok(()), "negative control: within one device it works");
+    }
+
+    #[test]
+    fn multi_directory_assign_and_self_assign() {
+        let mut v = vol();
+        v.add_device("Opus", false);
+        v.put_file("Opus:Libs/Special.library", b"s".to_vec()).unwrap();
+        v.assign_add("LIBS", "Opus:Libs");
+        assert_eq!(v.full_path(v.resolve(ROOT, "LIBS:special.library").unwrap()), "Opus:Libs/Special.library");
+        assert_eq!(v.full_path(v.resolve(ROOT, "LIBS:foo.library").unwrap()), "SYS:Libs/Foo.library", "the first directory still answers");
+        v.assign("OPUS", "Opus:"); // an assign naming its own device is a no-op, not a loop
+        assert_eq!(v.full_path(v.resolve(ROOT, "opus:Libs").unwrap()), "Opus:Libs");
+        assert!(v.assign_remove_target("LIBS", "Opus:Libs"));
+        assert_eq!(v.resolve(ROOT, "LIBS:special.library"), Err(ERROR_OBJECT_NOT_FOUND));
     }
 }

@@ -47,7 +47,7 @@ pub fn setup(mem: &mut GuestMem) -> Result<(), Refusal> {
 #[derive(Default)]
 pub struct Console { pub stdout: Vec<u8> }
 
-fn emit<U: GuestUi>(a: &mut Amiga<U>, bytes: &[u8]) -> String {
+pub(crate) fn emit<U: GuestUi>(a: &mut Amiga<U>, bytes: &[u8]) -> String {
     a.console.stdout.extend_from_slice(bytes);
     String::from_utf8_lossy(bytes).trim_end_matches('\n').replace('\n', "\\n")
 }

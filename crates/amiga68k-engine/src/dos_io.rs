@@ -41,7 +41,7 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
         (Ok(n), _) => n,
         (Err(_), _) => {
             let made = a.fs.vol.resolve_parent(cwd, &name).and_then(|(d, leaf)| a.fs.vol.create_file(d, &leaf));
-            match made { Ok(n) => n, Err(e) => return fail(a, cpu, e, 0, what) }
+            match made { Ok(n) => { let d = crate::dos_misc::now(a); a.fs.vol.get_mut(n).date = d; n } Err(e) => return fail(a, cpu, e, 0, what) }
         }
     };
     let excl = mode == MODE_NEWFILE;
@@ -64,7 +64,7 @@ pub fn close<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
     ok(a, cpu, DOSTRUE, format!("[dos] Close {:#x}", b << 2))
 }
 
-fn handle<'a, U: GuestUi>(a: &'a mut Amiga<U>, b: u32, call: &str) -> Result<&'a mut OpenFile, Refusal> {
+pub(crate) fn handle<'a, U: GuestUi>(a: &'a mut Amiga<U>, b: u32, call: &str) -> Result<&'a mut OpenFile, Refusal> {
     a.fs.files.get_mut(&(b << 2)).ok_or_else(|| Refusal(format!("{call} on {:#x}: not an open file", b << 2)))
 }
 
@@ -100,7 +100,7 @@ pub fn fputs<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
 }
 
 /// Store `bytes` at the handle's position; Ok(false) = refused with IoErr set (read-only handle).
-fn write_bytes_to<U: GuestUi>(a: &mut Amiga<U>, b: u32, bytes: &[u8]) -> Result<bool, Refusal> {
+pub(crate) fn write_bytes_to<U: GuestUi>(a: &mut Amiga<U>, b: u32, bytes: &[u8]) -> Result<bool, Refusal> {
     let (node, pos, writable) = { let f = handle(a, b, "Write")?; (f.node, f.pos, f.write) };
     if !writable { set_ioerr(&mut a.mem, ERROR_WRITE_PROTECTED); return Ok(false); }
     let data = a.fs.vol.file_data_mut(node).ok_or_else(|| Refusal("Write: the file's node is gone".into()))?;
@@ -108,6 +108,8 @@ fn write_bytes_to<U: GuestUi>(a: &mut Amiga<U>, b: u32, bytes: &[u8]) -> Result<
     if data.len() < at + bytes.len() { data.resize(at + bytes.len(), 0); }
     data[at..at + bytes.len()].copy_from_slice(bytes);
     handle(a, b, "Write")?.pos = (at + bytes.len()) as u32;
+    let d = crate::dos_misc::now(a);
+    a.fs.vol.get_mut(node).date = d;
     Ok(true)
 }
 

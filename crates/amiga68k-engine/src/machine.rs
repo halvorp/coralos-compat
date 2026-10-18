@@ -154,6 +154,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(devices::LVO_OPEN_DEVICE, "OpenDevice", devices::open_device::<U>)
             .func(devices::LVO_CLOSE_DEVICE, "CloseDevice", devices::close_device::<U>)
             .with(crate::makelib::register::<U>)
+            .with(crate::execlists::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("dos.library", DOS_BASE)
             .func(dos::LVO_READ, "Read", dos::read::<U>)
@@ -206,6 +207,7 @@ impl<U: GuestUi> Amiga<U> {
         for (name, base) in [("exec.library", EXEC_BASE), ("dos.library", DOS_BASE), ("intuition.library", INTUITION_BASE), ("graphics.library", GRAPHICS_BASE), ("gadtools.library", GADTOOLS_BASE)] {
             a.libs.push(LibInfo { name, base, open_count: 0 });
         }
+        crate::execlists::init(&mut a.mem)?;
         crate::guest_call::install(&mut a.mem)?;
         a.dispatch.insert(crate::guest_call::RET_SLOT, ("exec.library", "GuestCallReturn", crate::guest_call::on_return::<U>));
         write_slot(&mut a.mem, EXIT_SLOT).map_err(Refusal::mem("exit slot"))?;

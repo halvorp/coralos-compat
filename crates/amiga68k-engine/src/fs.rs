@@ -29,7 +29,6 @@ const PR_CURRENT_DIR: u32 = 152;
 pub struct LockRec { pub node: NodeId, pub exclusive: bool }
 pub struct OpenFile { pub node: NodeId, pub pos: u32, pub read: bool, pub write: bool, pub exclusive: bool }
 
-#[derive(Default)]
 pub struct FsState {
     pub vol: Volume,
     /// Live guest locks: struct address -> what they lock.
@@ -42,6 +41,8 @@ pub struct FsState {
     pub segs: BTreeMap<u32, (u32, u32)>,
     /// Libraries loaded from disk (disklib.rs).
     pub disk_libs: Vec<crate::disklib::DiskLib>,
+    /// The Amiga-epoch day the virtual clock starts on (dos_misc.rs).
+    pub start_day: i32,
 }
 
 impl FsState {
@@ -96,4 +97,10 @@ pub fn new_lock<U: GuestUi>(a: &mut Amiga<U>, node: NodeId, exclusive: bool) -> 
     a.mem.write_u32(p + FL_ACCESS, if exclusive { -1i32 as u32 } else { -2i32 as u32 }).map_err(Refusal::mem("fl_Access"))?;
     a.fs.locks.insert(p, LockRec { node, exclusive });
     Ok(Some(p))
+}
+
+impl Default for FsState {
+    fn default() -> Self {
+        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026 }
+    }
 }
