@@ -34,6 +34,12 @@ pub fn frame_size(layout: &[Arg]) -> u32 { layout.iter().map(|a| a.size()).sum()
 pub struct Args(Vec<u32>);
 
 impl Args {
+    /// The arguments of a call made BY VALUE (another processor's convention: PowerPC passes them in r3..r10): one
+    /// value per layout entry, each truncated to its slot width the way a 68k stack slot would hold it.
+    pub fn from_values(layout: &[Arg], values: &[u32]) -> Result<Args, Refusal> {
+        if layout.len() != values.len() { return Err(Refusal(alloc::format!("call passes {} arguments, the Toolbox signature takes {}", values.len(), layout.len()))); }
+        Ok(Args(layout.iter().zip(values).map(|(a, &v)| match a { Arg::B => v & 0xFF, Arg::W => v & 0xFFFF, Arg::L => v }).collect()))
+    }
     pub fn get(&self, i: usize) -> u32 { self.0[i] }
     pub fn len(&self) -> usize { self.0.len() }
     pub fn is_empty(&self) -> bool { self.0.is_empty() }

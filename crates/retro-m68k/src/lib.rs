@@ -63,28 +63,37 @@ pub trait Host {
 }
 
 /// Register access and run control, valid only inside a callback.
-pub struct Cpu { halted: bool, blocked: bool, insns: u64, bus_faults: u32 }
+pub struct Cpu { halted: bool, blocked: bool, insns: u64, bus_faults: u32, detached: bool }
 
 impl Cpu {
-    pub fn dreg(&self, n: u32) -> u32 { debug_assert!(n < 8); unsafe { m68k_get_reg(core::ptr::null_mut(), REG_D0 + n) } }
-    pub fn areg(&self, n: u32) -> u32 { debug_assert!(n < 8); unsafe { m68k_get_reg(core::ptr::null_mut(), REG_A0 + n) } }
-    pub fn set_d0(&mut self, v: u32) { unsafe { m68k_set_reg(REG_D0, v) } }
-    pub fn set_dreg(&mut self, n: u32, v: u32) { debug_assert!(n < 8); unsafe { m68k_set_reg(REG_D0 + n, v) } }
+    /// A `Cpu` that belongs to no running 68k: for a host that drives a Toolbox handler on behalf of ANOTHER processor
+    /// (the PowerPC personality calling the same Rust handlers). It has no registers: reads give 0, writes are dropped,
+    /// and [`Cpu::halt`] / [`Cpu::block`] only record the request ([`Cpu::is_halted`], [`Cpu::is_blocked`]) without
+    /// touching Musashi's global timeslice, so it can never disturb a 68k machine running in the same process.
+    pub fn detached() -> Cpu { Cpu { halted: false, blocked: false, insns: 0, bus_faults: 0, detached: true } }
+    /// True if [`Cpu::halt`] was called on this `Cpu` (meaningful on a detached one; a running 68k reports through RunStats).
+    pub fn is_halted(&self) -> bool { self.halted }
+    /// True if [`Cpu::block`] was called on this `Cpu`.
+    pub fn is_blocked(&self) -> bool { self.blocked }
+    pub fn dreg(&self, n: u32) -> u32 { debug_assert!(n < 8); if self.detached { return 0; } unsafe { m68k_get_reg(core::ptr::null_mut(), REG_D0 + n) } }
+    pub fn areg(&self, n: u32) -> u32 { debug_assert!(n < 8); if self.detached { return 0; } unsafe { m68k_get_reg(core::ptr::null_mut(), REG_A0 + n) } }
+    pub fn set_d0(&mut self, v: u32) { if self.detached { return; } unsafe { m68k_set_reg(REG_D0, v) } }
+    pub fn set_dreg(&mut self, n: u32, v: u32) { debug_assert!(n < 8); if self.detached { return; } unsafe { m68k_set_reg(REG_D0 + n, v) } }
     /// Set address register `n` (A7 = the active stack pointer). Only inside a Host callback, like every accessor here.
-    pub fn set_areg(&mut self, n: u32, v: u32) { debug_assert!(n < 8); unsafe { m68k_set_reg(REG_A0 + n, v) } }
-    pub fn pc(&self) -> u32 { unsafe { m68k_get_reg(core::ptr::null_mut(), REG_PC) } }
+    pub fn set_areg(&mut self, n: u32, v: u32) { debug_assert!(n < 8); if self.detached { return; } unsafe { m68k_set_reg(REG_A0 + n, v) } }
+    pub fn pc(&self) -> u32 { if self.detached { return 0; } unsafe { m68k_get_reg(core::ptr::null_mut(), REG_PC) } }
     /// Continue at `pc` instead of the instruction after the trapped word: how an A-line handler redirects the guest
     /// (the Segment Loader's `_LoadSeg` resumes at the jump-table entry it just patched). Only inside a Host callback.
-    pub fn set_pc(&mut self, pc: u32) { unsafe { m68k_set_reg(REG_PC, pc) } }
+    pub fn set_pc(&mut self, pc: u32) { if self.detached { return; } unsafe { m68k_set_reg(REG_PC, pc) } }
     /// The status register (the condition codes are its low five bits).
-    pub fn sr(&self) -> u32 { unsafe { m68k_get_reg(core::ptr::null_mut(), REG_SR) } }
-    pub fn set_sr(&mut self, v: u32) { unsafe { m68k_set_reg(REG_SR, v) } }
+    pub fn sr(&self) -> u32 { if self.detached { return 0; } unsafe { m68k_get_reg(core::ptr::null_mut(), REG_SR) } }
+    pub fn set_sr(&mut self, v: u32) { if self.detached { return; } unsafe { m68k_set_reg(REG_SR, v) } }
     /// Stop after the current instruction.
-    pub fn halt(&mut self) { self.halted = true; unsafe { m68k_end_timeslice() } }
+    pub fn halt(&mut self) { self.halted = true; if !self.detached { unsafe { m68k_end_timeslice() } } }
     /// Stop after the current instruction WITHOUT ending the program: the trapped call is left unfinished, and the next
     /// [`resume`] continues at the instruction after the trap (the library slot's RTS), so the call returns then with
     /// whatever D0 the host set before resuming. This is how a guest `Wait` with nothing pending suspends.
-    pub fn block(&mut self) { self.blocked = true; unsafe { m68k_end_timeslice() } }
+    pub fn block(&mut self) { self.blocked = true; if !self.detached { unsafe { m68k_end_timeslice() } } }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,7 +154,7 @@ pub fn start_with<H: Host>(host: &mut H, entry: u32, sp: u32, regs: &[(u32, u32)
     let saved4 = host.mem().read_u32(4).unwrap_or(0);
     let _ = host.mem().write_u32(0, sp);
     let _ = host.mem().write_u32(4, entry);
-    let mut cpu = Cpu { halted: false, blocked: false, insns: 0, bus_faults: 0 };
+    let mut cpu = Cpu { halted: false, blocked: false, insns: 0, bus_faults: 0, detached: false };
     // The reset reads the vectors through the memory callbacks, so ACTIVE must be set for it too.
     activate(host, &mut cpu, |_| unsafe {
         m68k_init();
@@ -164,7 +173,7 @@ pub fn start_with<H: Host>(host: &mut H, entry: u32, sp: u32, regs: &[(u32, u32)
 pub fn resume<H: Host>(host: &mut H, ctx: &mut CpuContext, max_insns: u64) -> RunStats {
     let _g = Guard::take();
     unsafe { m68k_set_context(ctx.0.as_mut_ptr()) };
-    let mut cpu = Cpu { halted: false, blocked: false, insns: 0, bus_faults: 0 };
+    let mut cpu = Cpu { halted: false, blocked: false, insns: 0, bus_faults: 0, detached: false };
     let mut stalled = None;
     activate(host, &mut cpu, |p| {
         while !live!(p, halted) && !live!(p, blocked) && live!(p, insns) < max_insns {
