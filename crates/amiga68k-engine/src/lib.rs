@@ -77,6 +77,8 @@ pub mod run;
 pub mod screen;
 pub mod cache;
 pub mod exec_patch;
+pub mod fmt;
+pub mod rawdofmt;
 pub mod locale;
 pub mod locale_fmt;
 pub mod locale_tables;

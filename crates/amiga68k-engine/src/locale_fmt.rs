@@ -6,9 +6,8 @@
 //! Behaviour from AROS workbench/libs/locale (formatdate.c, formatstring.c, parsedate.c) with these decisions:
 //! - FormatDate: %I and %Q show 12 for hour 0 and 12 (AROS prints 0 for midnight; AmigaOS shows 12); %j is the real day
 //!   of the year; %Z prints nothing (unimplemented in 3.1); a lone trailing '%' prints nothing.
-//! - FormatString: `%[n$][-][0][width][.limit][l|ll|L|i]type` with type b d D u U x X p P s c; data are 16-bit unless `l`,
-//!   pointers and strings 32-bit; the result is the address after the arguments the template used. %D/%U group by the
-//!   default locale's loc_Grouping/loc_GroupSeparator.
+//! - FormatString runs the engine's one formatter (fmt.rs) with the locale extensions on; the result is the address after
+//!   the arguments the template used.
 //! - ParseDate reads the WHOLE input first (up to 1024 characters, to the first NUL) and parses that, instead of pulling
 //!   characters on demand: a getChar hook with side effects sees more calls than on AROS. A month missing from the
 //!   template counts as January (AROS indexes before its table).
@@ -128,8 +127,6 @@ fn format_date<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Re
     Ok(line)
 }
 
-struct Arg { pos: usize, size: u32 }
-
 /// FormatString(a0 = locale, a1 = template, a2 = dataStream, a3 = putChar hook) -> the address after the used arguments.
 fn format_string<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let loc = locale_arg(a, cpu.areg(0), "FormatString")?;
@@ -137,91 +134,12 @@ fn format_string<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     if tpl == 0 { cpu.set_d0(data); return Ok("[locale] FormatString NULL template".into()); }
     let entry = hook_entry(a, hook, "FormatString")?;
     let t = crate::guest_str::read_bytes_z(&a.mem, tpl, 4096).map_err(Refusal::mem("FormatString.template"))?;
-    // Pass 1: the directives, to lay out the argument stream by position.
-    struct Dir { arg: usize, left: bool, zero: bool, width: usize, limit: usize, size: u32, ty: u8 }
-    enum Item { Lit(u8), Dir(Dir) }
-    let mut items = Vec::new();
-    let (mut i, mut counter) = (0, 0usize);
-    let num = |i: &mut usize| { let mut n = 0usize; while *i < t.len() && t[*i].is_ascii_digit() { n = n * 10 + (t[*i] - b'0') as usize; *i += 1; } n };
-    while i < t.len() {
-        if t[i] != b'%' { items.push(Item::Lit(t[i])); i += 1; continue; }
-        i += 1;
-        if t.get(i) == Some(&b'%') { items.push(Item::Lit(b'%')); i += 1; continue; }
-        counter += 1;
-        let save = i;
-        let mut arg = counter;
-        if t.get(i).map_or(false, u8::is_ascii_digit) {
-            let n = num(&mut i);
-            if t.get(i) == Some(&b'$') { i += 1; arg = n; } else { i = save; }
-        }
-        let left = t.get(i) == Some(&b'-'); if left { i += 1; }
-        let zero = t.get(i) == Some(&b'0'); if zero { i += 1; }
-        let width = num(&mut i);
-        let mut limit = usize::MAX;
-        if t.get(i) == Some(&b'.') { i += 1; if t.get(i).map_or(false, u8::is_ascii_digit) { limit = num(&mut i); } }
-        let size = match t.get(i) {
-            Some(b'i') => { i += 1; 4 }
-            Some(b'L') => return Err(Refusal("FormatString: 64-bit arguments (%L, %ll) are not modelled".into())),
-            Some(b'l') => { i += 1; if t.get(i) == Some(&b'l') { return Err(Refusal("FormatString: 64-bit arguments (%L, %ll) are not modelled".into())); } 4 }
-            _ => 2,
-        };
-        let Some(&ty) = t.get(i) else { break };
-        i += 1;
-        let size = if matches!(ty, b'b' | b's' | b'p' | b'P') { 4 } else { size };
-        items.push(Item::Dir(Dir { arg, left, zero, width, limit, size, ty }));
-    }
-    let mut args: Vec<Arg> = items.iter().filter_map(|it| if let Item::Dir(d) = it { Some(Arg { pos: d.arg, size: d.size }) } else { None }).collect();
-    args.sort_by_key(|x| x.pos);
-    let off_of = |pos: usize| -> u32 { args.iter().filter(|x| x.pos < pos).map(|x| x.size).sum() };
-    let total: u32 = args.iter().map(|x| x.size).sum();
-    // Pass 2: format.
-    let rd = |a: &Amiga<U>, o: u32, size: u32| -> Result<u32, Refusal> {
-        if size == 4 { a.mem.read_u32(data + o) } else { a.mem.read_u16(data + o).map(u32::from) }.map_err(Refusal::mem("FormatString.dataStream"))
-    };
-    let mut out: Vec<u8> = Vec::new();
-    for it in &items {
-        let d = match it { Item::Lit(c) => { out.push(*c); continue } Item::Dir(d) => d };
-        let o = off_of(d.arg);
-        let v = rd(a, o, d.size)?;
-        let mut body: Vec<u8> = match d.ty {
-            b'd' | b'D' => {
-                let neg = if d.size == 4 { (v as i32) < 0 } else { (v as u16 as i16) < 0 };
-                let mag = if d.size == 4 { (v as i32).unsigned_abs() } else { (v as u16 as i16).unsigned_abs() as u32 };
-                let mut s = if d.ty == b'D' { group(mag) } else { format!("{mag}").into_bytes() };
-                if neg { s.insert(0, b'-'); }
-                s
-            }
-            b'u' | b'U' => { let mag = if d.size == 4 { v } else { v & 0xFFFF }; if d.ty == b'U' { group(mag) } else { format!("{mag}").into_bytes() } }
-            b'x' => format!("{:X}", if d.size == 4 { v } else { v & 0xFFFF }).into_bytes(),   // RawDoFmt's %lx is UPPER case
-            b'X' => format!("{:x}", if d.size == 4 { v } else { v & 0xFFFF }).into_bytes(),
-            b'p' | b'P' => { let s = format!("{v:08x}"); if d.ty == b'p' { s.to_uppercase() } else { s }.into_bytes() }
-            b'c' => alloc::vec![v as u8],
-            b's' | b'b' => {
-                let mut p = v;
-                let mut s = Vec::new();
-                if d.ty == b'b' { p <<= 2; let n = if p == 0 { 0 } else { a.mem.read_u8(p).map_err(Refusal::mem("FormatString %b"))? as u32 }; if p != 0 { p += 1; } for k in 0..n.min(d.limit as u32) { s.push(a.mem.read_u8(p + k).map_err(Refusal::mem("FormatString %b"))?); } }
-                else if p != 0 { while s.len() < d.limit { let c = a.mem.read_u8(p + s.len() as u32).map_err(Refusal::mem("FormatString %s"))?; if c == 0 { break; } s.push(c); } }
-                s
-            }
-            other => alloc::vec![other],   // an unknown type: the faulty '%' is ignored, the character printed
-        };
-        if matches!(d.ty, b'p' | b'P') && body.len() < 8 { body.splice(0..0, core::iter::repeat(b'0').take(8 - body.len())); }
-        let pad = d.width.saturating_sub(body.len());
-        if d.left { out.extend(body); out.extend(core::iter::repeat(b' ').take(pad)); }
-        else { out.extend(core::iter::repeat(if d.zero { b'0' } else { b' ' }).take(pad)); out.extend(body); }
-    }
+    let f = crate::fmt::format(&a.mem, &t, data, true)?;
+    let line = format!("[locale] FormatString \"{}\" -> {} characters", String::from_utf8_lossy(&t), f.bytes.len());
+    let mut out = f.bytes;
     out.push(0);
-    let line = format!("[locale] FormatString \"{}\" -> {} characters", String::from_utf8_lossy(&t), out.len() - 1);
-    guest_call::start(a, cpu, emit(out, 0, hook, entry, loc, data + total))?;
+    guest_call::start(a, cpu, emit(out, 0, hook, entry, loc, data + f.used))?;
     Ok(line)
-}
-
-/// Decimal digits of `n` grouped by 3 with the default locale's separator (loc_Grouping "\x03\x00", loc_GroupSeparator ",").
-fn group(n: u32) -> Vec<u8> {
-    let s = format!("{n}");
-    let mut out = Vec::new();
-    for (i, c) in s.bytes().enumerate() { if i > 0 && (s.len() - i) % 3 == 0 { out.push(b','); } out.push(c); }
-    out
 }
 
 /// ParseDate(a0 = locale, a1 = DateStamp or NULL, a2 = template, a3 = getChar hook) -> TRUE if the input matched.

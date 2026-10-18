@@ -80,6 +80,12 @@ pub fn write<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
     Ok(format!("[dos] Write console \"{shown}\""))
 }
 
+/// Write `bytes` to a file handle BPTR, the console included. Ok(false) = the handle refused (IoErr set).
+pub(crate) fn write_to<U: GuestUi>(a: &mut Amiga<U>, fh: u32, bytes: &[u8]) -> Result<bool, Refusal> {
+    if fh == STDOUT_FH >> 2 { emit(a, bytes); return Ok(true); }
+    crate::dos_io::write_bytes_to(a, fh, bytes)
+}
+
 /// Read(d1 = file, d2 = buffer, d3 = length): the console's stdin has nothing to give (EOF, 0).
 pub fn read<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     if cpu.dreg(1) != STDIN_FH >> 2 { return crate::dos_io::read(a, cpu); }

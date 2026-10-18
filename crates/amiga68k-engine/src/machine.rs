@@ -126,6 +126,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(memory::LVO_COPY_MEM, "CopyMem", memory::copy_mem::<U>)
             .with(crate::exec_task::register::<U>)
             .with(crate::exec_patch::register::<U>)
+            .with(crate::rawdofmt::register::<U>)
             .with(crate::cache::register::<U>)
             .func(memory::LVO_SET_SIGNAL, "SetSignal", memory::set_signal::<U>)
             .func(memory::LVO_STACK_SWAP, "StackSwap", memory::stack_swap::<U>)
@@ -193,6 +194,7 @@ impl<U: GuestUi> Amiga<U> {
             .with(crate::dos_fs::register::<U>)
             .with(crate::dos2::register::<U>)
             .with(crate::dos_newproc::register::<U>)
+            .with(crate::rawdofmt::register_dos::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("intuition.library", INTUITION_BASE)
             .func(window::LVO_OPEN_WINDOW, "OpenWindow", window::open_window::<U>)
