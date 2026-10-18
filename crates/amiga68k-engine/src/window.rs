@@ -145,6 +145,7 @@ pub fn close_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     let port = a.mem.read_u32(win + WD_USERPORT).map_err(Refusal::mem("Window.UserPort"))?;
     if port != 0 { a.drop_window_msgs(win, port)?; }
     a.windows.remove(&win);
+    crate::graphics::release_damage(a, win)?; // a DamageList left by mark_damaged that the program never refreshed
     crate::graphics::close_window_surface(a, win)?;
     a.ui.close_window(native).map_err(Refusal::ui)?;
     crate::gadtools::detach(a, win);

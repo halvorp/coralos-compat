@@ -25,7 +25,7 @@ pub mod target;
 mod text;
 mod windows;
 pub use drawinfo::draw_image_at;
-pub use regions::mark_damaged;
+pub use regions::{mark_damaged, release_damage};
 pub use windows::resize as resize_window;
 
 pub use setup::setup;

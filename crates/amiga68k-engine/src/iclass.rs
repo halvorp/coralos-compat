@@ -29,7 +29,7 @@ pub const NATIVE: [(&str, &str, Native, u16); 15] = [
     ("gadgetclass", "rootclass", Native::Gadget, GDATA_SIZE as u16),
     ("buttongclass", "gadgetclass", Native::Button, 0),
     ("strgclass", "gadgetclass", Native::Strg, STRG_DATA as u16),
-    ("propgclass", "gadgetclass", Native::Prop, 0),
+    ("propgclass", "gadgetclass", Native::Prop, PROP_DATA as u16),
     ("sysiclass", "imageclass", Native::Sysi, 0),
     ("frameiclass", "imageclass", Native::Frame, 0),
     ("Application.mui", "rootclass", Native::Mui(Kind::Application), 0),

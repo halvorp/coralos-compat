@@ -162,7 +162,7 @@ pub fn mark_damaged<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusa
     damage_whole(a, layer, b).map(|_| ())
 }
 
-fn end_refresh_of<U: GuestUi>(a: &mut Amiga<U>, layer: u32) -> Result<(), Refusal> {
+pub(crate) fn end_refresh_of<U: GuestUi>(a: &mut Amiga<U>, layer: u32) -> Result<(), Refusal> {
     let rg = a.mem.read_u32(layer + LY_DAMAGE_LIST).map_err(Refusal::mem("Layer"))?;
     if rg != 0 {
         if let Some(g) = a.gfx.regions.remove(&rg) {
@@ -180,4 +180,11 @@ pub fn end_refresh<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     let layer = a.mem.read_u32(win + WD_WLAYER).map_err(Refusal::mem("Layer"))?;
     if layer != 0 && a.gfx.layers.contains_key(&layer) { end_refresh_of(a, layer)?; }
     Ok(format!("[intuition] EndRefresh {win:#x}"))
+}
+
+/// CloseWindow: give back a DamageList nobody refreshed (mark_damaged made it; the program never ran BeginRefresh/EndRefresh).
+pub fn release_damage<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusal> {
+    let layer = a.mem.read_u32(win + WD_WLAYER).map_err(Refusal::mem("Layer"))?;
+    if layer != 0 && a.gfx.layers.contains_key(&layer) { end_refresh_of(a, layer)?; }
+    Ok(())
 }

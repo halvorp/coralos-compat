@@ -41,7 +41,8 @@ pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, native: Native, cl: u32, obj: u32,
     match native {
         Native::Root => root(a, cl, obj, msg),
         Native::Image | Native::Sysi | Native::Frame => image(a, cl, obj, msg),
-        Native::Gadget | Native::Button | Native::Prop => gadget(a, cl, obj, msg),
+        Native::Gadget | Native::Button => gadget(a, cl, obj, msg),
+        Native::Prop => crate::boopsi_prop::prop(a, cl, obj, msg),
         Native::Strg => crate::boopsi_strg::strg(a, cl, obj, msg),
         Native::Mui(_) => Err(Refusal(format!("{} cannot be reached through a class pointer (MUI objects are host-side)", a.classes.name_of(cl)))),
     }
@@ -132,7 +133,7 @@ fn image_set<U: GuestUi>(a: &mut Amiga<U>, im: u32, tag_list: u32) -> Result<u32
     Ok(all as u32)
 }
 
-fn gadget<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u32, Refusal> {
+pub(crate) fn gadget<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u32, Refusal> {
     let id = rd(a, msg, "method id")?;
     match id {
         OM_NEW => {

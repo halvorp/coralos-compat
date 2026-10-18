@@ -123,3 +123,48 @@ fn explore_idle_tasks() {
     for w in a.windows.keys() { eprintln!("WIN {w:#x} userport {:#x} idcmp {:#x}", a.mem.read_u32(w + 86).unwrap(), a.mem.read_u32(w + 82).unwrap()); }
     eprintln!("sem owners {:x?} nest {:x?}", a.sched.sem_owner, a.semaphores.iter().filter(|(_, &n)| n > 0).collect::<Vec<_>>());
 }
+
+/// A region fixture from the AROS oracle's screenshot (tests/oracle/dopus5/regions): rows of class characters.
+fn region(name: &str) -> Vec<Vec<char>> {
+    let t = std::fs::read_to_string(format!("{}/tests/oracle/dopus5/regions/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    t.lines().filter(|l| !l.starts_with('#') || l.starts_with("#W") || l.starts_with("##")).filter(|l| !l.starts_with("# ")).map(|l| l.chars().collect()).collect()
+}
+
+/// The class of one pixel of ours, in the fixture's alphabet (0x6688BB, black, any light pen; everything else '.').
+fn class(p: u32) -> char {
+    match p & 0xFF_FFFF { 0 => '#', 0x6688BB => 'B', c if (c >> 16) + ((c >> 8) & 0xFF) + (c & 0xFF) >= 700 => 'W', _ => '.' }
+}
+
+/// Compare a w x h patch of `canvas` at (cx, cy) with an oracle region ('?' = not compared); returns the mismatching positions.
+fn mismatches(canvas: &(i32, i32, Vec<u32>), (cx, cy): (i32, i32), want: &[Vec<char>]) -> Vec<(usize, usize, char, char)> {
+    let mut bad = vec![];
+    for (j, row) in want.iter().enumerate() {
+        for (i, &w) in row.iter().enumerate() {
+            if w == '?' { continue; }
+            let got = class(canvas.2[((cy as usize + j) * canvas.0 as usize) + cx as usize + i]);
+            if got != w { bad.push((i, j, got, w)); }
+        }
+    }
+    bad
+}
+
+#[test]
+fn the_lister_matches_the_oracle_where_the_oracle_is_ground_truth() {
+    let Some(a) = run(5) else { return };
+    let lister = a.ui.canvases.values().find(|(w, h, _)| (*w, *h) == (435, 564)).expect("the lister canvas");
+    // Regions compared (class structure; palettes differ: AROS's light pen is 0xEEEEEE, the engine's 0xFFFFFF):
+    //  1. the "SRCE" button at the lister's top right: exact text bitmap, black frame and the 0x6688BB pen;
+    //  2. the path field's 3D frame at the lister's bottom (outer white/black lines, the inner bevel), interior not compared.
+    // NOT compared: the button bank (not drawn yet), the file list area, the scroll bars and arrows (they sit in the window
+    // border, outside the engine's canvas) and the disk icons (different volumes, different default icon artwork).
+    let srce = region("lister-srce-48x10.txt");
+    assert_eq!(srce.len(), 10, "{srce:?}");
+    let bad = mismatches(lister, (387, 0), &srce);
+    assert!(bad.is_empty(), "SRCE region differs from the oracle at {bad:?}");
+    let frame = region("lister-pathfield-frame-24x12.txt");
+    assert_eq!(frame.len(), 12);
+    let bad = mismatches(lister, (0, 552), &frame);
+    assert!(bad.is_empty(), "path field frame differs from the oracle at {bad:?}");
+    // Negative control: shifting the SRCE comparison by one pixel must fail (the check is not vacuous).
+    assert!(!mismatches(lister, (388, 0), &srce).is_empty());
+}
