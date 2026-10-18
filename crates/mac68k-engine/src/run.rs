@@ -21,6 +21,7 @@ impl<U: GuestUi> Mac<U> {
         if entry as usize >= code.len() { return Err(format!("entry {entry:#x} is outside the {}-byte image", code.len())); }
         self.mem.write_bytes(CODE_BASE, code).map_err(|e| e.to_string())?;
         self.mem.write_u32(STACK_TOP - 4, EXIT_STUB).map_err(|e| e.to_string())?; // return address for the program's final rts
+        self.ev.waiting = None; // a new program replaces the old one, including its blocked event call
         self.ctx = Some(retro_m68k::start_with(self, CODE_BASE + entry, STACK_TOP - 4, &[]));
         Ok(())
     }
@@ -32,6 +33,7 @@ impl<U: GuestUi> Mac<U> {
         if !self.complete_wait() { return (Step::Blocked, idle); }
         let Some(mut ctx) = self.ctx.take() else { return (Step::Exited, RunStats { blocked: false, halted: true, ..idle }) };
         let stats = retro_m68k::resume(self, &mut ctx, budget);
+        crate::qd::flush(self);
         let step = if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked }
             else if let Some(pc) = stats.stalled_at { Step::Fault(format!("the 68k stopped making progress at pc={pc:#x} (STOP, or halted after a double fault)")) }
             else { Step::BudgetSpent };

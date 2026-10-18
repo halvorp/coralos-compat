@@ -1,7 +1,7 @@
 //! Host-side bookkeeping for graphics.library: what the guest must not be able to corrupt. The guest's RastPorts, fonts
 //! and BitMap STRUCTS live in guest memory and are the authority for their fields; the pixels, regions and colours
 //! live here.
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use retro_raster::{font::Font, Bitmap, Rect, Region};
@@ -43,12 +43,8 @@ pub struct State {
     pub fonts: Vec<u32>,
     pub rom_font: Option<Rc<Font>>,
     pub palette: Option<Palette>,
-    /// Per window: the canvas rectangle changed since the last `present_content`.
-    pub damage: BTreeMap<u32, Rect>,
-    /// Windows that have had their first (full-canvas) frame.
-    pub presented: BTreeSet<u32>,
-    /// A host without a canvas part refused a frame; logged once.
-    pub content_refused: bool,
+    /// Per-window damage and first-frame state; flushed by `content::flush` through the shared `retro-present`.
+    pub present: retro_present::Presenter,
     /// Pending AreaMove/AreaDraw polygons by RastPort: (points, closed-at).
     pub areas: BTreeMap<u32, Vec<(i32, i32)>>,
 }
@@ -56,8 +52,6 @@ pub struct State {
 impl State {
     pub fn palette(&mut self) -> &mut Palette { self.palette.get_or_insert_with(Palette::new) }
     pub fn add_damage(&mut self, win: u32, r: Rect) {
-        if r.is_empty() { return; }
-        let e = self.damage.entry(win).or_default();
-        *e = e.union(&r);
+        self.present.add_damage(win, r);
     }
 }

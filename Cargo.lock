@@ -11,6 +11,7 @@ dependencies = [
  "retro-guest-mem",
  "retro-hunk",
  "retro-m68k",
+ "retro-present",
  "retro-raster",
 ]
 
@@ -48,6 +49,8 @@ dependencies = [
  "retro-common",
  "retro-guest-mem",
  "retro-m68k",
+ "retro-present",
+ "retro-raster",
  "retro-resfork",
 ]
 
@@ -84,6 +87,14 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "retro-guest-mem",
+]
+
+[[package]]
+name = "retro-present"
+version = "0.1.0"
+dependencies = [
+ "guestui-abi",
+ "retro-raster",
 ]
 
 [[package]]

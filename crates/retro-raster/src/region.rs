@@ -9,6 +9,25 @@ pub struct Region { rects: Vec<Rect> }
 impl Region {
     pub fn new() -> Region { Region::default() }
     pub fn from_rect(r: Rect) -> Region { let mut g = Region::new(); g.or_rect(r); g }
+    /// Build from scan rows in one linear pass: `rows` yields `(y, spans)` with `y` strictly increasing and each row's
+    /// `[x0, x1)` spans sorted and disjoint (touching spans are joined, empty ones dropped). Vertically adjacent rows
+    /// with equal spans merge, so the result is canonical -- unlike a loop of [`Region::or_rect`], whose cost grows
+    /// with the square of the row count.
+    pub fn from_rows(rows: impl IntoIterator<Item = (i32, Vec<(i32, i32)>)>) -> Region {
+        let mut bands: Vec<(i32, i32, Vec<(i32, i32)>)> = Vec::new();
+        for (y, spans) in rows {
+            let mut merged: Vec<(i32, i32)> = Vec::new();
+            for s in spans.into_iter().filter(|s| s.0 < s.1) {
+                match merged.last_mut() { Some(l) if s.0 <= l.1 => l.1 = l.1.max(s.1), _ => merged.push(s) }
+            }
+            if merged.is_empty() { continue; }
+            match bands.last_mut() {
+                Some(b) if b.1 == y && b.2 == merged => b.1 = y + 1,
+                _ => bands.push((y, y + 1, merged)),
+            }
+        }
+        Region { rects: bands.into_iter().flat_map(|(y0, y1, spans)| spans.into_iter().map(move |(x0, x1)| Rect::new(x0, y0, x1, y1))).collect() }
+    }
     pub fn rects(&self) -> &[Rect] { &self.rects }
     pub fn is_empty(&self) -> bool { self.rects.is_empty() }
     pub fn bounds(&self) -> Rect { self.rects.iter().fold(Rect::default(), |a, r| a.union(r)) }
@@ -100,6 +119,18 @@ mod tests {
         c.or_rect(Rect::new(15, 0, 20, 10));
         assert_eq!(b, c);
         assert_ne!(b, a, "negative control: different pixels differ");
+    }
+    #[test]
+    fn from_rows_is_canonical_and_equals_building_with_or_rect() {
+        let rows = alloc::vec![(0, alloc::vec![(2, 6)]), (1, alloc::vec![(2, 6)]), (2, alloc::vec![(0, 3), (3, 8)]), (4, alloc::vec![(0, 2), (5, 7)]), (5, alloc::vec![])];
+        let g = Region::from_rows(rows);
+        let mut h = Region::new();
+        for r in [Rect::new(2, 0, 6, 2), Rect::new(0, 2, 8, 3), Rect::new(0, 4, 2, 5), Rect::new(5, 4, 7, 5)] { h.or_rect(r); }
+        assert_eq!(g, h);
+        let mut other = h.clone();
+        other.or_rect(Rect::new(9, 9, 10, 10));
+        assert_ne!(g, other, "negative control: an extra pixel differs");
+        assert!(Region::from_rows(core::iter::empty()).is_empty());
     }
     #[test]
     fn and_xor_clear_match_set_algebra_pixel_by_pixel() {

@@ -6,7 +6,8 @@
 //! OS calls are A-line opcodes (`$Axxx`); `retro-m68k` hands each one to [`machine::Mac`]'s `Host::aline`, which looks
 //! the trap number up in a table ([`traps`]) and applies ONE of two calling conventions: the Pascal stack frame
 //! ([`pascal`], Toolbox traps) or registers ([`osconv`], OS traps). Handlers live in [`toolbox`] (windows),
-//! [`menu`], [`events`], [`resmgr`], [`memtraps`] (over [`memmgr`]), [`segment`] and [`quickdraw`]; the low-memory
+//! [`menu`], [`events`], [`resmgr`], [`memtraps`] (over [`memmgr`]), [`segment`], [`quickdraw`] (globals) and [`qd`] (drawing on
+//! `retro-raster`, published by `retro-present` exactly as the Amiga engine does); the low-memory
 //! globals they share are the documented map in [`lowmem`]. Anything not in the table, or any bad guest pointer, is a
 //! named refusal; nothing is silently accepted.
 //!
@@ -23,6 +24,7 @@ pub mod memtraps;
 pub mod menu;
 pub mod osconv;
 pub mod pascal;
+pub mod qd;
 pub mod quickdraw;
 pub mod rects;
 pub mod resmgr;

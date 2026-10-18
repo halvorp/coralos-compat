@@ -65,6 +65,8 @@ fn startup_builds_the_a5_world_loads_both_segments_and_opens_window_and_menus() 
                 item("Undo", true, Some('Z'), 1, 130), item("-", false, None, 2, 130), item("Cut", true, Some('X'), 3, 130),
                 item("Copy", true, Some('C'), 4, 130), item("Paste", true, Some('V'), 5, 130)] },
         ] }),
+        // the app drew nothing, so the window's first content frame is its blank (white) canvas, whole
+        UiCall::PresentContent { win: WIN, damage: GuestRect { left: 0, top: 0, width: 320, height: 200 }, width: 320, height: 200, hash: guestui_abi::pixel_hash(&vec![0x00FF_FFFF; 320 * 200]) },
     ]);
     // the program asked for an activate and an update event for its window; it consumed both while waiting
     assert!(m.ev.queue.is_empty());
@@ -80,7 +82,7 @@ fn it_runs_identically_from_macbinary_appledouble_and_a_raw_fork() {
         seen.push((name, m.ui.calls.len(), m.windows.len()));
         assert!(m.refused.is_empty(), "{name}: {:?}", m.refused);
     }
-    assert!(seen.iter().all(|&(_, n, w)| n == 2 && w == 1), "{seen:?}");
+    assert!(seen.iter().all(|&(_, n, w)| n == 3 && w == 1), "{seen:?}");
 }
 
 #[test]

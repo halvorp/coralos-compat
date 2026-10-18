@@ -74,3 +74,6 @@ pub static EVTEST: &[u8] = include_bytes!("../fixtures/testapp/evtest.bin");
 
 /// `fixtures/testapp/recttest.s`: QuickDraw Rect/Point utilities; results at 0x3000... .
 pub static RECTTEST: &[u8] = include_bytes!("../fixtures/testapp/recttest.bin");
+
+/// `fixtures/testapp/qdapp.s`: an event-loop application that draws its window with QuickDraw on every updateEvt.
+pub static QDAPP: &[u8] = include_bytes!("../fixtures/testapp/qdapp.bin");
