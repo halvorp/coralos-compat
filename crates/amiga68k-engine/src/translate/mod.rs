@@ -62,7 +62,15 @@ pub fn message(r: &Row, activation: u32, value: Option<&ControlValue>) -> Option
     let code = match p.code {
         Code::Zero => 0,
         Code::Return => 0x0D,
-        Code::Value => match value { Some(ControlValue::Checked(b)) => *b as u16, Some(ControlValue::Level(l)) => *l as u16, _ => 0 },
+        Code::Value => match value {
+            Some(ControlValue::Checked(b)) => *b as u16,
+            Some(ControlValue::Level(l)) => *l as u16,
+            // GadTools lists and choices: the chosen entry / row, a scroller's new Top.
+            Some(ControlValue::Choice(i)) => *i as u16,
+            Some(ControlValue::Rows { selected: Some(r), .. }) => *r as u16,
+            Some(ControlValue::Scroll { top, .. }) => *top as u16,
+            _ => 0,
+        },
     };
     Some((p.class, code))
 }

@@ -59,6 +59,7 @@ pub mod exec_wait;
 pub mod fs;
 pub mod gadtools;
 pub mod gt_kinds;
+mod gt_kinds_rows;
 pub mod gt_menus;
 pub mod graphics;
 pub mod idcmp;
