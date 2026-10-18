@@ -28,46 +28,64 @@ fn ellipse_row(w: i32, h: i32, k: i32) -> Option<(i32, i32)> {
 
 pub fn rect(r: Rect) -> Region { Region::from_rect(r) }
 
-pub fn oval(r: Rect) -> Region {
-    let mut g = Region::new();
-    for k in 0..r.height().max(0) {
-        if let Some((l, rt)) = ellipse_row(r.width(), r.height(), k) { g.or_rect(Rect::new(r.x0 + l, r.y0 + k, r.x0 + rt, r.y0 + k + 1)); }
-    }
-    g
+/// The span of row `k` of an oval in box `r` (absolute coordinates).
+fn oval_span(r: Rect, k: i32) -> Option<(i32, i32)> { ellipse_row(r.width(), r.height(), k).map(|(l, rt)| (r.x0 + l, r.x0 + rt)) }
+
+/// The span of row `k` of a round rectangle in box `r`; `ow` x `oh` is the corner ellipse (clamped to the rectangle).
+fn round_span(r: Rect, ow: i32, oh: i32, k: i32) -> Option<(i32, i32)> {
+    let (w, h) = (r.width(), r.height());
+    if k < 0 || k >= h { return None; }
+    let (ow, oh) = (ow.clamp(0, w.max(0)), oh.clamp(0, h.max(0)));
+    if ow == 0 || oh == 0 { return Some((r.x0, r.x1)); }
+    let inset = if k < oh / 2 { ellipse_row(ow, oh, k).map(|(l, _)| l) }
+        else if k >= h - (oh - oh / 2) { ellipse_row(ow, oh, k - (h - oh)).map(|(l, _)| l) }
+        else { Some(0) };
+    let i = inset.unwrap_or(0);
+    Some((r.x0 + i, r.x1 - i))
 }
 
+pub fn oval(r: Rect) -> Region { Shape::Oval.region(r) }
+
 /// `ow` x `oh` is the corner ellipse's size (clamped to the rectangle, as QuickDraw does).
-pub fn round_rect(r: Rect, ow: i32, oh: i32) -> Region {
-    let (w, h) = (r.width(), r.height());
-    let (ow, oh) = (ow.clamp(0, w.max(0)), oh.clamp(0, h.max(0)));
-    if ow == 0 || oh == 0 { return rect(r); }
-    let mut g = Region::new();
-    for k in 0..h {
-        let inset = if k < oh / 2 { ellipse_row(ow, oh, k).map(|(l, _)| l) }
-            else if k >= h - (oh - oh / 2) { ellipse_row(ow, oh, k - (h - oh)).map(|(l, _)| l) }
-            else { Some(0) };
-        let i = inset.unwrap_or(0);
-        g.or_rect(Rect::new(r.x0 + i, r.y0 + k, r.x1 - i, r.y0 + k + 1));
-    }
-    g
-}
+pub fn round_rect(r: Rect, ow: i32, oh: i32) -> Region { Shape::RoundRect { ow, oh }.region(r) }
 
 /// Which shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape { Rect, Oval, RoundRect { ow: i32, oh: i32 } }
 
 impl Shape {
-    pub fn region(self, r: Rect) -> Region {
-        match self { Shape::Rect => rect(r), Shape::Oval => oval(r), Shape::RoundRect { ow, oh } => round_rect(r, ow, oh) }
+    /// Row `k` (0-based from the top of `r`) of the shape as an absolute `[x0, x1)` span.
+    fn span(self, r: Rect, k: i32) -> Option<(i32, i32)> {
+        match self {
+            Shape::Rect => (k >= 0 && k < r.height() && !r.is_empty()).then_some((r.x0, r.x1)),
+            Shape::Oval => if k < 0 || k >= r.height() { None } else { oval_span(r, k) },
+            Shape::RoundRect { ow, oh } => round_span(r, ow, oh, k),
+        }
     }
-    /// The frame: the shape minus the same shape inset by the pen (`pw` wide, `ph` tall) on every side.
+    /// Scan conversion is ONE pass over the rows (linear in the height); a guest-chosen huge rectangle costs
+    /// proportionally, never quadratically.
+    pub fn region(self, r: Rect) -> Region {
+        if self == Shape::Rect { return rect(r); }
+        Region::from_rows((0..r.height().max(0)).map(|k| (r.y0 + k, self.span(r, k).into_iter().collect())))
+    }
+    /// The frame: the shape minus the same shape inset by the pen (`pw` wide, `ph` tall) on every side, row by row.
     pub fn frame(self, r: Rect, pw: i32, ph: i32) -> Region {
-        let mut outer = self.region(r);
         let inner_r = Rect::new(r.x0 + pw, r.y0 + ph, r.x1 - pw, r.y1 - ph);
-        if inner_r.is_empty() { return outer; }
-        let inner = match self { Shape::RoundRect { ow, oh } => Shape::RoundRect { ow: (ow - 2 * pw).max(0), oh: (oh - 2 * ph).max(0) }.region(inner_r), s => s.region(inner_r) };
-        outer.clear_region(&inner);
-        outer
+        if inner_r.is_empty() { return self.region(r); }
+        let inner = match self { Shape::RoundRect { ow, oh } => Shape::RoundRect { ow: (ow - 2 * pw).max(0), oh: (oh - 2 * ph).max(0) }, s => s };
+        if self == Shape::Rect {
+            let mut outer = rect(r);
+            outer.clear_rect(inner_r);
+            return outer;
+        }
+        Region::from_rows((0..r.height().max(0)).map(|k| {
+            let spans = match (self.span(r, k), inner.span(inner_r, k - ph)) {
+                (Some(o), Some(i)) => [(o.0, o.1.min(i.0)), (o.0.max(i.1), o.1)].into_iter().collect(),
+                (Some(o), None) => alloc::vec![o],
+                (None, _) => alloc::vec![],
+            };
+            (r.y0 + k, spans)
+        }))
     }
 }
 
@@ -103,5 +121,39 @@ mod tests {
         let f = Shape::Rect.frame(r, 2, 1);
         assert!(f.contains(0, 5) && f.contains(1, 5) && !f.contains(2, 5) && f.contains(5, 0) && !f.contains(5, 1) && f.contains(5, 9));
         assert_eq!(Shape::Rect.frame(Rect::new(0, 0, 3, 3), 2, 2), rect(Rect::new(0, 0, 3, 3)), "a pen thicker than the shape fills it");
+    }
+    /// The pre-linear construction (one `or_rect` per row, frame by `clear_region`): the oracle for the row-wise one.
+    fn slow(shape: Shape, r: Rect, pw: i32, ph: i32) -> (Region, Region) {
+        let mut g = Region::new();
+        for k in 0..r.height().max(0) { if let Some((l, rt)) = shape.span(r, k) { g.or_rect(Rect::new(l, r.y0 + k, rt, r.y0 + k + 1)); } }
+        let mut f = g.clone();
+        let inner_r = Rect::new(r.x0 + pw, r.y0 + ph, r.x1 - pw, r.y1 - ph);
+        if !inner_r.is_empty() {
+            let inner = match shape { Shape::RoundRect { ow, oh } => Shape::RoundRect { ow: (ow - 2 * pw).max(0), oh: (oh - 2 * ph).max(0) }, s => s };
+            let mut ig = Region::new();
+            for k in 0..inner_r.height() { if let Some((l, rt)) = inner.span(inner_r, k) { ig.or_rect(Rect::new(l, inner_r.y0 + k, rt, inner_r.y0 + k + 1)); } }
+            f.clear_region(&ig);
+        }
+        (g, f)
+    }
+    #[test]
+    fn the_linear_scan_conversion_equals_the_row_by_row_or_rect_oracle() {
+        for shape in [Shape::Oval, Shape::RoundRect { ow: 10, oh: 14 }, Shape::RoundRect { ow: 3, oh: 0 }] {
+            for (w, h, pw, ph) in [(37, 29, 1, 1), (40, 40, 3, 2), (9, 50, 4, 4), (6, 6, 1, 1), (31, 3, 2, 1)] {
+                let r = Rect::new(-5, 7, -5 + w, 7 + h);
+                let (g, f) = slow(shape, r, pw, ph);
+                assert_eq!(shape.region(r), g, "{shape:?} {w}x{h}");
+                assert_eq!(shape.frame(r, pw, ph), f, "{shape:?} frame {w}x{h} pen {pw}x{ph}");
+            }
+        }
+        assert_ne!(Shape::Oval.region(Rect::new(0, 0, 30, 30)), Shape::RoundRect { ow: 10, oh: 10 }.region(Rect::new(0, 0, 30, 30)), "negative control: different shapes differ");
+    }
+    #[test]
+    fn a_huge_oval_is_scan_converted_in_linear_time() {
+        let t = std::time::Instant::now();
+        let r = Rect::new(-32767, -32767, 32767, 32767);
+        let (g, f) = (Shape::Oval.region(r), Shape::Oval.frame(r, 3, 3));
+        assert!(g.rects().len() > 1000 && f.rects().len() > g.rects().len());
+        assert!(t.elapsed().as_secs() < 5, "took {:?}", t.elapsed());
     }
 }

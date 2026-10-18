@@ -201,7 +201,7 @@ fn string_width_char_width_text_width_and_font_info_agree_with_what_is_drawn() {
     put(&mut g.m, STR + 0x20, b"abcdef");
     let mut p = Prog::new();
     p.clr_w().l(STR).trap(0xA88C).pop_w(SCRATCH); // StringWidth
-    p.clr_w().b(b'W').trap(0xA88D).pop_w(SCRATCH + 2); // CharWidth
+    p.clr_w().ch(b'W').trap(0xA88D).pop_w(SCRATCH + 2); // CharWidth
     p.clr_w().l(STR + 0x20).w(1).w(3).trap(0xA886).pop_w(SCRATCH + 4); // TextWidth(buf, 1, 3) = "bcd"
     p.l(SCRATCH + 8).trap(0xA88B); // GetFontInfo
     g.run(p.exit());
@@ -238,7 +238,7 @@ fn text_modes_src_or_leaves_the_paper_src_copy_paints_it_and_xor_twice_vanishes(
 #[test]
 fn bold_adds_ink_and_a_hidden_pen_draws_no_text_but_moves() {
     let plain = { let mut g = Rig::new(); put(&mut g.m, STR, &pstr("Hi")); g.run(Prog::new().move_to(10, 30).draw_string(STR).exit()); g.count_black() };
-    let bold = { let mut g = Rig::new(); put(&mut g.m, STR, &pstr("Hi")); g.run(Prog::new().b(1).trap(0xA888).move_to(10, 30).draw_string(STR).exit()); g.count_black() };
+    let bold = { let mut g = Rig::new(); put(&mut g.m, STR, &pstr("Hi")); g.run(Prog::new().ch(1).trap(0xA888).move_to(10, 30).draw_string(STR).exit()); g.count_black() };
     assert!(bold > plain, "bold {bold} vs plain {plain}");
     let mut g = Rig::new();
     put(&mut g.m, STR, &pstr("Hi"));
@@ -253,4 +253,98 @@ fn text_font_and_size_are_stored_and_logged_as_the_named_substitution() {
     g.run(Prog::new().w(3).trap(0xA887).w(9).trap(0xA88A).exit()); // TextFont(geneva=3) TextSize(9)
     assert_eq!((g.m.mem.read_u16(g.win + 68).unwrap(), g.m.mem.read_u16(g.win + 74).unwrap()), (3, 9));
     assert!(g.m.log.iter().any(|l| l.contains("TextFont 3") && l.contains("topaz-8 stand-in")), "{:?}", g.m.log);
+}
+
+#[test]
+fn draw_char_reads_the_char_from_the_low_byte_and_text_face_stores_the_style_there() {
+    let ink = |c: u8| { let mut g = Rig::new(); g.run(Prog::new().move_to(10, 30).ch(c).trap(0xA883).exit()); g.no_refusals(); (g.count_black(), g.pic(10, 24, 18, 32)) };
+    let (a, b) = (ink(b'A'), ink(b'B'));
+    assert!(a.0 > 0 && a.1 != b.1, "DrawChar('A') and ('B') draw different glyphs\n{}\n{}", a.1, b.1);
+    assert_eq!(ink(b' ').0, 0, "negative control: a space draws no ink, so the 'A' above was read from the right byte");
+    let mut g = Rig::new();
+    g.run(Prog::new().ch(1).trap(0xA888).exit());
+    assert_eq!(g.m.mem.read_u8(g.win + 70).unwrap(), 1, "TextFace(bold) lands in txFace");
+    let mut g = Rig::new();
+    g.run(Prog::new().ch(4).trap(0xA888).move_to(10, 30).ch(b'A').trap(0xA883).exit());
+    assert_eq!(g.m.mem.read_u8(g.win + 70).unwrap(), 4);
+}
+
+#[test]
+fn a_port_pointer_near_the_top_of_the_address_space_is_a_named_refusal_not_a_panic() {
+    for (name, mut p) in [
+        ("PaintRect", { let mut p = Prog::new(); p.l(SCRATCH).trap(0xA8A2); p }),
+        ("DrawString", { let mut p = Prog::new(); p.l(STR).trap(0xA884); p }),
+        ("DrawText", { let mut p = Prog::new(); p.l(0xFFFF_FFF0).w(100).w(1).trap(0xA885); p }),
+        ("TextFace", { let mut p = Prog::new(); p.ch(1).trap(0xA888); p }),
+        ("PenSize", { let mut p = Prog::new(); p.pen_size(2, 2); p }),
+        ("OpenRgn", { let mut p = Prog::new(); p.trap(0xA8DA); p }),
+    ] {
+        let mut g = Rig::new();
+        put(&mut g.m, STR, &pstr("x"));
+        set_rect(&mut g.m, SCRATCH, 0, 0, 5, 5);
+        g.m.mem.write_u32(GLOBALS, 0xFFFF_FFF0).unwrap(); // thePort
+        g.m.start(&p.exit().0, 0).unwrap();
+        let _ = g.m.run_loop(1_000_000);
+        assert!(!g.m.refused.is_empty(), "{name}: expected a named refusal, got {:?}", g.m.log);
+    }
+}
+
+/// A 16x32 black offscreen bitmap copied to the window at local (0,0)..(16,32) while the window's clip is the 4x4 rect at (2,2).
+fn clipped_copy(the_port_is_offscreen: bool, hide_pen: bool) -> Rig {
+    const CLIP: u32 = 0x3200;
+    let mut g = Rig::new();
+    offscreen(&mut g);
+    set_rect(&mut g.m, R1, 0, 0, 16, 32);
+    set_rect(&mut g.m, 0x3110, 0, 0, 16, 32);
+    set_rect(&mut g.m, 0x3118, 2, 2, 6, 6);
+    let win = g.win;
+    let mut p = Prog::new();
+    draw_offscreen(&mut p, |p| { p.paint_rect(R1); }, win);
+    p.new_rgn(CLIP).rect_rgn(CLIP, 0x3118).rgn_arg(CLIP).trap(0xA879); // SetClip on the window
+    if hide_pen { p.trap(0xA896); }
+    if the_port_is_offscreen { p.set_port(PORT); }
+    copy(&mut p, BM, win + 2, R1, 0x3110, 0, 0);
+    g.run(p.exit());
+    g.no_refusals();
+    g
+}
+
+#[test]
+fn copy_bits_is_clipped_only_when_the_destination_is_the_current_ports_bits() {
+    let g = clipped_copy(false, false);
+    assert_eq!(g.count_black(), 16, "thePort is the window: its clipRgn applies\n{}", g.pic(0, 0, 10, 10));
+    let g = clipped_copy(true, false);
+    assert_eq!(g.count_black(), 16 * 32, "negative control: thePort is another port, so the destination is drawn wide open (NOTPORT)");
+}
+
+#[test]
+fn copy_bits_to_the_current_port_draws_nothing_while_its_pen_is_hidden() {
+    let g = clipped_copy(false, true);
+    assert_eq!(g.count_black(), 0, "StdBits: pnVis < 0 goes home");
+    let g = clipped_copy(true, true);
+    assert_eq!(g.count_black(), 16 * 32, "negative control: the hidden pen belongs to the window, not to the offscreen thePort");
+}
+
+#[test]
+fn init_port_restores_the_screen_bitmap_the_port_rect_and_the_vis_region() {
+    let mut g = Rig::new();
+    offscreen(&mut g);
+    let win = g.win;
+    let mut p = Prog::new();
+    p.l(PORT).trap(0xA86F).l(BM).trap(0xA875).l(PORT).trap(0xA86D).set_port(win); // OpenPort, SetPortBits(BM), InitPort
+    let mut before = { let mut q = Prog::new(); q.l(PORT).trap(0xA86F).l(BM).trap(0xA875).set_port(win); q };
+    let mut h = Rig::new();
+    offscreen(&mut h);
+    h.run(before.exit());
+    let bits = |g: &Rig| g.m.mem.bytes(g.m.mem.span(PORT + 2, 14).unwrap()).unwrap().to_vec();
+    let screen = g.m.mem.bytes(g.m.mem.span(GLOBALS - mac68k_engine::quickdraw::OFF_SCREEN_BITS, 14).unwrap()).unwrap().to_vec();
+    assert_eq!(bits(&h), g.m.mem.bytes(g.m.mem.span(BM, 14).unwrap()).unwrap().to_vec(), "negative control: SetPortBits did point the port at BM");
+    g.run(p.exit());
+    g.no_refusals();
+    assert_eq!(bits(&g), screen, "InitPort: portBits := screenBits");
+    let rect = g.m.mem.bytes(g.m.mem.span(PORT + 16, 8).unwrap()).unwrap().to_vec();
+    assert_eq!(rect, screen[6..14].to_vec(), "portRect := screenBits.bounds");
+    let vis = g.m.mem.read_u32(PORT + 24).unwrap();
+    let r = g.m.read_region(vis).unwrap();
+    assert_eq!((r.bounds().x0, r.bounds().y0, r.bounds().x1, r.bounds().y1), (i32::from(i16::from_be_bytes([screen[8], screen[9]])), i32::from(i16::from_be_bytes([screen[6], screen[7]])), i32::from(i16::from_be_bytes([screen[12], screen[13]])), i32::from(i16::from_be_bytes([screen[10], screen[11]]))), "visRgn := the screen bounds");
 }

@@ -1,11 +1,13 @@
 //! `CopyBits(srcBits, dstBits, srcRect, dstRect, mode, maskRgn)` between any two BitMaps: a window's `portBits` (its
 //! canvas), or a real 1-bit BitMap in guest memory (an offscreen port). One `retro_raster::blit` with the transfer mode
 //! as a minterm; `maskRgn` (destination LOCAL coordinates) leaves the destination alone outside it. The destination
-//! is clipped by its port's clipRgn and visRgn (the window, or `thePort` when its `portBits` is the destination).
+//! is clipped by `thePort`'s clipRgn and visRgn ONLY when it is `thePort`'s `portBits` (same baseAddr and
+//! bounds.topLeft, QuickDraw/Bitmaps.a TOPORT), and not at all when `thePort`'s pen is hidden (StdBits: `pnVis < 0`);
+//! any other destination is drawn with a wide-open clip (NOTPORT).
 //!
 //! Refused by name: scaling (srcRect and dstRect of different size), pattern modes 8..15, color PixMaps.
-use super::port::{raster, P_BITS};
-use super::target::{clip_of, clip_region, current_port, finish, open_bits, Target};
+use super::port::{raster, BM_BASE, BM_BOUNDS, P_BITS, P_PN_VIS};
+use super::target::{clip_of, clip_region_via, current_port, finish, open_bits, Target};
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_rect, Arg};
 use crate::Refusal;
@@ -25,8 +27,20 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     super::reg(m, 0xA8EC, "CopyBits", &[Arg::L, Arg::L, Arg::L, Arg::L, Arg::W, Arg::L], None, copy_bits::<U>)
 }
 
-fn blit_them<U: GuestUi>(m: &Mac<U>, dt: &mut Target, st: Option<&mut Target>, sr: Rect, dr: Rect, mt: u8, mask: Option<&retro_raster::Region>) -> Result<Rect, Refusal> {
-    let clip_region = if dt.port != 0 { clip_region(m, dt)? } else { retro_raster::Region::from_rect(dt.bm.rect()) };
+/// `thePort` when `db` is its `portBits` (the struct itself, or a copy with the same baseAddr and bounds.topLeft).
+fn port_for_bits<U: GuestUi>(m: &Mac<U>, db: u32) -> Result<u32, Refusal> {
+    let Ok(p) = current_port(m) else { return Ok(0) };
+    let pb = p.wrapping_add(P_BITS);
+    if pb == db { return Ok(p); }
+    let e = Refusal::mem("BitMap");
+    let key = |bm: u32| -> Result<(u32, u32), Refusal> {
+        Ok((m.mem.read_u32(bm.wrapping_add(BM_BASE)).map_err(&e)?, m.mem.read_u32(bm.wrapping_add(BM_BOUNDS)).map_err(&e)?)) // baseAddr, (top, left)
+    };
+    Ok(match key(pb) { Ok(k) if k == key(db)? => p, _ => 0 })
+}
+
+fn blit_them<U: GuestUi>(m: &Mac<U>, clip_port: u32, dt: &mut Target, st: Option<&mut Target>, sr: Rect, dr: Rect, mt: u8, mask: Option<&retro_raster::Region>) -> Result<Rect, Refusal> {
+    let clip_region = clip_region_via(m, clip_port, dt)?;
     let c = clip_of(&clip_region, dt);
     let (l0, d) = (dt.local0, dt.to_pixels(dr));
     let maskf = |x: i32, y: i32| mask.map_or(true, |g| g.contains(x + l0.0, y + l0.1));
@@ -48,11 +62,12 @@ fn copy_bits<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, 
     if mode_bits > 7 { return Err(Refusal(format!("CopyBits: transfer mode {mode} is not implemented (source modes 0..7 only; pattern modes 8..15 need a pattern source)"))); }
     let mask = if a.get(5) != 0 { Some(m.read_region(a.get(5))?) } else { None };
     let mut dt = open_bits(m, db)?;
-    if dt.port == 0 { if let Ok(p) = current_port(m) { if p + P_BITS == db { dt.port = p; } } }
+    let clip_port = match port_for_bits(m, db) { Ok(p) => p, Err(e) => { finish(m, dt, Rect::default())?; return Err(e); } };
+    let hidden = clip_port != 0 && m.mem.read_i16(clip_port.wrapping_add(P_PN_VIS)).map_err(Refusal::mem("pnVis")).map_or(false, |v| v < 0);
     let mut st = if sb == db { None } else {
         match open_bits(m, sb) { Ok(t) => Some(t), Err(e) => { finish(m, dt, Rect::default())?; return Err(e); } }
     };
-    let touched = blit_them(m, &mut dt, st.as_mut(), sr, dr, minterm(mode_bits), mask.as_ref());
+    let touched = if hidden { Ok(Rect::default()) } else { blit_them(m, clip_port, &mut dt, st.as_mut(), sr, dr, minterm(mode_bits), mask.as_ref()) };
     if let Some(s) = st { finish(m, s, Rect::default())?; }
     finish(m, dt, *touched.as_ref().unwrap_or(&Rect::default()))?;
     touched?;

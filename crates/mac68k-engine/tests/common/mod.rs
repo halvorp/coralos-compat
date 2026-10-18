@@ -23,6 +23,8 @@ impl Prog {
     pub fn w(&mut self, v: i16) -> &mut Self { self.raw(&[0x3F3C, v as u16]) }
     /// a Pascal BYTE/Boolean/CHAR argument: the byte rides in the high half of its 16-bit slot
     pub fn b(&mut self, v: u8) -> &mut Self { self.w((u16::from(v) << 8) as i16) }
+    /// a Pascal CHAR / Style argument: a 16-bit slot with the value in the LOW byte (QuickDraw/Text.a: MOVE.B 5(SP))
+    pub fn ch(&mut self, v: u8) -> &mut Self { self.w(i16::from(v)) }
     pub fn clr_w(&mut self) -> &mut Self { self.raw(&[0x4267]) }
     pub fn clr_l(&mut self) -> &mut Self { self.raw(&[0x42A7]) }
     pub fn trap(&mut self, op: u16) -> &mut Self { self.raw(&[op]) }

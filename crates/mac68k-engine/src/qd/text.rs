@@ -26,14 +26,14 @@ fn text_bytes<U: GuestUi>(m: &Mac<U>, buf: u32, first: u32, count: u32) -> Resul
     let e = Refusal::mem("text buffer");
     let (first, count) = (first as u16 as i16, count as u16 as i16);
     if first < 0 || count < 0 { return Err(Refusal(format!("text buffer: negative firstByte {first} or byteCount {count}"))); }
-    m.mem.bytes(m.mem.span(buf + first as u32, count as u32).map_err(&e)?).map_err(&e).map(<[u8]>::to_vec)
+    m.mem.bytes(m.mem.span(buf.wrapping_add(first as u32), count as u32).map_err(&e)?).map_err(&e).map(<[u8]>::to_vec)
 }
 
 /// Draw `bytes` at the pen and advance it.
 fn draw<U: GuestUi>(m: &mut Mac<U>, bytes: &[u8], name: &str) -> Result<Done, Refusal> {
     let port = current_port(m)?;
     let pen = read_pen(&m.mem, port)?;
-    let (face, tmode) = (m.mem.read_u8(port + P_TX_FACE).map_err(Refusal::mem("txFace"))?, m.mem.read_u16(port + P_TX_MODE).map_err(Refusal::mem("txMode"))?);
+    let (face, tmode) = (m.mem.read_u8(port.wrapping_add(P_TX_FACE)).map_err(Refusal::mem("txFace"))?, m.mem.read_u16(port.wrapping_add(P_TX_MODE)).map_err(Refusal::mem("txMode"))?);
     let width = m.qd.font.text_length(bytes);
     if pen.vis >= 0 && !bytes.is_empty() {
         let (brush, style) = (brush_for(tmode), style_of(face));
@@ -47,7 +47,7 @@ fn draw<U: GuestUi>(m: &mut Mac<U>, bytes: &[u8], name: &str) -> Result<Done, Re
     Ok(Done { result: 0, log: format!("[quickdraw] {name} {:?} at ({},{}) width {width}", bytes.iter().map(|&b| char::from(b)).collect::<alloc::string::String>(), pen.v, pen.h) })
 }
 
-fn draw_char<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { draw(m, &[c.args.get(0) as u8], "DrawChar") }
+fn draw_char<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { draw(m, &[(c.args.get(0) & 0xFF) as u8], "DrawChar") }
 fn draw_string<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let s = read_pstring_bytes(&m.mem, c.args.get(0))?;
     draw(m, &s, "DrawString")
@@ -61,7 +61,7 @@ fn width<U: GuestUi>(m: &Mac<U>, bytes: &[u8], name: &str) -> Result<Done, Refus
     let w = m.qd.font.text_length(bytes);
     Ok(Done { result: w as u32 & 0xFFFF, log: format!("[quickdraw] {name} -> {w}") })
 }
-fn char_width<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { width(m, &[c.args.get(0) as u8], "CharWidth") }
+fn char_width<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { width(m, &[(c.args.get(0) & 0xFF) as u8], "CharWidth") }
 fn string_width<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { width(m, &read_pstring_bytes(&m.mem, c.args.get(0))?, "StringWidth") }
 fn text_width<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let s = text_bytes(m, c.args.get(0), c.args.get(1), c.args.get(2))?;
@@ -78,7 +78,7 @@ fn get_font_info<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
 
 fn set_field<U: GuestUi>(m: &mut Mac<U>, off: u32, v: u16, what: &str) -> Result<Done, Refusal> {
     let p = current_port(m)?;
-    m.mem.write_u16(p + off, v).map_err(Refusal::mem("GrafPort"))?;
+    m.mem.write_u16(p.wrapping_add(off), v).map_err(Refusal::mem("GrafPort"))?;
     Ok(Done { result: 0, log: format!("[quickdraw] {what} {v} (drawn with the topaz-8 stand-in font)") })
 }
 fn text_font<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { set_field(m, P_TX_FONT, c.args.get(0) as u16, "TextFont") }
@@ -86,20 +86,20 @@ fn text_mode<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, 
 fn text_size<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { set_field(m, P_TX_SIZE, c.args.get(0) as u16, "TextSize") }
 fn text_face<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let p = current_port(m)?;
-    m.mem.write_u8(p + P_TX_FACE, c.args.get(0) as u8).map_err(Refusal::mem("txFace"))?;
-    Ok(Done { result: 0, log: format!("[quickdraw] TextFace {:#04x}", c.args.get(0) as u8) })
+    m.mem.write_u8(p.wrapping_add(P_TX_FACE), (c.args.get(0) & 0xFF) as u8).map_err(Refusal::mem("txFace"))?;
+    Ok(Done { result: 0, log: format!("[quickdraw] TextFace {:#04x}", c.args.get(0) & 0xFF) })
 }
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     use super::reg;
     reg(m, 0xA887, "TextFont", &[Arg::W], None, text_font::<U>)?;
-    reg(m, 0xA888, "TextFace", &[Arg::B], None, text_face::<U>)?;
+    reg(m, 0xA888, "TextFace", &[Arg::W], None, text_face::<U>)?;
     reg(m, 0xA889, "TextMode", &[Arg::W], None, text_mode::<U>)?;
     reg(m, 0xA88A, "TextSize", &[Arg::W], None, text_size::<U>)?;
-    reg(m, 0xA883, "DrawChar", &[Arg::B], None, draw_char::<U>)?;
+    reg(m, 0xA883, "DrawChar", &[Arg::W], None, draw_char::<U>)?;
     reg(m, 0xA884, "DrawString", &[Arg::L], None, draw_string::<U>)?;
     reg(m, 0xA885, "DrawText", &[Arg::L, Arg::W, Arg::W], None, draw_text_trap::<U>)?;
-    reg(m, 0xA88D, "CharWidth", &[Arg::B], Some(Arg::W), char_width::<U>)?;
+    reg(m, 0xA88D, "CharWidth", &[Arg::W], Some(Arg::W), char_width::<U>)?;
     reg(m, 0xA88C, "StringWidth", &[Arg::L], Some(Arg::W), string_width::<U>)?;
     reg(m, 0xA886, "TextWidth", &[Arg::L, Arg::W, Arg::W], Some(Arg::W), text_width::<U>)?;
     reg(m, 0xA88B, "GetFontInfo", &[Arg::L], None, get_font_info::<U>)

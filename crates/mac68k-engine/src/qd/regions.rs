@@ -156,21 +156,21 @@ fn open_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, R
     let port = current_port(m)?;
     if m.qd.rgn_open.contains_key(&port) { return Err(Refusal("OpenRgn: a region is already open on this port (nested OpenRgn is not supported)".into())); }
     let h = m.new_region(&Region::new())?;
-    m.mem.write_u32(port + P_RGN_SAVE, h).map_err(Refusal::mem("rgnSave"))?;
-    let vis = m.mem.read_i16(port + P_PN_VIS).map_err(Refusal::mem("pnVis"))?; // OpenRgn hides the pen
-    m.mem.write_u16(port + P_PN_VIS, vis.wrapping_sub(1) as u16).map_err(Refusal::mem("pnVis"))?;
+    m.mem.write_u32(port.wrapping_add(P_RGN_SAVE), h).map_err(Refusal::mem("rgnSave"))?;
+    let vis = m.mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(Refusal::mem("pnVis"))?; // OpenRgn hides the pen
+    m.mem.write_u16(port.wrapping_add(P_PN_VIS), vis.wrapping_sub(1) as u16).map_err(Refusal::mem("pnVis"))?;
     m.qd.rgn_open.insert(port, Region::new());
     done(&format!("OpenRgn on {port:#x}: rgnSave {h:#x}"))
 }
 fn close_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let port = current_port(m)?;
     let g = m.qd.rgn_open.remove(&port).ok_or_else(|| Refusal("CloseRgn: no region is open on the current port".into()))?;
-    let (dst, save) = (c.args.get(0), m.mem.read_u32(port + P_RGN_SAVE).map_err(Refusal::mem("rgnSave"))?);
+    let (dst, save) = (c.args.get(0), m.mem.read_u32(port.wrapping_add(P_RGN_SAVE)).map_err(Refusal::mem("rgnSave"))?);
     m.write_region(dst, &g)?;
     if save != 0 && save != dst { m.dispose_handle(save).map_err(|e| Refusal(format!("CloseRgn: freeing the scratch region failed ({e})")))?; }
-    m.mem.write_u32(port + P_RGN_SAVE, 0).map_err(Refusal::mem("rgnSave"))?;
-    let vis = m.mem.read_i16(port + P_PN_VIS).map_err(Refusal::mem("pnVis"))?;
-    m.mem.write_u16(port + P_PN_VIS, vis.wrapping_add(1) as u16).map_err(Refusal::mem("pnVis"))?;
+    m.mem.write_u32(port.wrapping_add(P_RGN_SAVE), 0).map_err(Refusal::mem("rgnSave"))?;
+    let vis = m.mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(Refusal::mem("pnVis"))?;
+    m.mem.write_u16(port.wrapping_add(P_PN_VIS), vis.wrapping_add(1) as u16).map_err(Refusal::mem("pnVis"))?;
     done(&format!("CloseRgn -> {dst:#x} ({} rect(s))", g.rects().len()))
 }
 fn copy_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
@@ -239,7 +239,7 @@ fn empty_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, 
 
 fn port_rgn<U: GuestUi>(m: &mut Mac<U>, off: u32, what: &str) -> Result<u32, Refusal> {
     let port = current_port(m)?;
-    let h = m.mem.read_u32(port + off).map_err(Refusal::mem("GrafPort"))?;
+    let h = m.mem.read_u32(port.wrapping_add(off)).map_err(Refusal::mem("GrafPort"))?;
     if h == 0 { Err(Refusal(format!("{what}: the current port has no region there (port {port:#x} was not initialised by OpenPort/NewWindow)"))) } else { Ok(h) }
 }
 fn clip_rect<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

@@ -27,7 +27,7 @@ impl<U: GuestUi> Mac<U> {
 
 /// The whole content of `win` needs redrawing (its updateEvt is queued by the caller).
 pub(crate) fn invalidate_all<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(), Refusal> {
-    let r = raster(read_rect(&m.mem, win + P_RECT)?);
+    let r = raster(read_rect(&m.mem, win.wrapping_add(P_RECT))?);
     m.qd.update.insert(win, Region::from_rect(r));
     Ok(())
 }
@@ -43,10 +43,10 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
 }
 
 fn begin_update<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    let win = c.args.get(0);
+    let win = super::target::checked_port(c.args.get(0))?;
     m.require_window(win, "BeginUpdate")?;
     if m.qd.saved_vis.contains_key(&win) { return Err(Refusal(format!("BeginUpdate {win:#x}: already between BeginUpdate and EndUpdate"))); }
-    let h = m.mem.read_u32(win + P_VIS).map_err(Refusal::mem("visRgn"))?;
+    let h = m.mem.read_u32(win.wrapping_add(P_VIS)).map_err(Refusal::mem("visRgn"))?;
     let vis = m.read_region(h)?;
     let mut narrowed = vis.clone();
     narrowed.and_region(&m.qd.update.remove(&win).unwrap_or_default());
@@ -55,10 +55,10 @@ fn begin_update<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
     Ok(Done { result: 0, log: format!("[quickdraw] BeginUpdate {win:#x}: visRgn narrowed to {} rect(s)", narrowed.rects().len()) })
 }
 fn end_update<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    let win = c.args.get(0);
+    let win = super::target::checked_port(c.args.get(0))?;
     m.require_window(win, "EndUpdate")?;
     let vis = m.qd.saved_vis.remove(&win).ok_or_else(|| Refusal(format!("EndUpdate {win:#x}: no matching BeginUpdate")))?;
-    let h = m.mem.read_u32(win + P_VIS).map_err(Refusal::mem("visRgn"))?;
+    let h = m.mem.read_u32(win.wrapping_add(P_VIS)).map_err(Refusal::mem("visRgn"))?;
     m.write_region(h, &vis)?;
     Ok(Done { result: 0, log: format!("[quickdraw] EndUpdate {win:#x}") })
 }

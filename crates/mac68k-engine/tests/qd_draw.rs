@@ -59,18 +59,22 @@ fn erase_uses_the_background_pattern_and_invert_twice_is_the_identity() {
 }
 
 #[test]
-fn fill_rect_with_the_gray_pattern_is_aligned_to_the_screen_not_the_window() {
-    let mut g = rig_with_rect(0, 0, 16, 16);
-    put(&mut g.m, PAT, &[0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55]);
-    g.run(Prog::new().fill_rect(R1, PAT).exit());
-    g.no_refusals();
-    assert_eq!(g.count_black(), 128, "a checkerboard is half black");
-    for (x, y) in [(0, 0), (1, 0), (0, 1), (5, 9), (6, 3)] {
-        // screen alignment: the window's content starts at global (left 50, top 100)
-        let (gx, gy) = (x + 50, y + 100);
-        let expect = [0xAAu8, 0x55][(gy & 1) as usize] >> (7 - (gx & 7)) & 1 == 1;
-        assert_eq!(g.black(x, y), expect, "pixel {x},{y}\n{}", g.pic(0, 0, 16, 8));
+fn fill_rect_with_a_pattern_is_aligned_to_the_port_local_coordinates_not_the_screen() {
+    // The window's content is at global left 50 (50 & 7 == 2) and top 100: a single-column pattern tells local (column 0
+    // of the port is a black bit) from global alignment (column 6 would be) -- QuickDraw/Util.a PATEXPAND "ALIGN TO LOCAL COORDS".
+    let fill = |pat: [u8; 8]| { let mut g = rig_with_rect(0, 0, 16, 16); put(&mut g.m, PAT, &pat); g.run(Prog::new().fill_rect(R1, PAT).exit()); g.no_refusals(); g };
+    let g = fill([0x80; 8]);
+    assert_eq!(g.count_black(), 32, "one column in eight");
+    for (x, y) in [(0, 0), (8, 3), (1, 0), (6, 0), (7, 5)] {
+        assert_eq!(g.black(x, y), x % 8 == 0, "pixel {x},{y}\n{}", g.pic(0, 0, 16, 4));
     }
+    let g = fill([0x40; 8]);
+    assert!(!g.black(0, 0) && g.black(1, 0), "negative control: shifting the pattern bit shifts the column\n{}", g.pic(0, 0, 16, 4));
+    // vertical: row k of the port takes pattern row k % 8
+    let g = fill([0xFF, 0, 0, 0, 0, 0, 0, 0]);
+    assert!(g.black(3, 0) && !g.black(3, 1) && g.black(3, 8) && !g.black(3, 9), "{}", g.pic(0, 0, 4, 10));
+    let g = fill([0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55]);
+    assert_eq!(g.count_black(), 128, "a checkerboard is half black");
     // the black pattern from QDGlobals (thePort-16) fills solid; the white one (thePort-8) draws nothing
     let mut g = rig_with_rect(0, 0, 16, 16);
     g.run(Prog::new().fill_rect(R1, GLOBALS - 16).exit());
@@ -188,11 +192,11 @@ fn drawing_with_no_port_or_before_initgraf_is_a_named_refusal() {
 }
 
 #[test]
-fn get_ccursor_answers_nil_and_says_so() {
+fn get_ccursor_is_refused_by_name_not_answered_with_a_fake_nil() {
     let mut g = Rig::new();
-    g.m.mem.write_u32(SCRATCH, 0xDEAD_BEEF).unwrap();
-    g.run(Prog::new().clr_l().w(128).trap(0xAA1B).pop_l(SCRATCH).exit());
-    assert_eq!(g.m.mem.read_u32(SCRATCH).unwrap(), 0, "NIL handle: the program falls back to its B&W cursor");
-    assert!(g.m.log.iter().any(|l| l.contains("GetCCursor 128 -> NIL") && l.contains("not implemented")));
-    g.no_refusals();
+    g.m.start(&Prog::new().clr_l().w(128).trap(0xAA1B).pop_l(SCRATCH).exit().0, 0).unwrap();
+    let _ = g.m.run_loop(100_000).unwrap();
+    assert!(g.m.refused.iter().any(|r| r.contains("GetCCursor")), "{:?}", g.m.refused);
+    assert_eq!(g.m.refused.len(), 1, "exactly the one named refusal: {:?}", g.m.refused);
+    assert!(g.m.log.iter().all(|l| !l.contains("-> NIL")), "no invented NIL answer is logged");
 }

@@ -24,12 +24,12 @@ fn go_runs_its_think_c_startup_and_the_init_sequence_before_the_first_missing_tr
     // The THINK C startup: ZERO / DATA / DREL resources fill the A5 world (it copies from CurStackBase up to A5, so the
     // world must start exactly at CurStackBase), then segment 6 is loaded through the jump table.
     let log = m.log.join("\n");
-    for needle in ["GetResource 'ZERO' 0", "GetResource 'DATA' 0", "GetResource 'DREL' 0", "LoadSeg 6", "InitGraf", "InitWindows", "InitMenus", "InitDialogs", "GetCCursor 129 -> NIL"] {
+    for needle in ["GetResource 'ZERO' 0", "GetResource 'DATA' 0", "GetResource 'DREL' 0", "LoadSeg 6", "InitGraf", "InitWindows", "InitMenus", "InitDialogs"] {
         assert!(log.contains(needle), "{needle}: {log}");
     }
     assert_eq!(m.mem.read_u32(0x908).unwrap(), m.seg.a5 - 12524, "CurStackBase is the bottom of go's 12524-byte below-A5 world");
     // The census names exactly one missing trap and nothing else went wrong before it.
-    assert_eq!(m.refused, vec!["unimplemented trap _GetString ($A9BA)".to_string()]);
+    assert_eq!(m.refused, vec!["unimplemented trap _GetCCursor ($AA1B)".to_string()]);
 }
 
 #[test]

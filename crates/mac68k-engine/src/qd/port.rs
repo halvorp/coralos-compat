@@ -53,19 +53,19 @@ pub fn pattern(p: &[u8; 8]) -> Pattern { Pattern { rows: p.iter().map(|&b| u16::
 pub fn read_pen(mem: &GuestMem, port: u32) -> Result<Pen, Refusal> {
     let e = Refusal::mem("GrafPort");
     Ok(Pen {
-        v: mem.read_i16(port + P_PN_LOC).map_err(&e)?, h: mem.read_i16(port + P_PN_LOC + 2).map_err(&e)?,
-        height: mem.read_i16(port + P_PN_SIZE).map_err(&e)?, width: mem.read_i16(port + P_PN_SIZE + 2).map_err(&e)?,
-        mode: mem.read_u16(port + P_PN_MODE).map_err(&e)?, pat: read_pat(mem, port + P_PN_PAT)?, vis: mem.read_i16(port + P_PN_VIS).map_err(&e)?,
+        v: mem.read_i16(port.wrapping_add(P_PN_LOC)).map_err(&e)?, h: mem.read_i16(port.wrapping_add(P_PN_LOC + 2)).map_err(&e)?,
+        height: mem.read_i16(port.wrapping_add(P_PN_SIZE)).map_err(&e)?, width: mem.read_i16(port.wrapping_add(P_PN_SIZE + 2)).map_err(&e)?,
+        mode: mem.read_u16(port.wrapping_add(P_PN_MODE)).map_err(&e)?, pat: read_pat(mem, port.wrapping_add(P_PN_PAT))?, vis: mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(&e)?,
     })
 }
 
 pub fn set_pen_loc(mem: &mut GuestMem, port: u32, v: i16, h: i16) -> Result<(), Refusal> {
     let e = Refusal::mem("pnLoc");
-    mem.write_u16(port + P_PN_LOC, v as u16).map_err(&e)?;
-    mem.write_u16(port + P_PN_LOC + 2, h as u16).map_err(&e)
+    mem.write_u16(port.wrapping_add(P_PN_LOC), v as u16).map_err(&e)?;
+    mem.write_u16(port.wrapping_add(P_PN_LOC + 2), h as u16).map_err(&e)
 }
 
-pub fn port_rect(mem: &GuestMem, port: u32) -> Result<Rect, Refusal> { read_rect(mem, port + P_RECT) }
+pub fn port_rect(mem: &GuestMem, port: u32) -> Result<Rect, Refusal> { read_rect(mem, port.wrapping_add(P_RECT)) }
 
 pub fn write_rect(mem: &mut GuestMem, at: u32, r: Rect) -> Result<(), Refusal> {
     let e = Refusal::mem("Rect");

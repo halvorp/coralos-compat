@@ -15,9 +15,8 @@ fn glyph_at(g: &Rig, ch: u8, x: i32, baseline: i32) -> bool {
     let f = Font::topaz8();
     (0..8).all(|gy| (0..8).all(|gx| g.black(x + gx, baseline - 6 + gy) == f.glyph_bit(f.slot(ch), gx, gy)))
 }
-fn gray(x: i32, y: i32) -> bool { // qd.gray = $AA55AA55 AA55AA55, aligned to the screen: the window's content is at global (50, 100)
-    let (gx, gy) = (x + i32::from(WIN_LEFT), y + i32::from(WIN_TOP));
-    [0xAAu8, 0x55][(gy & 1) as usize] >> (7 - (gx & 7)) & 1 == 1
+fn gray(x: i32, y: i32) -> bool { // qd.gray = $AA55AA55 AA55AA55, aligned to the port's LOCAL coordinates (x, y)
+    [0xAAu8, 0x55][(y & 1) as usize] >> (7 - (x & 7)) & 1 == 1
 }
 
 #[test]

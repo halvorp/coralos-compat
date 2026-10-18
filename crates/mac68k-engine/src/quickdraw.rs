@@ -63,14 +63,8 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA874, &[Arg::L], None, get_port::<U>)?; // GetPort(VAR gp)
     // PROCEDURE InitFonts; InitCursor; TEInit; SystemTask: nothing to keep yet
     for t in [0xA8FE, 0xA850, 0xA9CC, 0xA9B4] { m.register(t, &[], None, accept::<U>)?; }
-    m.register(0xAA1B, &[Arg::W], Some(Arg::L), get_ccursor::<U>)?; // GetCCursor(crsrID): CCrsrHandle
     m.register(0xA97B, &[Arg::L], None, accept::<U>)?; // InitDialogs(resumeProc)
     m.register(0xA9DA, &[Arg::L], None, accept::<U>) // TEIdle(hTE)
-}
-
-/// No color cursors: NIL is the documented answer for a resource that cannot be had (the program falls back to its B&W cursor).
-fn get_ccursor<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    Ok(Done { result: 0, log: format!("[toolbox] GetCCursor {} -> NIL (color cursors are not implemented; the program sees a missing resource)", c.args.get(0) as u16 as i16) })
 }
 
 pub(crate) fn accept<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

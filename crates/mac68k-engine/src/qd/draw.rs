@@ -31,10 +31,10 @@ pub fn brush_for(mode: u16) -> Brush {
 
 /// Draw `region` (LOCAL coordinates) into `port` with transfer `mode` and pattern `pat`, through the port's clip.
 pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16, pat: &[u8; 8]) -> Result<(), Refusal> {
-    if m.mem.read_i16(port + P_PN_VIS).map_err(Refusal::mem("pnVis"))? < 0 { return Ok(()); }
+    if m.mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(Refusal::mem("pnVis"))? < 0 { return Ok(()); }
     let (pt, brush) = (pattern(pat), brush_for(mode));
     target::with(m, port, |m, t| {
-        let (mut g, ph) = (region.clone(), t.phase0);
+        let (mut g, ph) = (region.clone(), t.local0);
         g.translate(-t.local0.0, -t.local0.1);
         let clip = clip_region(m, t)?;
         let c = clip_of(&clip, t);
@@ -60,7 +60,7 @@ fn shape_op<U: GuestUi>(m: &mut Mac<U>, shape: Shape, r: Rect, op: Op, fill: Opt
     let (region, mode, pat) = match op {
         Op::Frame => (shape.frame(r, i32::from(pen.width), i32::from(pen.height)), pen.mode, pen.pat),
         Op::Paint => (shape.region(r), pen.mode, pen.pat),
-        Op::Erase => (shape.region(r), PAT_COPY, read_pat(&m.mem, port + P_BK_PAT)?),
+        Op::Erase => (shape.region(r), PAT_COPY, read_pat(&m.mem, port.wrapping_add(P_BK_PAT))?),
         Op::Invert => (shape.region(r), 10, BLACK),
         Op::Fill => (shape.region(r), PAT_COPY, read_pat(&m.mem, fill.unwrap_or(0))?),
     };
@@ -114,7 +114,7 @@ fn rgn_op<U: GuestUi>(m: &mut Mac<U>, c: &Call, op: Op, name: &str) -> Result<Do
             (Shape::Rect.frame(b, i32::from(pen.width), i32::from(pen.height)), pen.mode, pen.pat)
         }
         Op::Paint => (g, pen.mode, pen.pat),
-        Op::Erase => (g, PAT_COPY, read_pat(&m.mem, port + P_BK_PAT)?),
+        Op::Erase => (g, PAT_COPY, read_pat(&m.mem, port.wrapping_add(P_BK_PAT))?),
         Op::Invert => (g, 10, BLACK),
         Op::Fill => (g, PAT_COPY, read_pat(&m.mem, c.args.get(1))?),
     };
@@ -134,34 +134,34 @@ fn w16(m: &mut Mac<impl GuestUi>, a: u32, v: i16) -> Result<(), Refusal> { m.mem
 
 fn pen_normal<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
     let p = current_port(m)?;
-    w16(m, p + P_PN_SIZE, 1)?; w16(m, p + P_PN_SIZE + 2, 1)?; w16(m, p + P_PN_MODE, PAT_COPY as i16)?;
-    write_pat(&mut m.mem, p + P_PN_PAT, &BLACK)?;
+    w16(m, p.wrapping_add(P_PN_SIZE), 1)?; w16(m, p.wrapping_add(P_PN_SIZE + 2), 1)?; w16(m, p.wrapping_add(P_PN_MODE), PAT_COPY as i16)?;
+    write_pat(&mut m.mem, p.wrapping_add(P_PN_PAT), &BLACK)?;
     done("PenNormal")
 }
 fn pen_size<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let p = current_port(m)?;
-    w16(m, p + P_PN_SIZE + 2, c.args.get(0) as i16)?; w16(m, p + P_PN_SIZE, c.args.get(1) as i16)?;
+    w16(m, p.wrapping_add(P_PN_SIZE + 2), c.args.get(0) as i16)?; w16(m, p.wrapping_add(P_PN_SIZE), c.args.get(1) as i16)?;
     done(&format!("PenSize {}x{}", c.args.get(0) as i16, c.args.get(1) as i16))
 }
 fn pen_mode<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let p = current_port(m)?;
-    w16(m, p + P_PN_MODE, c.args.get(0) as i16)?;
+    w16(m, p.wrapping_add(P_PN_MODE), c.args.get(0) as i16)?;
     done(&format!("PenMode {}", c.args.get(0) as u16))
 }
 fn pen_pat<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (p, pat) = (current_port(m)?, read_pat(&m.mem, c.args.get(0))?);
-    write_pat(&mut m.mem, p + P_PN_PAT, &pat)?;
+    write_pat(&mut m.mem, p.wrapping_add(P_PN_PAT), &pat)?;
     done("PenPat")
 }
 fn back_pat<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (p, pat) = (current_port(m)?, read_pat(&m.mem, c.args.get(0))?);
-    write_pat(&mut m.mem, p + P_BK_PAT, &pat)?;
+    write_pat(&mut m.mem, p.wrapping_add(P_BK_PAT), &pat)?;
     done("BackPat")
 }
 fn hide_show<U: GuestUi>(m: &mut Mac<U>, delta: i16, name: &str) -> Result<Done, Refusal> {
     let p = current_port(m)?;
-    let v = m.mem.read_i16(p + P_PN_VIS).map_err(Refusal::mem("pnVis"))?;
-    w16(m, p + P_PN_VIS, v.wrapping_add(delta))?;
+    let v = m.mem.read_i16(p.wrapping_add(P_PN_VIS)).map_err(Refusal::mem("pnVis"))?;
+    w16(m, p.wrapping_add(P_PN_VIS), v.wrapping_add(delta))?;
     done(name)
 }
 fn hide_pen<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> { hide_show(m, -1, "HidePen") }
@@ -170,14 +170,14 @@ fn show_pen<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, R
 /// PenState: pnLoc (4), pnSize (4), pnMode (2), pnPat (8) = the port's bytes 48..66.
 fn get_pen_state<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let p = current_port(m)?;
-    let b = m.mem.bytes(m.mem.span(p + P_PN_LOC, 18).map_err(Refusal::mem("pnState"))?).map_err(Refusal::mem("pnState"))?.to_vec();
+    let b = m.mem.bytes(m.mem.span(p.wrapping_add(P_PN_LOC), 18).map_err(Refusal::mem("pnState"))?).map_err(Refusal::mem("pnState"))?.to_vec();
     m.mem.write_bytes(c.args.get(0), &b).map_err(Refusal::mem("PenState"))?;
     done("GetPenState")
 }
 fn set_pen_state<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let p = current_port(m)?;
     let b = m.mem.bytes(m.mem.span(c.args.get(0), 18).map_err(Refusal::mem("PenState"))?).map_err(Refusal::mem("PenState"))?.to_vec();
-    m.mem.write_bytes(p + P_PN_LOC, &b).map_err(Refusal::mem("pnState"))?;
+    m.mem.write_bytes(p.wrapping_add(P_PN_LOC), &b).map_err(Refusal::mem("pnState"))?;
     done("SetPenState")
 }
 fn get_pen<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
