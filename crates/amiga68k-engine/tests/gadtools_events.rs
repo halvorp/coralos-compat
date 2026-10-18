@@ -206,8 +206,8 @@ fn gadget_events_become_gadgetup_with_the_gadget_and_update_what_the_program_rea
     // NEGATIVE CONTROLS: an out-of-range level, a value of the wrong kind, a stale control and an unknown token.
     let bad = |fx: &mut Fx, e| fx.a.deliver(e).unwrap_err().0;
     assert!(bad(&mut fx, ev(slider, lt, ControlValue::Level(10))).contains("outside 1..=9"));
-    assert!(bad(&mut fx, ev(slider, lt, ControlValue::Pressed)).contains("cannot be held by a kind-11"));
-    assert!(bad(&mut fx, ev(button, bt, ControlValue::Checked(true))).contains("from a button"));
+    assert!(bad(&mut fx, ev(slider, lt, ControlValue::Pressed)).contains("means nothing for the control"));
+    assert!(bad(&mut fx, ev(button, bt, ControlValue::Checked(true))).contains("means nothing for the control"));
     assert!(bad(&mut fx, ev(check, bt, ControlValue::Pressed)).contains("not that native control"));
     assert!(bad(&mut fx, ev(button, CallbackToken(0x1234), ControlValue::Pressed)).contains("not a GadTools gadget"));
     assert_eq!(fx.records().0, 5, "none of those reached the program");
@@ -259,4 +259,40 @@ fn events_for_a_window_that_is_gone_are_not_for_a_guest_window() {
     assert_eq!(fx.a.deliver(ev).unwrap(), Delivered::NotForAGuestWindow);
     let e = fx.a.deliver(GuestUiEvent::Resized { win: native, rect: GuestRect { left: 0, top: 0, width: 1, height: 1 } }).unwrap_err();
     assert!(e.0.contains("not bridged yet"), "{e:?}");
+}
+
+/// Seam v2 + the GadTools table (src/translate/gadtools.rs): the guest-visible state changes FIRST, then exactly one IDCMP_GADGETUP
+/// follows with IAddress = the Gadget and the Code the table names; an intent the table has no row for, or a stale generation, is
+/// refused by name and changes nothing.
+#[test]
+fn state_first_then_one_gadgetup_in_the_table_order_and_stale_or_rowless_intents_are_refused() {
+    let mut fx = Fx::new();
+    let (_, native) = fx.win();
+    let (button, bt) = fx.control(0);
+    let (check, ct) = fx.control(1);
+    let (slider, lt) = fx.control(3);
+    // State first: the checkbox's SELECTED flag is set the moment the event is delivered, before the program runs and sees the message.
+    assert_eq!(fx.a.mem.read_u16(ct.0 as u32 + 12).unwrap() & 0x80 != 0, true, "starts checked (GTCB_Checked)");
+    let d = fx.a.deliver(GuestUiEvent::intent(native, check, ct, Intent::SetValue(ControlValue::Checked(false)))).unwrap();
+    assert_eq!(fx.a.mem.read_u16(ct.0 as u32 + 12).unwrap() & 0x80, 0, "SELECTED cleared before the guest ran");
+    let Delivered::Queued(msg) = d else { panic!("{d:?}") };
+    let (class, code, iaddress) = (fx.a.mem.read_u32(msg + 20).unwrap(), fx.a.mem.read_u16(msg + 24).unwrap(), fx.a.mem.read_u32(msg + 28).unwrap());
+    assert_eq!((class, code, iaddress), (IDCMP_GADGETUP, 0, ct.0 as u32), "IntuiMessage Class / Code (the new state) / IAddress (the gadget)");
+    assert_eq!(fx.run().0, Step::Blocked);
+    // Several intents, one message each, in delivery order (the program logs them).
+    fx.deliver_and_run(GuestUiEvent::intent(native, button, bt, Intent::Activate));
+    fx.deliver_and_run(GuestUiEvent::intent(native, slider, lt, Intent::SetValue(ControlValue::Level(4))));
+    let r = fx.records().1;
+    assert_eq!(r.iter().map(|x| (x[0], x[1], x[2])).collect::<Vec<_>>(), [(IDCMP_GADGETUP, 0, ct.0 as u32), (IDCMP_GADGETUP, 0, bt.0 as u32), (IDCMP_GADGETUP, 4, lt.0 as u32)]);
+    // NEGATIVE CONTROLS. A stale generation (the ref as the host held it before the control was recreated) is refused by name.
+    let stale = GuestUiEvent::Intent { win: native, control: button, token: bt, generation: button.generation + 1, intent: Intent::Activate };
+    let e = fx.a.deliver(stale).unwrap_err();
+    assert!(e.0.contains("stale"), "{e:?}");
+    // The table has no row for Press on a GadTools button (GadTools gadgets report on release only) or for a row selection.
+    for intent in [Intent::Press, Intent::SelectRow(1), Intent::ScrollTo(1)] {
+        let e = fx.a.deliver(GuestUiEvent::intent(native, button, bt, intent)).unwrap_err();
+        assert!(e.0.contains("means nothing for the control"), "{e:?}");
+    }
+    assert_eq!(fx.records().0, 3, "none of those reached the program");
+    fx.close();
 }

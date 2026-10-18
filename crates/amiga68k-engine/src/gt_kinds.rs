@@ -21,7 +21,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
-use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, idcmp::{self, IDCMP_GADGETUP}, machine::Amiga, memory, run::Delivered, tags, Refusal};
+use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, idcmp, machine::Amiga, memory, run::Delivered, tags, translate::{self, gadtools}, Refusal};
 use guestui_abi::{CallbackToken, ControlKind, ControlValue, GuestUi, Intent, UiObjectRef};
 use retro_m68k::Cpu;
 
@@ -219,25 +219,18 @@ pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectR
     if info.attached != Some((win, native, control)) {
         return Err(Refusal(format!("deliver: Intent for gadget {g:#x}, which is not that native control of that window (stale?)")));
     }
+    let row = translate::lookup(gadtools::TABLE, &control_kind(&info), &intent)?;
     let value = match intent {
-        Intent::Activate => ControlValue::Pressed,
-        Intent::SetValue(v) => v,
-        Intent::CommitText(t) => ControlValue::Text(t),
-        other => return Err(Refusal(format!("deliver: a GadTools gadget has no meaning for {other:?}"))),
+        Intent::SetValue(v) => Some(normalize(&info, v)?),
+        Intent::CommitText(t) => Some(normalize(&info, ControlValue::Text(t))?),
+        _ => None,
     };
-    let (code, value) = match (info.kind, value) {
-        (BUTTON_KIND, ControlValue::Pressed) => (0u16, None),
-        (BUTTON_KIND, v) => return Err(Refusal(format!("deliver: a {v:?} value from a button"))),
-        (_, v) => {
-            let v = normalize(&info, v)?;
-            (match &v { ControlValue::Checked(b) => *b as u16, ControlValue::Level(l) => *l as u16, _ => 0 }, Some(v))
-        }
-    };
-    let msg = if idcmp::subscribed(a, win, IDCMP_GADGETUP)? { Some(idcmp::reserve(a)?) } else { None };
+    let (class, code) = translate::message(row, 0, value.as_ref()).ok_or_else(|| Refusal("deliver: a GadTools row sent no message".into()))?;
+    let msg = if idcmp::subscribed(a, win, class)? { Some(idcmp::reserve(a)?) } else { None };
     if let Some(v) = &value {
         if let Err(e) = store(a, g, v) { if let Some(m) = msg { let _ = a.heap.free(m, idcmp::INTUIMESSAGE_SIZE); } return Err(e); }
     }
-    match msg { Some(m) => idcmp::queue(a, win, m, IDCMP_GADGETUP, code, g), None => Ok(Delivered::IgnoredUnsubscribed) }
+    match msg { Some(m) => idcmp::queue(a, win, m, class, code, g), None => Ok(Delivered::IgnoredUnsubscribed) }
 }
 
 /// GT_SetGadgetAttrsA(a0 = gadget, a1 = window, a2 = requester, a3 = tags): GTTX_Text (text), GTCB_Checked, GTST_String,
