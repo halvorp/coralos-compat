@@ -1,0 +1,10 @@
+[package]
+name = "retro-present"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Damage accumulation and one-present_content-per-step publishing, shared by the retro engines"
+
+[dependencies]
+guestui-abi = { path = "../guestui-abi" }
+retro-raster = { path = "../retro-raster" }
