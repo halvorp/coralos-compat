@@ -57,6 +57,10 @@ pub struct Amiga<U: GuestUi> {
     pub heap: memory::Heap,
     /// The engine's own arena (see SYS_ARENA_START).
     pub sys_heap: memory::Heap,
+    /// Started file-change notification requests (dos_notify.rs).
+    pub notify: crate::dos_notify::State,
+    /// asl.library's requests (asl.rs).
+    pub asl: crate::asl::State,
     /// commodities.library's object graph (commodities.rs).
     pub cx: crate::commodities::State,
     /// The default Locale and its strings (locale.rs).
@@ -110,7 +114,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), cx: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), notify: Default::default(), asl: Default::default(), cx: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), gfx: Default::default(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };

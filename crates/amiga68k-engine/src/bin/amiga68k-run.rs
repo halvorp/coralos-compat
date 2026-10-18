@@ -18,6 +18,7 @@ fn main() {
     if census { args.remove(0); }
     let mut a = Amiga::new(RecordingGuestUi::new()).expect("machine");
     let die = |m: String| -> ! { eprintln!("{m}"); std::process::exit(2) };
+    let mut max_insns: u64 = 1_000_000;
     while args.first().map_or(false, |x| x.starts_with("--") && x != "--fixture") {
         let opt = args.remove(0);
         let val = if args.is_empty() { die(format!("{opt} needs a value")) } else { args.remove(0) };
@@ -27,6 +28,7 @@ fn main() {
             "--mount" => { let (n, d) = pair(&val); a.fs.vol.add_device(&n, false); report(&d, volume_host::load_dir(&mut a.fs.vol, &format!("{n}:"), std::path::Path::new(&d))); }
             "--assign" => { let (n, p) = pair(&val); a.fs.vol.assign(&n, &p); }
             "--assign-add" => { let (n, p) = pair(&val); a.fs.vol.assign_add(&n, &p); }
+            "--max-insns" => max_insns = val.replace('_', "").parse().unwrap_or_else(|_| die(format!("--max-insns wants a number, got {val}"))),
             "--progdir" => a.fs.vol.assign("PROGDIR", &val),
             "--stub" => { let (l, f) = val.split_once('/').unwrap_or_else(|| die(format!("--stub wants library/Function, got {val}"))); a.census_stubs.push((l.to_string(), f.to_string())); }
             _ => die(format!("unknown option {opt}")),
@@ -37,7 +39,7 @@ fn main() {
         std::fs::read(&arg).unwrap_or_else(|e| { eprintln!("{arg}: {e}"); std::process::exit(1) })
     };
     a.stop_on_unimplemented = census;
-    match a.run_hunk(&file, 1_000_000) {
+    match a.run_hunk(&file, max_insns) {
         Ok(r) => println!("ran {} instructions, halted={}, bus_faults={}", r.stats.insns, r.stats.halted, r.stats.bus_faults),
         Err(e) => { eprintln!("load failed: {e}"); std::process::exit(1) }
     }

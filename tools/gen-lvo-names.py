@@ -7,6 +7,7 @@ import re, sys, os
 AROS = sys.argv[1]
 LIBS = [("exec","rom/exec"),("dos","rom/dos"),("intuition","rom/intuition"),("graphics","rom/graphics"),
         ("gadtools","workbench/libs/gadtools"),("utility","rom/utility"),("layers","rom/hyperlayers"),("keymap","rom/keymap"),
+        ("mathieeesingbas","workbench/libs/mathieeesingbas"),("mathieeesingtrans","workbench/libs/mathieeesingtrans"),
         ("mathieeedoubbas","workbench/libs/mathieeedoubbas"),("mathieeedoubtrans","workbench/libs/mathieeedoubtrans"),
         ("mathffp","workbench/libs/mathffp"),("icon","workbench/libs/icon"),("workbench","workbench/libs/workbench"),
         ("asl","workbench/libs/asl"),("diskfont","workbench/libs/diskfont"),("locale","workbench/libs/locale"),

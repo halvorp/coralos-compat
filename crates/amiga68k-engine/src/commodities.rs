@@ -9,8 +9,8 @@
 //! sets COERR_NULLATTACH on the head, and attaching to a NULL head deletes the object.
 //!
 //! What is NOT modelled: there is no input.device stream, so no InputEvent ever reaches a filter and a hot key never
-//! fires; the CxMsg calls (CxMsgType/ID/Data, DivertCxMsg ...), ParseIX / SetFilter's description parser, MatchIX and the
-//! broker list calls (CopyBrokerList, BrokerCommand) stay named refusals. SetFilter stores the description text unparsed.
+//! fires; the CxMsg calls (CxMsgType/ID/Data, DivertCxMsg ...), MatchIX and the
+//! broker list calls (CopyBrokerList, BrokerCommand) stay named refusals. SetFilter stores the description text unparsed (ParseIX itself is commodities_parse.rs).
 //! Offsets (m68k-linux-gnu-gcc -m68020 -mno-align-int over AROS libraries/commodities.h, 2026-10-18): struct NewBroker is 26
 //! bytes: nb_Version 0, nb_Name 2, nb_Title 6, nb_Descr 10, nb_Unique 14, nb_Flags 16, nb_Pri 18, nb_Port 20; struct IX 12.
 use alloc::collections::BTreeMap;
@@ -51,7 +51,7 @@ pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
         .named("CxObjError", obj_error::<U>).named("ClearCxObjError", clear_error::<U>).named("SetCxObjPri", set_pri::<U>)
         .named("AttachCxObj", attach::<U>).named("EnqueueCxObj", enqueue::<U>).named("InsertCxObj", insert::<U>)
         .named("RemoveCxObj", remove::<U>).named("SetTranslate", set_translate::<U>).named("SetFilter", set_filter::<U>)
-        .named("SetFilterIX", set_filter_ix::<U>)
+        .named("SetFilterIX", set_filter_ix::<U>).with(crate::commodities_parse::register::<U>)
 }
 
 fn new_obj<U: GuestUi>(a: &mut Amiga<U>, ty: u32, active: bool, pri: i8, name: String) -> Result<u32, Refusal> {

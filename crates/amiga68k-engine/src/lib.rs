@@ -12,6 +12,7 @@
 //! need re-verification against a licence-checked source (see NOTICE).
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+pub mod asl;
 pub mod boopsi;
 pub mod boopsi_gadget;
 pub mod boopsi_glist;
@@ -38,6 +39,7 @@ pub mod dos_fs;
 pub mod dos_io;
 pub mod dos_match;
 pub mod dos_misc;
+pub mod dos_notify;
 pub mod dos_path;
 pub mod dos_proc;
 pub mod dos_text;
@@ -77,6 +79,8 @@ pub mod run;
 pub mod screen;
 pub mod cache;
 pub mod commodities;
+pub mod commodities_parse;
+pub mod cx_tables;
 pub mod exec_misc;
 pub mod exec_patch;
 pub mod fmt;
