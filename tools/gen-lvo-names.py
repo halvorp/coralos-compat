@@ -11,14 +11,15 @@ LIBS = [("exec","rom/exec"),("dos","rom/dos"),("intuition","rom/intuition"),("gr
         ("mathffp","workbench/libs/mathffp"),("icon","workbench/libs/icon"),("workbench","workbench/libs/workbench"),
         ("asl","workbench/libs/asl"),("diskfont","workbench/libs/diskfont"),("locale","workbench/libs/locale"),
         ("muimaster","workbench/libs/muimaster"),("commodities","workbench/libs/commodities"),
-        ("rexxsyslib","workbench/libs/rexxsyslib"),("iffparse","workbench/libs/iffparse"),
+        ("rexxsyslib","workbench/libs/rexxsyslib"),("lowlevel","workbench/libs/lowlevel"),("iffparse","workbench/libs/iffparse"),
         ("datatypes","workbench/libs/datatypes"),("cybergraphics","workbench/libs/cgfx"),
         ("timer.device","rom/timer"),("input.device","rom/devs/input"),("console.device","rom/devs/console")]
 ANCHORS = {("timer.device","GetSysTime"):-66,("timer.device","AddTime"):-42,("timer.device","BeginIO"):-30,
            ("input.device","PeekQualifier"):-42,("exec","Wait"):-318,("exec","OpenLibrary"):-552,("exec","CloseLibrary"):-414,("exec","FindTask"):-294,
            ("dos","Open"):-30,("intuition","OpenWindow"):-204,("intuition","CloseWindow"):-72,
            ("intuition","OpenWindowTagList"):-606,("graphics","Text"):-60,("gadtools","CreateGadgetA"):-30,
-           ("mathieeedoubbas","IEEEDPFix"):-30}
+           ("mathieeedoubbas","IEEEDPFix"):-30,
+           ("lowlevel","ReadJoyPort"):-30,("lowlevel","GetKey"):-48,("lowlevel","QueryKeys"):-54}
 def parse(path):
     L = open(path).read().split("\n")
     s = next(i for i, l in enumerate(L) if l.strip() == "##begin functionlist")

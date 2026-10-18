@@ -242,7 +242,7 @@ impl<U: GuestUi> Amiga<U> {
         let base = self.next_lib_base;
         if base >= DYNAMIC_LIB_END { return Err(Refusal(format!("OpenLibrary {name}: no library base left (NOMEM)"))); }
         self.next_lib_base += DYNAMIC_LIB_STRIDE;
-        let lib = if name == "muimaster.library" { crate::mui::library(base) } else { LibraryBuilder::new(name, base) };
+        let lib = if name == "muimaster.library" { crate::mui::library(base) } else { crate::libfactory::library(name, base) };
         lib.install(&mut self.mem, &mut self.dispatch)?;
         self.libs.push(LibInfo { name, base, open_count: 1 });
         Ok(base)
