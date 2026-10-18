@@ -19,7 +19,8 @@ use retro_m68k::RunStats;
 
 /// What [`Amiga::deliver`] did with an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Delivered { Queued(u32), IgnoredUnsubscribed, NotForAGuestWindow }
+pub enum Delivered { Queued(u32), IgnoredUnsubscribed, NotForAGuestWindow, /// A MUI object took it (mui::try_deliver).
+    Handled }
 
 const IDCMP_CLOSEWINDOW: u32 = 0x200;
 const INTUIMESSAGE_SIZE: u32 = 52;
@@ -62,6 +63,7 @@ impl<U: GuestUi> Amiga<U> {
     /// A native event for the guest. Only CloseRequested becomes an IntuiMessage so far (IDCMP_CLOSEWINDOW); a
     /// window that did not ask for that class gets nothing, as on AmigaOS.
     pub fn deliver(&mut self, ev: GuestUiEvent) -> Result<Delivered, Refusal> {
+        if let Some(d) = crate::mui::try_deliver(self, &ev)? { return Ok(d); }
         let GuestUiEvent::CloseRequested { win: native, .. } = ev else { return Err(Refusal(format!("deliver: {ev:?} not bridged yet"))) };
         let Some((&win, _)) = self.windows.iter().find(|(_, &n)| n == native) else { return Ok(Delivered::NotForAGuestWindow) };
         let idcmp = self.mem.read_u32(win + WD_IDCMP).map_err(Refusal::mem("Window.IDCMPFlags"))?;
