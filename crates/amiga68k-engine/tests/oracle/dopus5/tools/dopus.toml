@@ -1,0 +1,5 @@
+rom = "/data/build/copperline/release/aros-amiga-m68k-rom.bin"
+extended_rom = "/data/build/copperline/release/aros-amiga-m68k-ext.bin"
+[[filesys]]
+path = "/data/build/oracle/dopus/tree"
+volume = "DOpus5"

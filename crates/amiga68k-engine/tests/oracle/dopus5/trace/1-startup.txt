@@ -1,0 +1,2086 @@
+# t(s) task lib.Func(args) = result   [DOpus-originated calls only; ROM-internal and noisy calls elided, see footer]
+   2.78 RunProg:launch exec.MakeLibrary(funcInit=0x23d440, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x23d8f8
+   2.78 RunProg:launch exec.AddLibrary(library=0x23d8f8)
+   2.79 RunProg:launch exec.MakeLibrary(funcInit=0x23d9f8, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x23deb0
+   2.79 RunProg:launch exec.AddLibrary(library=0x23deb0)
+   2.79 RunProg:launch exec.MakeLibrary(funcInit=0x23dfb0, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x23e468
+   2.79 RunProg:launch exec.AddLibrary(library=0x23e468)
+   2.79 RunProg:launch exec.MakeLibrary(funcInit=0x23e660, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x23eb18
+   2.79 RunProg:launch exec.AddLibrary(library=0x23eb18)
+   2.79 RunProg:launch exec.MakeLibrary(funcInit=0x23ec18, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x23f0d0
+   2.79 RunProg:launch exec.AddLibrary(library=0x23f0d0)
+   2.79 RunProg:launch exec.MakeLibrary(funcInit=0x23f1d0, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x23f688
+   2.80 RunProg:launch exec.AddLibrary(library=0x23f688)
+   2.80 RunProg:launch exec.MakeLibrary(funcInit=0x23f788, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x23f9e8
+   2.80 RunProg:launch exec.AddLibrary(library=0x23f9e8)
+   2.80 RunProg:launch exec.MakeLibrary(funcInit=0x23fae8, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x23fd48
+   2.80 RunProg:launch exec.AddLibrary(library=0x23fd48)
+   2.80 RunProg:launch exec.MakeLibrary(funcInit=0x23fe48, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x2400a8
+   2.80 RunProg:launch exec.AddLibrary(library=0x2400a8)
+   2.80 RunProg:launch exec.MakeLibrary(funcInit=0x2401a8, structInit=0, libInit=0, dataSize=0x100, segList=0) = 0x240660
+   2.81 RunProg:launch exec.AddLibrary(library=0x240660)
+   2.81 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0) = 0x21a4dc
+   2.81 RunProg:launch dos.Lock(name='DOpus5:Libs', accessMode=0xfffffffe) = 0x3aa000
+   2.81 RunProg:launch dos.AssignAdd(name='LIBS', lock=0x3aa000) = 0xffffffff
+   2.81 RunProg:launch dos.Lock(name='DOpus5:', accessMode=0xfffffffe) = 0x3aa006
+   2.82 RunProg:launch dos.SetProgramDir(lock=0x3aa006) = 0x3aa806
+   2.82 RunProg:launch dos.LoadSeg(name='DOpus5:DirectoryOpus') = 0x262a53
+   4.35 RunProg:launch dos.RunCommand(segList=0x262a53, stacksize=0x4000, argptr='\n', argsize=1) = ...
+   4.35 RunProg:launch exec.OldOpenLibrary(libName=0x9faac0) = 0x21a4dc
+   4.36 RunProg:launch exec.OldOpenLibrary(libName=0x9faacc) = 0x23d8f8
+   4.36 RunProg:launch dos.GetProgramName(buf=0x240764, len=0x100) = 0xeffff
+   4.37 RunProg:launch dos.DupLock(lock=0x3aa006) = 0x3aa00c
+   4.37 RunProg:launch dos.AssignLock(name='DOPUS5', lock=0x3aa00c) = 0
+   4.37 RunProg:launch dos.UnLock(lock=0x3aa00c) = 0xffff0001
+   4.38 RunProg:launch dos.Lock(name='D5THEMES:', accessMode=0xfffffffe) = 0
+   4.38 RunProg:launch dos.Lock(name='DOpus5:Themes', accessMode=0xfffffffe) = 0x3aa00c
+   4.38 RunProg:launch dos.AssignLock(name='D5THEMES', lock=0x3aa00c) = 0xffffffff
+   4.38 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Libs/dopus5.library', version=0x49) = 0x267230
+   4.90 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   4.90 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   4.91 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   4.91 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   4.91 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   4.92 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   4.92 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   4.92 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   4.93 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   4.93 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   4.93 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   4.94 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   4.94 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   4.95 RunProg:launch exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x2674fe, flags=0) = 0
+   4.95 RunProg:launch graphics.OpenFont(textAttr=TextAttr('topaz.font', y=8, style=00, flags=00)) = 0x20b8b0
+   4.95 RunProg:launch dos.GetVar(name='dopus/3DLook', buffer=0x984e00, size=2, flags=0x100) = 0xffffffff
+   4.97 RunProg:launch dos.GetVar(name='dopus/OuEstLeMinibar', buffer=0x984e00, size=2, flags=0x100) = 0xffffffff
+   4.98 RunProg:launch dos.GetVar(name='dopus/DOSPatch', buffer=0x984e00, size=2, flags=0x100) = 0xffffffff
+   4.99 RunProg:launch dos.GetVar(name='dopus/FiletypeCache', buffer=0x984e00, size=0xe, flags=0x100) = 0xffffffff
+   5.01 RunProg:launch dos.GetVar(name='dopus/NoSysPatch', buffer=0x984e00, size=2, flags=0x100) = 0xffffffff
+   5.02 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x518, threshSize=0x28c) = 0x2676a8
+   5.02 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x418, threshSize=0x20c) = 0x267740
+   5.02 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x1030, threshSize=0x40c) = 0x2677d8
+   5.02 RunProg:launch intuition.MakeClass(classID='dopusiclass', superClassID='imageclass', superClassPtr=0, instanceSize=0x26000a, flags=0) = 0x267828
+   5.03 RunProg:launch intuition.AddClass(classPtr=0x267828)
+   5.03 RunProg:launch intuition.MakeClass(classID='dopusbuttongclass', superClassID='gadgetclass', superClassPtr=0, instanceSize=0x260066, flags=0) = 0x267880
+   5.03 RunProg:launch intuition.AddClass(classPtr=0x267880)
+   5.03 RunProg:launch intuition.MakeClass(classID='dopusstrgclass', superClassID='strgclass', superClassPtr=0, instanceSize=0x26007c, flags=0) = 0x2678d8
+   5.03 RunProg:launch intuition.AddClass(classPtr=0x2678d8)
+   5.03 RunProg:launch intuition.MakeClass(classID='dopuscheckgclass', superClassID='gadgetclass', superClassPtr=0, instanceSize=0x26006a, flags=0) = 0x267948
+   5.03 RunProg:launch intuition.AddClass(classPtr=0x267948)
+   5.03 RunProg:launch intuition.MakeClass(classID='dopusviewgclass', superClassID='gadgetclass', superClassPtr=0, instanceSize=0x260066, flags=0) = 0x2679a0
+   5.04 RunProg:launch intuition.AddClass(classPtr=0x2679a0)
+   5.04 RunProg:launch intuition.MakeClass(classID='dopuspalettegclass', superClassID='gadgetclass', superClassPtr=0, instanceSize=0x26009e, flags=0) = 0x2679f8
+   5.04 RunProg:launch intuition.AddClass(classPtr=0x2679f8)
+   5.04 RunProg:launch intuition.MakeClass(classID='dopusframeclass', superClassID='gadgetclass', superClassPtr=0, instanceSize=0x260066, flags=0) = 0x267a50
+   5.04 RunProg:launch intuition.AddClass(classPtr=0x267a50)
+   5.04 RunProg:launch intuition.MakeClass(classID='dopusgaugeclass', superClassID='gadgetclass', superClassPtr=0, instanceSize=0x260072, flags=0) = 0x267aa8
+   5.04 RunProg:launch intuition.AddClass(classPtr=0x267aa8)
+   5.04 RunProg:launch intuition.MakeClass(classID='dopuslistviewgclass', superClassID='gadgetclass', superClassPtr=0, instanceSize=0x26015c, flags=0) = 0x267b00
+   5.04 RunProg:launch intuition.AddClass(classPtr=0x267b00)
+   5.04 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   5.05 RunProg:launch locale.OpenLocale(name=0) = 0
+   5.05 RunProg:launch locale.ParseDate(locale=0, date=0x980290, fmtTemplate=0, getCharFunc=0x2673ce) = 0
+   5.05 RunProg:launch dos.Open(name='env:dopus/paths', accessMode=0x3ed) = 0
+   5.06 RunProg:launch dos.Open(name='env:dopus/paths', accessMode=0x3ed) = 0
+   5.06 RunProg:launch dos.CreateNewProc(tags={NP_Entry=0x963334, NP_Name='DO_LAUNCHER', NP_WindowPtr=0xffffffff, NP_StackSize=0x4000, NP_Priority=0, NP_Cli=1, NP_Path=0}) = 0x267c88
+   5.08 RunProg:launch exec.CreateMsgPort() = 0x267c40
+   5.08 RunProg:launch exec.PutMsg(port=0x267ce4, message=0x984d8c)
+   5.09 DO_LAUNCHER exec.CreateMsgPort() = 0x26c470
+   5.09 DO_LAUNCHER exec.CreateMsgPort() = 0x26c498
+   5.09 DO_LAUNCHER exec.ReplyMsg(message=0x984d8c)
+   5.09 DO_LAUNCHER exec.CreateMsgPort() = 0x26c4f8
+   5.09 DO_LAUNCHER exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x26c4c8, flags=0) = 0
+   5.09 DO_LAUNCHER exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x26c528, flags=0) = 0
+   5.09 DO_LAUNCHER exec.CreateMsgPort() = 0x26c558
+   5.10 DO_LAUNCHER dos.SetProgramName(name='DO_LAUNCHER') = 0xffff
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x236adc, funcOffset=0xffffffd0, newFunction=0x964330) = 0xe52aa0
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x236adc, funcOffset=0xffffffca, newFunction=0x964844) = 0xe539a0
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x236adc, funcOffset=0xffffffc4, newFunction=0x964542) = 0xe527a4
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x236adc, funcOffset=0xffffffbe, newFunction=0x964960) = 0xe538ec
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x236adc, funcOffset=0xffffffb8, newFunction=0x96440a) = 0xe529e6
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x236adc, funcOffset=0xffffffb2, newFunction=0x9648cc) = 0xe53950
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x211ae4, funcOffset=0xffffffb2, newFunction=0x964cf0) = 0xe1ab3c
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x211ae4, funcOffset=0xffffff2e, newFunction=0x964d4c) = 0xe202ce
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x22c5e8, funcOffset=0xffffffac, newFunction=0x95b2c8) = 0xe49cb4
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x22c5e8, funcOffset=0xffffff76, newFunction=0x95b340) = 0xe47228
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x2007d8, funcOffset=0xfffffe9e, newFunction=0x965200) = 0xf83a28
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x211ae4, funcOffset=0xffffffb8, newFunction=0x965282) = 0xe1a670
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x21a4dc, funcOffset=0xfffffd30, newFunction=0x96ebfe) = 0xf98218
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x236adc, funcOffset=0xffffffa6, newFunction=0x9653ce) = 0xe53e60
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x2007d8, funcOffset=0xfffffee6, newFunction=0x962b1c) = 0xf83b30
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x2007d8, funcOffset=0xfffffee0, newFunction=0x962b68) = 0xff021a
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x2007d8, funcOffset=0xfffffeda, newFunction=0x962bc4) = 0xf84e90
+   5.10 DO_LAUNCHER exec.SetFunction(library=0x211ae4, funcOffset=0xfffffda2, newFunction=0x962c70) = 0xe201b4
+   5.11 RunProg:launch exec.DeleteMsgPort(port=0x267c40)
+   5.11 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   5.12 RunProg:launch locale.OpenLocale(name=0) = 0
+   5.12 RunProg:launch locale.ParseDate(locale=0, date=0x9f6a23, fmtTemplate=0, getCharFunc=0x985658) = 0
+   5.12 RunProg:launch exec.FindPort(name='Directory Opus') = NULL
+   5.12 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   5.12 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   5.12 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   5.12 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x24) = 0x23e468
+   5.13 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   5.13 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   5.13 RunProg:launch exec.OpenLibrary(libName='commodities.library', version=0x25) = 0x23f0d0
+   5.14 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   5.14 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   5.14 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   5.14 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   5.15 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0) = 0x23eb18
+   5.15 RunProg:launch exec.OpenLibrary(libName='amigaguide.library', version=0) = 0x23f688
+   5.15 RunProg:launch exec.OpenLibrary(libName='newicon.library', version=0) = NULL
+   5.19 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x2282a4, name=0x26bc0c) = 0x219ed0
+   5.19 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22402c, name=0x26bc0c) = 0x219e30
+   5.19 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x21cfec, name=0x26bc0c) = 0x219e80
+   5.20 RunProg:launch exec.OpenDevice(devName='input.device', unitNumber=0, iORequest=0x985708, flags=0) = 0
+   5.20 RunProg:launch exec.OpenDevice(devName='timer.device', unitNumber=0, iORequest=0x985628, flags=0) = 0
+   5.21 RunProg:launch exec.OpenDevice(devName='console.device', unitNumber=0xffffffff, iORequest=0x985668, flags=0) = 0
+   5.21 RunProg:launch dos.Open(name='DOpus5:System/seed', accessMode=0x3ed) = 0x99a27
+   5.21 DO_LAUNCHER exec.AllocSignal(signalNum=0xff) = 0x14
+   5.21 RunProg:launch dos.Close(file=0x99a27) = 0xffff
+   5.22 RunProg:launch dopus5.Seed(seed=0xe52b3c23) = 0x7844ca56
+   5.22 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/update.module', version=0) = NULL
+   5.23 RunProg:launch exec.OpenLibrary(libName='DOpus5:Modules/update.module', version=0) = NULL
+   5.24 RunProg:launch dopus5.NewMemHandle(puddle=0x400, thresh=0x200, type=0x10001) = 0x26689c
+   5.24 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x418, threshSize=0x20c) = 0x267c40
+   5.25 RunProg:launch dopus5.InitListLock(ll=0x26d236, name=0) = 0x26e9f0
+   5.25 RunProg:launch dopus5.InitListLock(ll=0x26d272, name=0) = 0x26e9f0
+   5.25 RunProg:launch dopus5.InitListLock(ll=0x26d2ae, name=0) = 0x26e9f0
+   5.25 RunProg:launch dopus5.InitListLock(ll=0x26d2ea, name=0) = 0x26e9f0
+   5.25 RunProg:launch dopus5.InitListLock(ll=0x26e050, name=0) = 0x26e9f0
+   5.25 RunProg:launch dopus5.InitListLock(ll=0x26d3f8, name=0) = 0x26e9f0
+   5.25 RunProg:launch dopus5.InitListLock(ll=0x26d9ea, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26dc8c, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26dcc8, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26de6c, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26df1a, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26df56, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26dfd8, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26e08c, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26e014, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26e0c8, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26e104, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26e14c, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.InitListLock(ll=0x26e27e, name=0) = 0x26e9f0
+   5.26 RunProg:launch dopus5.Att_NewList(flags=3) = 0x26ec6c
+   5.26 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x26ed18
+   5.26 RunProg:launch exec.AllocSignal(signalNum=0x26ecff) = 0x10
+   5.27 RunProg:launch dopus5.SetReqBackFill(hook=0x26e2ba, scr=0x26d3ee) = 1
+   5.27 RunProg:launch dos.GetVar(name='Kickstart', buffer=0x26d5b2, size=0xf, flags=0x100) = 0xffffffff
+   5.28 RunProg:launch dos.GetVar(name='Workbench', buffer=0x26d5c2, size=0xf, flags=0x100) = 0xffffffff
+   5.29 RunProg:launch exec.OpenLibrary(libName='version.library', version=0) = NULL
+   5.33 RunProg:launch dopus5.NewMemHandle(puddle=0, thresh=0, type=0x10000) = 0x270704
+   5.33 RunProg:launch dopus5.NewMemHandle(puddle=0x400, thresh=0x200, type=0x10001) = 0x270764
+   5.33 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x418, threshSize=0x20c) = 0x2707c0
+   5.33 RunProg:launch dopus5.NewMemHandle(puddle=0x400, thresh=0x122, type=0x10001) = 0x2707fc
+   5.33 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x424, threshSize=0x12e) = 0x270858
+   5.33 RunProg:launch dopus5.DefaultEnvironment(env=0x2708a0) = 0x11
+   5.33 RunProg:launch intuition.LockPubScreen(name=0) = 0x271c6c
+   5.57 RunProg:launch intuition.UnlockPubScreen(name=0, screen=0x271c6c)
+   5.57 RunProg:launch exec.FindPort(name='WORKBENCH') = NULL
+   5.57 RunProg:launch icon.FindToolType(toolTypeArray=0x23e614, typeName='TOOLPRI') = 0
+   5.57 RunProg:launch icon.FindToolType(toolTypeArray=0x23e614, typeName='CX_PRIORITY') = 0
+   5.57 RunProg:launch icon.FindToolType(toolTypeArray=0x23e614, typeName='ENVIRONMENT') = 0
+   5.57 RunProg:launch icon.FindToolType(toolTypeArray=0x23e614, typeName='CX_POPUP') = 0
+   5.57 RunProg:launch icon.FindToolType(toolTypeArray=0x23e614, typeName='QUIET') = 0
+   5.57 RunProg:launch icon.FindToolType(toolTypeArray=0x23e614, typeName='NOSCREENTOFRONT') = 0
+   5.57 RunProg:launch icon.FindToolType(toolTypeArray=0x23e614, typeName='WBSTARTUP') = 0
+   5.57 RunProg:launch icon.FindToolType(toolTypeArray=0x23e614, typeName='STARTUPPIC') = 0
+   5.57 RunProg:launch dos.GetVar(name='dopus/StartupNumbers', buffer=0x26d842, size=2, flags=0x100) = 0xffffffff
+   5.58 RunProg:launch dopus5.OpenProgressWindow(tags=0x984e70) = 0x2801f4
+   5.58 RunProg:launch dos.CreateNewProc(tags={NP_Entry=0x961224, NP_Name='dopus_progressbar', NP_WindowPtr=0xffffffff, NP_StackSize=0x2000, NP_Priority=0}) = 0x2804b8
+   5.60 RunProg:launch exec.CreateMsgPort() = 0x280470
+   5.61 RunProg:launch exec.PutMsg(port=0x280514, message=0x984dc8)
+   5.61 dopus_progressbar exec.CreateMsgPort() = 0x282768
+   5.61 dopus_progressbar exec.CreateMsgPort() = 0x282790
+   5.61 dopus_progressbar exec.ReplyMsg(message=0x984dc8)
+   5.61 dopus_progressbar intuition.LockPubScreen(name=0) = 0x271c6c
+   5.61 dopus_progressbar intuition.OpenWindowTagList(newWindow=0, tagList={WA_Left=0x96, WA_Top=0x64, WA_Width=0x153, WA_Height=0x37, WA_Flags=0x1000e, WA_IDCMP=0x644, WA_SimpleRefresh=1, WA_PubScreen=0x271c6c, WA_Title='Directory Opus', WA_WindowName='dOpUs5.win', WA_AutoAdjust=1}) = 0x2827b8
+   5.70 RunProg:launch exec.DeleteMsgPort(port=0x280470)
+   5.70 RunProg:launch dopus5.PopUpNewHandle(data=0, callback=0, locale=0x985658) = 0x280474
+   5.71 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x40c, threshSize=0x30c) = 0x283178
+   5.71 RunProg:launch dopus5.PopUpNewItem(handle=0x280474, string=0xb6d, id=0x9f, flags=0) = 0x283228
+   5.71 RunProg:launch dopus5.PopUpNewItem(handle=0x280474, string=0xb6e, id=0xa0, flags=0) = 0x2832c0
+   5.71 dopus_progressbar intuition.UnlockPubScreen(name=0, screen=0x271c6c)
+   5.71 dopus_progressbar dopus5.SetWindowID(window=0x2827b8, id_ptr=0x280304, id=0, port=0) = 0
+   5.72 dopus_progressbar dopus5.DrawBox(rp=0x282b0c, rect=0x2823e4, info=0x271dd4, recess=1) = 2
+   5.73 RunProg:launch dopus5.PopUpNewItem(handle=0x280474, string=0xb6f, id=0xa1, flags=0) = 0x2832f0
+   5.73 RunProg:launch dopus5.PopUpSeparator(handle=0x280474) = 1
+   5.73 RunProg:launch dopus5.PopUpNewItem(handle=0x280474, string=0xf, id=0xa2, flags=0) = 0x283350
+   5.73 RunProg:launch dopus5.NewMemHandle(puddle=0x1000, thresh=0x400, type=0x10000) = 0x283724
+   5.73 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x1030, threshSize=0x40c) = 0x283780
+   5.73 RunProg:launch dopus5.InitListLock(ll=0x2833c4, name=0) = 0x283724
+   5.74 RunProg:launch dopus5.Att_NewList(flags=2) = 0x2837bc
+   5.74 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x283868
+   5.74 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfda6, data=4, flags=2) = 0x283918
+   5.74 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfdae, data=0xc, flags=2) = 0x2839c0
+   5.74 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf412, data=0, flags=2) = 0x283a08
+   5.74 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf5ea, data=0, flags=2) = 0x283ac8
+   5.74 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfdb7, data=0, flags=2) = 0x283b08
+   5.74 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfdc5, data=0, flags=2) = 0x283b50
+   5.74 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfdd2, data=2, flags=2) = 0x283b98
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfddf, data=1, flags=2) = 0x283be0
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfdeb, data=0, flags=2) = 0x283c28
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfdf8, data=0, flags=2) = 0x283c70
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfe03, data=0, flags=2) = 0x283d28
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfe10, data=0, flags=2) = 0x283d70
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfe1e, data=0, flags=2) = 0x283db8
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfe2a, data=0, flags=2) = 0x283e00
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfe3c, data=2, flags=2) = 0x283e50
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfe4f, data=2, flags=2) = 0x283ea0
+   5.75 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cfe63, data=0xa, flags=2) = 0x283ef0
+   5.76 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf188, data=2, flags=2) = 0x283f38
+   5.76 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf40a, data=2, flags=2) = 0x283f80
+   5.76 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf417, data=2, flags=2) = 0x283fc0
+   5.76 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf535, data=2, flags=2) = 0x284008
+   5.76 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf569, data=2, flags=2) = 0x284048
+   5.76 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf5a6, data=2, flags=2) = 0x284088
+   5.76 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf7c6, data=2, flags=2) = 0x2840c8
+   5.76 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x9cf7cb, data=2, flags=2) = 0x284188
+   5.77 RunProg:launch dos.MatchFirst(pat='DOpus5:System/scripts/#?.scp', AP=0x284a14) = 0
+   5.79 RunProg:launch dos.Open(name='DOpus5:System/scripts/ftp.scp', accessMode=0x3ed) = 0xa13c1
+   5.80 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x284e8c, data=1, flags=2) = 0x2841d0
+   5.80 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x284ea2, data=1, flags=2) = 0x284220
+   5.80 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x284eb5, data=1, flags=2) = 0x284270
+   5.80 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x284ec8, data=1, flags=2) = 0x2842c0
+   5.80 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x284ed8, data=1, flags=2) = 0x284308
+   5.80 RunProg:launch dopus5.Att_NewNode(list=0x2837bc, name=0x284ee4, data=1, flags=2) = 0x284350
+   5.80 RunProg:launch dos.Close(file=0xa13c1) = 0xffff
+   5.81 RunProg:launch dos.MatchNext(AP=0x284a14) = 0xe8
+   5.81 RunProg:launch dos.MatchEnd(AP=0x284a14)
+   5.82 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e7c) = 0x3e8
+   5.82 RunProg:launch exec.CreateMsgPort() = 0x282a38
+   5.82 RunProg:launch exec.PutMsg(port=0x282768, message=0x284a18)
+   5.82 dopus_progressbar dopus5.IPC_Reply(msg=0x284a18) = 0x20000
+   5.82 dopus_progressbar exec.ReplyMsg(message=0x284a18)
+   5.82 RunProg:launch exec.DeleteMsgPort(port=0x282a38)
+   5.82 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+   5.82 RunProg:launch dopus5.NewMemHandle(puddle=0x800, thresh=0x200, type=0x10001) = 0x284a14
+   5.82 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x830, threshSize=0x20c) = 0x284a70
+   5.82 RunProg:launch dopus5.IFFOpen(name=0x9f4708, mode=0x2803ed, form=0x4f505553) = 0
+   5.82 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x284b80
+   5.83 RunProg:launch dos.Open(name='DOpus5:System/position-info', accessMode=0x3ed) = 0
+   5.83 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e70) = 0x3e8
+   5.84 RunProg:launch exec.CreateMsgPort() = 0x282a38
+   5.84 RunProg:launch exec.PutMsg(port=0x282768, message=0x284ab0)
+   5.84 dopus_progressbar dopus5.IPC_Reply(msg=0x284ab0) = 0x20000
+   5.84 dopus_progressbar exec.ReplyMsg(message=0x284ab0)
+   5.84 RunProg:launch exec.DeleteMsgPort(port=0x282a38)
+   5.84 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+   5.84 RunProg:launch exec.CreateMsgPort() = 0x282a38
+   5.84 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e8c) = 0x3e8
+   5.84 RunProg:launch exec.CreateMsgPort() = 0x284ad8
+   5.84 RunProg:launch exec.PutMsg(port=0x282768, message=0x284ab0)
+   5.85 dopus_progressbar dopus5.IPC_Reply(msg=0x284ab0) = 0x40000
+   5.85 dopus_progressbar exec.ReplyMsg(message=0x284ab0)
+   5.85 RunProg:launch exec.DeleteMsgPort(port=0x284ad8)
+   5.85 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+   5.85 RunProg:launch exec.CreateMsgPort() = 0x284aa8
+   5.85 RunProg:launch exec.CreateMsgPort() = 0x284ad0
+   5.85 RunProg:launch exec.CreateMsgPort() = 0x284af8
+   5.85 RunProg:launch exec.CreateMsgPort() = 0x284b20
+   5.85 RunProg:launch exec.AddPort(port=port:'Directory Opus'@0x284af8)
+   5.85 RunProg:launch dopus5.InitListLock(ll=0x9856ca, name=0) = 0x2320e0
+   5.85 RunProg:launch exec.AddSemaphore(sigSem=0x985698)
+   5.85 RunProg:launch dopus5.AddNotifyRequest(type=0x305c, data=0, port=0x284ad0) = 0x284b4c
+   5.85 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e80) = 0x3e8
+   5.85 RunProg:launch exec.CreateMsgPort() = 0x284b90
+   5.86 RunProg:launch exec.PutMsg(port=0x282768, message=0x284b68)
+   5.86 dopus_progressbar dopus5.IPC_Reply(msg=0x284b68) = 0x400000
+   5.86 dopus_progressbar exec.ReplyMsg(message=0x284b68)
+   5.86 RunProg:launch exec.DeleteMsgPort(port=0x284b90)
+   5.86 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+   5.86 RunProg:launch dopus5.OpenBuf(name=0x993244, mode=0x3ed, buffer_size=0xfa0) = 0
+   5.86 RunProg:launch dos.Open(name='DOpus5:System/OpenWith', accessMode=0x3ed) = 0
+   5.87 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e74) = 0x3e8
+   5.87 RunProg:launch exec.CreateMsgPort() = 0x284b90
+   5.87 RunProg:launch exec.PutMsg(port=0x282768, message=0x284b68)
+   5.87 dopus_progressbar dopus5.IPC_Reply(msg=0x284b68) = 0x400000
+   5.87 dopus_progressbar exec.ReplyMsg(message=0x284b68)
+   5.88 RunProg:launch exec.DeleteMsgPort(port=0x284b90)
+   5.88 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+   5.88 RunProg:launch dos.GetVar(name='dopus/dopus', buffer=0x26d842, size=0x100, flags=0x100) = 0xffffffff
+   5.89 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e8c) = 0x3e8
+   5.89 RunProg:launch exec.CreateMsgPort() = 0x284b90
+   5.89 RunProg:launch exec.PutMsg(port=0x282768, message=0x284b68)
+   5.90 dopus_progressbar dopus5.IPC_Reply(msg=0x284b68) = 0x400000
+   5.90 dopus_progressbar exec.ReplyMsg(message=0x284b68)
+   5.90 RunProg:launch exec.DeleteMsgPort(port=0x284b90)
+   5.90 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+   5.90 RunProg:launch dopus5.IPC_Launch(list=0x26d2ea, ipc=0x26de2a, name=0x9f49dc, entry=0x995da4, stack=0x2000, data=0, dos=0x21a4dc) = 1
+   5.90 RunProg:launch dos.CreateNewProc(tags={NP_Entry=0x995da4, NP_Name='dopus_rexx', NP_WindowPtr=0xffffffff, NP_StackSize=0x2000, NP_Priority=0}) = 0x284bf8
+   5.91 RunProg:launch exec.CreateMsgPort() = 0x284bb0
+   5.91 RunProg:launch exec.PutMsg(port=0x284c54, message=0x984e34)
+   5.92 dopus_rexx dopus5.IPC_ProcStartup(data=0, code=0x995ce4) = 0x284b64
+   5.92 dopus_rexx exec.FindPort(name='DOPUS.1') = NULL
+   5.92 dopus_rexx exec.CreateMsgPort() = 0x286f60
+   5.92 dopus_rexx exec.AddPort(port=port:'DOPUS.1'@0x286f60)
+   5.92 dopus_rexx exec.CreateMsgPort() = 0x286f88
+   5.92 dopus_rexx exec.CreateMsgPort() = 0x286fb0
+   5.92 dopus_rexx exec.ReplyMsg(message=0x984e34)
+   5.92 dopus_rexx exec.CreateMsgPort() = 0x286fd8
+   5.92 dopus_rexx exec.CreateMsgPort() = 0x287000
+   5.92 dopus_rexx exec.CreateMsgPort() = 0x287028
+   5.92 dopus_rexx dopus5.AllocTimer(unit=1, port=0) = 0x287054
+   5.92 dopus_rexx exec.CreateMsgPort() = 0x287088
+   5.92 dopus_rexx exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x287058, flags=0) = 0
+   5.93 dopus_rexx dopus5.NewMemHandle(puddle=0x800, thresh=0x400, type=0x10000) = 0x28842c
+   5.93 dopus_rexx exec.CreatePool(requirements=0x10000, puddleSize=0x818, threshSize=0x40c) = 0x288488
+   5.93 dopus_rexx dopus5.AddNotifyRequest(type=0x800, data=0, port=0x287028) = 0x284bdc
+   5.93 RunProg:launch exec.DeleteMsgPort(port=0x284bb0)
+   5.93 RunProg:launch commodities.CxBroker(nb=0x26f778, error=0) = 0
+   5.93 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e80) = 0x3e8
+   5.93 RunProg:launch exec.CreateMsgPort() = 0x284bb0
+   5.93 RunProg:launch exec.PutMsg(port=0x282768, message=0x2884c8)
+   5.94 dopus_progressbar dopus5.IPC_Reply(msg=0x2884c8) = 0x400000
+   5.94 dopus_progressbar exec.ReplyMsg(message=0x2884c8)
+   5.94 RunProg:launch exec.DeleteMsgPort(port=0x284bb0)
+   5.94 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+   6.04 RunProg:launch dos.MatchFirst(pat='PROGDIR:Modules/#?.module', AP=0x2884c4) = 0
+   6.07 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   6.07 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   6.07 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/cleanup.module', version=0x49) = 0x2889a4
+   6.13 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   6.14 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   6.14 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   6.14 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   6.14 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   6.15 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   6.15 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   6.16 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   6.16 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   6.16 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   6.17 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   6.17 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   6.17 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   6.18 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   6.18 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   6.18 RunProg:launch locale.OpenLocale(name=0) = 0
+   6.18 RunProg:launch locale.ParseDate(locale=0, date=0x95a651, fmtTemplate=0, getCharFunc=0x288a04) = 0
+   6.19 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26f826) = 0
+   6.20 RunProg:launch exec.CloseLibrary(library=0x2889a4)
+   6.20 RunProg:launch locale.ConvToLower(locale=0, character=0x240660) = 0
+   6.20 RunProg:launch locale.CloseLocale(locale=0)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x240660)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x267230)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x240660)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   6.20 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   6.20 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   6.20 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   6.21 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   6.21 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   6.21 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/diskinfo.module', version=0x49) = 0x288a74
+   6.29 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   6.30 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   6.30 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   6.30 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   6.30 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   6.31 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   6.31 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   6.31 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   6.32 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   6.32 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   6.32 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   6.33 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   6.33 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   6.33 RunProg:launch exec.OpenLibrary(libName='mathieeesingbas.library', version=0x25) = 0x2195b0
+   6.34 RunProg:launch exec.OpenLibrary(libName='mathieeesingtrans.library', version=0x25) = 0x23f9e8
+   6.34 RunProg:launch exec.OpenLibrary(libName='mathieeedoubbas.library', version=0x25) = 0x23fd48
+   6.35 RunProg:launch exec.OpenLibrary(libName='mathieeedoubtrans.library', version=0x25) = 0x2400a8
+   6.35 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   6.36 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   6.36 RunProg:launch locale.OpenLocale(name=0) = 0
+   6.36 RunProg:launch locale.ParseDate(locale=0, date=0x959144, fmtTemplate=0, getCharFunc=0x288a04) = 0
+   6.36 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26f8d6) = 0
+   6.37 RunProg:launch exec.CloseLibrary(library=0x288a74)
+   6.37 RunProg:launch locale.ConvToLower(locale=0, character=0x240660) = 0
+   6.37 RunProg:launch locale.CloseLocale(locale=0)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x240660)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x267230)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x2195b0)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x23f9e8)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x23fd48)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x2400a8)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x240660)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   6.37 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   6.37 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   6.37 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   6.38 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/filetype.module', version=0x49) = 0x288bcc
+   6.50 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   6.51 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   6.51 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   6.51 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   6.52 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   6.52 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   6.52 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   6.53 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   6.53 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   6.53 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   6.54 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   6.54 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   6.54 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   6.55 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   6.55 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   6.55 RunProg:launch locale.OpenLocale(name=0) = 0
+   6.55 RunProg:launch locale.ParseDate(locale=0, date=0x956ae2, fmtTemplate=0, getCharFunc=0x288a04) = 0
+   6.56 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26f986) = 0
+   6.57 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26f9f6) = 0
+   6.57 RunProg:launch exec.CloseLibrary(library=0x288bcc)
+   6.57 RunProg:launch locale.ConvToLower(locale=0, character=0x240660) = 0
+   6.57 RunProg:launch locale.CloseLocale(locale=0)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x240660)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x267230)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x240660)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   6.57 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   6.58 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   6.58 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   6.58 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   6.58 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   6.58 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/fixicons.module', version=0x49) = 0x288d34
+   6.65 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   6.66 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   6.66 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   6.66 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   6.67 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   6.67 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   6.67 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   6.67 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   6.68 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   6.68 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   6.69 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   6.69 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   6.69 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   6.70 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   6.70 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   6.71 RunProg:launch locale.OpenLocale(name=0) = 0
+   6.71 RunProg:launch locale.ParseDate(locale=0, date=0x9526fb, fmtTemplate=0, getCharFunc=0x288a04) = 0
+   6.71 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26faa6) = 0
+   6.72 RunProg:launch exec.CloseLibrary(library=0x288d34)
+   6.72 RunProg:launch locale.ConvToLower(locale=0, character=0x240660) = 0
+   6.72 RunProg:launch locale.CloseLocale(locale=0)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x240660)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x267230)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x240660)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   6.72 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   6.72 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   6.72 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   6.72 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   6.73 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/ftp.module', version=0x49) = 0x288e84
+   7.86 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   7.86 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   7.87 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   7.87 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   7.87 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   7.88 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   7.88 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   7.88 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   7.88 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   7.89 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   7.89 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   7.90 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   7.90 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   7.90 RunProg:launch exec.OpenLibrary(libName='codesets.library', version=6) = NULL
+   7.94 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   7.95 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   7.95 RunProg:launch locale.OpenLocale(name=0) = 0
+   7.95 RunProg:launch locale.ParseDate(locale=0, date=0x904121, fmtTemplate=0, getCharFunc=0x288a04) = 0
+   7.95 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26fbb6) = 0
+   7.96 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26fc1e) = 0
+   7.97 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26fd06) = 0
+   7.98 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26fd86) = 0
+   7.99 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26fdee) = 0
+   8.00 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26fe5e) = 0
+   8.00 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26fec6) = 0
+   8.01 RunProg:launch exec.CloseLibrary(library=0x288e84)
+   8.01 RunProg:launch locale.ConvToLower(locale=0, character=0x240660) = 0
+   8.01 RunProg:launch locale.CloseLocale(locale=0)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x267230)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   8.01 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   8.01 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.02 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.02 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   8.02 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/join.module', version=0x49) = 0x288fe4
+   8.12 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   8.12 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   8.12 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   8.12 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   8.13 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   8.13 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   8.13 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   8.14 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   8.14 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   8.14 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   8.15 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   8.15 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   8.16 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   8.16 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   8.16 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   8.17 RunProg:launch locale.OpenLocale(name=0) = 0
+   8.17 RunProg:launch locale.ParseDate(locale=0, date=0x8edeb8, fmtTemplate=0, getCharFunc=0x288a04) = 0
+   8.17 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26f236) = 0
+   8.18 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26f2ae) = 0
+   8.19 RunProg:launch exec.CloseLibrary(library=0x288fe4)
+   8.19 RunProg:launch locale.ConvToLower(locale=0, character=0x240660) = 0
+   8.19 RunProg:launch locale.CloseLocale(locale=0)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x267230)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   8.19 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   8.19 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.19 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.20 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   8.20 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/misc.module', version=0x49) = 0x289134
+   8.26 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   8.26 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   8.27 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   8.27 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   8.27 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   8.28 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   8.28 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   8.28 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   8.29 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   8.29 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   8.29 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   8.30 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   8.30 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   8.30 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   8.31 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   8.31 RunProg:launch locale.OpenLocale(name=0) = 0
+   8.31 RunProg:launch locale.ParseDate(locale=0, date=0x8ecd6a, fmtTemplate=0, getCharFunc=0x288a04) = 0
+   8.32 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x26ec36) = 0
+   8.33 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x289d16) = 0
+   8.33 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x289d76) = 0
+   8.34 RunProg:launch exec.CloseLibrary(library=0x289134)
+   8.34 RunProg:launch locale.ConvToLower(locale=0, character=0x240660) = 0
+   8.34 RunProg:launch locale.CloseLocale(locale=0)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x267230)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   8.34 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   8.34 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.35 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   8.35 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/pathformat.module', version=0x49) = 0x28928c
+   8.42 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   8.42 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   8.43 RunProg:launch exec.OpenLibrary(libName='commodities.library', version=0x25) = 0x23f0d0
+   8.43 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   8.43 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   8.44 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   8.44 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   8.44 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   8.45 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   8.45 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   8.45 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   8.46 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   8.46 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   8.46 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   8.47 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   8.47 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   8.48 RunProg:launch locale.OpenLocale(name=0) = 0
+   8.48 RunProg:launch locale.ParseDate(locale=0, date=0x8ec212, fmtTemplate=0, getCharFunc=0x288a04) = 0
+   8.48 RunProg:launch exec.CloseLibrary(library=0x28928c)
+   8.48 RunProg:launch locale.ConvToLower(locale=0, character=0x240660) = 0
+   8.48 RunProg:launch locale.CloseLocale(locale=0)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x267230)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x23f0d0)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   8.48 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   8.48 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.48 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.49 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.49 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.49 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.50 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   8.50 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/themes.module', version=0x49) = 0x2893dc
+   8.60 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   8.60 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   8.60 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   8.61 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   8.61 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   8.61 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   8.62 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   8.62 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   8.62 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   8.63 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   8.63 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   8.63 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   8.64 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   8.64 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   8.65 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x26) = 0x240660
+   8.65 RunProg:launch locale.OpenLocale(name=0) = 0
+   8.65 RunProg:launch locale.ParseDate(locale=0, date=0x8e8219, fmtTemplate=0, getCharFunc=0x288a04) = 0
+   8.65 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x289e4e) = 0
+   8.66 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x289eb6) = 0
+   8.67 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x289f6e) = 0
+   8.68 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x289fe6) = 0
+   8.69 RunProg:launch exec.CloseLibrary(library=0x2893dc)
+   8.69 RunProg:launch locale.ConvToLower(locale=0, character=0x240660) = 0
+   8.69 RunProg:launch locale.CloseLocale(locale=0)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x267230)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   8.69 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   8.69 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.69 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0
+   8.70 RunProg:launch exec.OpenLibrary(libName='PROGDIR:Modules/xadopus.module', version=0x49) = 0x28953c
+   8.79 RunProg:launch exec.OpenLibrary(libName='dos.library', version=0x25) = 0x21a4dc
+   8.79 RunProg:launch exec.OpenLibrary(libName='utility.library', version=0x25) = 0x2076c4
+   8.79 RunProg:launch exec.OpenLibrary(libName='graphics.library', version=0x25) = 0x20b3b0
+   8.80 RunProg:launch exec.OpenLibrary(libName='intuition.library', version=0x25) = 0x211ae4
+   8.80 RunProg:launch exec.OpenLibrary(libName='gadtools.library', version=0x25) = 0x2191a8
+   8.80 RunProg:launch exec.OpenLibrary(libName='asl.library', version=0x25) = 0x23deb0
+   8.81 RunProg:launch exec.OpenLibrary(libName='layers.library', version=0x25) = 0x20bca0
+   8.81 RunProg:launch exec.OpenLibrary(libName='diskfont.library', version=0x25) = 0x23e468
+   8.81 RunProg:launch exec.OpenLibrary(libName='icon.library', version=0x25) = 0x22c5e8
+   8.82 RunProg:launch exec.OpenLibrary(libName='workbench.library', version=0x25) = 0x236adc
+   8.82 RunProg:launch exec.OpenLibrary(libName='datatypes.library', version=0x25) = 0x23eb18
+   8.82 RunProg:launch exec.OpenLibrary(libName='rexxsyslib.library', version=0) = 0x23d8f8
+   8.83 RunProg:launch exec.OpenLibrary(libName='locale.library', version=0x25) = 0x240660
+   8.83 RunProg:launch exec.OpenLibrary(libName='dopus5.library', version=0x49) = 0x267230
+   8.84 RunProg:launch exec.OpenLibrary(libName='xadmaster.library', version=7) = NULL
+   8.88 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x28a0a6) = 0
+   8.88 RunProg:launch dopus5.FindNameI(list=0x26dfd8, name=0x28a0f6) = 0
+   8.89 RunProg:launch exec.CloseLibrary(library=0x28953c)
+   8.89 RunProg:launch exec.CloseLibrary(library=0)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x267230)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x240660)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x23d8f8)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x23eb18)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x236adc)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x22c5e8)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x23e468)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x20bca0)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x23deb0)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x2191a8)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x211ae4)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x20b3b0)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x2076c4)
+   8.89 RunProg:launch exec.CloseLibrary(library=0x21a4dc)
+   8.89 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0xe8
+   8.90 RunProg:launch dos.MatchEnd(AP=0x2884c4)
+   8.90 RunProg:launch dos.MatchFirst(pat='DOpus5:Modules/#?.module', AP=0x2884c4) = 0
+   8.92 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.93 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x26f7c0
+   8.93 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.93 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.94 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.94 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x26f870
+   8.94 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.94 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x26f920
+   8.95 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.95 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x26fa40
+   8.95 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.95 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.96 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x26fb58
+   8.96 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.96 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.97 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x26f1d8
+   8.97 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.97 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.98 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x26f308
+   8.98 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.98 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x289da8
+   8.98 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.99 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.99 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   8.99 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   9.00 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   9.00 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x289de8
+   9.00 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0
+   9.01 RunProg:launch dopus5.FindNameI(list=0x26e014, name=0x2884e0) = 0x28a040
+   9.01 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0xe8
+   9.01 RunProg:launch dos.MatchEnd(AP=0x2884c4)
+   9.02 RunProg:launch dos.MatchFirst(pat='DOpus5:Commands/~(#?.info)', AP=0x2884c4) = 0
+   9.04 RunProg:launch dos.MatchNext(AP=0x2884c4) = 0xe8
+   9.04 RunProg:launch dos.MatchEnd(AP=0x2884c4)
+   9.05 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a128
+   9.05 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4a7e) = 0x28a168
+   9.05 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a1a8
+   9.05 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4a87) = 0x28a1e8
+   9.05 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a228
+   9.05 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4a90) = 0x28a268
+   9.05 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a2a0
+   9.05 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4a97) = 0x28a2e0
+   9.06 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a320
+   9.06 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4aa0) = 0x28a360
+   9.06 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a398
+   9.06 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4aa7) = 0x28a3d8
+   9.06 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a418
+   9.06 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4ab0) = 0x28a458
+   9.06 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a498
+   9.06 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4abb) = 0x28a4d8
+   9.06 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a518
+   9.06 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4ac5) = 0x28a558
+   9.06 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a590
+   9.06 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4ac9) = 0x28a5d0
+   9.07 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a608
+   9.07 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4ad0) = 0x28a648
+   9.07 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a680
+   9.07 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4ad7) = 0x28a6c0
+   9.07 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a700
+   9.07 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4ae4) = 0x28a740
+   9.07 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a778
+   9.07 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4aec) = 0x28a7b8
+   9.07 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a7f8
+   9.07 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4af5) = 0x28a838
+   9.08 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a870
+   9.08 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4afa) = 0x28a8b0
+   9.08 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a8e8
+   9.08 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4aff) = 0x28a928
+   9.08 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a960
+   9.08 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4b06) = 0x28a9a0
+   9.08 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28a9e0
+   9.08 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4b10) = 0x28aa20
+   9.08 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28aa58
+   9.09 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4b14) = 0x28aa98
+   9.09 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28aad8
+   9.09 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4b24) = 0x28ab18
+   9.09 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28ab60
+   9.09 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4b35) = 0x28aba0
+   9.09 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28abe0
+   9.09 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4b3f) = 0x28ac20
+   9.09 RunProg:launch dopus5.NewFunction(memory=0x26689c, type=0x280000) = 0x28acf0
+   9.09 RunProg:launch dopus5.NewInstruction(memory=0x26689c, type=0x280000, string=0x9f4b49) = 0x28ad30
+   9.10 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e74) = 0x3e8
+   9.10 RunProg:launch exec.CreateMsgPort() = 0x2884f0
+   9.10 RunProg:launch exec.PutMsg(port=0x282768, message=0x2884c8)
+   9.10 dopus_progressbar dopus5.IPC_Reply(msg=0x2884c8) = 0x400000
+   9.10 dopus_progressbar exec.ReplyMsg(message=0x2884c8)
+   9.10 RunProg:launch exec.DeleteMsgPort(port=0x2884f0)
+   9.10 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+   9.10 RunProg:launch dopus5.NewMemHandle(puddle=0x1000, thresh=0x100, type=0x10000) = 0x2884c4
+   9.10 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x10c0, threshSize=0x10c) = 0x288520
+   9.11 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28bcf0
+   9.11 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28bdd0
+   9.11 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7998) = 0x28be10
+   9.11 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28be50
+   9.11 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28bf28
+   9.11 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d79b5) = 0x28bf68
+   9.11 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28c040
+   9.11 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28c118
+   9.11 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d79b5) = 0x28c158
+   9.11 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28c190
+   9.12 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28c268
+   9.12 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d79b5) = 0x28c2a8
+   9.12 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28c2e0
+   9.12 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28c3b8
+   9.12 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d79f7) = 0x28c3f8
+   9.12 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28c430
+   9.12 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28c508
+   9.12 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d79f7) = 0x28c548
+   9.12 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28c580
+   9.12 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28c6e0
+   9.13 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7a1e) = 0x28c720
+   9.13 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28c758
+   9.13 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28c838
+   9.13 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7a1e) = 0x28c878
+   9.13 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28c9f0
+   9.13 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28cae0
+   9.13 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7a6b) = 0x28cb20
+   9.14 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28cb98
+   9.14 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28cc78
+   9.14 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7ae1) = 0x28ccb8
+   9.14 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28cd28
+   9.14 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28ce08
+   9.14 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7b34) = 0x28ce48
+   9.14 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28ceb8
+   9.14 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28cf98
+   9.14 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7b8c) = 0x28cfd8
+   9.15 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28d048
+   9.15 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28d128
+   9.15 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7bdb) = 0x28d168
+   9.15 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=0x9c0000) = 0x28d1d8
+   9.15 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=5, string=0x9cedf4) = 0x28d218
+   9.15 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7c13) = 0x28d258
+   9.15 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28d298
+   9.16 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28d420
+   9.16 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28d538
+   9.16 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28d648
+   9.16 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28d730
+   9.16 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7cbb) = 0x28d770
+   9.17 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28d8f0
+   9.17 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28d9c8
+   9.17 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7cf2) = 0x28da08
+   9.17 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=3) = 0x28da48
+   9.17 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7d06) = 0x28da88
+   9.17 RunProg:launch dopus5.NewFiletype(memory=0x2884c4) = 0x28dac0
+   9.17 RunProg:launch dopus5.NewFunction(memory=0x2884c4, type=2) = 0x28db98
+   9.17 RunProg:launch dopus5.NewInstruction(memory=0x2884c4, type=0x280000, string=0x9d7a1e) = 0x28dbd8
+   9.17 RunProg:launch dopus5.ClearFiletypeCache() = 0x28dc10
+   9.17 RunProg:launch dos.MatchFirst(pat='DOpus5:Filetypes/~(#?.info)', AP=0x28dc10) = 0
+   9.20 RunProg:launch dopus5.ReadFiletypes(name=0x28dd28, memory=0x2884c4) = 0x28de40
+   9.20 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288a00
+   9.20 RunProg:launch dos.Open(name='DOpus5:Filetypes/All', accessMode=0x3ed) = 0xa25a5
+   9.21 RunProg:launch dos.ExamineFH(fh=0xa25a5, fib=0x984d58) = 0x98ffff
+   9.25 RunProg:launch dos.Close(file=0xa25a5) = 0xffff
+   9.25 RunProg:launch dos.MatchNext(AP=0x28dc10) = 0
+   9.26 RunProg:launch dopus5.ReadFiletypes(name=0x28dd28, memory=0x2884c4) = 0x28e788
+   9.26 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288a00
+   9.26 RunProg:launch dos.Open(name='DOpus5:Filetypes/All, Directories', accessMode=0x3ed) = 0xa25a9
+   9.27 RunProg:launch dos.ExamineFH(fh=0xa25a9, fib=0x984d58) = 0x98ffff
+   9.29 RunProg:launch dos.Close(file=0xa25a9) = 0xffff
+   9.30 RunProg:launch dos.MatchNext(AP=0x28dc10) = 0
+   9.30 RunProg:launch dopus5.ReadFiletypes(name=0x28dd28, memory=0x2884c4) = 0x28fea8
+   9.30 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288a00
+   9.30 RunProg:launch dos.Open(name='DOpus5:Filetypes/Archives_over_XAD', accessMode=0x3ed) = 0xa25a9
+   9.31 RunProg:launch dos.ExamineFH(fh=0xa25a9, fib=0x984d58) = 0x98ffff
+   9.33 RunProg:launch dos.Seek(file=0xa25a9, position=0xd2, mode=0xffffffff) = 0xd2
+   9.33 RunProg:launch dos.Seek(file=0xa25a9, position=0, mode=0) = 0xd2
+   9.34 RunProg:launch dos.Close(file=0xa25a9) = 0xffff
+   9.34 RunProg:launch dos.MatchNext(AP=0x28dc10) = 0
+   9.35 RunProg:launch dopus5.ReadFiletypes(name=0x28dd28, memory=0x2884c4) = 0x290378
+   9.35 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288a00
+   9.35 RunProg:launch dos.Open(name='DOpus5:Filetypes/Font', accessMode=0x3ed) = 0xa25a7
+   9.36 RunProg:launch dos.ExamineFH(fh=0xa25a7, fib=0x984d58) = 0x98ffff
+   9.37 RunProg:launch dos.Seek(file=0xa25a7, position=0xc8, mode=0xffffffff) = 0xc8
+   9.37 RunProg:launch dos.Seek(file=0xa25a7, position=0, mode=0) = 0xc8
+   9.37 RunProg:launch dos.Close(file=0xa25a7) = 0xffff
+   9.38 RunProg:launch dos.MatchNext(AP=0x28dc10) = 0
+   9.38 RunProg:launch dopus5.ReadFiletypes(name=0x28dd28, memory=0x2884c4) = 0x2907e8
+   9.38 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288a00
+   9.38 RunProg:launch dos.Open(name='DOpus5:Filetypes/Picture', accessMode=0x3ed) = 0xa25a7
+   9.39 RunProg:launch dos.ExamineFH(fh=0xa25a7, fib=0x984d58) = 0x98ffff
+   9.41 RunProg:launch dos.Close(file=0xa25a7) = 0xffff
+   9.42 RunProg:launch dos.MatchNext(AP=0x28dc10) = 0
+   9.42 RunProg:launch dopus5.ReadFiletypes(name=0x28dd28, memory=0x2884c4) = 0x290cf0
+   9.42 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288a00
+   9.42 RunProg:launch dos.Open(name='DOpus5:Filetypes/Version', accessMode=0x3ed) = 0xa25a7
+   9.43 RunProg:launch dos.ExamineFH(fh=0xa25a7, fib=0x984d58) = 0x98ffff
+   9.45 RunProg:launch dos.Close(file=0xa25a7) = 0xffff
+   9.45 RunProg:launch dos.MatchNext(AP=0x28dc10) = 0xe8
+   9.46 RunProg:launch dos.MatchEnd(AP=0x28dc10)
+   9.46 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e8c) = 0x3e8
+   9.46 RunProg:launch exec.CreateMsgPort() = 0x288730
+   9.46 RunProg:launch exec.PutMsg(port=0x282768, message=0x288708)
+   9.47 dopus_progressbar dopus5.IPC_Reply(msg=0x288708) = 0x400000
+   9.47 dopus_progressbar exec.ReplyMsg(message=0x288708)
+   9.47 RunProg:launch exec.DeleteMsgPort(port=0x288730)
+   9.47 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+   9.47 RunProg:launch dopus5.ClearMemHandle(handle=0x2707fc) = 0x270000
+   9.48 RunProg:launch dopus5.SetProgressWindow(win=0, tags=0x984d90) = 0
+   9.48 RunProg:launch dopus5.OpenEnvironment(name=0x26ff2a, data=0x291ea8) = 1
+   9.48 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2937b8
+   9.48 RunProg:launch dos.Open(name='PROGDIR:Environment/default', accessMode=0x3ed) = 0xa4e07
+   9.49 RunProg:launch dos.Close(file=0xa4e07) = 0xffff
+   9.49 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2887d8
+   9.49 RunProg:launch dos.Open(name='PROGDIR:Environment/default', accessMode=0x3ed) = 0xa220f
+   9.51 RunProg:launch dos.Seek(file=0xa220f, position=0x1534, mode=0xffffffff) = 0x1534
+   9.51 RunProg:launch dos.Seek(file=0xa220f, position=0, mode=0) = 0x1534
+   9.52 RunProg:launch dos.Close(file=0xa220f) = 0xffff
+   9.53 RunProg:launch dos.Lock(name='PROGDIR:Buttons/toolbar', accessMode=0xfffffffe) = 0x3aa024
+   9.53 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+   9.53 RunProg:launch dos.Lock(name='PROGDIR:Buttons/Lister Menu', accessMode=0xfffffffe) = 0x3aa024
+   9.54 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+   9.54 RunProg:launch dos.Lock(name='PROGDIR:Buttons/User Menu', accessMode=0xfffffffe) = 0x3aa024
+   9.54 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+   9.54 RunProg:launch dos.Lock(name='PROGDIR:Buttons/Scripts', accessMode=0xfffffffe) = 0x3aa024
+   9.55 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+   9.55 RunProg:launch dos.Lock(name='PROGDIR:Buttons/hotkeys', accessMode=0xfffffffe) = 0x3aa024
+   9.55 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+   9.56 RunProg:launch dopus5.OpenButtonBank(name=0x27015a) = 0x2936e4
+   9.56 RunProg:launch dos.Lock(name='PROGDIR:Buttons/toolbar', accessMode=0xfffffffe) = 0x3aa024
+   9.56 RunProg:launch dos.Examine(lock=0x3aa024, fib=0x984c2c) = 0xffffffff
+   9.57 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+   9.57 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288910
+   9.57 RunProg:launch dos.Open(name='PROGDIR:Buttons/toolbar', accessMode=0x3ed) = 0xa2281
+   9.58 RunProg:launch dos.Close(file=0xa2281) = 0xffff
+   9.58 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288910
+   9.58 RunProg:launch dos.Open(name='PROGDIR:Buttons/toolbar', accessMode=0x3ed) = 0xa2281
+   9.59 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x818, threshSize=0x30c) = 0x293a20
+   9.59 RunProg:launch dos.NameFromFH(fh=0xa2281, buffer=0x293784, length=0x100) = 1
+   9.62 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x293d30
+   9.62 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x293e40
+   9.62 RunProg:launch dos.Open(name='dopus5:images/Root.small', accessMode=0x3ed) = 0xa4fa9
+   9.65 RunProg:launch dos.Close(file=0xa4fa9) = 0xffff
+   9.66 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x818, threshSize=0x40c) = 0x293dc8
+   9.67 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x294408
+   9.67 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x294518
+   9.67 RunProg:launch dos.Open(name='dopus5:images/World.small', accessMode=0x3ed) = 0xa515f
+   9.70 RunProg:launch dos.Close(file=0xa515f) = 0xffff
+   9.73 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x289978
+   9.73 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x289aa8
+   9.73 RunProg:launch dos.Open(name='dopus5:images/Parent.small', accessMode=0x3ed) = 0xa26c3
+   9.76 RunProg:launch dos.Close(file=0xa26c3) = 0xffff
+   9.77 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x289a68
+   9.78 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x289b78
+   9.78 RunProg:launch dos.Open(name='dopus5:images/Root.small', accessMode=0x3ed) = 0xa520b
+   9.81 RunProg:launch dos.Close(file=0xa520b) = 0xffff
+   9.83 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x289b78
+   9.83 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x293b00
+   9.83 RunProg:launch dos.Open(name='dopus5:images/All.small', accessMode=0x3ed) = 0xa5391
+   9.86 RunProg:launch dos.Close(file=0xa5391) = 0xffff
+   9.88 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x294da0
+   9.88 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2972e0
+   9.88 RunProg:launch dos.Open(name='dopus5:images/All_s.small', accessMode=0x3ed) = 0xa5cc7
+   9.91 RunProg:launch dos.Close(file=0xa5cc7) = 0xffff
+   9.93 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x294e88
+   9.93 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2973b8
+   9.94 RunProg:launch dos.Open(name='dopus5:images/Select.small', accessMode=0x3ed) = 0xa5d07
+   9.96 RunProg:launch dos.Close(file=0xa5d07) = 0xffff
+   9.98 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x297378
+   9.98 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x297488
+   9.99 RunProg:launch dos.Open(name='dopus5:images/Toggle.small', accessMode=0x3ed) = 0xa5d3b
+  10.02 RunProg:launch dos.Close(file=0xa5d3b) = 0xffff
+  10.04 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x297488
+  10.04 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x297598
+  10.04 RunProg:launch dos.Open(name='dopus5:images/Makedir.small', accessMode=0x3ed) = 0xa5d7f
+  10.07 RunProg:launch dos.Close(file=0xa5d7f) = 0xffff
+  10.09 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x297558
+  10.09 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x297668
+  10.09 RunProg:launch dos.Open(name='dopus5:images/Makefile.small', accessMode=0x3ed) = 0xa5db3
+  10.11 RunProg:launch dos.Close(file=0xa5db3) = 0xffff
+  10.13 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x297628
+  10.13 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x297738
+  10.13 RunProg:launch dos.Open(name='dopus5:images/Assign.small', accessMode=0x3ed) = 0xa5de7
+  10.16 RunProg:launch dos.Close(file=0xa5de7) = 0xffff
+  10.18 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x2976f8
+  10.19 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x297808
+  10.19 RunProg:launch dos.Open(name='dopus5:images/Copy.small', accessMode=0x3ed) = 0xa5e11
+  10.22 RunProg:launch dos.Close(file=0xa5e11) = 0xffff
+  10.23 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x2977c8
+  10.23 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2978d8
+  10.23 RunProg:launch dos.Open(name='dopus5:images/CopyAs.small', accessMode=0x3ed) = 0xa5e45
+  10.26 RunProg:launch dos.Close(file=0xa5e45) = 0xffff
+  10.29 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x297898
+  10.29 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2979a8
+  10.29 RunProg:launch dos.Open(name='dopus5:images/Move.small', accessMode=0x3ed) = 0xa5e79
+  10.32 RunProg:launch dos.Close(file=0xa5e79) = 0xffff
+  10.34 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x297968
+  10.34 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x297a78
+  10.34 RunProg:launch dos.Open(name='dopus5:images/MoveAs.small', accessMode=0x3ed) = 0xa5ead
+  10.37 RunProg:launch dos.Close(file=0xa5ead) = 0xffff
+  10.39 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x297a00
+  10.39 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x297b10
+  10.39 RunProg:launch dos.Open(name='dopus5:images/CopyAs.small', accessMode=0x3ed) = 0xa7f37
+  10.43 RunProg:launch dos.Close(file=0xa7f37) = 0xffff
+  10.45 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x297ad0
+  10.45 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x29fd28
+  10.45 RunProg:launch dos.Open(name='dopus5:images/Rename.small', accessMode=0x3ed) = 0xa9fa7
+  10.48 RunProg:launch dos.Close(file=0xa9fa7) = 0xffff
+  10.50 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x29fd10
+  10.51 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2b5d78
+  10.51 RunProg:launch dos.Open(name='dopus5:images/Delete.small', accessMode=0x3ed) = 0xad76d
+  10.54 RunProg:launch dos.Close(file=0xad76d) = 0xffff
+  10.56 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x2a7f08
+  10.56 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2a7f40
+  10.56 RunProg:launch dos.Open(name='dopus5:images/Show.small', accessMode=0x3ed) = 0xad795
+  10.59 RunProg:launch dos.Close(file=0xad795) = 0xffff
+  10.61 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x2b5dd8
+  10.62 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2b6b68
+  10.62 RunProg:launch dos.Open(name='dopus5:images/Read.small', accessMode=0x3ed) = 0xadae9
+  10.65 RunProg:launch dos.Close(file=0xadae9) = 0xffff
+  10.67 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x2b5e48
+  10.67 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2b6c40
+  10.67 RunProg:launch dos.Open(name='dopus5:images/Play.small', accessMode=0x3ed) = 0xadb1f
+  10.70 RunProg:launch dos.Close(file=0xadb1f) = 0xffff
+  10.73 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x2b6c00
+  10.73 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2b6d10
+  10.73 RunProg:launch dos.Open(name='dopus5:images/Protect.small', accessMode=0x3ed) = 0xadb53
+  10.76 RunProg:launch dos.Close(file=0xadb53) = 0xffff
+  10.78 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x2b6cd0
+  10.79 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2be378
+  10.79 RunProg:launch dos.Open(name='dopus5:images/Comment.small', accessMode=0x3ed) = 0xaf8ed
+  10.82 RunProg:launch dos.Close(file=0xaf8ed) = 0xffff
+  10.84 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x2be378
+  10.84 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2be3b0
+  10.84 RunProg:launch dos.Open(name='dopus5:images/Datestamp.small', accessMode=0x3ed) = 0xafc53
+  10.87 RunProg:launch dos.Close(file=0xafc53) = 0xffff
+  10.90 RunProg:launch dos.Close(file=0xa2281) = 0xffff
+  10.90 RunProg:launch dopus5.DisposeBitMap(b=0) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x293aec, type=0x280000) = 0x293c08
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x293e78, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x29422c, type=0x280000) = 0x294298
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x294578, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x294904, type=0x280000) = 0x294968
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x296bd8, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x294acc, type=0x280000) = 0x294b38
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x296e60, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x294c9c, type=0x280000) = 0x294d08
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2970f0, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x29efec, type=0x280000) = 0x29f058
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2a71f0, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x29f1bc, type=0x280000) = 0x29f228
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2a7480, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x29f38c, type=0x280000) = 0x29f3f8
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2a7710, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x29f584, type=0x280000) = 0x29f5f0
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2a7858, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x29f77c, type=0x280000) = 0x2a8980
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2a79a0, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x2a8a1c, type=0x280000) = 0x2a8a88
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2a7ae8, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x2a8c14, type=0x280000) = 0x2a8c80
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2a7c30, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x2a8d1c, type=0x280000) = 0x2a8d88
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2a7d78, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x2a8f14, type=0x280000) = 0x2a8f80
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2b8ba8, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x2a910c, type=0x280000) = 0x2a9178
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2b8cf0, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.FindFunctionType(list=0x2a9304, type=0x280000) = 0x2a9378
+  10.90 RunProg:launch dopus5.GetImageAttrs(image=0x2b8e38, tags=0x984d0c) = 0
+  10.90 RunProg:launch dopus5.CloseButtonBank(bank=0) = 0
+  10.90 RunProg:launch dopus5.OpenButtonBank(name=0x27025e) = 0x28eedc
+  10.90 RunProg:launch dos.Lock(name='PROGDIR:Buttons/Lister Menu', accessMode=0xfffffffe) = 0x3aa024
+  10.91 RunProg:launch dos.Examine(lock=0x3aa024, fib=0x984c3c) = 0xffffffff
+  10.91 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+  10.91 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288830
+  10.92 RunProg:launch dos.Open(name='PROGDIR:Buttons/Lister Menu', accessMode=0x3ed) = 0xa3ba9
+  10.93 RunProg:launch dos.Close(file=0xa3ba9) = 0xffff
+  10.93 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288830
+  10.93 RunProg:launch dos.Open(name='PROGDIR:Buttons/Lister Menu', accessMode=0x3ed) = 0xa3ba9
+  10.94 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x818, threshSize=0x30c) = 0x28f218
+  10.94 RunProg:launch dos.NameFromFH(fh=0xa3ba9, buffer=0x28ef7c, length=0x100) = 1
+  11.15 RunProg:launch dos.Seek(file=0xa3ba9, position=0x9e8, mode=0xffffffff) = 0x9e8
+  11.15 RunProg:launch dos.Seek(file=0xa3ba9, position=0, mode=0) = 0x9e8
+  11.16 RunProg:launch dos.Close(file=0xa3ba9) = 0xffff
+  11.16 RunProg:launch dopus5.CloseButtonBank(bank=0) = 0
+  11.16 RunProg:launch dopus5.OpenButtonBank(name=0x27035e) = 0x2bf06c
+  11.16 RunProg:launch dos.Lock(name='PROGDIR:Buttons/User Menu', accessMode=0xfffffffe) = 0x3aa024
+  11.17 RunProg:launch dos.Examine(lock=0x3aa024, fib=0x984c3c) = 0xffffffff
+  11.17 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+  11.18 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288830
+  11.18 RunProg:launch dos.Open(name='PROGDIR:Buttons/User Menu', accessMode=0x3ed) = 0xa3ba9
+  11.19 RunProg:launch dos.Close(file=0xa3ba9) = 0xffff
+  11.19 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288830
+  11.19 RunProg:launch dos.Open(name='PROGDIR:Buttons/User Menu', accessMode=0x3ed) = 0xa3ba9
+  11.20 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x818, threshSize=0x30c) = 0x2bf348
+  11.20 RunProg:launch dos.NameFromFH(fh=0xa3ba9, buffer=0x2bf10c, length=0x100) = 1
+  11.39 RunProg:launch dos.Seek(file=0xa3ba9, position=0xa7e, mode=0xffffffff) = 0xa7e
+  11.39 RunProg:launch dos.Seek(file=0xa3ba9, position=0, mode=0) = 0xa7e
+  11.39 RunProg:launch dos.Close(file=0xa3ba9) = 0xffff
+  11.40 RunProg:launch dopus5.CloseButtonBank(bank=0) = 0
+  11.40 RunProg:launch dopus5.OpenButtonBank(name=0x27055e) = 0x2c89cc
+  11.40 RunProg:launch dos.Lock(name='PROGDIR:Buttons/Scripts', accessMode=0xfffffffe) = 0x3aa024
+  11.40 RunProg:launch dos.Examine(lock=0x3aa024, fib=0x984c30) = 0xffffffff
+  11.40 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+  11.41 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288830
+  11.41 RunProg:launch dos.Open(name='PROGDIR:Buttons/Scripts', accessMode=0x3ed) = 0xa3ba9
+  11.42 RunProg:launch dos.Close(file=0xa3ba9) = 0xffff
+  11.42 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x288830
+  11.43 RunProg:launch dos.Open(name='PROGDIR:Buttons/Scripts', accessMode=0x3ed) = 0xa3ba9
+  11.44 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x818, threshSize=0x30c) = 0x2c8d08
+  11.44 RunProg:launch dos.NameFromFH(fh=0xa3ba9, buffer=0x2c8a6c, length=0x100) = 1
+  11.47 RunProg:launch dos.Seek(file=0xa3ba9, position=0x144, mode=0xffffffff) = 0x144
+  11.47 RunProg:launch dos.Seek(file=0xa3ba9, position=0, mode=0) = 0x144
+  11.48 RunProg:launch dos.Close(file=0xa3ba9) = 0xffff
+  11.48 RunProg:launch dopus5.IPC_Command(ipc=0x985738, command=0x40001, flags=0, data=0, data_free=0x284bb4, reply=0) = 1
+  11.48 RunProg:launch exec.PutMsg(port=0x282a38, message=0x288838)
+  11.48 RunProg:launch dos.Lock(name='PROGDIR:Buttons/Vertical', accessMode=0xfffffffe) = 0x3aa024
+  11.49 RunProg:launch dos.UnLock(lock=0x3aa024) = 0xffff0001
+  11.49 RunProg:launch dopus5.IPC_Launch(list=0x26d2ae, ipc=0x984d38, name=0x9b8f86, entry=0x9b9356, stack=0x2000, data=0x2c1004, dos=0x21a4dc) = 0
+  11.49 RunProg:launch dos.CreateNewProc(tags={NP_Entry=0x9b9356, NP_Name='dopus_buttons', NP_WindowPtr=0xffffffff, NP_StackSize=0x2000, NP_Priority=0}) = 0x2c1648
+  11.51 RunProg:launch exec.CreateMsgPort() = 0x28ee28
+  11.51 RunProg:launch exec.PutMsg(port=0x2c16a4, message=0x984cc0)
+  11.52 dopus_buttons dopus5.IPC_ProcStartup(data=0x2cb11c, code=0x9b9250) = 0
+  11.52 dopus_buttons dopus5.NewMemHandle(puddle=0x400, thresh=0x100, type=0x10000) = 0x2c1834
+  11.52 dopus_buttons exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2c1890
+  11.52 dopus_buttons asl.AllocAslRequest(reqType=0, tagList={ASLFR_InitialLeftEdge|ASL_LeftEdge=0x40, ASLFR_InitialTopEdge|ASL_TopEdge=0x20, ASLFR_InitialWidth|ASL_Width=0x140, ASLFR_InitialHeight|ASL_Height=0xc8}) = 0
+  11.52 dopus_buttons exec.ReplyMsg(message=0x984cc0)
+  11.52 dopus_buttons dopus5.FreeTimer(handle=0) = 0
+  11.52 dopus_buttons asl.FreeAslRequest(requester=0)
+  11.52 dopus_buttons dopus5.FreeMemHandle(handle=0x2c1834) = 0x800
+  11.52 dopus_buttons dopus5.CloseButtonBank(bank=0) = 0
+  11.52 dopus_buttons dopus5.CloseButtonBank(bank=0) = 0
+  11.52 dopus_buttons dopus5.IPC_Free(ipc=0x288914) = 0x80
+  11.52 dopus_buttons exec.DeleteMsgPort(port=0)
+  11.52 dopus_buttons exec.DeleteMsgPort(port=0)
+  11.53 RunProg:launch exec.DeleteMsgPort(port=0x28ee28)
+  11.54 RunProg:launch dopus5.NewMemHandle(puddle=0x5dc, thresh=0x190, type=0x10000) = 0x288914
+  11.54 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x600, threshSize=0x19c) = 0x2897c0
+  11.54 RunProg:launch dopus5.NewMemHandle(puddle=0x1000, thresh=0x400, type=0x10000) = 0x2897fc
+  11.54 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x1030, threshSize=0x40c) = 0x289858
+  11.54 RunProg:launch dopus5.InitListLock(ll=0x2c104c, name=0) = 0x2897fc
+  11.54 RunProg:launch dopus5.NewMemHandle(puddle=0x280, thresh=0x3c, type=0x10001) = 0x28ee2c
+  11.54 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x2f8, threshSize=0x48) = 0x289890
+  11.54 RunProg:launch dopus5.InitListLock(ll=0x2cc062, name=0) = 0x28ee2c
+  11.54 RunProg:launch dopus5.IPC_Launch(list=0x26d236, ipc=0x984d48, name=0x9d90ce, entry=0x9c9a10, stack=0x2000, data=0x2cb1dc, dos=0x21a4dc) = 1
+  11.54 RunProg:launch dos.CreateNewProc(tags={NP_Entry=0x9c9a10, NP_Name='dopus_lister', NP_WindowPtr=0xffffffff, NP_StackSize=0x2000, NP_Priority=0}) = 0x2c1938
+  11.57 RunProg:launch exec.CreateMsgPort() = 0x2c1550
+  11.58 RunProg:launch exec.PutMsg(port=0x2c1994, message=0x984cdc)
+  11.58 dopus_lister dopus5.IPC_ProcStartup(data=0x2ce740, code=0x9c977c) = 0x28ee8c
+  11.58 dopus_lister dopus5.Att_NewList(flags=1) = 0x2c15d4
+  11.58 dopus_lister exec.CreateMsgPort() = 0x2c1620
+  11.58 dopus_lister exec.CreateMsgPort() = 0x2c1648
+  11.58 dopus_lister exec.AllocSignal(signalNum=0x2c16ff) = 0x12
+  11.58 dopus_lister exec.AllocSignal(signalNum=0xff) = 0x13
+  11.58 dopus_lister exec.AllocSignal(signalNum=0xff) = 0x14
+  11.58 dopus_lister dopus5.AllocTimer(unit=1, port=0x2c1648) = 0x2c1674
+  11.58 dopus_lister exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x2c1678, flags=0) = 0
+  11.59 dopus_lister dopus5.AllocTimer(unit=1, port=0x2c1648) = 0x2c16ac
+  11.59 dopus_lister exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x2c16b0, flags=0) = 0
+  11.59 dopus_lister dopus5.AllocTimer(unit=1, port=0x2c1648) = 0x2c16e4
+  11.59 dopus_lister exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x2c16e8, flags=0) = 0
+  11.59 dopus_lister dopus5.AllocTimer(unit=1, port=0x2c1648) = 0x2c171c
+  11.59 dopus_lister exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x2c1720, flags=0) = 0
+  11.60 dopus_lister dopus5.NewMemHandle(puddle=0x1000, thresh=0x400, type=0x10001) = 0x2c1754
+  11.60 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x1030, threshSize=0x40c) = 0x2c17b0
+  11.60 dopus_lister dopus5.NewMemHandle(puddle=0x1000, thresh=0x400, type=0x10001) = 0x2ca474
+  11.60 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x1030, threshSize=0x40c) = 0x2c1a78
+  11.60 dopus_lister dopus5.PopUpFreeHandle(handle=0) = 0
+  11.60 dopus_lister dopus5.PopUpNewHandle(data=0, callback=0, locale=0x985658) = 0x2c1c5c
+  11.61 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x40c, threshSize=0x30c) = 0x2c1cf8
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x28f390, id=0, flags=0x20) = 0x2c1da8
+  11.61 dopus_lister dopus5.PopUpSeparator(handle=0x2c1c5c) = 1
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x28f5d0, id=1, flags=0x20) = 0x2c1e70
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x28f6c0, id=2, flags=0x20) = 0x2c1ea0
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x28f838, id=3, flags=0x20) = 0x2c1ed0
+  11.61 dopus_lister dopus5.PopUpSeparator(handle=0x2c1c5c) = 1
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x28f9e0, id=4, flags=0x20) = 0x2ca578
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x28fad0, id=5, flags=0x20) = 0x2ca5a8
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x28fbc0, id=6, flags=0x20) = 0x2ca5d8
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c4d58, id=7, flags=0x20) = 0x2ca608
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c4e50, id=8, flags=0x20) = 0x2ca638
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c4f50, id=9, flags=0x20) = 0x2ca668
+  11.61 dopus_lister dopus5.PopUpSeparator(handle=0x2c1c5c) = 1
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c5100, id=0xa, flags=0x20) = 0x2ca6c8
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c5208, id=0xb, flags=0x20) = 0x2ca6f8
+  11.61 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c5310, id=0xc, flags=0x20) = 0x2ca7a8
+  11.62 dopus_lister dopus5.PopUpSeparator(handle=0x2c1c5c) = 1
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c54c8, id=0xd, flags=0x20) = 0x2ca808
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c55b8, id=0xe, flags=0x20) = 0x2ca838
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c56b0, id=0xf, flags=0x20) = 0x2ca868
+  11.62 dopus_lister dopus5.PopUpSeparator(handle=0x2c1c5c) = 1
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c58b0, id=0x10, flags=0x20) = 0x2ca8c8
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c59a0, id=0x11, flags=0x20) = 0x2ca8f8
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c5a90, id=0x12, flags=0x20) = 0x2ca928
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c5b80, id=0x13, flags=0x20) = 0x2ca958
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c5c70, id=0x14, flags=0x20) = 0x2ca988
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c5d60, id=0x15, flags=0x20) = 0x2ca9b8
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c5e58, id=0x16, flags=0x20) = 0x2ca9e8
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c5f60, id=0x17, flags=0x20) = 0x2caa18
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c6060, id=0x18, flags=0x20) = 0x2caa48
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c6150, id=0x19, flags=0x20) = 0x2caa78
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c6248, id=0x1a, flags=0x20) = 0x2caaa8
+  11.62 dopus_lister dopus5.PopUpSeparator(handle=0x2c1c5c) = 1
+  11.62 dopus_lister dopus5.PopUpNewItem(handle=0x2c1c5c, string=0x2c63f8, id=0x1b, flags=0x20) = 0x2cab08
+  11.62 dopus_lister diskfont.OpenDiskFont(textAttr=TextAttr('topaz.font', y=8, style=00, flags=00)) = 0
+  11.62 dopus_lister exec.CreateMsgPort() = 0x2c1ef8
+  11.62 dopus_lister exec.CreateMsgPort() = 0x2c1f20
+  11.62 dopus_lister exec.ReplyMsg(message=0x984cdc)
+  11.62 RunProg:launch exec.DeleteMsgPort(port=0x2c1550)
+  11.63 RunProg:launch dopus5.IPC_Command(ipc=0x985738, command=0x800000e, flags=0, data=0, data_free=0, reply=0) = 1
+  11.63 RunProg:launch exec.PutMsg(port=0x282a38, message=0x288878)
+  11.63 RunProg:launch dopus5.IPC_ListCommand(list=0x26d236, command=0x800000e, flags=0, data=0, wait=0) = 0
+  11.63 RunProg:launch exec.PutMsg(port=0x2c1ef8, message=0x2888a8)
+  11.63 RunProg:launch dopus5.LockAppList() = 0x267294
+  11.63 RunProg:launch dopus5.NextAppEntry(last=0x267294, type=2) = 0
+  11.63 RunProg:launch dopus5.UnlockAppList() = 0
+  11.63 RunProg:launch dopus5.FindFunctionType(list=0x28fcbc, type=0) = 0x28fd88
+  11.63 RunProg:launch dopus5.SetProgressWindow(win=0, tags=0x984d90) = 0
+  11.63 RunProg:launch dopus5.SetLibraryFlags(flags=0, mask=0x40) = 0x400
+  11.63 RunProg:launch dopus5.SetLibraryFlags(flags=0x80, mask=0x80) = 0x400
+  11.63 RunProg:launch dopus5.SetLibraryFlags(flags=0, mask=2) = 0x480
+  11.63 RunProg:launch dopus5.SetNewIconsFlags(flags=1, prec=0x10) = 1
+  11.63 RunProg:launch dopus5.SetLibraryFlags(flags=0, mask=0x100) = 0x480
+  11.63 RunProg:launch dopus5.SetLibraryFlags(flags=0x200, mask=0x200) = 0x480
+  11.63 RunProg:launch dos.DeleteFile(name='env:dopus/paths') = 0
+  11.63 RunProg:launch dopus5.UpdatePathList() = 1
+  11.64 RunProg:launch dos.Open(name='env:dopus/paths', accessMode=0x3ed) = 0
+  11.65 RunProg:launch exec.PutMsg(port=0x26c470, message=0x291f68)
+  11.65 RunProg:launch dopus5.SetPopUpDelay(delay=0xa) = 0xa
+  11.65 RunProg:launch dos.Lock(name='DOpus5:Themes/', accessMode=0xfffffffe) = 0x3aa02a
+  11.65 dopus_lister dopus5.IPC_Reply(msg=0x2888a8) = 0x40
+  11.65 DO_LAUNCHER dopus5.UpdateMyPaths() = 0
+  11.65 DO_LAUNCHER dos.Open(name='env:dopus/paths', accessMode=0x3ed) = 0
+  11.66 DO_LAUNCHER dopus5.IPC_Reply(msg=0x291f68) = 0x2000
+  11.66 RunProg:launch dos.AssignLock(name='D5THEMES', lock=0x3aa02a) = 0xffffffff
+  11.67 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e70) = 0x3e8
+  11.67 RunProg:launch exec.CreateMsgPort() = 0x291f60
+  11.67 RunProg:launch exec.PutMsg(port=0x282768, message=0x266870)
+  11.68 dopus_progressbar dopus5.IPC_Reply(msg=0x266870) = 0x400000
+  11.68 dopus_progressbar exec.ReplyMsg(message=0x266870)
+  11.68 RunProg:launch exec.DeleteMsgPort(port=0x291f60)
+  11.68 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+  11.68 RunProg:launch dos.StartNotify(notify=0x28ad70) = 0
+  11.70 RunProg:launch dos.StartNotify(notify=0x28ad70) = 0
+  11.71 RunProg:launch dos.StartNotify(notify=0x28ad70) = 0
+  11.72 RunProg:launch dos.StartNotify(notify=0x28ad70) = 0
+  11.73 RunProg:launch dos.StartNotify(notify=0x28ad70) = 0
+  11.74 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e8c) = 0x3e8
+  11.74 RunProg:launch exec.CreateMsgPort() = 0x291f60
+  11.74 RunProg:launch exec.PutMsg(port=0x282768, message=0x266870)
+  11.74 dopus_progressbar dopus5.IPC_Reply(msg=0x266870) = 0x400000
+  11.74 dopus_progressbar exec.ReplyMsg(message=0x266870)
+  11.74 RunProg:launch exec.DeleteMsgPort(port=0x291f60)
+  11.74 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+  11.75 RunProg:launch dopus5.OpenImage(name=0x9f4e90, info=0) = 0x2b8f80
+  11.75 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x49c, threshSize=0x5a) = 0x291ff8
+  11.75 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x292110
+  11.75 RunProg:launch dos.Open(name='DOpus5:Images/ToolbarArrow.image', accessMode=0x3ed) = 0xa4853
+  11.76 RunProg:launch dos.Close(file=0xa4853) = 0xffff
+  11.77 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x292110
+  11.77 RunProg:launch dos.Open(name='DOpus5:Images/ToolbarArrow.image', accessMode=0x3ed) = 0xa4853
+  11.80 RunProg:launch dos.Seek(file=0xa4853, position=0xa2c, mode=0xffffffff) = 0xa2c
+  11.81 RunProg:launch dos.Seek(file=0xa4853, position=0, mode=0) = 0xa2c
+  11.81 RunProg:launch dos.Close(file=0xa4853) = 0xffff
+  11.83 RunProg:launch dopus5.GetCachedDiskObject(name=0x9f4eb1, flags=0x10000000) = 0x292070
+  11.83 RunProg:launch icon.GetIconTagList(name='DOpus5:Icons/Lister', tags={0x8000902f=1, 0x80009045=0}) = 0x292070
+  11.93 RunProg:launch dopus5.GetCachedDiskObject(name=0x9f4ec5, flags=0x10000000) = 0x292230
+  11.93 RunProg:launch icon.GetIconTagList(name='DOpus5:Icons/Buttons', tags={0x8000902f=1, 0x80009045=0}) = 0x292230
+  12.03 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e80) = 0x3e8
+  12.03 RunProg:launch exec.CreateMsgPort() = 0x2923b0
+  12.03 RunProg:launch exec.PutMsg(port=0x282768, message=0x2921f8)
+  12.04 dopus_progressbar dopus5.IPC_Reply(msg=0x2921f8) = 0x400000
+  12.04 dopus_progressbar exec.ReplyMsg(message=0x2921f8)
+  12.04 RunProg:launch exec.DeleteMsgPort(port=0x2923b0)
+  12.04 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+  12.04 RunProg:launch dopus5.FindNameI(list=0x2706c2, name=0x283f18) = 0
+  12.04 RunProg:launch dopus5.FindFunctionType(list=0x2c8dd4, type=0) = 0x2c8ea0
+  12.04 RunProg:launch dopus5.FindFunctionType(list=0x2c8fcc, type=0xffff0000) = 0x2c9040
+  12.04 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e74) = 0x3e8
+  12.04 RunProg:launch exec.CreateMsgPort() = 0x2923b0
+  12.04 RunProg:launch exec.PutMsg(port=0x282768, message=0x2921f8)
+  12.04 dopus_progressbar dopus5.IPC_Reply(msg=0x2921f8) = 0x400000
+  12.04 dopus_progressbar exec.ReplyMsg(message=0x2921f8)
+  12.04 RunProg:launch exec.DeleteMsgPort(port=0x2923b0)
+  12.04 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+  12.04 RunProg:launch dopus5.IPC_QuitName(list=0x26d2ea, name=0x993d68, flags=0) = 0xfffffff6
+  12.04 RunProg:launch intuition.LockPubScreen(name='Workbench') = 0x271c6c
+  12.05 RunProg:launch intuition.OpenWindowTagList(newWindow=0, tagList={WA_Left=0, WA_Top=0xf, WA_Width=0x280, WA_Height=0xf1, WA_MinWidth=0x64, WA_MinHeight=0x28, WA_MaxWidth=0xffffffff, WA_MaxHeight=0xffffffff, WA_IDCMP=0x10da77e, WA_Activate=1, WA_Backdrop=1, WA_Borderless=1, WA_CloseGadget=0, WA_DepthGadget=0, WA_DragBar=0, WA_MenuHelp=1, WA_SimpleRefresh=1, WA_SizeGadget=0, WA_SizeBBottom=0, WA_SizeBRight=0, WA_NewLookMenus=1, WA_PubScreen=0x271c6c, WA_PubScreenFallBack=1, WA_ScreenTitle='Directory Opus', WA_WindowName='dOpUs5.win', WA_Gadgets=0, WA_BackFill=0x26dd0c}) = 0x2923b0
+  12.14 RunProg:launch gadtools.GetVisualInfoA(screen=0x271c6c, tagList=NULL) = 0x23e624
+  12.14 RunProg:launch dopus5.SetWindowID(window=0x2923b0, id_ptr=0x26d73c, id=0x4000001, port=0x985738) = 0x4000001
+  12.14 RunProg:launch dopus5.SetBusyPointer(window=0x2923b0) = 5
+  12.14 RunProg:launch intuition.SetWindowPointerA(window=0x2923b0, taglist={WA_BusyPointer|SA_BottomRightScreen=1, WA_PointerDelay|SA_StopBlanker=1})
+  12.14 RunProg:launch dopus5.ScreenInfo(screen=0x271c6c) = 1
+  12.14 RunProg:launch graphics.GetVPModeID(vp=0x271c98) = 0x29000
+  12.14 RunProg:launch graphics.GetDisplayInfoData(handle=0, buf=0x984d40, size=0x38, tagID=0x80000000, ID=0x29000) = 0x38
+  12.14 RunProg:launch dopus5.SetNotifyRequest(req=0x284b4c, flags=2, mask=2) = 2
+  12.14 RunProg:launch exec.CreateMsgPort() = 0x292608
+  12.14 RunProg:launch dopus5.AddNotifyRequest(type=1, data=0, port=0x292608) = 0x26686c
+  12.14 RunProg:launch workbench.AddAppWindowA(id=0x4000001, userdata=0x985738, window=0x2923b0, msgport=port:'Directory Opus'@0x284af8, taglist=NULL) = 0x292a0c
+  12.15 RunProg:launch gadtools.GetVisualInfoA(screen=0x271c6c, tagList=NULL) = 0x288a2c
+  12.15 RunProg:launch dopus5.BuildMenuStrip(data=0x98647a, locale=0x985658) = 0x2d2048
+  12.15 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x140, threshSize=0x14) = 0x292ba8
+  12.25 RunProg:launch gadtools.CreateMenusA(newmenu=0x2d0508, tagList=NULL) = 0x2d2048
+  12.32 RunProg:launch gadtools.LayoutMenusA(menu=0x2d2048, vi=0x288a2c, tagList={0x80080043=1}) = 1
+  12.45 RunProg:launch intuition.SetMenuStrip(window=0x2923b0, menu=0x2d2048) = 1
+  12.45 RunProg:launch gadtools.FreeVisualInfo(vi=0x288a2c)
+  12.45 RunProg:launch intuition.ClearMenuStrip(window=0x2923b0)
+  12.47 RunProg:launch intuition.ResetMenuStrip(window=0x2923b0, menu=0x2d2048) = 1
+  12.47 RunProg:launch dopus5.NewMemHandle(puddle=0x400, thresh=0x100, type=0x10000) = 0x2d164c
+  12.47 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2d16a8
+  12.47 RunProg:launch dopus5.GetDosListCopy(list=0x984cba, memory=0x2d164c) = 1
+  12.48 RunProg:launch dopus5.GetDeviceUnit(startup=0x3a9e08, device=0x2d1792, unit=0x2d17ba) = 0
+  12.48 RunProg:launch dopus5.GetDeviceUnit(startup=0x3a9e00, device=0x2d187a, unit=0x2d18a2) = 0
+  12.48 RunProg:launch dopus5.GetDeviceUnit(startup=0x83f34, device=0x2d18fa, unit=0x2d1922) = 1
+  12.48 RunProg:launch dopus5.GetDeviceUnit(startup=0x3a9e04, device=0x2d1a4a, unit=0x2d1a72) = 0
+  12.48 RunProg:launch dopus5.DeviceFromHandler(port=0x22f40c, name=0x984bf0) = 0x22f1f4
+  12.48 RunProg:launch dopus5.DeviceFromHandler(port=0x2282a4, name=0x984bf0) = 0x219ed0
+  12.49 RunProg:launch dopus5.DeviceFromHandler(port=0x22402c, name=0x984bf0) = 0x219e30
+  12.49 RunProg:launch dopus5.DeviceFromHandler(port=0x21cfec, name=0x984bf0) = 0x219e80
+  12.49 RunProg:launch dopus5.DeviceFromHandler(port=0x21cfec, name=0x984cf0) = 0x219e80
+  12.49 RunProg:launch dopus5.DeviceFromHandler(port=0x22402c, name=0x984cf0) = 0x219e30
+  12.50 RunProg:launch dopus5.DeviceFromHandler(port=0x2282a4, name=0x984cf0) = 0x219ed0
+  12.50 RunProg:launch dopus5.DeviceFromHandler(port=0x22f40c, name=0x984cf0) = 0x22f1f4
+  12.50 RunProg:launch dopus5.DeviceFromHandler(port=0x2015bc, name=0) = 0x20fca4
+  12.50 RunProg:launch dopus5.GetDeviceUnit(startup=0x83f34, device=0, unit=0) = 1
+  12.50 RunProg:launch dopus5.FreeMemHandle(handle=0x2d164c) = 0x800
+  12.51 RunProg:launch dos.Lock(name='RAM:', accessMode=0xfffffffe) = 0x8c6fe
+  12.51 RunProg:launch dos.CurrentDir(lock=0x8c6fe) = 0x3aa800
+  12.51 RunProg:launch dopus5.GetMatchHandle(name=0x2d4f62) = 0x2d53c4
+  12.52 RunProg:launch dos.Lock(name='RAM:', accessMode=0xfffffffe) = 0x8c6fe
+  12.52 RunProg:launch dos.Examine(lock=0x8c6fe, fib=0x2d58d4) = 0xffffffff
+  12.52 RunProg:launch dos.Info(lock=0x8c6fe, parameterBlock=0x2d5aec) = 0xffffffff
+  12.52 RunProg:launch dos.NameFromLock(lock=0x8c6fe, buffer=0x2d164c, length=0x100) = 0xffffffff
+  12.53 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28c9f0) = 0
+  12.53 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28cb98) = 0
+  12.53 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28cd28) = 0
+  12.53 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28ceb8) = 0
+  12.53 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28d048) = 0
+  12.53 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28d298) = 0
+  12.54 RunProg:launch dos.ParsePatternNoCase(Source='*.module', Dest=0x2d57d0, DestLength=0x102) = 1
+  12.54 RunProg:launch dos.MatchPatternNoCase(pat=0x2d57d0, str='RAM Disk') = 0
+  12.54 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28d420) = 0
+  12.54 RunProg:launch dos.ParsePatternNoCase(Source='*.module', Dest=0x2d57d0, DestLength=0x102) = 1
+  12.54 RunProg:launch dos.MatchPatternNoCase(pat=0x2d57d0, str='RAM Disk') = 0
+  12.54 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28d538) = 0
+  12.54 RunProg:launch dos.ParsePatternNoCase(Source='*.dopus5', Dest=0x2d57d0, DestLength=0x102) = 1
+  12.54 RunProg:launch dos.MatchPatternNoCase(pat=0x2d57d0, str='RAM Disk') = 0
+  12.54 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28e8c8) = 0
+  12.54 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28df80) = 0
+  12.54 RunProg:launch dos.ParsePatternNoCase(Source='#?', Dest=0x2d57d0, DestLength=0x102) = 1
+  12.54 RunProg:launch dos.MatchPatternNoCase(pat=0x2d57d0, str='RAM Disk') = 1
+  12.54 RunProg:launch dopus5.FreeMatchHandle(handle=0x2d53c4) = 0x8000
+  12.54 RunProg:launch dos.UnLock(lock=0x8c6fe) = 0xffff0001
+  12.54 RunProg:launch dopus5.GetCachedDiskObject(name=0x9ebf1d, flags=0) = 0
+  12.54 RunProg:launch icon.GetIconTagList(name='Disk', tags={0x8000902f=1, 0x80009045=0x271c6c}) = 0
+  12.55 RunProg:launch dopus5.GetCachedDefDiskObject(type=1) = 0x2cabf8
+  12.55 RunProg:launch icon.GetIconTagList(name='env:sys/def_disk', tags={0x8000902f=1, 0x80009045=0x271c6c}) = 0
+  12.55 RunProg:launch icon.GetIconTagList(name=0, tags={0x8000902d=1, 0x80009045=0x271c6c}) = 0x2cabf8
+  12.61 RunProg:launch dos.CurrentDir(lock=0x3aa800) = 0x8c6fe
+  12.61 RunProg:launch dos.UnLock(lock=0x8c6fe) = 0xffff0001
+  12.62 RunProg:launch dopus5.SetIconFlags(icon=0x2cabf8, flags=0) = 0
+  12.62 RunProg:launch dopus5.SetIconPosition(icon=0x2cabf8, x=0xffffffff, y=0xffff) = 0xffffffff
+  12.62 RunProg:launch dopus5.RemapIcon(icon=0x2cabf8, screen=0x271c6c, free=0x290000) = 0x2c0001
+  12.62 RunProg:launch icon.LayoutIconA(icon=0x2cabf8, screen=0x271c6c, tags={}) = 0x2c0001
+  12.62 RunProg:launch dopus5.BuildTransDragMask(mask=0x1556c, image=0x14f68, width=0x10020, height=0x20, depth=2, flags=0) = 1
+  12.62 RunProg:launch graphics.AllocBitMap(sizex=0x22, sizey=0x22, depth=2, flags=1, friend_bitmap=0) = 0x2cb0d4
+  12.83 RunProg:launch graphics.FreeBitMap(bm=0x2cb0d4)
+  12.83 RunProg:launch dopus5.BuildTransDragMask(mask=0x155f4, image=0x15068, width=0x10020, height=0x20, depth=2, flags=0) = 1
+  12.83 RunProg:launch graphics.AllocBitMap(sizex=0x22, sizey=0x22, depth=2, flags=1, friend_bitmap=0) = 0x2cb0d4
+  13.04 RunProg:launch graphics.FreeBitMap(bm=0x2cb0d4)
+  13.04 RunProg:launch dos.Lock(name='HOSTFS1:', accessMode=0xfffffffe) = 0x3aa45a
+  13.04 RunProg:launch dos.CurrentDir(lock=0x3aa45a) = 0x3aa800
+  13.04 RunProg:launch dopus5.GetMatchHandle(name=0x2d1e9a) = 0x2d53c4
+  13.05 RunProg:launch dos.Lock(name='HOSTFS1:', accessMode=0xfffffffe) = 0x3aa460
+  13.05 RunProg:launch dos.Examine(lock=0x3aa460, fib=0x2d58d4) = 0xffffffff
+  13.05 RunProg:launch dos.Info(lock=0x3aa460, parameterBlock=0x2d5aec) = 0xffffffff
+  13.05 RunProg:launch dos.NameFromLock(lock=0x3aa460, buffer=0x2d5b1c, length=0x100) = 0xffffffff
+  13.06 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28c9f0) = 0
+  13.06 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28cb98) = 0
+  13.06 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28cd28) = 0
+  13.06 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28ceb8) = 0
+  13.06 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28d048) = 0
+  13.06 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28d298) = 0
+  13.06 RunProg:launch dos.ParsePatternNoCase(Source='*.module', Dest=0x2d57d0, DestLength=0x102) = 1
+  13.06 RunProg:launch dos.MatchPatternNoCase(pat=0x2d57d0, str='RunBoot') = 0
+  13.06 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28d420) = 0
+  13.06 RunProg:launch dos.ParsePatternNoCase(Source='*.module', Dest=0x2d57d0, DestLength=0x102) = 1
+  13.06 RunProg:launch dos.MatchPatternNoCase(pat=0x2d57d0, str='RunBoot') = 0
+  13.07 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28d538) = 0
+  13.07 RunProg:launch dos.ParsePatternNoCase(Source='*.dopus5', Dest=0x2d57d0, DestLength=0x102) = 1
+  13.07 RunProg:launch dos.MatchPatternNoCase(pat=0x2d57d0, str='RunBoot') = 0
+  13.07 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28e8c8) = 0
+  13.07 RunProg:launch dopus5.MatchFiletype(handle=0x2d53c4, type=0x28df80) = 0
+  13.07 RunProg:launch dos.ParsePatternNoCase(Source='#?', Dest=0x2d57d0, DestLength=0x102) = 1
+  13.07 RunProg:launch dos.MatchPatternNoCase(pat=0x2d57d0, str='RunBoot') = 1
+  13.07 RunProg:launch dopus5.FreeMatchHandle(handle=0x2d53c4) = 0x8000
+  13.07 RunProg:launch dos.UnLock(lock=0x3aa460) = 0xffff0001
+  13.07 RunProg:launch dopus5.GetCachedDiskObject(name=0x9ebf1d, flags=0) = 0
+  13.07 RunProg:launch icon.GetIconTagList(name='Disk', tags={0x8000902f=1, 0x80009045=0x271c6c}) = 0
+  13.07 RunProg:launch dopus5.GetCachedDefDiskObject(type=1) = 0x2d53c8
+  13.07 RunProg:launch icon.GetIconTagList(name='env:sys/def_disk', tags={0x8000902f=1, 0x80009045=0x271c6c}) = 0
+  13.08 RunProg:launch icon.GetIconTagList(name=0, tags={0x8000902d=1, 0x80009045=0x271c6c}) = 0x2d53c8
+  13.13 RunProg:launch dos.CurrentDir(lock=0x3aa800) = 0x3aa45a
+  13.14 RunProg:launch dos.UnLock(lock=0x3aa45a) = 0xffff0001
+  13.14 RunProg:launch dopus5.SetIconFlags(icon=0x2d53c8, flags=0) = 0
+  13.14 RunProg:launch dopus5.SetIconPosition(icon=0x2d53c8, x=0xffffffff, y=0xffff) = 0xffffffff
+  13.14 RunProg:launch dopus5.RemapIcon(icon=0x2d53c8, screen=0x271c6c, free=0x290000) = 0x2d0001
+  13.14 RunProg:launch icon.LayoutIconA(icon=0x2d53c8, screen=0x271c6c, tags={}) = 0x2d0001
+  13.14 RunProg:launch dopus5.BuildTransDragMask(mask=0x15c7c, image=0x15678, width=0x10020, height=0x20, depth=2, flags=0) = 1
+  13.14 RunProg:launch graphics.AllocBitMap(sizex=0x22, sizey=0x22, depth=2, flags=1, friend_bitmap=0) = 0x2d1c64
+  13.35 RunProg:launch graphics.FreeBitMap(bm=0x2d1c64)
+  13.35 RunProg:launch dopus5.BuildTransDragMask(mask=0x15d04, image=0x15778, width=0x10020, height=0x20, depth=2, flags=0) = 1
+  13.35 RunProg:launch graphics.AllocBitMap(sizex=0x22, sizey=0x22, depth=2, flags=1, friend_bitmap=0) = 0x2d1c64
+  13.55 RunProg:launch graphics.FreeBitMap(bm=0x2d1c64)
+  13.56 RunProg:launch dos.Lock(name='HOSTFS0:', accessMode=0xfffffffe) = 0x3aa00c
+  13.56 RunProg:launch dos.CurrentDir(lock=0x3aa00c) = 0x3aa800
+  13.56 RunProg:launch dopus5.GetMatchHandle(name=0x2d4c82) = 0x2d54ec
+  13.56 RunProg:launch dos.Lock(name='HOSTFS0:', accessMode=0xfffffffe) = 0x3aa030
+  13.57 RunProg:launch dos.Examine(lock=0x3aa030, fib=0x2d59fc) = 0xffffffff
+  13.57 RunProg:launch dos.Info(lock=0x3aa030, parameterBlock=0x2d5c14) = 0xffffffff
+  13.57 RunProg:launch dos.NameFromLock(lock=0x3aa030, buffer=0x2d5c44, length=0x100) = 0xffffffff
+  13.58 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28c9f0) = 0
+  13.58 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28cb98) = 0
+  13.58 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28cd28) = 0
+  13.58 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28ceb8) = 0
+  13.58 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28d048) = 0
+  13.58 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28d298) = 0
+  13.58 RunProg:launch dos.ParsePatternNoCase(Source='*.module', Dest=0x2d58f8, DestLength=0x102) = 1
+  13.58 RunProg:launch dos.MatchPatternNoCase(pat=0x2d58f8, str='DOpus5') = 0
+  13.58 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28d420) = 0
+  13.58 RunProg:launch dos.ParsePatternNoCase(Source='*.module', Dest=0x2d58f8, DestLength=0x102) = 1
+  13.58 RunProg:launch dos.MatchPatternNoCase(pat=0x2d58f8, str='DOpus5') = 0
+  13.58 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28d538) = 0
+  13.58 RunProg:launch dos.ParsePatternNoCase(Source='*.dopus5', Dest=0x2d58f8, DestLength=0x102) = 1
+  13.59 RunProg:launch dos.MatchPatternNoCase(pat=0x2d58f8, str='DOpus5') = 0
+  13.59 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28e8c8) = 0
+  13.59 RunProg:launch dopus5.MatchFiletype(handle=0x2d54ec, type=0x28df80) = 0
+  13.59 RunProg:launch dos.ParsePatternNoCase(Source='#?', Dest=0x2d58f8, DestLength=0x102) = 1
+  13.59 RunProg:launch dos.MatchPatternNoCase(pat=0x2d58f8, str='DOpus5') = 1
+  13.59 RunProg:launch dopus5.FreeMatchHandle(handle=0x2d54ec) = 0x8000
+  13.59 RunProg:launch dos.UnLock(lock=0x3aa030) = 0xffff0001
+  13.59 RunProg:launch dopus5.GetCachedDiskObject(name=0x9ebf1d, flags=0) = 0
+  13.59 RunProg:launch icon.GetIconTagList(name='Disk', tags={0x8000902f=1, 0x80009045=0x271c6c}) = 0
+  13.59 RunProg:launch dopus5.GetCachedDefDiskObject(type=1) = 0x2d54f0
+  13.59 RunProg:launch icon.GetIconTagList(name='env:sys/def_disk', tags={0x8000902f=1, 0x80009045=0x271c6c}) = 0
+  13.60 RunProg:launch icon.GetIconTagList(name=0, tags={0x8000902d=1, 0x80009045=0x271c6c}) = 0x2d54f0
+  13.65 RunProg:launch dos.CurrentDir(lock=0x3aa800) = 0x3aa00c
+  13.65 RunProg:launch dos.UnLock(lock=0x3aa00c) = 0xffff0001
+  13.66 RunProg:launch dopus5.SetIconFlags(icon=0x2d54f0, flags=0) = 0
+  13.66 RunProg:launch dopus5.SetIconPosition(icon=0x2d54f0, x=0xffffffff, y=0xffff) = 0xffffffff
+  13.66 RunProg:launch dopus5.RemapIcon(icon=0x2d54f0, screen=0x271c6c, free=0x290000) = 0x2d0001
+  13.66 RunProg:launch icon.LayoutIconA(icon=0x2d54f0, screen=0x271c6c, tags={}) = 0x2d0001
+  13.66 RunProg:launch dopus5.BuildTransDragMask(mask=0x1638c, image=0x15d88, width=0x10020, height=0x20, depth=2, flags=0) = 1
+  13.66 RunProg:launch graphics.AllocBitMap(sizex=0x22, sizey=0x22, depth=2, flags=1, friend_bitmap=0) = 0x2d59ac
+  13.86 RunProg:launch graphics.FreeBitMap(bm=0x2d59ac)
+  13.87 RunProg:launch dopus5.BuildTransDragMask(mask=0x16414, image=0x15e88, width=0x10020, height=0x20, depth=2, flags=0) = 1
+  13.87 RunProg:launch graphics.AllocBitMap(sizex=0x22, sizey=0x22, depth=2, flags=1, friend_bitmap=0) = 0x2d59ac
+  14.08 RunProg:launch graphics.FreeBitMap(bm=0x2d59ac)
+  14.08 RunProg:launch dos.Lock(name='HOSTFS2:', accessMode=0xfffffffe) = 0x3aa824
+  14.09 RunProg:launch dos.CurrentDir(lock=0x3aa824) = 0x3aa800
+  14.09 RunProg:launch dopus5.GetMatchHandle(name=0x2d4d8a) = 0x2d5a14
+  14.09 RunProg:launch dos.Lock(name='HOSTFS2:', accessMode=0xfffffffe) = 0x3aa82a
+  14.09 RunProg:launch dos.Examine(lock=0x3aa82a, fib=0x2d5f24) = 0xffffffff
+  14.09 RunProg:launch dos.Info(lock=0x3aa82a, parameterBlock=0x2d613c) = 0xffffffff
+  14.10 RunProg:launch dos.NameFromLock(lock=0x3aa82a, buffer=0x2d616c, length=0x100) = 0xffffffff
+  14.10 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28c9f0) = 0
+  14.10 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28cb98) = 0
+  14.10 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28cd28) = 0
+  14.10 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28ceb8) = 0
+  14.10 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28d048) = 0
+  14.10 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28d298) = 0
+  14.10 RunProg:launch dos.ParsePatternNoCase(Source='*.module', Dest=0x2d5e20, DestLength=0x102) = 1
+  14.10 RunProg:launch dos.MatchPatternNoCase(pat=0x2d5e20, str='RunProg') = 0
+  14.10 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28d420) = 0
+  14.10 RunProg:launch dos.ParsePatternNoCase(Source='*.module', Dest=0x2d5e20, DestLength=0x102) = 1
+  14.11 RunProg:launch dos.MatchPatternNoCase(pat=0x2d5e20, str='RunProg') = 0
+  14.11 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28d538) = 0
+  14.11 RunProg:launch dos.ParsePatternNoCase(Source='*.dopus5', Dest=0x2d5e20, DestLength=0x102) = 1
+  14.11 RunProg:launch dos.MatchPatternNoCase(pat=0x2d5e20, str='RunProg') = 0
+  14.11 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28e8c8) = 0
+  14.11 RunProg:launch dopus5.MatchFiletype(handle=0x2d5a14, type=0x28df80) = 0
+  14.11 RunProg:launch dos.ParsePatternNoCase(Source='#?', Dest=0x2d5e20, DestLength=0x102) = 1
+  14.11 RunProg:launch dos.MatchPatternNoCase(pat=0x2d5e20, str='RunProg') = 1
+  14.11 RunProg:launch dopus5.FreeMatchHandle(handle=0x2d5a14) = 0x8000
+  14.11 RunProg:launch dos.UnLock(lock=0x3aa82a) = 0xffff0001
+  14.11 RunProg:launch dopus5.GetCachedDiskObject(name=0x9ebf1d, flags=0) = 0
+  14.11 RunProg:launch icon.GetIconTagList(name='Disk', tags={0x8000902f=1, 0x80009045=0x271c6c}) = 0
+  14.11 RunProg:launch dopus5.GetCachedDefDiskObject(type=1) = 0x2d5a18
+  14.11 RunProg:launch icon.GetIconTagList(name='env:sys/def_disk', tags={0x8000902f=1, 0x80009045=0x271c6c}) = 0
+  14.12 RunProg:launch icon.GetIconTagList(name=0, tags={0x8000902d=1, 0x80009045=0x271c6c}) = 0x2d5a18
+  14.18 RunProg:launch dos.CurrentDir(lock=0x3aa800) = 0x3aa824
+  14.18 RunProg:launch dos.UnLock(lock=0x3aa824) = 0xffff0001
+  14.18 RunProg:launch dopus5.SetIconFlags(icon=0x2d5a18, flags=0) = 0
+  14.18 RunProg:launch dopus5.SetIconPosition(icon=0x2d5a18, x=0xffffffff, y=0xffff) = 0xffffffff
+  14.18 RunProg:launch dopus5.RemapIcon(icon=0x2d5a18, screen=0x271c6c, free=0x290000) = 0x2d0001
+  14.18 RunProg:launch icon.LayoutIconA(icon=0x2d5a18, screen=0x271c6c, tags={}) = 0x2d0001
+  14.18 RunProg:launch dopus5.BuildTransDragMask(mask=0x16a9c, image=0x16498, width=0x10020, height=0x20, depth=2, flags=0) = 1
+  14.18 RunProg:launch graphics.AllocBitMap(sizex=0x22, sizey=0x22, depth=2, flags=1, friend_bitmap=0) = 0x2d5f4c
+  14.39 RunProg:launch graphics.FreeBitMap(bm=0x2d5f4c)
+  14.39 RunProg:launch dopus5.BuildTransDragMask(mask=0x16b24, image=0x16598, width=0x10020, height=0x20, depth=2, flags=0) = 1
+  14.39 RunProg:launch graphics.AllocBitMap(sizex=0x22, sizey=0x22, depth=2, flags=1, friend_bitmap=0) = 0x2d5f4c
+  14.60 RunProg:launch graphics.FreeBitMap(bm=0x2d5f4c)
+  14.61 RunProg:launch dopus5.LockAppList() = 0x267294
+  14.61 RunProg:launch dopus5.NextAppEntry(last=0x267294, type=0) = 0
+  14.61 RunProg:launch dopus5.UnlockAppList() = 0
+  14.61 RunProg:launch dos.Lock(name='DOpus5:Desktop/', accessMode=0xfffffffe) = 0x3aa00c
+  14.61 RunProg:launch dos.DupLock(lock=0x3aa00c) = 0x3aa030
+  14.61 RunProg:launch dos.CurrentDir(lock=0x3aa00c) = 0x3aa800
+  14.61 RunProg:launch dos.Examine(lock=0x3aa030, fib=0x984c38) = 0xffffffff
+  14.62 RunProg:launch dos.ExNext(lock=0x3aa030, fileInfoBlock=0x984c38) = 0xffffffff
+  14.62 RunProg:launch dos.ExNext(lock=0x3aa030, fileInfoBlock=0x984c38) = 0
+  14.62 RunProg:launch dos.UnLock(lock=0x3aa030) = 0xffff0001
+  14.62 RunProg:launch dos.CurrentDir(lock=0x3aa800) = 0x3aa00c
+  14.62 RunProg:launch dos.UnLock(lock=0x3aa00c) = 0xffff0001
+  14.62 RunProg:launch dos.StartNotify(notify=0x28ad70) = 0
+  14.64 RunProg:launch dos.MatchFirst(pat='DOpus5:Groups/#?.info', AP=0x2d5fb4) = 0xe8
+  14.67 RunProg:launch dos.MatchEnd(AP=0x2d5fb4)
+  15.13 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22f40c, name=0x26bc0c) = 0x22f1f4
+  15.13 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x2282a4, name=0x26bc0c) = 0x219ed0
+  15.13 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22402c, name=0x26bc0c) = 0x219e30
+  15.13 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x21cfec, name=0x26bc0c) = 0x219e80
+  15.21 DO_LAUNCHER dopus5.Att_NewList(flags=0) = 0x2d7fb4
+  15.21 DO_LAUNCHER dopus5.Att_RemList(list=0x2d7fb4, flags=0) = 0x8000
+  15.45 RunProg:launch intuition.UnlockPubScreen(name=0, screen=0x271c6c)
+  15.45 RunProg:launch dopus5.ScreenInfo(screen=0x271c6c) = 1
+  15.45 RunProg:launch graphics.GetVPModeID(vp=0x271c98) = 0x29000
+  15.45 RunProg:launch graphics.GetDisplayInfoData(handle=0, buf=0x984d40, size=0x38, tagID=0x80000000, ID=0x29000) = 0x38
+  15.45 RunProg:launch dopus5.RemapImage(image=0x2b8f80, screen=0x271c6c, remap=0x26df98) = 1
+  15.45 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2d5f4c
+  15.45 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2d61bc
+  15.89 RunProg:launch graphics.FreeBitMap(bm=0x2d5f4c)
+  15.89 RunProg:launch graphics.FreeBitMap(bm=0x2d61bc)
+  15.89 RunProg:launch dopus5.DisposeBitMap(b=0) = 0
+  15.89 RunProg:launch dopus5.RemapImage(image=0x293e78, screen=0x271c6c, remap=0x288782) = 1
+  15.89 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x28879c
+  15.90 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2887cc
+  16.23 RunProg:launch graphics.FreeBitMap(bm=0x28879c)
+  16.23 RunProg:launch graphics.FreeBitMap(bm=0x2887cc)
+  16.23 RunProg:launch dopus5.RemapImage(image=0x294028, screen=0x271c6c, remap=0x288782) = 1
+  16.24 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x28879c
+  16.24 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2887cc
+  16.60 RunProg:launch graphics.FreeBitMap(bm=0x28879c)
+  16.61 RunProg:launch graphics.FreeBitMap(bm=0x2887cc)
+  16.61 RunProg:launch dopus5.RemapImage(image=0x294578, screen=0x271c6c, remap=0x288782) = 1
+  16.61 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x28879c
+  16.61 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2887cc
+  16.98 RunProg:launch graphics.FreeBitMap(bm=0x28879c)
+  16.99 RunProg:launch graphics.FreeBitMap(bm=0x2887cc)
+  16.99 RunProg:launch dopus5.RemapImage(image=0x2946c0, screen=0x271c6c, remap=0x288782) = 1
+  16.99 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x28879c
+  16.99 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2887cc
+  17.32 RunProg:launch graphics.FreeBitMap(bm=0x28879c)
+  17.33 RunProg:launch graphics.FreeBitMap(bm=0x2887cc)
+  17.33 RunProg:launch dopus5.RemapImage(image=0x296bd8, screen=0x271c6c, remap=0x288782) = 1
+  17.33 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x28879c
+  17.34 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2887cc
+  17.58 RunProg:launch graphics.FreeBitMap(bm=0x28879c)
+  17.58 RunProg:launch graphics.FreeBitMap(bm=0x2887cc)
+  17.58 RunProg:launch dopus5.RemapImage(image=0x296d18, screen=0x271c6c, remap=0x288782) = 1
+  17.59 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x28879c
+  17.59 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2887cc
+  17.84 RunProg:launch graphics.FreeBitMap(bm=0x28879c)
+  17.84 RunProg:launch graphics.FreeBitMap(bm=0x2887cc)
+  17.84 RunProg:launch dopus5.RemapImage(image=0x296e60, screen=0x271c6c, remap=0x288782) = 1
+  17.84 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x28879c
+  17.85 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2887cc
+  18.10 RunProg:launch graphics.FreeBitMap(bm=0x28879c)
+  18.11 RunProg:launch graphics.FreeBitMap(bm=0x2887cc)
+  18.11 RunProg:launch dopus5.RemapImage(image=0x296fa8, screen=0x271c6c, remap=0x288782) = 1
+  18.11 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x28879c
+  18.11 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2887cc
+  18.36 RunProg:launch graphics.FreeBitMap(bm=0x28879c)
+  18.37 RunProg:launch graphics.FreeBitMap(bm=0x2887cc)
+  18.37 RunProg:launch dopus5.RemapImage(image=0x2970f0, screen=0x271c6c, remap=0x288782) = 1
+  18.37 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x28879c
+  18.38 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2887cc
+  18.74 RunProg:launch graphics.FreeBitMap(bm=0x28879c)
+  18.75 RunProg:launch graphics.FreeBitMap(bm=0x2887cc)
+  18.75 RunProg:launch dopus5.RemapImage(image=0x297238, screen=0x271c6c, remap=0x288782) = 1
+  18.75 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=7, flags=0, friend_bitmap=0) = 0x2d60bc
+  18.75 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2d60ec
+  19.02 RunProg:launch graphics.FreeBitMap(bm=0x2d60bc)
+  19.02 RunProg:launch graphics.FreeBitMap(bm=0x2d60ec)
+  19.02 RunProg:launch dopus5.RemapImage(image=0x2a70a8, screen=0x271c6c, remap=0x288782) = 1
+  19.03 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2887d4
+  19.03 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x288804
+  19.35 RunProg:launch graphics.FreeBitMap(bm=0x2887d4)
+  19.36 RunProg:launch graphics.FreeBitMap(bm=0x288804)
+  19.36 RunProg:launch dopus5.RemapImage(image=0x2a71f0, screen=0x271c6c, remap=0x288782) = 1
+  19.36 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2d61bc
+  19.36 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2d61ec
+  19.66 RunProg:launch graphics.FreeBitMap(bm=0x2d61bc)
+  19.66 RunProg:launch graphics.FreeBitMap(bm=0x2d61ec)
+  19.66 RunProg:launch dopus5.RemapImage(image=0x2a7338, screen=0x271c6c, remap=0x288782) = 1
+  19.66 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2887d4
+  19.67 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x288804
+  20.00 RunProg:launch graphics.FreeBitMap(bm=0x2887d4)
+  20.01 RunProg:launch graphics.FreeBitMap(bm=0x288804)
+  20.01 RunProg:launch dopus5.RemapImage(image=0x2a7480, screen=0x271c6c, remap=0x288782) = 1
+  20.01 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2d61bc
+  20.02 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2d61ec
+  20.30 RunProg:launch graphics.FreeBitMap(bm=0x2d61bc)
+  20.31 RunProg:launch graphics.FreeBitMap(bm=0x2d61ec)
+  20.31 RunProg:launch dopus5.RemapImage(image=0x2a75c8, screen=0x271c6c, remap=0x288782) = 1
+  20.31 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2887d4
+  20.32 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x288804
+  20.65 RunProg:launch graphics.FreeBitMap(bm=0x2887d4)
+  20.66 RunProg:launch graphics.FreeBitMap(bm=0x288804)
+  20.66 RunProg:launch dopus5.RemapImage(image=0x2a7710, screen=0x271c6c, remap=0x288782) = 1
+  20.66 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2d61bc
+  20.66 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2d61ec
+  21.00 RunProg:launch graphics.FreeBitMap(bm=0x2d61bc)
+  21.00 RunProg:launch graphics.FreeBitMap(bm=0x2d61ec)
+  21.01 RunProg:launch dopus5.RemapImage(image=0x2a7858, screen=0x271c6c, remap=0x288782) = 1
+  21.01 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2887d4
+  21.02 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x288804
+  21.34 RunProg:launch graphics.FreeBitMap(bm=0x2887d4)
+  21.34 RunProg:launch graphics.FreeBitMap(bm=0x288804)
+  21.34 RunProg:launch dopus5.RemapImage(image=0x2a79a0, screen=0x271c6c, remap=0x288782) = 1
+  21.34 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2d61bc
+  21.35 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2d61ec
+  21.66 RunProg:launch graphics.FreeBitMap(bm=0x2d61bc)
+  21.66 RunProg:launch graphics.FreeBitMap(bm=0x2d61ec)
+  21.66 RunProg:launch dopus5.RemapImage(image=0x2a7ae8, screen=0x271c6c, remap=0x288782) = 1
+  21.67 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2887d4
+  21.67 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x288804
+  21.92 RunProg:launch graphics.FreeBitMap(bm=0x2887d4)
+  21.93 RunProg:launch graphics.FreeBitMap(bm=0x288804)
+  21.93 RunProg:launch dopus5.RemapImage(image=0x2a7c30, screen=0x271c6c, remap=0x288782) = 1
+  21.93 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2d61bc
+  21.93 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2d61ec
+  22.20 RunProg:launch graphics.FreeBitMap(bm=0x2d61bc)
+  22.20 RunProg:launch graphics.FreeBitMap(bm=0x2d61ec)
+  22.20 RunProg:launch dopus5.RemapImage(image=0x2a7d78, screen=0x271c6c, remap=0x288782) = 1
+  22.21 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2887d4
+  22.21 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x288804
+  22.53 RunProg:launch graphics.FreeBitMap(bm=0x2887d4)
+  22.53 RunProg:launch graphics.FreeBitMap(bm=0x288804)
+  22.53 RunProg:launch dopus5.RemapImage(image=0x2b8ba8, screen=0x271c6c, remap=0x288782) = 1
+  22.54 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2d61bc
+  22.54 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2d61ec
+  22.77 RunProg:launch graphics.FreeBitMap(bm=0x2d61bc)
+  22.77 RunProg:launch graphics.FreeBitMap(bm=0x2d61ec)
+  22.77 RunProg:launch dopus5.RemapImage(image=0x2b8cf0, screen=0x271c6c, remap=0x288782) = 1
+  22.78 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2887d4
+  22.78 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x288804
+  23.11 RunProg:launch graphics.FreeBitMap(bm=0x2887d4)
+  23.11 RunProg:launch graphics.FreeBitMap(bm=0x288804)
+  23.11 RunProg:launch dopus5.RemapImage(image=0x2b8e38, screen=0x271c6c, remap=0x288782) = 1
+  23.12 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=8, flags=0, friend_bitmap=0) = 0x2d61bc
+  23.12 RunProg:launch graphics.AllocBitMap(sizex=0x18, sizey=1, depth=2, flags=0, friend_bitmap=0) = 0x2d61ec
+  23.37 RunProg:launch graphics.FreeBitMap(bm=0x2d61bc)
+  23.37 RunProg:launch graphics.FreeBitMap(bm=0x2d61ec)
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x293aec, type=0x2d0000) = 0x293c08
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x293e78, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x29422c, type=0x2d0000) = 0x294298
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x294578, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x294904, type=0x2d0000) = 0x294968
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x296bd8, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x294acc, type=0x2d0000) = 0x294b38
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x296e60, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x294c9c, type=0x2d0000) = 0x294d08
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2970f0, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x29efec, type=0x2d0000) = 0x29f058
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2a71f0, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x29f1bc, type=0x2d0000) = 0x29f228
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2a7480, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x29f38c, type=0x2d0000) = 0x29f3f8
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2a7710, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x29f584, type=0x2d0000) = 0x29f5f0
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2a7858, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x29f77c, type=0x2d0000) = 0x2a8980
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2a79a0, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x2a8a1c, type=0x2d0000) = 0x2a8a88
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2a7ae8, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x2a8c14, type=0x2d0000) = 0x2a8c80
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2a7c30, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x2a8d1c, type=0x2d0000) = 0x2a8d88
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2a7d78, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x2a8f14, type=0x2d0000) = 0x2a8f80
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2b8ba8, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x2a910c, type=0x2d0000) = 0x2a9178
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2b8cf0, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.FindFunctionType(list=0x2a9304, type=0x2d0000) = 0x2a9378
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2b8e38, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.GetImageAttrs(image=0x2b8f80, tags=0x984d50) = 0
+  23.38 RunProg:launch dopus5.NewBitMap(w=0x1a0, h=0x1a, d=2, f=1, b=0x271f5c) = 0x2887d4
+  23.38 RunProg:launch graphics.AllocBitMap(sizex=0x1a0, sizey=0x1a, depth=2, flags=1, friend_bitmap=0x271f5c) = 0x2887d4
+  23.39 RunProg:launch dopus5.FindFunctionType(list=0x293aec, type=0) = 0x293c08
+  23.39 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x293e78, left=0x290000, top=0x290000, tags=0x984d50) = 1
+  23.39 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=1, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.40 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.40 RunProg:launch dopus5.FindFunctionType(list=0x29422c, type=0x1a0000) = 0x294298
+  23.40 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x294578, left=0x290000, top=0x290000, tags=0x984d50) = 1
+  23.40 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x1b, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.40 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.41 RunProg:launch dopus5.FindFunctionType(list=0x294904, type=0x340000) = 0x294968
+  23.41 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x296bd8, left=0x290000, top=0x290000, tags=0x984d50) = 1
+  23.41 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x35, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.41 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.41 RunProg:launch dopus5.FindFunctionType(list=0x294acc, type=0x4e0000) = 0x294b38
+  23.41 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x296e60, left=0x290000, top=0x290000, tags=0x984d50) = 1
+  23.41 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x4f, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.42 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.42 RunProg:launch dopus5.FindFunctionType(list=0x294c9c, type=0x680000) = 0x294d08
+  23.42 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2970f0, left=0x290000, top=0x290000, tags=0x984d50) = 1
+  23.42 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x69, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.43 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.43 RunProg:launch dopus5.FindFunctionType(list=0x29efec, type=0x820000) = 0x29f058
+  23.43 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2a71f0, left=0x2a0000, top=0x290000, tags=0x984d50) = 1
+  23.43 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x83, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.43 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.43 RunProg:launch dopus5.FindFunctionType(list=0x29f1bc, type=0x9c0000) = 0x29f228
+  23.43 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2a7480, left=0x2a0000, top=0x290000, tags=0x984d50) = 1
+  23.44 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x9d, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.44 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.44 RunProg:launch dopus5.FindFunctionType(list=0x29f38c, type=0xb60000) = 0x29f3f8
+  23.44 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2a7710, left=0x2a0000, top=0x290000, tags=0x984d50) = 1
+  23.44 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0xb7, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.45 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.45 RunProg:launch dopus5.FindFunctionType(list=0x29f584, type=0xd00000) = 0x29f5f0
+  23.45 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2a7858, left=0x2a0000, top=0x290000, tags=0x984d50) = 1
+  23.45 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0xd1, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.45 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.46 RunProg:launch dopus5.FindFunctionType(list=0x29f77c, type=0xea0000) = 0x2a8980
+  23.46 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2a79a0, left=0x2a0000, top=0x290000, tags=0x984d50) = 1
+  23.46 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0xeb, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.46 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.46 RunProg:launch dopus5.FindFunctionType(list=0x2a8a1c, type=0x1040000) = 0x2a8a88
+  23.46 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2a7ae8, left=0x2a0000, top=0x2a0000, tags=0x984d50) = 1
+  23.46 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x105, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.47 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.47 RunProg:launch dopus5.FindFunctionType(list=0x2a8c14, type=0x11e0000) = 0x2a8c80
+  23.47 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2a7c30, left=0x2a0000, top=0x2a0000, tags=0x984d50) = 1
+  23.47 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x11f, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.47 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.48 RunProg:launch dopus5.FindFunctionType(list=0x2a8d1c, type=0x1380000) = 0x2a8d88
+  23.48 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2a7d78, left=0x2a0000, top=0x2a0000, tags=0x984d50) = 1
+  23.48 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x139, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.48 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.48 RunProg:launch dopus5.FindFunctionType(list=0x2a8f14, type=0x1520000) = 0x2a8f80
+  23.48 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2b8ba8, left=0x2b0000, top=0x2a0000, tags=0x984d50) = 1
+  23.48 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x153, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.49 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.49 RunProg:launch dopus5.FindFunctionType(list=0x2a910c, type=0x16c0000) = 0x2a9178
+  23.49 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2b8cf0, left=0x2b0000, top=0x2a0000, tags=0x984d50) = 1
+  23.49 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x16d, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.49 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.50 RunProg:launch dopus5.FindFunctionType(list=0x2a9304, type=0x1860000) = 0x2a9378
+  23.50 RunProg:launch dopus5.RenderImage(rp=0x288716, image=0x2b8e38, left=0x2b0000, top=0x2a0000, tags=0x984d50) = 1
+  23.50 RunProg:launch graphics.BltBitMapRastPort(srcBitMap=0x984cbc, xSrc=0, ySrc=0, destRP=0x288716, xDest=0x187, yDest=1, xSize=0x18, ySize=0x18, minterm=0xffffffc0)
+  23.50 RunProg:launch dopus5.DrawBox(rp=0x288716, rect=0x984d44, info=0x271dd4, recess=0) = 6
+  23.50 RunProg:launch dopus5.IPC_FindProc(list=0x26d2ea, name=0x993dd3, act=0, data=0) = 0
+  23.50 RunProg:launch dopus5.IPC_Launch(list=0x26d2ea, ipc=0, name=0x993dd3, entry=0x99a778, stack=0x2000, data=0, dos=0x21a4dc) = 1
+  23.51 RunProg:launch dos.CreateNewProc(tags={NP_Entry=0x99a778, NP_Name='dopus_clock', NP_WindowPtr=0xffffffff, NP_StackSize=0x2000, NP_Priority=0}) = 0x2d6270
+  23.52 RunProg:launch exec.CreateMsgPort() = 0x2d6228
+  23.52 RunProg:launch exec.PutMsg(port=0x2d62cc, message=0x984d24)
+  23.53 dopus_clock dopus5.IPC_ProcStartup(data=0, code=0) = 0x2d5f4c
+  23.53 dopus_clock exec.CreateMsgPort() = 0x2d85b8
+  23.53 dopus_clock exec.CreateMsgPort() = 0x2d85e0
+  23.53 dopus_clock exec.ReplyMsg(message=0x984d24)
+  23.53 dopus_clock exec.OpenLibrary(libName='SysInfo.library', version=2) = NULL
+  23.58 RunProg:launch exec.DeleteMsgPort(port=0x2d6228)
+  23.58 RunProg:launch dopus5.RemapIcon(icon=0x292070, screen=0x271c6c, free=0) = 1
+  23.58 RunProg:launch icon.LayoutIconA(icon=0x292070, screen=0x271c6c, tags={}) = 1
+  23.61 RunProg:launch dopus5.RemapIcon(icon=0x292230, screen=0x271c6c, free=0) = 1
+  23.61 RunProg:launch icon.LayoutIconA(icon=0x292230, screen=0x271c6c, tags={}) = 1
+  23.64 dopus_clock dopus5.AllocTimer(unit=1, port=0) = 0x2d860c
+  23.64 dopus_clock exec.CreateMsgPort() = 0x2d8ee8
+  23.64 dopus_clock exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x2d8610, flags=0) = 0
+  23.65 RunProg:launch dopus5.IPC_ListCommand(list=0x26d2ae, command=0, flags=0, data=0x271c6c, wait=0x270000) = 0
+  23.65 RunProg:launch dopus5.IPC_ListCommand(list=0x26e14c, command=0x8000008, flags=0, data=0x271c6c, wait=0x270000) = 0
+  23.65 RunProg:launch dopus5.IPC_ListCommand(list=0x26d236, command=0x1e, flags=0, data=0x271c6c, wait=0x270000) = 0
+  23.65 RunProg:launch exec.PutMsg(port=0x2c1ef8, message=0x2d8f18)
+  23.65 RunProg:launch dopus5.IPC_ListCommand(list=0x26e050, command=0x8000008, flags=0, data=0x271c6c, wait=0x270000) = 0
+  23.65 RunProg:launch dopus5.IPC_ListCommand(list=0x26d2ea, command=0x8000008, flags=0, data=0x271c6c, wait=0x270000) = 0
+  23.65 RunProg:launch exec.PutMsg(port=0x286f88, message=0x2d8f48)
+  23.65 RunProg:launch exec.PutMsg(port=0x2d85b8, message=0x2d8f78)
+  23.65 RunProg:launch dopus5.IPC_ListCommand(list=0x26df1a, command=0x8000008, flags=0, data=0x271c6c, wait=0x270000) = 0
+  23.65 RunProg:launch dopus5.SendNotifyMsg(type=0x200, data=0x2923b0, flags=0, wait=0x270000, name=0, fib=0) = 0
+  23.65 RunProg:launch dopus5.IPC_Command(ipc=0x28ee8c, command=2, flags=0, data=0, data_free=0, reply=0) = 1
+  23.65 RunProg:launch exec.PutMsg(port=0x2c1ef8, message=0x2d8fa8)
+  23.65 RunProg:launch dopus5.IPC_FindProc(list=0x26d2ea, name=0x993ddf, act=1, data=0) = 0
+  23.66 RunProg:launch dopus5.IPC_Launch(list=0x26d2ea, ipc=0x984d60, name=0x993ddf, entry=0x9d98e2, stack=0x2000, data=0x2d59fc, dos=0x21a4dc) = 1
+  23.66 RunProg:launch dos.CreateNewProc(tags={NP_Entry=0x9d98e2, NP_Name='dopus_pattern_stuff', NP_WindowPtr=0xffffffff, NP_StackSize=0x2000, NP_Priority=0}) = 0x2d9068
+  23.66 dopus_lister dopus5.FindGadgetType(gad=0x273204, type=0x50) = 0x273204
+  23.66 dopus_lister dopus5.CreateTitleGadget(scr=0x271c6c, list=0x2c1036, zoom=0x2c0000, offset=0x80000000, type=6, id=0xa) = 0x2d933c
+  23.66 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748e0, tagList={0x80020018=0x271dd4, 0x8002000d=0}) = 0x282df4
+  23.66 dopus_lister intuition.DisposeObject(object=0x282df4)
+  23.66 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748e0, tagList={0x80020018=0x271dd4, 0x8002000d=1}) = 0x282df4
+  23.66 dopus_lister intuition.DisposeObject(object=0x282df4)
+  23.66 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748ea, tagList={MA_MemorySize=6, IA_Width|IA_WIDTH=0xe, IA_Height|IA_HEIGHT=0xf}) = 0x2d9234
+  23.67 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748ce, tagList={GA_ID=0xa, GA_RelRight|GA_RELRIGHT=0xffffffd8, GA_Top|GA_TOP=0, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xf, GA_RelVerify|GA_RELVERIFY=1, GA_TopBorder|GA_TOPBORDER=1, GA_Image|GA_IMAGE=0x2d9234}) = 0x2d933c
+  23.67 dopus_lister dopus5.CreateTitleGadget(scr=0x271c6c, list=0x2c1036, zoom=0, offset=0xfff2, type=8, id=0xb) = 0x2d95ac
+  23.67 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748e0, tagList={0x80020018=0x271dd4, 0x8002000d=0}) = 0x282df4
+  23.67 dopus_lister intuition.DisposeObject(object=0x282df4)
+  23.67 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748e0, tagList={0x80020018=0x271dd4, 0x8002000d=1}) = 0x282df4
+  23.68 dopus_lister intuition.DisposeObject(object=0x282df4)
+  23.68 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748ea, tagList={MA_MemorySize=8, IA_Width|IA_WIDTH=0xe, IA_Height|IA_HEIGHT=0xf}) = 0x2d946c
+  23.68 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748ce, tagList={GA_ID=0xb, GA_RelRight|GA_RELRIGHT=0xffffffca, GA_Top|GA_TOP=0, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xf, GA_RelVerify|GA_RELVERIFY=1, GA_TopBorder|GA_TOPBORDER=1, GA_Image|GA_IMAGE=0x2d946c}) = 0x2d95ac
+  23.68 dopus_lister intuition.OpenWindowTagList(newWindow=0, tagList={WA_Left=0xd1, WA_Top=0x33, WA_Width=0x1bb, WA_Height=0x247, WA_MinWidth=0x5b, WA_MinHeight=0x3d, WA_MaxWidth=0xffffffff, WA_MaxHeight=0xffffffff, WA_IDCMP=0xb4c277e, WA_AutoAdjust=1, WA_CloseGadget=1, WA_DragBar=1, WA_DepthGadget=1, WA_MenuHelp=1, WA_NewLookMenus=1, WA_SizeGadget=1, WA_SizeBRight=1, WA_SizeBBottom=1, WA_CustomScreen=0x271c6c, WA_ScreenTitle='Directory Opus', WA_WindowName='dOpUs5.win', WA_Gadgets=0x2d933c, WA_SmartRefresh=1, WA_BackFill=0x2cc0b8}) = 0x2d9790
+  23.84 dopus_rexx dopus5.IPC_Reply(msg=0x2d8f48) = 0x40
+  23.84 dopus_clock dopus5.FindGadgetType(gad=0x273204, type=0x50) = 0x273204
+  23.85 dopus_clock dopus5.IPC_Reply(msg=0x2d8f78) = 0xa
+  23.91 dopus_lister dopus5.FixTitleGadgets(win=0x2d9790) = 0
+  23.91 dopus_lister intuition.RemoveGList(remPtr=0x2d9790, gadget=0x2d933c, numGad=1) = 5
+  23.91 dopus_lister intuition.AddGList(window=0x2d9790, gadget=0x2d933c, position=0, numGad=1, requester=0) = 0
+  23.92 dopus_lister intuition.RemoveGList(remPtr=0x2d9790, gadget=0x2d95ac, numGad=1) = 6
+  23.92 dopus_lister intuition.AddGList(window=0x2d9790, gadget=0x2d95ac, position=0, numGad=1, requester=0) = 0
+  23.94 dopus_lister dopus5.SetWindowID(window=0x2d9790, id_ptr=0x2cb92a, id=0x4000002, port=0x28ee8c) = 0x4000002
+  23.94 dopus_lister dopus5.InitWindowDims(window=0x2d9790, dims=0x2cb7aa) = 0x4000001
+  23.94 dopus_lister diskfont.OpenDiskFont(textAttr=TextAttr('topaz.font', y=8, style=00, flags=00)) = 0
+  23.94 dopus_lister gadtools.GetVisualInfoA(screen=0x271c6c, tagList=NULL) = 0x29221c
+  23.94 dopus_lister dopus5.BuildMenuStrip(data=0x98647a, locale=0x985658) = 0x2de1f0
+  23.94 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x140, threshSize=0x14) = 0x2d9ed0
+  23.97 RunProg:launch exec.CreateMsgPort() = 0x2d9020
+  23.97 RunProg:launch exec.PutMsg(port=0x2d90c4, message=0x984cec)
+  24.02 dopus_pattern_stuff dopus5.IPC_ProcStartup(data=0x2dc172, code=0) = 0x2d8fd4
+  24.02 dopus_pattern_stuff exec.CreateMsgPort() = 0x2d9f08
+  24.02 dopus_pattern_stuff exec.CreateMsgPort() = 0x2de178
+  24.02 dopus_pattern_stuff exec.ReplyMsg(message=0x984cec)
+  24.02 dopus_pattern_stuff dopus5.IFFOpen(name=0x9953ed, mode=0x3ed, form=0x50524546) = 0
+  24.02 dopus_pattern_stuff exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x2de278
+  24.03 dopus_pattern_stuff dos.Open(name='env:sys/wbpattern.prefs', accessMode=0x3ed) = 0
+  24.03 dopus_pattern_stuff dos.StartNotify(notify=0x28ad70) = 0
+  24.04 dopus_pattern_stuff dopus5.IPC_Flush(port=0x2d8fd4) = 0
+  24.04 dopus_pattern_stuff dopus5.IPC_Goodbye(ipc=0x2d8fd4, owner=0x985738, flags=0) = 1
+  24.04 dopus_pattern_stuff exec.PutMsg(port=0x282a38, message=0x26cf38)
+  24.04 dopus_pattern_stuff dopus5.IPC_Free(ipc=0x2d8fd4) = 0x80
+  24.04 dopus_pattern_stuff exec.DeleteMsgPort(port=0x2d9f08)
+  24.04 dopus_pattern_stuff exec.DeleteMsgPort(port=0x2de178)
+  24.08 RunProg:launch exec.DeleteMsgPort(port=0x2d9020)
+  24.08 RunProg:launch intuition.ClearPointer(window=0x2923b0)
+  24.09 RunProg:launch dopus5.SendNotifyMsg(type=0x400, data=1, flags=0, wait=0xffff0000, name=0x26d7a0, fib=0) = 0
+  24.09 RunProg:launch dopus5.Att_NewList(flags=0) = 0x9fd7ac
+  24.09 RunProg:launch dos.Lock(name='sys:wbstartup', accessMode=0xfffffffe) = 0
+  24.10 dopus_lister gadtools.CreateMenusA(newmenu=0x2dc5b0, tagList=NULL) = 0x2de1f0
+  24.16 RunProg:launch dos.Lock(name='DOpus5:WBStartup', accessMode=0xfffffffe) = 0x3aa030
+  24.19 dopus_lister gadtools.LayoutMenusA(menu=0x2de1f0, vi=0x29221c, tagList={0x80080043=1}) = 1
+  24.20 RunProg:launch dos.DupLock(lock=0x3aa030) = 0x3aa036
+  24.28 RunProg:launch dos.CurrentDir(lock=0x3aa030) = 0x3aa800
+  24.28 RunProg:launch dopus5.SetBusyPointer(window=0x2923b0) = 5
+  24.28 RunProg:launch intuition.SetWindowPointerA(window=0x2923b0, taglist={WA_BusyPointer|SA_BottomRightScreen=1, WA_PointerDelay|SA_StopBlanker=1})
+  24.28 RunProg:launch dos.Examine(lock=0x3aa036, fib=0x984da4) = 0xffffffff
+  24.31 dopus_lister intuition.SetMenuStrip(window=0x2d9790, menu=0x2de1f0) = 1
+  24.31 dopus_lister gadtools.FreeVisualInfo(vi=0x29221c)
+  24.32 dopus_lister intuition.ClearMenuStrip(window=0x2d9790)
+  24.32 RunProg:launch dos.ExNext(lock=0x3aa036, fileInfoBlock=0x984da4) = 0xffffffff
+  24.33 dopus_lister intuition.ResetMenuStrip(window=0x2d9790, menu=0x2de1f0) = 1
+  24.33 dopus_lister intuition.ClearMenuStrip(window=0x2d9790)
+  24.34 dopus_lister intuition.ResetMenuStrip(window=0x2d9790, menu=0x2de1f0) = 1
+  24.34 dopus_lister dopus5.AddScrollBars(win=0x2d9790, list=0x2c1036, drawinfo=0x271dd4, noidcmp=7) = 0x2daccc
+  24.34 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cf0, tagList={0x8002000b=0, 0x8002000d=0xa, 0x80020018=0x271dd4}) = 0x282ed4
+  24.34 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cf0, tagList={0x8002000b=0, 0x8002000d=0xb, 0x80020018=0x271dd4}) = 0x282f0c
+  24.34 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cf0, tagList={0x8002000b=0, 0x8002000d=0xc, 0x80020018=0x271dd4}) = 0x282f44
+  24.34 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cf0, tagList={0x8002000b=0, 0x8002000d=0xd, 0x80020018=0x271dd4}) = 0x2da58c
+  24.34 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cfa, tagList={GA_ID=2, GA_RelRight|GA_RELRIGHT=0xfffffff7, GA_Top|GA_TOP=0x11, GA_Width|GA_WIDTH=6, GA_RelHeight|GA_RELHEIGHT=0xffffffc3, GA_Immediate|GA_IMMEDIATE=1, GA_FollowMouse|GA_FOLLOWMOUSE=1, GA_RelVerify|GA_RELVERIFY=1, GA_RightBorder|GA_RIGHTBORDER=1, PGA_Freedom|PGA_FREEDOM=4, PGA_NewLook=1, PGA_Borderless|PGA_BORDERLESS=1, PGA_Visible|PGA_VISIBLE=1, PGA_Total|PGA_TOTAL=1, ICA_MAP=0x95aa2e}) = 0x2d904c
+  24.35 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976d05, tagList={GA_ID=3, GA_Image|GA_IMAGE=0x282f0c, GA_Previous|GA_PREVIOUS=0x2d904c, GA_RelRight|GA_RELRIGHT=0xfffffff3, GA_RelBottom|GA_RELBOTTOM=0xffffffd7, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xe, GA_Immediate|GA_IMMEDIATE=1, GA_RelVerify|GA_RELVERIFY=1, GA_RightBorder|GA_RIGHTBORDER=1}) = 0x2d9e0c
+  24.35 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976d05, tagList={GA_ID=4, GA_Image|GA_IMAGE=0x2da58c, GA_Previous|GA_PREVIOUS=0x2d9e0c, GA_RelRight|GA_RELRIGHT=0xfffffff3, GA_RelBottom|GA_RELBOTTOM=0xffffffe5, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xe, GA_Immediate|GA_IMMEDIATE=1, GA_RelVerify|GA_RELVERIFY=1, GA_RightBorder|GA_RIGHTBORDER=1}) = 0x2d9e6c
+  24.35 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cfa, tagList={GA_ID=5, GA_Previous|GA_PREVIOUS=0x2d9e6c, GA_Left|GA_LEFT=4, GA_RelBottom|GA_RELBOTTOM=0xfffffff5, GA_RelWidth|GA_RELWIDTH=0xffffffd0, GA_Height|GA_HEIGHT=0xa, GA_Immediate|GA_IMMEDIATE=1, GA_FollowMouse|GA_FOLLOWMOUSE=1, GA_RelVerify|GA_RELVERIFY=1, GA_BottomBorder|GA_BOTTOMBORDER=1, PGA_Freedom|PGA_FREEDOM=2, PGA_NewLook=1, PGA_Borderless|PGA_BORDERLESS=1, PGA_Visible|PGA_VISIBLE=1, PGA_Total|PGA_TOTAL=1, ICA_MAP=0x95aa2e}) = 0x2daa8c
+  24.36 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976d05, tagList={GA_ID=6, GA_Image|GA_IMAGE=0x282ed4, GA_Previous|GA_PREVIOUS=0x2daa8c, GA_RelRight|GA_RELRIGHT=0xffffffd7, GA_RelBottom|GA_RELBOTTOM=0xfffffff3, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xe, GA_Immediate|GA_IMMEDIATE=1, GA_RelVerify|GA_RELVERIFY=1, GA_BottomBorder|GA_BOTTOMBORDER=1}) = 0x2dac6c
+  24.36 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976d05, tagList={GA_ID=7, GA_Image|GA_IMAGE=0x282f44, GA_Previous|GA_PREVIOUS=0x2dac6c, GA_RelRight|GA_RELRIGHT=0xffffffe5, GA_RelBottom|GA_RELBOTTOM=0xfffffff3, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xe, GA_Immediate|GA_IMMEDIATE=1, GA_RelVerify|GA_RELVERIFY=1, GA_BottomBorder|GA_BOTTOMBORDER=1}) = 0x2daccc
+  24.36 dopus_lister dopus5.FindBOOPSIGadget(list=0x2c1036, id=2) = 0x2d904c
+  24.36 dopus_lister dopus5.FindBOOPSIGadget(list=0x2c1036, id=5) = 0x2daa8c
+  24.36 dopus_lister intuition.AddGList(window=0x2d9790, gadget=0x2d904c, position=0xffffffff, numGad=0xffff, requester=0) = 7
+  24.40 RunProg:launch dos.ExNext(lock=0x3aa036, fileInfoBlock=0x984da4) = 0xffffffff
+  24.44 RunProg:launch dos.Lock(name='Opus5_Startup', accessMode=0xfffffffe) = 0x3aa03c
+  24.50 RunProg:launch dos.Examine(lock=0x3aa03c, fib=0x984c9c) = 0xffffffff
+  24.52 RunProg:launch dos.UnLock(lock=0x3aa03c) = 0xffff0001
+  24.52 RunProg:launch dopus5.GetCachedDiskObject(name=0x2da40d, flags=0) = 0x2db238
+  24.52 RunProg:launch icon.GetIconTagList(name='Opus5_Startup', tags={0x8000902f=1, 0x80009045=0x271c6c}) = 0x2db238
+  24.57 dopus_lister exec.CreateMsgPort() = 0x2d90f8
+  24.57 dopus_lister dopus5.AddNotifyRequest(type=1, data=0, port=0x2d90f8) = 0x2d6254
+  24.57 dopus_lister dopus5.FindGadgetType(gad=0x2d95ac, type=0x10) = 0x2d9c2c
+  24.57 dopus_lister dopus5.FindGadgetType(gad=0x2d95ac, type=0x60) = 0x2d9cec
+  24.57 dopus_lister dopus5.GetEditHook(type=0, flags=1, tags=0x2ce614) = 0x2d9124
+  24.57 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9c23c0, tagList={GA_ID=0, GA_Left|GA_LEFT=4, GA_RelBottom|GA_RELBOTTOM=0xffffffe6, GA_RelWidth|GA_RELWIDTH=0xffffffee, GA_Height|GA_HEIGHT=0xc, GA_RelVerify|GA_RELVERIFY=1, GA_Immediate|GA_IMMEDIATE=1, 0x8000001b=1, SA_ErrorCode|DA_Dummy=1, STRINGA_TextVal=0x2c9466, STRINGA_MaxChars=0x1ff, STRINGA_Buffer=0x2cb412, STRINGA_UndoBuffer=0x26edc8, STRINGA_WorkBuffer=0x26efc8, STRINGA_Font=0x20b8b0, STRINGA_EditHook=0x2d9124}) = 0x2dc83c
+  24.58 dopus_lister intuition.ObtainGIRPort(gInfo=0) = 0
+  24.58 dopus_lister workbench.AddAppWindowA(id=0x4000002, userdata=0x2cb1dc, window=0x2d9790, msgport=0x2c1620, taglist=NULL) = 0x2dc954
+  24.59 dopus_lister intuition.AddGList(window=0x2d9790, gadget=0x2cb612, position=0xffffffff, numGad=2, requester=0) = 0xd
+  24.63 dopus_lister intuition.SetGadgetAttrsA(gadget=0x2dc83c, window=0x2d9790, requester=0, tagList={STRINGA_TextVal=0x2c9752}) = 0
+  24.63 dopus_lister intuition.ObtainGIRPort(gInfo=0x212120) = 0x2dc9d0
+  24.65 dopus_lister intuition.ReleaseGIRPort(rp=0x2dc9d0)
+  24.65 dopus_lister dopus5.FindGadgetType(gad=0x273204, type=0x50) = 0x273204
+  24.65 dopus_lister intuition.WindowLimits(window=0x2d9790, MinWidth=0x5b, MinHeight=0x5d, MaxWidth=0xffff, MaxHeight=0xffff) = 1
+  24.65 dopus_lister dopus5.DrawBox(rp=0x2cb21c, rect=0x2ce5b4, info=0x271dd4, recess=0xa2000000) = 6
+  24.66 dopus_lister dopus5.DrawBox(rp=0x2cbf9e, rect=0x2ce5b0, info=0x271dd4, recess=0) = 6
+  24.66 dopus_lister dopus5.DrawBox(rp=0x2cbf20, rect=0x2ce5ac, info=0x271dd4, recess=0) = 6
+  24.66 dopus_lister dopus5.DrawBox(rp=0x2cb29a, rect=0x2ce5a8, info=0x271dd4, recess=0) = 6
+  24.73 dopus_lister intuition.SetGadgetAttrsA(gadget=0x2d904c, window=0x2d9790, requester=0, tagList={PGA_Top|PGA_TOP=0, PGA_Total|PGA_TOTAL=0, PGA_Visible|PGA_VISIBLE=0x14}) = 0
+  24.75 dopus_lister intuition.SetGadgetAttrsA(gadget=0x2daa8c, window=0x2d9790, requester=0, tagList={PGA_Top|PGA_TOP=0, PGA_Total|PGA_TOTAL=0, PGA_Visible|PGA_VISIBLE=0x1a0}) = 0
+  24.97 dopus_lister dopus5.FindNameI(list=0x2706c2, name=0x283c08) = 0
+  24.97 dopus_lister dopus5.FindFunctionType(list=0x2c8dd4, type=0) = 0x2c8ea0
+  24.97 dopus_lister dopus5.FindFunctionType(list=0x2c8fcc, type=0xffff0000) = 0x2c9040
+  24.97 dopus_lister intuition.ActivateWindow(window=0x2d9790)
+  24.98 dopus_lister dopus5.NewMemHandle(puddle=0x800, thresh=0x400, type=0x10000) = 0x2d8f44
+  24.98 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x818, threshSize=0x40c) = 0x2dddd8
+  24.99 dopus_lister dopus5.NewMemHandle(puddle=0x800, thresh=0x11c, type=0x10000) = 0x2dde14
+  24.99 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x854, threshSize=0x128) = 0x2dde70
+  24.99 dopus_lister asl.AllocAslRequest(reqType=0, tagList=NULL) = 0
+  24.99 dopus_lister dopus5.FreeMemHandle(handle=0x2dde14) = 0x100
+  24.99 dopus_lister dopus5.FreeMemHandle(handle=0x2d8f44) = 0x80
+  24.99 dopus_lister dopus5.IPC_Reply(msg=0x2d8f18) = 0x100
+  25.03 dopus_lister intuition.ActivateWindow(window=0x2d9790)
+  25.03 dopus_lister dopus5.IPC_Reply(msg=0x2d8fa8) = 0x40
+  25.29 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22f40c, name=0x26bc0c) = 0x22f1f4
+  25.29 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x2282a4, name=0x26bc0c) = 0x219ed0
+  25.29 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22402c, name=0x26bc0c) = 0x219e30
+  25.29 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x21cfec, name=0x26bc0c) = 0x219e80
+  25.29 dopus_lister exec.ReplyMsg(message=0x2dccb0)
+  25.29 dopus_lister exec.ReplyMsg(message=0x2dccf8)
+  25.29 dopus_lister exec.ReplyMsg(message=0x2dcf78)
+  25.30 DO_LAUNCHER dopus5.Att_NewList(flags=0) = 0x2dc9d4
+  25.30 DO_LAUNCHER dopus5.Att_RemList(list=0x2dc9d4, flags=0) = 0x100
+  25.39 RunProg:launch dopus5.FreeCachedDiskObject(icon=0x2db238) = 0x200
+  25.39 RunProg:launch icon.FreeDiskObject(diskobj=0x2db238)
+  25.41 RunProg:launch dos.ExNext(lock=0x3aa036, fileInfoBlock=0x984da4) = 0
+  25.41 dopus_lister exec.ReplyMsg(message=0x2dccb0)
+  25.41 RunProg:launch dopus5.IPC_FindProc(list=0x26d2ea, name=0x9f201d, act=1, data=0x9fd7ac) = 0
+  25.42 RunProg:launch dopus5.IPC_Launch(list=0x26d2ea, ipc=0x984c48, name=0x9f201d, entry=0x9d98e2, stack=0x2000, data=0x2d59fc, dos=0x21a4dc) = 1
+  25.42 RunProg:launch dos.CreateNewProc(tags={NP_Entry=0x9d98e2, NP_Name='dopus_wbstartup', NP_WindowPtr=0xffffffff, NP_StackSize=0x2000, NP_Priority=0}) = 0x2db230
+  25.44 RunProg:launch exec.CreateMsgPort() = 0x2d8f60
+  25.44 RunProg:launch exec.PutMsg(port=0x2db28c, message=0x984bd4)
+  25.44 dopus_wbstartup dopus5.IPC_ProcStartup(data=0x2e33b2, code=0) = 0x2d8f14
+  25.44 dopus_wbstartup exec.CreateMsgPort() = 0x2db900
+  25.44 dopus_wbstartup exec.CreateMsgPort() = 0x2db928
+  25.44 dopus_wbstartup exec.ReplyMsg(message=0x984bd4)
+  25.44 dopus_wbstartup dopus5.Att_RemList(list=0x9fd7ac, flags=0) = 0x1000
+  25.44 dopus_wbstartup dopus5.IPC_Flush(port=0x2d8f14) = 0
+  25.44 dopus_wbstartup dopus5.IPC_Goodbye(ipc=0x2d8f14, owner=0x985738, flags=0) = 1
+  25.45 dopus_wbstartup exec.PutMsg(port=0x282a38, message=0x26cf70)
+  25.45 dopus_wbstartup dopus5.IPC_Free(ipc=0x2d8f14) = 0x80
+  25.45 dopus_wbstartup exec.DeleteMsgPort(port=0x2db900)
+  25.45 dopus_wbstartup exec.DeleteMsgPort(port=0x2db928)
+  25.45 RunProg:launch exec.DeleteMsgPort(port=0x2d8f60)
+  25.45 RunProg:launch dos.UnLock(lock=0x3aa036) = 0xffff0001
+  25.46 RunProg:launch dos.CurrentDir(lock=0x3aa800) = 0x3aa030
+  25.46 RunProg:launch dos.UnLock(lock=0x3aa030) = 0xffff0001
+  25.47 RunProg:launch intuition.ClearPointer(window=0x2923b0)
+  25.47 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e88) = 0x3e8
+  25.47 RunProg:launch exec.CreateMsgPort() = 0x2da438
+  25.47 RunProg:launch exec.PutMsg(port=0x282768, message=0x2da410)
+  25.48 dopus_progressbar dopus5.IPC_Reply(msg=0x2da410) = 0x1000000
+  25.48 dopus_progressbar exec.ReplyMsg(message=0x2da410)
+  25.48 RunProg:launch exec.DeleteMsgPort(port=0x2da438)
+  25.48 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+  25.48 RunProg:launch dopus5.SetProgressWindow(win=0x2801f4, tags=0x984e7c) = 0x3e8
+  25.48 RunProg:launch exec.CreateMsgPort() = 0x2d8f40
+  25.48 RunProg:launch exec.PutMsg(port=0x282768, message=0x2d8f18)
+  25.48 dopus_progressbar dopus5.IPC_Reply(msg=0x2d8f18) = 0x1000000
+  25.48 dopus_progressbar exec.ReplyMsg(message=0x2d8f18)
+  25.48 RunProg:launch exec.DeleteMsgPort(port=0x2d8f40)
+  25.48 RunProg:launch dopus5.CheckProgressAbort(win=0x2801f4) = 0x280000
+  25.48 RunProg:launch dopus5.FindNameI(list=0x2706c2, name=0x2839a8) = 0
+  25.48 RunProg:launch dopus5.FindFunctionType(list=0x2c8dd4, type=0) = 0x2c8ea0
+  25.48 RunProg:launch dopus5.FindFunctionType(list=0x2c8fcc, type=0xffff0000) = 0x2c9040
+  25.48 RunProg:launch exec.FindPort(name='REXX') = NULL
+  25.48 RunProg:launch dopus5.CloseProgressWindow(win=0x2801f4) = 0x8000003
+  25.48 RunProg:launch exec.PutMsg(port=0x282768, message=0x2d8f18)
+  25.48 dopus_progressbar dopus5.IPC_Reply(msg=0x2d8f18) = 0x40000
+  25.48 dopus_progressbar exec.ReplyMsg(message=0x2d8f18)
+  25.49 dopus_progressbar intuition.CloseWindow(window=0x2827b8)
+  25.49 dopus_progressbar dopus5.FindPubScreen(scr=0x271c6c, lock=0x260000) = 0x271ea8
+  25.54 RunProg:launch dopus5.AllocTimer(unit=1, port=0) = 0x2827bc
+  25.54 RunProg:launch exec.CreateMsgPort() = 0x2827f0
+  25.54 RunProg:launch exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x2827c0, flags=0) = 0
+  25.54 RunProg:launch dopus5.AllocTimer(unit=1, port=0x2827f0) = 0x28281c
+  25.54 RunProg:launch exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x282820, flags=0) = 0
+  25.54 RunProg:launch dopus5.AllocTimer(unit=1, port=0x2827f0) = 0x282854
+  25.54 RunProg:launch exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x282858, flags=0) = 0
+  25.54 RunProg:launch dopus5.AllocTimer(unit=1, port=0x2827f0) = 0x28288c
+  25.54 RunProg:launch exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x282890, flags=0) = 0
+  25.55 RunProg:launch dopus5.AllocTimer(unit=1, port=0x2827f0) = 0x2828c4
+  25.55 RunProg:launch exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x2828c8, flags=0) = 0
+  25.55 RunProg:launch dopus5.AllocTimer(unit=1, port=0x2827f0) = 0x2828fc
+  25.55 RunProg:launch exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x282900, flags=0) = 0
+  25.55 RunProg:launch dopus5.AllocTimer(unit=1, port=0x2827f0) = 0x282934
+  25.55 RunProg:launch exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x282938, flags=0) = 0
+  25.56 RunProg:launch dopus5.SetBusyPointer(window=0x2923b0) = 0
+  25.56 RunProg:launch intuition.SetWindowPointerA(window=0x2923b0, taglist={WA_BusyPointer|SA_BottomRightScreen=1, WA_PointerDelay|SA_StopBlanker=1})
+  25.56 RunProg:launch commodities.DeleteCxObjAll(co=0)
+  25.56 RunProg:launch dopus5.CloseButtonBank(bank=0) = 0
+  25.56 RunProg:launch dopus5.OpenButtonBank(name=0x27045e) = 0x2e2654
+  25.56 RunProg:launch dos.Lock(name='PROGDIR:Buttons/hotkeys', accessMode=0xfffffffe) = 0x3aa030
+  25.56 dopus_progressbar dopus5.IPC_Free(ipc=0x280424) = 0x80
+  25.56 dopus_progressbar exec.DeleteMsgPort(port=0x282768)
+  25.56 dopus_progressbar exec.DeleteMsgPort(port=0x282790)
+  25.59 dopus_lister exec.ReplyMsg(message=0x2dccf8)
+  25.59 RunProg:launch dos.Examine(lock=0x3aa030, fib=0x984ce0) = 0xffffffff
+  25.60 RunProg:launch dos.UnLock(lock=0x3aa030) = 0xffff0001
+  25.61 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x280250
+  25.61 RunProg:launch dos.Open(name='PROGDIR:Buttons/hotkeys', accessMode=0x3ed) = 0xa00a3
+  25.62 RunProg:launch dos.Close(file=0xa00a3) = 0xffff
+  25.62 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x430, threshSize=0x10c) = 0x280250
+  25.62 RunProg:launch dos.Open(name='PROGDIR:Buttons/hotkeys', accessMode=0x3ed) = 0xa00a3
+  25.63 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x818, threshSize=0x30c) = 0x280320
+  25.64 RunProg:launch dos.NameFromFH(fh=0xa00a3, buffer=0x2e26f4, length=0x100) = 1
+  25.65 dopus_lister exec.ReplyMsg(message=0x2dccf8)
+  25.69 RunProg:launch dos.Seek(file=0xa00a3, position=0x1b8, mode=0xffffffff) = 0x1b8
+  25.69 RunProg:launch dos.Seek(file=0xa00a3, position=0, mode=0) = 0x1b8
+  25.70 RunProg:launch dos.Close(file=0xa00a3) = 0xffff
+  25.71 RunProg:launch commodities.CxBroker(nb=0x26f778, error=0) = 0
+  25.71 RunProg:launch intuition.ClearPointer(window=0x2923b0)
+  25.71 RunProg:launch dopus5.IPC_Reply(msg=0x288838) = 0x40
+  25.71 RunProg:launch dopus5.IPC_Reply(msg=0x288878) = 0x40
+  25.71 RunProg:launch dopus5.IPC_Reply(msg=0x26cf38) = 0x238
+  25.71 RunProg:launch dopus5.IPC_Reply(msg=0x26cf70) = 0x270
+  25.71 RunProg:launch exec.ReplyMsg(message=0x292b08)
+  25.71 RunProg:launch exec.ReplyMsg(message=0x2dcc68)
+  25.71 RunProg:launch intuition.BeginRefresh(window=0x2923b0)
+  25.74 RunProg:launch intuition.EndRefresh(window=0x2923b0, complete=1)
+  25.74 RunProg:launch dopus5.StopTimer(handle=0x2827bc) = 0x2827bc
+  25.74 RunProg:launch exec.ReplyMsg(message=0x2dccb0)
+  25.77 dopus_lister exec.ReplyMsg(message=0x280260)
+  25.89 dopus_lister exec.ReplyMsg(message=0x280260)
+  26.01 dopus_lister exec.ReplyMsg(message=0x280260)
+  26.13 dopus_lister exec.ReplyMsg(message=0x280260)
+  26.25 dopus_lister exec.ReplyMsg(message=0x280260)
+  26.37 dopus_lister exec.ReplyMsg(message=0x280260)
+  26.49 dopus_lister exec.ReplyMsg(message=0x280260)
+  26.61 dopus_lister exec.ReplyMsg(message=0x280260)
+  26.73 dopus_lister exec.ReplyMsg(message=0x280260)
+  26.85 dopus_lister exec.ReplyMsg(message=0x280260)
+  26.97 dopus_lister exec.ReplyMsg(message=0x280260)
+  27.09 dopus_lister exec.ReplyMsg(message=0x280260)
+  27.22 dopus_lister exec.ReplyMsg(message=0x280260)
+  27.33 dopus_lister exec.ReplyMsg(message=0x280260)
+  27.45 dopus_lister exec.ReplyMsg(message=0x280260)
+  27.57 dopus_lister exec.ReplyMsg(message=0x280260)
+  27.69 dopus_lister exec.ReplyMsg(message=0x280260)
+  27.81 dopus_lister exec.ReplyMsg(message=0x280260)
+  27.93 dopus_lister exec.ReplyMsg(message=0x280260)
+# elided (count): (ROM-internal) x13863, graphics.ObtainBestPenA x3875, graphics.ReleasePen x3861, exec.GetMsg x345, dopus5.FreeSemaphore x177, dopus5.GetSemaphore x176, dopus5.GetString x115, graphics.InitRastPort x110, graphics.InitBitMap x107, exec.Wait x99, dopus5.AllocMemH x98, exec.FindName x95, dopus5.CheckTimer x92, exec.CheckIO x92, graphics.GetBitMapAttr x52, exec.SendIO x42, dopus5.StartTimer x40, dopus5.GetIconFlags x36, exec.WaitIO x35, graphics.TextLength x28, graphics.WaitBlit x24, intuition.NextObject x21, exec.WaitPort x16, dopus5.FreeMemH x12, locale.IsAlNum x11, dopus5.ItoaU64 x10, graphics.SetFont x6, dos.DateStamp x6, dos.UnLockDosList x5, dos.GetDeviceProc x5, intuition.GetScreenDrawInfo x5, locale.FormatString x5, intuition.LockIBase x5, dopus5.GetWindowID x5, intuition.UnlockIBase x5, intuition.SetWindowTitles x5, layers.InstallClipRegion x4, intuition.FreeScreenDrawInfo x3, intuition.RefreshGList x3, dos.LockDosList x2, graphics.AskFont x2, graphics.ClipBlit x1, exec.Signal x1, intuition.LockPubScreenList x1
