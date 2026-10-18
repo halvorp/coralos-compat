@@ -45,6 +45,13 @@ impl<U: GuestUi> Amiga<U> {
         let Some(mut ctx) = self.ctx.take() else { return (Step::Exited, RunStats { blocked: false, halted: true, ..idle }) };
         if let Some(w) = self.waiting {
             match self.try_satisfy(w) {
+                // Pointer input for a guest gadget: send the guest back through its own Wait trap (boopsi_input.rs).
+                Ok(None) if self.input.pending() && self.input.wait_trap != 0 => {
+                    // the guest calls in between trashed D0/A0, which carry the wait's argument: put it back
+                    match w { exec_wait::Waiting::Signals(set) => ctx.set_reg(retro_m68k::REG_D0, set), exec_wait::Waiting::Port(p) => ctx.set_reg(retro_m68k::REG_A0, p) }
+                    ctx.set_reg(retro_m68k::REG_PC, self.input.wait_trap);
+                    self.waiting = None;
+                }
                 Ok(None) => { self.ctx = Some(ctx); return (Step::Blocked, idle); }
                 Ok(Some(v)) => { ctx.set_reg(retro_m68k::REG_D0, v); self.waiting = None; }
                 Err(Refusal(e)) => { self.ctx = Some(ctx); return (Step::Fault(e), idle); }

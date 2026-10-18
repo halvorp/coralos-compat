@@ -94,6 +94,8 @@ pub struct Amiga<U: GuestUi> {
     pub objects: crate::boopsi::Objects,
     /// BOOPSI classes and objects made by the class core (iclass.rs, boopsi_native.rs).
     pub classes: crate::iclass::Classes,
+    /// Queued pointer events for BOOPSI gadgets and the Wait trap a blocked guest sits on (boopsi_input.rs).
+    pub input: crate::boopsi_input::Input,
     /// Functions the census runner was told to pretend exist (`--stub lib/Func`, census.rs).
     pub census_stubs: Vec<(String, String)>,
     next_lib_base: u32,
@@ -107,7 +109,7 @@ impl<U: GuestUi> Amiga<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
-            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), gfx: Default::default(),
+            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), gfx: Default::default(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
@@ -272,6 +274,7 @@ impl<U: GuestUi> Host for Amiga<U> {
     fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool {
         if pc == EXIT_SLOT { cpu.halt(); return true; }
         let Some((lib, func, handler)) = self.dispatch.get(&pc).copied() else { return false };
+        self.input.trap_pc = pc;
         let handler = if self.census_stubs.iter().any(|(l, f)| l == lib && f == func) { crate::census::stub::<U> } else { handler };
         match handler(self, cpu) {
             Ok(line) => self.log.push(line),

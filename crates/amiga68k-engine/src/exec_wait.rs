@@ -115,6 +115,8 @@ pub fn signal<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Ref
 /// Wait(d0 = signal set) -> the received signals of that set (cleared). Blocks while none is set.
 pub fn wait<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let set = cpu.dreg(0);
+    a.input.wait_trap = a.input.trap_pc;
+    if crate::boopsi_input::pump(a, cpu, Waiting::Signals(set))? { return Ok(format!("[exec] Wait {set:#x} (pointer input for gadgets first)")); }
     match a.try_satisfy(Waiting::Signals(set))? {
         Some(got) => { cpu.set_d0(got); Ok(format!("[exec] Wait {set:#x} -> {got:#x}")) }
         None => { a.waiting = Some(Waiting::Signals(set)); cpu.block(); Ok(format!("[exec] Wait {set:#x} (blocked)")) }
@@ -124,6 +126,8 @@ pub fn wait<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
 /// WaitPort(a0 = port) -> the first message (left queued). Blocks while the port is empty.
 pub fn wait_port<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let port = cpu.areg(0);
+    a.input.wait_trap = a.input.trap_pc;
+    if crate::boopsi_input::pump(a, cpu, Waiting::Port(port))? { return Ok(format!("[exec] WaitPort {port:#x} (pointer input for gadgets first)")); }
     match a.try_satisfy(Waiting::Port(port))? {
         Some(head) => { cpu.set_d0(head); Ok(format!("[exec] WaitPort {port:#x} -> {head:#x}")) }
         None => { a.waiting = Some(Waiting::Port(port)); cpu.block(); Ok(format!("[exec] WaitPort {port:#x} (blocked)")) }

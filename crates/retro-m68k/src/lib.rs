@@ -43,7 +43,7 @@ extern "C" {
 }
 pub const REG_D0: u32 = 0;
 pub const REG_A0: u32 = 8;
-const REG_PC: u32 = 16;
+pub const REG_PC: u32 = 16;
 const REG_SR: u32 = 17;
 const CPU_68020: u32 = 4;
 

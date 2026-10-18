@@ -57,9 +57,15 @@ pub fn add_glist<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     let (win, g, pos, num) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0) as u16 as u32, cpu.dreg(1) as i32);
     open(a, win, "AddGList")?;
     let used = link_in(a, win, g, pos, num)?;
-    let boopsi: Vec<u32> = chain(a, g, num)?.into_iter().filter(|x| a.classes.class_of(*x).is_some()).collect();
+    // boopsigadgets.c DoGMLayout: only custom gadgets with some relativity are laid out.
+    let mut boopsi = Vec::new();
+    for x in chain(a, g, num)? {
+        let (ty, fl) = (a.mem.read_u16(x + GAD_TYPE).map_err(Refusal::mem("Gadget.GadgetType"))? as u32, a.mem.read_u16(x + GAD_FLAGS).map_err(Refusal::mem("Gadget.Flags"))? as u32);
+        if ty & GTYP_GTYPEMASK == GTYP_CUSTOMGADGET && fl & (GFLG_RELSPECIAL | GFLG_RELRIGHT | GFLG_RELBOTTOM | GFLG_RELWIDTH | GFLG_RELHEIGHT) != 0
+            && a.classes.class_of(x).is_some() { boopsi.push(x); }
+    }
     cpu.set_d0(used);
-    let log = format!("[intuition] AddGList {g:#x} into {win:#x} at {used} ({} BOOPSI)", boopsi.len());
+    let log = format!("[intuition] AddGList {g:#x} into {win:#x} at {used} ({} laid out)", boopsi.len());
     run_methods(a, cpu, Job { win, gadgets: boopsi, i: 0, method: GM_LAYOUT, result: used })?;
     Ok(log)
 }

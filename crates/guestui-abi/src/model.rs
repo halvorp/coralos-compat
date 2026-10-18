@@ -76,7 +76,14 @@ pub enum GuestUiEvent {
     ControlChanged { win: UiObjectRef, control: UiObjectRef, token: CallbackToken, value: ControlValue },
     MenuCommand { win: UiObjectRef, token: CallbackToken },
     Resized { win: UiObjectRef, rect: GuestRect },
+    /// The pointer's primary button or motion, in the window's own coordinates (0,0 = its top-left corner). The smallest
+    /// generic pointer input: a guest-drawn gadget (BOOPSI) needs it to be hit-tested and driven.
+    Pointer { win: UiObjectRef, x: i32, y: i32, phase: PointerPhase },
 }
+
+/// What the primary pointer button / motion did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerPhase { Down, Move, Up }
 
 /// Named refusals (the plan: refuse by name, never silently discard).
 #[derive(Debug, Clone, PartialEq, Eq)]
