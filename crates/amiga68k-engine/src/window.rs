@@ -25,6 +25,8 @@ const WD_FLAGS: u32 = 24;
 const WD_TITLE: u32 = 32;
 const WD_WSCREEN: u32 = 46;
 const WD_BORDER_LEFT: u32 = 54;
+const WD_GZZ_WIDTH: u32 = 112;
+const WD_GZZ_HEIGHT: u32 = 114;
 // WFLG_ bits (intuition/intuition.h).
 const WFLG_NOCAREREFRESH: u32 = 0x2_0000;
 use crate::idcmp::{IDCMP_ACTIVEWINDOW, IDCMP_REFRESHWINDOW};
@@ -89,7 +91,10 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal>
     a.mem.write_u32(win + WD_TITLE, s.title).map_err(m("Window.Title"))?;
     a.mem.write_u32(win + WD_WSCREEN, screen::SCREEN).map_err(m("Window.WScreen"))?;
     for (i, b) in [bl, bt, br, bb].iter().enumerate() { a.mem.write_u8(win + WD_BORDER_LEFT + i as u32, *b as u8).map_err(m("Window borders"))?; }
+    // GZZWidth / GZZHeight: the inner size, for every window (intuition.h; AROS sets them in OpenWindow). DOpus sizes its file list from GZZWidth.
+    for (off, v) in [(WD_GZZ_WIDTH, width - bl - br), (WD_GZZ_HEIGHT, height - bt - bb)] { a.mem.write_u16(win + off, v as u16).map_err(m("Window GZZ size"))?; }
     a.mem.write_u32(win + WD_IDCMP, s.idcmp).map_err(m("Window.IDCMPFlags"))?;
+    idcmp::create_window_port(a, win)?;
     if s.idcmp != 0 { idcmp::create_user_port(a, win)?; }
     let model = WindowModel {
         title: title.clone(),
@@ -150,6 +155,7 @@ pub fn close_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     a.ui.close_window(native).map_err(Refusal::ui)?;
     crate::gadtools::detach(a, win);
     idcmp::free_user_port(a, win)?;
+    idcmp::free_window_port(a, win)?;
     a.menu_strips.remove(&win);
     a.heap.free(win, WINDOW_SIZE).map_err(|e| Refusal(format!("CloseWindow: {e}")))?;
     Ok(format!("[intuition] CloseWindow {win:#x}"))

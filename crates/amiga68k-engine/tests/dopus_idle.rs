@@ -53,8 +53,13 @@ fn distinct_pens(px: &[u32]) -> usize { let mut v = px.to_vec(); v.sort_unstable
 #[test]
 fn directory_opus_starts_its_processes_ports_and_windows() {
     let Some(a) = run(5) else { return };
-    // Named refusals only, and only these: DOpus's own CloseLibrary(NULL), and one FreeVec of an address (the buttons process frees `msg - 8` of an IntuiMessage the engine allocated; not understood yet).
-    assert!(a.refused.iter().all(|r| r.contains("CloseLibrary: 0x0 is not an open library base") || (r.starts_with("exec.library/FreeVec: FreeVec: 0x") && r.ends_with("is not a block this heap allocated"))), "{:#?}", a.refused);
+    // No refusal at all: DOpus's CloseLibrary(NULL) is a no-op and its ReplyFreeMsg of an IntuiMessage replies (the message names the WindowPort).
+    assert!(a.refused.is_empty(), "{:#?}", a.refused);
+
+    // The lister's file list: RAM: holds Env, EnvArc and T; each is drawn as a row of 48 characters (432 px), name first. Control: no row was
+    // ever drawn zero characters wide (what a window with GZZWidth 0 gives).
+    for name in ["Env    ", "EnvArc ", "T      "] { assert!(a.log.iter().any(|l| l.starts_with(&format!("[graphics] Text \"{name}")) && l.ends_with("(+432)")), "no list row for {name:?}"); }
+    assert!(!a.log.iter().any(|l| l.starts_with("[graphics] Text \"\" at 5,")), "a file-list row was drawn zero characters wide");
 
     // Processes: the order DOpus creates them in (EXPECTATIONS.md items 8-13), from the engine's own log.
     let created: Vec<&str> = a.log.iter().filter_map(|l| l.strip_prefix("[dos] CreateNewProc \"")).filter_map(|l| l.split('"').next()).collect();
@@ -155,7 +160,7 @@ fn the_lister_matches_the_oracle_where_the_oracle_is_ground_truth() {
     // Regions compared (class structure; palettes differ: AROS's light pen is 0xEEEEEE, the engine's 0xFFFFFF):
     //  1. the "SRCE" button at the lister's top right: exact text bitmap, black frame and the 0x6688BB pen;
     //  2. the path field's 3D frame at the lister's bottom (outer white/black lines, the inner bevel), interior not compared.
-    // NOT compared: the button bank (not drawn yet), the file list area, the scroll bars and arrows (they sit in the window
+    // NOT compared: the toolbar artwork (the cell frames are, region 3), the file list area (the oracle's list is empty: AROS stub libraries), the scroll bars and arrows (they sit in the window
     // border, outside the engine's canvas) and the disk icons (different volumes, different default icon artwork).
     let srce = region("lister-srce-48x10.txt");
     assert_eq!(srce.len(), 10, "{srce:?}");
@@ -165,6 +170,12 @@ fn the_lister_matches_the_oracle_where_the_oracle_is_ground_truth() {
     assert_eq!(frame.len(), 12);
     let bad = mismatches(lister, (0, 552), &frame);
     assert!(bad.is_empty(), "path field frame differs from the oracle at {bad:?}");
+    // 3. the toolbar: the black separator above it and the 3D frames of its first two 26x26 cells (interiors, the brush artwork, are not compared).
+    let cells = region("lister-toolbar-cells-52x27.txt");
+    assert_eq!(cells.len(), 27);
+    let bad = mismatches(lister, (0, 9), &cells);
+    assert!(bad.is_empty(), "toolbar cell frames differ from the oracle at {bad:?}");
+    assert!(!mismatches(lister, (1, 9), &cells).is_empty(), "control: the toolbar comparison shifted by one pixel must fail");
     // Negative control: shifting the SRCE comparison by one pixel must fail (the check is not vacuous).
     assert!(!mismatches(lister, (388, 0), &srce).is_empty());
 }

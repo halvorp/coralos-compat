@@ -31,7 +31,9 @@ const NT_MESSAGE: u8 = 5;
 // struct Window offsets.
 pub const WD_IDCMP: u32 = 82;
 pub const WD_USERPORT: u32 = 86;
+pub const WD_WINDOW_PORT: u32 = 90;
 // struct IntuiMessage offsets.
+const IM_REPLY_PORT: u32 = 14;
 const IM_LENGTH: u32 = 18;
 const IM_CLASS: u32 = 20;
 const IM_CODE: u32 = 24;
@@ -39,6 +41,23 @@ const IM_IADDRESS: u32 = 28;
 const IM_SECONDS: u32 = 36;
 const IM_MICROS: u32 = 40;
 const IM_WINDOW: u32 = 44;
+
+/// Give `win` its WindowPort: the port Intuition's messages name as their reply port (AROS sets `mn_ReplyPort = w->WindowPort`), so a
+/// program that tests the reply port (DOpus's ReplyFreeMsg: ReplyMsg when set, FreeVec when NULL) replies, as it must. No signal: PA_IGNORE.
+pub fn create_window_port<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusal> {
+    let port = memory::alloc_zeroed(a, MSGPORT_SIZE, "WindowPort")?;
+    ports::init_port(a, port, 0)?;
+    a.mem.write_u8(port + 14, 2).map_err(Refusal::mem("mp_Flags"))?; // PA_IGNORE
+    a.mem.write_u32(win + WD_WINDOW_PORT, port).map_err(Refusal::mem("Window.WindowPort"))
+}
+
+/// Give back the WindowPort (CloseWindow).
+pub fn free_window_port<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusal> {
+    let port = a.mem.read_u32(win + WD_WINDOW_PORT).map_err(Refusal::mem("Window.WindowPort"))?;
+    if port == 0 { return Ok(()); }
+    a.heap.free(port, MSGPORT_SIZE).map_err(|e| Refusal(format!("WindowPort: {e}")))?;
+    a.mem.write_u32(win + WD_WINDOW_PORT, 0).map_err(Refusal::mem("Window.WindowPort"))
+}
 
 /// Give `win` a UserPort with its own signal bit.
 pub fn create_user_port<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusal> {
@@ -93,6 +112,8 @@ fn fill_and_link<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, c
     let m = Refusal::mem;
     let port = a.mem.read_u32(win + WD_USERPORT).map_err(m("Window.UserPort"))?;
     if port == 0 { return Err(Refusal(format!("deliver: window {win:#x} has no UserPort"))); }
+    let reply = a.mem.read_u32(win + WD_WINDOW_PORT).map_err(m("Window.WindowPort"))?;
+    a.mem.write_u32(msg + IM_REPLY_PORT, reply).map_err(m("mn_ReplyPort"))?;
     a.mem.write_u16(msg + IM_LENGTH, INTUIMESSAGE_SIZE as u16).map_err(m("mn_Length"))?;
     a.mem.write_u32(msg + IM_CLASS, class).map_err(m("Class"))?;
     a.mem.write_u16(msg + IM_CODE, code).map_err(m("Code"))?;

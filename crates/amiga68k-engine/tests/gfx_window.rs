@@ -123,3 +123,18 @@ fn drawing_on_the_window_frame_is_dropped_by_name_and_clips_to_the_canvas() {
     let c = &g.a.ui.canvases[&id];
     assert_eq!(c.2.iter().filter(|&&p| p == WHITE).count(), 4, "BorderRPort drew nothing (a 21x21 rect would show); the RPort rect (-50,-50)-(5,5) meets the canvas (origin 4,4) in 2x2 pixels");
 }
+
+#[test]
+fn every_window_has_gzz_width_and_height_equal_to_its_inner_size() {
+    // intuition.h Window.GZZWidth (offset 112) / GZZHeight (114): DOpus sizes its file list from GZZWidth; 0 made every row zero characters wide.
+    let mut g = G::new();
+    let nw = g.zeroed(48);
+    for (o, v) in [(0u32, 0u16), (2, 0), (4, 80), (6, 40)] { g.a.mem.write_u16(nw + o, v).unwrap(); }
+    let nw2 = g.zeroed(48);
+    for (o, v) in [(0u32, 0u16), (2, 0), (4, 100), (6, 50)] { g.a.mem.write_u16(nw2 + o, v).unwrap(); }
+    g.a.mem.write_u32(nw2 + 14, 0x800).unwrap(); // WFLG_BORDERLESS
+    g.run(&[intu(OPEN_WINDOW, &[a(0, nw)]), intu(OPEN_WINDOW, &[a(0, nw2)])]);
+    let (w1, w2) = (g.result(0), g.result(1));
+    assert_eq!((g.r16(w1 + 112), g.r16(w1 + 114)), (80 - 8, 40 - 8), "bordered: size minus the 4-pixel borders");
+    assert_eq!((g.r16(w2 + 112), g.r16(w2 + 114)), (100, 50), "control: a borderless window's inner size is its size");
+}
