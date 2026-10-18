@@ -470,3 +470,57 @@ up (Macintosh Garden has none stated, so it was not used). **For Peter, if wante
    every `CNTL`/`DLOG`/`DITL`/`MENU`/`WIND` projection.
 10. **List Manager and StandardFile** (`LNew`, `LAddRow`, `LClick`, `Pack0`/`Pack3`): 1 and 2 apps here (the Showcase uses a List, `go` and the Showcase `Pack3`),
     and every real document app uses both: they stay on the list because the corpus is thin on them, not because they are rare.
+
+## Macintosh Garden apps (real shipped classic Mac software, 2026-10-18)
+
+Peter authorised downloading from macintoshgarden.org for LOCAL TESTING ONLY. They are abandonware: "owner-authorised local test use, abandonware, never redistributed". Nothing here is committed: binaries and extracted resources live in `/data/build/corpus-bin/mac/<app>/` (URL, version and sha256 of every download in `/data/build/corpus-bin/CORPUS.tsv`). Downloaded archives are untrusted data: they were only ever unpacked with tools (machfs, unar, 7z), never executed on the host.
+
+How they were fetched and unpacked (no sudo): the site serves an incomplete TLS chain, so curl was given the Sectigo intermediate fetched from the certificate's own AIA URL (verification stayed ON, no `-k`). Downloads are the token-signed links the page itself offers. `.zip`/`.dsk`/`.img`/`.toast` HFS images: `tools/mac-extract-hfs.py` (machfs in a venv; handles DiskCopy 4.2 headers) writes MacBinary II files. `.sit`/`.sea.bin`: `unar` (Fedora rpm unpacked into /data/build/rpms/root, run with LD_LIBRARY_PATH) writes AppleDouble `.rsrc` files. Both are read directly by retro-resfork.
+
+Still unextracted, for Peter: **WriteNow 4.0.x**: both `WriteNow40.sit` and `writenow_4_02.zip` hold DiskCopy images of an installer (creator SIAP) whose payload is a proprietary installer archive that unar/lsar cannot open, and the 4.0.2 "updater" is only a patch. Needs a classic-Mac installer runner or a StuffIt Installer-Maker unpacker (nothing on vesper). WriteNow 2.0 and 2.2 are real 68k applications and ARE in the corpus. MFS volumes (WriteNow 1.07, MacPaint 1.5) cannot be read by machfs. BBEdit Lite pages list no download. Packages that would help: none required for what is here (`unar`, `p7zip` and python `machfs` are in use); a `hfsutils` or `hfsprogs` install would make HFS checks independent of machfs.
+
+Tools: `tools/corpus-apps-mac-garden.tsv` (the app list; feed it to `corpus-census-mac.py`), `tools/mac-extract-hfs.py`, and `corpus-traps-mac.py --rank` (below). `census_corpus.rs` in `mac68k-engine` and `macppc-engine` pin each stop and SKIP loudly when the binaries are absent.
+
+### Census (mac68k-run / macppc-run --census)
+
+| app | arch | NEXT-NEEDED | managers reached before the stop |
+|---|---|---|---|
+| garden-writenow-2.0 | 68k | none (no unimplemented trap reached) | toolbox: InitFonts,InitGraf,InitWindows; event: EventAvail; res: GetResource |
+| garden-writenow-2.2 | 68k | none (no unimplemented trap reached) | toolbox: InitFonts,InitGraf,InitWindows; event: EventAvail; res: GetResource |
+| garden-writenow-installer-4.0 | 68k | _UnloadScrap ($A9FA) at pc=0x2027da | res: GetResource,ReleaseResource; toolbox: REFUSED |
+| garden-writenow-updater-4.02 | 68k | _HFSDispatch ($A260) at pc=0x2039c8 | toolbox: GetTrapAddress,InitCursor,InitDialogs,InitFonts,InitGraf,InitWindows; menu: InitMenus; res: CurResFile |
+| garden-macwrite-4.6 | 68k | _Pack2 ($A9E9) at pc=0x20900c | event: FlushEvents; res: GetResource; toolbox: InitDialogs,InitFonts,InitGraf,InitWindows,REFUSED,TEInit; menu: InitMenus; quickdraw: OpenPort |
+| garden-macwrite-4.5 | 68k | _SetTrapAddress ($A047) at pc=0x2022e2 | event: FlushEvents; res: GetResource; toolbox: GetTrapAddress,InitDialogs,InitFonts,InitGraf,InitWindows,OpenPort |
+| garden-macpaint-2.1F | 68k | _UnloadScrap ($A9FA) at pc=0x208752 | toolbox: REFUSED |
+| garden-resedit-2.1.3 | 68k | _Alert ($A985) at pc=0x201aee | toolbox: GetTrapAddress,InitCursor,InitDialogs,InitFonts,InitGraf,InitWindows |
+| garden-simpletext-1.4 | 68k | _HFSDispatch ($A260) at pc=0x2075d2 | toolbox: GetTrapAddress,REFUSED; res: CurResFile |
+| garden-simpletext-1.3 | 68k | _SetToolBoxTrapAddress ($A647) at pc=0x203d90 | res: Get1Resource; toolbox: GetTrapAddress,REFUSED |
+| garden-glider-pro | 68k | _SetToolBoxTrapAddress ($A647) at pc=0x205894 | res: GetResource,ReleaseResource; toolbox: GetTrapAddress,REFUSED |
+| garden-glider-edit | 68k | _SetToolBoxTrapAddress ($A647) at pc=0x20154c | res: GetResource,ReleaseResource; toolbox: GetTrapAddress,REFUSED |
+| garden-moving-van | 68k | _SetToolBoxTrapAddress ($A647) at pc=0x2007e4 | res: GetResource,ReleaseResource; toolbox: GetTrapAddress,REFUSED |
+| garden-glider-pro-ppc | ppc | unimplemented trap import FlushEvents: _FlushEvents ($A032) is an OS trap with no C prototype in OS_SIGS yet | 155 unbound imports; run stops: see NEXT-NEEDED |
+
+Findings the census exposed (not fixed in this lane):
+
+* **WriteNow 2.0 and 2.2 report no missing trap but never finish**: after `GetResource('CODE', 2)` they spin to the 5M-instruction cap with ~10M bus faults (jump through memory the loader never mapped). A census row that says "none" is not a clean run; `census_corpus.rs` pins the symptom. Likely a segment-loader gap (the app loads CODE itself instead of via `_LoadSeg`).
+* **MacWrite 4.5** hands `_OpenPort` a GrafPort pointer `0x8020a9fa` the engine rejects as outside guest RAM before it reaches `_SetTrapAddress`: probably a 24-bit-address flag in the high byte of a Handle or Ptr that must be stripped before use (unverified).
+* **Glider PRO** is a FAT application: its PEF ('cfrg') binds 312 InterfaceLib imports (155 unbound today; the run stops at `_FlushEvents`, an OS trap with no C prototype in OS_SIGS) while its 68k half stops at `_SetToolBoxTrapAddress` like every Retro68 sample and Glider Edit / Moving Van.
+* `_SetToolBoxTrapAddress ($A647)` stops 4 of the 13 new rows (the trap-patching idiom); `_HFSDispatch` and `_UnloadScrap` two each.
+
+### The next 10 traps by app count, whole Mac corpus (68k, static)
+
+`tools/corpus-traps-mac.py --rank IMPLEMENTED.txt FILE...` counts, over every 68k application in the corpus (32 files: executor, the Retro68 samples, systemless-showcase and the Garden apps; PPC fragments have no CODE and are ranked by imports above), how many apps contain each trap in their CODE resources and the engine's table (`Mac::implemented()`) does not implement, compared by table KEY so aliases (`_GetOSTrapAddress`, `_NewPtrClear`) count as implemented. An upper bound: data that looks like a trap word counts; the Retro68 runtime's libc inflates the file calls.
+
+| rank | apps | trap |
+|---|---|---|
+| 1 | 18 | _Close ($A001) |
+| 2 | 18 | _Read ($A002) |
+| 3 | 18 | _Write ($A003) |
+| 4 | 17 | _GetFileInfo ($A00C) |
+| 5 | 17 | _DragWindow ($A925) |
+| 6 | 17 | _SysEnvirons ($A090) |
+| 7 | 16 | _SetTrapAddress ($A047) |
+| 8 | 16 | _FSDispatch ($A060) |
+| 9 | 15 | _Open ($A000) |
+| 10 | 15 | _Create ($A008) |
+

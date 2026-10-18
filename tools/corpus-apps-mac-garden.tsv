@@ -1,0 +1,15 @@
+#name	arch	path	note
+garden-writenow-2.0	68k	mac/writenow/fx/z20_0/WriteNow 2.0.bin	WriteNow 2.0 (T/Maker), HFS disk image Disk 1 from WriteNow20.zip
+garden-writenow-2.2	68k	mac/writenow/fx/z22_1/WriteNow 2.2.bin	WriteNow 2.2, DiskCopy 4.2 image from WriteNow_2.2.zip
+garden-writenow-installer-4.0	68k	mac/writenow/fx40_1/Install WriteNow 4.0.bin	WriteNow 4.0 installer app only; the payload is a proprietary installer archive unar cannot open
+garden-writenow-updater-4.02	68k	mac/writenow/fx/Updaters/WriteNow4.01 to 4.02.bin	WriteNow 4.0.1 to 4.0.2 updater
+garden-macwrite-4.6	68k	mac/macwrite/fx46/MacWrite.bin	MacWrite 4.6 from macwrite_4_6.zip
+garden-macwrite-4.5	68k	mac/macwrite/u45/MacWrite.rsrc	MacWrite 4.5 (StuffIt, AppleDouble .rsrc by unar)
+garden-macpaint-2.1F	68k	mac/macpaint/u21/MacPaint 2.1F.rsrc	MacPaint 2.1F (StuffIt, AppleDouble .rsrc by unar)
+garden-resedit-2.1.3	68k	mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc	ResEdit 2.1.3 (MacBinary self-extractor unpacked by unar)
+garden-simpletext-1.4	68k	mac/simpletext/ux/SimpleText.rsrc	SimpleText 1.4 (StuffIt 5 via unar)
+garden-simpletext-1.3	68k	mac/simpletext/u13/SimpleText 1.3.rsrc	SimpleText 1.3
+garden-glider-pro	68k	mac/glider-pro/fx/Glider PRO™.bin	Glider PRO 1.1.2 (CD toast image)
+garden-glider-edit	68k	mac/glider-pro/fx/Utilities_Glider Edit 1.1.1.bin	Glider PRO house editor
+garden-moving-van	68k	mac/glider-pro/fx/Utilities_Moving Van.bin	Glider PRO Moving Van
+garden-glider-pro-ppc	ppc	mac/glider-pro/fx/Glider PRO™.bin	Glider PRO 1.1.2 fat app: its PEF fragment (cfrg) run by macppc-engine

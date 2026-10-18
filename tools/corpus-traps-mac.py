@@ -46,6 +46,24 @@ def resources(rf):
             off = do + (w & 0xFFFFFF); ln = struct.unpack(">I", rf[off: off + 4])[0]
             out.setdefault(t.decode("latin1"), []).append((rid, rf[off + 4: off + 4 + ln]))
     return out
+def trap_key(w):
+    """The engine's table key: OS traps drop the flag bits (NewPtrClear and NewPtr are one key), Toolbox traps keep 10 bits."""
+    return 0xA800 | (w & 0x03FF) if w & 0x0800 else 0xA000 | (w & 0x00FF)
+def trap_keys(path):
+    """The set of distinct trap KEYS appearing in a file's CODE resources (same over-counting caveat as scan)."""
+    try: res = resources(split_forks(open(path, "rb").read()))
+    except Exception: return set()
+    return {trap_key(w) for rid, body in res.get("CODE", []) for i in range(0, len(body) - 1, 2)
+            for w in [struct.unpack(">H", body[i: i + 2])[0]] if w & 0xF000 == 0xA000 and w in TRAPS}
+def rank(implemented, paths, n=10):
+    """The n traps used by the most apps that the engine does not implement: `--rank IMPLEMENTED.txt FILE...` (one registered
+    name per line, from Mac::implemented()). Compared by table key, so an alias (GetOSTrapAddress for the GetTrapAddress
+    handler, NewPtrClear for NewPtr) counts as implemented exactly as the engine's table sees it."""
+    have = {l.strip().lstrip("_") for l in open(implemented)}
+    done = {trap_key(w) for w, name in TRAPS.items() if name in have} | {0xA89F}   # $A89F is the Unimplemented marker, not a call
+    c = collections.Counter()
+    for p in paths: c.update(k for k in trap_keys(p) if k not in done)
+    return [("%s ($%04X)" % (TRAPS.get(k, "?"), k), v) for k, v in c.most_common(n)]
 def scan(path):
     d = open(path, "rb").read(); rf = split_forks(d)
     try: res = resources(rf)
@@ -62,5 +80,8 @@ def scan(path):
             if re.search(rx, name): groups[g].add(name); break
     return {"resource_types": types, "traps": len(hist), "managers": {g: sorted(v) for g, v in sorted(groups.items())}}
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--rank"]:
+        for name, k in rank(sys.argv[2], sys.argv[3:], 25): print("%3d apps  _%s" % (k, name))
+        sys.exit(0)
     out = {os.path.basename(p): scan(p) for p in sys.argv[1:]}
     print(json.dumps(out, indent=1))

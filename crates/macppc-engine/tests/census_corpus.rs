@@ -33,3 +33,21 @@ fn retro68_ppc_samples_bind_their_interfacelib_imports_and_stop_at_the_first_rou
     let Some((_, log, refused)) = run("Dialog") else { return };
     assert!(!refused.iter().any(|r| r.contains("NGetTrapAddress")) && !log.iter().any(|l| l.contains("NewRoutineDescriptor")));
 }
+
+#[test]
+fn macintosh_garden_glider_pro_fat_app_binds_most_of_interfacelib_and_names_what_is_missing() {
+    // Glider PRO 1.1.2 (fat: 68k CODE + a PEF 'cfrg'; Macintosh Garden CD image, owner-authorised local test use; docs/CORPUS.md).
+    let path = "/data/build/corpus-bin/mac/glider-pro/fx/Glider PRO\u{2122}.bin";
+    let Ok(file) = std::fs::read(path) else { eprintln!("SKIPPED: corpus binary {path} not present (docs/CORPUS.md)"); return };
+    let (frag_name, bytes) = fragment_bytes(&file, None).unwrap();
+    let pef = Pef::parse(&bytes).unwrap();
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let _ = m.attach_resources(&file);
+    let frag = m.instantiate(&frag_name, &pef).unwrap();
+    let c = Census::of(&frag);
+    for needed in ["ZoomWindow", "HiliteWindow", "GetScrap", "GetCursor"] {
+        assert!(c.next_needed.iter().any(|n| n.ends_with(&format!("/{needed}"))), "{needed} is unbound and named: {:?}", c.next_needed);
+    }
+    // NEGATIVE CONTROL: InitWindows is bound (it is not NEXT-NEEDED), so the list is not simply "everything".
+    assert!(!c.next_needed.iter().any(|n| n.ends_with("/InitWindows")), "{:?}", c.next_needed);
+}
