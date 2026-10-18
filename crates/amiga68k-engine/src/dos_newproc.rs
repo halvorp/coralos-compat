@@ -88,7 +88,7 @@ const ERROR_REQUIRED_ARG_MISSING: DosErr = DosErr(116);
 const ERROR_BAD_NUMBER: DosErr = DosErr(115);
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
-    b.named("CreateNewProc", create_new_proc::<U>).named("CreateProc", create_proc::<U>).named("Exit", exit::<U>).with(crate::dos_notify::register::<U>).named("SetProgramName", crate::dos::set_program_name::<U>)
+    b.named("CreateNewProc", create_new_proc::<U>).named("CreateProc", create_proc::<U>).named("Exit", exit::<U>).with(crate::dos_notify::register::<U>).with(crate::dos_pkt::register::<U>).named("SetProgramName", crate::dos::set_program_name::<U>)
 }
 
 /// What a created process owns until it ends (host-side: the guest cannot corrupt it).

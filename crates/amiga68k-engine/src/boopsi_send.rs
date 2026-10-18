@@ -102,6 +102,9 @@ pub fn get_attr<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
 /// SetGadgetAttrsA(a0 = gadget, a1 = window, a2 = requester, a3 = tags): OM_SET with the window's GadgetInfo.
 pub fn set_gadget_attrs_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (g, win, req, tags) = (cpu.areg(0), cpu.areg(1), cpu.areg(2), cpu.areg(3));
+    // AROS rom/intuition/setgadgetattrsa.c: SANITY_CHECKR(gadget, FALSE) and SANITY_CHECKR(tagList, FALSE): a NULL gadget or tag
+    // list is answered with FALSE, not a crash. DOpus calls it with a gadget it has not created yet.
+    if g == 0 || tags == 0 { cpu.set_d0(0); return Ok(format!("[intuition] SetGadgetAttrsA gadget {g:#x} tags {tags:#x}: NULL -> FALSE")); }
     if is_mui(a, g) { return Err(Refusal("SetGadgetAttrsA on a MUI object".into())); }
     let cl = live_class(a, g, "SetGadgetAttrsA")?;
     let gi = if win != 0 || req != 0 { crate::boopsi_gadget::make_ginfo(a, win, req, g)? } else { 0 };

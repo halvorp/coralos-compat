@@ -41,6 +41,7 @@ pub mod dos_match;
 pub mod dos_misc;
 pub mod dos_notify;
 pub mod dos_path;
+pub mod dos_pkt;
 pub mod dos_proc;
 pub mod dos_text;
 pub mod exall;

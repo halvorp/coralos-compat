@@ -96,6 +96,11 @@ fn port<U: GuestUi>(a: &mut Amiga<U>, dev: &str) -> Result<u32, Refusal> {
 /// The MsgPort of the device `dev` (a name or `NAME:`).
 pub fn device_port<U: GuestUi>(a: &mut Amiga<U>, dev: &str) -> Result<u32, Refusal> { port(a, dev.trim_end_matches(':')) }
 
+/// The device whose private MsgPort (from GetDeviceProc / DosList nodes) is `port`, if any.
+pub fn device_of_port<U: GuestUi>(a: &Amiga<U>, port: u32) -> Option<String> {
+    a.fs.dos.ports.iter().find(|(_, &p)| p == port).map(|(k, _)| k.clone())
+}
+
 struct Want { name: String, ty: u32, sig: Vec<String> }
 
 fn wanted<U: GuestUi>(a: &Amiga<U>) -> Vec<Want> {

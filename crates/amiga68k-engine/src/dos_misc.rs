@@ -78,6 +78,12 @@ pub fn info<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     let what = format!("[dos] Info {:#x}", b << 2);
     let node = match lock_node(a, b) { Ok(n) => n, Err(e) => return fail(a, cpu, e, 0, what) };
     let dev = a.fs.vol.device_of(node);
+    fill_info_data(a, dev, id)?;
+    ok(a, cpu, DOSTRUE, what)
+}
+
+/// Fill the 36-byte `struct InfoData` at `id` for device `dev` (shared by Info() and the ACTION_DISK_INFO packet).
+pub(crate) fn fill_info_data<U: GuestUi>(a: &mut Amiga<U>, dev: crate::volume::NodeId, id: u32) -> Result<(), Refusal> {
     let used: usize = used_bytes(a, dev);
     let used_blocks = (used as u32).div_ceil(BLOCK_SIZE).min(TOTAL_BLOCKS);
     let state = if a.fs.vol.is_writable(dev) { ID_VALIDATED } else { ID_WRITE_PROTECTED };
@@ -88,7 +94,7 @@ pub fn info<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     let volume_node = crate::doslist::volume_node(a, &String::from(a.fs.vol.name(dev))).unwrap_or(0);
     let in_use = u32::from(a.fs.files.values().any(|f| a.fs.vol.device_of(f.node) == dev));
     for (off, v) in [(8, state), (12, TOTAL_BLOCKS), (16, used_blocks), (20, BLOCK_SIZE), (24, ID_DOS_DISK), (28, volume_node >> 2), (32, in_use)] { a.mem.write_u32(id + off, v).map_err(&m)?; }
-    ok(a, cpu, DOSTRUE, what)
+    Ok(())
 }
 
 fn used_bytes<U: GuestUi>(a: &Amiga<U>, dir: crate::volume::NodeId) -> usize {
