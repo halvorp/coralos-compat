@@ -15,6 +15,7 @@ pub enum UiCall {
     AddControl(UiObjectRef, ControlModel),
     RemoveControl(UiObjectRef, UiObjectRef),
     SetControl(UiObjectRef, UiObjectRef, ControlValue),
+    SetControlRect(UiObjectRef, UiObjectRef, GuestRect),
     /// `present_content`: the window, the damage rectangle, the canvas size, and an FNV-1a 64 hash over the damage pixels.
     PresentContent { win: UiObjectRef, damage: GuestRect, width: i32, height: i32, hash: u64 },
 }
@@ -33,6 +34,9 @@ pub struct RecordingGuestUi {
     pub events: VecDeque<GuestUiEvent>,
     /// The canvas each window shows: (width, height, 0x00RRGGBB pixels), composed from every `present_content`.
     pub canvases: BTreeMap<u32, (i32, i32, Vec<u32>)>,
+    /// The live native controls as the host would hold them now: control id -> (window, model with every `set_control` /
+    /// `set_control_rect` applied). `calls` keeps the history; this is the current picture.
+    pub controls: BTreeMap<u32, (UiObjectRef, ControlModel)>,
     next_id: u32,
     /// live object id -> generation
     live: BTreeMap<u32, u32>,
@@ -65,6 +69,8 @@ impl GuestUi for RecordingGuestUi {
     fn close_window(&mut self, win: UiObjectRef) -> Result<(), UiRefusal> {
         self.check(win)?;
         self.live.remove(&win.id);
+        let gone: Vec<u32> = self.controls.iter().filter(|(_, (w, _))| *w == win).map(|(&id, _)| id).collect();
+        for id in gone { self.controls.remove(&id); self.live.remove(&id); }
         self.calls.push(UiCall::CloseWindow(win));
         Ok(())
     }
@@ -90,19 +96,31 @@ impl GuestUi for RecordingGuestUi {
                 return Err(UiRefusal::InvalidGeometry("slider range"));
             }
         }
-        self.calls.push(UiCall::AddControl(win, control));
-        Ok(self.alloc())
+        self.calls.push(UiCall::AddControl(win, control.clone()));
+        let id = self.alloc();
+        self.controls.insert(id.id, (win, control));
+        Ok(id)
     }
     fn set_control(&mut self, win: UiObjectRef, control: UiObjectRef, value: ControlValue) -> Result<(), UiRefusal> {
         self.check(win)?;
         self.check(control)?;
+        if let Some((_, m)) = self.controls.get_mut(&control.id) { m.apply(&value)?; }
         self.calls.push(UiCall::SetControl(win, control, value));
+        Ok(())
+    }
+    fn set_control_rect(&mut self, win: UiObjectRef, control: UiObjectRef, rect: GuestRect) -> Result<(), UiRefusal> {
+        self.check(win)?;
+        self.check(control)?;
+        if rect.width < 0 || rect.height < 0 { return Err(UiRefusal::InvalidGeometry("control rect with a negative size")); }
+        if let Some((_, m)) = self.controls.get_mut(&control.id) { m.rect = rect; }
+        self.calls.push(UiCall::SetControlRect(win, control, rect));
         Ok(())
     }
     fn remove_control(&mut self, win: UiObjectRef, control: UiObjectRef) -> Result<(), UiRefusal> {
         self.check(win)?;
         self.check(control)?;
         self.live.remove(&control.id);
+        self.controls.remove(&control.id);
         self.calls.push(UiCall::RemoveControl(win, control));
         Ok(())
     }
@@ -192,5 +210,25 @@ mod tests {
         let w = ui.open_window(win()).unwrap();
         assert!(ui.add_control(w, ctl(ControlKind::Slider { min: 5, max: 1, value: 3 })).is_err());
         assert_eq!(ui.calls.len(), 1, "refused calls are not recorded");
+    }
+
+    #[test]
+    fn native_gadget_controls_are_tracked_valued_and_moved() {
+        let mut ui = RecordingGuestUi::new();
+        let w = ui.open_window(win()).unwrap();
+        let bar = ui.add_control(w, ctl(ControlKind::Scrollbar { orientation: Orientation::Vertical, total: 100, visible: 10, top: 0 })).unwrap();
+        ui.set_control(w, bar, ControlValue::Scroll { total: 100, visible: 10, top: 500 }).unwrap();
+        assert!(matches!(ui.controls[&bar.id].1.kind, ControlKind::Scrollbar { top: 90, .. }), "top clamps to total - visible");
+        ui.set_control_rect(w, bar, GuestRect { left: 1, top: 2, width: 3, height: 4 }).unwrap();
+        assert_eq!(ui.controls[&bar.id].1.rect, GuestRect { left: 1, top: 2, width: 3, height: 4 });
+        // Negative controls: a value the kind cannot hold, and a negative rect, are refused by name and change nothing.
+        assert_eq!(ui.set_control(w, bar, ControlValue::Checked(true)), Err(UiRefusal::Unsupported("a value the control's kind cannot hold")));
+        assert!(ui.set_control_rect(w, bar, GuestRect { left: 0, top: 0, width: -1, height: 4 }).is_err());
+        assert_eq!(ui.controls[&bar.id].1.rect.width, 3);
+        let t = ui.add_control(w, ctl(ControlKind::ToggleButton { on: false })).unwrap();
+        ui.set_control(w, t, ControlValue::Checked(true)).unwrap();
+        assert!(matches!(ui.controls[&t.id].1.kind, ControlKind::ToggleButton { on: true }));
+        ui.close_window(w).unwrap();
+        assert!(ui.controls.is_empty());
     }
 }
