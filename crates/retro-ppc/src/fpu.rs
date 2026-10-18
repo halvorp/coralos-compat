@@ -92,7 +92,15 @@ fn need_rne(cpu: &Cpu, w: W) -> R {
     } else { Ok(()) }
 }
 
+/// Rc=1 updates CR1 from FPSCR whether or not the result was written (a suppressed result under an enabled
+/// exception still records the exception summary: PEM, "Recording" of FP instructions).
 fn arith(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
+    let r = arith_inner(cpu, w, op, single);
+    if r.is_ok() && w.rc() { copy_to_cr1(cpu); }
+    r
+}
+
+fn arith_inner(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
     need_rne(cpu, w)?;
     let (a, b, c) = (f(cpu, w.ra()), f(cpu, w.rb()), f(cpu, w.frc()));
     let used: &[f64] = match op {
@@ -104,6 +112,10 @@ fn arith(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
     let d = w.rt();
     let mut flags = 0u32;
     if used.iter().any(|x| is_snan(*x)) { flags |= fs::VXSNAN; }
+    // PEM fmul/fmadd: infinity x zero is VXIMZ whatever the addend is, so it is raised even when frB is a NaN and
+    // the NaN (not the default QNaN) is what lands in frD.
+    let inf0 = |x: f64, y: f64| (x.is_infinite() && y == 0.0) || (y.is_infinite() && x == 0.0);
+    if matches!(op, Op::Mul | Op::Fma { .. }) && inf0(a, c) { flags |= fs::VXIMZ; }
     // NaN operands propagate, first in the order frA, frB, frC (PEM 3.3.6.? "NaN results").
     if let Some(n) = used.iter().find(|x| x.is_nan()) {
         if flags != 0 { raise(cpu, flags); if cpu.fpscr & fs::VE != 0 { return Ok(()); } }
@@ -112,20 +124,15 @@ fn arith(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
         put(cpu, w, d, q.to_bits(), single);
         return Ok(());
     }
-    let inf0 = |x: f64, y: f64| (x.is_infinite() && y == 0.0) || (y.is_infinite() && x == 0.0);
     match op {
         Op::Add if a.is_infinite() && b.is_infinite() && a.is_sign_negative() != b.is_sign_negative() => flags |= fs::VXISI,
         Op::Sub if a.is_infinite() && b.is_infinite() && a.is_sign_negative() == b.is_sign_negative() => flags |= fs::VXISI,
-        Op::Mul if inf0(a, c) => flags |= fs::VXIMZ,
         Op::Div if a.is_infinite() && b.is_infinite() => flags |= fs::VXIDI,
         Op::Div if a == 0.0 && b == 0.0 => flags |= fs::VXZDZ,
-        Op::Fma { sub, .. } => {
-            if inf0(a, c) { flags |= fs::VXIMZ; }
-            else if (a.is_infinite() || c.is_infinite()) && b.is_infinite() {
-                let prod_neg = a.is_sign_negative() != c.is_sign_negative();
-                let add_neg = b.is_sign_negative() != sub;
-                if prod_neg != add_neg { flags |= fs::VXISI; }
-            }
+        Op::Fma { sub, .. } if !inf0(a, c) && (a.is_infinite() || c.is_infinite()) && b.is_infinite() => {
+            let prod_neg = a.is_sign_negative() != c.is_sign_negative();
+            let add_neg = b.is_sign_negative() != sub;
+            if prod_neg != add_neg { flags |= fs::VXISI; }
         }
         Op::Sqrt | Op::Rsqrte if b < 0.0 => flags |= fs::VXSQRT, // also -inf; -0 is fine
         _ => {}
@@ -151,7 +158,11 @@ fn arith(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
         Op::Res => { zx = b == 0.0; 1.0 / b }
         Op::Rsqrte => { zx = b == 0.0; 1.0 / libm::sqrt(b) }
     };
-    if zx { raise(cpu, fs::ZX); }
+    if zx {
+        raise(cpu, fs::ZX);
+        // PEM 3.3.6.? zero-divide exception, enabled (ZE=1): the target FPR is left unchanged.
+        if cpu.fpscr & fs::ZE != 0 { return Ok(()); }
+    }
     if single || matches!(op, Op::Res) { r = (r as f32) as f64; }
     if r.is_infinite() && !zx && used.iter().all(|x| x.is_finite()) { raise(cpu, fs::OX); }
     put(cpu, w, d, r.to_bits(), single || matches!(op, Op::Res));
@@ -186,6 +197,12 @@ fn fsel(cpu: &mut Cpu, w: W) -> R {
 }
 
 fn frsp(cpu: &mut Cpu, w: W) -> R {
+    let r = frsp_inner(cpu, w);
+    if r.is_ok() && w.rc() { copy_to_cr1(cpu); }
+    r
+}
+
+fn frsp_inner(cpu: &mut Cpu, w: W) -> R {
     need_rne(cpu, w)?;
     let b = f(cpu, w.rb());
     if is_snan(b) {
@@ -234,6 +251,12 @@ fn round_int(x: f64, mode: u32) -> f64 {
 /// fctiw / fctiwz: convert to a 32-bit integer in the low word of frD (the high word is undefined; we set
 /// 0xFFF80000). Out-of-range and NaN inputs saturate and raise VXCVI (NaN -> 0x80000000).
 fn fctiw(cpu: &mut Cpu, w: W, z: bool) -> R {
+    let r = fctiw_inner(cpu, w, z);
+    if r.is_ok() && w.rc() { copy_to_cr1(cpu); }
+    r
+}
+
+fn fctiw_inner(cpu: &mut Cpu, w: W, z: bool) -> R {
     let b = f(cpu, w.rb());
     let mode = if z { 1 } else { cpu.fpscr & fs::RN };
     let mut flags = 0;
