@@ -17,10 +17,13 @@ pub const HEAP_END_G: u32 = 0x114; // Ptr
 pub const THE_ZONE: u32 = 0x118; // THz: the current heap zone
 pub const APPL_LIMIT: u32 = 0x130; // Ptr: heap growth limit; StackSpace = SP - ApplLimit
 pub const TICKS: u32 = 0x16A; // long: 60 Hz tick count
+pub const MB_STATE: u32 = 0x172; // byte: mouse button state, bit 7 SET = button up
 pub const MEM_ERR: u32 = 0x220; // short: the last Memory Manager result
 pub const SYS_ZONE: u32 = 0x2A6; // THz
 pub const APPL_ZONE: u32 = 0x2AA; // THz
 pub const SCRN_BASE: u32 = 0x824; // Ptr: main screen bitmap
+pub const RAW_MOUSE: u32 = 0x82C; // Point: v, h (global)
+pub const MOUSE: u32 = 0x830; // Point: v, h (global), the processed mouse
 pub const CRSR_PIN: u32 = 0x834; // Rect: the cursor's bound = screen bounds
 pub const CUR_AP_REF_NUM: u32 = 0x900; // short: the application's resource-file refNum
 pub const CURRENT_A5: u32 = 0x904; // Ptr: the application's A5
@@ -39,8 +42,8 @@ pub type Global = (u32, u32, &'static str);
 /// Every global the engine initialises or maintains, ascending and non-overlapping.
 pub static MAP: &[Global] = &[
     (SCREEN_ROW, 2, "ScreenRow"), (MEM_TOP, 4, "MemTop"), (BUF_PTR, 4, "BufPtr"), (HEAP_END_G, 4, "HeapEnd"),
-    (THE_ZONE, 4, "TheZone"), (APPL_LIMIT, 4, "ApplLimit"), (TICKS, 4, "Ticks"), (MEM_ERR, 2, "MemErr"),
-    (SYS_ZONE, 4, "SysZone"), (APPL_ZONE, 4, "ApplZone"), (SCRN_BASE, 4, "ScrnBase"), (CRSR_PIN, 8, "CrsrPin"),
+    (THE_ZONE, 4, "TheZone"), (APPL_LIMIT, 4, "ApplLimit"), (TICKS, 4, "Ticks"), (MB_STATE, 1, "MBState"), (MEM_ERR, 2, "MemErr"),
+    (SYS_ZONE, 4, "SysZone"), (APPL_ZONE, 4, "ApplZone"), (SCRN_BASE, 4, "ScrnBase"), (RAW_MOUSE, 4, "RawMouse"), (MOUSE, 4, "Mouse"), (CRSR_PIN, 8, "CrsrPin"),
     (CUR_AP_REF_NUM, 2, "CurApRefNum"), (CURRENT_A5, 4, "CurrentA5"), (CUR_STACK_BASE, 4, "CurStackBase"),
     (CUR_AP_NAME, 32, "CurApName"), (CUR_JT_OFFSET, 2, "CurJTOffset"), (WINDOW_LIST, 4, "WindowList"),
     (MENU_LIST, 4, "MenuList"), (RES_LOAD, 2, "ResLoad"), (RES_ERR, 2, "ResErr"), (MBAR_HEIGHT, 2, "MBarHeight"),
@@ -76,6 +79,7 @@ pub fn init(mem: &mut GuestMem) -> Result<(), Refusal> {
     mem.write_u32(CUR_STACK_BASE, STACK_TOP).map_err(&e)?;
     mem.write_u32(SCRN_BASE, SCREEN_BASE).map_err(&e)?;
     for (i, v) in [0, 0, SCREEN_H, SCREEN_W].into_iter().enumerate() { mem.write_u16(CRSR_PIN + 2 * i as u32, v as u16).map_err(&e)?; }
+    mem.write_u8(MB_STATE, 0x80).map_err(&e)?; // button up
     mem.write_u16(RES_LOAD, 0x0100).map_err(&e)?; // ResLoad = TRUE (Boolean in the high byte)
     mem.write_u16(MBAR_HEIGHT, MENU_BAR_HEIGHT as u16).map_err(&e)
 }

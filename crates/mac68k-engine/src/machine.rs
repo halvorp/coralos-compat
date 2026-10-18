@@ -77,6 +77,8 @@ pub struct Mac<U: GuestUi> {
     pub seg: SegLoader,
     pub menus: MenuMgr,
     pub ev: EventMgr,
+    /// The translation layer's state: projected controls, dialogs, pending gestures (translate/).
+    pub tr: crate::translate::Translate,
     /// The address the program gave InitGraf (its `qd.thePort`); 0 before InitGraf.
     pub qd_globals: u32,
     /// QuickDraw's host-side state: window canvases, update regions, the font (qd/).
@@ -101,7 +103,7 @@ impl<U: GuestUi> Mac<U> {
     pub fn new(ui: U) -> Result<Self, Refusal> {
         let mut m = Mac {
             mem: GuestMem::new(DEFAULT_SIZE), ui, windows: BTreeMap::new(), z: vec![], mm: MemMgr::default(), rm: ResMgr::default(),
-            seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), qd_globals: 0, qd: qd::Qd::default(),
+            seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
         };
@@ -115,6 +117,7 @@ impl<U: GuestUi> Mac<U> {
         segment::register(&mut m)?;
         menu::register(&mut m)?;
         events::register(&mut m)?;
+        crate::translate::register(&mut m)?;
         m.mem.write_u16(EXIT_STUB, 0xA9F4).map_err(Refusal::mem("exit stub"))?; // _ExitToShell
         Ok(m)
     }

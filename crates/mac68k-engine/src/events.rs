@@ -16,7 +16,10 @@
 //!   `inMenuBar` and its `MenuSelect` returns the choice as `menuID << 16 | item` (instead of tracking the mouse).
 //! * `Resized` -> the window's rect is updated and an `updateEvt` is queued.
 //! * A window becoming visible queues `activateEvt` then `updateEvt` (message = the WindowPtr), as the Window Manager does.
-//! * `Intent` has no Mac meaning (Mac controls come from `GetNewControl`, not bridged yet): a named refusal.
+//! * `Intent` -> the exact guest input the original OS produced for that gesture ([`crate::translate`]: a `mouseDown` in
+//!   the control, then the part code `TrackControl` returns; an `itemHit` for a modal dialog).
+//! * `Pointer` / `Key` -> `mouseDown`/`mouseUp`/`keyDown`/`autoKey` in global coordinates, the low-memory `Mouse`/`MBState`
+//!   ([`crate::translate::input`]).
 use crate::lowmem::TICKS;
 use crate::machine::{Call, Done, Mac};
 use crate::osconv::Regs;
@@ -29,6 +32,9 @@ use guestui_abi::{GuestUi, GuestUiEvent};
 use retro_m68k::Cpu;
 
 pub const MOUSE_DOWN: u16 = 1;
+pub const MOUSE_UP: u16 = 2;
+pub const KEY_DOWN: u16 = 3;
+pub const AUTO_KEY: u16 = 5;
 pub const UPDATE_EVT: u16 = 6;
 pub const ACTIVATE_EVT: u16 = 8;
 pub const EVENT_RECORD_SIZE: u32 = 16;
@@ -54,9 +60,12 @@ pub struct EventMgr {
 pub fn go_away_point(r: &Rect) -> (i16, i16) { (r.top - 9, r.left + 14) }
 
 impl<U: GuestUi> Mac<U> {
-    pub fn post(&mut self, what: u16, message: u32, v: i16, h: i16) {
+    pub fn post(&mut self, what: u16, message: u32, v: i16, h: i16) { self.post_with(what, message, v, h, 0); }
+
+    /// Queue an event with its modifier word (`EventRecord.modifiers`).
+    pub fn post_with(&mut self, what: u16, message: u32, v: i16, h: i16, modifiers: u16) {
         let when = self.ev.ticks;
-        self.ev.queue.push_back(MacEvent { what, message, when, v, h, modifiers: 0 });
+        self.ev.queue.push_back(MacEvent { what, message, when, v, h, modifiers });
     }
 
     /// The host's 60 Hz clock: advance `Ticks` (and so `TickCount` and event timestamps).
@@ -97,7 +106,9 @@ impl<U: GuestUi> Mac<U> {
                 self.post(UPDATE_EVT, p, 0, 0);
                 Ok(Delivered::Queued)
             }
-            other => Err(Refusal(format!("deliver: {other:?} has no classic Mac event"))),
+            GuestUiEvent::Intent { win, control, token, generation, intent } => self.deliver_intent(win, control, token, generation, intent),
+            GuestUiEvent::Pointer { win, x, y, button, phase, clicks } => self.deliver_pointer(win, x, y, button, phase, clicks),
+            GuestUiEvent::Key { win, text, modifiers, down, code } => self.deliver_key(win, code, &text, modifiers, down),
         }
     }
 
@@ -123,6 +134,7 @@ impl<U: GuestUi> Mac<U> {
     /// Called by [`Mac::step`] before resuming: finish a blocked event call if a matching event has arrived.
     /// Returns false while the guest must stay blocked.
     pub(crate) fn complete_wait(&mut self) -> bool {
+        if self.tr.dlg.modal.is_some() { return self.complete_modal(); }
         let Some(w) = self.ev.waiting else { return true };
         self.pump_ui();
         let Some(e) = self.take_event(w.mask, true) else { return false };
@@ -138,7 +150,9 @@ fn mask_accepts(mask: u16, what: u16) -> bool { what < 16 && mask & (1u16 << wha
 
 /// What [`Mac::deliver`] did with an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Delivered { Queued, NotForAGuestWindow }
+pub enum Delivered { Queued, NotForAGuestWindow,
+    /// Accepted and deliberately not turned into an event (pointer motion, a key release: classic Mac programs poll those).
+    Ignored }
 
 /// Where a menu command's `mouseDown` is reported: inside the menu bar (rows 0..20).
 pub const MENU_BAR_HIT: (i16, i16) = (5, 10);
