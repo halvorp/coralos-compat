@@ -53,8 +53,8 @@ fn distinct_pens(px: &[u32]) -> usize { let mut v = px.to_vec(); v.sort_unstable
 #[test]
 fn directory_opus_starts_its_processes_ports_and_windows() {
     let Some(a) = run(5) else { return };
-    // Named refusals only, and only these: DOpus's own CloseLibrary(NULL), and one FreeVec of an address (the buttons process frees `msg - 8` of an IntuiMessage the engine allocated; not understood yet).
-    assert!(a.refused.iter().all(|r| r.contains("CloseLibrary: 0x0 is not an open library base") || (r.starts_with("exec.library/FreeVec: FreeVec: 0x") && r.ends_with("is not a block this heap allocated"))), "{:#?}", a.refused);
+    // No refusal at all: DOpus's CloseLibrary(NULL) is a no-op and its ReplyFreeMsg of an IntuiMessage replies (the message names the WindowPort).
+    assert!(a.refused.is_empty(), "{:#?}", a.refused);
 
     // The lister's file list: RAM: holds Env, EnvArc and T; each is drawn as a row of 48 characters (432 px), name first. Control: no row was
     // ever drawn zero characters wide (what a window with GZZWidth 0 gives).

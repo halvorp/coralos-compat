@@ -94,6 +94,7 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal>
     // GZZWidth / GZZHeight: the inner size, for every window (intuition.h; AROS sets them in OpenWindow). DOpus sizes its file list from GZZWidth.
     for (off, v) in [(WD_GZZ_WIDTH, width - bl - br), (WD_GZZ_HEIGHT, height - bt - bb)] { a.mem.write_u16(win + off, v as u16).map_err(m("Window GZZ size"))?; }
     a.mem.write_u32(win + WD_IDCMP, s.idcmp).map_err(m("Window.IDCMPFlags"))?;
+    idcmp::create_window_port(a, win)?;
     if s.idcmp != 0 { idcmp::create_user_port(a, win)?; }
     let model = WindowModel {
         title: title.clone(),
@@ -154,6 +155,7 @@ pub fn close_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     a.ui.close_window(native).map_err(Refusal::ui)?;
     crate::gadtools::detach(a, win);
     idcmp::free_user_port(a, win)?;
+    idcmp::free_window_port(a, win)?;
     a.menu_strips.remove(&win);
     a.heap.free(win, WINDOW_SIZE).map_err(|e| Refusal(format!("CloseWindow: {e}")))?;
     Ok(format!("[intuition] CloseWindow {win:#x}"))
