@@ -21,6 +21,7 @@ impl<U: GuestUi> Mac<U> {
         if entry as usize >= code.len() { return Err(format!("entry {entry:#x} is outside the {}-byte image", code.len())); }
         self.mem.write_bytes(CODE_BASE, code).map_err(|e| e.to_string())?;
         self.mem.write_u32(STACK_TOP - 4, EXIT_STUB).map_err(|e| e.to_string())?; // return address for the program's final rts
+        self.ev.waiting = None; // a new program replaces the old one, including its blocked event call
         self.ctx = Some(retro_m68k::start_with(self, CODE_BASE + entry, STACK_TOP - 4, &[]));
         Ok(())
     }

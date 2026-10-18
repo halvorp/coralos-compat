@@ -9,7 +9,7 @@
 //! P-202 privates (76 bytes)   P-126 randSeed (long)   P-122 screenBits (BitMap, 14)   P-108 arrow (Cursor, 68)
 //! P-40 dkGray  P-32 ltGray  P-24 gray  P-16 black  P-8 white (Patterns, 8 each)   P+0 thePort (GrafPtr)
 //! ```
-//! Drawing itself is not implemented yet: only the state a program reads back (and `SetPort`/`GetPort`).
+//! This file is the globals and the Init family plus `SetPort`/`GetPort`; the drawing itself is in [`crate::qd`].
 use crate::lowmem::{CRSR_PIN, CURRENT_A5, SCRN_BASE, SCREEN_ROW};
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::Arg;

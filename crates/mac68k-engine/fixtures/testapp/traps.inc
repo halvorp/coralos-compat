@@ -43,3 +43,21 @@
         .equ _ResError, 0xA9AF
         .equ _SizeRsrc, 0xA9A5
         .equ _GetNamedResource, 0xA9A1
+        .equ _SetPort, 0xA873
+        .equ _BeginUpDate, 0xA922
+        .equ _EndUpDate, 0xA923
+        .equ _EraseRect, 0xA8A3
+        .equ _PenSize, 0xA89B
+        .equ _FrameRect, 0xA8A1
+        .equ _PenNormal, 0xA89E
+        .equ _PaintRect, 0xA8A2
+        .equ _FillRect, 0xA8A5
+        .equ _PaintOval, 0xA8B8
+        .equ _FrameRoundRect, 0xA8B0
+        .equ _MoveTo, 0xA893
+        .equ _LineTo, 0xA891
+        .equ _InverRect, 0xA8A4
+        .equ _TextFont, 0xA887
+        .equ _TextSize, 0xA88A
+        .equ _DrawString, 0xA884
+        .equ _GetNextEvent, 0xA970
