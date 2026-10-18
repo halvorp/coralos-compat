@@ -4,5 +4,5 @@ use crate::libtable::LibraryBuilder;
 use guestui_abi::GuestUi;
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
-    b.with(crate::vars::register::<U>)
+    b.with(crate::vars::register::<U>).with(crate::doslist::register::<U>).with(crate::devproc::register::<U>)
 }

@@ -47,6 +47,10 @@ pub struct FsState {
     pub icons: BTreeMap<u32, u32>,
     /// The Process's local variables (vars.rs).
     pub vars: crate::vars::Vars,
+    /// The DOS device list's guest entries (doslist.rs).
+    pub dos: crate::doslist::DosListState,
+    /// DevProcs and MakeDosEntry nodes (devproc.rs).
+    pub devs: crate::devproc::DevState,
 }
 
 impl FsState {
@@ -124,6 +128,6 @@ pub fn write_file<U: GuestUi>(a: &mut Amiga<U>, path: &str, bytes: Vec<u8>) -> R
 
 impl Default for FsState {
     fn default() -> Self {
-        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, icons: BTreeMap::new(), vars: Default::default() }
+        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, icons: BTreeMap::new(), vars: Default::default(), dos: Default::default(), devs: Default::default() }
     }
 }

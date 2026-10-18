@@ -77,7 +77,7 @@ pub fn lock<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     }
 }
 
-fn free_lock<U: GuestUi>(a: &mut Amiga<U>, bptr: u32, call: &str) -> Result<(), Refusal> {
+pub(crate) fn free_lock<U: GuestUi>(a: &mut Amiga<U>, bptr: u32, call: &str) -> Result<(), Refusal> {
     if bptr == 0 { return Ok(()); }
     if a.fs.locks.remove(&(bptr << 2)).is_none() { return Err(Refusal(format!("{call}: {:#x} is not a live lock", bptr << 2))); }
     a.heap.free(bptr << 2, LOCK_SIZE).map_err(|e| Refusal(format!("{call}: {e}")))

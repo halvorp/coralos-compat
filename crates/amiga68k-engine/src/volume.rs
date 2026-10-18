@@ -115,6 +115,8 @@ impl Volume {
         if self.assigns[&k].is_empty() { self.assigns.remove(&k); }
         gone
     }
+    /// Every assign with its directories, in name order.
+    pub fn assign_list(&self) -> Vec<(String, Vec<String>)> { self.assigns.iter().map(|(k, v)| (k.clone(), v.clone())).collect() }
     pub fn assign_targets(&self, name: &str) -> Option<&[String]> { self.assigns.iter().find(|(k, _)| same(k, name)).map(|(_, v)| v.as_slice()) }
 
     pub fn find_child(&self, dir: NodeId, name: &str) -> Option<NodeId> { self.children(dir).iter().copied().find(|&c| same(self.name(c), name)) }

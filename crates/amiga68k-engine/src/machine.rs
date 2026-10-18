@@ -230,6 +230,7 @@ impl<U: GuestUi> Amiga<U> {
             a.libs.push(LibInfo { name, base, open_count: 0 });
         }
         crate::execlists::init(&mut a.mem)?;
+        crate::doslist::init(&mut a)?;
         crate::guest_call::install(&mut a.mem)?;
         a.dispatch.insert(crate::guest_call::RET_SLOT, ("exec.library", "GuestCallReturn", crate::guest_call::on_return::<U>));
         write_slot(&mut a.mem, EXIT_SLOT).map_err(Refusal::mem("exit slot"))?;
