@@ -74,7 +74,7 @@ fn aligned4(cpu: &Cpu, ea: u32, what: &'static str) -> R {
 
 fn lmw<H: Host>(host: &mut H, cpu: &mut Cpu, w: W, ea: u32) -> R {
     aligned4(cpu, ea, "lmw")?;
-    if w.ra() >= w.rt() && w.ra() != 0 { return Err(cpu.invalid(w, "lmw with RA in the loaded range")); }
+    if w.ra() >= w.rt() { return Err(cpu.invalid(w, "lmw with RA in the loaded range")); }
     for (i, r) in (w.rt()..32).enumerate() {
         cpu.gpr[r] = rd(cpu, host, ea.wrapping_add(4 * i as u32), 4)?;
     }
@@ -105,6 +105,16 @@ fn load_string<H: Host>(host: &mut H, cpu: &mut Cpu, w: W, ea: u32, n: u32) -> R
     }
     Ok(())
 }
+/// lswi/lswx are invalid when RA (nonzero) or, for lswx, RB is one of the registers being loaded (PEM lswi/lswx),
+/// the range running RT.. for ceil(n/4) registers and wrapping r31 -> r0.
+fn string_overlap(cpu: &Cpu, w: W, n: u32, check_rb: bool) -> Option<Trap> {
+    let count = n.div_ceil(4);
+    let loaded = |r: usize| (r as u32).wrapping_sub(w.rt() as u32) & 31 < count;
+    if (w.ra() != 0 && loaded(w.ra())) || (check_rb && loaded(w.rb())) {
+        return Some(cpu.invalid(w, "lswi/lswx with RA or RB inside the loaded register range"));
+    }
+    None
+}
 fn store_string<H: Host>(host: &mut H, cpu: &mut Cpu, w: W, ea: u32, n: u32) -> R {
     let mut r = w.rt();
     for i in 0..n {
@@ -126,16 +136,25 @@ pub(crate) fn x31<H: Host>(host: &mut H, cpu: &mut Cpu, w: W, xo: u32) -> Option
         534 => (Op::Lwbr, false), 790 => (Op::Lhbr, false), 662 => (Op::Stwbr, false), 918 => (Op::Sthbr, false),
         20 => return Some(lwarx(host, cpu, w, ea)),
         150 => return Some(stwcx(host, cpu, w, ea)),
-        597 => { let n = if w.rb() == 0 { 32 } else { w.rb() as u32 }; return Some(load_string(host, cpu, w, base(cpu, w), n)) }
+        597 => {
+            let n = if w.rb() == 0 { 32 } else { w.rb() as u32 };
+            if let Some(e) = string_overlap(cpu, w, n, false) { return Some(Err(e)); }
+            return Some(load_string(host, cpu, w, base(cpu, w), n));
+        }
         725 => { let n = if w.rb() == 0 { 32 } else { w.rb() as u32 }; return Some(store_string(host, cpu, w, base(cpu, w), n)) }
-        533 => return Some(load_string(host, cpu, w, ea, cpu.xer & 0x7F)),
+        533 => {
+            let n = cpu.xer & 0x7F;
+            if let Some(e) = string_overlap(cpu, w, n, true) { return Some(Err(e)); }
+            return Some(load_string(host, cpu, w, ea, n));
+        }
         661 => return Some(store_string(host, cpu, w, ea, cpu.xer & 0x7F)),
         1014 => { // dcbz: zero the 32-byte line containing EA
             let line = ea & !(LINE - 1);
             return Some(host.mem().zero(line, LINE).map_err(|_| Trap::BusFault { pc: cpu.pc, addr: line, write: true }));
         }
         // Cache / ordering hints: no cache and a single in-order CPU, so there is nothing to do. dcbi is supervisor.
-        54 | 86 | 246 | 278 | 982 | 598 | 854 | 566 => return Some(Ok(())),
+        54 | 86 | 246 | 278 | 982 | 598 | 854 => return Some(Ok(())),
+        566 => return Some(Err(cpu.privileged(w, "tlbsync"))),
         470 => return Some(Err(cpu.privileged(w, "dcbi"))),
         _ => return None,
     };

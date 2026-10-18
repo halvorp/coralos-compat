@@ -9,19 +9,30 @@ use crate::Host;
 #[derive(Clone, Copy)]
 enum Op { Lfs, Lfd, Stfs, Stfd, Stfiw }
 
+/// lfs: widen exactly. A NaN keeps its payload and its quiet bit (a host `as` cast would quiet a signalling NaN).
+fn single_to_double(s: u32) -> u64 {
+    let x = f32::from_bits(s);
+    if x.is_nan() { (s as u64 & 0x8000_0000) << 32 | 0x7FF << 52 | (s as u64 & 0x007F_FFFF) << 29 } else { (x as f64).to_bits() }
+}
+/// stfs: a NaN stores sign + the top 23 fraction bits unchanged (no quieting); anything else rounds to nearest-even.
+fn double_to_single(d: u64) -> u32 {
+    let x = f64::from_bits(d);
+    if x.is_nan() { ((d >> 32) as u32 & 0x8000_0000) | 0x7F80_0000 | (d >> 29) as u32 & 0x007F_FFFF } else { (x as f32).to_bits() }
+}
+
 fn access<H: Host>(host: &mut H, cpu: &mut Cpu, w: W, op: Op, ea: u32, update: bool) -> R {
     if update && w.ra() == 0 {
         return Err(cpu.invalid(w, "update-form FP load/store with RA=0"));
     }
     let t = w.rt();
     match op {
-        Op::Lfs => cpu.fpr[t] = (f32::from_bits(rd(cpu, host, ea, 4)?) as f64).to_bits(),
+        Op::Lfs => cpu.fpr[t] = single_to_double(rd(cpu, host, ea, 4)?),
         Op::Lfd => {
             let hi = rd(cpu, host, ea, 4)?;
             let lo = rd(cpu, host, ea.wrapping_add(4), 4)?;
             cpu.fpr[t] = (hi as u64) << 32 | lo as u64;
         }
-        Op::Stfs => wr(cpu, host, ea, 4, (f64::from_bits(cpu.fpr[t]) as f32).to_bits())?,
+        Op::Stfs => wr(cpu, host, ea, 4, double_to_single(cpu.fpr[t]))?,
         Op::Stfd => {
             wr(cpu, host, ea, 4, (cpu.fpr[t] >> 32) as u32)?;
             wr(cpu, host, ea.wrapping_add(4), 4, cpu.fpr[t] as u32)?;

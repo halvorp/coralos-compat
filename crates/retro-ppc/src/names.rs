@@ -12,7 +12,7 @@ pub(crate) fn primary(op: u32) -> &'static str {
 /// Opcode-31 extended opcodes that are real instructions but outside the user-mode subset, or reserved.
 pub(crate) fn x31(xo: u32) -> &'static str {
     match xo {
-        83 => "mfmsr (supervisor)", 146 => "mtmsr (supervisor)", 210 | 242 | 306 | 370 | 434 | 466 | 498 => "TLB/segment management (supervisor)",
+        83 => "mfmsr (supervisor)", 146 => "mtmsr (supervisor)", 210 | 242 | 306 | 370 | 434 | 466 | 498 | 566 => "TLB/segment management (supervisor)",
         339 | 467 => "mfspr/mtspr", 595 | 659 | 627 | 693 | 723 => "segment register access (supervisor)",
         310 | 438 => "eciwx/ecowx (external control, not in user subset)",
         6 | 7 | 38 | 39 | 71 | 103 | 135 | 167 | 199 | 231 | 342 | 359 | 487 | 822 => "AltiVec load/store (lvx/stvx family)",

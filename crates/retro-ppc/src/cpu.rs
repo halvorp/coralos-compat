@@ -150,10 +150,14 @@ impl Cpu {
     }
     /// CR0 = LT/GT/EQ of `result` read as signed, plus XER[SO] (what every Rc=1 integer instruction does).
     pub(crate) fn set_cr0(&mut self, result: u32) {
+        self.set_cr_compare(0, (result as i32).cmp(&0));
+    }
+    /// CR field `bf` = LT/GT/EQ for `ord` plus XER[SO] (cmp, cmpl and every Rc=1 integer instruction).
+    pub(crate) fn set_cr_compare(&mut self, bf: u32, ord: core::cmp::Ordering) {
         let so = (self.xer & XER_SO != 0) as u32;
-        let f = match (result as i32).cmp(&0) {
+        let f = match ord {
             core::cmp::Ordering::Less => 8, core::cmp::Ordering::Greater => 4, core::cmp::Ordering::Equal => 2,
         };
-        self.set_cr_field(0, f | so);
+        self.set_cr_field(bf, f | so);
     }
 }

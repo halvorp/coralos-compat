@@ -142,7 +142,11 @@ fn arith(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
         Op::Sub => a - b,
         Op::Mul => a * c,
         Op::Div => { zx = b == 0.0 && a != 0.0 && a.is_finite(); a / b }
-        Op::Fma { neg, sub } => { let m = libm::fma(a, c, if sub { -b } else { b }); if neg { -m } else { m } }
+        Op::Fma { neg, sub } => {
+            let b = if sub { -b } else { b };
+            let m = if single { fma_single(a, c, b) } else { libm::fma(a, c, b) };
+            if neg { -m } else { m }
+        }
         Op::Sqrt => libm::sqrt(b),
         Op::Res => { zx = b == 0.0; 1.0 / b }
         Op::Rsqrte => { zx = b == 0.0; 1.0 / libm::sqrt(b) }
@@ -152,6 +156,26 @@ fn arith(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
     if r.is_infinite() && !zx && used.iter().all(|x| x.is_finite()) { raise(cpu, fs::OX); }
     put(cpu, w, d, r.to_bits(), single || matches!(op, Op::Res));
     Ok(())
+}
+
+/// a*c+b rounded ONCE to single precision, returned widened to f64. Rounding the f64 result to f32 would round twice
+/// (and can land one ulp off at a tie). When the operands are single-representable the product is exact in f64, so
+/// TwoSum gives the exact sum as s+t; round that to ODD in f64 (truncate toward zero, force the lsb when inexact),
+/// then the f64->f32 nearest-even rounding is correct because f64 has >= 2 more bits than f32 (PEM fmadds).
+/// Operands that are not single-representable are undefined on hardware; they take the plain fma.
+fn fma_single(a: f64, c: f64, b: f64) -> f64 {
+    let exact_single = |x: f64| !x.is_finite() || (x as f32) as f64 == x;
+    if !(exact_single(a) && exact_single(b) && exact_single(c)) { return libm::fma(a, c, b); }
+    let p = a * c; // exact: 24 x 24 bits
+    let s = p + b;
+    if !s.is_finite() { return s; }
+    let bb = s - p;
+    let t = (p - (s - bb)) + (b - bb); // Knuth TwoSum error term: p + b == s + t exactly
+    if t == 0.0 { return s; }
+    let toward_zero = (s > 0.0) != (t > 0.0);
+    let mut bits = s.to_bits();
+    if toward_zero { bits -= 1; } // |s| shrinks by one ulp (s != 0 here: s == 0 would mean t == 0)
+    f64::from_bits(bits | 1)
 }
 
 fn fsel(cpu: &mut Cpu, w: W) -> R {
@@ -242,13 +266,12 @@ fn field_mask(fm: u32) -> u32 {
     (0..8).filter(|i| fm & (0x80 >> i) != 0).fold(0, |m, i| m | 0xF << (28 - 4 * i))
 }
 
-/// Write the FPSCR bits selected by `m` from `v`. FEX and VX are derived, so they are never taken from `v`;
-/// a sticky flag rising from 0 to 1 raises FX.
+/// Write the FPSCR bits selected by `m` from `v`. FEX and VX are derived, so they are never taken from `v`; every
+/// other bit, FX and the sticky flags included, is copied exactly as given (PEM mtfsf/mtfsfi: no FX-rising rule,
+/// that rule belongs to the hardware-raised flags and mtfsb1).
 fn write_fpscr(cpu: &mut Cpu, m: u32, v: u32) {
     let m = m & !(fs::FEX | fs::VX);
-    let rising = v & m & fs::STICKY & !cpu.fpscr & !fs::FX;
     cpu.fpscr = (cpu.fpscr & !m) | (v & m);
-    if rising != 0 { cpu.fpscr |= fs::FX; }
     fs::fix(cpu);
 }
 

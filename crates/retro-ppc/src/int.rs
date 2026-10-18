@@ -23,13 +23,6 @@ fn finish(cpu: &mut Cpu, w: W, rd: usize, r: u32, ca: Option<bool>, ov: bool) {
 fn ca_in(cpu: &Cpu) -> u32 { (cpu.xer & XER_CA != 0) as u32 }
 fn ra0(cpu: &Cpu, w: W) -> u32 { if w.ra() == 0 { 0 } else { cpu.gpr[w.ra()] } }
 
-/// Compare into CR field `bf`: LT/GT/EQ plus XER[SO] (PEM cmp/cmpl).
-fn compare(cpu: &mut Cpu, bf: u32, ord: core::cmp::Ordering) {
-    let so = (cpu.xer & XER_SO != 0) as u32;
-    let f = match ord { core::cmp::Ordering::Less => 8, core::cmp::Ordering::Greater => 4, core::cmp::Ordering::Equal => 2 };
-    cpu.set_cr_field(bf, f | so);
-}
-
 /// The TO-field test of tw/twi: bits 0x10 <, 0x08 >, 0x04 =, 0x02 <u, 0x01 >u (PEM tw).
 fn trap_cond(to: u32, a: u32, b: u32) -> bool {
     let (sa, sb) = (a as i32, b as i32);
@@ -54,8 +47,8 @@ pub(crate) fn exec_d(cpu: &mut Cpu, w: W) -> R {
             cpu.gpr[t] = r;
             cpu.xer = (cpu.xer & !XER_CA) | if ca { XER_CA } else { 0 };
         }
-        10 => { let o = cpu.gpr[a].cmp(&w.uimm()); compare(cpu, w.bf(), o) } // cmpli
-        11 => { let o = (cpu.gpr[a] as i32).cmp(&(w.simm() as i32)); compare(cpu, w.bf(), o) } // cmpi
+        10 => { let o = cpu.gpr[a].cmp(&w.uimm()); cpu.set_cr_compare(w.bf(), o) } // cmpli
+        11 => { let o = (cpu.gpr[a] as i32).cmp(&(w.simm() as i32)); cpu.set_cr_compare(w.bf(), o) } // cmpi
         12 | 13 => { // addic / addic.
             let (r, ca, _) = add_core(cpu.gpr[a], w.simm(), 0);
             cpu.gpr[t] = r;
@@ -112,6 +105,7 @@ pub(crate) fn arith(cpu: &mut Cpu, w: W, x: u32) -> Option<R> {
             let p = (a as i32 as i64) * (b as i32 as i64);
             finish(cpu, w, d, p as u32, None, p != p as i32 as i64)
         }
+        75 | 11 if w.oe() => return Some(Err(cpu.invalid(w, "mulhw/mulhwu with the reserved OE bit set"))),
         75 => { let p = (a as i32 as i64) * (b as i32 as i64); finish(cpu, w, d, (p >> 32) as u32, None, false) } // mulhw
         11 => { let p = a as u64 * b as u64; finish(cpu, w, d, (p >> 32) as u32, None, false) }                 // mulhwu
         491 => { // divw: see the lib.rs note on undefined results
@@ -148,8 +142,8 @@ pub(crate) fn logical(cpu: &mut Cpu, w: W, xo: u32) -> Option<R> {
             cpu.xer = (cpu.xer & !XER_CA) | if ca { XER_CA } else { 0 };
             r
         }
-        0 => { let o = (cpu.gpr[w.ra()] as i32).cmp(&(b as i32)); compare(cpu, w.bf(), o); return Some(Ok(())) }  // cmp
-        32 => { let o = cpu.gpr[w.ra()].cmp(&b); compare(cpu, w.bf(), o); return Some(Ok(())) }                  // cmpl
+        0 => { let o = (cpu.gpr[w.ra()] as i32).cmp(&(b as i32)); cpu.set_cr_compare(w.bf(), o); return Some(Ok(())) }  // cmp
+        32 => { let o = cpu.gpr[w.ra()].cmp(&b); cpu.set_cr_compare(w.bf(), o); return Some(Ok(())) }                  // cmpl
         4 => return Some(tw(cpu, w)),
         _ => return None,
     };
