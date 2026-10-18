@@ -93,6 +93,7 @@ impl<U: GuestUi> Mac<U> {
                 let Some((p, _)) = find(self, win) else { return Ok(Delivered::NotForAGuestWindow) };
                 let r = Rect { top: rect.top as i16, left: rect.left as i16, bottom: (rect.top + rect.height) as i16, right: (rect.left + rect.width) as i16 };
                 self.set_window_rect(p, r)?;
+                crate::qd::lifecycle::window_resized(self, p)?;
                 self.post(UPDATE_EVT, p, 0, 0);
                 Ok(Delivered::Queued)
             }

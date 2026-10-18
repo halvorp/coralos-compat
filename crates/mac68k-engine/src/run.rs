@@ -32,6 +32,7 @@ impl<U: GuestUi> Mac<U> {
         if !self.complete_wait() { return (Step::Blocked, idle); }
         let Some(mut ctx) = self.ctx.take() else { return (Step::Exited, RunStats { blocked: false, halted: true, ..idle }) };
         let stats = retro_m68k::resume(self, &mut ctx, budget);
+        crate::qd::flush(self);
         let step = if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked }
             else if let Some(pc) = stats.stalled_at { Step::Fault(format!("the 68k stopped making progress at pc={pc:#x} (STOP, or halted after a double fault)")) }
             else { Step::BudgetSpent };

@@ -13,7 +13,7 @@ use crate::pascal::{self, Arg, Args, Rect};
 use crate::resmgr::ResMgr;
 use crate::segment::SegLoader;
 use crate::traps::{describe, trap_key, trap_name};
-use crate::{events, lowmem, memtraps, menu, quickdraw, rects, resmgr, segment, toolbox, Refusal};
+use crate::{events, lowmem, memtraps, menu, qd, quickdraw, rects, resmgr, segment, toolbox, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::heap::Heap;
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
@@ -79,6 +79,8 @@ pub struct Mac<U: GuestUi> {
     pub ev: EventMgr,
     /// The address the program gave InitGraf (its `qd.thePort`); 0 before InitGraf.
     pub qd_globals: u32,
+    /// QuickDraw's host-side state: window canvases, update regions, the font (qd/).
+    pub qd: qd::Qd,
     table: BTreeMap<u16, TrapEntry<U>>,
     /// One line per successful bridged call, in order.
     pub log: Vec<String>,
@@ -99,7 +101,7 @@ impl<U: GuestUi> Mac<U> {
     pub fn new(ui: U) -> Result<Self, Refusal> {
         let mut m = Mac {
             mem: GuestMem::new(DEFAULT_SIZE), ui, windows: BTreeMap::new(), z: vec![], mm: MemMgr::default(), rm: ResMgr::default(),
-            seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), qd_globals: 0,
+            seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), qd_globals: 0, qd: qd::Qd::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
         };
@@ -107,6 +109,7 @@ impl<U: GuestUi> Mac<U> {
         toolbox::register(&mut m)?;
         quickdraw::register(&mut m)?;
         rects::register(&mut m)?;
+        qd::register(&mut m)?;
         memtraps::register(&mut m)?;
         resmgr::register(&mut m)?;
         segment::register(&mut m)?;

@@ -15,7 +15,7 @@ use crate::events::{go_away_point, ACTIVATE_EVT, UPDATE_EVT};
 use crate::lowmem::{MBAR_HEIGHT, SCRN_BASE, SCREEN_ROW, WINDOW_LIST};
 use crate::machine::{Call, Done, Mac, MacWindow};
 use crate::pascal::{read_pstring, read_rect, Arg, Rect};
-use crate::quickdraw::{accept, set_the_port};
+use crate::quickdraw::set_the_port;
 use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
@@ -94,6 +94,7 @@ impl<U: GuestUi> Mac<U> {
         self.post(ACTIVATE_EVT, win, 0, 0);
         self.ev.queue.back_mut().map(|e| e.modifiers = 1); // bit 0: activate
         self.post(UPDATE_EVT, win, 0, 0);
+        crate::qd::lifecycle::window_shown(self, win);
         Ok(())
     }
 
@@ -127,9 +128,9 @@ impl<U: GuestUi> Mac<U> {
         // behind: -1 = in front of all, 0 = behind all, else behind that window
         let at = match s.behind { 0xFFFF_FFFF => 0, 0 => self.z.len(), b => self.z.iter().position(|&z| z == b).map_or(0, |i| i + 1) };
         self.z.insert(at, win);
-        if let Err(e) = self.set_window_rect(win, r).and_then(|_| self.relink_windows()) { self.windows.remove(&win); self.z.retain(|&z| z != win); undo(self); return Err(e); }
+        if let Err(e) = self.set_window_rect(win, r).and_then(|_| self.relink_windows()).and_then(|_| crate::qd::lifecycle::window_created(self, win)) { crate::qd::lifecycle::window_disposed(self, win); self.windows.remove(&win); self.z.retain(|&z| z != win); undo(self); return Err(e); }
         if s.visible {
-            if let Err(e) = self.open_native(win) { self.windows.remove(&win); self.z.retain(|&z| z != win); let _ = self.relink_windows(); undo(self); return Err(e); }
+            if let Err(e) = self.open_native(win) { crate::qd::lifecycle::window_disposed(self, win); self.windows.remove(&win); self.z.retain(|&z| z != win); let _ = self.relink_windows(); undo(self); return Err(e); }
         }
         if self.qd_globals != 0 { set_the_port(self, win)?; }
         Ok(win)
@@ -167,8 +168,6 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA924, &[], Some(Arg::L), front_window::<U>)?;
     m.register(0xA92C, &[Arg::L, Arg::L], Some(Arg::W), find_window::<U>)?;
     m.register(0xA91E, &[Arg::L, Arg::L], Some(Arg::B), track_go_away::<U>)?;
-    m.register(0xA922, &[Arg::L], None, accept::<U>)?; // BeginUpdate(theWindow): no update regions are kept yet
-    m.register(0xA923, &[Arg::L], None, accept::<U>)?; // EndUpdate(theWindow)
     m.register(0xA9F4, &[], None, exit_to_shell::<U>)
 }
 
@@ -217,6 +216,7 @@ fn get_new_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<D
 fn dispose_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let win = c.args.get(0);
     let w = m.windows.remove(&win).ok_or_else(|| Refusal(format!("DisposeWindow: {win:#x} is not an open window")))?;
+    crate::qd::lifecycle::window_disposed(m, win);
     if let Some(n) = w.native { m.ui.close_window(n).map_err(Refusal::ui)?; }
     if w.owned { m.mm.dispose_ptr(&mut m.heap, win).map_err(|e| Refusal(format!("DisposeWindow: {e}")))?; }
     m.z.retain(|&z| z != win);

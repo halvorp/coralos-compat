@@ -23,6 +23,7 @@ pub mod memtraps;
 pub mod menu;
 pub mod osconv;
 pub mod pascal;
+pub mod qd;
 pub mod quickdraw;
 pub mod rects;
 pub mod resmgr;
