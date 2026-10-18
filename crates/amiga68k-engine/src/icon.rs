@@ -37,16 +37,16 @@ const MAX_TOOL_TYPES: u32 = 4096;
 const TRUE: u32 = 1;
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
-    b.func(-78, "GetDiskObject", get_disk_object::<U>)
-        .func(-84, "PutDiskObject", put_disk_object::<U>)
-        .func(-90, "FreeDiskObject", free_disk_object::<U>)
-        .func(-96, "FindToolType", find_tool_type::<U>)
-        .func(-102, "MatchToolValue", match_tool_value::<U>)
-        .func(-120, "GetDefDiskObject", get_def_disk_object::<U>)
-        .func(-132, "GetDiskObjectNew", get_disk_object_new::<U>)
-        .func(-138, "DeleteDiskObject", delete_disk_object::<U>)
-        .func(-150, "DupDiskObjectA", dup_disk_object::<U>)
-        .func(-174, "NewDiskObject", new_disk_object::<U>)
+    b.named("GetDiskObject", get_disk_object::<U>)
+        .named("PutDiskObject", put_disk_object::<U>)
+        .named("FreeDiskObject", free_disk_object::<U>)
+        .named("FindToolType", find_tool_type::<U>)
+        .named("MatchToolValue", match_tool_value::<U>)
+        .named("GetDefDiskObject", get_def_disk_object::<U>)
+        .named("GetDiskObjectNew", get_disk_object_new::<U>)
+        .named("DeleteDiskObject", delete_disk_object::<U>)
+        .named("DupDiskObjectA", dup_disk_object::<U>)
+        .named("NewDiskObject", new_disk_object::<U>)
 }
 
 /// The `.info` file name for an object: `Dev:` is described by `Dev:Disk.info`, everything else by `name.info`.
@@ -246,23 +246,7 @@ fn put_disk_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     let path = info_path(&name);
     let what = format!("[icon] PutDiskObject \"{path}\"");
     let bytes = extract(a, cpu.areg(1))?.to_bytes();
-    let cwd = cur_dir(a);
-    let target = a.fs.vol.resolve_parent(cwd, &path).and_then(|(dir, leaf)| match a.fs.vol.find_child(dir, &leaf) {
-        Some(f) if !a.fs.vol.is_writable(f) => Err(ERROR_DISK_WRITE_PROTECTED),
-        Some(f) if a.fs.node_in_use(f) => Err(ERROR_OBJECT_IN_USE),
-        Some(f) if a.fs.vol.file_data(f).is_none() => Err(ERROR_OBJECT_WRONG_TYPE),
-        Some(f) => Ok(f),
-        None => a.fs.vol.create_file(dir, &leaf),
-    });
-    match target {
-        Err(e) => fail(a, cpu, e, 0, what),
-        Ok(f) => {
-            let date = crate::dos_misc::now(a);
-            *a.fs.vol.file_data_mut(f).expect("a file") = bytes;
-            a.fs.vol.get_mut(f).date = date;
-            ok(a, cpu, TRUE, what)
-        }
-    }
+    match write_file(a, &path, bytes) { Err(e) => fail(a, cpu, e, 0, what), Ok(_) => ok(a, cpu, TRUE, what) }
 }
 
 /// DeleteDiskObject(a0 = name) -> TRUE: removes `name.info`.

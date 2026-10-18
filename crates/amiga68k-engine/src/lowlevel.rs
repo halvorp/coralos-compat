@@ -18,10 +18,10 @@ const KEY_QUERY_SIZE: u32 = 4;
 const KQ_PRESSED: u32 = 2;
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
-    b.func(-30, "ReadJoyPort", read_joy_port::<U>)
-        .func(-36, "GetLanguageSelection", get_language_selection::<U>)
-        .func(-48, "GetKey", get_key::<U>)
-        .func(-54, "QueryKeys", query_keys::<U>)
+    b.named("ReadJoyPort", read_joy_port::<U>)
+        .named("GetLanguageSelection", get_language_selection::<U>)
+        .named("GetKey", get_key::<U>)
+        .named("QueryKeys", query_keys::<U>)
 }
 
 /// ReadJoyPort(d0 = port) -> JP_TYPE_NOTAVAIL: no controller is attached to any port.

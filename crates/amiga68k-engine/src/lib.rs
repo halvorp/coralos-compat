@@ -13,9 +13,11 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 pub mod boopsi;
+pub mod census;
 pub mod devices;
 pub mod disklib;
 pub mod dos;
+pub mod dos2;
 pub mod dos_assign;
 pub mod dos_err;
 pub mod dos_files;
@@ -58,6 +60,7 @@ pub mod screen;
 pub mod semaphores;
 pub mod tags;
 pub mod timer;
+pub mod vars;
 pub mod volume;
 pub mod window;
 mod menu;

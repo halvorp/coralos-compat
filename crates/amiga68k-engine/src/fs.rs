@@ -45,6 +45,8 @@ pub struct FsState {
     pub start_day: i32,
     /// Live DiskObjects icon.library made: address -> size of the one heap block holding all of it (icon.rs).
     pub icons: BTreeMap<u32, u32>,
+    /// The Process's local variables (vars.rs).
+    pub vars: crate::vars::Vars,
 }
 
 impl FsState {
@@ -101,8 +103,27 @@ pub fn new_lock<U: GuestUi>(a: &mut Amiga<U>, node: NodeId, exclusive: bool) -> 
     Ok(Some(p))
 }
 
+/// Create or replace the regular file at `path` with `bytes`, as the GUEST could: refused on a read-only device, for a
+/// file that is open or locked, or where a directory is. Stamps the file with the virtual clock.
+pub fn write_file<U: GuestUi>(a: &mut Amiga<U>, path: &str, bytes: Vec<u8>) -> Result<NodeId, DosErr> {
+    use crate::dos_err::*;
+    let cwd = cur_dir(a);
+    let (dir, leaf) = a.fs.vol.resolve_parent(cwd, path)?;
+    let f = match a.fs.vol.find_child(dir, &leaf) {
+        Some(f) if !a.fs.vol.is_writable(f) => return Err(ERROR_DISK_WRITE_PROTECTED),
+        Some(f) if a.fs.node_in_use(f) => return Err(ERROR_OBJECT_IN_USE),
+        Some(f) if a.fs.vol.file_data(f).is_none() => return Err(ERROR_OBJECT_WRONG_TYPE),
+        Some(f) => f,
+        None => a.fs.vol.create_file(dir, &leaf)?,
+    };
+    let date = crate::dos_misc::now(a);
+    *a.fs.vol.file_data_mut(f).expect("a file") = bytes;
+    a.fs.vol.get_mut(f).date = date;
+    Ok(f)
+}
+
 impl Default for FsState {
     fn default() -> Self {
-        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, icons: BTreeMap::new() }
+        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, icons: BTreeMap::new(), vars: Default::default() }
     }
 }

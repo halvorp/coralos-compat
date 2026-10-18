@@ -5,7 +5,8 @@
 //!
 //! Volume options (repeatable, before the program): `--sys DIR` loads DIR into SYS:, `--mount NAME=DIR` makes a device
 //! NAME: from DIR, `--assign NAME=PATH` / `--assign-add NAME=PATH` define or extend an assign (`LIBS=DOpus5:Libs`),
-//! `--progdir PATH` points PROGDIR: at a guest path.
+//! `--progdir PATH` points PROGDIR: at a guest path. `--stub lib/Func` (census only) makes an unimplemented function return a
+//! zeroed block so the run continues past another lane's missing library (census.rs).
 use amiga68k_engine::{fixture, Amiga};
 #[path = "../volume_host.rs"]
 mod volume_host;
@@ -27,6 +28,7 @@ fn main() {
             "--assign" => { let (n, p) = pair(&val); a.fs.vol.assign(&n, &p); }
             "--assign-add" => { let (n, p) = pair(&val); a.fs.vol.assign_add(&n, &p); }
             "--progdir" => a.fs.vol.assign("PROGDIR", &val),
+            "--stub" => { let (l, f) = val.split_once('/').unwrap_or_else(|| die(format!("--stub wants library/Function, got {val}"))); a.census_stubs.push((l.to_string(), f.to_string())); }
             _ => die(format!("unknown option {opt}")),
         }
     }

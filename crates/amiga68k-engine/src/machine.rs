@@ -84,6 +84,8 @@ pub struct Amiga<U: GuestUi> {
     pub public_semaphores: BTreeMap<String, u32>,
     /// BOOPSI/MUI objects (boopsi.rs, mui/).
     pub objects: crate::boopsi::Objects,
+    /// Functions the census runner was told to pretend exist (`--stub lib/Func`, census.rs).
+    pub census_stubs: Vec<(String, String)>,
     next_lib_base: u32,
 }
 
@@ -96,7 +98,7 @@ impl<U: GuestUi> Amiga<U> {
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(),
-            fs: Default::default(), calls: vec![],
+            fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
@@ -176,6 +178,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(rdargs::LVO_READ_ARGS, "ReadArgs", rdargs::read_args::<U>)
             .func(rdargs::LVO_FREE_ARGS, "FreeArgs", rdargs::free_args::<U>)
             .with(crate::dos_fs::register::<U>)
+            .with(crate::dos2::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("intuition.library", INTUITION_BASE)
             .func(window::LVO_OPEN_WINDOW, "OpenWindow", window::open_window::<U>)
@@ -255,6 +258,7 @@ impl<U: GuestUi> Host for Amiga<U> {
     fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool {
         if pc == EXIT_SLOT { cpu.halt(); return true; }
         let Some((lib, func, handler)) = self.dispatch.get(&pc).copied() else { return false };
+        let handler = if self.census_stubs.iter().any(|(l, f)| l == lib && f == func) { crate::census::stub::<U> } else { handler };
         match handler(self, cpu) {
             Ok(line) => self.log.push(line),
             Err(Refusal(e)) => {

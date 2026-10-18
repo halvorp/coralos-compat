@@ -47,7 +47,7 @@ impl Volume {
         let mut v = Volume { nodes: alloc::vec![Some(root)], assigns: BTreeMap::new() };
         v.add_device(BOOT_DEVICE, false);
         v.add_device("RAM", true);
-        for (name, target) in [("LIBS", "SYS:Libs"), ("DEVS", "SYS:Devs"), ("C", "SYS:C"), ("S", "SYS:S"), ("L", "SYS:L"), ("ENV", "RAM:Env"), ("T", "RAM:T")] {
+        for (name, target) in [("LIBS", "SYS:Libs"), ("DEVS", "SYS:Devs"), ("C", "SYS:C"), ("S", "SYS:S"), ("L", "SYS:L"), ("ENV", "RAM:Env"), ("ENVARC", "RAM:EnvArc"), ("T", "RAM:T")] {
             let _ = v.mkdirs(target);
             v.assign(name, target);
         }
