@@ -101,17 +101,16 @@ round_ops! {
     invert_round, Op::Invert, "InvertRoundRect"; fill_round, Op::Fill, "FillRoundRect";
 }
 
-/// Frame/Paint/Erase/Invert/FillRgn: the region's own pixels (a frame is the region minus itself inset: for a general
-/// region that inset is not implemented, so FrameRgn of a non-rectangular region is refused by name).
+/// Frame/Paint/Erase/Invert/FillRgn: the region's own pixels (a frame is the region minus itself inset by the pen).
 fn rgn_op<U: GuestUi>(m: &mut Mac<U>, c: &Call, op: Op, name: &str) -> Result<Done, Refusal> {
     let g = m.read_region(c.args.get(0))?;
     let port = current_port(m)?;
     let pen = read_pen(&m.mem, port)?;
     let (region, mode, pat) = match op {
         Op::Frame => {
-            if g.rects().len() > 1 { return Err(Refusal("FrameRgn: only rectangular regions can be framed (outlining a general region is not implemented)".into())); }
-            let b = g.bounds();
-            (Shape::Rect.frame(b, i32::from(pen.width), i32::from(pen.height)), pen.mode, pen.pat)
+            let (pw, ph) = (i32::from(pen.width), i32::from(pen.height));
+            // Regions.a FrRgn: a rectangular region is FrRect; any other is DiffRgn(rgn, InsetRgn(copy, pnSize))
+            if g.rects().len() <= 1 { (Shape::Rect.frame(g.bounds(), pw, ph), pen.mode, pen.pat) } else { (super::inset::frame_region(&g, pw, ph), pen.mode, pen.pat) }
         }
         Op::Paint => (g, pen.mode, pen.pat),
         Op::Erase => (g, PAT_COPY, read_pat(&m.mem, port.wrapping_add(P_BK_PAT))?),

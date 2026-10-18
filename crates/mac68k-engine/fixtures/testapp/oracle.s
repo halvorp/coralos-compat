@@ -9,7 +9,7 @@
 |   row 3  regions: A=rect, B=oval, PaintRgn(A), PaintRgn(B), Union, Diff(A,B), Sect, Xor, FrameRgn(Union, 2x2 pen),
 |          InvertRgn(Union) over gray   (Cells: A, B, A+B, A-B, A*B, A^B, frame, invert)
 |   row 4  CopyBits of a 32x32 offscreen "F" bitmap: srcCopy, srcOr over gray, srcXor over gray, srcBic over black,
-|          notSrcCopy, srcCopy through an oval mask region, srcCopy shrunk 32x32 -> 24x36, srcCopy grown 16x16 -> 36x36
+|          notSrcCopy, srcCopy through an oval mask region, srcCopy shrunk 32x32 -> 24x36, srcCopy doubled 16x16 -> 32x32
 |   row 6  line geometry on white (black pen): slopes, pen sizes, directions
 |   row 5  four DrawString slots 80 px wide in the system font (12 pt, 12 pt, 12 pt, 9 pt); after each string a 4 px tick
 |          is drawn below the baseline at the pen's x, so the pen advance is visible in the pixels
@@ -142,7 +142,7 @@ main:   pea     -4(%a5)                | &qd.thePort
         RCALL   _PaintRect,13,2,17,20
         RCALL   _FrameOval,18,16,31,31     | an oval in the lower right, and a diagonal
         MOVETO  20,20
-        LINETO  30,30
+        LINETO  30,26                      | a slope off 1.0: see geom-X for the 45-degree case
         | ---- the window (WIND 128, content 320x240 at global top 43 left 61)
         clr.l   -(%sp)
         move.w  #128,-(%sp)
@@ -316,7 +316,7 @@ update: move.l  EVENT+2(%a5),%a3
         CELL    6,4
         CB      0,0,32,32,CY+2,CX+2,CY+38,CX+26,0,#0
         CELL    7,4
-        CB      0,0,16,16,CY+2,CX+2,CY+38,CX+38,0,#0
+        CB      0,0,16,16,CY+4,CX+4,CY+36,CX+36,0,#0
         | ================= row 6: line geometry on white (black pen, patCopy): slopes, pen sizes, directions
         CELL    0,6
         MOVETO  CX+4,CY+10
@@ -357,7 +357,7 @@ update: move.l  EVENT+2(%a5),%a3
         CELL    5,6
         PENSIZE 5,5
         MOVETO  CX+4,CY+4
-        LINETO  CX+30,CY+30
+        LINETO  CX+30,CY+27
         PENSIZE 1,4
         MOVETO  CX+34,CY+4
         LINETO  CX+34,CY+34

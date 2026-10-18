@@ -204,10 +204,8 @@ fn offset_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
 }
 fn inset_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let g = m.read_region(c.args.get(0))?;
-    if g.rects().len() > 1 { return Err(Refusal("InsetRgn: only rectangular regions can be inset (the shrink of a general shape is not implemented)".into())); }
     let (dh, dv) = (i32::from(c.args.get(1) as i16), i32::from(c.args.get(2) as i16));
-    let b = g.bounds();
-    m.write_region(c.args.get(0), &Region::from_rect(Rect::new(b.x0 + dh, b.y0 + dv, b.x1 - dh, b.y1 - dv)))?;
+    m.write_region(c.args.get(0), &super::inset::inset_region(&g, dh, dv))?;
     done("InsetRgn")
 }
 

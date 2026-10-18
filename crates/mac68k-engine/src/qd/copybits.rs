@@ -5,7 +5,8 @@
 //! bounds.topLeft, QuickDraw/Bitmaps.a TOPORT), and not at all when `thePort`'s pen is hidden (StdBits: `pnVis < 0`);
 //! any other destination is drawn with a wide-open clip (NOTPORT).
 //!
-//! Refused by name: scaling (srcRect and dstRect of different size), pattern modes 8..15, color PixMaps.
+//! Scaling (srcRect and dstRect of different size) is StretchBits ([`super::stretch`]), one destination row at a time.
+//! Refused by name: pattern modes 8..15, color PixMaps.
 use super::port::{raster, BM_BASE, BM_BOUNDS, P_BITS, P_PN_VIS};
 use super::target::{clip_of, clip_region_via, current_port, finish, open_bits, Target};
 use crate::machine::{Call, Done, Mac};
@@ -15,6 +16,7 @@ use alloc::format;
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 use retro_raster::blit::{blit, blit_within};
+use super::stretch::stretch;
 use retro_raster::Rect;
 
 /// srcCopy..notSrcBic as a minterm over (A = mask, B = source, C = destination), with the mask-off terms keeping C.
@@ -40,6 +42,7 @@ fn port_for_bits<U: GuestUi>(m: &Mac<U>, db: u32) -> Result<u32, Refusal> {
 }
 
 fn blit_them<U: GuestUi>(m: &Mac<U>, clip_port: u32, dt: &mut Target, st: Option<&mut Target>, sr: Rect, dr: Rect, mt: u8, mask: Option<&retro_raster::Region>) -> Result<Rect, Refusal> {
+    if (sr.width(), sr.height()) != (dr.width(), dr.height()) { return stretch_them(m, clip_port, dt, st, sr, dr, mt, mask); }
     let clip_region = clip_region_via(m, clip_port, dt)?;
     let c = clip_of(&clip_region, dt);
     let (l0, d) = (dt.local0, dt.to_pixels(dr));
@@ -51,13 +54,30 @@ fn blit_them<U: GuestUi>(m: &Mac<U>, clip_port: u32, dt: &mut Target, st: Option
     })
 }
 
+/// StretchBits: each destination row of the DDA is blitted as a one-row source through the same mode, mask and clip.
+fn stretch_them<U: GuestUi>(m: &Mac<U>, clip_port: u32, dt: &mut Target, st: Option<&mut Target>, sr: Rect, dr: Rect, mt: u8, mask: Option<&retro_raster::Region>) -> Result<Rect, Refusal> {
+    let clip_region = clip_region_via(m, clip_port, dt)?;
+    let c = clip_of(&clip_region, dt);
+    let (l0, d) = (dt.local0, dt.to_pixels(dr));
+    let maskf = |x: i32, y: i32| mask.map_or(true, |g| g.contains(x + l0.0, y + l0.1));
+    let mf: retro_raster::blit::MaskFn = if mask.is_some() { Some(&maskf) } else { None };
+    let sp = match &st { Some(s) => s.to_pixels(sr), None => dt.to_pixels(sr) };
+    let source = match st { Some(s) => s.bm.clone(), None => dt.bm.clone() }; // a scaled copy within one bitmap must not overlap itself: read the original
+    let mut touched = Rect::default();
+    stretch(&source, sp, d.width(), d.height(), |row, pens| {
+        let mut one = retro_raster::Bitmap::new(pens.len() as i32, 1, 1).ok_or_else(|| Refusal("CopyBits: scaled row too wide".into()))?;
+        for (x, &p) in pens.iter().enumerate() { one.set(x as i32, 0, p); }
+        let t = blit(&mut dt.bm, d.x0, d.y0 + row, &one, 0, 0, pens.len() as i32, 1, mt, 0xFF, mf, &c);
+        touched = if touched.is_empty() { t } else { touched.union(&t) };
+        Ok(())
+    })?;
+    Ok(touched)
+}
+
 fn copy_bits<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let a = &c.args;
     let (sb, db, mode) = (a.get(0), a.get(1), a.get(4) as u16);
     let (sr, dr) = (raster(read_rect(&m.mem, a.get(2))?), raster(read_rect(&m.mem, a.get(3))?));
-    if (sr.width(), sr.height()) != (dr.width(), dr.height()) {
-        return Err(Refusal(format!("CopyBits: scaling is not implemented (srcRect is {}x{}, dstRect {}x{})", sr.width(), sr.height(), dr.width(), dr.height())));
-    }
     let mode_bits = mode & !64; // 64 = ditherCopy: no meaning on a 1-bit destination
     if mode_bits > 7 { return Err(Refusal(format!("CopyBits: transfer mode {mode} is not implemented (source modes 0..7 only; pattern modes 8..15 need a pattern source)"))); }
     let mask = if a.get(5) != 0 { Some(m.read_region(a.get(5))?) } else { None };

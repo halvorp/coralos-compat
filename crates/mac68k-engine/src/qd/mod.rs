@@ -15,10 +15,12 @@
 //! never carves out overlapping windows; color (CGrafPort/PixMap) is refused by name; `SetOrigin` is not implemented.
 pub mod copybits;
 pub mod draw;
+pub mod inset;
 pub mod lifecycle;
 pub mod port;
 pub mod regions;
 pub mod shapes;
+pub mod stretch;
 pub mod target;
 pub mod text;
 pub mod update;
