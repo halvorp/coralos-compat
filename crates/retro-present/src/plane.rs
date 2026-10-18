@@ -49,7 +49,7 @@ fn moved(op: &DrawOp, (dx, dy): (i32, i32)) -> DrawOp {
     let p = |g: &GuestPoint| GuestPoint { x: g.x + dx, y: g.y + dy };
     match op {
         DrawOp::Fill { rect, pen_role } => DrawOp::Fill { rect: r(rect), pen_role: *pen_role },
-        DrawOp::Text { at, string, font_role, px, pen_role, bg_role } => DrawOp::Text { at: p(at), string: string.clone(), font_role: *font_role, px: *px, pen_role: *pen_role, bg_role: *bg_role },
+        DrawOp::Text { at, string, font_role, px, width, pen_role, bg_role } => DrawOp::Text { at: p(at), string: string.clone(), font_role: *font_role, px: *px, width: *width, pen_role: *pen_role, bg_role: *bg_role },
         DrawOp::Line { a, b, pen_role } => DrawOp::Line { a: p(a), b: p(b), pen_role: *pen_role },
         DrawOp::Bevel { rect, raised } => DrawOp::Bevel { rect: r(rect), raised: *raised },
         DrawOp::Icon { rect, role } => DrawOp::Icon { rect: r(rect), role: *role },
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn a_text_row_redrawn_in_place_does_not_grow_the_list_and_an_overflow_keeps_the_newest_named() {
-        let text = |s: &str, bg: Option<PenRole>| (DrawOp::Text { at: GuestPoint { x: 0, y: 0 }, string: s.into(), font_role: guestui_abi::FontRole::Ui, px: 8, pen_role: PenRole::Text, bg_role: bg }, Rect::new(0, 0, 40, 8));
+        let text = |s: &str, bg: Option<PenRole>| (DrawOp::Text { at: GuestPoint { x: 0, y: 0 }, string: s.into(), font_role: guestui_abi::FontRole::Ui, px: 8, width: 40, pen_role: PenRole::Text, bg_role: bg }, Rect::new(0, 0, 40, 8));
         let canvas = Rect::new(0, 0, 100, 100);
         let (mut jam2, mut jam1) = (Presenter::default(), Presenter::default());
         for i in 0..50 {

@@ -3,6 +3,7 @@
 //! live here.
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
+use alloc::string::String;
 use alloc::vec::Vec;
 use retro_raster::{font::Font, Bitmap, Rect, Region};
 
@@ -34,6 +35,8 @@ impl Palette {
 
 #[derive(Default)]
 pub struct State {
+    /// The program's own name (the file it was started from, `Amiga::start_hunk_as`): the title of a window the guest opened without one.
+    pub program_name: String,
     pub bitmaps: BTreeMap<u32, GBitmap>,
     pub layers: BTreeMap<u32, GLayer>,
     pub regions: BTreeMap<u32, GRegion>,

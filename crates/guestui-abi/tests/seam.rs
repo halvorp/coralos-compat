@@ -100,7 +100,7 @@ fn pointer_and_key_events_are_plain_window_coordinates() {
 }
 
 fn text(s: &str, pen: PenRole) -> DrawOp {
-    DrawOp::Text { at: GuestPoint { x: 2, y: 2 }, string: s.into(), font_role: FontRole::Ui, px: 14, pen_role: pen, bg_role: None }
+    DrawOp::Text { at: GuestPoint { x: 2, y: 2 }, string: s.into(), font_role: FontRole::Ui, px: 14, width: 7 * s.len() as i32, pen_role: pen, bg_role: None }
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn planes_are_recorded_replaced_per_id_and_validated() {
     let n = ui.calls.len();
     let bad_rect = Plane { id: 5, rect: r(0, 0, 0, 5), ops: vec![] };
     let bad_pixels = Plane { id: 5, rect: r(0, 0, 4, 4), ops: vec![DrawOp::Pixels { rect: r(0, 0, 2, 2), rgb: vec![0; 3] }] };
-    let bad_text = Plane { id: 5, rect: r(0, 0, 4, 4), ops: vec![DrawOp::Text { at: GuestPoint { x: 0, y: 0 }, string: "x".into(), font_role: FontRole::Mono, px: 0, pen_role: PenRole::Text, bg_role: Some(PenRole::Background) }] };
+    let bad_text = Plane { id: 5, rect: r(0, 0, 4, 4), ops: vec![DrawOp::Text { at: GuestPoint { x: 0, y: 0 }, string: "x".into(), font_role: FontRole::Mono, px: 0, width: 0, pen_role: PenRole::Text, bg_role: Some(PenRole::Background) }] };
     for bad in [bad_rect, bad_pixels, bad_text] { assert!(matches!(ui.present_plane(w, bad), Err(UiRefusal::InvalidGeometry(_)))); }
     assert!(ui.present_plane(UiObjectRef { id: 77, generation: 1 }, newer).is_err());
     assert_eq!(ui.calls.len(), n);

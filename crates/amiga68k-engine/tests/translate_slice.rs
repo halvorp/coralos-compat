@@ -46,7 +46,7 @@ fn drawing_is_one_plane_per_step_with_roles_from_the_pen_table_and_holes_for_wha
     let ops = &p[0].ops;
     assert!(ops.contains(&DrawOp::Fill { rect: GuestRect { left: 100, top: 5, width: 41, height: 16 }, pen_role: PenRole::Fill }), "RectFill in the FILLPEN: {ops:?}");
     let top = 60 - font.baseline as i32;
-    assert!(ops.contains(&DrawOp::Text { at: GuestPoint { x: 12, y: top }, string: "Env".into(), font_role: FontRole::Ui, px: font.y_size, pen_role: PenRole::Text, bg_role: Some(PenRole::Background) }),
+    assert!(ops.contains(&DrawOp::Text { at: GuestPoint { x: 12, y: top }, string: "Env".into(), font_role: FontRole::Ui, px: font.y_size, width: font.text_length(b"Env"), pen_role: PenRole::Text, bg_role: Some(PenRole::Background) }),
         "a TEXTPEN run in JAM2 over the BACKGROUNDPEN, the proportional face as Ui: {ops:?}");
     assert!(ops.contains(&DrawOp::Bevel { rect: GuestRect { left: 10, top: 20, width: 41, height: 21 }, raised: true }), "SHINE then SHADOW edges of one box are one bevel: {ops:?}");
     assert!(!ops.iter().any(|o| matches!(o, DrawOp::Line { pen_role: PenRole::Shine | PenRole::Shadow, .. })), "the edge lines were merged: {ops:?}");
