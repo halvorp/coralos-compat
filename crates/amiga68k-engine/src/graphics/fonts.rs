@@ -19,9 +19,11 @@ const FSF_TAGGED: u8 = 0x80;
 const FPF_ROMFONT: u8 = 0x01;
 const FPF_DESIGNED: u8 = 0x40;
 
-/// Lay the ROM font out in guest memory and register it as the default.
+/// Lay the ROM font out in guest memory (once per machine: its accessor count must survive a restart) and register it
+/// as the default.
 pub fn install_rom_font<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
     use retro_raster::topaz8 as t;
+    if a.gfx.fonts.contains(&ROM_FONT) { return Ok(()); }
     let m = Refusal::mem("ROM font");
     a.mem.zero(ROM_FONT, TF_SIZE).map_err(&m)?;
     for (i, b) in b"topaz.font\0".iter().enumerate() { a.mem.write_u8(ROM_FONT_NAME + i as u32, *b).map_err(&m)?; }
@@ -41,9 +43,7 @@ pub fn install_rom_font<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
     a.mem.write_u16(ROM_FONT + TF_MODULO, t::MODULO).map_err(&m)?;
     a.mem.write_u32(ROM_FONT + TF_CHAR_LOC, ROM_FONT_LOC).map_err(&m)?;
     a.mem.write_u32(GRAPHICS_BASE + GB_DEFAULT_FONT, ROM_FONT).map_err(&m)?;
-    a.gfx.fonts.clear();
-    a.gfx.fonts.push(ROM_FONT);
-    a.gfx.rom_font = None;
+    a.gfx.fonts.insert(0, ROM_FONT);
     Ok(())
 }
 

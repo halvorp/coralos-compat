@@ -1,7 +1,7 @@
 //! Per-start layout of the graphics state: the ROM font, the Workbench screen's RastPort, BitMap, ViewPort ColorMap and
 //! DrawInfo, GfxBase fields. Runs from `start_hunk` after the screen block is written.
 use super::layout::*;
-use super::{bitmaps, fonts, palette, rastport, state::State};
+use super::{bitmaps, fonts, palette, rastport};
 use crate::{machine::Amiga, screen, Refusal};
 use guestui_abi::GuestUi;
 
@@ -27,15 +27,16 @@ fn write_image<U: GuestUi>(a: &mut Amiga<U>, at: u32, data: u32, w: i16, rows: &
     Ok(())
 }
 
+/// (Re)write the guest-visible layout. Host-side state (bitmaps, windows, palette, fonts) persists across starts, as the
+/// guest heap does; only the fixed structures `screen::setup` zeroes are laid out again.
 pub fn setup<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
-    a.gfx = State::default();
     fonts::install_rom_font(a)?;
     let m = Refusal::mem("screen graphics");
     let scr = screen::SCREEN;
     // The screen's BitMap and RastPort (drawing into it is accepted and not presented: only windows are shown).
     let bm = scr + SC_BITMAP;
     bitmaps::write_struct(a, bm, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DEPTH)?;
-    a.gfx.bitmaps.insert(bm, super::state::GBitmap { bm: retro_raster::Bitmap::new(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DEPTH).unwrap(), window: None });
+    a.gfx.bitmaps.entry(bm).or_insert_with(|| super::state::GBitmap { bm: retro_raster::Bitmap::new(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DEPTH).unwrap(), window: None });
     let rp = scr + SC_RASTPORT;
     rastport::init(a, rp)?;
     a.mem.write_u8(rp + RP_FG_PEN, 1).map_err(&m)?;
