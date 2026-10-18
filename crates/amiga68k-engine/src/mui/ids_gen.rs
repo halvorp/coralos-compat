@@ -359,6 +359,7 @@ pub const MUIO_Label_SingleFrame: u32 = 256;
 pub const MUIO_Menuitem: u32 = 14;
 pub const MUIO_MenustripNM: u32 = 13;
 pub const MUIO_MenustripNM_CommandKeyCheck: u32 = 1;
+pub const MUIO_NumericButton: u32 = 16;
 pub const MUIO_PopButton: u32 = 8;
 pub const MUIO_Radio: u32 = 5;
 pub const MUIO_Slider: u32 = 6;

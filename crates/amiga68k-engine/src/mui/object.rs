@@ -194,7 +194,8 @@ pub fn set_many<U: GuestUi>(a: &mut Amiga<U>, obj: u32, sets: &[(u32, Setting)],
     }
     if notify_too {
         for (attr, text) in stored {
-            let v = if text { string_pointer(a, obj, attr)? } else { a.objects.num_or(obj, attr, 0) };
+            // string.c: Acknowledge is set to the contents buffer itself, so its notification carries the same pointer.
+            let v = if text { string_pointer(a, obj, if attr == MUIA_String_Acknowledge { MUIA_String_Contents } else { attr })? } else { a.objects.num_or(obj, attr, 0) };
             notify::trigger(a, obj, attr, v)?;
         }
     }
@@ -263,6 +264,7 @@ pub fn get_attr<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32) -> Result<u32
         MUIA_Parent => return Ok(a.objects.map.get(&obj).and_then(|o| o.parent).unwrap_or(0)),
         MUIA_Window if kind.is_area() => return Ok(0), // no Intuition Window behind a native window: see docs/AMIGA-TRANSLATION.md
         MUIA_Group_ChildList => return Err(Refusal("MUI Group class: MUIA_Group_ChildList (a struct List of the children) is not implemented".into())),
+        MUIA_String_Acknowledge => return string_pointer(a, obj, MUIA_String_Contents),
         MUIA_String_Integer => return Ok(a.objects.text(obj, MUIA_String_Contents).trim().parse::<i64>().unwrap_or(0) as u32),
         MUIA_List_Entries | MUIA_List_First | MUIA_List_Visible | MUIA_List_Active => return super::list::get(a, obj, attr),
         _ => {}

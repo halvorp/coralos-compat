@@ -69,3 +69,63 @@ fn a_zune_calculator_opens_as_native_buttons_and_a_native_click_runs_its_own_cla
     let e = a.deliver(GuestUiEvent::intent(w, c, m.token, Intent::SelectRow(2))).unwrap_err();
     assert!(e.0.contains("means nothing for the control"), "{}", e.0);
 }
+
+fn labels(a: &Amiga<RecordingGuestUi>) -> Vec<String> {
+    a.ui.controls.values().filter_map(|(_, m)| match &m.kind { ControlKind::Label { text, .. } => Some(text.clone()), _ => None }).collect()
+}
+
+#[test]
+fn a_zune_slider_demo_is_a_native_slider_a_native_value_lands_in_the_object_and_a_native_close_quits_the_program() {
+    let Some(mut a) = start("Demos/Zune/mui_slider") else { return };
+    let win = a.ui.calls.iter().find_map(|c| match c { UiCall::OpenWindow(m) => Some(m.clone()), _ => None }).unwrap();
+    assert_eq!(win.title, "Input modes");
+    let (w, c, m) = a.ui.find_control(|m| matches!(m.kind, ControlKind::Slider { .. })).expect("the Slider.mui object is a native slider");
+    assert_eq!(m.kind, ControlKind::Slider { min: 0, max: 100, value: 50 }, "MUIA_Numeric_Value 50 in Numeric's default range 0..100");
+    let slider = a.objects.map.iter().find(|(_, o)| o.kind == amiga68k_engine::mui::classes::Kind::Slider).map(|(&k, _)| k).unwrap();
+    let before = a.ui.calls.len();
+    assert_eq!(a.deliver(GuestUiEvent::intent(w, c, m.token, Intent::SetValue(ControlValue::Level(75)))).unwrap(), Delivered::Handled);
+    // Queued: MUI processes input inside the program's NewInput, so nothing has changed until the program runs.
+    assert_eq!(amiga68k_engine::mui::get_attr(&mut a, slider, amiga68k_engine::mui::MUIA_Numeric_Value).unwrap(), 50);
+    assert_eq!(a.step(1_000_000).0, Step::Blocked);
+    assert_eq!(amiga68k_engine::mui::get_attr(&mut a, slider, amiga68k_engine::mui::MUIA_Numeric_Value).unwrap(), 75, "GetAttr sees the user's value");
+    assert!(a.ui.calls[before..].iter().all(|c| !matches!(c, UiCall::SetControl(..))), "the host already shows 75: no echo");
+    // NEGATIVE CONTROL: an intent aimed at a retired generation of the control is refused by name and changes nothing.
+    let stale = guestui_abi::UiObjectRef { id: c.id, generation: c.generation + 1 };
+    let e = a.deliver(GuestUiEvent::Intent { win: w, control: stale, token: m.token, generation: stale.generation, intent: Intent::SetValue(ControlValue::Level(5)) }).unwrap_err();
+    assert!(e.0.contains("stale control ref"), "{}", e.0);
+    assert_eq!(a.step(1_000_000).0, Step::Blocked);
+    assert_eq!(amiga68k_engine::mui::get_attr(&mut a, slider, amiga68k_engine::mui::MUIA_Numeric_Value).unwrap(), 75);
+    // The native close gadget: the program's own MUIM_Notify (CloseRequest TRUE -> ReturnID Quit) fires and it exits cleanly.
+    assert_eq!(a.deliver(GuestUiEvent::CloseRequested { win: w, token: guestui_abi::CallbackToken(0) }).unwrap(), Delivered::Handled);
+    assert_eq!(a.step(20_000_000).0, Step::Exited, "{:?}", a.refused);
+    assert!(a.refused.is_empty() && a.objects.map.is_empty(), "{:?}", a.refused);
+    assert!(matches!(a.ui.calls.last(), Some(UiCall::CloseWindow(_))));
+}
+
+#[test]
+fn a_zune_pages_demo_turns_its_pages_when_native_buttons_are_pressed() {
+    let Some(mut a) = start("Demos/Zune/mui_pages") else { return };
+    let page = |a: &Amiga<RecordingGuestUi>| labels(a).into_iter().find(|l| l.starts_with("Rect"));
+    let titles: Vec<String> = a.ui.controls.values().filter(|(_, m)| matches!(m.kind, ControlKind::Button)).map(|(_, m)| m.label.clone()).collect();
+    assert_eq!(titles, ["prev", "next", "1", "2", "3"], "RelVerify Rectangles are buttons, captioned by MUIA_Rectangle_BarTitle");
+    assert_eq!(page(&a).as_deref(), Some("Rect1"), "MUIA_Group_PageMode shows page 0 only");
+    assert_eq!(labels(&a).iter().filter(|l| l.starts_with("Rect")).count(), 1, "the other pages have no native control");
+    let groups = a.ui.controls.values().filter(|(_, m)| matches!(m.kind, ControlKind::Group { .. })).count();
+    assert!(groups >= 2, "GroupFrame and InputListFrame groups are native groups: {groups}");
+    // A full click on "next": Pressed TRUE bumps MUIA_Timer, whose notification (EveryTime) sets MUIA_Group_ActivePage to Next.
+    act(&mut a, button("next"), Intent::Activate);
+    assert_eq!(page(&a).as_deref(), Some("Rect2"), "the program's own notification turned the page");
+    act(&mut a, button("next"), Intent::Activate);
+    assert_eq!(page(&a).as_deref(), Some("Rect3"));
+    act(&mut a, button("next"), Intent::Activate);
+    assert_eq!(page(&a).as_deref(), Some("Rect3"), "MUIV_Group_ActivePage_Next stops at the last page");
+    // "1" notifies on Pressed FALSE, i.e. on RELEASE: a press alone does nothing, a cancelled click does nothing, a click does.
+    act(&mut a, button("1"), Intent::Press);
+    assert_eq!(page(&a).as_deref(), Some("Rect3"));
+    act(&mut a, button("1"), Intent::Release { inside: false });
+    assert_eq!(page(&a).as_deref(), Some("Rect3"), "a release outside is nnset(Pressed): the notification does not run");
+    act(&mut a, button("1"), Intent::Press);
+    act(&mut a, button("1"), Intent::Release { inside: true });
+    assert_eq!(page(&a).as_deref(), Some("Rect1"));
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+}

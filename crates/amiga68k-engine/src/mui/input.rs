@@ -53,10 +53,24 @@ fn popup_refusal(a: &crate::boopsi::Objects, obj: u32, on: On) -> Option<Refusal
         .then(|| Refusal(format!("MUI {parent:?} class: the popup button was pressed, and the requester or window behind it is not bridged yet")))
 }
 
+/// Does the intent carry the kind of value the control holds? (A level for a slider, a state for a checkbox, a choice index ...)
+fn payload_fits(control: &guestui_abi::ControlKind, intent: &Intent) -> bool {
+    use guestui_abi::ControlKind as K;
+    match (control, intent) {
+        (K::Checkbox { .. } | K::ToggleButton { .. }, Intent::SetValue(v)) => matches!(v, ControlValue::Checked(_)),
+        (K::Slider { .. }, Intent::SetValue(v) | Intent::Drag(v)) => matches!(v, ControlValue::Level(_)),
+        (K::Choice { .. }, Intent::SetValue(v)) => matches!(v, ControlValue::Choice(_)),
+        (K::ScrollBar { .. }, Intent::Drag(v)) => matches!(v, ControlValue::Scroll { .. }),
+        (K::Field { .. } | K::String { .. }, Intent::Drag(v)) => matches!(v, ControlValue::Text(_)),
+        _ => true,
+    }
+}
+
 /// The table row `intent` means for `obj`'s control, or the named refusal (checked when the event arrives AND when it is applied).
 pub fn validate<U: GuestUi>(a: &Amiga<U>, obj: u32, intent: &Intent) -> Result<&'static table::Row, Refusal> {
     let control = roles::leaf(&a.objects, obj).ok_or_else(|| Refusal(format!("Intent for {obj:#x}: the object is not a control any more")))?;
     let row = table::lookup(&control, intent)?;
+    if !payload_fits(&control, intent) { return Err(Refusal(format!("deliver: Intent {intent:?} on a {control:?} control: the value is not one the control holds"))); }
     if let Some(r) = popup_refusal(&a.objects, obj, row.on) { return Err(r); }
     Ok(row)
 }
