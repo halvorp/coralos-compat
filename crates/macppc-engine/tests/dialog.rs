@@ -1,7 +1,7 @@
 //! The SAME dialog program the 68k test runs (`mac68k_engine::fixture::dialog_script`), driven through the PowerPC glue the
 //! way a PPC CPU calls the Toolbox: r3.. = the Pascal arguments, a `GlueOutcome` back. The guest-visible result must be the
 //! one observation both CPUs share (`DIALOG_EXPECTED`): the personality is the Toolbox, not the processor.
-use guestui_abi::{ControlValue, GuestUiEvent, Intent, Modifiers, RecordingGuestUi, UiObjectRef};
+use guestui_abi::{ControlValue, Intent, RecordingGuestUi, UiObjectRef};
 use macppc_engine::{GlueOutcome, MacPpc, PpcHost};
 use mac68k_engine::fixture::{cells, dialog_fork, dialog_observation, dialog_script, ScriptArg, DIALOG_EXPECTED};
 use mac68k_engine::pascal::Arg;
@@ -67,11 +67,10 @@ fn the_modal_dialog_through_the_powerpc_glue_leaves_the_same_guest_state_as_the_
     let (win, edit) = item(&m, 5);
     let (_, check) = item(&m, 3);
     m.mac.ui.push_intent(win, edit, Intent::CommitText("World".into())).unwrap();
-    m.mac.ui.push_intent(win, check, Intent::SetValue(ControlValue::Checked(true))).unwrap();
-    assert!(m.mac.modal_ready(), "the hit wakes it");
+    assert!(m.mac.modal_ready(), "typing in the edit field wakes it");
     let at = run_from(&mut m, at);
     assert_eq!(at, 6, "the second ModalDialog parks the caller: {:#?}", m.mac.log);
-    m.mac.ui.events.push_back(GuestUiEvent::Key { win, code: 36, text: "\r".into(), modifiers: Modifiers::default(), down: true });
+    m.mac.ui.push_intent(win, check, Intent::SetValue(ControlValue::Checked(true))).unwrap();
     assert!(m.mac.modal_ready());
     assert_eq!(run_from(&mut m, at), dialog_script().len());
     assert!(m.mac.refused.is_empty(), "{:?}", m.mac.refused);
@@ -131,4 +130,53 @@ fn control_manager_traps_through_the_glue_answer_like_the_68k_run() {
     assert_eq!(g(&mut m, "FindControl", &[(200u32 << 16) | 200, win, 0x3300]) & 0xFFFF, 0);
     assert_eq!(m.mac.mem.read_u32(0x3300).unwrap(), 0);
     assert!(m.mac.refused.is_empty(), "{:?}", m.mac.refused);
+}
+
+/// The PowerPC CPU itself calls the Toolbox: a real fragment (`fixture::dialog_app`) runs `GetNewDialog` and `ModalDialog`
+/// through retro-ppc and the glue. The caller PARKS in `ModalDialog` (the `wait_dialog` path of `MacPpc::step`), a native
+/// intent wakes it, and the item hit lands in the program's own data section.
+mod real_ppc {
+    use super::*;
+    use macppc_engine::cfm::Fragment;
+    use macppc_engine::fixture::{dialog_app, DIALOG_HIT_AT};
+    use macppc_engine::Step;
+    use retro_pef::Pef;
+
+    fn boot() -> (M, Fragment, u32) {
+        let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+        m.attach_resources(&dialog_fork()).unwrap();
+        let frag = m.instantiate("dialog", &Pef::parse(&dialog_app()).unwrap()).unwrap();
+        m.start(&frag).unwrap();
+        let r2 = m.cpu().unwrap().gpr[2];
+        (m, frag, r2)
+    }
+    fn hit(m: &M, r2: u32) -> u16 { m.mac.mem.read_u16((r2 as i32 + DIALOG_HIT_AT + 2) as u32).unwrap() }
+
+    #[test]
+    fn a_ppc_program_parks_in_modal_dialog_and_wakes_on_a_native_hit() {
+        let (mut m, _f, r2) = boot();
+        let (step, stats) = m.step(1_000_000);
+        assert_eq!(step, Step::Blocked, "{:#?}\nfault: {:?}", m.mac.log, m.fault());
+        assert!(stats.insns > 10, "PowerPC instructions ran before the park: {}", stats.insns);
+        assert!(m.mac.log.iter().any(|l| l.contains("ModalDialog: no item hit yet")), "{:#?}", m.mac.log);
+        // negative control: with no hit, stepping again changes nothing and the program is still parked
+        assert_eq!(m.step(1_000_000).0, Step::Blocked);
+        assert_eq!(hit(&m, r2), 0);
+        let (win, cancel) = item(&m, 2);
+        m.mac.ui.push_intent(win, cancel, Intent::Activate).unwrap();
+        let (step, _) = m.step(1_000_000);
+        assert_eq!(step, Step::Exited, "{:#?}\nfault: {:?}", m.mac.log, m.fault());
+        assert_eq!(hit(&m, r2), 2, "ModalDialog returned Cancel's item number to the PowerPC code");
+        assert!(m.mac.refused.is_empty(), "{:?}", m.mac.refused);
+    }
+
+    #[test]
+    fn typing_in_the_edit_field_wakes_it_with_the_edit_items_number() {
+        let (mut m, _f, r2) = boot();
+        assert_eq!(m.step(1_000_000).0, Step::Blocked);
+        let (win, edit) = item(&m, 5);
+        m.mac.ui.push_intent(win, edit, Intent::CommitText("typed".into())).unwrap();
+        assert_eq!(m.step(1_000_000).0, Step::Exited, "{:#?}", m.mac.log);
+        assert_eq!(hit(&m, r2), 5);
+    }
 }

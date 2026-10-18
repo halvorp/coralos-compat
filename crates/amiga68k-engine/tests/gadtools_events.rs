@@ -208,7 +208,7 @@ fn gadget_events_become_gadgetup_with_the_gadget_and_update_what_the_program_rea
     assert!(bad(&mut fx, ev(slider, lt, ControlValue::Level(10))).contains("outside 1..=9"));
     assert!(bad(&mut fx, ev(slider, lt, ControlValue::Pressed)).contains("cannot be held by a kind-11"));
     assert!(bad(&mut fx, ev(button, bt, ControlValue::Checked(true))).contains("from a button"));
-    assert!(bad(&mut fx, ev(check, bt, ControlValue::Pressed)).contains("not that native control"));
+    assert!(bad(&mut fx, ev(check, bt, ControlValue::Pressed)).contains("stale control ref"));
     assert!(bad(&mut fx, ev(button, CallbackToken(0x1234), ControlValue::Pressed)).contains("not a GadTools gadget"));
     assert_eq!(fx.records().0, 5, "none of those reached the program");
     // The program reads its gadgets back on the way out.

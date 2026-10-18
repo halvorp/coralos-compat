@@ -20,7 +20,7 @@
 //! each end, a 16-pixel thumb moving over the rest in proportion to `(value - min) / (max - min)`. systemless (the oracle
 //! this table was compared with) uses an 8-pixel thumb; the 16-pixel box is the System 7 scroll box.
 use super::{guest_rect, Obj};
-use crate::events::MOUSE_DOWN;
+use crate::events::{MOUSE_DOWN, MOUSE_UP};
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_pstring, read_rect, Arg, Rect};
 use crate::Refusal;
@@ -43,8 +43,10 @@ const C_REF_CON: u32 = 36;
 const C_TITLE: u32 = 40;
 /// `controlList` in a WindowRecord.
 pub const WR_CONTROL_LIST: u32 = 140;
-/// `contrlHilite` 255: the control is inactive (dimmed, takes no clicks). 254 is the same for hit-testing.
-const INACTIVE: u8 = 0xFE;
+/// `contrlHilite` 255 is the ONLY inactive value (dimmed, takes no clicks); 1..=254 are a part being tracked (Control Manager).
+const INACTIVE: u8 = 0xFF;
+/// `contrlVis` of a visible control: the ROM writes 255, not 1.
+const VISIBLE: u8 = 0xFF;
 
 pub const IN_BUTTON: u16 = 10;
 pub const IN_CHECK_BOX: u16 = 11;
@@ -90,6 +92,9 @@ fn model(row: &Row, f: &Facts, token: u32) -> Option<ControlModel> {
     Some(ControlModel { kind, label, rect: guest_rect(f.rect), enabled: f.hilite < INACTIVE, token: CallbackToken(u64::from(token)) })
 }
 
+/// Does the kit have a part for this control (a row with a role the closed vocabulary can express)?
+pub(super) fn has_kit_part(f: &Facts) -> bool { row_of(f.proc_id).and_then(|r| model(r, f, 0)).is_some() }
+
 fn arrow_len(len: i32) -> i32 { len.clamp(1, 16) }
 
 /// Where along its axis a scroll bar's thumb starts (local coordinate), and how long it is.
@@ -104,16 +109,16 @@ fn thumb_span(f: &Facts) -> (i32, i32) {
     (start + arrow + rel * (track - thumb) / span, thumb)
 }
 
-/// The part under the local point `(v, h)`, 0 when it is outside the rect.
+/// The part under the local point `(v, h)`, 0 when it is outside the rect. All arithmetic is i32: the rect is guest data.
 pub fn part_at(row: &Row, f: &Facts, v: i16, h: i16) -> u16 {
-    let r = f.rect;
-    if v < r.top || v >= r.bottom || h < r.left || h >= r.right { return 0; }
+    let (r, v, h) = (f.rect, i32::from(v), i32::from(h));
+    let (top, left, bottom, right) = (i32::from(r.top), i32::from(r.left), i32::from(r.bottom), i32::from(r.right));
+    if v < top || v >= bottom || h < left || h >= right { return 0; }
     match row.role {
         Role::Button => IN_BUTTON,
         Role::Check | Role::Radio => IN_CHECK_BOX,
         Role::Scroll => {
-            let vertical = r.bottom - r.top >= r.right - r.left;
-            let (start, end, at) = if vertical { (i32::from(r.top), i32::from(r.bottom), i32::from(v)) } else { (i32::from(r.left), i32::from(r.right), i32::from(h)) };
+            let (start, end, at) = if bottom - top >= right - left { (top, bottom, v) } else { (left, right, h) };
             let arrow = arrow_len(end - start);
             let (ts, tl) = thumb_span(f);
             if at < start + arrow { IN_UP_BUTTON } else if at >= end - arrow { IN_DOWN_BUTTON }
@@ -122,14 +127,16 @@ pub fn part_at(row: &Row, f: &Facts, v: i16, h: i16) -> u16 {
     }
 }
 
+fn clamp16(v: i32) -> i16 { v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16 }
+
 /// Where a complete gesture on the control starts, in local coordinates: the thumb for a scroll bar, else the middle.
 fn click_point(row: &Row, f: &Facts) -> (i16, i16) {
     let r = f.rect;
-    let (cv, ch) = ((r.top + r.bottom) / 2, (r.left + r.right) / 2);
-    if row.role != Role::Scroll { return (cv, ch); }
+    let (cv, ch) = ((i32::from(r.top) + i32::from(r.bottom)) / 2, (i32::from(r.left) + i32::from(r.right)) / 2);
+    if row.role != Role::Scroll { return (clamp16(cv), clamp16(ch)); }
     let (ts, tl) = thumb_span(f);
-    let mid = (ts + tl / 2) as i16;
-    if r.bottom - r.top >= r.right - r.left { (mid, ch) } else { (cv, mid) }
+    let mid = ts + tl / 2;
+    if i32::from(r.bottom) - i32::from(r.top) >= i32::from(r.right) - i32::from(r.left) { (clamp16(mid), clamp16(ch)) } else { (clamp16(cv), clamp16(mid)) }
 }
 
 /// The meaning of a role-level intent for a role: the part the original OS reports, and the value it leaves behind.
@@ -168,7 +175,8 @@ impl<U: GuestUi> Mac<U> {
     pub(crate) fn sync_control(&mut self, ctl: u32) -> Result<(), Refusal> {
         let f = self.control_facts(ctl)?;
         let want = if f.vis { row_of(f.proc_id).and_then(|r| model(r, &f, ctl)) } else { None };
-        self.sync_projection(f.owner, Obj::Control(ctl), want)
+        self.sync_projection(f.owner, Obj::Control(ctl), want)?;
+        self.draw_fallback(ctl)
     }
 
     /// The controls of `win`, front of the list first. Bounded by the number of controls that exist, so a list the
@@ -199,7 +207,7 @@ impl<U: GuestUi> Mac<U> {
         self.mem.write_u32(p + C_NEXT, head).map_err(&e)?;
         self.mem.write_u32(p + C_OWNER, win).map_err(&e)?;
         for (i, v) in [rect.top, rect.left, rect.bottom, rect.right].into_iter().enumerate() { self.mem.write_u16(p + C_RECT + 2 * i as u32, v as u16).map_err(&e)?; }
-        self.mem.write_u8(p + C_VIS, visible as u8).map_err(&e)?;
+        self.mem.write_u8(p + C_VIS, if visible { VISIBLE } else { 0 }).map_err(&e)?;
         for (off, v) in [(C_VALUE, value), (C_MIN, min), (C_MAX, max)] { self.mem.write_u16(p + off, v as u16).map_err(&e)?; }
         self.mem.write_u32(p + C_REF_CON, ref_con).map_err(&e)?;
         self.mem.write_u8(p + C_TITLE, t.len() as u8).map_err(&e)?;
@@ -207,8 +215,8 @@ impl<U: GuestUi> Mac<U> {
         self.mem.write_u32(win + WR_CONTROL_LIST, ctl).map_err(&e)?;
         self.tr.procs.insert(ctl, proc_id);
         match row_of(proc_id) {
-            None => self.log.push(format!("[control] procID {proc_id} has no row in the Control Manager table: the control exists in guest memory and is not shown")),
-            Some(r) if r.role == Role::Radio => self.log.push(format!("[control] {} has no kit role yet (choice is reserved): the control exists in guest memory and is not shown", r.name)),
+            None => self.log.push(format!("[control] procID {proc_id} has no row in the Control Manager table: drawn into the content plane as the default look")),
+            Some(r) if r.role == Role::Radio => self.log.push(format!("[control] {} has no kit role yet (choice is reserved): drawn into the content plane as the default look", r.name)),
             Some(_) => {}
         }
         self.sync_control(ctl)?;
@@ -246,10 +254,20 @@ impl<U: GuestUi> Mac<U> {
         if f.hilite >= INACTIVE { return Err(Refusal(format!("Intent: {} {ctl:#x} is inactive (contrlHilite {})", row.name, f.hilite))); }
         let g = gesture(row, &f, &intent)?;
         let (v, h) = click_point(row, &f);
-        if let Some(item) = self.dialog_item_of(f.owner, ctl) { self.dialog_hit(f.owner, item); return self.restore_native(Obj::Control(ctl)); }
+        self.tr.supersede();
+        if let Some(item) = self.dialog_item_of(f.owner, ctl) {
+            // DialogSelect runs TrackControl first: the control's value is what the gesture left, THEN the item is reported
+            if let Some(value) = g.value { self.set_control_field(ctl, C_VALUE, value)?; }
+            self.dialog_hit(f.owner, item);
+            self.restore_native(Obj::Control(ctl))?;
+            return self.sync_control(ctl);
+        }
         let w = self.windows.get(&f.owner).ok_or_else(|| Refusal(format!("Intent: control {ctl:#x} has no open window")))?.rect;
         self.tr.tracks.insert(ctl, (g.part, g.value));
-        self.mouse_event(MOUSE_DOWN, v.wrapping_add(w.top), h.wrapping_add(w.left), 0)
+        // a complete click: the button goes down and, the gesture being over, up again at the same place (mouseUp queued, MBState up)
+        let (gv, gh) = (v.wrapping_add(w.top), h.wrapping_add(w.left));
+        self.mouse_event(MOUSE_DOWN, gv, gh, 0)?;
+        self.mouse_event(MOUSE_UP, gv, gh, 0)
     }
 
     fn set_control_field(&mut self, ctl: u32, off: u32, v: i16) -> Result<(), Refusal> {
@@ -300,7 +318,7 @@ fn kill_controls<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
 
 fn set_vis<U: GuestUi>(m: &mut Mac<U>, ctl: u32, vis: bool, name: &str) -> Result<Done, Refusal> {
     let p = m.control_rec(ctl, name)?;
-    m.mem.write_u8(p + C_VIS, vis as u8).map_err(Refusal::mem("ControlRecord"))?;
+    m.mem.write_u8(p + C_VIS, if vis { VISIBLE } else { 0 }).map_err(Refusal::mem("ControlRecord"))?;
     m.sync_control(ctl)?;
     done(format!("[control] {name} {ctl:#x}"))
 }
@@ -380,12 +398,15 @@ fn set_rect<U: GuestUi>(m: &mut Mac<U>, ctl: u32, r: Rect) -> Result<(), Refusal
 }
 
 /// `DrawControls` / `Draw1Control`: the kit draws projected controls; the call only checks its argument.
+/// A control with a kit part is drawn by the host; one without is drawn into the content plane ([`super::fallback`]).
 fn draw_controls<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    let n = m.window_controls(c.args.get(0))?.len();
-    done(format!("[control] DrawControls {:#x}: {n} control(s), drawn by the host's kit parts", c.args.get(0)))
+    let all = m.window_controls(c.args.get(0))?;
+    for &ctl in all.iter().rev() { m.draw_fallback(ctl)?; }
+    done(format!("[control] DrawControls {:#x}: {} control(s), kit parts by the host, the rest in the content plane", c.args.get(0), all.len()))
 }
 fn draw_one<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     m.control_rec(c.args.get(0), "Draw1Control")?;
+    m.draw_fallback(c.args.get(0))?;
     done(format!("[control] Draw1Control {:#x}", c.args.get(0)))
 }
 
@@ -407,7 +428,7 @@ fn find_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
 
 /// `TrackControl(theControl, startPt, actionProc): INTEGER`: see the module docs.
 fn track_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    let (ctl, (v, h)) = (c.args.get(0), point(c.args.get(1)));
+    let (ctl, (v, h), action) = (c.args.get(0), point(c.args.get(1)), c.args.get(2));
     let f = m.control_facts(ctl)?;
     let row = row_of(f.proc_id).ok_or_else(|| Refusal(format!("TrackControl: procID {} has no row in the Control Manager table", f.proc_id)))?;
     let under = if f.vis && f.hilite < INACTIVE { part_at(row, &f, v, h) } else { 0 };
@@ -417,7 +438,9 @@ fn track_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
     if let (Some((_, Some(value))), true) = (pending, under != 0) { m.set_control_field(ctl, C_VALUE, value)?; }
     m.restore_native(Obj::Control(ctl))?; // the host showed the gesture's result optimistically; the guest's record is the truth
     m.sync_control(ctl)?;
-    Ok(Done { result: u32::from(part), log: format!("[control] TrackControl {ctl:#x} ({v},{h}) -> part {part}{}", if pending.is_some() { " (native gesture)" } else { "" }) })
+    // the gesture is already complete, so there is no tracking loop to call a live action procedure from: named, not silent
+    let note = if action != 0 && action != u32::MAX { format!("; actionProc {action:#x} not called (the host finished the gesture before TrackControl)") } else { String::new() };
+    Ok(Done { result: u32::from(part), log: format!("[control] TrackControl {ctl:#x} ({v},{h}) -> part {part}{}{note}", if pending.is_some() { " (native gesture)" } else { "" }) })
 }
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {

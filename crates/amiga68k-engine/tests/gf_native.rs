@@ -165,7 +165,7 @@ fn string_edit_and_return_update_the_buffer_and_post_gadgetup() {
     assert_eq!(f.g.a.mem.read_cstr(buf).unwrap(), "hello world, far to", "cut to MaxChars 20, which counts the NUL (Intuition)");
     assert_eq!((f.g.r16(si + 16), f.g.r16(si + 8)), (19, 19), "NumChars and BufferPos");
     assert_eq!(messages(&f), [(GADGETUP, 0x0D, f.strg)], "Return ends the edit: GADGETUP, Code 0x0D, IAddress = the gadget");
-    assert!(matches!(&f.g.a.native_gads.map[&f.strg].model.kind, ControlKind::Field { text, .. } if text == "hello world, far to"), "the engine's copy of what the host shows is kept in line");
+    assert!(matches!(&f.g.a.native_gads.get(u64::from(f.strg)).unwrap().model.kind, ControlKind::Field { text, .. } if text == "hello world, far to"), "the engine's copy of what the host shows is kept in line");
     assert_eq!(f.g.a.ui.calls.len(), calls, "...without a call back to the host (it made the edit)");
 }
 

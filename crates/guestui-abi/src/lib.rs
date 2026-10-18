@@ -16,11 +16,13 @@ extern crate alloc;
 mod event;
 mod model;
 mod plane;
+mod project;
 mod recording;
 
 pub use event::*;
 pub use model::*;
 pub use plane::*;
+pub use project::{check_ref, same_shape, state, Projected, Projections};
 pub use recording::{pixel_hash, RecordingGuestUi, UiCall};
 
 /// What an icon depicts, in generic terms (a host maps each to its own artwork).

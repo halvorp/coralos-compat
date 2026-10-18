@@ -193,3 +193,26 @@ fn pointer_and_keys_become_the_events_a_mac_program_handles() {
     assert!(key(&mut g, 200, "é", 0, true).unwrap_err().0.contains("outside ASCII"));
     assert_eq!(g.m.ev.queue.len(), 4);
 }
+
+#[test]
+fn inverting_twice_around_other_drawing_is_not_an_undo_of_the_list() {
+    // InvertRect, then text drawn inside, then InvertRect again: the bitmap has changed in between, so the second invert
+    // must not just delete the first highlight (the list would then still show text the bitmap no longer has).
+    let mut g = Rig::new();
+    set_rect(&mut g.m, R, 10, 10, 30, 50);
+    put(&mut g.m, S, &pstr("OK"));
+    g.run(Prog::new().invert_rect(R).move_to(14, 24).draw_string(S).invert_rect(R).exit());
+    g.no_refusals();
+    let ops = plane(&g.m, native(&g));
+    let canvas = &g.m.qd.canvases[&g.win];
+    let (w, h) = (i32::from(canvas.rect().x1), i32::from(canvas.rect().y1));
+    let rep = replay(&ops, w, h);
+    let wrong = rep.iter().enumerate().filter(|(i, p)| p.is_some_and(|b| b != (canvas.pixels()[*i] == 1))).count();
+    assert_eq!(wrong, 0, "the list disagrees with the bitmap on {wrong} pixels: {ops:?}");
+    assert!(!ops.iter().any(|o| matches!(o, DrawOp::Text { .. })), "the text was inverted away: {ops:?}");
+    // POSITIVE control: nothing drawn in between keeps the cheap undo (an empty list)
+    let mut g = Rig::new();
+    set_rect(&mut g.m, R, 10, 10, 30, 50);
+    g.run(Prog::new().invert_rect(R).invert_rect(R).exit());
+    assert!(plane(&g.m, native(&g)).is_empty());
+}

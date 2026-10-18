@@ -199,11 +199,12 @@ pub fn dialog_observation(m: &crate::Mac<guestui_abi::RecordingGuestUi>) -> allo
     out
 }
 
-/// The observation every run of [`dialog_script`] must produce (68k code, PowerPC glue): item 3 (the check box) was hit and its
-/// value left alone, the edit text read back "World", Return hit the default item 1.
+/// The observation every run of [`dialog_script`] must produce (68k code, PowerPC glue): the first `ModalDialog` returned the
+/// edit item (5: the user typed "World", read back by the program), the second returned item 3 (the check box was clicked and
+/// its value left alone, as on a Mac).
 pub static DIALOG_EXPECTED: &[&str] = &[
-    "hit1=3 type=16 box=(30,20,46,200)",
-    "text=\"World\" check=0 hit2=1",
+    "hit1=5 type=16 box=(30,20,46,200)",
+    "text=\"World\" check=0 hit2=3",
     "open \"Dialog\" GuestRect { left: 40, top: 60, width: 260, height: 120 } Dialog",
     "add Button \"OK\" GuestRect { left: 200, top: 80, width: 60, height: 20 } enabled=true",
     "add Button \"Cancel\" GuestRect { left: 120, top: 80, width: 60, height: 20 } enabled=true",
@@ -211,7 +212,7 @@ pub static DIALOG_EXPECTED: &[&str] = &[
     "add Label { text: \"Name:\", framed: false } \"\" GuestRect { left: 20, top: 10, width: 180, height: 16 } enabled=true",
     "add Field { text: \"Hello\", max_len: 255, editable: true, integer: false } \"\" GuestRect { left: 20, top: 30, width: 180, height: 16 } enabled=true",
     "plane GuestRect { left: 0, top: 0, width: 260, height: 120 } 0 op(s)",
-    "set Checked(false)",
     "set Text(\"Changed\")",
+    "set Checked(false)",
     "close",
 ];

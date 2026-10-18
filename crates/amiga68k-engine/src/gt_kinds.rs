@@ -212,13 +212,11 @@ fn store<U: GuestUi>(a: &mut Amiga<U>, g: u32, v: &ControlValue) -> Result<(), R
 }
 
 /// A native control changed: update the gadget's state and post IDCMP_GADGETUP (IAddress = the gadget).
-pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, intent: Intent) -> Result<Delivered, Refusal> {
+pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, generation: u32, intent: Intent) -> Result<Delivered, Refusal> {
     let g = u32::try_from(token.0).ok().filter(|g| a.gadgets.contains_key(g))
         .ok_or_else(|| Refusal(format!("deliver: Intent token {:#x} is not a GadTools gadget", token.0)))?;
     let info = a.gadgets[&g].clone();
-    if info.attached != Some((win, native, control)) {
-        return Err(Refusal(format!("deliver: Intent for gadget {g:#x}, which is not that native control of that window (stale?)")));
-    }
+    guestui_abi::check_ref(token.0, native, control, generation, info.attached.filter(|a| a.0 == win).map(|(_, n, c)| (n, c))).map_err(Refusal)?;
     let value = match intent {
         Intent::Activate => ControlValue::Pressed,
         Intent::SetValue(v) => v,

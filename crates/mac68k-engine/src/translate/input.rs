@@ -64,6 +64,7 @@ impl<U: GuestUi> Mac<U> {
             (PointerButton::Secondary, PointerPhase::Up) => (MOUSE_UP, CONTROL),
             (b, p) => return Err(Refusal(format!("Pointer: {b:?} {p:?} has no classic Mac event (a one-button mouse; the secondary button is a control-click)"))),
         };
+        if what != 0 { self.tr.supersede(); } // a button event ends any native gesture still waiting for its TrackControl
         self.mouse_event(what, v, h, modifiers)?;
         Ok(if what == 0 { Delivered::Ignored } else { Delivered::Queued })
     }
@@ -80,10 +81,15 @@ impl<U: GuestUi> Mac<U> {
             Some(c) if (c as u32) < 0x80 => c as u8,
             Some(c) => return Err(Refusal(format!("Key: U+{:04X} is outside ASCII; Mac Roman input is not mapped", c as u32))),
         };
-        if matches!(ch, 0x0D | 0x03) && self.tr.dlg.dialogs.contains_key(&ptr) {
-            let item = self.default_item(ptr)?;
-            self.dialog_hit(ptr, item);
-            return Ok(Delivered::Queued);
+        self.tr.supersede();
+        if self.tr.dlg.dialogs.contains_key(&ptr) {
+            if matches!(ch, 0x0D | 0x03) {
+                let item = self.default_item(ptr)?;
+                self.dialog_hit(ptr, item);
+                return Ok(Delivered::Queued);
+            }
+            // a dialog's keys are the Dialog Manager's: they never reach the program's own event loop
+            return Ok(if self.dialog_key(ptr, ch, mods.has(Modifiers::META))? { Delivered::Queued } else { Delivered::Ignored });
         }
         let what = if self.tr.input.held == Some(code) { AUTO_KEY } else { KEY_DOWN };
         self.tr.input.held = Some(code);

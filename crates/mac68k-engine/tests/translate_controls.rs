@@ -92,7 +92,11 @@ fn a_native_click_is_a_mouse_down_and_the_part_track_control_returns() {
     assert_eq!((ev(10), ev(12)), (22, 60));
     let mouse = |o: u32| w.rig.m.mem.read_u16(mac68k_engine::lowmem::MOUSE + o).unwrap() as i16;
     assert_eq!((mouse(0), mouse(2)), (22 + WIN_TOP, 60 + WIN_LEFT), "the low-memory Mouse is global, the window origin added");
-    assert_eq!(w.rig.m.mem.read_u8(mac68k_engine::lowmem::MB_STATE).unwrap(), 0, "the button is down");
+    // the click is complete: the button is UP again (MBState bit 7) and the mouseUp is queued after the mouseDown, at the same place
+    assert_eq!(w.rig.m.mem.read_u8(mac68k_engine::lowmem::MB_STATE).unwrap(), 0x80, "the button is up again once TrackControl has returned");
+    let whats: Vec<u16> = w.rig.m.ev.queue.iter().map(|e| e.what).collect();
+    assert_eq!(whats, vec![2], "the mouseDown was consumed by the program, its mouseUp is still queued: {whats:?}");
+    assert_eq!((w.rig.m.ev.queue[0].v, w.rig.m.ev.queue[0].h), (22 + WIN_TOP, 60 + WIN_LEFT));
     assert_eq!((word(&w, 6), word(&w, 8)), (10, 10), "FindControl and TrackControl both answer inButton");
     assert_eq!(w.rig.m.mem.read_u32(WHICH).unwrap(), w.btn);
     assert!(w.rig.m.refused.is_empty(), "{:?}", w.rig.m.refused);
@@ -175,4 +179,111 @@ fn an_inactive_control_takes_no_clicks_and_set_value_is_clamped() {
     w.rig.m.pump_ui();
     assert!(w.rig.m.refused.iter().any(|r| r.contains("inactive")), "{:?}", w.rig.m.refused);
     assert!(w.rig.m.ev.queue.iter().all(|e| e.what != 1));
+}
+
+// ---- review findings: guest data cannot panic the engine, controls with no kit part are not lost, ControlRecord fields ----
+
+#[test]
+fn guest_supplied_rects_cannot_overflow_the_engine() {
+    use mac68k_engine::pascal::Rect;
+    use mac68k_engine::translate::controls::{part_at, row_of, Facts};
+    for proc_id in [0u16, 1, 16] {
+        let mut rig = Rig::new();
+        let (win, nwin) = (rig.win, rig.m.windows[&rig.win].native.unwrap());
+        let wild = Rect { top: 20_000, left: 30_000, bottom: 32_000, right: 32_767 };
+        let ctl = rig.m.create_control(win, wild, "x", true, 0, 0, 10, proc_id, 0).unwrap();
+        let f = rig.m.control_facts(ctl).unwrap();
+        let row = row_of(proc_id).unwrap();
+        for (v, h) in [(20_001, 30_001), (i16::MIN, i16::MIN), (i16::MAX, i16::MAX), (31_999, 32_766)] { let _ = part_at(row, &f, v, h); }
+        // the intent path computes the click point from the same rect
+        let n = rig.m.tr.projected(Obj::Control(ctl)).unwrap().native;
+        let intent = if proc_id == 16 { Intent::ScrollTo(3) } else if proc_id == 1 { Intent::SetValue(ControlValue::Checked(true)) } else { Intent::Activate };
+        rig.m.ui.push_intent(nwin, n, intent).unwrap();
+        rig.m.pump_ui();
+        assert!(rig.m.refused.is_empty(), "{:?}", rig.m.refused);
+        // negative control: a sane rect still finds its part (the arithmetic was not just made to return 0)
+        let sane = Facts { rect: Rect { top: 0, left: 0, bottom: 20, right: 80 }, ..f.clone() };
+        assert_ne!(part_at(row, &sane, 10, 10), 0);
+    }
+}
+
+#[test]
+fn contrl_hilite_255_alone_is_inactive_and_contrl_vis_is_the_roms_255() {
+    let mut w = world();
+    let (win, ctl) = (win_ref(&w), native(&w, w.btn));
+    let p = w.rig.m.mm.block(w.btn).unwrap().ptr;
+    assert_eq!(w.rig.m.mem.read_u8(p + 16).unwrap(), 255, "contrlVis of a visible control is 255 (the ROM's NewControl), not 1");
+    // 254 is a part being tracked, NOT inactive: the control still takes a click and is enabled on the host
+    let mut prog = Prog::new();
+    prog.l(w.btn).w(254).trap(0xA95D).exit();
+    w.rig.m.start(&prog.0, 0).unwrap();
+    w.rig.m.run_loop(100_000).unwrap();
+    assert!(!w.rig.m.ui.calls.iter().any(|c| matches!(c, UiCall::SetControlEnabled(_, r, false) if *r == ctl)), "254 does not ghost the control");
+    w.rig.m.ui.push_intent(win, ctl, Intent::Activate).unwrap();
+    w.rig.m.pump_ui();
+    assert!(w.rig.m.refused.is_empty() && w.rig.m.ev.queue.iter().any(|e| e.what == 1), "{:?}", w.rig.m.refused);
+    // 255 IS inactive (the existing test pins the refusal); ShowControl/HideControl keep 255/0
+    let mut prog = Prog::new();
+    prog.l(w.btn).trap(0xA958).exit();
+    w.rig.m.start(&prog.0, 0).unwrap();
+    w.rig.m.run_loop(100_000).unwrap();
+    assert_eq!(w.rig.m.mem.read_u8(p + 16).unwrap(), 0);
+}
+
+#[test]
+fn a_native_click_ends_with_the_button_up_so_a_stale_gesture_cannot_replay() {
+    let mut w = world();
+    let (win, ctl) = (win_ref(&w), native(&w, w.btn));
+    w.rig.m.ui.push_intent(win, ctl, Intent::Activate).unwrap();
+    w.rig.m.pump_ui();
+    assert!(w.rig.m.tr.tracks.contains_key(&w.btn), "the gesture waits for the program's TrackControl");
+    // a later pointer click (different input) supersedes it: no stale part can replay into a later TrackControl
+    let nwin = win_ref(&w);
+    w.rig.m.ui.events.push_back(GuestUiEvent::Pointer { win: nwin, x: 5, y: 5, button: guestui_abi::PointerButton::Primary, phase: guestui_abi::PointerPhase::Down, clicks: 1 });
+    w.rig.m.pump_ui();
+    assert!(w.rig.m.tr.tracks.is_empty(), "a newer input ended the old gesture");
+    // negative control: pointer motion alone does not
+    w.rig.m.ui.push_intent(win, ctl, Intent::Activate).unwrap();
+    w.rig.m.pump_ui();
+    w.rig.m.ui.events.push_back(GuestUiEvent::Pointer { win: nwin, x: 6, y: 6, button: guestui_abi::PointerButton::Primary, phase: guestui_abi::PointerPhase::Move, clicks: 0 });
+    w.rig.m.pump_ui();
+    assert!(w.rig.m.tr.tracks.contains_key(&w.btn));
+}
+
+#[test]
+fn controls_with_no_kit_part_are_drawn_into_the_content_plane_and_counted() {
+    use mac68k_engine::pascal::Rect;
+    // a radio button (no kit role yet) and a control whose procID has no row at all (popupMenuProc 1008)
+    for (proc_id, name) in [(2u16, "Radio"), (1008, "Popup")] {
+        let mut rig = Rig::new();
+        let (win, nwin) = (rig.win, rig.m.windows[&rig.win].native.unwrap());
+        let rect = Rect { top: 20, left: 20, bottom: 40, right: 120 };
+        let before = rig.count_in(20, 20, 120, 40);
+        let ctl = rig.m.create_control(win, rect, name, true, 1, 0, 1, proc_id, 0).unwrap();
+        let mut p = Prog::new();
+        p.l(win).trap(0xA969).exit(); // DrawControls
+        rig.run(&p);
+        rig.no_refusals();
+        assert!(rig.m.tr.projected(Obj::Control(ctl)).is_none(), "{name}: no kit part");
+        assert_eq!(before, 0);
+        assert!(rig.count_in(20, 20, 120, 40) > 20, "{name}: the default look is in the window's bitmap:\n{}", rig.pic(18, 18, 124, 42));
+        let c = rig.m.ui.route_census(nwin);
+        assert_eq!((c.native, c.replayed, c.raw), (0, 1, 0), "{name}: the census counts the plane, not nothing: {c:?}");
+        let ops = rig.m.ui.planes[&(nwin.id, 0)].ops.clone();
+        assert!(ops.iter().any(|o| matches!(o, guestui_abi::DrawOp::Text { string, .. } if string == name)), "{name}: the title is a text run: {ops:?}");
+        // HideControl erases it again
+        let mut p = Prog::new();
+        p.l(ctl).trap(0xA958).exit();
+        rig.run(&p);
+        assert_eq!(rig.count_in(20, 20, 120, 40), 0, "{name}: hidden = erased");
+    }
+    // NEGATIVE control: a push button HAS a kit part, so nothing is drawn into the bitmap for it
+    let mut rig = Rig::new();
+    let win = rig.win;
+    rig.m.create_control(win, Rect { top: 20, left: 20, bottom: 40, right: 120 }, "OK", true, 0, 0, 1, 0, 0).unwrap();
+    let mut p = Prog::new();
+    p.l(win).trap(0xA969).exit();
+    rig.run(&p);
+    assert_eq!(rig.count_in(20, 20, 120, 40), 0);
+    assert_eq!(rig.m.ui.route_census(rig.m.windows[&win].native.unwrap()).native, 1);
 }

@@ -4,7 +4,7 @@
 //! * **The canvas stays the truth.** `CopyBits`/`GetPixel` readback is exact because the bitmap is still drawn; the list is
 //!   a second, semantic account of the same drawing. Where the list cannot say a drawing EXACTLY, it says it in pixels:
 //!   [`finish`](super::target::finish) records a `Pixels` op for every drawing no recorder below named (an icon blit, a
-//!   `CopyBits`, a mixed-pattern transfer mode). Exactness holds by construction; the route census shows how much of a
+//!   `CopyBits`, a mixed-pattern transfer mode). Exactness holds by construction (every shortcut below is guarded so it cannot disagree with the bitmap); the route census shows how much of a
 //!   window went the raw way.
 //! * **Pens are roles, never colours.** [`ink`] maps a (transfer mode, pattern) pair to a theme role: black ink is `Text`,
 //!   white is `Surface`, a half-tone is `TextMuted`. A pattern/mode pair with no role (xor with a gray) goes raw.
@@ -60,11 +60,15 @@ impl Planes {
         self.touch(win, bounds);
     }
 
-    /// Remove the highlight `Fill` over exactly `r`, if the last op there is one (an invert undone by inverting again).
+    /// Remove the highlight `Fill` over exactly `r`, if it is the last thing drawn anywhere in `r` (an invert undone by
+    /// inverting again). With drawing recorded after it the second invert is NOT an undo of the list: it goes raw instead.
     fn remove_selection(&mut self, win: u32, r: Rect) -> bool {
         let Some(list) = self.lists.get_mut(&win) else { return false };
         let at = list.iter().rposition(|x| x.bounds == r && matches!(x.op, DrawOp::Fill { pen_role: PenRole::Selection, .. }));
-        match at { Some(i) => { list.remove(i); self.touch(win, r); true } None => false }
+        match at {
+            Some(i) if list[i + 1..].iter().all(|x| x.bounds.intersect(&r).is_empty()) => { list.remove(i); self.touch(win, r); true }
+            _ => false,
+        }
     }
 
     /// Is everything already drawn under `r` plain surface (so an invert there is a highlight)?

@@ -14,10 +14,15 @@
 //!
 //! **Behaviour.** A modal dialog's controls report through the Dialog Manager, not through `mouseDown`: a push button,
 //! check box or radio hit is the ITEM NUMBER `ModalDialog` returns in `itemHit` (the program toggles a check box itself,
-//! as on a real Mac). A native text commit writes the text into the item's handle and returns nothing (`ModalDialog` does
-//! not return on typing). Return or Enter is the default item's hit (`aDefItem`, 1 unless the program changed it).
+//! as on a real Mac); a scroll bar's `contrlValue` is moved first (`DialogSelect` runs `TrackControl`, then reports the item).
+//! Typing in an enabled `editText` item returns that item's number, as `DialogSelect` does after `TEKey`: a native text
+//! commit writes the text into the item's handle and queues the hit; a key reaching the dialog window is applied to the
+//! edit field the same way. Keys are the dialog's, never the program's event queue's. Return or Enter is the default
+//! item's hit (`aDefItem`, 1 unless the program changed it); an `aDefItem` that names no item is ignored by name.
 //! A disabled item's hit is ignored by name, as `ModalDialog` ignores clicks in disabled items. `ModalDialog` blocks like an
 //! event call; the PowerPC adapter parks the caller on the same wake condition ([`Mac::modal_ready`]).
+//! A non-NIL `filterProc` is a guest callback the trap bridge cannot run from inside a trap: it is named as a refusal
+//! (the standard filtering applies), never ignored silently.
 use super::{guest_rect, Obj};
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_pstring, Arg, Rect};
@@ -136,7 +141,9 @@ impl<U: GuestUi> Mac<U> {
 
     /// The user hit item `item` of dialog `win`: queue it for `ModalDialog` (a disabled item ignores it).
     pub fn dialog_hit(&mut self, win: u32, item: i16) {
-        let enabled = self.tr.dlg.dialogs.get(&win).and_then(|d| d.list.get((item - 1).max(0) as usize)).is_some_and(|s| s.raw_type & 0x80 == 0);
+        // item numbers are guest data (aDefItem): 1-based, anything else is no item
+        let slot = usize::try_from(i32::from(item) - 1).ok().and_then(|i| self.tr.dlg.dialogs.get(&win).and_then(|d| d.list.get(i)));
+        let enabled = slot.is_some_and(|s| s.raw_type & 0x80 == 0);
         if enabled { self.tr.dlg.hits.push_back((win, item)); }
         else { self.log.push(format!("[dialog] item {item} of {win:#x} is disabled (or not an item): the hit is ignored")); }
     }
@@ -147,7 +154,9 @@ impl<U: GuestUi> Mac<U> {
             (Item::EditText, Intent::CommitText(t)) => {
                 self.set_handle_text(h, &t)?;
                 self.adopt_native_state(Obj::Text(h), &guestui_abi::ControlValue::Text(t));
-                self.sync_text(win, idx)
+                self.sync_text(win, idx)?;
+                self.dialog_hit(win, idx as i16 + 1); // DialogSelect reports editField + 1 after TEKey
+                Ok(())
             }
             (item, i) => Err(Refusal(format!("Intent {i:?} has no meaning for a {item:?} dialog item"))),
         }
@@ -155,6 +164,24 @@ impl<U: GuestUi> Mac<U> {
 
     /// The frontmost dialog window.
     fn front_dialog(&self) -> Option<u32> { self.z.iter().copied().find(|w| self.tr.dlg.dialogs.contains_key(w)) }
+
+    /// A key typed into dialog `win` (never the program's event queue): applied to the edit field like `TEKey`, and the
+    /// field's item is reported. Command-key equivalents and keys with no edit field are consumed by name.
+    pub(crate) fn dialog_key(&mut self, win: u32, ch: u8, command: bool) -> Result<bool, Refusal> {
+        let field = self.mem.read_i16(win + DR_EDIT_FIELD).map_err(Refusal::mem("editField"))?;
+        let idx = usize::try_from(field).ok().filter(|&i| self.tr.dlg.dialogs[&win].list.get(i).is_some_and(|s| s.item == Item::EditText));
+        let Some(idx) = idx.filter(|_| !command) else {
+            self.log.push(format!("[dialog] key {ch:#04x} in {win:#x} consumed: {}", if command { "command-key equivalents are not mapped in a modal dialog" } else { "the dialog has no edit field" }));
+            return Ok(false);
+        };
+        let h = self.tr.dlg.dialogs[&win].list[idx].handle;
+        let mut text = self.handle_text(h)?;
+        match ch { 0x08 => { text.pop(); } c if c >= 0x20 && c != 0x7F => text.push(char::from(c)), _ => return Ok(false) }
+        self.set_handle_text(h, &text)?;
+        self.sync_text(win, idx)?;
+        self.dialog_hit(win, idx as i16 + 1);
+        Ok(true)
+    }
 
     fn take_hit(&mut self, win: u32) -> Option<i16> {
         let i = self.tr.dlg.hits.iter().position(|&(w, _)| w == win)?;
@@ -297,7 +324,8 @@ fn get_dialog_item_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Re
 
 /// `ModalDialog(filterProc, VAR itemHit)`: return a queued hit of the frontmost dialog, else block until one arrives.
 fn modal_dialog<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    let at = c.args.get(1);
+    let (filter, at) = (c.args.get(0), c.args.get(1));
+    if filter != 0 { m.note_refusal("ModalDialog", format!("filterProc {filter:#x} is a guest callback and is not called; the standard filtering applies")); }
     let win = m.front_dialog().ok_or_else(|| Refusal("ModalDialog: no dialog is open".into()))?;
     if let Some(item) = m.take_hit(win) {
         m.mem.write_u16(at, item as u16).map_err(Refusal::mem("itemHit"))?;

@@ -35,6 +35,11 @@ fn text_bytes<U: GuestUi>(m: &Mac<U>, buf: u32, first: u32, count: u32) -> Resul
 /// Draw `bytes` at the pen and advance it.
 fn draw<U: GuestUi>(m: &mut Mac<U>, bytes: &[u8], name: &str) -> Result<Done, Refusal> {
     let port = current_port(m)?;
+    draw_on(m, port, bytes, name)
+}
+
+/// [`draw`] on a named port (the engine's own default control look draws into the owner window's port, not the current one).
+pub(crate) fn draw_on<U: GuestUi>(m: &mut Mac<U>, port: u32, bytes: &[u8], name: &str) -> Result<Done, Refusal> {
     let pen = read_pen(&m.mem, port)?;
     let (face, tmode) = (m.mem.read_u8(port.wrapping_add(P_TX_FACE)).map_err(Refusal::mem("txFace"))?, m.mem.read_u16(port.wrapping_add(P_TX_MODE)).map_err(Refusal::mem("txMode"))?);
     let width = m.qd.font.text_length(bytes);

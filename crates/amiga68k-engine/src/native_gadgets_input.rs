@@ -61,20 +61,14 @@ fn scroll_to<U: GuestUi>(a: &mut Amiga<U>, g: u32, top: u32) -> Result<(), Refus
 /// A user intent on a control (idcmp::deliver's arm for `GuestUiEvent::Intent`): the token says whether it is a native gadget
 /// (here) or a GadTools gadget (`gt_kinds`). A `control` / `generation` that is not the live control of the token is refused by name.
 pub fn intent<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, generation: u32, intent: Intent) -> Result<Delivered, Refusal> {
-    if generation != control.generation {
-        return Err(Refusal(format!("deliver: Intent for token {:#x} carries generation {generation}, but its control ref has {} (stale)", token.0, control.generation)));
-    }
-    let native_gadget = u32::try_from(token.0).is_ok_and(|g| a.native_gads.map.contains_key(&g));
-    if native_gadget { driven(a, win, native, control, token, intent) } else { gt_kinds::control_changed(a, win, native, control, token, intent) }
+    let native_gadget = a.native_gads.get(token.0).is_some();
+    if native_gadget { driven(a, win, native, control, token, generation, intent) } else { gt_kinds::control_changed(a, win, native, control, token, generation, intent) }
 }
 
-fn driven<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, intent: Intent) -> Result<Delivered, Refusal> {
-    let g = u32::try_from(token.0).ok().filter(|g| a.native_gads.map.contains_key(g))
-        .ok_or_else(|| Refusal(format!("deliver: Intent token {:#x} is not a native gadget", token.0)))?;
-    let ng = a.native_gads.map[&g].clone();
-    if (ng.win, ng.native, ng.ctl) != (win, native, control) {
-        return Err(Refusal(format!("deliver: Intent for gadget {g:#x}, which is not that native control of that window (stale?)")));
-    }
+fn driven<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, generation: u32, intent: Intent) -> Result<Delivered, Refusal> {
+    let g = u32::try_from(token.0).map_err(|_| Refusal(format!("deliver: Intent token {:#x} is not a native gadget", token.0)))?;
+    let ng = a.native_gads.resolve(token.0, native, control, generation).map_err(Refusal)?.clone();
+    if ng.meta != win { return Err(Refusal(format!("deliver: Intent for gadget {g:#x}, which belongs to another window (stale?)"))); }
     let act = a.mem.read_u16(g + GAD_ACTIVATION).map_err(Refusal::mem("Gadget.Activation"))? as u32;
     let bad = |why: &str| Refusal(format!("deliver: Intent {intent:?} on a {:?} control: {why}", ng.model.kind));
     let mut post = None; // (IDCMP class, Code)
