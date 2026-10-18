@@ -19,7 +19,7 @@
 //! Scroll bar geometry (classic CDEF 16): orientation from the rect (height >= width is vertical), a 16-pixel arrow box at
 //! each end, a 16-pixel thumb moving over the rest in proportion to `(value - min) / (max - min)`. systemless (the oracle
 //! this table was compared with) uses an 8-pixel thumb; the 16-pixel box is the System 7 scroll box.
-use super::Obj;
+use super::{guest_rect, Obj};
 use crate::events::MOUSE_DOWN;
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_pstring, read_rect, Arg, Rect};
@@ -27,7 +27,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use guestui_abi::{CallbackToken, ControlKind, ControlModel, ControlValue, GuestRect, GuestUi, Intent};
+use guestui_abi::{CallbackToken, ControlKind, ControlModel, ControlValue, GuestUi, Intent};
 use retro_m68k::Cpu;
 
 pub const RECORD_SIZE: u32 = 296;
@@ -75,10 +75,6 @@ pub fn row_of(proc_id: u16) -> Option<&'static Row> { let p = proc_id & !8; TABL
 /// What the record says right now.
 #[derive(Debug, Clone)]
 pub struct Facts { pub owner: u32, pub rect: Rect, pub vis: bool, pub hilite: u8, pub value: i16, pub min: i16, pub max: i16, pub proc_id: u16, pub title: String }
-
-fn guest_rect(r: Rect) -> GuestRect {
-    GuestRect { left: i32::from(r.left), top: i32::from(r.top), width: i32::from(r.right) - i32::from(r.left), height: i32::from(r.bottom) - i32::from(r.top) }
-}
 
 /// The attribute map, as data over the record: facts -> the role's model. `None`: the role has no kit part yet.
 fn model(row: &Row, f: &Facts, token: u32) -> Option<ControlModel> {
@@ -265,7 +261,7 @@ impl<U: GuestUi> Mac<U> {
 // ---- the traps ----
 
 fn done(log: String) -> Result<Done, Refusal> { Ok(Done { result: 0, log }) }
-fn point(v: u32) -> (i16, i16) { ((v >> 16) as i16, v as i16) }
+use crate::toolbox::point;
 
 fn new_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let a = &c.args;

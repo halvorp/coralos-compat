@@ -21,10 +21,16 @@ pub mod input;
 
 use crate::events::Delivered;
 use crate::machine::Mac;
+use crate::pascal::Rect;
 use crate::Refusal;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use guestui_abi::{CallbackToken, ControlKind, ControlModel, ControlValue, GuestUi, Intent, UiObjectRef};
+
+/// A Mac `Rect` (top, left, bottom, right) as the seam's rectangle (left, top, width, height).
+pub(crate) fn guest_rect(r: Rect) -> guestui_abi::GuestRect {
+    guestui_abi::GuestRect { left: i32::from(r.left), top: i32::from(r.top), width: i32::from(r.right) - i32::from(r.left), height: i32::from(r.bottom) - i32::from(r.top) }
+}
 
 /// What a projected token stands for in the guest. The token is always the guest object's own address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -276,7 +276,7 @@ fn front_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Don
 }
 
 /// A Point passed by value is one long: v in the high word, h in the low.
-fn point(v: u32) -> (i16, i16) { ((v >> 16) as i16, v as i16) }
+pub(crate) fn point(v: u32) -> (i16, i16) { ((v >> 16) as i16, v as i16) }
 
 fn find_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (v, h) = point(c.args.get(0));

@@ -18,7 +18,7 @@
 //! not return on typing). Return or Enter is the default item's hit (`aDefItem`, 1 unless the program changed it).
 //! A disabled item's hit is ignored by name, as `ModalDialog` ignores clicks in disabled items. `ModalDialog` blocks like an
 //! event call; the PowerPC adapter parks the caller on the same wake condition ([`Mac::modal_ready`]).
-use super::Obj;
+use super::{guest_rect, Obj};
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_pstring, Arg, Rect};
 use crate::toolbox::WindowSpec;
@@ -27,7 +27,7 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use guestui_abi::{CallbackToken, ControlKind, ControlModel, GuestRect, GuestUi, Intent};
+use guestui_abi::{CallbackToken, ControlKind, ControlModel, GuestUi, Intent};
 use retro_m68k::Cpu;
 
 pub const RECORD_SIZE: u32 = 170;
@@ -67,10 +67,6 @@ pub struct State {
     pub hits: VecDeque<(u32, i16)>,
     /// A blocked `ModalDialog`: where its `itemHit` result goes.
     pub modal: Option<u32>,
-}
-
-fn guest_rect(r: Rect) -> GuestRect {
-    GuestRect { left: i32::from(r.left), top: i32::from(r.top), width: i32::from(r.right) - i32::from(r.left), height: i32::from(r.bottom) - i32::from(r.top) }
 }
 
 struct Raw { rect: Rect, ty: u8, data: Vec<u8>, at: usize }

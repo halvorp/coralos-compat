@@ -91,3 +91,44 @@ fn negative_control_a_wrong_hit_changes_the_observation() {
     assert_ne!(dialog_observation(&m.mac)[0], DIALOG_EXPECTED[0]);
     assert!(dialog_observation(&m.mac)[0].starts_with("hit1=2 "));
 }
+
+#[test]
+fn control_manager_traps_through_the_glue_answer_like_the_68k_run() {
+    // FindControl / TrackControl / GetControlValue / SetControlValue are the 68k handlers; a native click on a push button and
+    // on a check box gives the part codes translate_controls.rs pins for 68k code (10 and 11), and the check box value stays
+    // the program's to change.
+    use mac68k_engine::pascal::Rect;
+    let mut m = machine();
+    let spec = mac68k_engine::toolbox::WindowSpec { storage: 0, rect: Rect { top: 100, left: 50, bottom: 220, right: 250 }, title: "w".into(), visible: true, proc_id: 0, behind: 0xFFFF_FFFF, go_away: false, ref_con: 0 };
+    let win = m.mac.make_window(spec).unwrap();
+    let btn = m.mac.create_control(win, Rect { top: 10, left: 20, bottom: 34, right: 100 }, "OK", true, 0, 0, 1, 0, 0).unwrap();
+    let chk = m.mac.create_control(win, Rect { top: 50, left: 20, bottom: 66, right: 120 }, "Check", true, 0, 0, 1, 1, 0).unwrap();
+    let g = |m: &mut M, name: &str, args: &[u32]| -> u32 {
+        m.bind(name);
+        let mut regs = [0u32; 32];
+        regs[3..3 + args.len()].copy_from_slice(args);
+        assert_eq!(m.glue_call(name, &mut regs), GlueOutcome::Return, "{name}");
+        regs[3]
+    };
+    let nwin = m.mac.windows[&win].native.unwrap();
+    let click = |m: &mut M, ctl: u32, intent: Intent| {
+        let n = m.mac.tr.projected(Obj::Control(ctl)).unwrap().native;
+        m.mac.ui.push_intent(nwin, n, intent).unwrap();
+        m.mac.pump_ui();
+    };
+    for (ctl, intent, local, part) in [(btn, Intent::Activate, (22i16, 60i16), 10u32), (chk, Intent::SetValue(ControlValue::Checked(true)), (58, 70), 11)] {
+        click(&mut m, ctl, intent);
+        let pt = ((local.0 as u16 as u32) << 16) | local.1 as u16 as u32;
+        let which = 0x3300;
+        assert_eq!(g(&mut m, "FindControl", &[pt, win, which]) & 0xFFFF, part);
+        assert_eq!(m.mac.mem.read_u32(which).unwrap(), ctl);
+        assert_eq!(g(&mut m, "TrackControl", &[ctl, pt, 0]) & 0xFFFF, part);
+    }
+    assert_eq!(g(&mut m, "GetControlValue", &[chk]) & 0xFFFF, 0, "the click did not flip the check box");
+    g(&mut m, "SetControlValue", &[chk, 1]);
+    assert_eq!(g(&mut m, "GetControlValue", &[chk]) & 0xFFFF, 1);
+    // negative control: a point outside every control finds nothing
+    assert_eq!(g(&mut m, "FindControl", &[(200u32 << 16) | 200, win, 0x3300]) & 0xFFFF, 0);
+    assert_eq!(m.mac.mem.read_u32(0x3300).unwrap(), 0);
+    assert!(m.mac.refused.is_empty(), "{:?}", m.mac.refused);
+}
