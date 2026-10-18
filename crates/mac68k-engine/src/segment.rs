@@ -63,11 +63,18 @@ impl<U: GuestUi> Mac<U> {
         let opened = retro_resfork::open(file).map_err(|e| e.to_string())?;
         let fork = ResFork::parse(file[opened.rsrc.clone()].to_vec()).map_err(|e| e.to_string())?;
         self.rm.open_fork(APP_REF_NUM, fork);
-        let h0 = self.get_resource(*b"CODE", 0, true).map_err(|e| format!("no 'CODE' 0 resource (ResErr {e}): not a 68k application"))?;
-        let code0 = self.handle_bytes(h0).ok_or("CODE 0 handle vanished")?;
+        let code0 = {
+            let f = &self.rm.files.last().ok_or("no resource file open")?.fork;
+            let i = f.find(*b"CODE", 0).ok_or("no 'CODE' 0 resource: not a 68k application")?;
+            f.data(i).ok_or("CODE 0 unreadable")?.to_vec()
+        };
         let (c, jt) = parse_code0(&code0)?;
         if c.jt_size == 0 { return Err("CODE 0: an empty jump table has no entry point".into()); }
+        // The A5 world is the first block ever allocated, so it begins exactly at STACK_TOP == CurStackBase: the stack
+        // ends where the application's globals begin, which is what THINK C-style startup code relies on (it fills the
+        // memory from CurStackBase up to A5 from its DATA resource).
         let world = self.mm.new_ptr(&mut self.mem, &mut self.heap, c.below + c.above, true).map_err(|e| format!("no memory for the A5 world (memFullErr {e})"))?;
+        if world != STACK_TOP { return Err(format!("the A5 world landed at {world:#x}, not at STACK_TOP: launch needs a fresh machine")); }
         let a5 = world + c.below;
         self.mem.write_bytes(a5 + c.jt_offset, jt).map_err(|e| e.to_string())?;
         lowmem::set_app(&mut self.mem, &opened.name.unwrap_or_else(|| "Application".into()), a5, c.jt_offset as u16, APP_REF_NUM).map_err(|e| e.0)?;

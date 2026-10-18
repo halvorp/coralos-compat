@@ -71,9 +71,7 @@ pub fn complete(mem: &mut GuestMem, sp: u32, layout: &[Arg], result: Option<(Arg
 /// A Str255 (length byte + that many bytes) at `addr`. Bytes above 0x7F are shown as their Latin-1 character (a
 /// MacRoman table is a later step).
 pub fn read_pstring(mem: &GuestMem, addr: u32) -> Result<alloc::string::String, Refusal> {
-    let len = mem.read_u8(addr).map_err(Refusal::mem("Str255 length"))? as u32;
-    let span = mem.span(addr + 1, len).map_err(Refusal::mem("Str255"))?;
-    Ok(mem.bytes(span).map_err(Refusal::mem("Str255"))?.iter().map(|&b| char::from(b)).collect())
+    Ok(read_pstring_bytes(mem, addr)?.iter().map(|&b| char::from(b)).collect())
 }
 
 /// The raw bytes of a Str255 at `addr` (no character mapping), for byte-exact name matching.

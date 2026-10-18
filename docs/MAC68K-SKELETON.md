@@ -39,26 +39,57 @@ by `traps::tests`.
   `Amiga`); `Refusal` and `Step` -> new `retro-common`.
 - Mac-only: trap table, Pascal frame helper, Toolbox handlers.
 
+## Groundwork for real applications (2026-10-18)
+
+New crate `retro-resfork` (no_std, shared with a future macppc engine): the Resource Manager file format (`ResFork`),
+MacBinary II (CRC-16/XMODEM checked), AppleDouble/AppleSingle header files, and a writer used by the tests.
+
+In `mac68k-engine`, one concern per file:
+
+| file | what |
+|---|---|
+| `osconv.rs` | the OS-trap REGISTER convention (D0/A0/A1/D1 in, D0 = OSErr and A0 out, `tst.w d0` flags), beside `pascal.rs` |
+| `lowmem.rs` | the documented, tested map of low-memory globals (`MAP`; a test fails if init writes outside it) |
+| `memmgr.rs` + `memtraps.rs` | Handles = master pointers over the shared `Heap`; NewHandle/NewPtr(+Clear), Dispose*, Get/SetHandleSize, HLock/HUnlock, HGet/SetState, BlockMove, MoreMasters, FreeMem/MaxMem/CompactMem..., HandToHand/PtrToHand/PtrAndHand, MemErr |
+| `resmgr.rs` | GetResource/Get1, GetNamedResource, CountResources, GetIndResource, Release/Load/DetachResource, SizeRsrc, GetResAttrs/Info, ResError, Cur/UseResFile; resources are real handles with the resource bit |
+| `segment.rs` | `Mac::launch(file)`: CODE 0, the A5 world (first block of the heap = `CurStackBase`), jump table, `_LoadSeg` (patches entries to `jmp`, resumes at the entry via `Cpu::set_pc`), `_UnloadSeg` (accepted) |
+| `quickdraw.rs`, `rects.rs` | InitGraf fills the QDGlobals (arrow, patterns, screenBits); SetPort/GetPort; SetRect/OffsetRect/InsetRect/SectRect/UnionRect/PtInRect... |
+| `toolbox.rs` | NewWindow, GetNewWindow (WIND), Dispose/Show/SelectWindow, FrontWindow, FindWindow, TrackGoAway, a real 156-byte WindowRecord with portRect and the nextWindow chain |
+| `menu.rs` | MenuInfo blocks in guest memory (= the MENU resource layout), NewMenu/AppendMenu/InsertMenu/DrawMenuBar/GetNewMBar/GetMenu/AddResMenu/MenuSelect..., menu bar -> `set_menu_strip` on every window |
+| `events.rs` | GetNextEvent/WaitNextEvent/EventAvail/FlushEvents/TickCount, blocking on the resumable machine, native events -> EventRecords |
+
+Event bridge choices (also in `events.rs`): a native close becomes a `mouseDown` on the window's go-away box, which the
+program's own `FindWindow` (-> `inGoAway`) and `TrackGoAway` (-> TRUE) confirm; a native menu command becomes a
+`mouseDown` in the menu bar plus a queued choice that the program's `MenuSelect` returns as `menuID << 16 | item`;
+`Resized` updates the WindowRecord and queues `updateEvt`; showing a window queues `activateEvt` + `updateEvt`.
+
+Run it: `cargo run -p mac68k-engine --bin mac68k-run -- [--census] [--event close|menu:ID:ITEM] <app or --fixture>`.
+Tests: `tests/app_end_to_end.rs` is a hand-assembled application (CODE 0/1/2, WIND, MENU, MBAR; sources in
+`fixtures/testapp/`, `build.sh` rebuilds the checked-in `.bin`s) run from MacBinary, AppleDouble and a raw fork;
+`tests/real_binaries.rs` runs Executor's MIT-licensed `go` launcher when the Executor tree is present.
+
 ## Stubbed / not true yet
 
-- No resource fork, no `CODE` resources, no A5 world: the image is a flat blob (entry = offset into it).
-- Init* calls are accepted and logged only. Only Toolbox traps (Pascal convention) are registered; the OS-trap half ($A000-$A7FF,
-  register convention, D0 = OSErr) has a key space and names but no handler kind yet.
-- NewWindow: `visible=false` is not honoured (the native window is always opened), `behind` is ignored, no GrafPort
-  contents beyond zeroing the WindowRecord and setting visible / goAwayFlag / refCon. `theProc` maps to role/resizable only.
+- No QuickDraw DRAWING: a program's update events find no drawing traps (named refusals), so windows stay blank; the Window
+  Manager keeps no regions (`BeginUpdate`/`EndUpdate` are accepted no-ops). Dialog/Control/TextEdit/Font managers absent.
+- No File Manager / `OpenResFile` / system file: one resource file (the application's). `GetTrapAddress`, `SysEnvirons`,
+  `Gestalt`, `Delay`, `SysBeep`, `GetDateTime` are absent.
+- Memory: nothing is ever purged or compacted (flags are kept, `HPurge` marks only); `SetPtrSize` absent; a locked handle
+  cannot change size; the stack is below the heap (reverse of a real Mac), `ApplLimit` is the stack floor.
+- `UnloadSeg` is accepted and does nothing; far-model (32-bit) CODE headers are refused by name.
+- Menu bar is global but GuestUi strips are per window (see menu.rs); `MenuSelect` does not track the mouse; `MenuKey` and
+  key events are not bridged. A menu title `$14` (the Apple glyph) is shown as "Apple".
 - Str255 bytes above 0x7F are shown as Latin-1, not MacRoman.
-- `deliver(CloseRequested)` queues `(mouseDown, WindowPtr)` in `Mac::pending`; nothing consumes it until GetNextEvent.
-- Structure layouts (Rect, WindowRecord size 156 and field offsets) are from Inside Macintosh and must be re-verified.
+- Structure layouts are from Inside Macintosh, cross-read against metamage_1 sources (cited in the file headers).
 
-## Next steps
+## Next steps toward a real app (Mac Paint era) and macppc
 
-1. Resource fork reader (AppleSingle/AppleDouble/MacBinary) and a `CODE` resource loader: CODE 0 jump table, A5 world,
-   segment loading via `_LoadSeg`/`_UnloadSeg` traps, QuickDraw globals at A5.
-2. QuickDraw onto guestui: GrafPort/`SetPort`, `MoveTo`/`LineTo`/`FrameRect`/`PaintRect`/`DrawString`, drawn into the
-   window's surface via the (still to be defined) guestui drawing model.
-3. The event loop: `GetNextEvent` / `WaitNextEvent` ($A970/$A860) map onto the resumable step model exactly as the
-   Amiga `Wait`/`WaitPort` do: with no event pending (and sleep > 0) the trap `Cpu::block`s; `deliver` queues an
-   EventRecord; the next `step` resumes with the result. Then FindWindow/TrackGoAway/CloseWindow, menus
-   (`GetMenuBar`/`MenuSelect`) onto `set_menu_strip`.
-4. OS traps with register conventions (Memory Manager `NewPtr`/`NewHandle` on the shared Heap, `GetResource`), and
-   registering a handler kind for them next to the Pascal one.
+1. QuickDraw drawing onto guestui (GrafPort state, Move/Line/Frame/Paint/Erase/Invert, DrawString + fonts, regions for
+   update/clip, CopyBits) with a guestui drawing surface; then Controls and the Dialog Manager (`go` stops at `GetCCursor`,
+   then `NewControl`/`GetDialogItem`/`HiliteControl`/`GetControlValue`), Gestalt/SysEnvirons/GetTrapAddress, File Manager
+   (`GetVolInfo`, `OpenResFile`, `PBxxx`), TextEdit, Scrap, Sound.
+2. MacPaint-class apps additionally need CopyBits/regions/patterns/PICT, `GetNextEvent` key events with modifiers, `MenuKey`.
+3. macppc: `retro-resfork` already reads the fork (`cfrg`, `pef`-bearing data forks come via the same containers); add a PEF
+   reader + CFM, a PowerPC core (Moira is 68k; PowerCore/Dingusppc are references only), the Mixed Mode Manager so PPC code
+   can call the same trap handlers through routine descriptors, and reuse this engine's Toolbox handlers unchanged
+   (they are keyed on the trap table, not on the CPU).

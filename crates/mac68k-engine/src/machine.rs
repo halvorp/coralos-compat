@@ -13,7 +13,7 @@ use crate::pascal::{self, Arg, Args, Rect};
 use crate::resmgr::ResMgr;
 use crate::segment::SegLoader;
 use crate::traps::{describe, trap_key, trap_name};
-use crate::{events, lowmem, memtraps, menu, quickdraw, resmgr, segment, toolbox, Refusal};
+use crate::{events, lowmem, memtraps, menu, quickdraw, rects, resmgr, segment, toolbox, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::heap::Heap;
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
@@ -86,6 +86,8 @@ pub struct Mac<U: GuestUi> {
     pub refused: Vec<String>,
     /// Census mode: the first call to an unimplemented trap halts the guest (the run's last refusal names it).
     pub stop_on_unimplemented: bool,
+    /// (trap word, address of the A-line word) for every call to an unimplemented trap, in order.
+    pub unimplemented_at: Vec<(u16, u32)>,
     pub heap: Heap,
     pub(crate) ctx: Option<retro_m68k::CpuContext>,
 }
@@ -99,11 +101,12 @@ impl<U: GuestUi> Mac<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, windows: BTreeMap::new(), z: vec![], mm: MemMgr::default(), rm: ResMgr::default(),
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), qd_globals: 0,
             table: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
+            stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
         };
         lowmem::init(&mut m.mem)?;
         toolbox::register(&mut m)?;
         quickdraw::register(&mut m)?;
+        rects::register(&mut m)?;
         memtraps::register(&mut m)?;
         resmgr::register(&mut m)?;
         segment::register(&mut m)?;
@@ -119,9 +122,9 @@ impl<U: GuestUi> Mac<U> {
         self.insert(opcode, Conv::Pascal { args, result, handler })
     }
 
-    /// Implement `opcode` (an Operating System trap) with the register convention.
+    /// Implement `opcode` with the REGISTER convention: every Operating System trap, and the handful of Toolbox-range
+    /// utilities (HandToHand, PtrToHand ...) that also pass their arguments in A0/A1/D0.
     pub fn register_os(&mut self, opcode: u16, handler: OsHandler<U>) -> Result<(), Refusal> {
-        if opcode & 0x0800 != 0 { return Err(Refusal(format!("register_os: {} is a Toolbox trap", describe(opcode)))); }
         self.insert(opcode, Conv::Os(handler))
     }
 
@@ -151,6 +154,7 @@ impl<U: GuestUi> Host for Mac<U> {
     fn aline(&mut self, cpu: &mut Cpu, opcode: u16, pc: u32) -> bool {
         let Some(entry) = self.table.get(&trap_key(opcode)).copied() else {
             // Unknown frame layout: the stack is left as the guest made it; D0 = 0 (noErr / NIL) and execution goes on.
+            self.unimplemented_at.push((opcode, pc));
             if self.stop_on_unimplemented { cpu.halt(); }
             let why = format!("{UNIMPLEMENTED} {}", describe(opcode));
             self.log.push(format!("[toolbox] REFUSED: {why}"));

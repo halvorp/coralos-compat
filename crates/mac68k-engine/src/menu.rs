@@ -437,3 +437,81 @@ fn menu_select<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done
     Ok(Done { result: r, log: format!("[menu] MenuSelect -> menu {} item {}", (r >> 16) as i16, r & 0xFFFF) })
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use guestui_abi::RecordingGuestUi;
+
+    fn items(s: &str) -> Vec<(Item, bool)> { parse_append(s.as_bytes()) }
+
+    #[test]
+    fn append_metacharacters() {
+        let v = items("New/N;Open.../O;(-;Bold<B<I!\u{12};Hello^2");
+        let t: Vec<(String, u8, u8, u8, u8, bool)> = v.iter().map(|(i, d)| (mac_text(&i.text), i.icon, i.key, i.mark, i.style, *d)).collect();
+        assert_eq!(t[0], ("New".into(), 0, b'N', 0, 0, false));
+        assert_eq!(t[1], ("Open...".into(), 0, b'O', 0, 0, false));
+        assert_eq!(t[2], ("-".into(), 0, 0, 0, 0, true), "( disables");
+        assert_eq!(t[3].0, "Bold");
+        assert_eq!((t[3].3, t[3].4), (0x12, 1 | 2), "! sets the mark char, <B and <I the style bits");
+        assert_eq!((t[4].0.as_str(), t[4].1), ("Hello", 2), "^n is the icon number");
+        assert_eq!(v.len(), 5);
+        // NEGATIVE: a plain string has no metacharacter effect, and an empty item is dropped
+        let plain = items("Plain text;;");
+        assert_eq!(plain.len(), 1);
+        assert_eq!((plain[0].0.key, plain[0].0.mark, plain[0].1), (0, 0, false));
+    }
+
+    #[test]
+    fn block_round_trip_and_malformed_blocks() {
+        let p = Parsed { id: 7, flags: 0b110, title: b"T".to_vec(), items: items("A;B").into_iter().map(|(i, _)| i).collect() };
+        let bytes = encode_block(&p, 10, 20, 0);
+        assert_eq!(parse_block(&bytes).unwrap(), p);
+        assert_eq!(&bytes[..6], &[0, 7, 0, 10, 0, 20], "id, width, height");
+        // NEGATIVE: every truncation is a named refusal, never a panic
+        for cut in 0..bytes.len() {
+            let r = parse_block(&bytes[..cut]);
+            assert!(r.is_err() || cut == bytes.len(), "cut {cut}");
+        }
+        assert!(parse_block(&bytes[..bytes.len() - 1]).unwrap_err().0.contains("no terminating zero"));
+    }
+
+    #[test]
+    fn model_has_checks_disabled_items_and_hierarchical_submenus() {
+        let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+        let sub = make_menu(&mut m, 200, b"Sub".to_vec()).unwrap();
+        let mut p = m.menu_view(sub).unwrap();
+        p.items = items("One;Two").into_iter().map(|(i, _)| i).collect();
+        m.menu_store(sub, &p).unwrap();
+        let top = make_menu(&mut m, 201, b"Top".to_vec()).unwrap();
+        let mut p = m.menu_view(top).unwrap();
+        p.items = items("Plain/P;Checked!\u{12};Nested").into_iter().map(|(i, _)| i).collect();
+        p.items[2].key = KEY_HIERARCHICAL;
+        p.items[2].mark = 200;
+        p.flags &= !(1 << 1); // disable item 1
+        m.menu_store(top, &p).unwrap();
+        m.menus.bar = vec![201];
+        let strip = m.menu_strip().unwrap();
+        let it = &strip.menus[0].items;
+        assert_eq!((it[0].enabled, it[0].shortcut, it[0].check), (false, Some('P'), None));
+        assert_eq!((it[1].enabled, it[1].check), (true, Some(true)));
+        assert_eq!(it[2].sub_items.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), vec!["One", "Two"]);
+        assert_eq!(it[2].shortcut, None, "the $1B key byte is not a shortcut");
+        assert_eq!(it[2].sub_items[1].token, CallbackToken(200 << 16 | 2), "submenu items carry their own menu id");
+    }
+
+    #[test]
+    fn editing_a_menu_keeps_its_handle_and_dispose_forgets_it() {
+        let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+        let h = make_menu(&mut m, 5, b"M".to_vec()).unwrap();
+        let mut p = m.menu_view(h).unwrap();
+        p.items = items("x").into_iter().map(|(i, _)| i).collect();
+        m.menu_store(h, &p).unwrap();
+        assert_eq!(m.menu_view(h).unwrap().items.len(), 1);
+        m.menus.bar = vec![5];
+        m.dispose_handle(h).unwrap();
+        assert!(m.menus.by_id.is_empty() && m.menus.bar.is_empty(), "the menu is gone from the id table and the bar");
+        assert!(m.menu_view(h).is_err(), "NEGATIVE: a disposed MenuHandle is not a menu");
+        assert!(m.menus.choice_for_token(&m.mem, &m.mm, 5 << 16 | 1).is_err());
+    }
+}

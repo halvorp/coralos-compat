@@ -31,7 +31,7 @@ impl<U: GuestUi> Mac<U> {
     pub(crate) fn set_mem_err(&mut self, e: i16) { let _ = self.mem.write_u16(MEM_ERR, e as u16); }
 
     /// DisposeHandle for the engine itself (ReleaseResource, DisposeMenu ...): the handle's other bookkeeping goes too.
-    pub(crate) fn dispose_handle(&mut self, h: u32) -> Result<(), i16> {
+    pub fn dispose_handle(&mut self, h: u32) -> Result<(), i16> {
         self.rm.forget(h);
         self.menus.forget(h);
         self.mm.dispose_handle(&mut self.mem, &mut self.heap, h)
@@ -55,7 +55,23 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register_os(0xA02E, block_move_trap::<U>)?;
     m.register_os(0xA036, more_masters::<U>)?;
     m.register_os(0xA01C, free_mem::<U>)?;
-    m.register_os(0xA055, strip_address::<U>)
+    m.register_os(0xA055, strip_address::<U>)?;
+    m.register_os(0xA063, max_appl_zone::<U>)?;
+    m.register_os(0xA040, resrv_mem::<U>)?;
+    m.register_os(0xA02D, set_appl_limit::<U>)?;
+    m.register_os(0xA04C, compact_mem::<U>)?;
+    m.register_os(0xA04D, purge_mem::<U>)?;
+    m.register_os(0xA11D, max_mem::<U>)?;
+    m.register_os(0xA064, move_hhi::<U>)?;
+    m.register_os(0xA065, stack_space::<U>)?;
+    m.register_os(0xA128, recover_handle::<U>)?;
+    m.register_os(0xA11A, get_zone::<U>)?;
+    m.register_os(0xA01B, set_zone::<U>)?;
+    m.register_os(0xA04B, set_grow_zone::<U>)?;
+    m.register_os(0xA9E1, hand_to_hand::<U>)?;
+    m.register_os(0xA9E3, ptr_to_hand::<U>)?;
+    m.register_os(0xA9EF, ptr_and_hand::<U>)?;
+    m.register_os(0xA9E4, hand_and_hand::<U>)
 }
 
 fn new_handle<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
@@ -170,3 +186,150 @@ fn free_mem<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
 
 /// The 24-bit-era address strip: this engine's addresses are 32-bit clean and below 16 MiB, so it returns D0 unchanged.
 fn strip_address<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R { Ok(format!("[mem] StripAddress {:#x}", r.d0)) }
+
+// ---- zone-level calls: the heap is one fixed zone that never compacts or purges ------------------------------------
+
+fn max_appl_zone<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    m.set_mem_err(0);
+    r.err(0);
+    Ok("[mem] MaxApplZone (accepted: the heap is already one fixed zone)".into())
+}
+
+/// `ResrvMem(D0 = bytes)`: succeeds when one free block can hold that many bytes (nothing needs moving here).
+fn resrv_mem<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let want = r.d0;
+    let e = if m.heap.available(true) >= want { 0 } else { crate::memmgr::MEM_FULL_ERR };
+    m.set_mem_err(e);
+    r.err(e);
+    Ok(format!("[mem] ResrvMem {want} -> {e}"))
+}
+
+fn set_appl_limit<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    m.set_mem_err(0);
+    r.err(0);
+    Ok(format!("[mem] SetApplLimit {:#x} (accepted, ApplLimit unchanged: the heap does not grow into the stack here)", r.a0))
+}
+
+fn compact_mem<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    r.d0 = m.heap.available(true);
+    Ok(format!("[mem] CompactMem -> largest free block {}", r.d0))
+}
+
+fn purge_mem<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let want = r.d0;
+    let e = if m.heap.available(true) >= want { 0 } else { crate::memmgr::MEM_FULL_ERR };
+    m.set_mem_err(e);
+    r.err(e);
+    Ok(format!("[mem] PurgeMem {want} -> {e} (nothing is purged)"))
+}
+
+fn max_mem<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    r.d0 = m.heap.available(true);
+    r.a0 = 0; // the heap cannot grow
+    Ok(format!("[mem] MaxMem -> {}", r.d0))
+}
+
+fn move_hhi<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let h = r.a0;
+    let res = m.mm.state(h).map(|_| ());
+    m.mem_result(r, "MoveHHi", &format!("{h:#x}"), res);
+    Ok(format!("[mem] MoveHHi {h:#x} (blocks never move)"))
+}
+
+/// `StackSpace`: bytes between SP and ApplLimit.
+fn stack_space<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, r: &mut Regs) -> R {
+    let limit = m.mem.read_u32(crate::lowmem::APPL_LIMIT).map_err(Refusal::mem("ApplLimit"))?;
+    r.d0 = cpu.areg(7).saturating_sub(limit);
+    Ok(format!("[mem] StackSpace -> {}", r.d0))
+}
+
+fn recover_handle<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let p = r.a0;
+    match m.mm.recover_handle(p) {
+        Some(h) => { r.a0 = h; m.set_mem_err(0); r.err(0); }
+        None => { r.a0 = 0; m.note_refusal("RecoverHandle", format!("{p:#x} is not the start of a relocatable block (memBCErr)")); m.set_mem_err(-115); r.err(-115); }
+    }
+    Ok(format!("[mem] RecoverHandle {p:#x} -> {:#x}", r.a0))
+}
+
+fn get_zone<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    r.a0 = m.mem.read_u32(crate::lowmem::THE_ZONE).map_err(Refusal::mem("TheZone"))?;
+    r.err(0);
+    Ok(format!("[mem] GetZone -> {:#x}", r.a0))
+}
+
+fn set_zone<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    // there is exactly one zone: SetZone to anything else is a bug in the program
+    if r.a0 != crate::lowmem::ZONE_STUB { return Err(Refusal(format!("SetZone {:#x}: the only zone is {:#x}", r.a0, crate::lowmem::ZONE_STUB))); }
+    r.err(0);
+    Ok("[mem] SetZone (the only zone)".into())
+}
+
+fn set_grow_zone<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    r.err(0);
+    Ok(format!("[mem] SetGrowZone {:#x} (accepted; never called: the heap does not compact)", r.a0))
+}
+
+// ---- Toolbox utilities with register conventions -------------------------------------------------------------------
+
+fn read_block<U: GuestUi>(m: &Mac<U>, p: u32, n: u32) -> Option<alloc::vec::Vec<u8>> { m.mem.bytes(m.mem.span(p, n).ok()?).ok().map(<[u8]>::to_vec) }
+
+fn new_handle_with<U: GuestUi>(m: &mut Mac<U>, data: &[u8]) -> Result<u32, i16> {
+    let h = m.mm.new_handle(&mut m.mem, &mut m.heap, data.len() as u32, false)?;
+    let p = m.mm.block(h).map(|b| b.ptr).ok_or(MEM_WZ_ERR)?;
+    m.mem.write_bytes(p, data).map_err(|_| MEM_WZ_ERR)?;
+    Ok(h)
+}
+
+fn finish_h<U: GuestUi>(m: &mut Mac<U>, r: &mut Regs, name: &str, res: Result<u32, i16>) -> R {
+    match res {
+        Ok(h) => { r.a0 = h; m.set_mem_err(0); r.err(0); Ok(format!("[mem] {name} -> {h:#x}")) }
+        Err(e) => {
+            r.a0 = 0;
+            if e == MEM_WZ_ERR { m.note_refusal(name, "argument is not a block the Memory Manager owns (memWZErr)".into()); }
+            m.set_mem_err(e);
+            r.err(e);
+            Ok(format!("[mem] {name} failed ({e})"))
+        }
+    }
+}
+
+/// `HandToHand(A0 = handle)`: a new handle with a copy of the block, in A0.
+fn hand_to_hand<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let src = r.a0;
+    let res = m.handle_bytes(src).ok_or(MEM_WZ_ERR).and_then(|d| new_handle_with(m, &d));
+    finish_h(m, r, "HandToHand", res)
+}
+
+/// `PtrToHand(A0 = ptr, D0 = size)`: a new handle holding a copy of `size` bytes at `ptr`.
+fn ptr_to_hand<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let (p, n) = (r.a0, r.d0);
+    let res = read_block(m, p, n).ok_or(MEM_WZ_ERR).and_then(|d| new_handle_with(m, &d));
+    finish_h(m, r, "PtrToHand", res)
+}
+
+fn append_to<U: GuestUi>(m: &mut Mac<U>, h: u32, data: &[u8]) -> Result<u32, i16> {
+    let old = m.mm.handle_size(h)?;
+    m.mm.set_handle_size(&mut m.mem, &mut m.heap, h, old + data.len() as u32)?;
+    let p = m.mm.block(h).map(|b| b.ptr).ok_or(MEM_WZ_ERR)?;
+    m.mem.write_bytes(p + old, data).map_err(|_| MEM_WZ_ERR)?;
+    Ok(h)
+}
+
+/// `PtrAndHand(A0 = ptr, A1 = handle, D0 = size)`: append `size` bytes at `ptr` to the handle's block.
+fn ptr_and_hand<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let (p, h, n) = (r.a0, r.a1, r.d0);
+    let res = read_block(m, p, n).ok_or(MEM_WZ_ERR).and_then(|d| append_to(m, h, &d));
+    let out = finish_h(m, r, "PtrAndHand", res);
+    r.a0 = if r.d0 == 0 { h } else { 0 }; // the manual leaves A0 undefined; keep it the handle on success
+    out
+}
+
+/// `HandAndHand(A0 = source handle, A1 = destination handle)`: append the source block to the destination.
+fn hand_and_hand<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let (src, dst) = (r.a0, r.a1);
+    let res = m.handle_bytes(src).ok_or(MEM_WZ_ERR).and_then(|d| append_to(m, dst, &d));
+    let out = finish_h(m, r, "HandAndHand", res);
+    r.a0 = if r.d0 == 0 { dst } else { 0 };
+    out
+}

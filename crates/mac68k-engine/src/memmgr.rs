@@ -142,6 +142,9 @@ impl MemMgr {
         heap.free(p, heap_len(size)).map_err(|_| MEM_WZ_ERR)
     }
 
+    /// RecoverHandle: the handle whose block starts at `p`.
+    pub fn recover_handle(&self, p: u32) -> Option<u32> { self.handles.iter().find(|(_, b)| b.ptr == p).map(|(&h, _)| h) }
+
     pub fn ptr_size(&self, p: u32) -> Result<u32, i16> { self.ptrs.get(&p).copied().ok_or(MEM_WZ_ERR) }
 }
 
