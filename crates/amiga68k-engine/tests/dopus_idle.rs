@@ -15,7 +15,12 @@ fn load(a: &mut Amiga<RecordingGuestUi>, prefix: &str, dir: &std::path::Path) {
 }
 
 /// Boot DirectoryOpus and run it, advancing the virtual clock whenever every task sleeps, until `seconds` of virtual time passed.
-fn run(seconds: u64) -> Option<Amiga<RecordingGuestUi>> {
+fn run(seconds: u64) -> Option<Amiga<RecordingGuestUi>> { run_with(seconds, true) }
+
+/// With `topaz` the screen's font is topaz 8, as on the AROS oracle that EXPECTATIONS.md and the region fixtures come from (AROS is the
+/// BEHAVIOUR reference, not the pixel target): window sizes follow the font DOpus reads from the screen, so the oracle's geometry holds
+/// only under it. Without it the engine is as shipped: the Gute Form face and pens.
+fn run_with(seconds: u64, topaz: bool) -> Option<Amiga<RecordingGuestUi>> {
     let file = std::fs::read(format!("{DOPUS}/DirectoryOpus")).ok().or_else(|| { eprintln!("skipped: corpus not present"); None })?;
     let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
     a.fs.vol.add_device("DOpus5", false);
@@ -23,6 +28,7 @@ fn run(seconds: u64) -> Option<Amiga<RecordingGuestUi>> {
     a.fs.vol.assign_add("LIBS", "DOpus5:Libs");
     a.fs.vol.assign("PROGDIR", "DOpus5:");
     a.start_hunk(&file).unwrap();
+    if topaz { use_topaz(&mut a); }
     let mut insns = 0u64;
     while a.clock_us < seconds * 1_000_000 && insns < 200_000_000 {
         let (step, st) = a.step(2_000_000);
@@ -34,6 +40,25 @@ fn run(seconds: u64) -> Option<Amiga<RecordingGuestUi>> {
         }
     }
     Some(a)
+}
+
+/// The screen's font as the AROS oracle had it: GfxBase.DefaultFont, DrawInfo.dri_Font and Screen.Font (TextAttr "topaz.font" 8) = topaz 8.
+fn use_topaz(a: &mut Amiga<RecordingGuestUi>) {
+    a.mem.write_u32(0x3000 + 154, 0x8000).unwrap();
+    a.mem.write_u32(0x8E00 + 8, 0x8000).unwrap();
+    a.mem.write_u32(0x6400 + 84 + 52, 0x8000).unwrap(); // Screen.RastPort.rp_Font
+    for (i, b) in b"topaz.font\0".iter().enumerate() { a.mem.write_u8(0x6570 + i as u32, *b).unwrap(); }
+    a.mem.write_u16(0x6560 + 4, 8).unwrap();
+}
+
+/// DOPUS_DUMP=<dir> writes every window canvas as a PPM there (`<tag>-window<id>-<w>x<h>.ppm`), to look at next to tests/oracle/dopus5/screens.
+fn dump_canvases(a: &Amiga<RecordingGuestUi>, tag: &str) {
+    let Ok(dir) = std::env::var("DOPUS_DUMP") else { return };
+    for (id, (w, h, px)) in &a.ui.canvases {
+        let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+        for p in px { out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]); }
+        std::fs::write(format!("{dir}/{tag}-window{id}-{w}x{h}.ppm"), out).unwrap();
+    }
 }
 
 /// Names on ExecBase.PortList (offset 392 of the ExecBase at 0x1000), read the way a guest would walk it.
@@ -103,14 +128,7 @@ fn directory_opus_starts_its_processes_ports_and_windows() {
     let frames = a.ui.calls.iter().filter(|c| matches!(c, UiCall::PresentContent { .. })).count();
     assert!(frames >= 10, "{frames} frames");
     let canvas = |w: i32, h: i32| a.ui.canvases.values().find(|(cw, ch, _)| (*cw, *ch) == (w, h)).unwrap_or_else(|| panic!("no {w}x{h} canvas: {:?}", a.ui.canvases.values().map(|c| (c.0, c.1)).collect::<Vec<_>>()));
-    // DOPUS_DUMP=<dir> writes every window canvas as a PPM there, to look at next to tests/oracle/dopus5/screens.
-    if let Ok(dir) = std::env::var("DOPUS_DUMP") {
-        for (id, (w, h, px)) in &a.ui.canvases {
-            let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
-            for p in px { out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]); }
-            std::fs::write(format!("{dir}/window{id}-{w}x{h}.ppm"), out).unwrap();
-        }
-    }
+    dump_canvases(&a, "topaz-oracle-geometry");
     let main_px = &canvas(640, 241).2;
     let lister_px = &canvas(435, 564).2;
     assert!(distinct_pens(main_px) >= 3, "main window canvas is blank ({} colours)", distinct_pens(main_px));
@@ -135,9 +153,11 @@ fn region(name: &str) -> Vec<Vec<char>> {
     t.lines().filter(|l| !l.starts_with('#') || l.starts_with("#W") || l.starts_with("##")).filter(|l| !l.starts_with("# ")).map(|l| l.chars().collect()).collect()
 }
 
-/// The class of one pixel of ours, in the fixture's alphabet (0x6688BB, black, any light pen; everything else '.').
+/// The class of one pixel of ours, in the fixture's alphabet, by ROLE: '#' the Gute Form text or border colour (the oracle's black was both the text pen and SHADOWPEN, which Gute Form tells apart), 'B' the accent (the
+/// oracle's 0x6688BB fill), 'W' the shine (the oracle's light pen); everything else '.'. The fixtures hold GEOMETRY; the colours are ours.
 fn class(p: u32) -> char {
-    match p & 0xFF_FFFF { 0 => '#', 0x6688BB => 'B', c if (c >> 16) + ((c >> 8) & 0xFF) + (c & 0xFF) >= 700 => 'W', _ => '.' }
+    use retro_theme::GUTE_FORM as T;
+    match p & 0xFF_FFFF { c if c == T.text.packed() || c == T.border.packed() => '#', c if c == T.accent.packed() => 'B', c if c == T.shine.packed() => 'W', _ => '.' }
 }
 
 /// Compare a w x h patch of `canvas` at (cx, cy) with an oracle region ('?' = not compared); returns the mismatching positions.
@@ -157,7 +177,7 @@ fn mismatches(canvas: &(i32, i32, Vec<u32>), (cx, cy): (i32, i32), want: &[Vec<c
 fn the_lister_matches_the_oracle_where_the_oracle_is_ground_truth() {
     let Some(a) = run(5) else { return };
     let lister = a.ui.canvases.values().find(|(w, h, _)| (*w, *h) == (435, 564)).expect("the lister canvas");
-    // Regions compared (class structure; palettes differ: AROS's light pen is 0xEEEEEE, the engine's 0xFFFFFF):
+    // Regions compared (class structure by role; the palettes are not compared: AROS's are not the target):
     //  1. the "SRCE" button at the lister's top right: exact text bitmap, black frame and the 0x6688BB pen;
     //  2. the path field's 3D frame at the lister's bottom (outer white/black lines, the inner bevel), interior not compared.
     // NOT compared: the toolbar artwork (the cell frames are, region 3), the file list area (the oracle's list is empty: AROS stub libraries), the scroll bars and arrows (they sit in the window
@@ -178,4 +198,35 @@ fn the_lister_matches_the_oracle_where_the_oracle_is_ground_truth() {
     assert!(!mismatches(lister, (1, 9), &cells).is_empty(), "control: the toolbar comparison shifted by one pixel must fail");
     // Negative control: shifting the SRCE comparison by one pixel must fail (the check is not vacuous).
     assert!(!mismatches(lister, (388, 0), &srce).is_empty());
+}
+
+#[test]
+fn as_shipped_directory_opus_draws_in_gute_form_colours_and_the_gute_form_face() {
+    use retro_theme::{amiga::AROS_SYSTEM_PALETTE, GUTE_FORM as T};
+    let (Some(shipped), Some(aros_font)) = (run_with(5, false), run(5)) else { return };
+    assert!(shipped.refused.is_empty(), "{:#?}", shipped.refused);
+    dump_canvases(&shipped, "guteform");
+    // Structure, not geometry: the same windows open in the same order with the same titles and flags (their SIZES follow the font DOpus reads).
+    let opens = |a: &Amiga<RecordingGuestUi>| -> Vec<(String, bool, bool)> { a.ui.calls.iter().filter_map(|c| if let UiCall::OpenWindow(m) = c { Some((m.title.clone(), m.closable, m.resizable)) } else { None }).collect() };
+    assert_eq!(opens(&shipped), opens(&aros_font), "the window set is the font-independent structure");
+    // Colours: the lister canvas is dominated by the window surface and carries the text, shine and accent roles; no AROS system grey survives.
+    let lister = shipped.ui.canvases.values().max_by_key(|(w, h, _)| w * h).expect("a canvas");
+    let count = |c: u32| lister.2.iter().filter(|&&p| p & 0xFF_FFFF == c).count();
+    assert!(count(T.surface.packed()) > lister.2.len() / 4, "the surface is the ground: {} of {}", count(T.surface.packed()), lister.2.len());
+    assert!(count(T.text.packed()) > 0 && count(T.shine.packed()) > 0, "text and shine are drawn");
+    // The AROS system pens do not survive in the lister's chrome. (A few pixels of 0xAAAAAA / 0x6688BB remain: DOpus's own icon artwork carries
+    // literal colours; that is the icon lane's, hence a bound of 0.1% and not zero.)
+    for aros in [AROS_SYSTEM_PALETTE[0], AROS_SYSTEM_PALETTE[3], AROS_SYSTEM_PALETTE[4], AROS_SYSTEM_PALETTE[5]] { assert!(count(aros) < lister.2.len() / 1000, "AROS colour {aros:#x} is {} px of the lister", count(aros)); }
+    // Negative control for the check itself: a canvas in the AROS grey exceeds the bound.
+    let grey_canvas = vec![AROS_SYSTEM_PALETTE[0]; 1000];
+    assert!(grey_canvas.iter().filter(|&&p| p == AROS_SYSTEM_PALETTE[0]).count() >= grey_canvas.len() / 1000);
+    // The face: the file list rows are drawn in the proportional Gute Form face (Text advance = the face's own TextLength), not at topaz's 8 px pitch.
+    let f = retro_raster::font::Font::gute_form();
+    let rows: Vec<&String> = shipped.log.iter().filter(|l| l.starts_with("[graphics] Text \"")).collect();
+    assert!(!rows.is_empty());
+    let proportional = rows.iter().any(|l| {
+        let text = l.strip_prefix("[graphics] Text \"").and_then(|t| t.split('"').next()).unwrap_or("");
+        l.ends_with(&format!("(+{})", f.text_length(text.as_bytes()))) && f.text_length(text.as_bytes()) != 8 * text.len() as i32
+    });
+    assert!(proportional, "some drawn text advanced by the Gute Form TextLength: {:?}", &rows[..rows.len().min(5)]);
 }
