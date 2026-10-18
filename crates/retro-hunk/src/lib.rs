@@ -1,8 +1,9 @@
-//! AmigaOS Hunk loader: HUNK_HEADER / CODE / DATA / BSS / RELOC32 / END.
+//! AmigaOS Hunk loader: HUNK_HEADER / CODE / DATA / BSS / RELOC32 / RELOC32SHORT / DREL32 /
+//! SYMBOL / DEBUG / NAME / END.
 //!
 //! Every read of the file and every write to guest RAM is bounds-checked; every refusal is
-//! a named [`HunkError`]. Not supported (refused by name, not skipped): overlays, debug and
-//! symbol hunks, RELOC32SHORT, DRELOC32, resident libraries, HUNK_EXT.
+//! a named [`HunkError`]. Not supported (refused by name, not skipped): overlays, resident
+//! libraries, HUNK_EXT.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 use alloc::vec::Vec;
@@ -16,6 +17,11 @@ pub const HUNK_CODE: u32 = 0x3E9;
 pub const HUNK_DATA: u32 = 0x3EA;
 pub const HUNK_BSS: u32 = 0x3EB;
 pub const HUNK_RELOC32: u32 = 0x3EC;
+pub const HUNK_NAME: u32 = 0x3E8;
+pub const HUNK_SYMBOL: u32 = 0x3F0;
+pub const HUNK_DEBUG: u32 = 0x3F1;
+pub const HUNK_DREL32: u32 = 0x3F7;
+pub const HUNK_RELOC32SHORT: u32 = 0x3FC;
 pub const HUNK_END: u32 = 0x3F2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +85,72 @@ impl Rd<'_> {
         self.p += 4;
         Ok(u32::from_be_bytes(s.try_into().unwrap()))
     }
+    fn u16(&mut self) -> Result<u16, HunkError> {
+        let s = self.b.get(self.p..self.p.checked_add(2).ok_or(HunkError::Truncated)?).ok_or(HunkError::Truncated)?;
+        self.p += 2;
+        Ok(u16::from_be_bytes(s.try_into().unwrap()))
+    }
     fn at_end(&self) -> bool { self.p >= self.b.len() }
+}
+
+fn process_reloc(
+    rd: &mut Rd,
+    mem: &mut GuestMem,
+    idx: usize,
+    hunk_base: u32,
+    hunk_size: u32,
+    num_hunks: usize,
+    bases: &[u32],
+    short: bool,
+) -> Result<(), HunkError> {
+    let mut words: u32 = 0;
+    loop {
+        let count = if short {
+            let v = rd.u16()? as u32;
+            words += 1;
+            v
+        } else {
+            rd.u32()?
+        };
+        if count == 0 {
+            if short && words % 2 == 1 {
+                let _ = rd.u16()?;
+            }
+            break;
+        }
+        let target = if short {
+            let v = rd.u16()? as u32;
+            words += 1;
+            v
+        } else {
+            rd.u32()?
+        };
+        // Preserve existing check order verbatim:
+        if idx >= num_hunks {
+            return Err(HunkError::SectionExceedsDeclared { hunk: idx });
+        }
+        if target as usize >= num_hunks {
+            return Err(HunkError::RelocToUnknownHunk { target });
+        }
+        let target_base = bases[target as usize];
+        for _ in 0..count {
+            let offset = if short {
+                let v = rd.u16()? as u32;
+                words += 1;
+                v
+            } else {
+                rd.u32()?
+            };
+            let bad = HunkError::RelocOutsideRam { hunk: idx, offset };
+            if offset.checked_add(4).map_or(true, |e| e > hunk_size) {
+                return Err(bad);
+            }
+            let addr = hunk_base.wrapping_add(offset);
+            let val = mem.read_u32(addr).map_err(|_| bad.clone())?;
+            mem.write_u32(addr, val.wrapping_add(target_base)).map_err(|_| bad)?;
+        }
+    }
+    Ok(())
 }
 
 /// Load a Hunk executable into guest RAM starting at `base`, relocations applied.
@@ -119,24 +190,29 @@ pub fn load(mem: &mut GuestMem, file: &[u8], base: u32) -> Result<Loaded, HunkEr
                 if bytes > sizes[idx] { return Err(HunkError::BssExceedsDeclared { hunk: idx }); }
                 mem.zero(bases[idx], sizes[idx]).map_err(|_| HunkError::OversizedBss { hunk: idx, bytes: sizes[idx] })?;
             }
-            HUNK_RELOC32 => loop {
-                let cnt = r.u32()?;
-                if cnt == 0 { break; }
-                let tgt = r.u32()?;
-                let tbase = *bases.get(tgt as usize).ok_or(HunkError::RelocToUnknownHunk { target: tgt })?;
+            HUNK_RELOC32 | HUNK_RELOC32SHORT | HUNK_DREL32 => {
+                let short = id != HUNK_RELOC32;
                 if idx >= table { return Err(HunkError::SectionExceedsDeclared { hunk: idx }); }
-                for _ in 0..cnt {
-                    let off = r.u32()?;
-                    let bad = HunkError::RelocOutsideRam { hunk: idx, offset: off };
-                    if off.checked_add(4).map_or(true, |e| e > sizes[idx]) { return Err(bad); }
-                    let at = bases[idx] + off;
-                    let v = mem.read_u32(at).map_err(|_| bad.clone())?;
-                    mem.write_u32(at, v.wrapping_add(tbase)).map_err(|_| bad)?;
+                process_reloc(&mut r, mem, idx, bases[idx], sizes[idx], table, &bases, short)?;
+            }
+            HUNK_SYMBOL => {
+                loop {
+                    let n = r.u32()?;
+                    if n == 0 { break; }
+                    for _ in 0..n { r.u32()?; }
+                    r.u32()?;
                 }
-            },
+            }
+            HUNK_DEBUG | HUNK_NAME => {
+                let n = r.u32()?;
+                for _ in 0..n { r.u32()?; }
+            }
             HUNK_END => idx += 1,
             other => return Err(HunkError::UnsupportedHunkType(other)),
         }
     }
+    // A file that ends before every declared hunk reached its HUNK_END was cut short, even when the cut falls exactly
+    // on a block boundary (the case a byte-level check cannot see).
+    if idx < table { return Err(HunkError::Truncated); }
     Ok(Loaded { entry: bases[0], bases, sizes, end: cur })
 }
