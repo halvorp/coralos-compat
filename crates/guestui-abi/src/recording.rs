@@ -146,11 +146,7 @@ impl GuestUi for RecordingGuestUi {
     }
     fn add_control(&mut self, win: UiObjectRef, control: ControlModel) -> Result<UiObjectRef, UiRefusal> {
         self.check(win)?;
-        if let ControlKind::Slider { min, max, value } = &control.kind {
-            if min > max || value < min || value > max {
-                return Err(UiRefusal::InvalidGeometry("slider range"));
-            }
-        }
+        control.kind.validate()?;
         self.calls.push(UiCall::AddControl(win, control.clone()));
         let id = self.alloc(win.id, control.token);
         self.controls.insert(id.id, (win, control));
