@@ -141,7 +141,7 @@ fn arith(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
         Op::Add => a + b,
         Op::Sub => a - b,
         Op::Mul => a * c,
-        Op::Div => { zx = b == 0.0 && a != 0.0; a / b }
+        Op::Div => { zx = b == 0.0 && a != 0.0 && a.is_finite(); a / b }
         Op::Fma { neg, sub } => { let m = libm::fma(a, c, if sub { -b } else { b }); if neg { -m } else { m } }
         Op::Sqrt => libm::sqrt(b),
         Op::Res => { zx = b == 0.0; 1.0 / b }
