@@ -51,8 +51,6 @@ pub fn init<U: GuestUi>(a: &mut Amiga<U>, rp: u32) -> Result<(), Refusal> {
     put8(a, rp, RP_MASK, 0xFF)?; put8(a, rp, RP_FG_PEN, 0xFF)?; put8(a, rp, RP_AOL_PEN, 0xFF)?; put8(a, rp, RP_DRAW_MODE, JAM2)?;
     a.mem.write_u16(rp + RP_LINE_PTRN, 0xFFFF).map_err(Refusal::mem("RastPort"))?;
     for i in 0..8 { put8(a, rp, RP_MINTERMS + i, 0)?; }
-    a.mem.write_u16(rp + RP_PEN_WIDTH, 1).map_err(Refusal::mem("RastPort"))?;
-    a.mem.write_u16(rp + RP_PEN_HEIGHT, 1).map_err(Refusal::mem("RastPort"))?;
     set_font(a, rp, 0)
 }
 
