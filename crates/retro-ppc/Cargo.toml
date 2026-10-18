@@ -1,0 +1,11 @@
+[package]
+name = "retro-ppc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PowerPC 32-bit user-mode interpreter (601/603/G3 user instruction set) for retro-compat engines"
+
+[dependencies]
+retro-guest-mem = { path = "../retro-guest-mem" }
+# MIT/Apache-2.0: correctly rounded fma and sqrt for no_std (core has neither on stable).
+libm = "0.2"
