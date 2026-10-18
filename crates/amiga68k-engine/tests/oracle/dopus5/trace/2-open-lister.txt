@@ -1,0 +1,496 @@
+# t(s) task lib.Func(args) = result   [DOpus-originated calls only; ROM-internal and noisy calls elided, see footer]
+   4.35 RunProg:launch dos.RunCommand(segList=0x262a53, stacksize=0x4000, argptr='\n', argsize=1) = ...
+  28.05 dopus_lister exec.ReplyMsg(message=0x280260)
+  28.17 dopus_lister exec.ReplyMsg(message=0x280260)
+  28.29 dopus_lister exec.ReplyMsg(message=0x280260)
+  28.41 dopus_lister exec.ReplyMsg(message=0x280260)
+  28.53 dopus_lister exec.ReplyMsg(message=0x280260)
+  28.65 dopus_lister exec.ReplyMsg(message=0x280260)
+  28.77 dopus_lister exec.ReplyMsg(message=0x280260)
+  28.89 dopus_lister exec.ReplyMsg(message=0x280260)
+  29.16 dopus_lister exec.ReplyMsg(message=0x280260)
+  29.16 RunProg:launch exec.ReplyMsg(message=0x280918)
+  29.16 RunProg:launch exec.ReplyMsg(message=0x280960)
+  29.36 RunProg:launch dopus5.DragCustomOk(bm=0x271f5c) = 0
+  29.36 RunProg:launch intuition.ModifyIDCMP(window=0x2923b0, flags=0x14da77e) = 1
+  29.36 RunProg:launch dopus5.GetDragInfo(window=0x2923b0, rast=0x26d7be, width=0x20, height=0x20, flags=0) = 0x280ccc
+  29.55 RunProg:launch dopus5.GetDragMask(drag=0x280ccc) = 1
+  29.55 RunProg:launch graphics.AllocBitMap(sizex=0x22, sizey=0x22, depth=2, flags=1, friend_bitmap=0) = 0x2801f4
+  29.77 RunProg:launch graphics.FreeBitMap(bm=0x2801f4)
+  29.78 RunProg:launch exec.ReplyMsg(message=0x2809a8)
+  29.78 RunProg:launch dopus5.FreeDragInfo(draginfo=0x280ccc) = 0x2000
+  29.78 RunProg:launch dopus5.StopTimer(handle=0x2827bc) = 0xfffffffe
+  29.78 RunProg:launch exec.ReplyMsg(message=0x280a78)
+  29.98 RunProg:launch dos.Lock(name='HOSTFS0:', accessMode=0xfffffffe) = 0x3aa030
+  29.98 RunProg:launch dos.CurrentDir(lock=0x3aa030) = 0x3aa800
+  29.98 RunProg:launch dopus5.DevNameFromLockDopus(lock=0x3aa030, buffer=0x984c6c, len=0x100) = 1
+  29.98 RunProg:launch dos.NameFromLock(lock=0x3aa030, buffer=0x984c6c, length=0x100) = 0xffffffff
+  30.00 RunProg:launch dos.Lock(name='HOSTFS0:', accessMode=0xfffffffe) = 0x3aa018
+  30.00 RunProg:launch dos.UnLock(lock=0x3aa018) = 0xffff0001
+  30.01 RunProg:launch dopus5.NewLister(path=0x984c6c) = 0x280ed4
+  30.01 RunProg:launch dos.Lock(name='HOSTFS0:', accessMode=0xfffffffe) = 0x3aa018
+  30.01 RunProg:launch dos.NameFromLock(lock=0x3aa018, buffer=0x280ccc, length=0x200) = 0xffffffff
+  30.03 RunProg:launch dos.UnLock(lock=0x3aa018) = 0xffff0001
+  30.03 RunProg:launch dopus5.FindNameI(list=0x26dcc8, name=0x280ccc) = 0
+  30.03 RunProg:launch dopus5.FindNameI(list=0x26dcc8, name=0x280ccc) = 0
+  30.03 RunProg:launch dopus5.NewMemHandle(puddle=0x5dc, thresh=0x190, type=0x10000) = 0x2808ac
+  30.03 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x600, threshSize=0x19c) = 0x280908
+  30.04 RunProg:launch dopus5.NewMemHandle(puddle=0x1000, thresh=0x400, type=0x10000) = 0x280944
+  30.04 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x1030, threshSize=0x40c) = 0x2809a0
+  30.04 RunProg:launch dopus5.InitListLock(ll=0x2db7a4, name=0) = 0x280944
+  30.04 RunProg:launch dopus5.NewMemHandle(puddle=0x280, thresh=0x3c, type=0x10001) = 0x2dbdb4
+  30.04 RunProg:launch exec.CreatePool(requirements=0x10000, puddleSize=0x2f8, threshSize=0x48) = 0x280cc8
+  30.04 RunProg:launch dopus5.InitListLock(ll=0x281ec2, name=0) = 0x2dbdb4
+  30.04 RunProg:launch dopus5.IPC_Launch(list=0x26d236, ipc=0x984ab0, name=0x9d90ce, entry=0x9c9a10, stack=0x2000, data=0x28103c, dos=0x21a4dc) = 1
+  30.04 RunProg:launch dos.CreateNewProc(tags={NP_Entry=0x9c9a10, NP_Name='dopus_lister', NP_WindowPtr=0xffffffff, NP_StackSize=0x2000, NP_Priority=0}) = 0x280d98
+  30.06 RunProg:launch exec.CreateMsgPort() = 0x280d50
+  30.06 RunProg:launch exec.PutMsg(port=0x280df4, message=0x984a44)
+  30.06 dopus_lister dopus5.IPC_ProcStartup(data=0x2e4860, code=0x9c977c) = 0x280d04
+  30.06 dopus_lister dopus5.Att_NewList(flags=1) = 0x282674
+  30.06 dopus_lister exec.CreateMsgPort() = 0x280ea0
+  30.07 dopus_lister exec.CreateMsgPort() = 0x2826c0
+  30.07 dopus_lister exec.AllocSignal(signalNum=0x2826ff) = 0x12
+  30.07 dopus_lister exec.AllocSignal(signalNum=0xff) = 0x13
+  30.07 dopus_lister exec.AllocSignal(signalNum=0xff) = 0x14
+  30.07 dopus_lister dopus5.AllocTimer(unit=1, port=0x2826c0) = 0x2826ec
+  30.07 dopus_lister exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x2826f0, flags=0) = 0
+  30.07 dopus_lister dopus5.AllocTimer(unit=1, port=0x2826c0) = 0x282724
+  30.07 dopus_lister exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x282728, flags=0) = 0
+  30.07 dopus_lister dopus5.AllocTimer(unit=1, port=0x2826c0) = 0x28275c
+  30.07 dopus_lister exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x282760, flags=0) = 0
+  30.07 dopus_lister dopus5.AllocTimer(unit=1, port=0x2826c0) = 0x28296c
+  30.07 dopus_lister exec.OpenDevice(devName='timer.device', unitNumber=1, iORequest=0x282970, flags=0) = 0
+  30.08 dopus_lister dopus5.NewMemHandle(puddle=0x1000, thresh=0x400, type=0x10001) = 0x2829a4
+  30.08 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x1030, threshSize=0x40c) = 0x282a00
+  30.08 dopus_lister dopus5.NewMemHandle(puddle=0x1000, thresh=0x400, type=0x10001) = 0x2dd3c4
+  30.08 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x1030, threshSize=0x40c) = 0x282a60
+  30.09 dopus_lister dopus5.PopUpFreeHandle(handle=0) = 0
+  30.09 dopus_lister dopus5.PopUpNewHandle(data=0, callback=0, locale=0x985658) = 0x282ca4
+  30.09 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x40c, threshSize=0x30c) = 0x282b38
+  30.09 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x28f390, id=0, flags=0x20) = 0x283060
+  30.09 dopus_lister dopus5.PopUpSeparator(handle=0x282ca4) = 1
+  30.09 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x28f5d0, id=1, flags=0x20) = 0x2dd5d0
+  30.09 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x28f6c0, id=2, flags=0x20) = 0x2dd600
+  30.09 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x28f838, id=3, flags=0x20) = 0x2dd630
+  30.09 dopus_lister dopus5.PopUpSeparator(handle=0x282ca4) = 1
+  30.09 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x28f9e0, id=4, flags=0x20) = 0x2dd700
+  30.09 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x28fad0, id=5, flags=0x20) = 0x2dd730
+  30.09 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x28fbc0, id=6, flags=0x20) = 0x2dd760
+  30.09 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c4d58, id=7, flags=0x20) = 0x2dd790
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c4e50, id=8, flags=0x20) = 0x2dd7c0
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c4f50, id=9, flags=0x20) = 0x2dd7f0
+  30.10 dopus_lister dopus5.PopUpSeparator(handle=0x282ca4) = 1
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c5100, id=0xa, flags=0x20) = 0x2dd850
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c5208, id=0xb, flags=0x20) = 0x2dd880
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c5310, id=0xc, flags=0x20) = 0x2dd930
+  30.10 dopus_lister dopus5.PopUpSeparator(handle=0x282ca4) = 1
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c54c8, id=0xd, flags=0x20) = 0x2dd990
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c55b8, id=0xe, flags=0x20) = 0x2dd9c0
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c56b0, id=0xf, flags=0x20) = 0x2dd9f0
+  30.10 dopus_lister dopus5.PopUpSeparator(handle=0x282ca4) = 1
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c58b0, id=0x10, flags=0x20) = 0x2dda50
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c59a0, id=0x11, flags=0x20) = 0x2dda80
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c5a90, id=0x12, flags=0x20) = 0x2ddab0
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c5b80, id=0x13, flags=0x20) = 0x2ddae0
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c5c70, id=0x14, flags=0x20) = 0x2ddb10
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c5d60, id=0x15, flags=0x20) = 0x2ddb40
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c5e58, id=0x16, flags=0x20) = 0x2ddb70
+  30.10 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c5f60, id=0x17, flags=0x20) = 0x2ddba0
+  30.11 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c6060, id=0x18, flags=0x20) = 0x2ddbd0
+  30.11 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c6150, id=0x19, flags=0x20) = 0x2ddc00
+  30.11 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c6248, id=0x1a, flags=0x20) = 0x2ddc30
+  30.11 dopus_lister dopus5.PopUpSeparator(handle=0x282ca4) = 1
+  30.11 dopus_lister dopus5.PopUpNewItem(handle=0x282ca4, string=0x2c63f8, id=0x1b, flags=0x20) = 0x2ddc90
+  30.11 dopus_lister diskfont.OpenDiskFont(textAttr=TextAttr('topaz.font', y=8, style=00, flags=00)) = 0
+  30.11 dopus_lister exec.CreateMsgPort() = 0x282790
+  30.11 dopus_lister exec.CreateMsgPort() = 0x282ce0
+  30.11 dopus_lister exec.ReplyMsg(message=0x984a44)
+  30.11 RunProg:launch exec.DeleteMsgPort(port=0x280d50)
+  30.11 RunProg:launch dopus5.IPC_Command(ipc=0x280d04, command=0x1e, flags=2, data=0x271c6c, data_free=0, reply=0) = 1
+  30.11 RunProg:launch exec.PutMsg(port=0x282790, message=0x280d58)
+  30.11 RunProg:launch dos.CurrentDir(lock=0x3aa800) = 0x3aa030
+  30.11 RunProg:launch dos.UnLock(lock=0x3aa030) = 0xffff0001
+  30.11 dopus_lister dopus5.FindGadgetType(gad=0x273204, type=0x50) = 0x273204
+  30.11 dopus_lister dopus5.CreateTitleGadget(scr=0x271c6c, list=0x2db78e, zoom=0x2d0000, offset=0x80000000, type=6, id=0xa) = 0x2d9674
+  30.11 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748e0, tagList={0x80020018=0x271dd4, 0x8002000d=0}) = 0x2da5c4
+  30.12 dopus_lister intuition.DisposeObject(object=0x2da5c4)
+  30.12 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748e0, tagList={0x80020018=0x271dd4, 0x8002000d=1}) = 0x2da5c4
+  30.12 dopus_lister intuition.DisposeObject(object=0x2da5c4)
+  30.12 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748ea, tagList={MA_MemorySize=6, IA_Width|IA_WIDTH=0xe, IA_Height|IA_HEIGHT=0xf}) = 0x2d94a4
+  30.12 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748ce, tagList={GA_ID=0xa, GA_RelRight|GA_RELRIGHT=0xffffffd8, GA_Top|GA_TOP=0, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xf, GA_RelVerify|GA_RELVERIFY=1, GA_TopBorder|GA_TOPBORDER=1, GA_Image|GA_IMAGE=0x2d94a4}) = 0x2d9674
+  30.12 dopus_lister dopus5.CreateTitleGadget(scr=0x271c6c, list=0x2db78e, zoom=0, offset=0xfff2, type=8, id=0xb) = 0x2e16c4
+  30.12 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748e0, tagList={0x80020018=0x271dd4, 0x8002000d=0}) = 0x2da5c4
+  30.12 dopus_lister intuition.DisposeObject(object=0x2da5c4)
+  30.12 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748e0, tagList={0x80020018=0x271dd4, 0x8002000d=1}) = 0x2da5c4
+  30.13 dopus_lister intuition.DisposeObject(object=0x2da5c4)
+  30.13 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748ea, tagList={MA_MemorySize=8, IA_Width|IA_WIDTH=0xe, IA_Height|IA_HEIGHT=0xf}) = 0x2d94dc
+  30.13 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9748ce, tagList={GA_ID=0xb, GA_RelRight|GA_RELRIGHT=0xffffffca, GA_Top|GA_TOP=0, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xf, GA_RelVerify|GA_RELVERIFY=1, GA_TopBorder|GA_TOPBORDER=1, GA_Image|GA_IMAGE=0x2d94dc}) = 0x2e16c4
+  30.13 dopus_lister intuition.OpenWindowTagList(newWindow=0, tagList={WA_Left=0x7e, WA_Top=6, WA_Width=0x1bc, WA_Height=0x23e, WA_MinWidth=0x5b, WA_MinHeight=0x3d, WA_MaxWidth=0xffffffff, WA_MaxHeight=0xffffffff, WA_IDCMP=0xb4c277e, WA_AutoAdjust=1, WA_CloseGadget=1, WA_DragBar=1, WA_DepthGadget=1, WA_MenuHelp=1, WA_NewLookMenus=1, WA_SizeGadget=1, WA_SizeBRight=1, WA_SizeBBottom=1, WA_CustomScreen=0x271c6c, WA_ScreenTitle='Directory Opus 1990984 graphics 6321696 other', WA_WindowName='dOpUs5.win', WA_Gadgets=0x2d9674, WA_SmartRefresh=1, WA_BackFill=0x281f18}) = 0x2ddd78
+  30.33 RunProg:launch dopus5.ReplyFreeMsg(msg=0x280ac0) = 0x216302
+  30.33 RunProg:launch exec.ReplyMsg(message=0x280ac0)
+  30.33 RunProg:launch dopus5.ReplyFreeMsg(msg=0x280b08) = 0x216302
+  30.33 RunProg:launch exec.ReplyMsg(message=0x280b08)
+  30.33 RunProg:launch dopus5.StopTimer(handle=0x2827bc) = 0x2827bc
+  30.36 dopus_lister dopus5.FixTitleGadgets(win=0x2ddd78) = 0
+  30.36 dopus_lister intuition.RemoveGList(remPtr=0x2ddd78, gadget=0x2d9674, numGad=1) = 5
+  30.36 dopus_lister intuition.AddGList(window=0x2ddd78, gadget=0x2d9674, position=0, numGad=1, requester=0) = 0
+  30.38 dopus_lister intuition.RemoveGList(remPtr=0x2ddd78, gadget=0x2e16c4, numGad=1) = 6
+  30.38 dopus_lister intuition.AddGList(window=0x2ddd78, gadget=0x2e16c4, position=0, numGad=1, requester=0) = 0
+  30.40 dopus_lister dopus5.SetWindowID(window=0x2ddd78, id_ptr=0x28178a, id=0x4000002, port=0x280d04) = 0x4000002
+  30.40 dopus_lister dopus5.InitWindowDims(window=0x2ddd78, dims=0x28160a) = 0x4000001
+  30.40 dopus_lister diskfont.OpenDiskFont(textAttr=TextAttr('topaz.font', y=8, style=00, flags=00)) = 0
+  30.40 dopus_lister gadtools.GetVisualInfoA(screen=0x271c6c, tagList=NULL) = 0x280224
+  30.40 dopus_lister dopus5.BuildMenuStrip(data=0x98647a, locale=0x985658) = 0x2e6628
+  30.40 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x140, threshSize=0x14) = 0x292ae8
+  30.51 RunProg:launch exec.ReplyMsg(message=0x2e6570)
+  30.53 dopus_lister gadtools.CreateMenusA(newmenu=0x2e4a38, tagList=NULL) = 0x2e6628
+  30.60 dopus_lister gadtools.LayoutMenusA(menu=0x2e6628, vi=0x280224, tagList={0x80080043=1}) = 1
+  30.63 RunProg:launch exec.ReplyMsg(message=0x2e6570)
+  30.73 dopus_lister intuition.SetMenuStrip(window=0x2ddd78, menu=0x2e6628) = 1
+  30.73 dopus_lister gadtools.FreeVisualInfo(vi=0x280224)
+  30.73 dopus_lister intuition.ClearMenuStrip(window=0x2ddd78)
+  30.74 dopus_lister intuition.ResetMenuStrip(window=0x2ddd78, menu=0x2e6628) = 1
+  30.74 dopus_lister intuition.ClearMenuStrip(window=0x2ddd78)
+  30.75 dopus_lister intuition.ResetMenuStrip(window=0x2ddd78, menu=0x2e6628) = 1
+  30.75 dopus_lister dopus5.AddScrollBars(win=0x2ddd78, list=0x2db78e, drawinfo=0x271dd4, noidcmp=7) = 0x2db02c
+  30.75 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cf0, tagList={0x8002000b=0, 0x8002000d=0xa, 0x80020018=0x271dd4}) = 0x2da6a4
+  30.75 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cf0, tagList={0x8002000b=0, 0x8002000d=0xb, 0x80020018=0x271dd4}) = 0x2da6dc
+  30.75 RunProg:launch exec.ReplyMsg(message=0x292af8)
+  30.75 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cf0, tagList={0x8002000b=0, 0x8002000d=0xc, 0x80020018=0x271dd4}) = 0x2da714
+  30.75 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cf0, tagList={0x8002000b=0, 0x8002000d=0xd, 0x80020018=0x271dd4}) = 0x2da74c
+  30.75 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cfa, tagList={GA_ID=2, GA_RelRight|GA_RELRIGHT=0xfffffff7, GA_Top|GA_TOP=0x11, GA_Width|GA_WIDTH=6, GA_RelHeight|GA_RELHEIGHT=0xffffffc3, GA_Immediate|GA_IMMEDIATE=1, GA_FollowMouse|GA_FOLLOWMOUSE=1, GA_RelVerify|GA_RELVERIFY=1, GA_RightBorder|GA_RIGHTBORDER=1, PGA_Freedom|PGA_FREEDOM=4, PGA_NewLook=1, PGA_Borderless|PGA_BORDERLESS=1, PGA_Visible|PGA_VISIBLE=1, PGA_Total|PGA_TOTAL=1, ICA_MAP=0x95aa2e}) = 0x2dab14
+  30.76 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976d05, tagList={GA_ID=3, GA_Image|GA_IMAGE=0x2da6dc, GA_Previous|GA_PREVIOUS=0x2dab14, GA_RelRight|GA_RELRIGHT=0xfffffff3, GA_RelBottom|GA_RELBOTTOM=0xffffffd7, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xe, GA_Immediate|GA_IMMEDIATE=1, GA_RelVerify|GA_RELVERIFY=1, GA_RightBorder|GA_RIGHTBORDER=1}) = 0x2daf0c
+  30.76 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976d05, tagList={GA_ID=4, GA_Image|GA_IMAGE=0x2da74c, GA_Previous|GA_PREVIOUS=0x2daf0c, GA_RelRight|GA_RELRIGHT=0xfffffff3, GA_RelBottom|GA_RELBOTTOM=0xffffffe5, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xe, GA_Immediate|GA_IMMEDIATE=1, GA_RelVerify|GA_RELVERIFY=1, GA_RightBorder|GA_RIGHTBORDER=1}) = 0x2daf6c
+  30.76 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976cfa, tagList={GA_ID=5, GA_Previous|GA_PREVIOUS=0x2daf6c, GA_Left|GA_LEFT=4, GA_RelBottom|GA_RELBOTTOM=0xfffffff5, GA_RelWidth|GA_RELWIDTH=0xffffffd0, GA_Height|GA_HEIGHT=0xa, GA_Immediate|GA_IMMEDIATE=1, GA_FollowMouse|GA_FOLLOWMOUSE=1, GA_RelVerify|GA_RELVERIFY=1, GA_BottomBorder|GA_BOTTOMBORDER=1, PGA_Freedom|PGA_FREEDOM=2, PGA_NewLook=1, PGA_Borderless|PGA_BORDERLESS=1, PGA_Visible|PGA_VISIBLE=1, PGA_Total|PGA_TOTAL=1, ICA_MAP=0x95aa2e}) = 0x2e1d8c
+  30.77 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976d05, tagList={GA_ID=6, GA_Image|GA_IMAGE=0x2da6a4, GA_Previous|GA_PREVIOUS=0x2e1d8c, GA_RelRight|GA_RELRIGHT=0xffffffd7, GA_RelBottom|GA_RELBOTTOM=0xfffffff3, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xe, GA_Immediate|GA_IMMEDIATE=1, GA_RelVerify|GA_RELVERIFY=1, GA_BottomBorder|GA_BOTTOMBORDER=1}) = 0x2dafcc
+  30.77 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x976d05, tagList={GA_ID=7, GA_Image|GA_IMAGE=0x2da714, GA_Previous|GA_PREVIOUS=0x2dafcc, GA_RelRight|GA_RELRIGHT=0xffffffe5, GA_RelBottom|GA_RELBOTTOM=0xfffffff3, GA_Width|GA_WIDTH=0xe, GA_Height|GA_HEIGHT=0xe, GA_Immediate|GA_IMMEDIATE=1, GA_RelVerify|GA_RELVERIFY=1, GA_BottomBorder|GA_BOTTOMBORDER=1}) = 0x2db02c
+  30.77 dopus_lister dopus5.FindBOOPSIGadget(list=0x2db78e, id=2) = 0x2dab14
+  30.77 dopus_lister dopus5.FindBOOPSIGadget(list=0x2db78e, id=5) = 0x2e1d8c
+  30.77 dopus_lister intuition.AddGList(window=0x2ddd78, gadget=0x2dab14, position=0xffffffff, numGad=0xffff, requester=0) = 7
+  30.87 RunProg:launch exec.ReplyMsg(message=0x292af8)
+  30.95 dopus_lister exec.CreateMsgPort() = 0x280220
+  30.95 dopus_lister dopus5.AddNotifyRequest(type=1, data=0, port=0x280220) = 0x280a04
+  30.95 dopus_lister dopus5.FindGadgetType(gad=0x2e16c4, type=0x10) = 0x2dad2c
+  30.95 dopus_lister dopus5.FindGadgetType(gad=0x2e16c4, type=0x60) = 0x2dadec
+  30.95 dopus_lister dopus5.GetEditHook(type=0, flags=1, tags=0x2e4734) = 0x280a1c
+  30.95 dopus_lister intuition.NewObjectA(classPtr=0, classID=0x9c23c0, tagList={GA_ID=0, GA_Left|GA_LEFT=4, GA_RelBottom|GA_RELBOTTOM=0xffffffe6, GA_RelWidth|GA_RELWIDTH=0xffffffee, GA_Height|GA_HEIGHT=0xc, GA_RelVerify|GA_RELVERIFY=1, GA_Immediate|GA_IMMEDIATE=1, 0x8000001b=1, SA_ErrorCode|DA_Dummy=1, STRINGA_TextVal=0x2dbf9e, STRINGA_MaxChars=0x1ff, STRINGA_Buffer=0x281272, STRINGA_UndoBuffer=0x26edc8, STRINGA_WorkBuffer=0x26efc8, STRINGA_Font=0x20b8b0, STRINGA_EditHook=0x280a1c}) = 0x2e214c
+  30.96 dopus_lister intuition.ObtainGIRPort(gInfo=0) = 0
+  30.96 dopus_lister workbench.AddAppWindowA(id=0x4000002, userdata=0x28103c, window=0x2ddd78, msgport=0x280ea0, taglist=NULL) = 0x280a4c
+  30.97 dopus_lister intuition.AddGList(window=0x2ddd78, gadget=0x281472, position=0xffffffff, numGad=2, requester=0) = 0xd
+  30.99 RunProg:launch exec.ReplyMsg(message=0x280b40)
+  31.01 dopus_lister intuition.SetGadgetAttrsA(gadget=0x2e214c, window=0x2ddd78, requester=0, tagList={STRINGA_TextVal=0x2dc28a}) = 0
+  31.01 dopus_lister intuition.ObtainGIRPort(gInfo=0x212120) = 0x280b80
+  31.03 dopus_lister intuition.ReleaseGIRPort(rp=0x280b80)
+  31.03 dopus_lister dopus5.FindGadgetType(gad=0x273204, type=0x50) = 0x273204
+  31.03 dopus_lister intuition.WindowLimits(window=0x2ddd78, MinWidth=0x5b, MinHeight=0x5d, MaxWidth=0xffff, MaxHeight=0xffff) = 1
+  31.03 dopus_lister dopus5.DrawBox(rp=0x28107c, rect=0x2e46d4, info=0x271dd4, recess=0xa2000000) = 6
+  31.04 dopus_lister dopus5.DrawBox(rp=0x281dfe, rect=0x2e46d0, info=0x271dd4, recess=0) = 6
+  31.04 dopus_lister dopus5.DrawBox(rp=0x281d80, rect=0x2e46cc, info=0x271dd4, recess=0) = 6
+  31.05 dopus_lister dopus5.DrawBox(rp=0x2810fa, rect=0x2e46c8, info=0x271dd4, recess=0) = 6
+  31.09 dopus_lister intuition.SetGadgetAttrsA(gadget=0x2dab14, window=0x2ddd78, requester=0, tagList={PGA_Top|PGA_TOP=0, PGA_Total|PGA_TOTAL=0, PGA_Visible|PGA_VISIBLE=0x14}) = 0
+  31.10 dopus_lister intuition.SetGadgetAttrsA(gadget=0x2e1d8c, window=0x2ddd78, requester=0, tagList={PGA_Top|PGA_TOP=0, PGA_Total|PGA_TOTAL=0, PGA_Visible|PGA_VISIBLE=0x1a8}) = 0
+  31.11 RunProg:launch exec.ReplyMsg(message=0x280b38)
+  31.23 RunProg:launch exec.ReplyMsg(message=0x280b38)
+  31.32 dopus_lister dopus5.FindNameI(list=0x2706c2, name=0x283c08) = 0
+  31.32 dopus_lister dopus5.FindFunctionType(list=0x2c8dd4, type=0) = 0x2c8ea0
+  31.32 dopus_lister dopus5.FindFunctionType(list=0x2c8fcc, type=0xffff0000) = 0x2c9040
+  31.32 dopus_lister intuition.ActivateWindow(window=0x2ddd78)
+  31.32 dopus_lister dopus5.IPC_Command(ipc=0x280d04, command=5, flags=0, data=0, data_free=0, reply=0) = 1
+  31.32 dopus_lister exec.PutMsg(port=0x282790, message=0x26cf38)
+  31.32 dopus_lister intuition.ActivateWindow(window=0x2ddd78)
+  31.33 RunProg:launch exec.ReplyMsg(message=0x280b38)
+  31.33 dopus_lister dopus5.NewMemHandle(puddle=0x800, thresh=0x400, type=0x10000) = 0x280c0c
+  31.33 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x818, threshSize=0x40c) = 0x280c68
+  31.33 dopus_lister dopus5.NewMemHandle(puddle=0x800, thresh=0x11c, type=0x10000) = 0x292a8c
+  31.33 dopus_lister exec.CreatePool(requirements=0x10000, puddleSize=0x854, threshSize=0x128) = 0x292ae8
+  31.33 dopus_lister asl.AllocAslRequest(reqType=0, tagList=NULL) = 0
+  31.33 dopus_lister dopus5.FreeMemHandle(handle=0x292a8c) = 0x100
+  31.34 dopus_lister dopus5.FreeMemHandle(handle=0x280c0c) = 0x100
+  31.34 dopus_lister dopus5.IPC_Reply(msg=0x280d58) = 0x80
+  31.35 dopus_lister dopus5.IPC_Reply(msg=0x26cf38) = 0x270
+  31.63 RunProg:launch exec.ReplyMsg(message=0x280b38)
+  31.63 dopus_lister exec.ReplyMsg(message=0x2f5a28)
+  31.63 dopus_lister exec.ReplyMsg(message=0x2f5a70)
+  31.63 dopus_lister exec.ReplyMsg(message=0x2f5ab8)
+  31.74 dopus_lister exec.ReplyMsg(message=0x280b38)
+  31.86 dopus_lister exec.ReplyMsg(message=0x280b38)
+  31.98 dopus_lister exec.ReplyMsg(message=0x280b38)
+  32.10 dopus_lister exec.ReplyMsg(message=0x280b38)
+  32.22 dopus_lister exec.ReplyMsg(message=0x280b38)
+  32.34 dopus_lister exec.ReplyMsg(message=0x280b38)
+  32.46 dopus_lister exec.ReplyMsg(message=0x280b38)
+  32.58 dopus_lister exec.ReplyMsg(message=0x280b38)
+  32.58 dopus_lister dopus5.FindFunctionType(list=0x29422c, type=0x290000) = 0x294298
+  32.58 dopus_lister dopus5.FindFunctionType(list=0x29422c, type=1) = 0x294328
+  32.58 dopus_lister dopus5.FindFunctionType(list=0x29422c, type=2) = 0
+  32.58 dopus_lister intuition.OpenWindowTagList(newWindow=0, tagList={WA_Left=0xaa, WA_Top=0x36, WA_Width=0x60, WA_Height=0x14, WA_Borderless=1, WA_SimpleRefresh=1, WA_CustomScreen=0x271c6c, WA_WindowName='dOpUs5.win', WA_IDCMP=4}) = 0x2e23f0
+  32.70 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  32.82 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  32.94 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  33.06 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  33.18 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  33.30 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  33.42 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  33.54 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  33.66 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  33.78 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  33.90 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  34.02 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  34.14 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  34.26 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  34.38 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  34.50 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  34.62 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  34.74 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  34.86 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  34.98 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  35.10 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  35.22 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  35.32 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22f40c, name=0x26bc0c) = 0x22f1f4
+  35.32 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x2282a4, name=0x26bc0c) = 0x219ed0
+  35.32 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22402c, name=0x26bc0c) = 0x219e30
+  35.32 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x21cfec, name=0x26bc0c) = 0x219e80
+  35.33 DO_LAUNCHER dopus5.Att_NewList(flags=0) = 0x2e1c24
+  35.33 DO_LAUNCHER dopus5.Att_RemList(list=0x2e1c24, flags=0) = 0x100
+  35.34 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  35.47 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  35.58 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  35.70 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  35.82 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  35.94 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  36.06 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  36.18 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  36.30 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  36.42 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  36.54 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  36.66 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  36.78 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  36.90 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  37.02 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  37.14 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  37.26 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  37.38 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  37.51 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  37.62 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  37.74 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  37.87 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  37.99 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  38.11 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  38.23 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  38.35 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  38.47 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  38.59 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  38.71 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  38.83 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  38.95 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  39.07 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  39.19 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  39.31 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  39.43 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  39.55 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  39.67 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  39.79 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  39.91 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  40.03 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  40.15 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  40.27 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  40.40 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  40.51 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  40.63 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  40.75 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  40.87 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  40.99 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  41.11 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  41.23 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  41.35 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  41.47 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  41.59 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  41.71 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  41.83 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  41.95 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  42.07 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  42.19 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  42.31 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  42.43 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  42.55 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  42.67 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  42.79 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  42.91 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  43.03 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  43.15 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  43.27 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  43.39 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  43.51 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  43.63 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  43.76 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  43.88 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  43.99 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  44.12 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  44.24 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  44.36 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  44.48 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  44.60 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  44.72 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  44.84 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  44.96 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  45.08 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  45.20 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  45.33 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  45.35 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22f40c, name=0x26bc0c) = 0x22f1f4
+  45.35 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x2282a4, name=0x26bc0c) = 0x219ed0
+  45.36 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22402c, name=0x26bc0c) = 0x219e30
+  45.36 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x21cfec, name=0x26bc0c) = 0x219e80
+  45.36 DO_LAUNCHER dopus5.Att_NewList(flags=0) = 0x2e1c24
+  45.36 DO_LAUNCHER dopus5.Att_RemList(list=0x2e1c24, flags=0) = 0x100
+  45.44 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  45.56 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  45.68 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  45.80 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  45.92 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  46.04 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  46.16 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  46.28 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  46.40 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  46.52 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  46.64 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  46.76 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  46.88 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  47.00 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  47.12 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  47.24 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  47.36 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  47.48 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  47.60 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  47.72 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  47.84 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  47.96 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  48.08 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  48.20 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  48.32 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  48.44 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  48.56 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  48.68 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  48.80 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  48.92 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  49.04 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  49.16 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  49.28 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  49.40 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  49.52 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  49.64 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  49.76 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  49.88 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  50.01 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  50.12 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  50.25 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  50.37 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  50.49 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  50.61 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  50.73 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  50.85 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  50.97 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  51.09 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  51.21 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  51.33 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  51.45 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  51.57 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  51.69 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  51.81 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  51.93 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  52.05 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  52.17 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  52.29 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  52.41 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  52.53 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  52.65 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  52.77 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  52.89 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  53.01 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  53.13 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  53.25 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  53.37 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  53.49 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  53.61 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  53.73 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  53.85 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  53.97 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  54.09 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  54.21 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  54.33 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  54.45 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  54.57 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  54.69 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  54.81 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  54.93 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  55.05 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  55.18 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  55.29 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  55.39 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22f40c, name=0x26bc0c) = 0x22f1f4
+  55.39 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x2282a4, name=0x26bc0c) = 0x219ed0
+  55.39 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x22402c, name=0x26bc0c) = 0x219e30
+  55.39 DO_LAUNCHER dopus5.DeviceFromHandler(port=0x21cfec, name=0x26bc0c) = 0x219e80
+  55.40 DO_LAUNCHER dopus5.Att_NewList(flags=0) = 0x2e1c24
+  55.40 DO_LAUNCHER dopus5.Att_RemList(list=0x2e1c24, flags=0) = 0x100
+  55.41 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  55.53 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  55.65 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  55.77 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  55.89 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  56.01 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  56.13 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  56.26 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  56.38 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  56.49 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  56.62 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  56.73 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  56.86 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  56.98 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  57.10 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  57.22 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  57.34 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  57.46 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  57.58 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  57.70 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  57.82 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  57.94 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  58.06 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  58.18 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  58.30 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  58.42 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  58.54 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  58.66 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  58.78 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  58.90 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  59.02 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  59.14 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  59.26 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  59.38 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  59.50 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  59.62 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  59.74 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  59.86 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  59.98 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  60.11 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  60.22 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  60.34 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  60.46 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  60.58 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  60.70 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  60.82 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  60.94 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  61.06 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  61.18 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  61.30 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  61.42 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  61.54 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  61.66 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  61.78 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  61.90 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  62.02 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  62.14 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  62.26 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  62.38 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  62.51 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  62.62 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+  62.74 dopus_lister exec.ReplyMsg(message=0x2e1be0)
+# elided (count): (ROM-internal) x3054, exec.GetMsg x1632, dopus5.CheckTimer x413, exec.CheckIO x409, exec.Wait x386, graphics.TextLength x180, dopus5.GetSemaphore x132, dopus5.FreeSemaphore x132, dopus5.StartTimer x102, exec.SendIO x102, exec.WaitIO x101, dopus5.GetString x91, dopus5.ItoaU64 x86, dos.DateStamp x43, locale.FormatString x43, intuition.LockIBase x43, dopus5.GetWindowID x43, intuition.UnlockIBase x43, intuition.NextObject x21, exec.FindName x19, intuition.SetWindowTitles x8, layers.InstallClipRegion x6, graphics.SetFont x6, graphics.InitBitMap x5, dos.GetDeviceProc x4, dopus5.GetIconFlags x4, graphics.ClipBlit x4, intuition.GetScreenDrawInfo x3, intuition.RefreshGList x3, dos.UnLockDosList x3, graphics.InitRastPort x2, dopus5.AllocMemH x2, exec.WaitPort x2, graphics.AskFont x2, intuition.FreeScreenDrawInfo x2, intuition.CurrentTime x1, graphics.WaitBlit x1, exec.AbortIO x1
