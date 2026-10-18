@@ -8,6 +8,7 @@ native CoralOS windows through `guestui`, not a pixel emulator. One concern per 
 |---|---|
 | `retro-guest-mem` | checked big-endian guest RAM, spans, named refusals |
 | `retro-m68k` | Musashi 68k core wrapper (ONE guest CPU per process) |
+| `retro-ppc` | PowerPC 32-bit user-mode interpreter (601/603/G3 user set, FPU, no AltiVec); no global state, native-glue hook for Toolbox imports |
 | `retro-hunk` | AmigaOS Hunk executable loader (+ test-only writer) |
 | `guestui-abi` | FIRST DRAFT of the normalized UI interface engines call (`GuestUi`) |
 | `retro-common` | `Refusal` and `Step`, shared by every engine |

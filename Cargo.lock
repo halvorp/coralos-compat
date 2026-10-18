@@ -35,6 +35,12 @@ name = "guestui-abi"
 version = "0.1.0"
 
 [[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
 name = "mac68k-engine"
 version = "0.1.0"
 dependencies = [
@@ -69,6 +75,14 @@ name = "retro-m68k"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "retro-guest-mem",
+]
+
+[[package]]
+name = "retro-ppc"
+version = "0.1.0"
+dependencies = [
+ "libm",
  "retro-guest-mem",
 ]
 
