@@ -201,7 +201,26 @@ fn activate<H: Host>(host: &mut H, cpu: &mut Cpu, f: impl FnOnce(*mut Cpu)) {
     unsafe { *ACTIVE.0.get() = None; }
 }
 
-#[no_mangle] pub extern "C" fn retro_instr_hook(_pc: u32) { with(|_, c| c.insns += 1) }
+/// The addresses of the last [`RECENT`] instructions executed (a ring), for diagnostics: where a guest ran just before it
+/// crashed or jumped somewhere it should not. Process-wide like Musashi itself; read it only from the thread that ran the guest.
+pub const RECENT: usize = 16384;
+static RING: [core::sync::atomic::AtomicU32; RECENT] = [const { core::sync::atomic::AtomicU32::new(0) }; RECENT];
+static RING_AT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The most recent instruction addresses, oldest first.
+pub fn recent_pcs() -> alloc::vec::Vec<u32> {
+    use core::sync::atomic::Ordering::Relaxed;
+    let at = RING_AT.load(Relaxed);
+    (0..RECENT).map(|i| RING[(at + i) % RECENT].load(Relaxed)).collect()
+}
+
+#[no_mangle] pub extern "C" fn retro_instr_hook(pc: u32) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let at = RING_AT.load(Relaxed);
+    RING[at % RECENT].store(pc, Relaxed);
+    RING_AT.store((at + 1) % RECENT, Relaxed);
+    with(|_, c| c.insns += 1)
+}
 #[no_mangle] pub extern "C" fn retro_illg_hook(opcode: i32) -> i32 {
     // Only $4AFC is a bridge trap; the library slot's next word is an RTS.
     if opcode != 0x4AFC { return 0; }

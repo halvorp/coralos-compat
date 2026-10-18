@@ -20,17 +20,19 @@ pub const DOS_BASE: u32 = 0x5000;
 pub const GADTOOLS_BASE: u32 = 0x7000;
 pub const EXIT_SLOT: u32 = 0x500;
 /// Bases for libraries opened on demand (OpenLibrary of a known name), each in its own 4 KiB stride: the largest
-/// known table (graphics, 186 functions) needs ~1.2 KiB below its base, the Library struct 34 bytes above it.
-pub const DYNAMIC_LIB_BASES: u32 = 0x4_0000;
+/// known table (graphics, 186 functions) needs ~1.2 KiB below its base, the Library struct 34 bytes above it. They live
+/// just below the engine arena, OUT of the way of the loaded program: it starts at LOAD_BASE and Directory Opus is 460 KB
+/// (an earlier 0x40000 base put library vectors INSIDE its code).
+pub const DYNAMIC_LIB_BASES: u32 = 0xF8_0000;
 const DYNAMIC_LIB_STRIDE: u32 = 0x1000;
-const DYNAMIC_LIB_END: u32 = 0x8_0000;
+const DYNAMIC_LIB_END: u32 = 0xFC_0000;
 pub const LOAD_BASE: u32 = 0x10000;
 pub const STACK_TOP: u32 = 0x20_0000;
 /// The program's stack: AmigaDOS's default CLI stack is 4 KiB; real programs ask for more, so 64 KiB.
 pub const STACK_SIZE: u32 = 0x1_0000;
-/// The guest heap: everything above the stack, to the end of the 16 MiB guest RAM.
+/// The guest heap: everything above the stack, up to the dynamic library bases (so about 14 MB of the 16 MB guest RAM).
 pub const HEAP_START: u32 = STACK_TOP;
-pub const HEAP_END: u32 = SYS_ARENA_START;
+pub const HEAP_END: u32 = DYNAMIC_LIB_BASES;
 /// The engine's own arena, the top 256 KiB of guest RAM: structs the ENGINE keeps for the guest (the DOS list and its
 /// locks) live here so that publishing them never moves the addresses the program's own allocations get.
 pub const SYS_ARENA_START: u32 = 0x100_0000 - 0x4_0000;
@@ -303,7 +305,11 @@ impl<U: GuestUi> Host for Amiga<U> {
     fn mem(&mut self) -> &mut GuestMem { &mut self.mem }
 
     fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool {
-        if pc == EXIT_SLOT { cpu.halt(); return true; }
+        if pc == EXIT_SLOT {
+            if self.sched.cur != process::PROCESS { let t = self.sched.cur; let n = self.sched.tasks.get(&t).map(|k| k.name.clone()).unwrap_or_default(); self.log.push(format!("[sched] task {t:#x} \"{n}\" jumped to the program exit slot (it returned through the wrong stack?) recent pcs: {}", { let r = retro_m68k::recent_pcs(); let k = r.iter().rposition(|&p| p >= 0x1000 && p < 0x200000).unwrap_or(0); r[k.saturating_sub(60)..=k].iter().map(|p| format!("{p:#x}")).collect::<Vec<_>>().join(" ") })); }
+            cpu.halt();
+            return true;
+        }
         let Some((lib, func, handler)) = self.dispatch.get(&pc).copied() else { return false };
         self.input.trap_pc = pc;
         let handler = if self.census_stubs.iter().any(|(l, f)| l == lib && f == func) { crate::census::stub::<U> } else { handler };

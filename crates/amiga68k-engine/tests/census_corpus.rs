@@ -13,7 +13,7 @@ fn census(prog: &str, progdir: &str) -> Option<(Vec<String>, Vec<String>)> {
     a.fs.vol.assign_add("LIBS", "DOpus5:Libs");
     a.fs.vol.assign("PROGDIR", progdir);
     a.stop_on_unimplemented = true;
-    let _ = a.run_hunk(&file, 3_000_000).unwrap();
+    let _ = a.run_hunk(&file, 20_000_000).unwrap();
     let unimpl = a.refused.iter().filter(|r| r.ends_with(amiga68k_engine::libtable::UNIMPLEMENTED)).cloned().collect();
     Some((a.refused.clone(), unimpl))
 }
@@ -28,10 +28,11 @@ fn load(a: &mut Amiga<RecordingGuestUi>, prefix: &str, dir: &std::path::Path) {
 }
 
 #[test]
-fn viewfont_and_directory_opus_run_until_their_launcher_process_needs_rawdofmt() {
-    for (prog, progdir) in [("C/viewfont", "DOpus5:C"), ("DirectoryOpus", "DOpus5:")] {
+fn viewfont_and_directory_opus_run_until_the_next_function_nobody_has_written() {
+    // The first unimplemented function each real binary reaches, in the order the engine's lanes knocked walls down.
+    for (prog, progdir, next) in [("C/viewfont", "DOpus5:C", "intuition.library/QueryOverscan"), ("DirectoryOpus", "DOpus5:", "dos.library/DoPkt")] {
         let Some((_, unimpl)) = census(prog, progdir) else { return };
-        assert_eq!(unimpl.last().map(String::as_str), Some("exec.library/RawDoFmt: unimplemented"), "{prog}: the first function still missing (CreateNewProc now works: the child process stops it); all of {unimpl:?}");
+        assert_eq!(unimpl.last().map(String::as_str), Some(format!("{next}: unimplemented").as_str()), "{prog}: all of {unimpl:?}");
         assert!(unimpl.iter().all(|u| !u.starts_with("icon.library") && !u.starts_with("lowlevel.library")), "{prog}: {unimpl:?}");
     }
 }
