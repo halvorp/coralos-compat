@@ -32,7 +32,12 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     let what = format!("[dos] Open \"{name}\" mode={mode}");
     if is_console(&name) { return ok(a, cpu, dos::STDOUT_FH >> 2, format!("{what} -> console")); }
     if !matches!(mode, MODE_OLDFILE | MODE_NEWFILE | MODE_READWRITE) { return fail(a, cpu, ERROR_ACTION_NOT_KNOWN, 0, what); }
-    if name.eq_ignore_ascii_case("NIL:") { return Err(Refusal("Open NIL: is not modelled yet".into())); }
+    if name.eq_ignore_ascii_case("NIL:") {
+        // dos.library's NIL: device: every mode opens; reads hit EOF at once, writes succeed and go nowhere.
+        let Some(fh) = alloc_zeroed(a, FH_SIZE)? else { return fail(a, cpu, ERROR_NO_FREE_STORE, 0, what) };
+        a.fs.files.insert(fh, OpenFile { node: crate::volume::ROOT, pos: 0, read: true, write: true, exclusive: false, nil: true });
+        return ok(a, cpu, fh >> 2, format!("{what} -> {fh:#x} (NIL:)"));
+    }
     let cwd = cur_dir(a);
     let existing = a.fs.vol.resolve(cwd, &name);
     let node = match (existing, mode) {
@@ -51,13 +56,14 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     if write && !a.fs.vol.is_writable(node) { return fail(a, cpu, ERROR_DISK_WRITE_PROTECTED, 0, what); }
     let Some(fh) = alloc_zeroed(a, FH_SIZE)? else { return fail(a, cpu, ERROR_NO_FREE_STORE, 0, what) };
     if mode == MODE_NEWFILE { if let Some(d) = a.fs.vol.file_data_mut(node) { d.clear(); } }
-    a.fs.files.insert(fh, OpenFile { node, pos: 0, read: true, write, exclusive: excl });
+    a.fs.files.insert(fh, OpenFile { node, pos: 0, read: true, write, exclusive: excl, nil: false });
     ok(a, cpu, fh >> 2, format!("{what} -> {fh:#x}"))
 }
 
 /// Close a file handle BPTR: the console streams are accepted and do nothing.
 pub(crate) fn close_fh<U: GuestUi>(a: &mut Amiga<U>, b: u32) -> Result<(), Refusal> {
-    if b == dos::STDIN_FH >> 2 || b == dos::STDOUT_FH >> 2 { return Ok(()); }
+    // Close(0) is DOSTRUE on AmigaOS (dos.library ignores a NULL handle); the stdcio/posixc cleanup of 26 corpus programs does it.
+    if b == 0 || b == dos::STDIN_FH >> 2 || b == dos::STDOUT_FH >> 2 { return Ok(()); }
     if a.fs.files.remove(&(b << 2)).is_none() { return Err(Refusal(format!("Close {:#x}: not an open file", b << 2))); }
     a.heap.free(b << 2, FH_SIZE).map_err(|e| Refusal(format!("Close: {e}")))
 }
@@ -106,7 +112,8 @@ pub fn fputs<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
 
 /// Store `bytes` at the handle's position; Ok(false) = refused with IoErr set (read-only handle).
 pub(crate) fn write_bytes_to<U: GuestUi>(a: &mut Amiga<U>, b: u32, bytes: &[u8]) -> Result<bool, Refusal> {
-    let (node, pos, writable) = { let f = handle(a, b, "Write")?; (f.node, f.pos, f.write) };
+    let (node, pos, writable, nil) = { let f = handle(a, b, "Write")?; (f.node, f.pos, f.write, f.nil) };
+    if nil { return Ok(true); }
     if !writable { set_ioerr(&mut a.mem, ERROR_WRITE_PROTECTED); return Ok(false); }
     let data = a.fs.vol.file_data_mut(node).ok_or_else(|| Refusal("Write: the file's node is gone".into()))?;
     let at = pos as usize;
@@ -176,7 +183,7 @@ pub fn open_from_lock<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Str
     if !matches!(a.fs.vol.get(node).kind, Kind::File(_)) { return fail(a, cpu, ERROR_OBJECT_WRONG_TYPE, 0, what); }
     let Some(fh) = alloc_zeroed(a, FH_SIZE)? else { return fail(a, cpu, ERROR_NO_FREE_STORE, 0, what) };
     let write = a.fs.vol.is_writable(node);
-    a.fs.files.insert(fh, OpenFile { node, pos: 0, read: true, write, exclusive: false });
+    a.fs.files.insert(fh, OpenFile { node, pos: 0, read: true, write, exclusive: false, nil: false });
     a.fs.locks.remove(&(b << 2));
     a.heap.free(b << 2, LOCK_SIZE).map_err(|e| Refusal(format!("OpenFromLock: {e}")))?;
     ok(a, cpu, fh >> 2, what)
