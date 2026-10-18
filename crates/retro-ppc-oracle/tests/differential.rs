@@ -138,3 +138,92 @@ fn exclusions_are_narrow() {
     assert_eq!(trap_excuse(46 << 26, &y, &a), Some("misaligned-multiple-or-reserved"));
     assert_eq!(trap_excuse(32 << 26, &y, &a), None, "an alignment trap on lwz is not excused");
 }
+
+/// lfs: the relaxation applies only to a loaded signalling NaN that retro left as the PEM load conversion says; a
+/// retro that corrupts bit 51 of an ordinary loaded single is a discrepancy (mutation witnessed 2026-10-18).
+#[test]
+fn lfs_exclusion_is_narrow_and_model_checked() {
+    use retro_ppc_oracle::exclude::fp_mode_excuse;
+    let (_, a, _) = word_pair(0x7c632214);
+    let lfs = 48 << 26 | 1 << 21 | 3 << 16; // lfs f1,0(r3)
+    let setup = |word: u32, retro_f1: u64, oracle_f1: u64| {
+        let mut pre = a.clone();
+        pre.gpr[3] = 0x1800;
+        pre.mem[0x1800..0x1804].copy_from_slice(&word.to_be_bytes());
+        let (mut rt, mut or) = (pre.clone(), pre.clone());
+        rt.fpr[1] = retro_f1;
+        or.fpr[1] = oracle_f1;
+        relax(lfs, &pre, &rt, &or)
+    };
+    let snan = 0x7F80_0001u32;
+    let m = 0x7FF0_0000_2000_0000u64; // PEM: fraction copied unchanged
+    let r = setup(snan, m, m | 1 << 51);
+    assert!(r.model_fail.is_empty() && r.names == ["ppcrs-lfs-quiets-snan"] && r.fpr[1] == !(1 << 51), "{r:?}");
+    // CONTROL: retro quieted the SNaN itself -> not the model -> a discrepancy.
+    assert_eq!(setup(snan, m | 1 << 51, m | 1 << 51).model_fail.len(), 1);
+    // CONTROL: an ordinary single with bit 51 flipped by retro is a discrepancy, and nothing is relaxed.
+    let one = 0x3F80_0000u32;
+    let good = 1.0f64.to_bits();
+    let r = setup(one, good ^ 1 << 51, good);
+    assert_eq!(r.model_fail.len(), 1, "{r:?}");
+    let r = setup(one, good, good);
+    assert!(r.model_fail.is_empty() && r.names.is_empty() && r.fpr[1] == !0, "an agreeing ordinary lfs is fully compared");
+    let _ = fp_mode_excuse; // (see fp_mode_exclusions_are_narrow)
+}
+
+/// The OX/UX whole-case exclusion fires only for a real overflow / underflow under an enabled exception.
+#[test]
+fn fp_mode_exclusions_are_narrow() {
+    use retro_ppc_oracle::exclude::fp_mode_excuse;
+    let (_, a, _) = word_pair(0x7c632214);
+    let fo = |op: u32, xo: u32, frt: u32, fra: u32, frb: u32, frc: u32| op << 26 | frt << 21 | fra << 16 | frb << 11 | frc << 6 | xo << 1;
+    let case = |w: u32, fpscr: u32, ops: [(usize, f64); 3], res: f64| {
+        let mut pre = a.clone();
+        pre.fpscr = fpscr;
+        for (r, v) in ops { pre.fpr[r] = v.to_bits(); }
+        let mut post = pre.clone();
+        post.fpr[1] = res.to_bits();
+        fp_mode_excuse(w, &pre, &post)
+    };
+    const OE: u32 = 1 << 6;
+    const UE: u32 = 1 << 5;
+    let fadd = fo(63, 21, 1, 2, 3, 0);
+    let fdiv = fo(63, 18, 1, 2, 3, 0);
+    let fmul = fo(63, 25, 1, 2, 0, 3);
+    let n = "retro-unwrapped-result-ox-ux-enabled";
+    // overflow: fadd MAX+MAX = inf under OE is excused; the control without OE is not; fdiv x/0 is ZX, not OX.
+    assert_eq!(case(fadd, OE, [(2, f64::MAX), (3, f64::MAX), (0, 0.0)], f64::INFINITY), Some(n));
+    assert_eq!(case(fadd, 0, [(2, f64::MAX), (3, f64::MAX), (0, 0.0)], f64::INFINITY), None, "CONTROL: OE clear");
+    assert_eq!(case(fdiv, OE, [(2, 1.0), (3, 0.0), (0, 0.0)], f64::INFINITY), None, "x/0 is ZX");
+    assert_eq!(case(fdiv, OE, [(2, f64::MAX), (3, 0.5), (0, 0.0)], f64::INFINITY), Some(n), "CONTROL: a real overflowing quotient");
+    // underflow: a tiny product is excused; an exact zero (0 + -0, 0 * x, a cancelling sum) is not.
+    assert_eq!(case(fmul, UE, [(2, 1e-200), (0, 0.0), (3, 1e-200)], 0.0), Some(n), "product flushed to zero");
+    assert_eq!(case(fmul, UE, [(2, 0.0), (0, 0.0), (3, 1e-200)], 0.0), None, "0 * x is exact");
+    assert_eq!(case(fadd, UE, [(2, 0.0), (3, -0.0), (0, 0.0)], 0.0), None, "0 + -0 is exact");
+    assert_eq!(case(fadd, UE, [(2, 1.5), (3, -1.5), (0, 0.0)], 0.0), None, "cancellation is exact");
+    assert_eq!(case(fadd, UE, [(2, 5e-324), (3, 1e-310), (0, 0.0)], 1e-310 + 5e-324), Some(n), "tiny nonzero result");
+    // a trapped (refused) instruction is never excused here
+    let mut pre = a.clone();
+    pre.fpscr = OE | UE;
+    let mut post = pre.clone();
+    post.trap = Tr::Illegal;
+    assert_eq!(fp_mode_excuse(fadd, &pre, &post), None);
+}
+
+/// The reference models are arithmetic, so check them against hand-computed words.
+#[test]
+fn the_reference_models_match_hand_computed_words() {
+    use retro_ppc_oracle::models::{fprf_denormal, lfs_double, stfs_word};
+    assert_eq!(stfs_word((1.0f64 + 0.75 * 2f64.powi(-23)).to_bits()), Some(0x3F80_0000), "truncated, not rounded");
+    assert_eq!(stfs_word((-1.0f64 - 0.75 * 2f64.powi(-23)).to_bits()), Some(0xBF80_0000));
+    assert_eq!(stfs_word(2f64.powi(-127).to_bits()), Some(0x0040_0000), "exp 896: denormal single");
+    assert_eq!(stfs_word((1.9 * 2f64.powi(-149)).to_bits()), Some(1), "denormal truncates toward zero");
+    assert_eq!(stfs_word((-(2f64.powi(-149))).to_bits()), Some(0x8000_0001));
+    assert_eq!(stfs_word(2f64.powi(-150).to_bits()), None, "below the smallest denormal is undefined");
+    assert_eq!(stfs_word((-0.0f64).to_bits()), Some(0x8000_0000));
+    assert_eq!(lfs_double(0x7F80_0001), 0x7FF0_0000_2000_0000, "SNaN fraction kept");
+    assert_eq!(lfs_double(0xFF80_0000), 0xFFF0_0000_0000_0000, "-inf");
+    assert_eq!(lfs_double(1), 2f64.powi(-149).to_bits(), "smallest denormal widens exactly");
+    assert_eq!(fprf_denormal(2f64.powi(-130).to_bits()), 0x1_4000);
+    assert_eq!(fprf_denormal((-(2f64.powi(-130))).to_bits()), 0x1_8000);
+}

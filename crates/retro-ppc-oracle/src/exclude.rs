@@ -57,17 +57,17 @@ pub fn nonsingle_operand(w: u32, pre: &Snap) -> bool {
     single_operands(w).iter().any(|r| !exact_single(pre.fpr[r(w)]))
 }
 
-/// EA of an stfs-family store (stfs, stfsu, stfsx, stfsux), if `w` is one.
-fn stfs_ea(w: u32, pre: &Snap) -> Option<u32> {
+/// EA and direction (`true` = store) of an lfs/stfs-family access (lfs, lfsu, lfsx, lfsux, stfs, stfsu, stfsx, stfsux).
+fn fp_single_ea(w: u32, pre: &Snap) -> Option<(u32, bool)> {
     let base = |upd: bool| if ra(w) == 0 && !upd { 0 } else { pre.gpr[ra(w)] };
+    let disp = w as u16 as i16 as i32 as u32;
     match (op(w), xo(w)) {
-        (52, _) => Some(base(false).wrapping_add(w as u16 as i16 as i32 as u32)),
-        (53, _) => Some(base(true).wrapping_add(w as u16 as i16 as i32 as u32)),
-        (31, 663) => Some(base(false).wrapping_add(pre.gpr[rb(w)])),
-        (31, 695) => Some(base(true).wrapping_add(pre.gpr[rb(w)])),
+        (48 | 49 | 52 | 53, _) => Some((base(op(w) & 1 == 1).wrapping_add(disp), op(w) >= 52)),
+        (31, 535 | 567 | 663 | 695) => Some((base(matches!(xo(w), 567 | 695)).wrapping_add(pre.gpr[rb(w)]), xo(w) >= 663)),
         _ => None,
     }
 }
+fn stfs_ea(w: u32, pre: &Snap) -> Option<u32> { fp_single_ea(w, pre).filter(|e| e.1).map(|e| e.0) }
 
 /// The relaxation for `word` executed from `pre`. `post_oracle` is consulted only for what the oracle newly set.
 pub fn relax(w: u32, pre: &Snap, post_retro: &Snap, post_oracle: &Snap) -> Relax {
@@ -83,8 +83,18 @@ pub fn relax(w: u32, pre: &Snap, post_retro: &Snap, post_oracle: &Snap) -> Relax
     if (op(w) == 59 || (op(w) == 63 && xo(w) == 12)) && !post_retro.trap_is_some() {
         let x = f64::from_bits(post_retro.fpr[rt(w)]);
         if x != 0.0 && x.is_finite() && x.abs() < f32::MIN_POSITIVE as f64 {
-            r.fpscr &= !(1 << 16); // FPRF[C] = manual bit 15
-            r.note("ppcrs-fprf-single-denormal");
+            // The class is judged by the model (PEM Table "Floating-point result flags": denormalized = C plus the
+            // sign's FG/FL), not assumed: retro must have written exactly that, ppc-rs differs only in C.
+            let want = crate::models::fprf_denormal(post_retro.fpr[rt(w)]);
+            let got = post_retro.fpscr & FPRF;
+            // A write suppressed by an enabled exception leaves both frD and FPRF as they were: nothing to relax.
+            let unwritten = post_retro.fpr[rt(w)] == pre.fpr[rt(w)] && got == pre.fpscr & FPRF;
+            if got == want {
+                r.fpscr &= !(1 << 16); // FPRF[C] = manual bit 15
+                r.note("ppcrs-fprf-single-denormal");
+            } else if !unwritten {
+                r.model_fail.push(format!("FPRF of a single-denormal result is {got:#x}, PEM gives {want:#x}"));
+            }
         }
     }
     // PEM divw/divwu: x/0 (and 0x80000000 / -1 for divw): rD and CR0[LT,GT,EQ] are undefined (OV is defined).
@@ -153,11 +163,21 @@ pub fn relax(w: u32, pre: &Snap, post_retro: &Snap, post_oracle: &Snap) -> Relax
         r.note("retro-untracked-fpscr-xx-ux-fi-fr");
     }
     // fctiw/fctiwz raise XX/FI in retro too, but FR is not tracked.
-    // ppc-rs quiets a signalling NaN on lfs; PEM lfs copies the fraction unchanged (no FPSCR, no quieting).
-    let lfs = matches!(op(w), 48 | 49) || (op(w) == 31 && matches!(xo(w), 535 | 567));
-    if lfs {
-        r.fpr[rt(w)] &= !(1 << 51);
-        r.note("ppcrs-lfs-quiets-snan");
+    // ppc-rs quiets a signalling NaN on lfs; PEM lfs copies the fraction unchanged (no FPSCR, no quieting). Retro's
+    // loaded value is checked against the PEM load conversion for EVERY lfs-family access; only a loaded signalling
+    // NaN that ppc-rs quieted (and retro left as the model says) is relaxed, and only in bit 51.
+    if let Some((ea, false)) = fp_single_ea(w, pre) {
+        let e = ea as usize;
+        if post_retro.trap == Tr::None && e + 4 <= pre.mem.len() {
+            let word = u32::from_be_bytes(pre.mem[e..e + 4].try_into().unwrap());
+            let m = crate::models::lfs_double(word);
+            if post_retro.fpr[rt(w)] != m {
+                r.model_fail.push(format!("lfs loaded {:#018x}, PEM load conversion gives {m:#018x}", post_retro.fpr[rt(w)]));
+            } else if crate::models::is_snan_single(word) && post_oracle.fpr[rt(w)] == m | 1 << 51 {
+                r.fpr[rt(w)] &= !(1 << 51);
+                r.note("ppcrs-lfs-quiets-snan");
+            }
+        }
     }
     r
 }
@@ -200,19 +220,44 @@ pub fn trap_excuse(w: u32, retro: &Snap, oracle: &Snap) -> Option<&'static str> 
 
 /// FP modes retro-ppc does not model (retro-ppc/src/lib.rs "Deliberate deviations"): an enabled overflow / underflow
 /// exception (PEM writes the exponent-wrapped result; retro writes the unwrapped one) and FPSCR[NI].
+/// Narrow: the OX clause needs an infinity made from finite operands that is not a divide by zero (that is ZX), and
+/// the UX clause needs a result that genuinely underflowed (a tiny non-zero value, or a zero whose exact result is
+/// non-zero), never an exact zero such as 0 + -0 or a cancelling sum.
 pub fn fp_mode_excuse(w: u32, pre: &Snap, retro: &Snap) -> Option<&'static str> {
-    if !fp_arith(w) { return None; }
+    if !fp_arith(w) || retro.trap != Tr::None { return None; }
     const NI: u32 = 4;
     const OE: u32 = 1 << 6;
     const UE_: u32 = 1 << 5;
     if pre.fpscr & NI != 0 { return Some("fpscr-ni-non-ieee-mode"); }
-    // Overflow with OE set: retro's result is an infinity (or max finite) made from finite operands.
     let used: &[u32] = if xo(w) == 12 && op(w) == 63 { &[11] } else { crate::models::operands(w) };
-    let operands_finite = used.iter().all(|s| f64::from_bits(pre.fpr[(w >> s & 31) as usize]).is_finite());
+    let val = |s: u32| f64::from_bits(pre.fpr[(w >> s & 31) as usize]);
+    let operands_finite = used.iter().all(|s| val(*s).is_finite());
     let res = f64::from_bits(retro.fpr[rt(w)]);
-    if pre.fpscr & OE != 0 && operands_finite && res.is_infinite() { return Some("retro-unwrapped-result-ox-ux-enabled"); }
-    // Underflow with UE set: the result is tiny (or zero from a non-zero exact result).
+    // Division by zero (fdiv, fres, frsqrte of a zero divisor) gives an infinity through ZX, not OX.
+    let div_by_zero = match w >> 1 & 0x1F { 18 => val(11) == 0.0 && val(16) != 0.0, 24 | 26 => val(11) == 0.0, _ => false };
+    if pre.fpscr & OE != 0 && operands_finite && res.is_infinite() && !div_by_zero { return Some("retro-unwrapped-result-ox-ux-enabled"); }
     let tiny = if op(w) == 59 || xo(w) == 12 { f32::MIN_POSITIVE as f64 } else { f64::MIN_POSITIVE };
-    if pre.fpscr & UE_ != 0 && res.is_finite() && res.abs() <= tiny { return Some("retro-unwrapped-result-ox-ux-enabled"); }
+    if pre.fpscr & UE_ != 0 && operands_finite && res.is_finite() {
+        let underflowed = if res != 0.0 { res.abs() <= tiny } else { exact_result_nonzero(w, &val) };
+        if underflowed { return Some("retro-unwrapped-result-ox-ux-enabled"); }
+    }
     None
+}
+
+/// For a zero result: was the exact (infinitely precise) result non-zero, i.e. did it flush to zero by underflow?
+/// Add/subtract are exact in the denormal range, so a zero sum is a true zero; a product, quotient or conversion
+/// underflows to zero only if no operand is zero; a fused op only if the product is non-zero and does not cancel b.
+fn exact_result_nonzero(w: u32, val: &dyn Fn(u32) -> f64) -> bool {
+    let (a, b, c) = (val(16), val(11), val(6));
+    match (op(w), w >> 1 & 0x1F) {
+        (59 | 63, 18) => a != 0.0 && b.is_finite() && b != 0.0,
+        (59 | 63, 25) => a != 0.0 && c != 0.0,
+        (63, 12) => b != 0.0,
+        (59 | 63, 28..=31) => {
+            let (b, p) = if matches!(w >> 1 & 0x1F, 28 | 30) { (-b, a * c) } else { (b, a * c) };
+            a != 0.0 && c != 0.0 && !(p.is_finite() && p != 0.0 && p == -b)
+        }
+        (59 | 63, 24 | 26) => false, // estimates of a finite non-zero operand are not zero by underflow here
+        _ => false,                   // add, sub, sqrt: exact zero
+    }
 }

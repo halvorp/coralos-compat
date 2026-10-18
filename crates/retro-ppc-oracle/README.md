@@ -1,7 +1,7 @@
 # retro-ppc-oracle
 
 Host-only differential fuzz of **retro-ppc** against **ppc-rs** (benletchford/ppc-rs 0.7.2, MIT, the `ppc` crate,
-checked out read-only at `/data/refs/retro/ppc-rs`). `publish = false`, its own cargo workspace root, **not** a
+pinned `=0.7.2` from crates.io; builds anywhere with network access). `publish = false`, its own cargo workspace root, **not** a
 dependency of anything and **not** part of the no_std workspace (ppc-rs is `std`, edition 2024, `rustc_apfloat`).
 The root `Cargo.toml` `exclude`s it, so run it from here:
 
@@ -10,7 +10,6 @@ The root `Cargo.toml` `exclude`s it, so run it from here:
     cargo run --release --bin ppc-fuzz  [seed] [cases-per-family] [sequences]   # default 1 2000 20000
     cargo run --release --bin ppc-gaps                  # opcode-space sweep: who refuses what
     cargo run --release --bin ppc-corpus > corpus/regressions.txt   # rebuild the corpus
-    PPC_FP_MODE=clean cargo run --release --bin ppc-fuzz …   # triage aid: no RN, no exception enables
 
 ## What it does
 
@@ -72,7 +71,8 @@ deviations"), or ppc-rs is wrong. Nothing is excluded because "they differ".
 | `retro-unwrapped-result-ox-ux-enabled` | enabled overflow/underflow: the architecture writes the exponent-wrapped result, retro writes the unwrapped one |
 | `fpscr-ni-non-ieee-mode` | FPSCR[NI] is ignored by retro-ppc |
 | `stfs-below-single-denormal-undefined` | PEM stfs of a magnitude below the single denormal range is undefined (retro stores a signed zero) |
-| `ppcrs-*` | the ppc-rs defects in the table above; each is applied only when retro matches an independent model (`src/models.rs`) of the PEM rule |
+| `ppcrs-*` | the ppc-rs defects in the table above; each is applied only when retro matches a model (`src/models.rs`) of the PEM rule: stfs (arithmetic: clear-and-convert / scale-and-truncate, not the shift amounts of the implementation), lfs (every lfs-family load is checked against the load conversion; only a loaded SNaN is relaxed, in bit 51 only), FPRF of a single denormal (C plus FG/FL), NaN selection, fctiw of a NaN |
+| `retro-unwrapped-result-ox-ux-enabled` | narrow: OX needs an infinity from finite operands that is not a divide by zero (ZX); UX needs a tiny non-zero result or a zero whose exact result is non-zero (0 + -0, 0 * x and cancelling sums are exact and compared) |
 
 ## Coverage gaps (`ppc-gaps`, whole opcode space)
 
@@ -83,3 +83,9 @@ state either.
 ## Remaining named gaps in retro-ppc
 
 FPSCR XX/UX/FI/FR tracking; exponent-wrapped results under enabled OE/UE; FP arithmetic under directed rounding; NI mode.
+
+## Sequences keep going after an exclusion
+
+An excluded step (one that is accounted for by a name above) does not end the case: the oracle machine adopts retro-ppc's
+state (`Pair::resync_oracle`) and the remaining instructions are still compared. A sequence stops only at an excluded
+trap, a pc mismatch, or lwarx/stwcx. (reservation state cannot be copied).

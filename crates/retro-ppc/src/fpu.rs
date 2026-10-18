@@ -15,11 +15,11 @@ fn f(cpu: &Cpu, n: usize) -> f64 { f64::from_bits(cpu.fpr[n]) }
 fn is_snan(x: f64) -> bool { x.is_nan() && x.to_bits() & (1 << 51) == 0 }
 fn quiet(x: f64) -> f64 { f64::from_bits(x.to_bits() | 1 << 51) }
 
-/// Write an FP result: FPRF from its class, then CR1 if Rc.
-fn put(cpu: &mut Cpu, w: W, d: usize, bits: u64, single: bool) {
+/// Write an FP result: FPRF from its class. (CR1 for Rc=1 is the caller's job: `arith`/`frsp` copy it once, whether
+/// or not the write was suppressed.)
+fn put(cpu: &mut Cpu, d: usize, bits: u64, single: bool) {
     cpu.fpr[d] = bits;
     set_fprf(cpu, classify(f64::from_bits(bits), single));
-    if w.rc() { copy_to_cr1(cpu); }
 }
 
 pub(crate) fn exec_59(cpu: &mut Cpu, w: W) -> R {
@@ -121,7 +121,7 @@ fn arith_inner(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
         if flags != 0 { raise(cpu, flags); if cpu.fpscr & fs::VE != 0 { return Ok(()); } }
         let q = quiet(*n);
         let q = if single { (q as f32) as f64 } else { q };
-        put(cpu, w, d, q.to_bits(), single);
+        put(cpu, d, q.to_bits(), single);
         return Ok(());
     }
     match op {
@@ -140,7 +140,7 @@ fn arith_inner(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
     if flags != 0 {
         raise(cpu, flags);
         if cpu.fpscr & fs::VE != 0 { return Ok(()); }
-        put(cpu, w, d, DEFAULT_NAN, single);
+        put(cpu, d, DEFAULT_NAN, single);
         return Ok(());
     }
     let mut zx = false;
@@ -165,7 +165,7 @@ fn arith_inner(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
     }
     if single || matches!(op, Op::Res) { r = (r as f32) as f64; }
     if r.is_infinite() && !zx && used.iter().all(|x| x.is_finite()) { raise(cpu, fs::OX); }
-    put(cpu, w, d, r.to_bits(), single || matches!(op, Op::Res));
+    put(cpu, d, r.to_bits(), single || matches!(op, Op::Res));
     Ok(())
 }
 
@@ -211,7 +211,7 @@ fn frsp_inner(cpu: &mut Cpu, w: W) -> R {
     }
     let r = if b.is_nan() { (quiet(b) as f32) as f64 } else { b as f32 as f64 };
     if r.is_infinite() && b.is_finite() { raise(cpu, fs::OX); }
-    put(cpu, w, w.rt(), r.to_bits(), true);
+    put(cpu, w.rt(), r.to_bits(), true);
     Ok(())
 }
 

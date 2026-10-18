@@ -81,6 +81,20 @@ impl Pair {
         p.alignment_policy = if strict_align { PpcAlignmentPolicy::Trap } else { PpcAlignmentPolicy::EmulateData };
     }
 
+    /// Make the oracle machine's state equal to retro-ppc's (registers, pc, time base, memory). Used after an
+    /// excluded instruction, whose difference is already accounted for, so that the rest of a sequence is still
+    /// compared instead of dropped. The reservation is cleared on the oracle only; callers do not resync across
+    /// lwarx/stwcx. (see `run.rs`).
+    pub fn resync_oracle(&mut self) {
+        let c = &self.retro;
+        let p = &mut self.ppc;
+        p.gpr = c.gpr; p.fpr = c.fpr; p.cr = c.cr; p.xer = c.xer; p.lr = c.lr; p.ctr = c.ctr; p.fpscr = c.fpscr; p.pc = c.pc;
+        p.set_time_base(c.tb);
+        p.invalidate_reservation();
+        let ram = self.h.0.bytes(self.h.0.span(0, RAM as u32).unwrap()).unwrap();
+        self.mem.write_bytes(0, ram).unwrap();
+    }
+
     pub fn pcs(&self) -> (u32, u32) { (self.retro.pc, self.ppc.pc) }
 
     pub fn snap_retro(&mut self, trap: Tr, note: String, why: Option<&'static str>) -> Snap {

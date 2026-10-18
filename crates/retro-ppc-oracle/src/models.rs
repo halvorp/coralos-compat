@@ -40,20 +40,39 @@ pub fn nan_result(w: u32, pre: &Snap) -> Option<u64> {
 
 /// PEM stfs / "Floating-point store single": the word stored for the double `d`.
 ///  * FRS[1:11] > 896 or FRS[1:63] = 0: WORD[0:1] <- FRS[0:1]; WORD[2:31] <- FRS[5:34]   (truncation, no rounding)
-///  * 874 <= FRS[1:11] <= 896: denormalize: the implicit 1 and FRS[12:63] shifted right by 897 - exp, truncated
+///  * 874 <= FRS[1:11] <= 896: the value denormalized and truncated to a multiple of 2^-149
 ///  * anything smaller is architecturally undefined (`None`).
+/// Computed as ARITHMETIC (clear the 29 dropped fraction bits then convert exactly; scale by 2^149 and truncate toward
+/// zero), not by restating the shift amounts of the implementation under test, so a shared misreading of the
+/// pseudocode's bit slices cannot cancel out. The bit-slice form survives only for exponents past the single range,
+/// where the PEM defines the word purely as that slice.
 pub fn stfs_word(d: u64) -> Option<u32> {
     let exp = (d >> 52 & 0x7FF) as u32;
-    if exp > 896 || d & !(1 << 63) == 0 {
-        return Some(((d >> 32) as u32 & 0xC000_0000) | (d >> 29) as u32 & 0x3FFF_FFFF);
+    let sign = (d >> 32) as u32 & 0x8000_0000;
+    if d & !(1 << 63) == 0 { return Some(sign); }
+    if exp > 1150 { return Some(((d >> 32) as u32 & 0xC000_0000) | (d >> 29) as u32 & 0x3FFF_FFFF); } // inf/NaN/overflow
+    if exp > 896 {
+        // normal single range: drop the low 29 fraction bits; the remainder is exactly a single.
+        return Some((f64::from_bits(d & !0x1FFF_FFFF) as f32).to_bits());
     }
     if exp >= 874 {
-        let frac = 1u64 << 52 | (d & ((1 << 52) - 1));
-        let sh = 897 - exp + 29; // 29 drops the 52->23 fraction width, 897-exp the denormalizing shift
-        return Some((d >> 32) as u32 & 0x8000_0000 | (frac >> sh) as u32);
+        // single denormal range: truncate |d| to a multiple of 2^-149 (scaling by a power of two is exact).
+        let units = (f64::from_bits(d & !(1 << 63)) * 2f64.powi(149)) as u32;
+        return Some(sign | units);
     }
     None
 }
+
+/// PEM lfs conversion: the double a loaded single word becomes. A NaN or infinity keeps its fraction unchanged
+/// (no quieting, FPSCR untouched); everything else, denormals included, widens exactly.
+pub fn lfs_double(word: u32) -> u64 {
+    let (sign, exp, frac) = ((word >> 31) as u64, word >> 23 & 0xFF, word as u64 & 0x7F_FFFF);
+    if exp == 0xFF { sign << 63 | 0x7FF << 52 | frac << 29 } else { (f32::from_bits(word) as f64).to_bits() }
+}
+pub fn is_snan_single(word: u32) -> bool { word >> 23 & 0xFF == 0xFF && word & 0x7F_FFFF != 0 && word & 0x40_0000 == 0 }
+
+/// PEM FPRF for a denormalized number: C plus FG (positive) or FL (negative) (Table "Floating-point result flags").
+pub fn fprf_denormal(bits: u64) -> u32 { 1 << 16 | if bits >> 63 != 0 { 1 << 15 } else { 1 << 14 } }
 
 /// PEM fctiw: NaN converts to 0x8000_0000 (the most negative integer) with VXCVI set (VE=0).
 pub const FCTIW_NAN: u32 = 0x8000_0000;

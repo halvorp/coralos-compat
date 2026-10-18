@@ -93,8 +93,6 @@ impl State {
         let mut fpscr = r.u32() & !0x4;
         if r.pct(80) { fpscr &= !0x3; }
         if r.pct(50) { fpscr &= !(0xFFF8_0000 | 0x0000_0700); } // no sticky bits: FX transitions become visible
-        // Debug aid for triage: PPC_FP_MODE=clean clears RN and every exception enable, =enables keeps VE..XE random.
-        if std::env::var("PPC_FP_MODE").as_deref() == Ok("clean") { fpscr &= !(0x3 | 0xF8); }
         fpscr = normalize_fpscr(fpscr);
         State {
             gpr, fpr,

@@ -13,5 +13,5 @@ description = "Host-only differential fuzz of retro-ppc against ppc-rs (MIT). No
 [dependencies]
 retro-ppc = { path = "../retro-ppc" }
 retro-guest-mem = { path = "../retro-guest-mem" }
-# The oracle: MIT, benletchford/ppc-rs 0.7.2, vendored read-only under /data/refs/retro/ppc-rs.
-ppc = { path = "/data/refs/retro/ppc-rs" }
+# The oracle: MIT, benletchford/ppc-rs 0.7.2 as published on crates.io.
+ppc = "=0.7.2"

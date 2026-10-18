@@ -108,3 +108,26 @@ fn record_form_updates_cr1_when_the_result_write_is_suppressed() {
     let c = run(fadd_rc & !1, |c| { c.fpscr = VE; c.cr = 0; c.fpr[2] = 0x7FF0_0000_0000_0001; c.fpr[3] = 1f64.to_bits(); });
     assert_eq!(c.cr, 0);
 }
+
+/// PEM zero-divide, enabled: fres (op 59) and frsqrte (op 63) of zero also leave frD unchanged and set ZX.
+#[test]
+fn reciprocal_estimates_of_zero_with_ze_leave_the_target_unchanged() {
+    for (name, word) in [("fres", a_form(59, 24, 1, 0, 3, 0, 0)), ("frsqrte", a_form(63, 26, 1, 0, 3, 0, 0))] {
+        let c = run(word, |c| { c.fpscr = ZE; c.fpr[1] = 7f64.to_bits(); c.fpr[3] = 0f64.to_bits(); });
+        assert_eq!(c.fpr[1], 7f64.to_bits(), "{name}: frD unchanged");
+        assert_ne!(c.fpscr & ZX, 0, "{name}: ZX set");
+        // CONTROL: ZE=0 writes an infinity.
+        let c = run(word, |c| { c.fpr[1] = 7f64.to_bits(); c.fpr[3] = 0f64.to_bits(); });
+        assert_eq!(c.fpr_f64(1), f64::INFINITY, "{name}: ZE=0 writes the infinity");
+    }
+}
+
+/// CR1 is written once from the final FPSCR on the normal path too: an Rc=1 fadd that overflows shows OX in CR1.
+#[test]
+fn record_form_cr1_reflects_the_final_fpscr_on_the_normal_path() {
+    let fadd_rc = a_form(63, 21, 1, 2, 3, 0, 1);
+    let c = run(fadd_rc, |c| { c.fpr[2] = f64::MAX.to_bits(); c.fpr[3] = f64::MAX.to_bits(); });
+    assert_eq!(c.cr_field(1) & 1, 1, "OX in CR1");
+    let c = run(fadd_rc, |c| { c.fpr[2] = 1f64.to_bits(); c.fpr[3] = 1f64.to_bits(); });
+    assert_eq!(c.cr_field(1), 0, "CONTROL: no exception, CR1 clear");
+}

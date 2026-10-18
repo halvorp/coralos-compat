@@ -8,6 +8,7 @@
   AROS Public License (APL) with its header kept; ported with Peter's 2026-10 ruling that AROS code may be ported.
   It is data only; the surrounding code is ours (MIT). No Amiga ROM font is used.
 - `crates/retro-ppc` is original MIT code written from the PowerPC Programming Environments Manual; no emulator source (MAME, dingusppc, SheepShaver, Executor) was copied. It depends on the `libm` crate (MIT or Apache-2.0, from crates.io, not vendored) for correctly rounded `fma` and `sqrt` in no_std. Its test encodings are produced by LLVM's assembler (`tools/ppc-regen.py`); no LLVM code is included.
+- `crates/retro-ppc-oracle` (host-only, not part of the no_std workspace) depends on `ppc` 0.7.2 (benletchford/ppc-rs, MIT) from crates.io as a test oracle, and through it on `rustc_apfloat` (Apache-2.0 WITH LLVM-exception), `bitflags` and `smallvec` (MIT or Apache-2.0); none is vendored or linked into any engine. Its reference models are written from the PowerPC Programming Environments Manual.
 - No GPL code is in the repository today: Musashi's MAME-derived FPU/PMMU files were replaced (2026-10-17) so the
   engines can link CoralOS's own user-mode libraries. GPL code may be added later, but any GPL code makes every
   binary that links it GPL as a whole, and a CoralOS engine statically links CoralOS libraries: GPL parts must
