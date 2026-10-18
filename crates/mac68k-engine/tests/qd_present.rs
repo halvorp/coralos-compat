@@ -20,7 +20,7 @@ fn rgb(g: &Rig, r: &GuestRect) -> Vec<u32> {
 
 #[test]
 fn begin_update_confines_drawing_to_the_invalid_part_and_end_update_restores_the_visrgn() {
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     set_rect(&mut g.m, R1, 0, 0, 120, 200); // the whole port
     set_rect(&mut g.m, R2, 10, 10, 30, 50); // the invalid part
     let win = g.win;
@@ -45,7 +45,7 @@ fn begin_update_confines_drawing_to_the_invalid_part_and_end_update_restores_the
 
 #[test]
 fn without_begin_update_drawing_is_not_confined_negative_control_and_a_fresh_window_is_all_invalid() {
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     set_rect(&mut g.m, R1, 0, 0, 120, 200);
     set_rect(&mut g.m, R2, 10, 10, 30, 50);
     let mut p = Prog::new();
@@ -53,7 +53,7 @@ fn without_begin_update_drawing_is_not_confined_negative_control_and_a_fresh_win
     g.run(p.exit());
     assert_eq!(g.count_black(), 120 * 200);
     // a fresh window: BeginUpdate with nothing validated lets the program redraw all of it
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     set_rect(&mut g.m, R1, 0, 0, 120, 200);
     let win = g.win;
     g.run(Prog::new().l(win).trap(0xA922).paint_rect(R1).l(win).trap(0xA923).exit());
@@ -62,7 +62,7 @@ fn without_begin_update_drawing_is_not_confined_negative_control_and_a_fresh_win
 
 #[test]
 fn inval_rect_posts_one_update_event_and_valid_rect_removes_the_area() {
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     set_rect(&mut g.m, R1, 0, 0, 120, 200);
     set_rect(&mut g.m, R2, 10, 10, 30, 50);
     g.run(Prog::new().l(R1).trap(0xA92A).l(R2).trap(0xA928).l(R2).trap(0xA928).exit());
@@ -70,7 +70,7 @@ fn inval_rect_posts_one_update_event_and_valid_rect_removes_the_area() {
     assert_eq!(n, 1, "two InvalRects, one updateEvt");
     assert_eq!(g.m.qd.update[&g.win].bounds(), retro_raster::Rect::new(10, 10, 50, 30));
     // ValidRect over it removes it (negative control for the above)
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     set_rect(&mut g.m, R1, 0, 0, 120, 200);
     g.run(Prog::new().l(R1).trap(0xA92A).exit());
     assert!(g.m.qd.update[&g.win].is_empty());
@@ -78,7 +78,7 @@ fn inval_rect_posts_one_update_event_and_valid_rect_removes_the_area() {
 
 #[test]
 fn end_update_without_begin_update_is_a_named_refusal() {
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     let win = g.win;
     g.m.start(&Prog::new().l(win).trap(0xA923).exit().0, 0).unwrap();
     g.m.run_loop(100_000).unwrap();
@@ -89,7 +89,7 @@ fn end_update_without_begin_update_is_a_named_refusal() {
 
 #[test]
 fn many_primitives_in_one_step_are_one_frame_whose_pixels_and_hash_match_the_canvas() {
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     set_rect(&mut g.m, R1, 10, 20, 30, 60);
     set_rect(&mut g.m, R2, 50, 80, 70, 120);
     put(&mut g.m, 0x3600, &pstr("QD"));
@@ -112,7 +112,7 @@ fn many_primitives_in_one_step_are_one_frame_whose_pixels_and_hash_match_the_can
 
 #[test]
 fn later_steps_present_only_the_damaged_rectangle_and_idle_steps_present_nothing() {
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     set_rect(&mut g.m, R1, 10, 20, 30, 60);
     g.run(Prog::new().paint_rect(R1).exit());
     assert_eq!(presents(&g).len(), 1);
@@ -135,7 +135,7 @@ fn later_steps_present_only_the_damaged_rectangle_and_idle_steps_present_nothing
 
 #[test]
 fn drawing_while_invisible_shows_as_the_first_frame_when_the_window_opens() {
-    let mut g = Rig::with(false);
+    let mut g = Rig::canvas_with(false);
     set_rect(&mut g.m, R1, 10, 20, 30, 60);
     g.run(Prog::new().paint_rect(R1).exit());
     assert!(presents(&g).is_empty(), "an invisible window opens nothing and presents nothing");
@@ -150,7 +150,7 @@ fn drawing_while_invisible_shows_as_the_first_frame_when_the_window_opens() {
 
 #[test]
 fn a_native_resize_makes_a_new_blank_canvas_a_full_update_and_a_full_frame() {
-    let mut g = Rig::new();
+    let mut g = Rig::canvas();
     set_rect(&mut g.m, R1, 10, 20, 30, 60);
     g.run(Prog::new().paint_rect(R1).exit());
     let native = g.m.windows[&g.win].native.unwrap();
@@ -189,6 +189,6 @@ fn a_host_without_a_canvas_part_is_logged_once_and_is_not_a_refusal_storm() {
         m.run_loop(100_000).unwrap();
     }
     assert!(m.refused.is_empty(), "{:?}", m.refused);
-    assert_eq!(m.log.iter().filter(|l| l.contains("not shown")).count(), 1, "logged once: {:?}", m.log);
+    assert_eq!(m.log.iter().filter(|l| l.contains("content window") && l.contains("not shown")).count(), 1, "logged once: {:?}", m.log);
     assert!(m.qd.canvases[&win].pixels().iter().any(|&p| p == 1), "drawing itself still works");
 }

@@ -105,3 +105,113 @@ pub fn oracle_app_macbinary() -> alloc::vec::Vec<u8> {
         .add(b"CODE", 0, None, &code0).add(b"CODE", 1, Some("Main"), &code1).add(b"WIND", 128, None, &wind).build();
     retro_resfork::writer::macbinary("QD Oracle", b"APPL", b"QDOR", &[], &fork)
 }
+
+// ---- the Dialog Manager / Control Manager script: ONE call list, run as 68k code AND through the PowerPC glue ----
+
+/// An argument of a scripted Toolbox call: a literal, or the word/long currently stored at a guest address (a result an earlier call saved).
+#[derive(Debug, Clone, Copy)]
+pub enum ScriptArg { Lit(u32), Mem(u32) }
+
+/// One Toolbox call by name. `save`: where the result goes (a long, a word, or a Boolean byte in the high half of a word, as a 68k
+/// `pop` leaves it), so the two CPUs leave the same bytes in guest memory.
+#[derive(Debug, Clone)]
+pub struct ScriptCall { pub name: &'static str, pub args: alloc::vec::Vec<ScriptArg>, pub save: Option<u32> }
+
+/// Where [`dialog_script`] keeps its cells.
+pub mod cells {
+    pub const DIALOG: u32 = 0x3000; // long
+    pub const HIT1: u32 = 0x3010; // word
+    pub const TYPE: u32 = 0x3012; // word
+    pub const ITEM: u32 = 0x3014; // long
+    pub const BOX: u32 = 0x3018; // Rect, 8 bytes
+    pub const TEXT: u32 = 0x3100; // Str255 read back from the edit field
+    pub const HIT2: u32 = 0x3020; // word
+    pub const CHECK: u32 = 0x3022; // word: GetControlValue of the check box
+    pub const CHECK_ITEM: u32 = 0x3024; // long
+    pub const NEW_TEXT: u32 = 0x3200; // Str255 the program writes into the edit field
+}
+
+/// A dialog application's resources: `DLOG` 128 (dBoxProc, visible), `DITL` 128: 1 OK button, 2 Cancel button, 3 check box
+/// "Remember", 4 static text "Name:", 5 edit text "Hello", 6 a disabled user item.
+pub fn dialog_fork() -> alloc::vec::Vec<u8> {
+    let item = |rect: [i16; 4], ty: u8, data: &[u8]| {
+        let mut v = alloc::vec![0u8; 4];
+        for r in rect { v.extend_from_slice(&r.to_be_bytes()); }
+        v.push(ty);
+        v.push(data.len() as u8);
+        v.extend_from_slice(data);
+        if data.len() & 1 == 1 { v.push(0); }
+        v
+    };
+    let ps = |s: &str| { let mut v = alloc::vec![s.len() as u8]; v.extend_from_slice(s.as_bytes()); v };
+    let mut ditl = 5i16.to_be_bytes().to_vec(); // count - 1
+    for it in [item([80, 200, 100, 260], 4, &ps("OK")), item([80, 120, 100, 180], 4, &ps("Cancel")), item([50, 20, 66, 140], 5, &ps("Remember")),
+               item([10, 20, 26, 200], 8, &ps("Name:")), item([30, 20, 46, 200], 16, &ps("Hello")), item([60, 220, 76, 260], 128, &[])] { ditl.extend_from_slice(&it); }
+    let mut dlog = alloc::vec::Vec::new();
+    for v in [60i16, 40, 180, 300, 1, 0x0100, 0x0000] { dlog.extend_from_slice(&v.to_be_bytes()); } // rect, procID, visible, goAway
+    dlog.extend_from_slice(&0u32.to_be_bytes()); // refCon
+    dlog.extend_from_slice(&128i16.to_be_bytes()); // itemsID
+    dlog.extend_from_slice(&ps("Dialog"));
+    retro_resfork::writer::ForkBuilder::new().add(b"DLOG", 128, None, &dlog).add(b"DITL", 128, None, &ditl).build()
+}
+
+/// The dialog program: open `DLOG` 128, wait for a hit, read item 5's text, the check box and the item's type/box, rewrite the
+/// edit text, wait for a second hit, dispose. Calls 1 and 6 (`ModalDialog`) are where the host acts.
+pub fn dialog_script() -> alloc::vec::Vec<ScriptCall> {
+    use ScriptArg::{Lit, Mem};
+    use cells::*;
+    let c = |name, args: &[ScriptArg], save| ScriptCall { name, args: args.to_vec(), save };
+    alloc::vec![
+        c("GetNewDialog", &[Lit(128), Lit(0), Lit(0xFFFF_FFFF)], Some(DIALOG)),
+        c("ModalDialog", &[Lit(0), Lit(HIT1)], None),
+        c("GetDialogItem", &[Mem(DIALOG), Lit(5), Lit(TYPE), Lit(ITEM), Lit(BOX)], None),
+        c("GetDialogItemText", &[Mem(ITEM), Lit(TEXT)], None),
+        c("SetDialogItemText", &[Mem(ITEM), Lit(NEW_TEXT)], None),
+        c("GetDialogItem", &[Mem(DIALOG), Lit(3), Lit(0x3040), Lit(CHECK_ITEM), Lit(0x3044)], None),
+        c("ModalDialog", &[Lit(0), Lit(HIT2)], None),
+        c("GetControlValue", &[Mem(CHECK_ITEM)], Some(CHECK)),
+        c("DisposeDialog", &[Mem(DIALOG)], None),
+    ]
+}
+
+/// What [`dialog_script`] left behind, with every host address and token left out, so the 68k run and the PowerPC run can be
+/// compared line for line: the cells, then each host call in order (kind, label, geometry and value; never a ref or token).
+pub fn dialog_observation(m: &crate::Mac<guestui_abi::RecordingGuestUi>) -> alloc::vec::Vec<alloc::string::String> {
+    use alloc::format;
+    use guestui_abi::UiCall;
+    let w = |a: u32| m.mem.read_u16(a).map_or(-1, i32::from);
+    let pstr = |a: u32| m.mem.read_u8(a).map_or("?".into(), |n| (0..u32::from(n)).map(|i| char::from(m.mem.read_u8(a + 1 + i).unwrap_or(b'?'))).collect::<alloc::string::String>());
+    let mut out = alloc::vec![
+        format!("hit1={} type={} box=({},{},{},{})", w(cells::HIT1), w(cells::TYPE), w(cells::BOX), w(cells::BOX + 2), w(cells::BOX + 4), w(cells::BOX + 6)),
+        format!("text={:?} check={} hit2={}", pstr(cells::TEXT), w(cells::CHECK), w(cells::HIT2)),
+    ];
+    for c in &m.ui.calls {
+        out.push(match c {
+            UiCall::OpenWindow(x) => format!("open {:?} {:?} {:?}", x.title, x.rect, x.role),
+            UiCall::AddControl(_, x) => format!("add {:?} {:?} {:?} enabled={}", x.kind, x.label, x.rect, x.enabled),
+            UiCall::SetControl(_, _, v) => format!("set {v:?}"),
+            UiCall::RemoveControl(..) => "remove".into(),
+            UiCall::PresentPlane(_, p) => format!("plane {:?} {} op(s)", p.rect, p.ops.len()),
+            UiCall::CloseWindow(_) => "close".into(),
+            other => format!("{other:?}"),
+        });
+    }
+    out
+}
+
+/// The observation every run of [`dialog_script`] must produce (68k code, PowerPC glue): item 3 (the check box) was hit and its
+/// value left alone, the edit text read back "World", Return hit the default item 1.
+pub static DIALOG_EXPECTED: &[&str] = &[
+    "hit1=3 type=16 box=(30,20,46,200)",
+    "text=\"World\" check=0 hit2=1",
+    "open \"Dialog\" GuestRect { left: 40, top: 60, width: 260, height: 120 } Dialog",
+    "add Button \"OK\" GuestRect { left: 200, top: 80, width: 60, height: 20 } enabled=true",
+    "add Button \"Cancel\" GuestRect { left: 120, top: 80, width: 60, height: 20 } enabled=true",
+    "add Checkbox { checked: false } \"Remember\" GuestRect { left: 20, top: 50, width: 120, height: 16 } enabled=true",
+    "add Label { text: \"Name:\", framed: false } \"\" GuestRect { left: 20, top: 10, width: 180, height: 16 } enabled=true",
+    "add Field { text: \"Hello\", max_len: 255, editable: true, integer: false } \"\" GuestRect { left: 20, top: 30, width: 180, height: 16 } enabled=true",
+    "plane GuestRect { left: 0, top: 0, width: 260, height: 120 } 0 op(s)",
+    "set Checked(false)",
+    "set Text(\"Changed\")",
+    "close",
+];

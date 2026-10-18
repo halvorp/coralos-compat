@@ -124,6 +124,11 @@ impl<U: GuestUi> Mac<U> {
         match state(&p.model.kind) { Some(v) => self.ui.set_control(p.window, p.native, v).map_err(Refusal::ui), None => Ok(()) }
     }
 
+    /// The host already shows `v` (the user typed it): take it as the shown state so the next sync does not echo it back.
+    pub(crate) fn adopt_native_state(&mut self, obj: Obj, v: &ControlValue) {
+        if let Some(p) = self.tr.live.get_mut(&(obj.handle() as u64)).filter(|p| p.obj == obj) { let _ = p.model.apply(v); }
+    }
+
     /// Forget every projection of a window that is going away (the host retires its controls with the window).
     pub(crate) fn forget_window_projections(&mut self, win: u32) { self.tr.live.retain(|_, p| p.win != win); }
 

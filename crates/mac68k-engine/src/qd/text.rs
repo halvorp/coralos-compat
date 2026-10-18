@@ -43,7 +43,14 @@ fn draw<U: GuestUi>(m: &mut Mac<U>, bytes: &[u8], name: &str) -> Result<Done, Re
         target::with(m, port, |m, t| {
             let clip = clip_region(m, t)?;
             let c = clip_of(&clip, t);
-            Ok(draw_text(&mut t.bm, &m.qd.font, bytes, i32::from(pen.h) - t.local0.0, i32::from(pen.v) - t.local0.1 - 1, &brush, style, &c).1)
+            let touched = draw_text(&mut t.bm, &m.qd.font, bytes, i32::from(pen.h) - t.local0.0, i32::from(pen.v) - t.local0.1 - 1, &brush, style, &c).1;
+            // the glyph box the bitmap used: `width` wide, `y_size` tall, its baseline `baseline` rows down from the top
+            let (x0, y0) = (i32::from(pen.h) - t.local0.0, i32::from(pen.v) - t.local0.1 - 1 - m.qd.font.baseline as i32);
+            let rd = |off: u32| m.mem.read_u16(port.wrapping_add(off)).unwrap_or(0);
+            let back = read_pat(&m.mem, port.wrapping_add(P_BK_PAT))?;
+            let run = super::plane::Run { text: bytes, box_px: retro_raster::Rect::new(x0, y0, x0 + width as i32, y0 + m.qd.font.y_size as i32), font: rd(P_TX_FONT), face, size: rd(P_TX_SIZE), mode: tmode, back: &back };
+            super::plane::record_text(&mut m.qd.plane, t, &run, &clip);
+            Ok(touched)
         })?;
     }
     set_pen_loc(&mut m.mem, port, pen.v, pen.h.wrapping_add(width as i16))?;

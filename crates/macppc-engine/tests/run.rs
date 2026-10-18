@@ -27,7 +27,7 @@ fn glyph_at(m: &M, ch: u8, x: i32, baseline: i32) -> bool {
     let f = Font::topaz8();
     (0..8).all(|gy| (0..8).all(|gx| black(m, x + gx, baseline - 7 + gy) == f.glyph_bit(f.slot(ch), gx, gy)))
 }
-fn frames(m: &M) -> usize { m.mac.ui.calls.iter().filter(|c| matches!(c, UiCall::PresentContent { .. })).count() }
+fn frames(m: &M) -> usize { m.mac.ui.calls.iter().filter(|c| matches!(c, UiCall::PresentContent { .. } | UiCall::PresentPlane(..))).count() }
 fn close(m: &mut M) { let win = native(m); m.mac.ui.events.push_back(GuestUiEvent::CloseRequested { win, token: CallbackToken(0) }); }
 
 #[test]
@@ -57,12 +57,15 @@ fn the_application_opens_its_window_draws_its_string_and_waits_for_an_event() {
     for (i, ch) in b"Hello from PowerPC".iter().enumerate() {
         assert!(glyph_at(&m, *ch, h + 8 * i as i32, v), "glyph {:?} at {i}", *ch as char);
     }
-    // the same pixels reached the GuestUi canvas (present_content), not only the engine's own bitmap
-    let canvas = &m.mac.ui.canvases[&native(&m).id];
+    // the host got the string as a TEXT RUN of a display list (replayed with the kit's typography), not as guest pixels
+    let plane = &m.mac.ui.planes[&(native(&m).id, 0)];
+    let runs: Vec<_> = plane.ops.iter().filter_map(|op| if let guestui_abi::DrawOp::Text { string, at, .. } = op { Some((string.as_str(), *at)) } else { None }).collect();
+    assert_eq!(runs.len(), 1, "{:?}", plane.ops);
+    assert_eq!(runs[0].0, "Hello from PowerPC");
+    assert_eq!(runs[0].1.x, i32::from(PEN.0), "the run starts at the pen");
+    assert!(!plane.is_raw() && m.mac.ui.route_census(native(&m)).raw == 0, "nothing went the raw way");
     let bitmap = m.mac.qd.canvases[&win(&m)].pixels();
-    assert_eq!(canvas.2.len(), bitmap.len(), "the canvas and the engine bitmap have the same extent");
-    assert!(canvas.2.iter().zip(bitmap.iter()).all(|(&c, &q)| (c == 0) == (q == 1)), "every black pixel is at the same POSITION in both");
-    assert!(bitmap.iter().any(|&q| q == 1), "control: the comparison is not between two blank images");
+    assert!(bitmap.iter().any(|&q| q == 1), "control: the engine bitmap (still authoritative) is not blank");
     // NEGATIVE controls: the check is not vacuous (a different glyph at the same place fails), and nothing is drawn
     // outside the string's row
     assert!(!glyph_at(&m, b'Z', h, v), "'H' is not 'Z'");

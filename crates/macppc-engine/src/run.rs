@@ -37,6 +37,8 @@ pub struct Runtime {
     bound: usize,
     /// Set by a `WaitNextEvent` that parked the CPU: the event mask a queued event must match to resume.
     pub(crate) wait_mask: Option<u16>,
+    /// Set by a `ModalDialog` that parked the CPU: it resumes when the front dialog has an item hit.
+    pub(crate) wait_dialog: bool,
     /// `main`'s entry state, held while the init routine runs.
     after_init: Option<StartState>,
     main_tvector: u32,
@@ -88,6 +90,10 @@ impl<U: GuestUi> MacPpc<U> {
             self.mac.pump_ui();
             if !self.mac.event_pending(mask) { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
             self.rt.wait_mask = None;
+        }
+        if self.rt.wait_dialog {
+            if !self.mac.modal_ready() { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
+            self.rt.wait_dialog = false;
         }
         self.sync_natives(&mut cpu);
         let stats = retro_ppc::resume(self, &mut cpu, budget);

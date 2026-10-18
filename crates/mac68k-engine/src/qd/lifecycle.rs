@@ -60,6 +60,7 @@ pub(crate) fn window_resized<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(),
     let canvas = Bitmap::new(w, h, 1).ok_or_else(|| Refusal(format!("window {w}x{h}: no canvas of that size")))?;
     m.qd.canvases.insert(win, canvas);
     m.qd.present.forget(win);
+    m.qd.plane.reset(win);
     let vis = m.mem.read_u32(win.wrapping_add(P_VIS)).map_err(Refusal::mem("visRgn"))?;
     m.write_region(vis, &Region::from_rect(Rect::new(0, 0, w, h)))?;
     invalidate_all(m, win)
@@ -72,6 +73,7 @@ pub(crate) fn window_disposed<U: GuestUi>(m: &mut Mac<U>, win: u32) {
     m.qd.saved_vis.remove(&win);
     m.qd.rgn_open.remove(&win);
     m.qd.present.forget(win);
+    m.qd.plane.forget(win);
     for off in [P_VIS, P_CLIP] {
         if let Ok(h) = m.mem.read_u32(win.wrapping_add(off)) { if h != 0 { let _ = m.dispose_handle(h); } }
     }

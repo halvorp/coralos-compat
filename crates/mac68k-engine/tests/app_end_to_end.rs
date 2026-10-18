@@ -65,8 +65,9 @@ fn startup_builds_the_a5_world_loads_both_segments_and_opens_window_and_menus() 
                 item("Undo", true, Some('Z'), 1, 130), item("-", false, None, 2, 130), item("Cut", true, Some('X'), 3, 130),
                 item("Copy", true, Some('C'), 4, 130), item("Paste", true, Some('V'), 5, 130)] },
         ] }),
-        // the app drew nothing, so the window's first content frame is its blank (white) canvas, whole
-        UiCall::PresentContent { win: WIN, damage: GuestRect { left: 0, top: 0, width: 320, height: 200 }, width: 320, height: 200, hash: guestui_abi::pixel_hash(&vec![0x00FF_FFFF; 320 * 200]) },
+        // the app drew nothing, so the window's first content frame is an EMPTY display list for the whole window (the kit's
+        // surface shows through): a replayed plane, not a raw canvas
+        UiCall::PresentPlane(WIN, guestui_abi::Plane { id: 0, rect: GuestRect { left: 0, top: 0, width: 320, height: 200 }, ops: vec![] }),
     ]);
     // the program asked for an activate and an update event for its window; it consumed both while waiting
     assert!(m.ev.queue.is_empty());

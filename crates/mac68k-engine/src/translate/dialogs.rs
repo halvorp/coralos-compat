@@ -139,7 +139,7 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// The user hit item `item` of dialog `win`: queue it for `ModalDialog` (a disabled item ignores it).
-    pub(crate) fn dialog_hit(&mut self, win: u32, item: i16) {
+    pub fn dialog_hit(&mut self, win: u32, item: i16) {
         let enabled = self.tr.dlg.dialogs.get(&win).and_then(|d| d.list.get((item - 1).max(0) as usize)).is_some_and(|s| s.raw_type & 0x80 == 0);
         if enabled { self.tr.dlg.hits.push_back((win, item)); }
         else { self.log.push(format!("[dialog] item {item} of {win:#x} is disabled (or not an item): the hit is ignored")); }
@@ -148,7 +148,11 @@ impl<U: GuestUi> Mac<U> {
     pub(crate) fn text_intent(&mut self, h: u32, intent: Intent) -> Result<(), Refusal> {
         let (win, idx) = self.text_slot(h).ok_or_else(|| Refusal(format!("Intent: {h:#x} is not a dialog text item")))?;
         match (self.tr.dlg.dialogs[&win].list[idx].item, intent) {
-            (Item::EditText, Intent::CommitText(t)) => { self.set_handle_text(h, &t)?; self.sync_text(win, idx) }
+            (Item::EditText, Intent::CommitText(t)) => {
+                self.set_handle_text(h, &t)?;
+                self.adopt_native_state(Obj::Text(h), &guestui_abi::ControlValue::Text(t));
+                self.sync_text(win, idx)
+            }
             (item, i) => Err(Refusal(format!("Intent {i:?} has no meaning for a {item:?} dialog item"))),
         }
     }
