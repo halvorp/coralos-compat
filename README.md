@@ -13,6 +13,8 @@ native CoralOS windows through `guestui`, not a pixel emulator. One concern per 
 | `guestui-abi` | FIRST DRAFT of the normalized UI interface engines call (`GuestUi`) |
 | `retro-common` | `Refusal` and `Step`, shared by every engine |
 | `mac68k-engine` | classic Mac 68k skeleton: A-line trap bridge, Pascal-convention Toolbox calls (docs/MAC68K-SKELETON.md) |
+| `retro-pef` | PEF (Code Fragment Manager) container: loader section, pattern data, every relocation opcode, export hash, writer |
+| `macppc-engine` | classic Mac PowerPC plumbing: CFM instantiation, imports bound by name onto the mac68k Toolbox handlers (docs/MACPPC-PLUMBING.md); no CPU yet |
 | `amiga68k-engine` | fake ExecBase, LVO trap bridge, Intuition handlers, host runner |
 
 The crates are `no_std` + `alloc`, so the same code runs on the host and in CoralOS user mode.

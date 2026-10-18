@@ -55,6 +55,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "macppc-engine"
+version = "0.1.0"
+dependencies = [
+ "guestui-abi",
+ "mac68k-engine",
+ "retro-common",
+ "retro-guest-mem",
+ "retro-pef",
+ "retro-resfork",
+]
+
+[[package]]
 name = "retro-common"
 version = "0.1.0"
 dependencies = [
@@ -70,6 +82,7 @@ version = "0.1.0"
 name = "retro-hunk"
 version = "0.1.0"
 dependencies = [
+ "retro-common",
  "retro-guest-mem",
 ]
 
@@ -79,6 +92,13 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "retro-guest-mem",
+]
+
+[[package]]
+name = "retro-pef"
+version = "0.1.0"
+dependencies = [
+ "retro-common",
 ]
 
 [[package]]
@@ -104,6 +124,9 @@ version = "0.1.0"
 [[package]]
 name = "retro-resfork"
 version = "0.1.0"
+dependencies = [
+ "retro-common",
+]
 
 [[package]]
 name = "shlex"

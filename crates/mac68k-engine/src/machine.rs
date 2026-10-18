@@ -81,7 +81,7 @@ pub struct Mac<U: GuestUi> {
     pub qd_globals: u32,
     /// QuickDraw's host-side state: window canvases, update regions, the font (qd/).
     pub qd: qd::Qd,
-    table: BTreeMap<u16, TrapEntry<U>>,
+    pub(crate) table: BTreeMap<u16, TrapEntry<U>>,
     /// One line per successful bridged call, in order.
     pub log: Vec<String>,
     /// Refusals (bad guest pointers, unimplemented traps ...), in order.
@@ -142,6 +142,23 @@ impl<U: GuestUi> Mac<U> {
     /// Names of every implemented trap, in trap order.
     pub fn implemented(&self) -> Vec<&'static str> { self.table.values().map(|e| e.name).collect() }
 
+    /// What a Pascal handler's outcome means, whichever CPU called it: log the line or record the refusal; the function
+    /// result (0 after a refusal). Shared by the 68k A-line bridge and the Mixed Mode seam ([`crate::mixed`]).
+    pub(crate) fn finish_pascal(&mut self, name: &str, outcome: Result<Done, Refusal>) -> u32 {
+        match outcome {
+            Ok(d) => { self.log.push(d.log); d.result }
+            Err(Refusal(e)) => { self.note_refusal(name, e); 0 }
+        }
+    }
+
+    /// The same for an OS-trap handler: log, or record the refusal and return paramErr in D0.
+    pub(crate) fn finish_os(&mut self, name: &str, outcome: Result<String, Refusal>, regs: &mut Regs) {
+        match outcome {
+            Ok(log) => self.log.push(log),
+            Err(Refusal(e)) => { self.note_refusal(name, e); regs.err(PARAM_ERR); }
+        }
+    }
+
     pub(crate) fn note_refusal(&mut self, name: &str, why: String) {
         self.log.push(format!("[toolbox] {name} REFUSED: {why}"));
         self.refused.push(format!("{name}: {why}"));
@@ -170,10 +187,7 @@ impl<U: GuestUi> Host for Mac<U> {
             Conv::Pascal { args: layout, result: rkind, handler } => {
                 let sp = cpu.areg(7);
                 let outcome = pascal::read_args(&self.mem, sp, layout).and_then(|args| handler(self, cpu, &Call { opcode, pc, name, args }));
-                let result = match outcome {
-                    Ok(d) => { self.log.push(d.log); d.result }
-                    Err(Refusal(e)) => { self.note_refusal(name, e); 0 }
-                };
+                let result = self.finish_pascal(name, outcome);
                 // The convention is applied once, here: pop the arguments whatever the handler did, store the result.
                 match pascal::complete(&mut self.mem, sp, layout, rkind.map(|k| (k, result))) {
                     Ok(new_sp) => cpu.set_areg(7, new_sp),
@@ -182,10 +196,8 @@ impl<U: GuestUi> Host for Mac<U> {
             }
             Conv::Os(handler) => {
                 let mut regs = Regs::read(cpu, opcode);
-                match handler(self, cpu, &mut regs) {
-                    Ok(log) => self.log.push(log),
-                    Err(Refusal(e)) => { self.note_refusal(name, e); regs.err(PARAM_ERR); }
-                }
+                let outcome = handler(self, cpu, &mut regs);
+                self.finish_os(name, outcome, &mut regs);
                 cpu.set_d0(regs.d0);
                 cpu.set_areg(0, regs.a0);
                 set_flags(cpu, regs.d0);

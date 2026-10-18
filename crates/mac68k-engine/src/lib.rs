@@ -22,6 +22,7 @@ pub mod machine;
 pub mod memmgr;
 pub mod memtraps;
 pub mod menu;
+pub mod mixed;
 pub mod osconv;
 pub mod pascal;
 pub mod qd;

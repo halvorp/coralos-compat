@@ -19,9 +19,4 @@ pub use fork::{ForkError, ResEntry, ResFork};
 /// A four-character resource type or file type, e.g. `*b"CODE"`.
 pub type OsType = [u8; 4];
 
-pub(crate) fn be16(b: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_be_bytes(b.get(at..at.checked_add(2)?)?.try_into().ok()?))
-}
-pub(crate) fn be32(b: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_be_bytes(b.get(at..at.checked_add(4)?)?.try_into().ok()?))
-}
+pub(crate) use retro_common::bytes::{be16, be32};
