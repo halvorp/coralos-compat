@@ -21,8 +21,8 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
-use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, idcmp::{self, IDCMP_GADGETUP}, machine::Amiga, memory, run::Delivered, tags, Refusal};
-use guestui_abi::{CallbackToken, ControlKind, ControlValue, GuestUi, UiObjectRef};
+use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, idcmp, machine::Amiga, memory, run::Delivered, tags, translate::{self, gadtools}, Refusal};
+use guestui_abi::{ControlKind, ControlValue, GuestUi, Intent};
 use retro_m68k::Cpu;
 
 pub const LVO_GT_GET_GADGET_ATTRS_A: i32 = -174;
@@ -212,26 +212,22 @@ fn store<U: GuestUi>(a: &mut Amiga<U>, g: u32, v: &ControlValue) -> Result<(), R
 }
 
 /// A native control changed: update the gadget's state and post IDCMP_GADGETUP (IAddress = the gadget).
-pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, control: UiObjectRef, token: CallbackToken, value: ControlValue) -> Result<Delivered, Refusal> {
-    let g = u32::try_from(token.0).ok().filter(|g| a.gadgets.contains_key(g))
-        .ok_or_else(|| Refusal(format!("deliver: ControlChanged token {:#x} is not a GadTools gadget", token.0)))?;
+pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32, intent: Intent) -> Result<Delivered, Refusal> {
     let info = a.gadgets[&g].clone();
-    if info.attached != Some((win, native, control)) {
-        return Err(Refusal(format!("deliver: ControlChanged for gadget {g:#x}, which is not that native control of that window (stale?)")));
-    }
-    let (code, value) = match (info.kind, value) {
-        (BUTTON_KIND, ControlValue::Pressed) => (0u16, None),
-        (BUTTON_KIND, v) => return Err(Refusal(format!("deliver: a {v:?} value from a button"))),
-        (_, v) => {
-            let v = normalize(&info, v)?;
-            (match &v { ControlValue::Checked(b) => *b as u16, ControlValue::Level(l) => *l as u16, _ => 0 }, Some(v))
-        }
+    let row = translate::lookup(gadtools::TABLE, &control_kind(&info), &intent)?;
+    let value = match intent {
+        Intent::SetValue(v) => Some(normalize(&info, v)?),
+        Intent::CommitText(t) => Some(normalize(&info, ControlValue::Text(t))?),
+        _ => None,
     };
-    let msg = if idcmp::subscribed(a, win, IDCMP_GADGETUP)? { Some(idcmp::reserve(a)?) } else { None };
+    let (class, code) = translate::message(row, 0, value.as_ref()).ok_or_else(|| Refusal("deliver: a GadTools row sent no message".into()))?;
+    let changed = matches!(&value, Some(ControlValue::Level(l)) if *l != info.state.level);
+    let class = gadtools::filter_class(class, info.kind, changed);
+    let msg = if idcmp::subscribed(a, win, class)? { Some(idcmp::reserve(a)?) } else { None };
     if let Some(v) = &value {
         if let Err(e) = store(a, g, v) { if let Some(m) = msg { let _ = a.heap.free(m, idcmp::INTUIMESSAGE_SIZE); } return Err(e); }
     }
-    match msg { Some(m) => idcmp::queue(a, win, m, IDCMP_GADGETUP, code, g), None => Ok(Delivered::IgnoredUnsubscribed) }
+    match msg { Some(m) => idcmp::queue(a, win, m, class, code, g), None => Ok(Delivered::IgnoredUnsubscribed) }
 }
 
 /// GT_SetGadgetAttrsA(a0 = gadget, a1 = window, a2 = requester, a3 = tags): GTTX_Text (text), GTCB_Checked, GTST_String,

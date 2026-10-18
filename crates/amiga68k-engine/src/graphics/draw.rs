@@ -31,7 +31,7 @@ pub fn draw<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     // COMPLEMENT lines that continue another segment skip the shared end pixel, or it would be inverted twice.
     let skip_first = brush.mode & COMPLEMENT != 0 && st.flags & FRST_DOT == 0;
     let from = st.cp;
-    target::paint(a, rp, "Draw", |bm, clip, (ox, oy)| {
+    target::paint_as(a, rp, "Draw", super::record::line(&st, from, (x, y)).filter(|_| !skip_first), |bm, clip, (ox, oy)| {
         let (p0, p1) = ((from.0 - ox, from.1 - oy), (x - ox, y - oy));
         if skip_first && p0 != p1 {
             let mut g = clip.region.cloned().unwrap_or_else(|| Region::from_rect(clip.rect));
@@ -52,7 +52,7 @@ pub fn rect_fill<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     let st = rastport::read(a, rp)?;
     let (brush, pat) = (st.brush(), pattern(a, &st)?);
     let r = Rect::from_inclusive(x0, y0, x1, y1);
-    target::paint(a, rp, "RectFill", |bm, clip, (ox, oy)| paint::fill_rect(bm, r.translate(-ox, -oy), &brush, pat.as_ref(), clip))?;
+    target::paint_as(a, rp, "RectFill", super::record::fill(&st), |bm, clip, (ox, oy)| paint::fill_rect(bm, r.translate(-ox, -oy), &brush, pat.as_ref(), clip))?;
     Ok(format!("[graphics] RectFill {rp:#x} ({x0},{y0})-({x1},{y1}) pen {} mode {}", st.fg, st.mode))
 }
 
@@ -64,7 +64,7 @@ pub fn erase_rect<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     let (rp, x0, y0, x1, y1) = (cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)), sx(cpu.dreg(2)), sx(cpu.dreg(3)));
     let st = rastport::read(a, rp)?;
     let (b, r) = (solid(erase_pen(&st), st.mask), Rect::from_inclusive(x0, y0, x1, y1));
-    target::paint(a, rp, "EraseRect", |bm, clip, (ox, oy)| paint::fill_rect(bm, r.translate(-ox, -oy), &b, None, clip))?;
+    target::paint_as(a, rp, "EraseRect", super::record::solid(&st, erase_pen(&st)), |bm, clip, (ox, oy)| paint::fill_rect(bm, r.translate(-ox, -oy), &b, None, clip))?;
     Ok(format!("[graphics] EraseRect {rp:#x} ({x0},{y0})-({x1},{y1})"))
 }
 
@@ -73,7 +73,8 @@ pub fn set_rast<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
     let (rp, pen) = (cpu.areg(1), cpu.dreg(0) as u8);
     let mask = a.mem.read_u8(rp + RP_MASK).map_err(Refusal::mem("Mask"))?;
     let b = solid(pen, mask);
-    target::paint(a, rp, "SetRast", |bm, clip, _| { let all = bm.rect(); paint::fill_rect(bm, all, &b, None, clip) })?;
+    let prim = (mask == 0xFF).then_some(super::record::Prim::Fill { pen });
+    target::paint_as(a, rp, "SetRast", prim, |bm, clip, _| { let all = bm.rect(); paint::fill_rect(bm, all, &b, None, clip) })?;
     Ok(format!("[graphics] SetRast {rp:#x} pen {pen}"))
 }
 
@@ -85,7 +86,7 @@ pub fn clear_eol<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     let pen = if st.mode & JAM2 != 0 { st.bg } else { 0 };
     let b = solid(pen, st.mask);
     let (x, top) = (st.cp.0, st.cp.1 - base);
-    target::paint(a, rp, "ClearEOL", |bm, clip, (ox, oy)| { let w = bm.width(); paint::fill_rect(bm, Rect::new(x - ox, top - oy, w, top - oy + h), &b, None, clip) })?;
+    target::paint_as(a, rp, "ClearEOL", super::record::solid(&st, pen), |bm, clip, (ox, oy)| { let w = bm.width(); paint::fill_rect(bm, Rect::new(x - ox, top - oy, w, top - oy + h), &b, None, clip) })?;
     Ok(format!("[graphics] ClearEOL {rp:#x} from x={x}"))
 }
 

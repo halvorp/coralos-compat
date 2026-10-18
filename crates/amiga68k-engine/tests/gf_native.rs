@@ -65,7 +65,7 @@ fn fixture() -> Fx {
 }
 
 /// Every IntuiMessage queued on the window's UserPort so far: (class, code, IAddress).
-macro_rules! drive { ($f:ident, $g:ident, $ph:expr, $v:expr) => {{ let gd = $f.$g; drive_impl(&mut $f, gd, $ph, $v) }}; }
+macro_rules! drive { ($f:ident, $g:ident, $intent:expr) => {{ let gd = $f.$g; drive_impl(&mut $f, gd, $intent) }}; }
 
 fn messages(f: &Fx) -> Vec<(u32, u32, u32)> {
     let m = &f.g.a.mem;
@@ -75,10 +75,10 @@ fn messages(f: &Fx) -> Vec<(u32, u32, u32)> {
     out
 }
 
-fn drive_impl(f: &mut Fx, gadget: u32, phase: PointerPhase, value: ControlValue) -> Result<Delivered, amiga68k_engine::Refusal> {
+fn drive_impl(f: &mut Fx, gadget: u32, intent: Intent) -> Result<Delivered, amiga68k_engine::Refusal> {
     let (ctl, _) = ctl_of(&f.g, gadget);
     let native = *f.g.a.windows.get(&f.win).unwrap();
-    f.g.a.deliver(GuestUiEvent::ControlDriven { win: native, control: ctl, token: CallbackToken(gadget as u64), phase, value })
+    f.g.a.deliver(GuestUiEvent::intent(native, ctl, CallbackToken(gadget as u64), intent))
 }
 
 #[test]
@@ -119,11 +119,11 @@ fn a_scroll_drag_updates_the_prop_info_and_posts_the_idcmp_sequence() {
     let mut f = fixture();
     let pi = f.g.r32(f.prop + 34);
     let scroll = |top| ControlValue::Scroll { total: 100, visible: 10, top };
-    assert_eq!(drive!(f, prop, PointerPhase::Down, scroll(0)).unwrap(), Delivered::Queued(f.g.a.mem.read_u32(f.g.r32(f.win + WD_USERPORT) + 20).unwrap()));
-    drive!(f, prop, PointerPhase::Move, scroll(40)).unwrap();
+    assert_eq!(drive!(f, prop, Intent::Press).unwrap(), Delivered::Queued(f.g.a.mem.read_u32(f.g.r32(f.win + WD_USERPORT) + 20).unwrap()));
+    drive!(f, prop, Intent::Drag(scroll(40))).unwrap();
     assert_eq!(f.g.r16(pi + 4) as u32, 40 * 0xFFFF / 90, "VertPot follows Top");
     assert_eq!(f.g.r32(pi + 32), 40, "propgclass keeps PGA_Top");
-    drive!(f, prop, PointerPhase::Up, scroll(500)).unwrap();
+    drive!(f, prop, Intent::ScrollTo(500)).unwrap();
     assert_eq!(f.g.r16(pi + 4), 0xFFFF, "a top past the end clamps to Total - Visible");
     assert_eq!(f.g.r16(pi + 8) as u32, 10 * 0xFFFF / 100, "the body is untouched");
     assert_eq!(messages(&f), [(GADGETDOWN, 0, f.prop), (MOUSEMOVE, 0, f.prop), (GADGETUP, 0, f.prop)], "IAddress = the Gadget");
@@ -133,9 +133,9 @@ fn a_scroll_drag_updates_the_prop_info_and_posts_the_idcmp_sequence() {
     assert_eq!(f.g.a.ui.calls.len(), calls);
     // Negative controls: a stale control and a nonsense phase are refused by name and change nothing.
     let pot = f.g.r16(pi + 4);
-    assert!(drive!(f, prop, PointerPhase::Move, ControlValue::Text("x".into())).is_err());
+    assert!(drive!(f, prop, Intent::Drag(ControlValue::Text("x".into()))).is_err());
     let native = *f.g.a.windows.get(&f.win).unwrap();
-    let stale = f.g.a.deliver(GuestUiEvent::ControlDriven { win: native, control: UiObjectRef { id: 999, generation: 1 }, token: CallbackToken(f.prop as u64), phase: PointerPhase::Down, value: scroll(0) });
+    let stale = f.g.a.deliver(GuestUiEvent::intent(native, UiObjectRef { id: 999, generation: 1 }, CallbackToken(f.prop as u64), Intent::Press));
     assert!(stale.is_err());
     assert_eq!((f.g.r16(pi + 4), messages(&f).len()), (pot, 3));
 }
@@ -158,10 +158,10 @@ fn string_edit_and_return_update_the_buffer_and_post_gadgetup() {
     let si = f.g.r32(f.strg + 34);
     let buf = f.g.r32(si);
     let calls = f.g.a.ui.calls.len();
-    drive!(f, strg, PointerPhase::Move, ControlValue::Text("hello wor".into())).unwrap();
+    drive!(f, strg, Intent::Drag(ControlValue::Text("hello wor".into()))).unwrap();
     assert_eq!(f.g.a.mem.read_cstr(buf).unwrap(), "hello wor", "typing updates the StringInfo buffer live");
     assert!(messages(&f).is_empty(), "no message until Return");
-    drive!(f, strg, PointerPhase::Up, ControlValue::Text("hello world, far too long for twenty".into())).unwrap();
+    drive!(f, strg, Intent::CommitText("hello world, far too long for twenty".into())).unwrap();
     assert_eq!(f.g.a.mem.read_cstr(buf).unwrap(), "hello world, far to", "cut to MaxChars 20, which counts the NUL (Intuition)");
     assert_eq!((f.g.r16(si + 16), f.g.r16(si + 8)), (19, 19), "NumChars and BufferPos");
     assert_eq!(messages(&f), [(GADGETUP, 0x0D, f.strg)], "Return ends the edit: GADGETUP, Code 0x0D, IAddress = the gadget");
@@ -173,21 +173,21 @@ fn string_edit_and_return_update_the_buffer_and_post_gadgetup() {
 fn buttons_select_on_press_and_verify_on_release_inside() {
     let mut f = fixture();
     let fl = |f: &Fx, g| f.g.r16(g + 12) & 0x80;
-    drive!(f, btn, PointerPhase::Down, ControlValue::Pressed).unwrap();
+    drive!(f, btn, Intent::Press).unwrap();
     assert_eq!(fl(&f, f.btn), 0x80, "GFLG_SELECTED while held");
-    drive!(f, btn, PointerPhase::Up, ControlValue::Pressed).unwrap();
+    drive!(f, btn, Intent::Release { inside: true }).unwrap();
     assert_eq!(fl(&f, f.btn), 0);
     assert_eq!(messages(&f), [(GADGETDOWN, 0, f.btn), (GADGETUP, 0, f.btn)]);
     // Released outside: selection ends, no GADGETUP.
-    drive!(f, btn, PointerPhase::Down, ControlValue::Pressed).unwrap();
-    drive!(f, btn, PointerPhase::Up, ControlValue::Cancelled).unwrap();
+    drive!(f, btn, Intent::Press).unwrap();
+    drive!(f, btn, Intent::Release { inside: false }).unwrap();
     assert_eq!((fl(&f, f.btn), messages(&f).len()), (0, 3), "only the second GADGETDOWN was added");
     // The arrow has GACT_RELVERIFY but not GACT_IMMEDIATE: no GADGETDOWN, GADGETUP on release (control for the flag check).
-    assert_eq!(drive!(f, arrow, PointerPhase::Down, ControlValue::Pressed).unwrap(), Delivered::Handled);
-    drive!(f, arrow, PointerPhase::Up, ControlValue::Pressed).unwrap();
+    assert_eq!(drive!(f, arrow, Intent::Press).unwrap(), Delivered::Handled);
+    drive!(f, arrow, Intent::Release { inside: true }).unwrap();
     assert_eq!(messages(&f)[3..], [(GADGETUP, 0, f.arrow)]);
     // A button gets no Move or Scroll.
-    assert!(drive!(f, btn, PointerPhase::Move, ControlValue::Scroll { total: 1, visible: 1, top: 0 }).is_err());
+    assert!(drive!(f, btn, Intent::Drag(ControlValue::Scroll { total: 1, visible: 1, top: 0 })).is_err());
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn a_removed_gadget_loses_its_control_and_pointer_input_never_reaches_native_gad
     assert_eq!(f.g.a.ui.controls.len(), 5, "AddGList registers it again");
     // A raw pointer press over a native gadget is not offered to a guest dispatcher (a system class would refuse GM_HITTEST).
     let native = *f.g.a.windows.get(&f.win).unwrap();
-    let d = f.g.a.deliver(GuestUiEvent::Pointer { win: native, x: 20, y: 15, phase: PointerPhase::Down }).unwrap();
+    let d = f.g.a.deliver(GuestUiEvent::primary(native, 20, 15, PointerPhase::Down)).unwrap();
     assert_eq!(d, Delivered::IgnoredUnsubscribed);
     assert!(f.g.a.refused.is_empty(), "{:?}", f.g.a.refused);
 }

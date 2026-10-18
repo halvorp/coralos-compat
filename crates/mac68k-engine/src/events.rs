@@ -16,7 +16,7 @@
 //!   `inMenuBar` and its `MenuSelect` returns the choice as `menuID << 16 | item` (instead of tracking the mouse).
 //! * `Resized` -> the window's rect is updated and an `updateEvt` is queued.
 //! * A window becoming visible queues `activateEvt` then `updateEvt` (message = the WindowPtr), as the Window Manager does.
-//! * `ControlChanged` has no Mac meaning (Mac controls come from `GetNewControl`, not bridged yet): a named refusal.
+//! * `Intent` has no Mac meaning (Mac controls come from `GetNewControl`, not bridged yet): a named refusal.
 use crate::lowmem::TICKS;
 use crate::machine::{Call, Done, Mac};
 use crate::osconv::Regs;

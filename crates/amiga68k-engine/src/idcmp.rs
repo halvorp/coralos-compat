@@ -10,8 +10,8 @@
 //! gives it back, so a refused delivery leaves the queue, the signal bits and the window untouched.
 use alloc::string::String;
 use alloc::format;
-use crate::{exec_wait, gt_kinds, machine::Amiga, memory, menu_nav, ports, run::Delivered, Refusal};
-use guestui_abi::{GuestUi, GuestUiEvent};
+use crate::{exec_wait, machine::Amiga, memory, menu_nav, ports, run::Delivered, Refusal};
+use guestui_abi::{GuestUi, GuestUiEvent, PointerButton};
 use retro_m68k::Cpu;
 
 pub const LVO_MODIFY_IDCMP: i32 = -150;
@@ -38,6 +38,9 @@ const IM_REPLY_PORT: u32 = 14;
 const IM_LENGTH: u32 = 18;
 const IM_CLASS: u32 = 20;
 const IM_CODE: u32 = 24;
+const IM_QUALIFIER: u32 = 26;
+const IM_MOUSE_X: u32 = 32;
+const IM_MOUSE_Y: u32 = 34;
 const IM_IADDRESS: u32 = 28;
 const IM_SECONDS: u32 = 36;
 const IM_MICROS: u32 = 40;
@@ -102,14 +105,28 @@ pub fn subscribed<U: GuestUi>(a: &Amiga<U>, win: u32, class: u32) -> Result<bool
 /// A zeroed message block, not yet visible to the guest.
 pub fn reserve<U: GuestUi>(a: &mut Amiga<U>) -> Result<u32, Refusal> { memory::alloc_zeroed(a, INTUIMESSAGE_SIZE, "deliver: IntuiMessage") }
 
+/// The input state an IntuiMessage carries besides the pointer position: its Qualifier. MouseX / MouseY are ALWAYS the window's own
+/// `Window.MouseX/MouseY` (AROS inputhandler_support.c stamps every non-DELTAMOVE message with them).
+#[derive(Clone, Copy, Default)]
+pub struct Stamp { pub qualifier: u16 }
+
+pub const WD_MOUSE_Y: u32 = 12;
+pub const WD_MOUSE_X: u32 = 14;
+
 /// Fill the reserved `msg` and link it on `win`'s UserPort (signalling the task). Any failure gives the block back.
 pub fn queue<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, code: u16, iaddress: u32) -> Result<Delivered, Refusal> {
-    let r = fill_and_link(a, win, msg, class, code, iaddress);
+    let stamp = crate::content_input::current_stamp(a, win);
+    queue_stamped(a, win, msg, class, code, iaddress, stamp)
+}
+
+/// [`queue`] with the input state the message carries.
+pub fn queue_stamped<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, code: u16, iaddress: u32, stamp: Stamp) -> Result<Delivered, Refusal> {
+    let r = fill_and_link(a, win, msg, class, code, iaddress, stamp);
     if r.is_err() { let _ = a.heap.free(msg, INTUIMESSAGE_SIZE); }
     r.map(|()| Delivered::Queued(msg))
 }
 
-fn fill_and_link<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, code: u16, iaddress: u32) -> Result<(), Refusal> {
+fn fill_and_link<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, code: u16, iaddress: u32, stamp: Stamp) -> Result<(), Refusal> {
     let m = Refusal::mem;
     let port = a.mem.read_u32(win + WD_USERPORT).map_err(m("Window.UserPort"))?;
     if port == 0 { return Err(Refusal(format!("deliver: window {win:#x} has no UserPort"))); }
@@ -118,6 +135,10 @@ fn fill_and_link<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, c
     a.mem.write_u16(msg + IM_LENGTH, INTUIMESSAGE_SIZE as u16).map_err(m("mn_Length"))?;
     a.mem.write_u32(msg + IM_CLASS, class).map_err(m("Class"))?;
     a.mem.write_u16(msg + IM_CODE, code).map_err(m("Code"))?;
+    a.mem.write_u16(msg + IM_QUALIFIER, stamp.qualifier).map_err(m("Qualifier"))?;
+    let (mx, my) = (a.mem.read_u16(win + WD_MOUSE_X).map_err(m("Window.MouseX"))?, a.mem.read_u16(win + WD_MOUSE_Y).map_err(m("Window.MouseY"))?);
+    a.mem.write_u16(msg + IM_MOUSE_X, mx).map_err(m("MouseX"))?;
+    a.mem.write_u16(msg + IM_MOUSE_Y, my).map_err(m("MouseY"))?;
     a.mem.write_u32(msg + IM_IADDRESS, iaddress).map_err(m("IAddress"))?;
     a.mem.write_u32(msg + IM_SECONDS, (a.clock_us / 1_000_000) as u32).map_err(m("Seconds"))?;
     a.mem.write_u32(msg + IM_MICROS, (a.clock_us % 1_000_000) as u32).map_err(m("Micros"))?;
@@ -151,16 +172,17 @@ pub fn deliver<U: GuestUi>(a: &mut Amiga<U>, ev: GuestUiEvent) -> Result<Deliver
             Some(w) => menu_nav::menu_pick(a, w, token),
             None => Ok(Delivered::NotForAGuestWindow),
         },
-        GuestUiEvent::ControlChanged { win, control, token, value } => match guest_window(a, win) {
-            Some(w) => gt_kinds::control_changed(a, w, win, control, token, value),
+        GuestUiEvent::Intent { win, control, token, generation, intent } => match guest_window(a, win) {
+            Some(w) => crate::native_gadgets_input::intent(a, w, win, control, token, generation, intent),
             None => Ok(Delivered::NotForAGuestWindow),
         },
-        GuestUiEvent::Pointer { win, x, y, phase } => match guest_window(a, win) {
-            Some(w) => crate::boopsi_input::queue(a, w, x, y, phase),
+        GuestUiEvent::Pointer { win, x, y, button, phase, .. } => match guest_window(a, win) {
+            Some(w) if matches!(button, PointerButton::Primary | PointerButton::None) && crate::boopsi_input::claims(a, w, x, y, phase)? => crate::boopsi_input::queue(a, w, x, y, phase),
+            Some(w) => crate::content_input::pointer(a, w, x, y, button, phase),
             None => Ok(Delivered::NotForAGuestWindow),
         },
-        GuestUiEvent::ControlDriven { win, control, token, phase, value } => match guest_window(a, win) {
-            Some(w) => crate::native_gadgets_input::driven(a, w, win, control, token, phase, value),
+        GuestUiEvent::Key { win, code, text, modifiers, down } => match guest_window(a, win) {
+            Some(w) => crate::content_input::key(a, w, code, &text, modifiers, down),
             None => Ok(Delivered::NotForAGuestWindow),
         },
         ev @ GuestUiEvent::Resized { .. } => Err(Refusal(format!("deliver: {ev:?} not bridged yet"))),

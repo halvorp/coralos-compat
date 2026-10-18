@@ -19,6 +19,7 @@ fn run_fixture(mode: u32, wflags: u32) -> Amiga<RecordingGuestUi> {
     code[4..8].copy_from_slice(&mode.to_be_bytes());
     code[8..12].copy_from_slice(&wflags.to_be_bytes());
     let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    a.gfx.present.set_plane_route(false); // the pixel-level tests read the canvas
     a.start_hunk(&build(&[Hunk::code(code, vec![])], None)).unwrap();
     let (s, _) = a.step(1_000_000);
     assert_eq!(s, Step::Blocked, "{:?} {:?}", a.refused, a.log);

@@ -13,6 +13,7 @@ fn run(doref: u32) -> (Amiga<RecordingGuestUi>, u32) {
     let mut code = BIN.to_vec();
     code[4..8].copy_from_slice(&doref.to_be_bytes());
     let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    a.gfx.present.set_plane_route(false); // this test reads the canvas
     let loaded = a.start_hunk(&build(&[Hunk::code(code, vec![])], None)).unwrap();
     let (s, _) = a.step(2_000_000);
     assert_eq!(s, Step::Blocked, "{:?} {:?}", a.refused, &a.log[a.log.len().saturating_sub(6)..]);

@@ -46,11 +46,16 @@ pub struct State {
     pub palette: Option<Palette>,
     /// Per-window damage and first-frame state; flushed by `content::flush` through the shared `retro-present`.
     pub present: retro_present::Presenter,
+    /// Images (guest addresses) of default icons that carry the host's artwork for a role: a draw of one is an `Icon` op.
+    pub icon_images: BTreeMap<u32, guestui_abi::IconRole>,
     /// Pending AreaMove/AreaDraw polygons by RastPort: (points, closed-at).
     pub areas: BTreeMap<u32, Vec<(i32, i32)>>,
 }
 
 impl State {
+    /// The plane route is the default (ruling 17 piece 5): window content is published as a display list, with
+    /// the canvas route as the host-refused fallback.
+    pub fn new() -> State { let mut s = State::default(); s.present.set_plane_route(true); s }
     pub fn palette(&mut self) -> &mut Palette { self.palette.get_or_insert_with(Palette::new) }
     pub fn add_damage(&mut self, win: u32, r: Rect) {
         self.present.add_damage(win, r);

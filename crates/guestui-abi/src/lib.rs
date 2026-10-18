@@ -13,10 +13,14 @@
 //! Records are pointer-free: no guest address ever crosses this boundary.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+mod event;
 mod model;
+mod plane;
 mod recording;
 
+pub use event::*;
 pub use model::*;
+pub use plane::*;
 pub use recording::{pixel_hash, RecordingGuestUi, UiCall};
 
 /// What an icon depicts, in generic terms (a host maps each to its own artwork).
@@ -71,6 +75,13 @@ pub trait GuestUi {
     /// engine step per window, never per drawing primitive. Hosts without a canvas part refuse by name.
     fn present_content(&mut self, _win: UiObjectRef, _damage: GuestRect, _width: i32, _height: i32, _pixels: &[u32]) -> Result<(), UiRefusal> {
         Err(UiRefusal::Unsupported("guest-drawn content (no canvas part in this host)"))
+    }
+    /// Guest drawing as a DISPLAY LIST (ruling 17): a content plane the engine could not map to controls, as recorded ops
+    /// with theme-role pens. `plane_damage.rect` is the region to repaint and `ops` everything drawn there; the host
+    /// replays it with the kit's own typography and theme. Hosts without plane replay refuse by name (the engine then
+    /// falls back to `present_content`).
+    fn present_plane(&mut self, _win: UiObjectRef, _plane_damage: Plane) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("guest content planes (no display-list replay in this host)"))
     }
     /// A host-drawn icon for a generic object `role`, `width` x `height` pixels, row-major `0xAARRGGBB` (alpha >= 0x80 is
     /// opaque, below it transparent), exactly `width * height` values. `None` = this host has no artwork for the role

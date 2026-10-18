@@ -173,12 +173,18 @@ fn menu_commands_that_name_nothing_are_refused_by_name() {
 #[test]
 fn gadget_events_become_gadgetup_with_the_gadget_and_update_what_the_program_reads_back() {
     let mut fx = Fx::new();
-    let (_, native) = fx.win();
+    let (w, native) = fx.win();
+    let idcmp = fx.a.mem.read_u32(w + 82).unwrap();
+    fx.a.mem.write_u32(w + 82, idcmp | 0x10).unwrap(); // + IDCMP_MOUSEMOVE: a changed slider level arrives as one
     let (button, bt) = fx.control(0);
     let (check, ct) = fx.control(1);
     let (string, st) = fx.control(2);
     let (slider, lt) = fx.control(3);
-    let ev = |control, token, value| GuestUiEvent::ControlChanged { win: native, control, token, value };
+    let ev = |control, token, value: ControlValue| GuestUiEvent::intent(native, control, token, match value {
+        ControlValue::Pressed => Intent::Activate,
+        ControlValue::Text(t) => Intent::CommitText(t),
+        v => Intent::SetValue(v),
+    });
     // Button -> GADGETUP, IAddress = the guest Gadget, Code 0.
     assert!(matches!(fx.deliver_and_run(ev(button, bt, ControlValue::Pressed)), Delivered::Queued(_)));
     let r = fx.records().1;
@@ -192,21 +198,24 @@ fn gadget_events_become_gadgetup_with_the_gadget_and_update_what_the_program_rea
     assert_ne!(fx.a.mem.read_u16(ct.0 as u32 + 12).unwrap() & 0x80, 0, "SELECTED set again");
     // String: the buffer the program's StringInfo points at holds the committed text (cut to MaxChars 8).
     fx.deliver_and_run(ev(string, st, ControlValue::Text("hello world".into())));
+    assert_eq!(fx.records().1[3][1], 0x0D, "strgclass: GADGETUP's Code is the key that ended the edit (Return)");
     let si = fx.a.mem.read_u32(st.0 as u32 + 34).unwrap();
     let buf = fx.a.mem.read_u32(si).unwrap();
     assert_eq!(fx.a.mem.read_cstr(buf).unwrap(), "hello wo");
     assert_eq!((fx.a.mem.read_u16(si + 16).unwrap(), fx.a.mem.read_u16(si + 10).unwrap()), (8, 9), "NumChars; MaxChars counts the NUL");
-    // Slider: Code = the level.
+    // Slider (GT_FilterIMsg): a release that changed the level is IDCMP_MOUSEMOVE with Code = the level; one that did not stays GADGETUP.
     fx.deliver_and_run(ev(slider, lt, ControlValue::Level(7)));
-    assert_eq!(fx.records().1[4][1], 7);
+    assert_eq!((fx.records().1[4][0], fx.records().1[4][1]), (0x10, 7));
+    fx.deliver_and_run(ev(slider, lt, ControlValue::Level(7)));
+    assert_eq!((fx.records().1[5][0], fx.records().1[5][1]), (IDCMP_GADGETUP, 7), "NEGATIVE CONTROL: an unchanged level is a GADGETUP");
     // NEGATIVE CONTROLS: an out-of-range level, a value of the wrong kind, a stale control and an unknown token.
     let bad = |fx: &mut Fx, e| fx.a.deliver(e).unwrap_err().0;
     assert!(bad(&mut fx, ev(slider, lt, ControlValue::Level(10))).contains("outside 1..=9"));
-    assert!(bad(&mut fx, ev(slider, lt, ControlValue::Pressed)).contains("cannot be held by a kind-11"));
-    assert!(bad(&mut fx, ev(button, bt, ControlValue::Checked(true))).contains("from a button"));
+    assert!(bad(&mut fx, ev(slider, lt, ControlValue::Pressed)).contains("means nothing for the control"));
+    assert!(bad(&mut fx, ev(button, bt, ControlValue::Checked(true))).contains("means nothing for the control"));
     assert!(bad(&mut fx, ev(check, bt, ControlValue::Pressed)).contains("not that native control"));
     assert!(bad(&mut fx, ev(button, CallbackToken(0x1234), ControlValue::Pressed)).contains("not a GadTools gadget"));
-    assert_eq!(fx.records().0, 5, "none of those reached the program");
+    assert_eq!(fx.records().0, 6, "none of those reached the program");
     // The program reads its gadgets back on the way out.
     fx.close();
     assert_eq!(fx.res(136), 1, "GTCB_Checked");
@@ -230,7 +239,7 @@ fn a_window_that_did_not_ask_for_a_class_gets_no_message_but_the_state_still_mov
     let UiCall::SetMenuStrip(_, m) = fx.a.ui.calls.last().unwrap() else { panic!("the native menu was re-sent") };
     assert_eq!(m.menus[1].items[0].check, Some(false), "Intuition moves the check even when no MENUPICK is wanted");
     // Gadget: SELECTED follows the native checkbox.
-    let d = fx.a.deliver(GuestUiEvent::ControlChanged { win: native, control: check, token: ct, value: ControlValue::Checked(false) }).unwrap();
+    let d = fx.a.deliver(GuestUiEvent::intent(native, check, ct, Intent::SetValue(ControlValue::Checked(false)))).unwrap();
     assert_eq!(d, Delivered::IgnoredUnsubscribed);
     assert_eq!(fx.a.mem.read_u16(ct.0 as u32 + 12).unwrap() & 0x80, 0);
     assert!(fx.a.engine_msgs.is_empty(), "nothing queued, nothing allocated");
@@ -238,7 +247,7 @@ fn a_window_that_did_not_ask_for_a_class_gets_no_message_but_the_state_still_mov
     assert_eq!((s, st.insns), (Step::Blocked, 0), "the program was not woken");
     // CONTROL: subscribe again and the same event is delivered.
     fx.a.mem.write_u32(w + 82, 0x340).unwrap();
-    let d = fx.a.deliver(GuestUiEvent::ControlChanged { win: native, control: check, token: ct, value: ControlValue::Checked(true) }).unwrap();
+    let d = fx.a.deliver(GuestUiEvent::intent(native, check, ct, Intent::SetValue(ControlValue::Checked(true)))).unwrap();
     assert!(matches!(d, Delivered::Queued(_)));
     fx.run();
     fx.close();
@@ -251,8 +260,49 @@ fn events_for_a_window_that_is_gone_are_not_for_a_guest_window() {
     let (check, ct) = fx.control(1);
     fx.close();
     assert_eq!(fx.a.deliver(GuestUiEvent::MenuCommand { win: native, token: menu_token(0, 0, None) }).unwrap(), Delivered::NotForAGuestWindow);
-    let ev = GuestUiEvent::ControlChanged { win: native, control: check, token: ct, value: ControlValue::Pressed };
+    let ev = GuestUiEvent::intent(native, check, ct, Intent::Activate);
     assert_eq!(fx.a.deliver(ev).unwrap(), Delivered::NotForAGuestWindow);
     let e = fx.a.deliver(GuestUiEvent::Resized { win: native, rect: GuestRect { left: 0, top: 0, width: 1, height: 1 } }).unwrap_err();
     assert!(e.0.contains("not bridged yet"), "{e:?}");
+}
+
+/// Seam v2 + the GadTools table (src/translate/gadtools.rs): the guest-visible state changes FIRST, then exactly one IDCMP_GADGETUP
+/// follows with IAddress = the Gadget and the Code the table names; an intent the table has no row for, or a stale generation, is
+/// refused by name and changes nothing.
+#[test]
+fn state_first_then_one_gadgetup_in_the_table_order_and_stale_or_rowless_intents_are_refused() {
+    let mut fx = Fx::new();
+    let (w, native) = fx.win();
+    let (button, bt) = fx.control(0);
+    let (check, ct) = fx.control(1);
+    let (slider, lt) = fx.control(3);
+    let idcmp = fx.a.mem.read_u32(w + 82).unwrap();
+    fx.a.mem.write_u32(w + 82, idcmp | 0x10).unwrap();
+    // State first: the checkbox's SELECTED flag is set the moment the event is delivered, before the program runs and sees the message.
+    assert_eq!(fx.a.mem.read_u16(ct.0 as u32 + 12).unwrap() & 0x80 != 0, true, "starts checked (GTCB_Checked)");
+    fx.a.mem.write_u16(w + 14, 21).unwrap(); // Window.MouseX / MouseY: every IntuiMessage is stamped with them
+    fx.a.mem.write_u16(w + 12, 9).unwrap();
+    let d = fx.a.deliver(GuestUiEvent::intent(native, check, ct, Intent::SetValue(ControlValue::Checked(false)))).unwrap();
+    assert_eq!(fx.a.mem.read_u16(ct.0 as u32 + 12).unwrap() & 0x80, 0, "SELECTED cleared before the guest ran");
+    let Delivered::Queued(msg) = d else { panic!("{d:?}") };
+    let (class, code, iaddress) = (fx.a.mem.read_u32(msg + 20).unwrap(), fx.a.mem.read_u16(msg + 24).unwrap(), fx.a.mem.read_u32(msg + 28).unwrap());
+    assert_eq!((class, code, iaddress), (IDCMP_GADGETUP, 0, ct.0 as u32), "IntuiMessage Class / Code (the new state) / IAddress (the gadget)");
+    assert_eq!((fx.a.mem.read_u16(msg + 32).unwrap(), fx.a.mem.read_u16(msg + 34).unwrap()), (21, 9), "MouseX / MouseY are the window's");
+    assert_eq!(fx.run().0, Step::Blocked);
+    // Several intents, one message each, in delivery order (the program logs them).
+    fx.deliver_and_run(GuestUiEvent::intent(native, button, bt, Intent::Activate));
+    fx.deliver_and_run(GuestUiEvent::intent(native, slider, lt, Intent::SetValue(ControlValue::Level(4))));
+    let r = fx.records().1;
+    assert_eq!(r.iter().map(|x| (x[0], x[1], x[2])).collect::<Vec<_>>(), [(IDCMP_GADGETUP, 0, ct.0 as u32), (IDCMP_GADGETUP, 0, bt.0 as u32), (0x10, 4, lt.0 as u32)]);
+    // NEGATIVE CONTROLS. A stale generation (the ref as the host held it before the control was recreated) is refused by name.
+    let stale = GuestUiEvent::Intent { win: native, control: button, token: bt, generation: button.generation + 1, intent: Intent::Activate };
+    let e = fx.a.deliver(stale).unwrap_err();
+    assert!(e.0.contains("stale"), "{e:?}");
+    // The table has no row for Press on a GadTools button (GadTools gadgets report on release only) or for a row selection.
+    for intent in [Intent::Press, Intent::SelectRow(1), Intent::ScrollTo(1)] {
+        let e = fx.a.deliver(GuestUiEvent::intent(native, button, bt, intent)).unwrap_err();
+        assert!(e.0.contains("means nothing for the control"), "{e:?}");
+    }
+    assert_eq!(fx.records().0, 3, "none of those reached the program");
+    fx.close();
 }

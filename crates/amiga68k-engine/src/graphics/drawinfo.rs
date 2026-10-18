@@ -75,7 +75,8 @@ fn draw_chain<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut im: u32, left: i32, top
         let dd = match target::resolve(a, rp)? { target::Dest::Bitmap { bm, .. } => a.gfx.bitmaps[&bm].bm.depth(), target::Dest::Dropped(_) => 8 };
         let pens = image_pens(a, &i, dd)?;
         let (x0, y0) = (left + i.left, top + i.top);
-        target::paint(a, rp, what, |bm, clip, (ox, oy)| {
+        let prim = a.gfx.icon_images.get(&im).map(|&role| super::record::Prim::Icon { rect: Rect::from_size(x0, y0, i.w, i.h), role });
+        target::paint_as(a, rp, what, prim, |bm, clip, (ox, oy)| {
             let mut hit = Rect::default();
             for y in 0..i.h { for x in 0..i.w {
                 let (bx, by) = (x0 + x - ox, y0 + y - oy);
@@ -145,7 +146,8 @@ pub fn draw_border<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
         let pts: Vec<(i32, i32)> = (0..count.max(0) as u32).map(|i| Ok((l + bl + a.mem.read_i16(xy + 4 * i).map_err(&m)? as i32, t + bt + a.mem.read_i16(xy + 4 * i + 2).map_err(&m)? as i32))).collect::<Result<_, Refusal>>()?;
         let brush = Brush { fg, bg, mode: mode & 7, mask: st.mask };
         let mut phase = 15u8;
-        target::paint(a, rp, "DrawBorder", |bm, clip, (ox, oy)| {
+        let prim = (mode & 7 <= 1 && st.mask == 0xFF && !pts.is_empty()).then(|| super::record::Prim::Lines { pts: pts.clone(), pen: fg });
+        target::paint_as(a, rp, "DrawBorder", prim, |bm, clip, (ox, oy)| {
             let mut hit = Rect::default();
             for w in pts.windows(2) { hit = hit.union(&paint::line(bm, (w[0].0 - ox, w[0].1 - oy), (w[1].0 - ox, w[1].1 - oy), &brush, 0xFFFF, &mut phase, clip)); }
             if pts.len() == 1 { hit = paint::plot(bm, pts[0].0 - ox, pts[0].1 - oy, &brush, clip); }
@@ -182,7 +184,8 @@ pub fn print_itext<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
         let text = if tp == 0 { Vec::new() } else { a.mem.read_cstr(tp).map_err(&m)?.into_bytes() };
         let brush = Brush { fg, bg, mode: mode & 7, mask };
         let base = font.baseline as i32;
-        target::paint(a, rp, "PrintIText", |bm, clip, (ox, oy)| retro_raster::font::draw_text(bm, &font, &text, x - ox, y + base - oy, &brush, saved.algo, clip).1)?;
+        let prim = super::record::text(&rastport::Rp { fg, bg, mode: mode & 7, ..saved }, &font, &text, (x, y + base));
+        target::paint_as(a, rp, "PrintIText", prim, |bm, clip, (ox, oy)| retro_raster::font::draw_text(bm, &font, &text, x - ox, y + base - oy, &brush, saved.algo, clip).1)?;
         it = next; n += 1;
     }
     Ok(format!("[intuition] PrintIText {n} texts at {l},{t}"))

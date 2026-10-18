@@ -18,6 +18,7 @@ pub mod fonts;
 mod palette;
 mod pixelarrays;
 pub mod rastport;
+pub mod record;
 mod regions;
 mod setup;
 pub mod state;

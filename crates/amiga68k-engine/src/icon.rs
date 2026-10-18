@@ -60,14 +60,14 @@ pub fn default_icon(ty: u8) -> Icon {
 
 /// The default icon the guest gets: the host's artwork for the type's role (icon_host.rs) when it has some, else the
 /// placeholder box. Returns the log suffix naming which one, and why the box (FALLBACK-BOX) when it is the box.
-fn default_for<U: GuestUi>(a: &mut Amiga<U>, ty: u8) -> (Icon, String) {
+fn default_for<U: GuestUi>(a: &mut Amiga<U>, ty: u8) -> (Icon, String, Option<guestui_abi::IconRole>) {
     let boxed = box_icon(ty);
-    let Some(role) = crate::icon_host::role_of(ty) else { return (boxed, " [placeholder box: no icon role for this type]".into()) };
+    let Some(role) = crate::icon_host::role_of(ty) else { return (boxed, " [placeholder box: no icon role for this type]".into(), None) };
     let fresh;
     let pal = match a.gfx.palette.as_ref() { Some(p) => p, None => { fresh = crate::graphics::state::Palette::new(); &fresh } };
     match crate::icon_host::host_image(&mut a.ui, role, pal) {
-        Ok(img) => (crate::icon_host::with_image(boxed, img), format!(" [host artwork: {role:?}]")),
-        Err(why) => (boxed, format!(" [FALLBACK-BOX: {why}]")),
+        Ok(img) => (crate::icon_host::with_image(boxed, img), format!(" [host artwork: {role:?}]"), Some(role)),
+        Err(why) => (boxed, format!(" [FALLBACK-BOX: {why}]"), None),
     }
 }
 
@@ -190,6 +190,18 @@ fn load<U: GuestUi>(a: &Amiga<U>, name: &str) -> Result<Icon, (DosErr, String)> 
     Icon::parse(data).map_err(|e| (ERROR_OBJECT_WRONG_TYPE, format!("{path}: {e:?}")))
 }
 
+/// [`deliver`] a default icon; when it carries the host's artwork for `role`, remember its Image so a draw of it is recorded as
+/// `DrawOp::Icon { role }` (graphics/record.rs) instead of pixels. The entry goes with the DiskObject (`free_disk_object`).
+fn deliver_default<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, icon: &Icon, role: Option<guestui_abi::IconRole>, what: String) -> Result<String, Refusal> {
+    let r = deliver(a, cpu, icon, what)?;
+    let p = cpu.dreg(0);
+    if let (Some(role), true) = (role, p != 0) {
+        let img = a.mem.read_u32(p + O_GADGET_RENDER as u32).map_err(Refusal::mem("DiskObject.do_Gadget.GadgetRender"))?;
+        if img != 0 { a.gfx.icon_images.insert(img, role); }
+    }
+    Ok(r)
+}
+
 fn deliver<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, icon: &Icon, what: String) -> Result<String, Refusal> {
     let note = if icon.trailer.is_empty() { String::new() } else { format!(" ({} trailing bytes of GlowIcons/NewIcons data ignored)", icon.trailer.len()) };
     match materialize(a, icon)? {
@@ -219,7 +231,7 @@ fn get_disk_object_new<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
                 Kind::File(d) if d.starts_with(&[0, 0, 3, 0xF3]) => WBTOOL, // HUNK_HEADER: an executable
                 Kind::File(_) => WBPROJECT,
             };
-            { let (i, note) = default_for(a, ty); deliver(a, cpu, &i, format!("{what} (no .info: default){note}")) }
+            { let (i, note, role) = default_for(a, ty); deliver_default(a, cpu, &i, role, format!("{what} (no .info: default){note}")) }
         }
         Err((e, why)) => fail(a, cpu, e, 0, format!("{what} ({why})")),
     }
@@ -230,7 +242,7 @@ fn get_def_disk_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
     let ty = cpu.dreg(0);
     let what = format!("[icon] GetDefDiskObject {ty}");
     if !(u32::from(WBDISK)..=u32::from(WBKICK)).contains(&ty) { return fail(a, cpu, ERROR_OBJECT_WRONG_TYPE, 0, what); }
-    { let (i, note) = default_for(a, ty as u8); deliver(a, cpu, &i, format!("{what}{note}")) }
+    { let (i, note, role) = default_for(a, ty as u8); deliver_default(a, cpu, &i, role, format!("{what}{note}")) }
 }
 
 /// NewDiskObject(d0 = type) -> a fresh icon of that type (the default one: the engine has no blank-icon variant).
@@ -238,7 +250,7 @@ fn new_disk_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     let ty = cpu.dreg(0);
     let what = format!("[icon] NewDiskObject {ty}");
     if !(u32::from(WBDISK)..=u32::from(WBAPPICON)).contains(&ty) { return fail(a, cpu, ERROR_OBJECT_WRONG_TYPE, 0, what); }
-    { let (i, note) = default_for(a, ty as u8); deliver(a, cpu, &i, format!("{what}{note}")) }
+    { let (i, note, role) = default_for(a, ty as u8); deliver_default(a, cpu, &i, role, format!("{what}{note}")) }
 }
 
 /// DupDiskObjectA(a0 = icon, a1 = tags): an independent copy (the tag list is not interpreted; any tag is logged).
@@ -253,6 +265,7 @@ fn free_disk_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     let p = cpu.areg(0);
     if p == 0 { return Ok("[icon] FreeDiskObject NULL".into()); }
     let Some(size) = a.fs.icons.remove(&p) else { return Err(Refusal(format!("FreeDiskObject {p:#x}: not a DiskObject icon.library made (or already freed)"))) };
+    a.gfx.icon_images.retain(|img, _| !(p..p + size).contains(img));
     a.heap.free(p, size).map_err(|e| Refusal(format!("FreeDiskObject: {e}")))?;
     Ok(format!("[icon] FreeDiskObject {p:#x}"))
 }
