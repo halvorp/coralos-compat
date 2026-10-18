@@ -56,6 +56,11 @@ fn directory_opus_starts_its_processes_ports_and_windows() {
     // Named refusals only, and only these: DOpus's own CloseLibrary(NULL), and one FreeVec of an address (the buttons process frees `msg - 8` of an IntuiMessage the engine allocated; not understood yet).
     assert!(a.refused.iter().all(|r| r.contains("CloseLibrary: 0x0 is not an open library base") || (r.starts_with("exec.library/FreeVec: FreeVec: 0x") && r.ends_with("is not a block this heap allocated"))), "{:#?}", a.refused);
 
+    // The lister's file list: RAM: holds Env, EnvArc and T; each is drawn as a row of 48 characters (432 px), name first. Control: no row was
+    // ever drawn zero characters wide (what a window with GZZWidth 0 gives).
+    for name in ["Env    ", "EnvArc ", "T      "] { assert!(a.log.iter().any(|l| l.starts_with(&format!("[graphics] Text \"{name}")) && l.ends_with("(+432)")), "no list row for {name:?}"); }
+    assert!(!a.log.iter().any(|l| l.starts_with("[graphics] Text \"\" at 5,")), "a file-list row was drawn zero characters wide");
+
     // Processes: the order DOpus creates them in (EXPECTATIONS.md items 8-13), from the engine's own log.
     let created: Vec<&str> = a.log.iter().filter_map(|l| l.strip_prefix("[dos] CreateNewProc \"")).filter_map(|l| l.split('"').next()).collect();
     let first: Vec<&str> = created.iter().copied().take(8).collect();
