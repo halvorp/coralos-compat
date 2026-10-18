@@ -27,10 +27,12 @@ pub struct LibraryBuilder<U: GuestUi> {
     pub name: &'static str,
     pub base: u32,
     funcs: Vec<(i32, &'static str, Option<Handler<U>>)>,
+    /// lib_Version this library reports ([`LIB_VERSION`] unless its real version is higher: aros.library is 41).
+    version: u16,
 }
 
 impl<U: GuestUi> LibraryBuilder<U> {
-    pub fn new(name: &'static str, base: u32) -> Self { LibraryBuilder { name, base, funcs: vec![] } }
+    pub fn new(name: &'static str, base: u32) -> Self { LibraryBuilder { name, base, funcs: vec![], version: LIB_VERSION } }
     /// Register an implemented function at negative offset `lvo` (e.g. -204).
     pub fn func(mut self, lvo: i32, name: &'static str, h: Handler<U>) -> Self {
         self.funcs.push((lvo, name, Some(h)));
@@ -43,6 +45,8 @@ impl<U: GuestUi> LibraryBuilder<U> {
             .unwrap_or_else(|| panic!("{} has no function named {name} in lvo_names", self.name));
         self.func(lvo, name, h)
     }
+    /// Report `v` as lib_Version (a program asking for a higher version than the 3.1 default must still get its library).
+    pub fn version(mut self, v: u16) -> Self { self.version = v; self }
     /// Apply a registration helper (a module's own list of functions) in the middle of a chain.
     pub fn with(self, f: impl FnOnce(Self) -> Self) -> Self { f(self) }
     /// Reserve a slot with no implementation: calling it is a named refusal, never a silent d0=0.
@@ -71,7 +75,7 @@ impl<U: GuestUi> LibraryBuilder<U> {
         }
         mem.write_u8(self.base + 8, NT_LIBRARY).map_err(Refusal::mem("Library.ln_Type"))?;
         mem.write_u16(self.base + 16, neg as u16).map_err(Refusal::mem("Library.lib_NegSize"))?;
-        mem.write_u16(self.base + 20, LIB_VERSION).map_err(Refusal::mem("Library.lib_Version"))?;
+        mem.write_u16(self.base + 20, self.version).map_err(Refusal::mem("Library.lib_Version"))?;
         Ok(())
     }
 }

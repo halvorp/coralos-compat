@@ -14,7 +14,7 @@ LIBS = [("exec","rom/exec"),("dos","rom/dos"),("intuition","rom/intuition"),("gr
         ("muimaster","workbench/libs/muimaster"),("commodities","workbench/libs/commodities"),
         ("rexxsyslib","workbench/libs/rexxsyslib"),("lowlevel","workbench/libs/lowlevel"),("iffparse","workbench/libs/iffparse"),
         ("datatypes","workbench/libs/datatypes"),("cybergraphics","workbench/libs/cgfx"),
-        ("timer.device","rom/timer"),("input.device","rom/devs/input"),("console.device","rom/devs/console")]
+        ("aros","rom/aros"),("timer.device","rom/timer"),("input.device","rom/devs/input"),("console.device","rom/devs/console")]
 ANCHORS = {("timer.device","GetSysTime"):-66,("timer.device","AddTime"):-42,("timer.device","BeginIO"):-30,
            ("input.device","PeekQualifier"):-42,("exec","Wait"):-318,("exec","OpenLibrary"):-552,("exec","CloseLibrary"):-414,("exec","FindTask"):-294,
            ("dos","Open"):-30,("intuition","OpenWindow"):-204,("intuition","CloseWindow"):-72,

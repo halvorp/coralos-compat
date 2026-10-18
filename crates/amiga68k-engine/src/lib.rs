@@ -30,6 +30,7 @@ pub mod iclass;
 pub mod utility;
 pub mod census;
 pub mod devices;
+pub mod task_resource;
 pub mod devproc;
 pub mod disklib;
 pub mod dos;

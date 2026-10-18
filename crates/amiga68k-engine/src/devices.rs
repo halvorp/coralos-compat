@@ -12,6 +12,7 @@ use retro_m68k::Cpu;
 
 pub const LVO_OPEN_DEVICE: i32 = -444;
 pub const LVO_CLOSE_DEVICE: i32 = -450;
+pub const LVO_OPEN_RESOURCE: i32 = -498;
 
 const IO_DEVICE: u32 = 20;
 const IO_UNIT: u32 = 24;
@@ -49,4 +50,26 @@ pub fn close_device<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     let l = a.libs.iter_mut().find(|l| l.base == dev).ok_or_else(|| Refusal(format!("CloseDevice: io_Device {dev:#x} is not an open device")))?;
     l.open_count = l.open_count.checked_sub(1).ok_or_else(|| Refusal(format!("CloseDevice: {} closed more than opened", l.name)))?;
     Ok(format!("[exec] CloseDevice {}", l.name))
+}
+
+/// OpenResource(a1 = name) -> d0 = the resource, or NULL. The machine models one resource, AROS's `task.resource`
+/// (task_resource.rs), created on first use; every other name fails, which is what real exec does for a resource nobody
+/// added (AmigaOS programs probe e.g. "FileSystem.resource" and carry on).
+pub fn open_resource<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let name = a.mem.read_cstr(cpu.areg(1)).map_err(Refusal::mem("OpenResource.resName"))?;
+    if !name.eq_ignore_ascii_case(crate::task_resource::NAME) {
+        cpu.set_d0(0);
+        return Ok(format!("[exec] OpenResource \"{name}\" -> NULL (no such resource)"));
+    }
+    let base = match a.task_res.base {
+        Some(b) => b,
+        None => {
+            let b = a.alloc_lib_base(crate::task_resource::NAME)?;
+            a.install_lib(crate::task_resource::library(b))?;
+            a.task_res.base = Some(b);
+            b
+        }
+    };
+    cpu.set_d0(base);
+    Ok(format!("[exec] OpenResource \"{name}\" -> {base:#x}"))
 }

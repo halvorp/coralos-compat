@@ -17,6 +17,9 @@ pub const LVO_SEND_IO: i32 = -462;
 pub const LVO_CHECK_IO: i32 = -468;
 pub const LVO_WAIT_IO: i32 = -474;
 pub const LVO_ABORT_IO: i32 = -480;
+/// timer.device's own library vectors (devices/timer.h / the AROS timer.device fd): GetSysTime(a0 = timeval), GetUpTime(a0).
+const LVO_GET_SYS_TIME: i32 = -66;
+const LVO_GET_UP_TIME: i32 = -72;
 
 const IO_DEVICE: u32 = 20;
 const IO_COMMAND: u32 = 28;
@@ -149,4 +152,19 @@ pub fn abort_io<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
     if let Some(i) = pending { a.timers.remove(i); complete(a, io, IOERR_ABORTED)?; }
     cpu.set_d0(0);
     Ok(format!("[exec] AbortIO {io:#x} ({})", if pending.is_some() { "aborted" } else { "already done" }))
+}
+
+/// The vectors of the `timer.device` base OpenDevice hands out that are implemented; every other one stays a named refusal.
+pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
+    b.func(LVO_GET_SYS_TIME, "GetSysTime", get_time::<U>).func(LVO_GET_UP_TIME, "GetUpTime", get_time::<U>)
+}
+
+/// GetSysTime(a0 = timeval) / GetUpTime(a0 = timeval): the virtual clock as seconds and microseconds, the same value
+/// TR_GETSYSTIME reports (the engine's clock starts at 0 when the program starts, so system time and up time coincide).
+fn get_time<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let tv = cpu.areg(0);
+    let (s, us) = ((a.clock_us / 1_000_000) as u32, (a.clock_us % 1_000_000) as u32);
+    a.mem.write_u32(tv, s).map_err(m("timeval.tv_secs"))?;
+    a.mem.write_u32(tv + 4, us).map_err(m("timeval.tv_micro"))?;
+    Ok(format!("[timer.device] GetSysTime -> {s}.{us:06}"))
 }

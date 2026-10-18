@@ -1085,6 +1085,7 @@
 #define LVO_cybergraphics_WritePixelArrayAlpha (-192)
 #define LVO_cybergraphics_BltTemplateAlpha (-198)
 #define LVO_cybergraphics_ProcessPixelArray (-204)
+#define LVO_aros_ArosInquireA (-30)
 #define LVO_timer_BeginIO (-30)
 #define LVO_timer_AbortIO (-36)
 #define LVO_timer_AddTime (-42)

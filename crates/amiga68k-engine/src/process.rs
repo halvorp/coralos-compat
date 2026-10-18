@@ -36,6 +36,16 @@ const EXECBASE_THIS_TASK: u32 = 276;
 /// AFF_68010 | AFF_68020. Programs built for 68020+ (DOpus5's OS3 build) Alert at startup when these are clear.
 const EXECBASE_ATTN_FLAGS: u32 = 296;
 const AFF_68010_68020: u16 = 0x0003;
+/// ExecBase's own struct Library header: ln_Type 8, lib_Version 20, lib_Revision 22, and SoftVer 34 (exec/execbase.h). A
+/// program asking "which Kickstart?" reads these; they were 0, so SnoopDos 3.11 printed "I need AT LEAST Kickstart 2.0"
+/// and quit (corpus census 2026-10-18). The machine reports AmigaOS 3.1 (40.68), like every bridged library does.
+const EXECBASE_LN_TYPE: u32 = 8;
+const EXECBASE_LIB_VERSION: u32 = 20;
+const EXECBASE_LIB_REVISION: u32 = 22;
+const EXECBASE_SOFT_VER: u32 = 34;
+const EXEC_VERSION: u16 = 40;
+const EXEC_REVISION: u16 = 68;
+const NT_LIBRARY: u8 = 9;
 const TC_NODE_TYPE: u32 = 8;
 const TC_NODE_NAME: u32 = 10;
 const TC_STATE: u32 = 15;
@@ -78,6 +88,10 @@ pub fn setup(mem: &mut GuestMem, exec_base: u32, stack_lower: u32, stack_upper: 
     for (i, b) in args.bytes().chain(core::iter::once(0)).enumerate() { mem.write_u8(ARGS + i as u32, b).map_err(m("argument line"))?; }
     mem.write_u32(exec_base + EXECBASE_THIS_TASK, PROCESS).map_err(m("ExecBase.ThisTask"))?;
     mem.write_u16(exec_base + EXECBASE_ATTN_FLAGS, AFF_68010_68020).map_err(m("ExecBase.AttnFlags"))?;
+    mem.write_u8(exec_base + EXECBASE_LN_TYPE, NT_LIBRARY).map_err(m("ExecBase.ln_Type"))?;
+    mem.write_u16(exec_base + EXECBASE_LIB_VERSION, EXEC_VERSION).map_err(m("ExecBase.lib_Version"))?;
+    mem.write_u16(exec_base + EXECBASE_LIB_REVISION, EXEC_REVISION).map_err(m("ExecBase.lib_Revision"))?;
+    mem.write_u16(exec_base + EXECBASE_SOFT_VER, EXEC_VERSION).map_err(m("ExecBase.SoftVer"))?;
     Ok(PROCESS)
 }
 

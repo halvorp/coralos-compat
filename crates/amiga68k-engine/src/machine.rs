@@ -63,6 +63,8 @@ pub struct Amiga<U: GuestUi> {
     pub workbench: crate::workbench::State,
     /// Started file-change notification requests (dos_notify.rs).
     pub notify: crate::dos_notify::State,
+    /// AROS's task.resource: storage slots and task hooks (task_resource.rs).
+    pub task_res: crate::task_resource::State,
     /// asl.library's requests (asl.rs).
     pub asl: crate::asl::State,
     /// commodities.library's object graph (commodities.rs).
@@ -124,7 +126,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), workbench: Default::default(), notify: Default::default(), asl: Default::default(), cx: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, ibase_locks: 0, pub_list: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), workbench: Default::default(), notify: Default::default(), task_res: Default::default(), asl: Default::default(), cx: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, ibase_locks: 0, pub_list: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), native_gads: Default::default(), gfx: Default::default(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
@@ -189,6 +191,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(ports::LVO_DELETE_IO_REQUEST, "DeleteIORequest", ports::delete_io_request::<U>)
             .func(devices::LVO_OPEN_DEVICE, "OpenDevice", devices::open_device::<U>)
             .func(devices::LVO_CLOSE_DEVICE, "CloseDevice", devices::close_device::<U>)
+            .func(devices::LVO_OPEN_RESOURCE, "OpenResource", devices::open_resource::<U>)
             .with(crate::makelib::register::<U>)
             .with(crate::execlists::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
@@ -285,6 +288,17 @@ impl<U: GuestUi> Amiga<U> {
 
     /// Guest calls in flight (guest_call.rs): 0 when no host-started guest call is outstanding.
     pub fn calls_in_flight(&self) -> usize { self.calls.len() }
+
+    /// Reserve the next dynamic library base (one per library or resource created on demand).
+    pub(crate) fn alloc_lib_base(&mut self, name: &str) -> Result<u32, Refusal> {
+        let base = self.next_lib_base;
+        if base >= DYNAMIC_LIB_END { return Err(Refusal(format!("{name}: no library base left (NOMEM)"))); }
+        self.next_lib_base += DYNAMIC_LIB_STRIDE;
+        Ok(base)
+    }
+
+    /// Install a built vector table into guest memory and the dispatch table.
+    pub(crate) fn install_lib(&mut self, lib: crate::libtable::LibraryBuilder<U>) -> Result<(), Refusal> { lib.install(&mut self.mem, &mut self.dispatch) }
 
     /// Open a library the name table knows but nothing bridges yet: a fresh base, every vector a named refusal.
     pub(crate) fn open_known_library(&mut self, name: &'static str) -> Result<u32, Refusal> {
