@@ -22,6 +22,9 @@ pub const HUNK_SYMBOL: u32 = 0x3F0;
 pub const HUNK_DEBUG: u32 = 0x3F1;
 pub const HUNK_DREL32: u32 = 0x3F7;
 pub const HUNK_RELOC32SHORT: u32 = 0x3FC;
+/// Word-encoded like RELOC32SHORT, but the 32-bit field gains `base[target] - base[this hunk]` (PC-relative; AROS's elf2hunk
+/// emits it for every m68k binary; semantics from AROS rom/dos/internalloadseg_aos.c case HUNK_RELRELOC32).
+pub const HUNK_RELRELOC32: u32 = 0x3FD;
 pub const HUNK_END: u32 = 0x3F2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +105,7 @@ fn process_reloc(
     num_hunks: usize,
     bases: &[u32],
     short: bool,
+    rel: bool,
 ) -> Result<(), HunkError> {
     let mut words: u32 = 0;
     loop {
@@ -147,7 +151,8 @@ fn process_reloc(
             }
             let addr = hunk_base.wrapping_add(offset);
             let val = mem.read_u32(addr).map_err(|_| bad.clone())?;
-            mem.write_u32(addr, val.wrapping_add(target_base)).map_err(|_| bad)?;
+            let delta = if rel { target_base.wrapping_sub(hunk_base) } else { target_base };
+            mem.write_u32(addr, val.wrapping_add(delta)).map_err(|_| bad)?;
         }
     }
     Ok(())
@@ -211,10 +216,10 @@ pub fn load_spaced(mem: &mut GuestMem, file: &[u8], base: u32, gap: u32) -> Resu
                 if bytes > sizes[idx] { return Err(HunkError::BssExceedsDeclared { hunk: idx }); }
                 mem.zero(bases[idx], sizes[idx]).map_err(|_| HunkError::OversizedBss { hunk: idx, bytes: sizes[idx] })?;
             }
-            HUNK_RELOC32 | HUNK_RELOC32SHORT | HUNK_DREL32 => {
+            HUNK_RELOC32 | HUNK_RELOC32SHORT | HUNK_DREL32 | HUNK_RELRELOC32 => {
                 let short = id != HUNK_RELOC32;
                 if idx >= table { return Err(HunkError::SectionExceedsDeclared { hunk: idx }); }
-                process_reloc(&mut r, mem, idx, bases[idx], sizes[idx], table, &bases, short)?;
+                process_reloc(&mut r, mem, idx, bases[idx], sizes[idx], table, &bases, short, id == HUNK_RELRELOC32)?;
             }
             HUNK_SYMBOL => {
                 loop {

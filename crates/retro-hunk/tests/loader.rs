@@ -272,3 +272,27 @@ fn constant_sanity() {
     assert_eq!(HUNK_DREL32, 0x3F7);
     assert_eq!(HUNK_RELOC32SHORT, 0x3FC);
 }
+
+#[test]
+fn relreloc32_adds_the_distance_between_the_two_hunks_and_not_the_absolute_base() {
+    // AROS m68k binaries carry HUNK_RELRELOC32 (0x3FD); same word encoding as RELOC32SHORT.
+    let (code, data) = (0x1000u32.to_be_bytes().to_vec(), 0xAABBCCDDu32.to_be_bytes().to_vec());
+    let build = |id: u32| {
+        let mut f = header(&[1, 1]);
+        section(&mut f, HUNK_CODE, &code);
+        be32(&mut f, id);
+        be16(&mut f, 1); be16(&mut f, 1); be16(&mut f, 0); be16(&mut f, 0); // count, target, offset, end (4 words: even, no pad)
+        be32(&mut f, HUNK_END);
+        section(&mut f, HUNK_DATA, &data);
+        be32(&mut f, HUNK_END);
+        f
+    };
+    let mut mem = GuestMem::new(0x10000);
+    let l = load(&mut mem, &build(HUNK_RELRELOC32), 0x100).unwrap();
+    assert_eq!(mem.read_u32(l.bases[0]).unwrap(), 0x1000 + (l.bases[1] - l.bases[0]));
+    // NEGATIVE CONTROL: the absolute encoding of the same bytes adds the absolute base instead.
+    let mut mem = GuestMem::new(0x10000);
+    let l = load(&mut mem, &build(HUNK_RELOC32SHORT), 0x100).unwrap();
+    assert_eq!(mem.read_u32(l.bases[0]).unwrap(), 0x1000 + l.bases[1]);
+    assert_ne!(l.bases[0], 0, "the control only separates the two encodings when hunk 0 is not at address 0");
+}
