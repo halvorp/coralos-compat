@@ -37,7 +37,24 @@ struct Size { w: i32, h: i32, gw: bool, gh: bool }
 
 pub struct Layout { pub width: i32, pub height: i32, pub elems: Vec<Elem> }
 
-struct Ctx<'a> { o: &'a Objects, font: &'a Font }
+/// The host's control metrics (ruling 17 piece 7: a declarative layout opts into host metrics as a MEASURED profile, never silently).
+/// Floors and paddings in window pixels that the host's native controls need; the default is all zero = Zune's own sizes. A host whose
+/// kit draws a toggle 56x28 or a 28 px field sets them, and MUI's layout then sizes every cell, group and the window for those
+/// controls, so nothing overlaps; the guest never sees the profile (its tree, attributes and notifications are untouched).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Metrics {
+    /// Smallest check box / toggle (width, height).
+    pub toggle: (i32, i32),
+    /// Smallest height of a button, string field, cycle, slider and gauge.
+    pub control_h: i32,
+    /// Extra width added to a button, field and cycle (the kit's inset on both sides together).
+    pub pad_w: i32,
+    /// The host draws a check box's label to the RIGHT of its toggle, `gap` px away (Gute Form order), instead of in MUI's label column to
+    /// the left: the label's own cell collapses and the box's cell holds toggle + gap + label, so the text never lands in a neighbour.
+    pub label_right: Option<i32>,
+}
+
+struct Ctx<'a> { o: &'a Objects, font: &'a Font, m: Metrics }
 impl Ctx<'_> {
     fn fy(&self) -> i32 { self.font.y_size as i32 }
     fn text_w(&self, s: &str) -> i32 { self.font.text_length(s.as_bytes()) }
@@ -99,8 +116,8 @@ fn grid(c: &Ctx, g: u32) -> Grid {
     if pages { (hsp, vsp) = (0, 0); }
     let rows = n.div_ceil(cols);
     let (mut col_w, mut row_h, mut col_g, mut row_g) = (alloc::vec![0; cols], alloc::vec![0; rows], alloc::vec![false; cols], alloc::vec![false; rows]);
-    for (i, &k) in kids.iter().enumerate() {
-        let s = measure(c, k);
+    for i in 0..kids.len() {
+        let s = measure_cell(c, &kids, i);
         let (ci, ri) = (i % cols, i / cols);
         col_w[ci] = col_w[ci].max(s.w);
         row_h[ri] = row_h[ri].max(s.h);
@@ -113,6 +130,23 @@ fn grid(c: &Ctx, g: u32) -> Grid {
     if same_h { let m = row_h.iter().copied().max().unwrap_or(0); row_h.iter_mut().for_each(|h| *h = m); }
     if pages { let (w, h) = (col_w.iter().copied().max().unwrap_or(0), row_h.iter().copied().max().unwrap_or(0)); col_w = alloc::vec![w; 1]; row_h = alloc::vec![h; 1]; }
     Grid { cols, col_w, row_h, col_g, row_g, hsp, vsp, pad: group_pad(c, g), kids }
+}
+
+/// The label MUI pairs with the check box `kids[i]` when the host draws it to the right: the MUIO_Label just before it.
+fn toggle_label(c: &Ctx, kids: &[u32], i: usize) -> Option<String> {
+    c.m.label_right?;
+    if i >= kids.len() { return None; }
+    let is_box = |k: u32| shape(c.o.kind(k).unwrap_or(Kind::Area)) == Shape::Leaf && matches!(roles::leaf(c.o, k), Some(ControlKind::Checkbox { .. }));
+    (i > 0 && is_box(kids[i]) && roles::is_label(c.o, kids[i - 1])).then(|| roles::display_text(c.o, kids[i - 1], MUIA_Text_Contents))
+}
+
+/// The size of `kids[i]` as a cell of its group: a label that the host draws with its check box has no cell of its own, and the box's
+/// cell is wide enough for the toggle, the gap and the text.
+fn measure_cell(c: &Ctx, kids: &[u32], i: usize) -> Size {
+    let mut s = measure(c, kids[i]);
+    if let (Some(gap), Some(text)) = (c.m.label_right, toggle_label(c, kids, i)) { s.w += gap + c.text_w(&text); }
+    if roles::is_label(c.o, kids[i]) && toggle_label(c, kids, i + 1).is_some() { s.w = 0; }
+    s
 }
 
 fn total(v: &[i32], gap: i32) -> i32 { v.iter().sum::<i32>() + gap * (v.len() as i32 - 1).max(0) }
@@ -153,10 +187,10 @@ fn leaf_size(c: &Ctx, o: u32, kind: Kind) -> Size {
             let text = roles::caption(c.o, o);
             let framed = c.o.num_or(o, MUIA_Frame, MUIV_Frame_None) != MUIV_Frame_None;
             let (pw, ph) = if framed { (FRAME_W, FRAME_H) } else { (0, 0) };
-            Size { w: c.text_w(&text) + pw, h: fy + ph, gw: kind != Kind::Image, gh: false }
+            Size { w: c.text_w(&text) + pw + c.m.pad_w, h: (fy + ph).max(c.m.control_h), gw: kind != Kind::Image, gh: false }
         }
-        Some(ControlKind::Checkbox { .. }) => Size { w: fy + 4, h: fy + 4, gw: false, gh: false },
-        Some(ControlKind::Field { .. }) => Size { w: fx * 12 + FRAME_W, h: fy + FRAME_H, gw: true, gh: false },
+        Some(ControlKind::Checkbox { .. }) => Size { w: (fy + 4).max(c.m.toggle.0), h: (fy + 4).max(c.m.toggle.1), gw: false, gh: false },
+        Some(ControlKind::Field { .. }) => Size { w: fx * 12 + FRAME_W + c.m.pad_w, h: (fy + FRAME_H).max(c.m.control_h), gw: true, gh: false },
         Some(ControlKind::Choice { style: guestui_abi::ChoiceStyle::Radio, labels, .. }) => {
             let widest = labels.iter().map(|l| c.text_w(l)).max().unwrap_or(0);
             let n = labels.len() as i32;
@@ -164,10 +198,10 @@ fn leaf_size(c: &Ctx, o: u32, kind: Kind) -> Size {
         }
         Some(ControlKind::Choice { labels, .. }) => {
             let widest = labels.iter().map(|l| c.text_w(l)).max().unwrap_or(0);
-            Size { w: widest + ARROW + FRAME_W, h: fy + FRAME_H, gw: true, gh: false }
+            Size { w: widest + ARROW + FRAME_W + c.m.pad_w, h: (fy + FRAME_H).max(c.m.control_h), gw: true, gh: false }
         }
-        Some(ControlKind::Slider { .. }) => Size { w: fy * 4 + 2, h: fy + 2, gw: true, gh: false },
-        Some(ControlKind::Gauge { .. }) => Size { w: fx * 8 + FRAME_W, h: fy + FRAME_H, gw: true, gh: false },
+        Some(ControlKind::Slider { .. }) => Size { w: fy * 4 + 2, h: (fy + 2).max(c.m.control_h), gw: true, gh: false },
+        Some(ControlKind::Gauge { .. }) => Size { w: fx * 8 + FRAME_W, h: (fy + FRAME_H).max(c.m.control_h), gw: true, gh: false },
         Some(ControlKind::ScrollBar { vertical, .. }) => if vertical { Size { w: ARROW, h: ARROW * 3, gw: false, gh: true } } else { Size { w: ARROW * 3, h: ARROW, gw: true, gh: false } },
         Some(ControlKind::List { rows, columns, .. }) => {
             let widest = rows.iter().map(|r| r.iter().map(|c2| c.text_w(c2)).sum::<i32>() + 8 * r.len() as i32).max().unwrap_or(0).max(fx * 12);
@@ -188,8 +222,8 @@ fn leaf_size(c: &Ctx, o: u32, kind: Kind) -> Size {
 }
 
 /// Lay out the tree under `root` (the window's root object) for a window whose content area is at least `avail`; margins included.
-pub fn compute(o: &Objects, root: u32, font: &Font, avail: (i32, i32)) -> Layout {
-    let c = Ctx { o, font };
+pub fn compute(o: &Objects, root: u32, font: &Font, avail: (i32, i32), metrics: Metrics) -> Layout {
+    let c = Ctx { o, font, m: metrics };
     let s = measure(&c, root);
     let (px, py) = (WIN_PAD.0 + WIN_PAD.1, WIN_PAD.2 + WIN_PAD.3);
     let (w, h) = ((s.w + px).max(avail.0), (s.h + py).max(avail.1));
@@ -245,11 +279,12 @@ fn place(c: &Ctx, o: u32, r: GuestRect, out: &mut Vec<Elem>, pending: &mut Optio
                 // A MUIO_Label directly before a control is that control's label: it keeps its own cell (the label column).
                 let next_is_control = g.kids.get(i + 1).is_some_and(|&n| !roles::is_label(c.o, n) && shape(c.o.kind(n).unwrap_or(Kind::Area)) == Shape::Leaf && roles::leaf(c.o, n).is_some());
                 if roles::is_label(c.o, k) && next_is_control { label = Some(roles::display_text(c.o, k, MUIA_Text_Contents)); }
-                let s = measure(c, k);
+                let s = measure_cell(c, &g.kids, i);
                 let (cw_i, rh_i) = (cw[ci], rh[ri]);
                 let w = if s.gw { cw_i } else { s.w.min(cw_i) };
                 let h = if s.gh { rh_i } else { s.h.min(rh_i) };
-                let cell = GuestRect { left: cx + (cw_i - w) / 2, top: cy + (rh_i - h) / 2, width: w, height: h };
+                let left = if toggle_label(c, &g.kids, i).is_some() { cx } else { cx + (cw_i - w) / 2 };
+                let cell = GuestRect { left, top: cy + (rh_i - h) / 2, width: w, height: h };
                 if roles::is_label(c.o, k) && next_is_control { continue; }
                 place(c, k, cell, out, &mut label);
             }
