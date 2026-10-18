@@ -60,12 +60,12 @@ pub enum ControlKind {
     /// A scrollbar over `total` units of which `visible` show, the first shown being `top` (all in the guest's own units).
     /// `top` is at most `total - visible`; a `visible >= total` bar has nothing to scroll. The host draws the knob, the
     /// arrows are separate [`ControlKind::ArrowButton`]s when the guest has them.
-    Scrollbar { orientation: Orientation, total: u32, visible: u32, top: u32 },
+    ScrollBar { vertical: bool, total: u32, visible: u32, top: u32 },
     /// A one-line text or integer field. `editable` false = shown but not typed into; `integer` = digits (and a leading
     /// minus) only; `max_len` counts characters.
     Field { text: String, max_len: u32, editable: bool, integer: bool },
-    /// A static bevelled frame around or behind other controls (no interaction, no events).
-    Frame { bevel: Bevel },
+    /// A static framed group around or behind other controls (frameiclass; no interaction, no events). Plan 16 §2a.1 `Group`.
+    Group { title: String, style: GroupStyle },
     /// A button that shows a direction arrow instead of a label (scrollbar arrows, spinners).
     ArrowButton { dir: ArrowDir },
     /// An invisible hit area: no visuals, but pointer press/release inside it are events (a gadget with nothing to draw).
@@ -73,14 +73,11 @@ pub enum ControlKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Orientation { Horizontal, Vertical }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrowDir { Up, Down, Left, Right }
 
-/// What a frame looks like, as a role (the host maps it onto its own kit parts).
+/// What a group frame looks like, as a role (the host maps it onto its own kit parts; Gute Form groups are flat, so the style may be metadata).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Bevel { Raised, Recessed, Ridge, DropBox }
+pub enum GroupStyle { Plain, Recessed, Raised }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlModel {
@@ -109,7 +106,7 @@ impl ControlModel {
                 if l < min || l > max { return Err(UiRefusal::InvalidGeometry("slider level outside its range")); }
                 *value = *l;
             }
-            (ControlKind::Scrollbar { total: t, visible: v, top: p, .. }, ControlValue::Scroll { total, visible, top }) => {
+            (ControlKind::ScrollBar { total: t, visible: v, top: p, .. }, ControlValue::Scroll { total, visible, top }) => {
                 (*t, *v) = (*total, *visible);
                 *p = (*top).min(total.saturating_sub(*visible));
             }

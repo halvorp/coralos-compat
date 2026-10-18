@@ -8,7 +8,7 @@ use crate::boopsi_ids::*;
 use crate::boopsi_native::{dispatch_super, image};
 use crate::{machine::Amiga, tags, Refusal};
 use alloc::format;
-use guestui_abi::{Bevel, GuestUi};
+use guestui_abi::{GroupStyle, GuestUi};
 use retro_raster::{paint::{self, Brush}, Rect};
 
 const FRAME_DEFAULT: u32 = 0;
@@ -165,15 +165,14 @@ pub fn draw<U: GuestUi>(a: &mut Amiga<U>, im: u32, rp: u32, x: i32, y: i32, stat
 }
 
 /// The bevel role a frameiclass object stands for (what a gadget framed by it becomes natively), `None` if `im` is not one.
-pub fn bevel_of<U: GuestUi>(a: &Amiga<U>, im: u32) -> Option<Bevel> {
+pub fn bevel_of<U: GuestUi>(a: &Amiga<U>, im: u32) -> Option<GroupStyle> {
     let cl = a.classes.class_of(im)?;
     if a.classes.recs.get(&cl)?.native != Some(crate::iclass::Native::Frame) { return None; }
     let fd = data(a, cl, im);
     let recessed = r16(a, fd + FD_RECESSED).ok()? != 0;
     Some(match r16(a, fd + FD_TYPE).ok()? as u32 {
-        FRAME_RIDGE => Bevel::Ridge,
-        FRAME_ICONDROPBOX => Bevel::DropBox,
-        _ if recessed => Bevel::Recessed,
-        _ => Bevel::Raised,
+        FRAME_RIDGE | FRAME_ICONDROPBOX => GroupStyle::Plain,
+        _ if recessed => GroupStyle::Recessed,
+        _ => GroupStyle::Raised,
     })
 }

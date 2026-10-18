@@ -224,9 +224,9 @@ mod tests {
     fn native_gadget_controls_are_tracked_valued_and_moved() {
         let mut ui = RecordingGuestUi::new();
         let w = ui.open_window(win()).unwrap();
-        let bar = ui.add_control(w, ctl(ControlKind::Scrollbar { orientation: Orientation::Vertical, total: 100, visible: 10, top: 0 })).unwrap();
+        let bar = ui.add_control(w, ctl(ControlKind::ScrollBar { vertical: true, total: 100, visible: 10, top: 0 })).unwrap();
         ui.set_control(w, bar, ControlValue::Scroll { total: 100, visible: 10, top: 500 }).unwrap();
-        assert!(matches!(ui.controls[&bar.id].1.kind, ControlKind::Scrollbar { top: 90, .. }), "top clamps to total - visible");
+        assert!(matches!(ui.controls[&bar.id].1.kind, ControlKind::ScrollBar { top: 90, .. }), "top clamps to total - visible");
         ui.set_control_rect(w, bar, GuestRect { left: 1, top: 2, width: 3, height: 4 }).unwrap();
         assert_eq!(ui.controls[&bar.id].1.rect, GuestRect { left: 1, top: 2, width: 3, height: 4 });
         // Negative controls: a value the kind cannot hold, and a negative rect, are refused by name and change nothing.

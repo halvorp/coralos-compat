@@ -9,10 +9,10 @@
 //! # Which gadgets become native controls
 //! | gadget | control |
 //! |---|---|
-//! | propgclass, or a classic GTYP_PROPGADGET (one axis) | `Scrollbar` (PGA_Total/Visible/Top, else the pots/bodies on a 0xFFFF scale) |
+//! | propgclass, or a classic GTYP_PROPGADGET (one axis) | `ScrollBar` (PGA_Total/Visible/Top, else the pots/bodies on a 0xFFFF scale) |
 //! | strgclass, or a classic GTYP_STRGADGET | `Field` (the StringInfo buffer; `integer` = GACT_LONGINT) |
 //! | buttongclass whose GA_Image is a sysiclass arrow | `ArrowButton` |
-//! | buttongclass framed by a frameiclass image, no action flags, no label | `Frame` (bevel role of the frame type) |
+//! | buttongclass framed by a frameiclass image, no action flags, no label | `Group` (style from the frame type: raised / recessed, else plain) |
 //! | buttongclass / classic GTYP_BOOLGADGET with GACT_TOGGLESELECT | `ToggleButton` (GFLG_SELECTED) |
 //! | classic boolean gadget with nothing to draw (no render, no text) | `Hotspot` |
 //! | any other buttongclass / classic boolean gadget | `Button` (label = GA_Text or the first IntuiText) |
@@ -36,7 +36,7 @@ use crate::boopsi_draw::{sysi_which, DOWNIMAGE, LEFTIMAGE, RIGHTIMAGE, UPIMAGE};
 use crate::boopsi_ids::*;
 use crate::iclass::Native;
 use crate::{machine::Amiga, Refusal};
-use guestui_abi::{ArrowDir, CallbackToken, ControlKind, ControlModel, ControlValue, GuestRect, GuestUi, Orientation, UiObjectRef};
+use guestui_abi::{ArrowDir, CallbackToken, ControlKind, ControlModel, ControlValue, GuestRect, GuestUi, UiObjectRef};
 
 // struct PropInfo (intuition.h): Flags 0, HorizPot 2, VertPot 4, HorizBody 6, VertBody 8; propgclass appends Total/Visible/Top.
 pub(crate) const PI_FLAGS: u32 = 0;
@@ -148,7 +148,7 @@ fn plan<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32) -> Result<Option<(Contro
             }
         };
         let (total, visible, top) = scroll_of(a, special, sys == Some(Native::Prop), vert)?;
-        ControlKind::Scrollbar { orientation: if vert { Orientation::Vertical } else { Orientation::Horizontal }, total, visible, top }
+        ControlKind::ScrollBar { vertical: vert, total, visible, top }
     } else if matches!(sys, Some(Native::Strg)) || (classic && ty & GTYP_GTYPEMASK == 4) {
         if special == 0 { return Ok(None); }
         let buf = r32(a, special, "StringInfo.Buffer")?;
@@ -160,7 +160,7 @@ fn plan<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32) -> Result<Option<(Contro
         let arrow = sysi_which(a, render).and_then(|w| match w { LEFTIMAGE => Some(ArrowDir::Left), UPIMAGE => Some(ArrowDir::Up), RIGHTIMAGE => Some(ArrowDir::Right), DOWNIMAGE => Some(ArrowDir::Down), _ => None });
         let acts = act & (GACT_RELVERIFY | GACT_IMMEDIATE | GACT_TOGGLESELECT) != 0;
         let kind = if let Some(dir) = arrow { ControlKind::ArrowButton { dir } }
-            else if let (Some(b), false, true) = (crate::boopsi_frame::bevel_of(a, render), acts, label.is_empty()) { ControlKind::Frame { bevel: b } }
+            else if let (Some(b), false, true) = (crate::boopsi_frame::bevel_of(a, render), acts, label.is_empty()) { ControlKind::Group { title: String::new(), style: b } }
             else if act & GACT_TOGGLESELECT != 0 { ControlKind::ToggleButton { on: fl & GFLG_SELECTED != 0 } }
             else if !boopsi && label.is_empty() && r32(a, g + GAD_RENDER, "Gadget.GadgetRender")? == 0 { ControlKind::Hotspot }
             else { ControlKind::Button };
@@ -196,7 +196,7 @@ pub fn ensure<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32) -> Result<bool, Re
 /// The value a `set_control` carries for a control of this kind, if the kind has one.
 fn value_of(k: &ControlKind) -> Option<ControlValue> {
     Some(match k {
-        ControlKind::Scrollbar { total, visible, top, .. } => ControlValue::Scroll { total: *total, visible: *visible, top: *top },
+        ControlKind::ScrollBar { total, visible, top, .. } => ControlValue::Scroll { total: *total, visible: *visible, top: *top },
         ControlKind::Field { text, .. } => ControlValue::Text(text.clone()),
         ControlKind::ToggleButton { on } => ControlValue::Checked(*on),
         _ => return None,

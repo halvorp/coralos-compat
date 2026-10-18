@@ -80,14 +80,14 @@ pub fn driven<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, contr
         (ControlKind::Button | ControlKind::ArrowButton { .. } | ControlKind::Hotspot | ControlKind::ToggleButton { .. }, PointerPhase::Up, ControlValue::Cancelled) => {
             if !matches!(ng.model.kind, ControlKind::ToggleButton { .. }) { set_selected(a, g, false)?; }
         }
-        (ControlKind::ToggleButton { .. }, PointerPhase::Down, _) | (ControlKind::Scrollbar { .. } | ControlKind::Field { .. }, PointerPhase::Down, _) => {
+        (ControlKind::ToggleButton { .. }, PointerPhase::Down, _) | (ControlKind::ScrollBar { .. } | ControlKind::Field { .. }, PointerPhase::Down, _) => {
             if act & GACT_IMMEDIATE != 0 { post = Some((IDCMP_GADGETDOWN, 0)); }
         }
         (ControlKind::ToggleButton { .. }, PointerPhase::Up, ControlValue::Checked(on)) => {
             set_selected(a, g, *on)?;
             if act & GACT_RELVERIFY != 0 { post = Some((IDCMP_GADGETUP, 0)); }
         }
-        (ControlKind::Scrollbar { .. }, PointerPhase::Move | PointerPhase::Up, ControlValue::Scroll { top, .. }) => {
+        (ControlKind::ScrollBar { .. }, PointerPhase::Move | PointerPhase::Up, ControlValue::Scroll { top, .. }) => {
             scroll_to(a, g, *top)?;
             if phase == PointerPhase::Move && act & GACT_FOLLOWMOUSE != 0 { post = Some((IDCMP_MOUSEMOVE, 0)); }
             if phase == PointerPhase::Up && act & GACT_RELVERIFY != 0 { post = Some((IDCMP_GADGETUP, 0)); }
