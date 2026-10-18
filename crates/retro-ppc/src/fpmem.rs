@@ -1,5 +1,5 @@
 //! Floating-point loads and stores (PEM 4.2.? "Floating-Point Load and Store Instructions").
-//! lfs widens a single to a double exactly; stfs rounds to single (nearest-even; the store ignores FPSCR[RN]).
+//! lfs widens a single to a double exactly; stfs truncates to single per the PEM store conversion (see below).
 use crate::cpu::Cpu;
 use crate::exec::R;
 use crate::fields::W;
@@ -14,10 +14,23 @@ fn single_to_double(s: u32) -> u64 {
     let x = f32::from_bits(s);
     if x.is_nan() { (s as u64 & 0x8000_0000) << 32 | 0x7FF << 52 | (s as u64 & 0x007F_FFFF) << 29 } else { (x as f64).to_bits() }
 }
-/// stfs: a NaN stores sign + the top 23 fraction bits unchanged (no quieting); anything else rounds to nearest-even.
+/// stfs: the PEM store conversion (stfs pseudocode, "Floating-point store single"), which TRUNCATES, never rounds,
+/// and does not look at FPSCR[RN]; a program wanting a rounded single does `frsp` first.
+///  * FRS[1:11] > 896 (a normal single exponent, infinity, NaN) or FRS = +-0: WORD[0:1] <- FRS[0:1],
+///    WORD[2:31] <- FRS[5:34]. A NaN keeps sign, quiet bit and the top 22 payload bits unchanged (no quieting).
+///  * 874 <= FRS[1:11] <= 896 (a single denormal): the implicit 1 and the fraction are shifted right by 897-exp and
+///    the low bits are dropped.
+///  * smaller magnitudes are architecturally undefined; we store a signed zero.
 fn double_to_single(d: u64) -> u32 {
-    let x = f64::from_bits(d);
-    if x.is_nan() { ((d >> 32) as u32 & 0x8000_0000) | 0x7F80_0000 | (d >> 29) as u32 & 0x007F_FFFF } else { (x as f32).to_bits() }
+    let exp = (d >> 52 & 0x7FF) as u32;
+    let sign = (d >> 32) as u32 & 0x8000_0000;
+    if exp > 896 || d << 1 == 0 {
+        sign | (d >> 32) as u32 & 0x4000_0000 | (d >> 29) as u32 & 0x3FFF_FFFF
+    } else if exp >= 874 {
+        sign | ((1u64 << 52 | d & ((1 << 52) - 1)) >> (897 - exp + 29)) as u32
+    } else {
+        sign
+    }
 }
 
 fn access<H: Host>(host: &mut H, cpu: &mut Cpu, w: W, op: Op, ea: u32, update: bool) -> R {

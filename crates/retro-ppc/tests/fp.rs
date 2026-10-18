@@ -316,9 +316,9 @@ fn fp_loads_and_stores_convert_formats() {
     assert_eq!(c.fpr_f64(5), 1.5);
     assert_eq!(c.gpr[3], m + 0x20, "lfsu updated RA");
     assert_eq!(c.fpr[6], 0x4009_21FB_5444_2D18, "lfdx");
-    // stfs rounds a double to single; lfs of a single denormal is exact.
-    let (c, v, _) = prog(&["stfs 1,0(3)", "lfs 2,4(3)"], |c, v| { c.set_fpr_f64(1, 1.0 + 2f64.powi(-30)); c.gpr[3] = m; v.mem.write_u32(m + 4, 1).unwrap(); });
-    assert_eq!(v.mem.read_u32(m).unwrap(), 0x3F80_0000, "rounded to 1.0f");
+    // stfs of 1+0.75ulp stores 1.0f (the PEM store conversion truncates; see oracle_fixes.rs); lfs of a single denormal is exact.
+    let (c, v, _) = prog(&["stfs 1,0(3)", "lfs 2,4(3)"], |c, v| { c.set_fpr_f64(1, 1.0 + 0.75 * 2f64.powi(-23)); c.gpr[3] = m; v.mem.write_u32(m + 4, 1).unwrap(); });
+    assert_eq!(v.mem.read_u32(m).unwrap(), 0x3F80_0000, "truncated to 1.0f (rounding would give 0x3F800001)");
     assert_eq!(c.fpr_f64(2), 2f64.powi(-149), "smallest single denormal widens exactly");
     // update form with RA=0 is refused
     let (_, _, st) = prog(&["lfsu 1,0(0)"], |_, _| {});

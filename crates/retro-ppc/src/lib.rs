@@ -11,8 +11,10 @@
 //! Deliberate deviations (each is a named refusal or documented here, none silent):
 //! - FP arithmetic is round-to-nearest-even only; with FPSCR[RN] != 0 an arithmetic FP instruction is a named
 //!   `Unimplemented` trap (fctiw honours RN). XX/FI/FR and UX are not tracked; OX, ZX and the VX* flags are.
-//! - FP exceptions are never delivered as interrupts; FPSCR[VE] suppresses the result write on an invalid operation,
-//!   the other enables only set FEX.
+//! - FP exceptions are never delivered as interrupts; FPSCR[VE] and [ZE] suppress the result write on an invalid
+//!   operation / zero divide (PEM: the target FPR is unchanged); an enabled OE or UE still writes the UNWRAPPED
+//!   result (the architecture writes the result with its exponent adjusted by -192/-1536 or +192/+1536: not done),
+//!   and XE only sets FEX. FPSCR[NI] (non-IEEE mode) is ignored.
 //! - fres/frsqrte return the correctly rounded reciprocal, more accurate than the hardware estimate.
 //! - fsqrt/fsqrts are executed although the 603/G3 omit them (the architecture defines them).
 //! - Integer divide by zero / overflow: PEM leaves the result undefined; we return 0xFFFFFFFF (divwu) and
