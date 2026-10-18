@@ -43,6 +43,18 @@ pub struct FsState {
     pub disk_libs: Vec<crate::disklib::DiskLib>,
     /// The Amiga-epoch day the virtual clock starts on (dos_misc.rs).
     pub start_day: i32,
+    /// Live DiskObjects icon.library made: address -> size of the one heap block holding all of it (icon.rs).
+    pub icons: BTreeMap<u32, u32>,
+    /// The Process's local variables (vars.rs).
+    pub vars: crate::vars::Vars,
+    /// The DOS device list's guest entries (doslist.rs).
+    pub dos: crate::doslist::DosListState,
+    /// DevProcs and MakeDosEntry nodes (devproc.rs).
+    pub devs: crate::devproc::DevState,
+    /// MatchFirst/MatchNext walks in progress, by AnchorPath address (dos_match.rs).
+    pub anchors: crate::dos_match::Anchors,
+    /// ExAll scans in progress: ExAllControl address -> (directory, next child index) (exall.rs).
+    pub exall: BTreeMap<u32, (NodeId, usize)>,
 }
 
 impl FsState {
@@ -90,17 +102,51 @@ pub fn alloc_zeroed<U: GuestUi>(a: &mut Amiga<U>, size: u32) -> Result<Option<u3
     Ok(Some(p))
 }
 
+/// Return a block to whichever heap it came from (the program's, or the engine's own arena above SYS_ARENA_START).
+pub fn free_block<U: GuestUi>(a: &mut Amiga<U>, at: u32, size: u32) -> Result<(), alloc::string::String> {
+    if at >= crate::machine::SYS_ARENA_START { a.sys_heap.free(at, size) } else { a.heap.free(at, size) }
+}
+
+/// Allocate a zeroed struct from the engine's own arena (None = it is full).
+pub fn alloc_zeroed_sys<U: GuestUi>(a: &mut Amiga<U>, size: u32) -> Result<Option<u32>, Refusal> {
+    let Some(p) = a.sys_heap.alloc(size) else { return Ok(None) };
+    a.mem.zero(p, size).map_err(Refusal::mem("alloc_zeroed_sys"))?;
+    Ok(Some(p))
+}
+
 /// Make a guest FileLock on `node`; None = out of guest memory.
-pub fn new_lock<U: GuestUi>(a: &mut Amiga<U>, node: NodeId, exclusive: bool) -> Result<Option<u32>, Refusal> {
-    let Some(p) = alloc_zeroed(a, LOCK_SIZE)? else { return Ok(None) };
+pub fn new_lock<U: GuestUi>(a: &mut Amiga<U>, node: NodeId, exclusive: bool) -> Result<Option<u32>, Refusal> { new_lock_in(a, node, exclusive, false) }
+
+/// [`new_lock`], optionally from the engine's own arena (locks the engine holds for its DOS list and AChains).
+pub fn new_lock_in<U: GuestUi>(a: &mut Amiga<U>, node: NodeId, exclusive: bool, sys: bool) -> Result<Option<u32>, Refusal> {
+    let Some(p) = (if sys { alloc_zeroed_sys(a, LOCK_SIZE)? } else { alloc_zeroed(a, LOCK_SIZE)? }) else { return Ok(None) };
     a.mem.write_u32(p + FL_KEY, node as u32).map_err(Refusal::mem("fl_Key"))?;
     a.mem.write_u32(p + FL_ACCESS, if exclusive { -1i32 as u32 } else { -2i32 as u32 }).map_err(Refusal::mem("fl_Access"))?;
     a.fs.locks.insert(p, LockRec { node, exclusive });
     Ok(Some(p))
 }
 
+/// Create or replace the regular file at `path` with `bytes`, as the GUEST could: refused on a read-only device, for a
+/// file that is open or locked, or where a directory is. Stamps the file with the virtual clock.
+pub fn write_file<U: GuestUi>(a: &mut Amiga<U>, path: &str, bytes: Vec<u8>) -> Result<NodeId, DosErr> {
+    use crate::dos_err::*;
+    let cwd = cur_dir(a);
+    let (dir, leaf) = a.fs.vol.resolve_parent(cwd, path)?;
+    let f = match a.fs.vol.find_child(dir, &leaf) {
+        Some(f) if !a.fs.vol.is_writable(f) => return Err(ERROR_DISK_WRITE_PROTECTED),
+        Some(f) if a.fs.node_in_use(f) => return Err(ERROR_OBJECT_IN_USE),
+        Some(f) if a.fs.vol.file_data(f).is_none() => return Err(ERROR_OBJECT_WRONG_TYPE),
+        Some(f) => f,
+        None => a.fs.vol.create_file(dir, &leaf)?,
+    };
+    let date = crate::dos_misc::now(a);
+    *a.fs.vol.file_data_mut(f).expect("a file") = bytes;
+    a.fs.vol.get_mut(f).date = date;
+    Ok(f)
+}
+
 impl Default for FsState {
     fn default() -> Self {
-        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026 }
+        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, icons: BTreeMap::new(), vars: Default::default(), dos: Default::default(), devs: Default::default(), anchors: Default::default(), exall: BTreeMap::new() }
     }
 }

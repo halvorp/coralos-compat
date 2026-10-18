@@ -81,7 +81,11 @@ pub fn info<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     let state = if a.fs.vol.is_writable(dev) { ID_VALIDATED } else { ID_WRITE_PROTECTED };
     let m = Refusal::mem("InfoData");
     a.mem.zero(id, 36).map_err(&m)?;
-    for (off, v) in [(8, state), (12, TOTAL_BLOCKS), (16, used_blocks), (20, BLOCK_SIZE), (24, ID_DOS_DISK)] { a.mem.write_u32(id + off, v).map_err(&m)?; }
+    // id_VolumeNode points at the device's DLT_VOLUME DosList node; id_InUse says whether anything on it is open.
+    crate::doslist::sync(a)?;
+    let volume_node = crate::doslist::volume_node(a, &String::from(a.fs.vol.name(dev))).unwrap_or(0);
+    let in_use = u32::from(a.fs.files.values().any(|f| a.fs.vol.device_of(f.node) == dev));
+    for (off, v) in [(8, state), (12, TOTAL_BLOCKS), (16, used_blocks), (20, BLOCK_SIZE), (24, ID_DOS_DISK), (28, volume_node >> 2), (32, in_use)] { a.mem.write_u32(id + off, v).map_err(&m)?; }
     ok(a, cpu, DOSTRUE, what)
 }
 
