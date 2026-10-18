@@ -231,10 +231,13 @@ fn a_list_shows_its_entries_a_native_row_becomes_list_active_and_getentry_answer
     assert_eq!(get_attr(&mut a, list, MUIA_List_Active).unwrap(), 0, "the active row moved up with its entry");
     method(&mut a, list, MUIM_List_Clear, &[]).unwrap();
     assert!(matches!(kind_of_obj(&a, list), ControlKind::List { ref rows, selected: None, .. } if rows.is_empty()));
-    // A hook is a NAMED refusal, not a silent empty row.
+    // With a display hook the row's cells come from the program: the engine queues the guest call (A2 = the cell array, A1 = the entry)
+    // and the row stays empty until it has run (a guest-driven test below runs it).
     set_attr(&mut a, list, MUIA_List_DisplayHook, 0x1234).unwrap();
-    let e = method(&mut a, list, MUIM_List_InsertSingle, &[rows[0], MUIV_List_Insert_Bottom]).unwrap_err().0;
-    assert!(e.contains("MUIA_List_DisplayHook is set"), "{e}");
+    method(&mut a, list, MUIM_List_InsertSingle, &[rows[0], MUIV_List_Insert_Bottom]).unwrap();
+    let queued: Vec<_> = a.objects.hooks.iter().map(|h| (h.hook, matches!(h.msg, hooks::Msg::Word(w) if w == rows[0]))).collect();
+    assert_eq!(queued, [(0x1234, true)]);
+    assert!(matches!(kind_of_obj(&a, list), ControlKind::List { ref rows, .. } if rows.len() == 1 && rows[0] == [String::new()]));
 }
 
 #[test]

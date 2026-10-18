@@ -61,7 +61,7 @@ pub fn new_by_name<U: GuestUi>(a: &mut Amiga<U>, name: &str, tags_at: u32) -> Re
 fn mui_new_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let name = a.mem.read_cstr(cpu.areg(0)).map_err(Refusal::mem("MUI_NewObjectA class name"))?;
     let obj = new_by_name(a, &name, cpu.areg(1))?;
-    cpu.set_d0(obj);
+    hooks::after_call(a, cpu, obj)?; // a List asks its display hook for the column titles
     Ok(format!("[muimaster] MUI_NewObjectA \"{name}\" -> {obj:#x}"))
 }
 
@@ -76,7 +76,7 @@ fn mui_dispose_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Str
 fn mui_make_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (ty, params) = (cpu.dreg(0), cpu.areg(0));
     let obj = make::make(a, ty, params)?;
-    cpu.set_d0(obj);
+    hooks::after_call(a, cpu, obj)?;
     Ok(format!("[muimaster] MUI_MakeObjectA type {ty} -> {obj:#x}"))
 }
 
@@ -91,7 +91,7 @@ pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, obj: u32, msg: u32)
     let r = if id == MUIM_CallHook {
         // The hook is called with the parameters where the guest put them, right after the hook pointer.
         let hook = a.mem.read_u32(msg + 4).map_err(Refusal::mem("MUIM_CallHook hook"))?;
-        a.objects.hooks.push_back(hooks::HookCall { hook, obj, msg: hooks::Msg::Addr(msg + 8) });
+        a.objects.hooks.push_back(hooks::HookCall { hook, obj, msg: hooks::Msg::Addr(msg + 8), after: hooks::After::Nothing });
         0
     } else {
         let n = methods::arity(a, id, msg)?;

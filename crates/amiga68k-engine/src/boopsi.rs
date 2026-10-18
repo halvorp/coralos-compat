@@ -102,7 +102,7 @@ pub fn new_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     if cpu.areg(0) != 0 { return Err(Refusal("NewObjectA: a private class pointer is not bridged (public class names only)".into())); }
     let name = a.mem.read_cstr(cpu.areg(1)).map_err(Refusal::mem("NewObjectA class name"))?;
     let obj = crate::mui::new_by_name(a, &name, cpu.areg(2))?;
-    cpu.set_d0(obj);
+    crate::mui::hooks::after_call(a, cpu, obj)?;
     Ok(format!("[intuition] NewObjectA \"{name}\" -> {obj:#x}"))
 }
 

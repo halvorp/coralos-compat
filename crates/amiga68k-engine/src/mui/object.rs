@@ -67,11 +67,13 @@ fn init<U: GuestUi>(a: &mut Amiga<U>, obj: u32, kind: Kind, tags: &[(u32, u32)])
         match attrs::lookup(kind, tag).ok_or_else(|| unknown(kind, tag))? {
             Ty::Num => store_num(a, obj, tag, data),
             Ty::Str => store_str(a, obj, tag, data)?,
+            Ty::StrOrFlag => if data < 0x100 { store_num(a, obj, tag, data) } else { store_str(a, obj, tag, data)? },
             Ty::StrArr => store_arr(a, obj, tag, data)?,
             Ty::Adopt => adopt(a, obj, tag, data)?,
         }
     }
     clamp_numeric(a, obj);
+    if kind == Kind::List { super::list::ask_titles(a, obj)?; }
     if kind == Kind::Listview && a.objects.children(obj).is_empty() {
         // Listview.mui builds its own List when none is given (Zune listview.c OM_NEW).
         let list = create(a, Kind::List, &[])?;
@@ -215,6 +217,7 @@ fn set_attr_with<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, val: u32, no
             store_str(a, obj, attr, val)?;
             if (kind, attr) == (Kind::Window, MUIA_Window_Title) { win::push_title(a, obj)?; }
         }
+        Ty::StrOrFlag => if val < 0x100 { store_num(a, obj, attr, val); } else { store_str(a, obj, attr, val)?; },
         Ty::StrArr => store_arr(a, obj, attr, val)?,
         Ty::Num => {
             shown = resolve_value(a, obj, kind, attr, val);

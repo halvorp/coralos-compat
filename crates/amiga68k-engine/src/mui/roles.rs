@@ -53,9 +53,10 @@ pub fn enabled(o: &Objects, obj: u32) -> bool {
 
 /// A Text's displayed string: MUI's `ESC` formatting sequences removed (`ESC c/l/r/b/u/i/n/-` and `ESC 2..8`/`ESC P[..]`), and the
 /// `_` that marks the hotkey character removed when the object says it does (`MUIA_Text_HiCharIdx` = '_').
-pub fn display_text(o: &Objects, obj: u32, attr: u32) -> String {
-    let raw = o.text(obj, attr);
-    let strip_hi = o.num(obj, MUIA_Text_HiCharIdx) == Some('_' as u32);
+pub fn display_text(o: &Objects, obj: u32, attr: u32) -> String { strip_format(o.text(obj, attr), o.num(obj, MUIA_Text_HiCharIdx) == Some('_' as u32)) }
+
+/// `raw` without MUI's `ESC` formatting sequences (and, when `hotkey`, the first `_`).
+pub fn strip_format(raw: &str, hotkey: bool) -> String {
     let mut out = String::new();
     let mut it = raw.chars().peekable();
     let mut hi_done = false;
@@ -65,7 +66,7 @@ pub fn display_text(o: &Objects, obj: u32, attr: u32) -> String {
                 let sel = it.next();
                 if matches!(sel, Some('P' | 'I')) && it.peek() == Some(&'[') { for d in it.by_ref() { if d == ']' { break; } } }
             }
-            '_' if strip_hi && !hi_done => hi_done = true,
+            '_' if hotkey && !hi_done => hi_done = true,
             c => out.push(c),
         }
     }
@@ -127,12 +128,10 @@ pub fn caption(o: &Objects, obj: u32) -> String {
 }
 
 fn choice(o: &Objects, obj: u32, style: ChoiceStyle, entries: u32, active: u32) -> ControlKind {
-    let labels: Vec<String> = o.entries(obj, entries).iter().map(|s| strip_esc(s)).collect();
+    let labels: Vec<String> = o.entries(obj, entries).iter().map(|s| strip_format(s, false)).collect();
     let selected = if labels.is_empty() { 0 } else { o.num_or(obj, active, 0).min(labels.len() as u32 - 1) };
     ControlKind::Choice { style, labels, selected }
 }
-
-fn strip_esc(s: &str) -> String { s.chars().filter(|&c| c != '\u{1b}').collect() }
 
 /// A container that draws a frame is a group around its children (title from `MUIA_FrameTitle`).
 pub fn frame_group(o: &Objects, obj: u32) -> Option<ControlKind> {

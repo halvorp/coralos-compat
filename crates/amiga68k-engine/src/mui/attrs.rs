@@ -17,6 +17,8 @@ pub enum Ty {
     Str,
     /// A child object: the object takes ownership (only at creation, or through its add method).
     Adopt,
+    /// A C string, or a small flag standing in for one (`MUIA_List_Title` TRUE = ask the display hook): below 0x100 it is the flag.
+    StrOrFlag,
     /// A NULL-terminated array of C strings (Cycle/Radio entries, Register titles), copied when it is set.
     StrArr,
 }
@@ -87,7 +89,7 @@ const GAUGE: &[(u32, Ty)] = &[(MUIA_Gauge_Current, Num), (MUIA_Gauge_Max, Num), 
 const PROP: &[(u32, Ty)] = &[(MUIA_Prop_First, Num), (MUIA_Prop_Entries, Num), (MUIA_Prop_Visible, Num), (MUIA_Prop_Horiz, Num),
     (MUIA_Prop_Slider, Num), (MUIA_Prop_UseWinBorder, Num)];
 const SCROLLBAR: &[(u32, Ty)] = &[(MUIA_Scrollbar_Type, Num)];
-const LIST: &[(u32, Ty)] = &[(MUIA_List_Active, Num), (MUIA_List_Quiet, Num), (MUIA_List_Format, Str), (MUIA_List_Title, Str),
+const LIST: &[(u32, Ty)] = &[(MUIA_List_Active, Num), (MUIA_List_Quiet, Num), (MUIA_List_Format, Str), (MUIA_List_Title, StrOrFlag),
     (MUIA_List_AutoVisible, Num), (MUIA_List_AdjustWidth, Num), (MUIA_List_AdjustHeight, Num), (MUIA_List_MinLineHeight, Num),
     (MUIA_List_ConstructHook, Num), (MUIA_List_DestructHook, Num), (MUIA_List_DisplayHook, Num), (MUIA_List_CompareHook, Num),
     (MUIA_List_MultiTestHook, Num), (MUIA_List_Pool, Num), (MUIA_List_PoolPuddleSize, Num), (MUIA_List_PoolThreshSize, Num),

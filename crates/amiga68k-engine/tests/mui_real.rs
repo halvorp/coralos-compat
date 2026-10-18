@@ -129,3 +129,26 @@ fn a_zune_pages_demo_turns_its_pages_when_native_buttons_are_pressed() {
     assert_eq!(page(&a).as_deref(), Some("Rect1"));
     assert!(a.refused.is_empty(), "{:?}", a.refused);
 }
+
+#[test]
+fn a_zune_screen_grabber_fills_its_native_list_through_its_own_display_hook_and_takes_a_native_row_and_value() {
+    let Some(mut a) = start("Tools/ScreenGrabber") else { return };
+    // The List.mui has a MUIA_List_DisplayHook: the cell text exists only because the engine called the program's hook as a guest call.
+    let (w, c, m) = a.ui.find_control(|m| matches!(m.kind, ControlKind::List { .. })).expect("List.mui is a native list");
+    let ControlKind::List { rows, selected, .. } = &m.kind else { unreachable!() };
+    assert_eq!((rows.as_slice(), *selected), ([vec!["Workbench".to_string()]].as_slice(), None), "the screen list, one row from the program's display hook");
+    let kinds: std::collections::BTreeSet<String> = a.ui.controls.values().map(|(_, m)| format!("{:?}", m.kind).split([' ', '{', '(']).next().unwrap().to_string()).collect();
+    for k in ["Button", "Checkbox", "Field", "Gauge", "Group", "Label", "List", "Slider"] { assert!(kinds.contains(k), "{k} in {kinds:?}"); }
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+    // A native row choice becomes MUIA_List_Active and runs the program's notifications and hooks to the end.
+    let list = a.objects.map.iter().find(|(_, o)| o.kind == amiga68k_engine::mui::classes::Kind::List).map(|(&k, _)| k).unwrap();
+    assert_eq!(a.deliver(GuestUiEvent::intent(w, c, m.token, Intent::SelectRow(0))).unwrap(), Delivered::Handled);
+    assert_eq!(a.step(20_000_000).0, Step::Blocked, "{:?}", a.refused);
+    assert_eq!(amiga68k_engine::mui::get_attr(&mut a, list, amiga68k_engine::mui::MUIA_List_Active).unwrap(), 0);
+    // NEGATIVE CONTROL: a row index the list does not have leaves it with no active row (MUI keeps the active row inside the list).
+    assert_eq!(a.deliver(GuestUiEvent::intent(w, c, m.token, Intent::SelectRow(7))).unwrap(), Delivered::Handled);
+    assert_eq!(a.step(20_000_000).0, Step::Blocked, "{:?}", a.refused);
+    assert_eq!(amiga68k_engine::mui::get_attr(&mut a, list, amiga68k_engine::mui::MUIA_List_Active).unwrap(), MUIV_OFF);
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+}
+const MUIV_OFF: u32 = u32::MAX; // MUIV_List_Active_Off

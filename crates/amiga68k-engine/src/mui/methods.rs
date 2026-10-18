@@ -4,7 +4,7 @@
 //! list.h) and mui.h; intuition/classusr.h for `OM_ADDMEMBER` / `OM_REMMEMBER`.
 use alloc::format;
 use super::classes::Kind;
-use super::hooks::{HookCall, Msg};
+use super::hooks::{After, HookCall, Msg};
 use super::ids_gen::*;
 use super::{app, attrs, list, notify, object};
 use crate::{machine::Amiga, Refusal};
@@ -46,7 +46,7 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         let cl = a.classes.class_of(obj).ok_or_else(|| Refusal(format!("DoMethod: {obj:#x} is not a MUI object")))?;
         let mut msg = alloc::vec![id];
         msg.extend_from_slice(args);
-        a.objects.hooks.push_back(HookCall { hook: cl, obj, msg: Msg::Params(msg) });
+        a.objects.hooks.push_back(HookCall { hook: cl, obj, msg: Msg::Params(msg), after: After::Nothing });
         return Ok(0);
     };
     let arg = |i: usize| args.get(i).copied().ok_or_else(|| Refusal(format!("{}: missing argument {i}", attrs::method_name(id))));
@@ -56,7 +56,7 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_NoNotifySet => { object::set_attr_quiet(a, obj, arg(0)?, arg(1)?)?; Ok(0) }
         OM_GET => { let v = object::get_attr(a, obj, arg(0)?)?; a.mem.write_u32(arg(1)?, v).map_err(Refusal::mem("MUIM_Get storage"))?; Ok(1) }
         MUIM_CallHook => {
-            a.objects.hooks.push_back(HookCall { hook: arg(0)?, obj, msg: Msg::Params(args[1..].to_vec()) });
+            a.objects.hooks.push_back(HookCall { hook: arg(0)?, obj, msg: Msg::Params(args[1..].to_vec()), after: After::Nothing });
             Ok(0)
         }
         MUIM_KillNotify => { let t = arg(0)?; if let Some(o) = a.objects.map.get_mut(&obj) { o.notifies.retain(|n| n.attr != t); } Ok(0) }
@@ -95,7 +95,8 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_List_Remove if kind == Kind::List => { list::remove(a, obj, arg(0)?)?; super::win::refresh(a, obj)?; Ok(0) }
         MUIM_List_Clear if kind == Kind::List => { list::clear(a, obj)?; super::win::refresh(a, obj)?; Ok(0) }
         MUIM_List_GetEntry if kind == Kind::List => { list::get_entry(a, obj, arg(0)?, arg(1)?)?; Ok(0) }
-        MUIM_List_Redraw | MUIM_List_Jump if kind == Kind::List => { super::win::refresh(a, obj)?; Ok(0) }
+        MUIM_List_Redraw if kind == Kind::List => { list::redraw(a, obj, arg(0)?)?; super::win::refresh(a, obj)?; Ok(0) }
+        MUIM_List_Jump if kind == Kind::List => { super::win::refresh(a, obj)?; Ok(0) }
         _ => Err(bad_kind(kind, id)),
     }
 }
