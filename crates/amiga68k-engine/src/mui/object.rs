@@ -42,6 +42,7 @@ fn init<U: GuestUi>(a: &mut Amiga<U>, obj: u32, kind: Kind, tags: &[(u32, u32)])
     if kind == Kind::Application {
         let bit = ports::alloc_signal_bit(a, -1)?.ok_or_else(|| Refusal("MUI Application: no free signal bit".into()))?;
         if let Some(o) = a.objects.map.get_mut(&obj) { o.ext = Ext::App { bit, pending: Default::default() }; }
+        a.sched.app_task.insert(obj, a.sched.cur); // the task a ReturnID signals: the one that created the Application
     }
     for &(tag, data) in tags {
         let def = lookup(kind, tag).ok_or_else(|| Refusal(format!("MUI {kind:?} class: attribute {} is not implemented", attr_name(tag))))?;

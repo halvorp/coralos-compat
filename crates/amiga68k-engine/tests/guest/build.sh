@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 # mccstub.s: testlib renamed and versioned like a MUI class, so a program asking for TextEditor.mcc v15 finds a library.
 sed -e 's/test\.library/TextEditor.mcc/g' -e 's/^\(\s*\.word\s*\)3\b/\115/' testlib.s > mccstub.s
-for n in testlib prog progdos progmisc mccstub gfxdraw boopsi boopsigad boopsiinput; do
+for n in testlib prog progdos progmisc mccstub gfxdraw boopsi boopsigad boopsiinput boopsitwo; do
   m68k-linux-gnu-as -m68020 -o $n.o $n.s
   m68k-linux-gnu-ld -e 0 -Ttext=0 -o $n.elf $n.o
   m68k-linux-gnu-objcopy -O binary $n.elf $n.bin

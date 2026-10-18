@@ -11,7 +11,8 @@ fn bit_of<U: GuestUi>(a: &Amiga<U>, app: u32) -> Result<u32, Refusal> {
 pub fn return_id<U: GuestUi>(a: &mut Amiga<U>, app: u32, id: u32) -> Result<(), Refusal> {
     let bit = bit_of(a, app)?;
     if id != 0 { if let Some(Ext::App { pending, .. }) = a.objects.map.get_mut(&app).map(|o| &mut o.ext) { pending.push_back(id); } }
-    exec_wait::signal_task(a, 1 << bit)
+    let task = a.sched.app_task.get(&app).copied().unwrap_or(a.sched.cur);
+    exec_wait::signal_task(a, task, 1 << bit)
 }
 
 /// MUIM_Application_NewInput(&sigs): the next pending return id (0 = none). `*sigs` is the signal mask to Wait on, or 0

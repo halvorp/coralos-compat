@@ -192,7 +192,7 @@ pub fn intui_text_length<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
     Ok(format!("[intuition] IntuiTextLength -> {w}"))
 }
 
-/// ObtainGIRPort(a0 = GadgetInfo) -> the gadget's window RastPort (shared, not cloned: one task).
+/// ObtainGIRPort(a0 = GadgetInfo) -> the gadget's window RastPort (shared, not cloned; tasks switch only after a library call, so no lock is needed).
 pub fn obtain_gi_rport<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let gi = cpu.areg(0);
     let win = a.mem.read_u32(gi + 4).map_err(Refusal::mem("GadgetInfo.gi_Window"))?;

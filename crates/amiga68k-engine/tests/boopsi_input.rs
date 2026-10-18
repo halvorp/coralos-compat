@@ -54,3 +54,41 @@ fn a_press_outside_or_rejected_by_hittest_starts_nothing() {
     point(&mut a, 28, 8, PointerPhase::Up);
     assert_eq!((c(&a, b, 2), c(&a, b, 9)), (0, 0), "nothing active, nothing posted");
 }
+
+// ---- two tasks: the window owner is parked in WaitPort while a busy worker task runs ----
+
+const TWO: &[u8] = include_bytes!("guest/boopsitwo.bin");
+
+#[test]
+fn a_click_reaches_the_gadget_of_a_parked_task_while_another_task_runs() {
+    let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    let loaded = a.start_hunk(&build(&[Hunk::code(TWO.to_vec(), vec![])], None)).unwrap();
+    let b = loaded.bases[0];
+    let (s, _) = a.step(300_000);
+    assert_eq!(s, Step::BudgetSpent, "the worker never blocks: the step ends on its budget, not Blocked ({:?})", a.refused);
+    assert_eq!(a.sched.tasks.len(), 2, "owner + worker");
+    let owner = a.sched.tasks.values().find(|t| t.main).expect("main");
+    assert!(owner.waiting.is_some(), "the window owner is parked in its WaitPort");
+    let w0 = c(&a, b, 10);
+    assert!(w0 > 0, "the worker ran while the owner was parked");
+    let win = *a.windows.values().next().unwrap();
+    for (x, y, ph) in [(15, 8, PointerPhase::Down), (16, 8, PointerPhase::Up)] {
+        assert_eq!(a.deliver(GuestUiEvent::Pointer { win, x, y, phase: ph }).unwrap(), Delivered::Handled);
+        let (s, _) = a.step(300_000);
+        assert!(matches!(s, Step::BudgetSpent | Step::Exited), "{s:?} {:?}", a.refused);
+        assert!(a.refused.is_empty(), "{:?}", a.refused);
+    }
+    assert_eq!((c(&a, b, 0), c(&a, b, 1), c(&a, b, 2), c(&a, b, 3)), (1, 1, 1, 1), "hittest, goactive, handleinput(up), goinactive ran on the owner's gadget");
+    assert_eq!((c(&a, b, 9), c(&a, b, 5), c(&a, b, 6)), (1, 0x40, 123), "the owner got IDCMP_GADGETUP and finished");
+    assert!(c(&a, b, 10) > w0, "the worker kept running throughout");
+}
+
+#[test]
+fn without_a_click_the_parked_owner_stays_parked() {
+    let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    let loaded = a.start_hunk(&build(&[Hunk::code(TWO.to_vec(), vec![])], None)).unwrap();
+    let b = loaded.bases[0];
+    a.step(300_000);
+    a.step(300_000);
+    assert_eq!((c(&a, b, 0), c(&a, b, 9)), (0, 0), "control: no pointer event, no gadget call, no message");
+}

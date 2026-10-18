@@ -113,11 +113,11 @@ pub fn read_args<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     let m = Refusal::mem;
     let (tp, array, given) = (cpu.dreg(1), cpu.dreg(2), cpu.dreg(3));
     let template = a.mem.read_cstr(tp).map_err(m("ReadArgs.template"))?;
-    let line = a.mem.read_cstr(crate::process::ARGS).map_err(m("argument line"))?;
+    let line = a.mem.read_cstr(crate::process::arg_ptr(a)).map_err(m("argument line"))?;
     let vals = match parse(&template, &line) {
         Ok(v) => v,
         Err(code) => {
-            a.mem.write_u32(crate::process::PROCESS + PR_RESULT2, code).map_err(m("pr_Result2"))?;
+            a.mem.write_u32(a.sched.cur + PR_RESULT2, code).map_err(m("pr_Result2"))?;
             cpu.set_d0(0);
             return Ok(format!("[dos] ReadArgs \"{template}\" line={line:?} -> NULL (IoErr {code})"));
         }

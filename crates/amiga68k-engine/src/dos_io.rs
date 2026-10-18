@@ -55,12 +55,17 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     ok(a, cpu, fh >> 2, format!("{what} -> {fh:#x}"))
 }
 
-/// Close(d1 = file) -> DOSTRUE. Closing the console streams is accepted and does nothing.
+/// Close a file handle BPTR: the console streams are accepted and do nothing.
+pub(crate) fn close_fh<U: GuestUi>(a: &mut Amiga<U>, b: u32) -> Result<(), Refusal> {
+    if b == dos::STDIN_FH >> 2 || b == dos::STDOUT_FH >> 2 { return Ok(()); }
+    if a.fs.files.remove(&(b << 2)).is_none() { return Err(Refusal(format!("Close {:#x}: not an open file", b << 2))); }
+    a.heap.free(b << 2, FH_SIZE).map_err(|e| Refusal(format!("Close: {e}")))
+}
+
+/// Close(d1 = file) -> DOSTRUE.
 pub fn close<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let b = cpu.dreg(1);
-    if b == dos::STDIN_FH >> 2 || b == dos::STDOUT_FH >> 2 { return ok(a, cpu, DOSTRUE, "[dos] Close console".into()); }
-    if a.fs.files.remove(&(b << 2)).is_none() { return Err(Refusal(format!("Close {:#x}: not an open file", b << 2))); }
-    a.heap.free(b << 2, FH_SIZE).map_err(|e| Refusal(format!("Close: {e}")))?;
+    close_fh(a, b)?;
     ok(a, cpu, DOSTRUE, format!("[dos] Close {:#x}", b << 2))
 }
 
@@ -88,7 +93,7 @@ pub fn write<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
     let (b, buf, len) = (cpu.dreg(1), cpu.dreg(2), cpu.dreg(3));
     let what = format!("[dos] Write {:#x} len={len}", b << 2);
     let bytes: alloc::vec::Vec<u8> = (0..len).map(|i| a.mem.read_u8(buf + i).map_err(Refusal::mem("Write.buffer"))).collect::<Result<_, _>>()?;
-    if write_bytes_to(a, b, &bytes)? { ok(a, cpu, len, what) } else { let e = DosErr(a.mem.read_u32(crate::process::PROCESS + PR_RESULT2).unwrap_or(0)); fail(a, cpu, e, MINUS_ONE, what) }
+    if write_bytes_to(a, b, &bytes)? { ok(a, cpu, len, what) } else { let e = DosErr(a.mem.read_u32(a.sched.cur + PR_RESULT2).unwrap_or(0)); fail(a, cpu, e, MINUS_ONE, what) }
 }
 
 /// FPuts(d1 = file, d2 = string) for a volume file -> 0 on success, -1 on a write error.

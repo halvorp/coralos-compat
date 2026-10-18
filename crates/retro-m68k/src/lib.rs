@@ -69,6 +69,7 @@ impl Cpu {
     pub fn dreg(&self, n: u32) -> u32 { debug_assert!(n < 8); unsafe { m68k_get_reg(core::ptr::null_mut(), REG_D0 + n) } }
     pub fn areg(&self, n: u32) -> u32 { debug_assert!(n < 8); unsafe { m68k_get_reg(core::ptr::null_mut(), REG_A0 + n) } }
     pub fn set_d0(&mut self, v: u32) { unsafe { m68k_set_reg(REG_D0, v) } }
+    pub fn set_dreg(&mut self, n: u32, v: u32) { debug_assert!(n < 8); unsafe { m68k_set_reg(REG_D0 + n, v) } }
     /// Set address register `n` (A7 = the active stack pointer). Only inside a Host callback, like every accessor here.
     pub fn set_areg(&mut self, n: u32, v: u32) { debug_assert!(n < 8); unsafe { m68k_set_reg(REG_A0 + n, v) } }
     pub fn pc(&self) -> u32 { unsafe { m68k_get_reg(core::ptr::null_mut(), REG_PC) } }

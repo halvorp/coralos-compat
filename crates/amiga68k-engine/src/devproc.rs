@@ -63,7 +63,7 @@ fn get_device_proc<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
         let dev = a.fs.vol.device_of(cur_dir(a));
         let dname = String::from(a.fs.vol.name(dev));
         let node = find(a, &dname, LDF_DEVICES).map_or(0, |e| e.addr);
-        let cur = a.mem.read_u32(crate::process::PROCESS + 152).map_err(Refusal::mem("pr_CurrentDir"))?;
+        let cur = a.mem.read_u32(a.sched.cur + 152).map_err(Refusal::mem("pr_CurrentDir"))?;
         (device_port(a, &dname)?, cur, 0, node)
     };
     let dp = if prev != 0 { prev } else {

@@ -88,7 +88,7 @@ pub(crate) fn free_lock<U: GuestUi>(a: &mut Amiga<U>, bptr: u32, call: &str) -> 
 /// UnLock(d1 = lock). The current directory's own lock cannot be released under the program.
 pub fn unlock<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let b = cpu.dreg(1);
-    let cur = a.mem.read_u32(crate::process::PROCESS + 152).map_err(Refusal::mem("pr_CurrentDir"))?;
+    let cur = a.mem.read_u32(a.sched.cur + 152).map_err(Refusal::mem("pr_CurrentDir"))?;
     if b != 0 && b == cur { return Err(Refusal(format!("UnLock {:#x}: it is the Process's current directory", b << 2))); }
     free_lock(a, b, "UnLock")?;
     Ok(format!("[dos] UnLock {:#x}", b << 2))
@@ -274,12 +274,12 @@ const PR_HOME_DIR: u32 = 188;
 
 /// GetProgramDir() -> the lock on the directory the program was started from (what `PROGDIR:` names), made on first use.
 pub fn get_program_dir<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let mut home = a.mem.read_u32(crate::process::PROCESS + PR_HOME_DIR).map_err(Refusal::mem("pr_HomeDir"))?;
+    let mut home = a.mem.read_u32(a.sched.cur + PR_HOME_DIR).map_err(Refusal::mem("pr_HomeDir"))?;
     if home == 0 {
         if let Ok(n) = a.fs.vol.resolve(a.fs.vol.boot_device(), "PROGDIR:") {
             if let Some(p) = new_lock(a, n, false)? {
                 home = p >> 2;
-                a.mem.write_u32(crate::process::PROCESS + PR_HOME_DIR, home).map_err(Refusal::mem("pr_HomeDir"))?;
+                a.mem.write_u32(a.sched.cur + PR_HOME_DIR, home).map_err(Refusal::mem("pr_HomeDir"))?;
             }
         }
     }
@@ -290,8 +290,8 @@ pub fn get_program_dir<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
 pub fn set_program_dir<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let b = cpu.dreg(1);
     if let Err(e) = lock_node(a, b) { return Err(Refusal(format!("SetProgramDir {:#x}: not a lock (IoErr {})", b << 2, e.0))); }
-    let old = a.mem.read_u32(crate::process::PROCESS + PR_HOME_DIR).map_err(Refusal::mem("pr_HomeDir"))?;
-    a.mem.write_u32(crate::process::PROCESS + PR_HOME_DIR, b).map_err(Refusal::mem("pr_HomeDir"))?;
+    let old = a.mem.read_u32(a.sched.cur + PR_HOME_DIR).map_err(Refusal::mem("pr_HomeDir"))?;
+    a.mem.write_u32(a.sched.cur + PR_HOME_DIR, b).map_err(Refusal::mem("pr_HomeDir"))?;
     cpu.set_d0(old);
     Ok(format!("[dos] SetProgramDir {:#x}", b << 2))
 }

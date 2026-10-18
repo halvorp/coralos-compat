@@ -57,8 +57,8 @@ pub struct Amiga<U: GuestUi> {
     pub heap: memory::Heap,
     /// The engine's own arena (see SYS_ARENA_START).
     pub sys_heap: memory::Heap,
-    /// Forbid nesting depth (counted, not enforced: one task).
-    pub forbid: u32,
+    /// The guest tasks and who runs (sched.rs).
+    pub sched: crate::sched::Sched<U>,
     /// What the program wrote to its console.
     pub console: dos::Console,
     /// Outstanding LockPubScreen locks on the one public screen.
@@ -70,22 +70,18 @@ pub struct Amiga<U: GuestUi> {
     /// Each open window's current menu strip (first Menu), and the blocks of every CreateMenusA result by its first menu.
     pub menu_strips: BTreeMap<u32, u32>,
     pub menu_allocs: BTreeMap<u32, Vec<(u32, u32)>>,
-    /// What a blocked guest waits for (exec_wait.rs); None = runnable.
-    pub waiting: Option<exec_wait::Waiting>,
     /// The virtual clock, microseconds (timer.rs), and the pending TR_ADDREQUEST timers: (deadline, IORequest).
     pub clock_us: u64,
     pub timers: Vec<(u64, u32)>,
     /// Messages the ENGINE sent (IntuiMessages): address -> delivered to the guest (GetMsg) yet?
     pub engine_msgs: BTreeMap<u32, bool>,
-    /// The running guest's CPU context (run.rs).
-    pub(crate) ctx: Option<retro_m68k::CpuContext>,
     /// exec memory pools: handle -> (requirements, live blocks address -> size).
     pub pools: BTreeMap<u32, (u32, BTreeMap<u32, u32>)>,
     /// The guest's filesystem and what hangs off it: locks, files, seglists, disk libraries (fs.rs).
     pub fs: crate::fs::FsState,
-    /// Guest calls in flight, innermost last (guest_call.rs).
+    /// Guest calls in flight of the RUNNING task, innermost last (guest_call.rs; swapped per task by sched.rs).
     pub(crate) calls: Vec<crate::guest_call::Frame<U>>,
-    /// SignalSemaphores by guest address -> the one task's nest count; the public list by name (semaphores.rs).
+    /// SignalSemaphores by guest address -> the owner's nest count (the owner is in `sched.sem_owner`); the public list by name (semaphores.rs).
     pub semaphores: BTreeMap<u32, u16>,
     pub public_semaphores: BTreeMap<String, u32>,
     /// graphics.library's host-side state: bitmaps, layers, regions, fonts, palette, content damage (graphics/).
@@ -94,7 +90,7 @@ pub struct Amiga<U: GuestUi> {
     pub objects: crate::boopsi::Objects,
     /// BOOPSI classes and objects made by the class core (iclass.rs, boopsi_native.rs).
     pub classes: crate::iclass::Classes,
-    /// Queued pointer events for BOOPSI gadgets and the Wait trap a blocked guest sits on (boopsi_input.rs).
+    /// Queued pointer events for BOOPSI gadgets and the Wait trap each task sits on (boopsi_input.rs).
     pub input: crate::boopsi_input::Input,
     /// Functions the census runner was told to pretend exist (`--stub lib/Func`, census.rs).
     pub census_stubs: Vec<(String, String)>,
@@ -108,14 +104,14 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
-            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), gfx: Default::default(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
+            clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), gfx: Default::default(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
             .func(exec::LVO_CLOSE_LIBRARY, "CloseLibrary", exec::close_library::<U>)
-            .func(process::LVO_FIND_TASK, "FindTask", process::find_task::<U>)
+            .func(process::LVO_FIND_TASK, "FindTask", crate::exec_task::find_task::<U>)
             .func(exec::LVO_OLD_OPEN_LIBRARY, "OldOpenLibrary", exec::old_open_library::<U>)
             .func(exec::LVO_ALERT, "Alert", exec::alert::<U>)
             .func(memory::LVO_ALLOC_MEM, "AllocMem", memory::alloc_mem::<U>)
@@ -124,8 +120,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(memory::LVO_FREE_VEC, "FreeVec", memory::free_vec::<U>)
             .func(memory::LVO_AVAIL_MEM, "AvailMem", memory::avail_mem::<U>)
             .func(memory::LVO_COPY_MEM, "CopyMem", memory::copy_mem::<U>)
-            .func(memory::LVO_FORBID, "Forbid", memory::forbid::<U>)
-            .func(memory::LVO_PERMIT, "Permit", memory::permit::<U>)
+            .with(crate::exec_task::register::<U>)
             .func(memory::LVO_SET_SIGNAL, "SetSignal", memory::set_signal::<U>)
             .func(memory::LVO_STACK_SWAP, "StackSwap", memory::stack_swap::<U>)
             .func(memory::LVO_CREATE_POOL, "CreatePool", memory::create_pool::<U>)
@@ -191,6 +186,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(rdargs::LVO_FREE_ARGS, "FreeArgs", rdargs::free_args::<U>)
             .with(crate::dos_fs::register::<U>)
             .with(crate::dos2::register::<U>)
+            .with(crate::dos_newproc::register::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("intuition.library", INTUITION_BASE)
             .func(window::LVO_OPEN_WINDOW, "OpenWindow", window::open_window::<U>)
@@ -243,9 +239,17 @@ impl<U: GuestUi> Amiga<U> {
         crate::doslist::init(&mut a)?;
         crate::guest_call::install(&mut a.mem)?;
         a.dispatch.insert(crate::guest_call::RET_SLOT, ("exec.library", "GuestCallReturn", crate::guest_call::on_return::<U>));
+        crate::exec_task::install(&mut a)?;
         write_slot(&mut a.mem, EXIT_SLOT).map_err(Refusal::mem("exit slot"))?;
         a.mem.write_u32(4, EXEC_BASE).map_err(Refusal::mem("AbsExecBase"))?; // AbsExecBase
         Ok(a)
+    }
+
+    /// Make `addr` an `ILLEGAL; RTS` slot whose trap runs `h` (the engine's own return traps).
+    pub(crate) fn install_slot(&mut self, addr: u32, lib: &'static str, func: &'static str, h: crate::libtable::Handler<U>) -> Result<(), Refusal> {
+        write_slot(&mut self.mem, addr).map_err(Refusal::mem("engine trap slot"))?;
+        self.dispatch.insert(addr, (lib, func, h));
+        Ok(())
     }
 
     /// Guest calls in flight (guest_call.rs): 0 when no host-started guest call is outstanding.
@@ -276,7 +280,9 @@ impl<U: GuestUi> Host for Amiga<U> {
         let Some((lib, func, handler)) = self.dispatch.get(&pc).copied() else { return false };
         self.input.trap_pc = pc;
         let handler = if self.census_stubs.iter().any(|(l, f)| l == lib && f == func) { crate::census::stub::<U> } else { handler };
-        match handler(self, cpu) {
+        let r = handler(self, cpu);
+        self.preempt_check(cpu);
+        match r {
             Ok(line) => self.log.push(line),
             Err(Refusal(e)) => {
                 cpu.set_d0(0); // NULL / FALSE

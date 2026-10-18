@@ -8,7 +8,7 @@
 //! its own Wait trap by `Amiga::step` (the trap address is recorded when it blocks), which is the pump's entry.
 //! Facts: AROS rom/intuition inputhandler gadget code, gadgetclass.h (gpHitTest/gpInput/gpGoInactive, GMR_*), classusr.
 use alloc::boxed::Box;
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use alloc::format;
 use crate::boopsi_ids::*;
@@ -29,19 +29,27 @@ const IECODE_NOBUTTON: u16 = 0xFF;
 const IEQUALIFIER_LEFTBUTTON: u16 = 0x4000;
 const GMR_VERIFY: u32 = 8;
 
-pub struct Ptr { pub win: u32, pub x: i32, pub y: i32, pub phase: PointerPhase }
+/// `owner` = the task that owns the window's UserPort (mp_SigTask): the one whose dispatcher calls run it.
+pub struct Ptr { pub win: u32, pub owner: u32, pub x: i32, pub y: i32, pub phase: PointerPhase }
 
 /// Queued pointer events, the gadget that has the pointer (window, gadget), and the trap a blocked Wait sits on.
 #[derive(Default)]
-pub struct Input { pub q: VecDeque<Ptr>, pub active: Option<(u32, u32)>, pub trap_pc: u32, pub wait_trap: u32 }
+pub struct Input { pub q: VecDeque<Ptr>, pub active: Option<(u32, u32)>, pub trap_pc: u32, pub wait_trap: BTreeMap<u32, u32> }
 
-impl Input { pub fn pending(&self) -> bool { !self.q.is_empty() } }
+impl Input {
+    /// Events waiting for task `t`.
+    pub fn pending_for(&self, t: u32) -> bool { self.q.iter().any(|p| p.owner == t) }
+    fn pop_for(&mut self, t: u32) -> Option<Ptr> { let i = self.q.iter().position(|p| p.owner == t)?; self.q.remove(i) }
+}
 
 /// A pointer event for guest window `win` (idcmp::deliver's arm).
 pub fn queue<U: GuestUi>(a: &mut Amiga<U>, win: u32, x: i32, y: i32, phase: PointerPhase) -> Result<Delivered, Refusal> {
     let has = crate::boopsi_glist::window_gadgets(a, win)?.iter().any(|g| a.classes.class_of(*g).is_some());
     if !has && a.input.active.is_none() { return Ok(Delivered::IgnoredUnsubscribed); }
-    a.input.q.push_back(Ptr { win, x, y, phase });
+    let port = a.mem.read_u32(win + crate::idcmp::WD_USERPORT).map_err(Refusal::mem("Window.UserPort"))?;
+    if port == 0 { return Ok(Delivered::IgnoredUnsubscribed); } // no IDCMP port: nobody to post a GADGETUP to
+    let owner = a.mem.read_u32(port + 16).map_err(Refusal::mem("MsgPort.mp_SigTask"))?;
+    a.input.q.push_back(Ptr { win, owner, x, y, phase });
     Ok(Delivered::Handled)
 }
 
@@ -54,8 +62,10 @@ struct Job { win: u32, x: i32, y: i32, phase: PointerPhase, cands: Vec<u32>, idx
 /// Called by Wait/WaitPort before they wait: if pointer events are queued, run them first (true = the call is in
 /// progress and the handler must return without waiting itself).
 pub fn pump<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, w: Waiting) -> Result<bool, Refusal> {
-    if !a.input.pending() { return Ok(false); }
-    let next = begin(a, cpu, (w, a.input.wait_trap))?;
+    let cur = a.sched.cur;
+    if !a.input.pending_for(cur) { return Ok(false); }
+    let trap = a.input.trap_pc;
+    let next = begin(a, cpu, (w, trap))?;
     guest_call::start(a, cpu, next)?;
     Ok(true)
 }
@@ -75,15 +85,17 @@ fn gadget_box<U: GuestUi>(a: &Amiga<U>, win: u32, g: u32) -> Result<(i32, i32, i
 }
 
 fn finish_wait<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, (w, trap): (Waiting, u32)) -> Result<Next<U>, Refusal> {
-    match a.try_satisfy(w)? {
+    let cur = a.sched.cur;
+    match a.satisfy(cur, w, true)? {
         Some(v) => Ok(Next::Return(v)),
-        None => { a.waiting = Some(w); a.input.wait_trap = trap; cpu.block(); Ok(Next::Return(0)) }
+        None => { a.park(w); a.input.wait_trap.insert(cur, trap); cpu.block(); Ok(Next::Return(0)) }
     }
 }
 
 /// Take queued events until one needs a guest call; with none left, do the wait the guest was making.
 fn begin<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, wait: (Waiting, u32)) -> Result<Next<U>, Refusal> {
-    while let Some(ev) = a.input.q.pop_front() {
+    let cur = a.sched.cur;
+    while let Some(ev) = a.input.pop_for(cur) {
         if !a.windows.contains_key(&ev.win) { continue; }
         let base = Job { win: ev.win, x: ev.x, y: ev.y, phase: ev.phase, cands: Vec::new(), idx: 0, stage: Stage::Hit, g: 0, scratch: 0, gi: 0, wait };
         match (ev.phase, a.input.active) {
@@ -168,3 +180,24 @@ fn advance<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, job: Job, d0: u32) -> Re
         }
     }
 }
+
+/// Scheduler hook (sched.rs, before a task is dispatched): a task parked in Wait/WaitPort that has pointer events queued
+/// is sent back through its own Wait trap, on ITS saved context, so the wait handler runs the pump. The guest calls in
+/// between trash D0/A0, which carry the wait's argument, so they are put back. True = the task was redirected.
+pub fn redirect<U: GuestUi>(a: &mut Amiga<U>, t: u32) -> bool {
+    if !a.input.pending_for(t) { return false; }
+    let Some(&trap) = a.input.wait_trap.get(&t) else { return false };
+    let Some(task) = a.sched.tasks.get_mut(&t) else { return false };
+    let (Some(w), Some(ctx)) = (task.waiting, task.ctx.as_mut()) else { return false };
+    match w {
+        Waiting::Signals(set) => ctx.set_reg(retro_m68k::REG_D0, set),
+        Waiting::Port(p) => ctx.set_reg(retro_m68k::REG_A0, p),
+        _ => return false,
+    }
+    ctx.set_reg(retro_m68k::REG_PC, trap);
+    task.waiting = None;
+    true
+}
+
+/// Can parked task `t` be woken to run its queued pointer events?
+pub fn wakes<U: GuestUi>(a: &Amiga<U>, t: u32) -> bool { a.input.pending_for(t) && a.input.wait_trap.contains_key(&t) }
