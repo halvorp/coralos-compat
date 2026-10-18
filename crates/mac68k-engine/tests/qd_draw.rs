@@ -186,3 +186,13 @@ fn drawing_with_no_port_or_before_initgraf_is_a_named_refusal() {
     g.m.run_loop(100_000).unwrap();
     assert!(g.m.refused.iter().any(|r| r.contains("PaintRect") && r.contains("thePort is NIL")), "{:?}", g.m.refused);
 }
+
+#[test]
+fn get_ccursor_answers_nil_and_says_so() {
+    let mut g = Rig::new();
+    g.m.mem.write_u32(SCRATCH, 0xDEAD_BEEF).unwrap();
+    g.run(Prog::new().clr_l().w(128).trap(0xAA1B).pop_l(SCRATCH).exit());
+    assert_eq!(g.m.mem.read_u32(SCRATCH).unwrap(), 0, "NIL handle: the program falls back to its B&W cursor");
+    assert!(g.m.log.iter().any(|l| l.contains("GetCCursor 128 -> NIL") && l.contains("not implemented")));
+    g.no_refusals();
+}
