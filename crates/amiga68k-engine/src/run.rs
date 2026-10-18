@@ -42,7 +42,7 @@ impl<U: GuestUi> Amiga<U> {
 
     /// Run at most `budget` instructions; the stats of what ran come back too.
     pub fn step(&mut self, budget: u64) -> (Step, RunStats) {
-        let idle = RunStats { insns: 0, bus_faults: 0, halted: false, blocked: true };
+        let idle = RunStats { insns: 0, bus_faults: 0, halted: false, blocked: true, stalled_at: None };
         let Some(mut ctx) = self.ctx.take() else { return (Step::Exited, RunStats { blocked: false, halted: true, ..idle }) };
         if let Some(w) = self.waiting {
             match self.try_satisfy(w) {
@@ -52,7 +52,9 @@ impl<U: GuestUi> Amiga<U> {
             }
         }
         let stats = retro_m68k::resume(self, &mut ctx, budget);
-        let step = if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked } else { Step::BudgetSpent };
+        let step = if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked }
+            else if let Some(pc) = stats.stalled_at { Step::Fault(format!("the 68k stopped making progress at pc={pc:#x} (STOP, or halted after a double fault)")) }
+            else { Step::BudgetSpent };
         if step != Step::Exited { self.ctx = Some(ctx); }
         (step, stats)
     }
@@ -113,7 +115,7 @@ impl<U: GuestUi> Amiga<U> {
     /// Load and run to the end or `max_insns`, advancing the virtual clock while the guest waits only on timers.
     pub fn run_hunk(&mut self, file: &[u8], max_insns: u64) -> Result<RunReport, String> {
         let loaded = self.start_hunk(file)?;
-        let mut total = RunStats { insns: 0, bus_faults: 0, halted: false, blocked: false };
+        let mut total = RunStats { insns: 0, bus_faults: 0, halted: false, blocked: false, stalled_at: None };
         loop {
             let (step, s) = self.step(max_insns.saturating_sub(total.insns));
             total.insns += s.insns; total.bus_faults += s.bus_faults;

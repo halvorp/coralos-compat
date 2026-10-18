@@ -88,6 +88,9 @@ pub struct RunStats {
     pub halted: bool,
     /// True if stopped by [`Cpu::block`]: the guest is suspended mid-call and the next [`resume`] continues it.
     pub blocked: bool,
+    /// Some(pc) if the CPU stopped making progress: an execute slice retired no instruction (the 68k is in STOP, or
+    /// halted itself after a double fault). Without this the run loop would spin forever on a CPU that never runs.
+    pub stalled_at: Option<u32>,
 }
 
 type Active = Option<(*mut (dyn Host + 'static), *mut Cpu)>;
@@ -151,13 +154,19 @@ pub fn resume<H: Host>(host: &mut H, ctx: &mut CpuContext, max_insns: u64) -> Ru
     let _g = Guard::take();
     unsafe { m68k_set_context(ctx.0.as_mut_ptr()) };
     let mut cpu = Cpu { halted: false, blocked: false, insns: 0, bus_faults: 0 };
+    let mut stalled = None;
     activate(host, &mut cpu, |c| {
         while !c.halted && !c.blocked && c.insns < max_insns {
+            let before = c.insns;
             unsafe { m68k_execute(1000) };
+            if c.insns == before && !c.halted && !c.blocked {
+                stalled = Some(c.pc());
+                break;
+            }
         }
     });
     unsafe { m68k_get_context(ctx.0.as_mut_ptr()) };
-    RunStats { insns: cpu.insns, bus_faults: cpu.bus_faults, halted: cpu.halted, blocked: cpu.blocked }
+    RunStats { insns: cpu.insns, bus_faults: cpu.bus_faults, halted: cpu.halted, blocked: cpu.blocked, stalled_at: stalled }
 }
 
 /// Run from `entry` with initial stack `sp` until [`Cpu::halt`], [`Cpu::block`] or `max_insns`: [`start`] + [`resume`].
@@ -271,6 +280,22 @@ mod tests {
         h.mem.write_u32(10 * 4, 0x300).unwrap(); // line-1010 vector
         h.mem.write_u16(0x300, 0x4AFC).unwrap();
         h
+    }
+
+    #[test]
+    fn a_stopped_cpu_is_reported_not_spun_on() {
+        // STOP #$2000 (supervisor after reset): the 68k waits for an interrupt that never comes. CONTROL: the same run
+        // loop with a NOP program retires instructions until the cap.
+        let mut h = aline_host(true);
+        h.mem.write_bytes(0x1000, &[0x4E, 0x72, 0x20, 0x00]).unwrap();
+        let st = run(&mut h, 0x1000, 0x8000, 1_000_000);
+        assert_eq!(st.stalled_at, Some(0x1004), "the stop is reported with the pc after STOP");
+        assert!(!st.halted && st.insns < 10, "{st:?}");
+        let mut n = aline_host(true);
+        for i in 0..64u32 { n.mem.write_u16(0x1000 + 2 * i, 0x4E71).unwrap(); }
+        n.mem.write_u16(0x1080, 0x60FE).unwrap(); // bra.s self: runs forever, retiring instructions
+        let st = run(&mut n, 0x1000, 0x8000, 5000);
+        assert_eq!((st.stalled_at, st.insns >= 5000), (None, true), "{st:?}");
     }
 
     #[test]
