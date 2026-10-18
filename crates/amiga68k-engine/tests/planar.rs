@@ -14,3 +14,12 @@ fn guest_planes_are_the_pixels_of_a_blit_source() {
     assert_eq!(r[9], 0, "after the program zeroed the plane bytes, the next blit sees zeros (no stale host copy)");
     assert_eq!(r[10], 1, "a NULL plane reads as zeros: only plane 0 contributes");
 }
+
+#[test]
+fn what_the_engine_draws_into_a_planar_bitmap_reaches_the_programs_planes_and_back() {
+    let mut a = machine();
+    let r = run(&mut a, PROG);
+    assert_eq!((r[11], r[12]), (0xCD, 0xAC), "WritePixelLine8 of pens 3,1,2,0,3,3,0,1 wrote plane 0 = 11001101 and plane 1 = 10101100 into the program's planes");
+    assert_eq!(r[13], 0x55, "control: the neighbouring plane byte the line did not cover is untouched");
+    assert_eq!((r[14], r[15]), (0, 3), "ReadPixelLine8 reads pens from the plane bytes the program wrote itself (x8 = 00, x9 = 11 in the two planes)");
+}

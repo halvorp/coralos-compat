@@ -28,4 +28,17 @@ void _start(void) {
   src[3] = 0; p0[0] = 0xF0;
   GFX(LVO_graphics_BltBitMap, 0, 0, 0, 0, 16, 2, 0xC0, 0xFF, (u32)src, dst, 0);
   V(10) = GFX(LVO_graphics_ReadPixel, 0, 0, 0, 0, 0, 0, 0, 0, 0, (u32)rp, 0);
+  /* What the engine draws into a planar bitmap is written back to the program's planes (DOpus's image remap writes with
+   * WritePixelLine8 and then draws from the planes): pens 3,1,2,0,3,3,0,1 -> plane 0 = 11001101 (CD), plane 1 = 10101100 (AC). */
+  static u8 q0[4] = { 0, 0x55, 0, 0 }, q1[4] = { 0, 0x77, 0, 0 };
+  static u8 pens[8] = { 3, 1, 2, 0, 3, 3, 0, 1 }, back[8];
+  src[2] = (u32)q0; src[3] = (u32)q1;
+  u32 srp[25]; memset(srp, 0, sizeof srp);
+  GFX(LVO_graphics_InitRastPort, 0, 0, 0, 0, 0, 0, 0, 0, 0, (u32)srp, 0); srp[1] = (u32)src;
+  GFX(LVO_graphics_WritePixelLine8, 0, 0, 8, 0, 0, 0, 0, 0, (u32)srp, 0, (u32)pens);
+  V(11) = q0[0]; V(12) = q1[0];
+  V(13) = q0[1];                                                                         /* control: row 0's second byte and row 1 untouched */
+  /* Reading a line sees plane bytes the program wrote itself: byte 1 of row 0 is 0x55 / 0x77. */
+  GFX(LVO_graphics_ReadPixelLine8, 8, 0, 8, 0, 0, 0, 0, 0, (u32)srp, 0, (u32)back);
+  V(14) = back[0]; V(15) = back[1];                                                     
 }

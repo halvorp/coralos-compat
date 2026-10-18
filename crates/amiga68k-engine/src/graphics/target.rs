@@ -40,10 +40,12 @@ pub fn paint<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, f: impl FnOnce(&
     match resolve(a, rp)? {
         Dest::Dropped(why) => { a.log.push(format!("[graphics] {what} on {rp:#x} dropped: {why}")); Ok(Rect::default()) }
         Dest::Bitmap { bm, origin, window, region } => {
+            super::bitmaps::ensure_source(a, bm)?;
             let g: &mut GBitmap = a.gfx.bitmaps.get_mut(&bm).ok_or_else(|| Refusal(format!("{what}: BitMap {bm:#x} vanished")))?;
             let clip = Clip { rect: g.bm.rect(), region: region.as_ref() };
             let r = f(&mut g.bm, &clip, origin);
             if let Some(w) = window { a.gfx.add_damage(w, r); }
+            super::bitmaps::export_planes(a, bm)?;
             Ok(r)
         }
     }
@@ -56,6 +58,7 @@ pub fn read_pixel<U: GuestUi>(a: &mut Amiga<U>, rp: u32, x: i32, y: i32) -> Resu
         Dest::Dropped(_) => None,
         Dest::Bitmap { bm, origin, region, .. } => {
             let (bx, by) = (x - origin.0, y - origin.1);
+            super::bitmaps::ensure_source(a, bm)?;
             let g = a.gfx.bitmaps.get(&bm).ok_or_else(|| Refusal(format!("ReadPixel: BitMap {bm:#x} vanished")))?;
             let clip = Clip { rect: g.bm.rect(), region: region.as_ref() };
             if clip.allows(bx, by) { g.bm.get(bx, by) } else { None }

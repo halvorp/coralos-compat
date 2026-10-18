@@ -54,6 +54,30 @@ pub fn ensure_source<U: GuestUi>(a: &mut Amiga<U>, bm: u32) -> Result<(), Refusa
     Ok(())
 }
 
+/// The other direction: after the engine drew into a bitmap whose Planes[] are real guest pointers, write the pixels back to the planes
+/// (plane i = bit i of the pen), so the guest reads what was drawn (DOpus's image remap writes with WritePixelLine8 and then draws
+/// from the planes). A NULL or -1 plane is skipped.
+pub fn export_planes<U: GuestUi>(a: &mut Amiga<U>, bm: u32) -> Result<(), Refusal> {
+    let m = Refusal::mem("BitMap");
+    let depth = a.mem.read_u8(bm + BM_DEPTH).map_err(&m)? as u32;
+    let mut planes = alloc::vec::Vec::new();
+    for i in 0..depth.min(8) { planes.push(a.mem.read_u32(bm + BM_PLANES + 4 * i).map_err(&m)?); }
+    if !planes.iter().any(|&p| p != 0 && p != u32::MAX) { return Ok(()); }
+    let (bpr, rows) = (a.mem.read_u16(bm + BM_BYTES_PER_ROW).map_err(&m)? as u32, a.mem.read_u16(bm + BM_ROWS).map_err(&m)? as u32);
+    let Some(g) = a.gfx.bitmaps.get(&bm) else { return Ok(()) };
+    let mut bytes = alloc::vec![0u8; (bpr * rows) as usize];
+    for (i, &p) in planes.iter().enumerate() {
+        if p == 0 || p == u32::MAX { continue; }
+        for y in 0..rows as i32 { for xb in 0..bpr as i32 {
+            let mut byte = 0u8;
+            for bit in 0..8 { if g.bm.get(xb * 8 + bit, y).unwrap_or(0) & (1 << i) != 0 { byte |= 0x80 >> bit; } }
+            bytes[(y as u32 * bpr + xb as u32) as usize] = byte;
+        } }
+        a.mem.write_bytes(p, &bytes).map_err(&m)?;
+    }
+    Ok(())
+}
+
 /// A new guest BitMap struct plus its host bitmap; returns the struct's address.
 pub fn create<U: GuestUi>(a: &mut Amiga<U>, w: i32, h: i32, depth: u8, window: Option<u32>) -> Result<u32, Refusal> {
     let host = Bitmap::new(w, h, depth).ok_or_else(|| Refusal(format!("BitMap {w}x{h}x{depth}: unsupported size or depth (chunky 1..=8 bits)")))?;

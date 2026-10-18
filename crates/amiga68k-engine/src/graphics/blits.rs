@@ -16,6 +16,7 @@ use retro_raster::{blit::{blit, blit_within, MaskFn}, paint::{stencil, Clip}, Re
 fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: Dest, (dx, dy): (i32, i32), (w, h): (i32, i32), mt: u8, planes: u8, mask: MaskFn) -> Result<Rect, Refusal> {
     let Dest::Bitmap { bm, origin, window, region } = dst else { return Ok(Rect::default()) };
     let (bx, by) = (dx - origin.0, dy - origin.1);
+    bitmaps::ensure_source(a, bm)?;
     let hit = if bm == src {
         let g = a.gfx.bitmaps.get_mut(&bm).ok_or_else(|| Refusal(format!("blit: BitMap {bm:#x} vanished")))?;
         let clip = Clip { rect: g.bm.rect(), region: region.as_ref() };
@@ -30,6 +31,7 @@ fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: 
         r?
     };
     if let Some(win) = window { a.gfx.add_damage(win, hit); }
+    bitmaps::export_planes(a, bm)?;
     Ok(hit)
 }
 

@@ -160,7 +160,7 @@ fn the_lister_matches_the_oracle_where_the_oracle_is_ground_truth() {
     // Regions compared (class structure; palettes differ: AROS's light pen is 0xEEEEEE, the engine's 0xFFFFFF):
     //  1. the "SRCE" button at the lister's top right: exact text bitmap, black frame and the 0x6688BB pen;
     //  2. the path field's 3D frame at the lister's bottom (outer white/black lines, the inner bevel), interior not compared.
-    // NOT compared: the button bank (not drawn yet), the file list area, the scroll bars and arrows (they sit in the window
+    // NOT compared: the toolbar artwork (the cell frames are, region 3), the file list area (the oracle's list is empty: AROS stub libraries), the scroll bars and arrows (they sit in the window
     // border, outside the engine's canvas) and the disk icons (different volumes, different default icon artwork).
     let srce = region("lister-srce-48x10.txt");
     assert_eq!(srce.len(), 10, "{srce:?}");
@@ -170,6 +170,12 @@ fn the_lister_matches_the_oracle_where_the_oracle_is_ground_truth() {
     assert_eq!(frame.len(), 12);
     let bad = mismatches(lister, (0, 552), &frame);
     assert!(bad.is_empty(), "path field frame differs from the oracle at {bad:?}");
+    // 3. the toolbar: the black separator above it and the 3D frames of its first two 26x26 cells (interiors, the brush artwork, are not compared).
+    let cells = region("lister-toolbar-cells-52x27.txt");
+    assert_eq!(cells.len(), 27);
+    let bad = mismatches(lister, (0, 9), &cells);
+    assert!(bad.is_empty(), "toolbar cell frames differ from the oracle at {bad:?}");
+    assert!(!mismatches(lister, (1, 9), &cells).is_empty(), "control: the toolbar comparison shifted by one pixel must fail");
     // Negative control: shifting the SRCE comparison by one pixel must fail (the check is not vacuous).
     assert!(!mismatches(lister, (388, 0), &srce).is_empty());
 }
