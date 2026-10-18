@@ -32,6 +32,10 @@ const SYSTEM_SIGNALS: u32 = 0x0000_FFFF;
 const SIGB_DOS: u8 = 8;
 
 const EXECBASE_THIS_TASK: u32 = 276;
+/// ExecBase.AttnFlags (UWORD, exec/execbase.h): which CPU/FPU the machine has. The engine runs a 68020 with no FPU:
+/// AFF_68010 | AFF_68020. Programs built for 68020+ (DOpus5's OS3 build) Alert at startup when these are clear.
+const EXECBASE_ATTN_FLAGS: u32 = 296;
+const AFF_68010_68020: u16 = 0x0003;
 const TC_NODE_TYPE: u32 = 8;
 const TC_NODE_NAME: u32 = 10;
 const TC_STATE: u32 = 15;
@@ -72,6 +76,7 @@ pub fn setup(mem: &mut GuestMem, exec_base: u32, stack_lower: u32, stack_upper: 
     mem.write_u32(PROCESS + TC_NODE_NAME, COMMAND_NAME + 1).map_err(m("tc_Node.ln_Name"))?;
     for (i, b) in args.bytes().chain(core::iter::once(0)).enumerate() { mem.write_u8(ARGS + i as u32, b).map_err(m("argument line"))?; }
     mem.write_u32(exec_base + EXECBASE_THIS_TASK, PROCESS).map_err(m("ExecBase.ThisTask"))?;
+    mem.write_u16(exec_base + EXECBASE_ATTN_FLAGS, AFF_68010_68020).map_err(m("ExecBase.AttnFlags"))?;
     Ok(PROCESS)
 }
 

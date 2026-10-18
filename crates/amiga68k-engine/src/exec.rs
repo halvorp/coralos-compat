@@ -47,3 +47,17 @@ pub fn old_open_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
     cpu.set_d0(0);
     open_library(a, cpu)
 }
+
+pub const LVO_ALERT: i32 = -108;
+/// exec/alerts.h: AT_DeadEnd = 0x80000000 (a recoverable alert has the bit clear).
+const AT_DEAD_END: u32 = 0x8000_0000;
+
+/// Alert(d7 = alertNum): the program reports a failure it cannot recover from. Logged by number (exec/alerts.h encodes
+/// the subsystem and reason) and, for a dead-end alert, the program ends: what an Amiga would do, minus the reboot.
+pub fn alert<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let code = cpu.dreg(7);
+    let dead = code & AT_DEAD_END != 0;
+    a.refused.push(format!("exec.library/Alert: {code:#010x}{}", if dead { " (dead-end)" } else { "" }));
+    if dead { cpu.halt(); }
+    Ok(format!("[exec] Alert {code:#010x}{}", if dead { " DEAD-END: the program stops" } else { " (recoverable)" }))
+}

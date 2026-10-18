@@ -12,6 +12,7 @@
 //! need re-verification against a licence-checked source (see NOTICE).
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+pub mod boopsi;
 pub mod devices;
 pub mod disklib;
 pub mod dos;
@@ -31,14 +32,18 @@ pub mod intuition;
 pub mod libtable;
 pub mod loadseg;
 pub mod lvo_names;
+pub mod lists;
 pub mod machine;
 pub mod makelib;
+pub mod memheader;
 pub mod memory;
+pub mod mui;
 pub mod ports;
 pub mod process;
 pub mod rdargs;
 pub mod run;
 pub mod screen;
+pub mod semaphores;
 pub mod tags;
 pub mod timer;
 pub mod volume;
