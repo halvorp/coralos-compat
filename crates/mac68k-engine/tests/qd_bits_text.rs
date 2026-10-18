@@ -148,8 +148,10 @@ fn unimplemented_copy_bits_cases_are_refused_by_name_and_touch_nothing() {
     p.exit();
     g.m.start(&p.0, 0).unwrap();
     g.m.run_loop(100_000).unwrap();
-    assert!(g.m.refused.iter().any(|r| r.contains("CopyBits") && r.contains("scaling")), "{:?}", g.m.refused);
-    assert_eq!(g.count_black(), 0);
+    // scaling is StretchBits now (qd/stretch.rs): an all-black 32x16 shrunk to 16x8 is an all-black 16x8
+    assert!(g.m.refused.is_empty(), "{:?}", g.m.refused);
+    assert_eq!(g.count_black(), 16 * 8, "shrunk by 2: the OR of black pixels is black");
+    assert_eq!(g.count_in(0, 0, 16, 8), 16 * 8);
     // a color PixMap (rowBytes high bit) is refused by name
     let mut g = Rig::new();
     offscreen(&mut g);
@@ -176,9 +178,11 @@ fn unimplemented_copy_bits_cases_are_refused_by_name_and_touch_nothing() {
 
 const STR: u32 = 0x3600;
 
+/// The pen's baseline is a line between rows: the topaz glyph's rows 0..7 occupy `baseline - 7 ..= baseline` (QuickDraw/oracle: the
+/// last row of a glyph without descender is `baseline - 1`; the Amiga's baseline ROW is not the Mac's).
 fn glyph_matches(g: &Rig, ch: u8, x: i32, baseline: i32) -> bool {
     let f = Font::topaz8();
-    (0..8).all(|gy| (0..8).all(|gx| g.black(x + gx, baseline - 6 + gy) == f.glyph_bit(f.slot(ch), gx, gy)))
+    (0..8).all(|gy| (0..8).all(|gx| g.black(x + gx, baseline - 7 + gy) == f.glyph_bit(f.slot(ch), gx, gy)))
 }
 
 #[test]
@@ -208,7 +212,7 @@ fn string_width_char_width_text_width_and_font_info_agree_with_what_is_drawn() {
     g.no_refusals();
     let rd = |o| g.m.mem.read_u16(SCRATCH + o).unwrap();
     assert_eq!((rd(0), rd(2), rd(4)), (40, 8, 24));
-    assert_eq!((rd(8), rd(10), rd(12), rd(14)), (6, 2, 8, 0), "ascent, descent, widMax, leading of the stand-in font");
+    assert_eq!((rd(8), rd(10), rd(12), rd(14)), (7, 1, 8, 0), "ascent, descent, widMax, leading of the stand-in font");
 }
 
 #[test]

@@ -2,10 +2,13 @@
 //!
 //! SUBSTITUTION: Chicago and Geneva are not bundled. EVERY font id and size draws in `retro-raster`'s topaz-8 (the font
 //! the Amiga engine's ROM text uses, one renderer for both), and the metrics the program reads back
-//! (`StringWidth`, `GetFontInfo`: ascent 6, descent 2, widMax 8, leading 0) are those of what is actually drawn, so the
+//! (`StringWidth`, `GetFontInfo`: ascent 7, descent 1, widMax 8, leading 0) are those of what is actually drawn, so the
 //! program's own layout stays self-consistent. The font id/size/face the program set are stored in the port as written.
 //! `txFace` bold/italic/underline map to the raster font styles; outline, shadow, condense and extend are not drawn.
 //! `txMode` selects the stencil like a pen mode ([`super::draw::brush_for`]); the pen is the BASELINE origin and advances.
+//! The baseline is a LINE between pixel rows (QuickDraw coordinates are grid points): the last row of a glyph without
+//! descender is row `v - 1` (systemless, run as an oracle, and Inside Macintosh agree), unlike the Amiga's baseline ROW,
+//! so the shared raster font is drawn at `v - 1` and `GetFontInfo` counts that row into the ascent.
 use super::draw::brush_for;
 use super::port::*;
 use super::target::{self, clip_of, clip_region, current_port};
@@ -40,7 +43,7 @@ fn draw<U: GuestUi>(m: &mut Mac<U>, bytes: &[u8], name: &str) -> Result<Done, Re
         target::with(m, port, |m, t| {
             let clip = clip_region(m, t)?;
             let c = clip_of(&clip, t);
-            Ok(draw_text(&mut t.bm, &m.qd.font, bytes, i32::from(pen.h) - t.local0.0, i32::from(pen.v) - t.local0.1, &brush, style, &c).1)
+            Ok(draw_text(&mut t.bm, &m.qd.font, bytes, i32::from(pen.h) - t.local0.0, i32::from(pen.v) - t.local0.1 - 1, &brush, style, &c).1)
         })?;
     }
     set_pen_loc(&mut m.mem, port, pen.v, pen.h.wrapping_add(width as i16))?;
@@ -71,7 +74,7 @@ fn text_width<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
 /// FontInfo: ascent, descent, widMax, leading (INTEGERs) of the font that is drawn.
 fn get_font_info<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let f = &m.qd.font;
-    let v = [f.baseline as i16, (f.y_size - f.baseline) as i16, f.x_size as i16, 0];
+    let v = [f.baseline as i16 + 1, (f.y_size - f.baseline) as i16 - 1, f.x_size as i16, 0]; // the baseline row is the last row above the pen's baseline line
     for (i, x) in v.into_iter().enumerate() { m.mem.write_u16(c.args.get(0) + 2 * i as u32, x as u16).map_err(Refusal::mem("FontInfo"))?; }
     Ok(Done { result: 0, log: format!("[quickdraw] GetFontInfo -> ascent {} descent {} widMax {} leading 0", v[0], v[1], v[2]) })
 }

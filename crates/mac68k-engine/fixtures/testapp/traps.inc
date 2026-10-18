@@ -61,3 +61,26 @@
         .equ _TextSize, 0xA88A
         .equ _DrawString, 0xA884
         .equ _GetNextEvent, 0xA970
+        .equ _PenMode, 0xA89C
+        .equ _PenPat, 0xA89D
+        .equ _TextMode, 0xA889
+        .equ _GetPen, 0xA89A
+        .equ _OpenPort, 0xA86F
+        .equ _SetPBits, 0xA875
+        .equ _NewRgn, 0xA8D8
+        .equ _OpenRgn, 0xA8DA
+        .equ _CloseRgn, 0xA8DB
+        .equ _UnionRgn, 0xA8E5
+        .equ _DiffRgn, 0xA8E6
+        .equ _SectRgn, 0xA8E4
+        .equ _XOrRgn, 0xA8E7
+        .equ _OffsetRgn, 0xA8E0
+        .equ _PaintRgn, 0xA8D3
+        .equ _FrameRgn, 0xA8D2
+        .equ _InverRgn, 0xA8D5
+        .equ _FrameOval, 0xA8B7
+        .equ _EraseOval, 0xA8B9
+        .equ _FillOval, 0xA8BB
+        .equ _PaintRoundRect, 0xA8B1
+        .equ _CopyBits, 0xA8EC
+        .equ _InvertOval, 0xA8BA

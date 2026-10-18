@@ -13,7 +13,7 @@ fn frames(g: &Rig) -> Vec<(GuestRect, u64)> {
 }
 fn glyph_at(g: &Rig, ch: u8, x: i32, baseline: i32) -> bool {
     let f = Font::topaz8();
-    (0..8).all(|gy| (0..8).all(|gx| g.black(x + gx, baseline - 6 + gy) == f.glyph_bit(f.slot(ch), gx, gy)))
+    (0..8).all(|gy| (0..8).all(|gx| g.black(x + gx, baseline - 7 + gy) == f.glyph_bit(f.slot(ch), gx, gy)))
 }
 fn gray(x: i32, y: i32) -> bool { // qd.gray = $AA55AA55 AA55AA55, aligned to the port's LOCAL coordinates (x, y)
     [0xAAu8, 0x55][(y & 1) as usize] >> (7 - (x & 7)) & 1 == 1
@@ -88,4 +88,4 @@ fn the_application_draws_on_its_update_event_and_the_host_gets_one_frame() {
     assert_eq!(step, Step::Exited);
 }
 
-const GOLDEN: u64 = 15562557315887039366;
+const GOLDEN: u64 = 1141123241323567110; // re-recorded 2026-10-18 when lines (DrawLine.a slabs) and ovals (DrawArc.a INITOVAL/BUMPOVAL) became the original algorithms; see tests/oracle/systemless

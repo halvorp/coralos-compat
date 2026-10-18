@@ -77,3 +77,31 @@ pub static RECTTEST: &[u8] = include_bytes!("../fixtures/testapp/recttest.bin");
 
 /// `fixtures/testapp/qdapp.s`: an event-loop application that draws its window with QuickDraw on every updateEvt.
 pub static QDAPP: &[u8] = include_bytes!("../fixtures/testapp/qdapp.bin");
+
+/// `fixtures/testapp/oracle.s`: draws a fixed set of QuickDraw primitives, one per 40x40 cell, on its first update event.
+pub static ORACLE: &[u8] = include_bytes!("../fixtures/testapp/oracle.bin");
+
+/// Window content origin (global) and size of the oracle application's window (WIND 128).
+pub const ORACLE_TOP: i16 = 27;
+pub const ORACLE_LEFT: i16 = 61;
+pub const ORACLE_W: i16 = 320;
+pub const ORACLE_H: i16 = 280;
+
+/// The oracle application as a MacBinary II file: CODE 0 (one jump-table entry for segment 1), CODE 1, WIND 128 (a plain
+/// bordered window, procID 3, so the content rect is exactly [`ORACLE_LEFT`], [`ORACLE_TOP`] + size).
+pub fn oracle_app_macbinary() -> alloc::vec::Vec<u8> {
+    let mut code0 = alloc::vec::Vec::new();
+    for v in [40u32, 512, 8, 32] { code0.extend_from_slice(&v.to_be_bytes()); } // aboveA5, belowA5, jtSize, jtOffset
+    code0.extend_from_slice(&[0, 0, 0x3F, 0x3C, 0, 1, 0xA9, 0xF0]); // offset 0, move.w #1,-(sp), _LoadSeg
+    let mut code1 = alloc::vec::Vec::new();
+    code1.extend_from_slice(&0u16.to_be_bytes()); // first jump-table entry
+    code1.extend_from_slice(&1u16.to_be_bytes()); // one entry
+    code1.extend_from_slice(ORACLE);
+    let mut wind = alloc::vec::Vec::new();
+    for v in [ORACLE_TOP, ORACLE_LEFT, ORACLE_TOP + ORACLE_H, ORACLE_LEFT + ORACLE_W, 3, 0x0100, 0x0000] { wind.extend_from_slice(&v.to_be_bytes()); }
+    wind.extend_from_slice(&0u32.to_be_bytes());
+    wind.extend_from_slice(b"\x06Oracle");
+    let fork = retro_resfork::writer::ForkBuilder::new()
+        .add(b"CODE", 0, None, &code0).add(b"CODE", 1, Some("Main"), &code1).add(b"WIND", 128, None, &wind).build();
+    retro_resfork::writer::macbinary("QD Oracle", b"APPL", b"QDOR", &[], &fork)
+}
