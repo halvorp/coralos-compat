@@ -44,6 +44,7 @@ extern "C" {
 pub const REG_D0: u32 = 0;
 pub const REG_A0: u32 = 8;
 const REG_PC: u32 = 16;
+const REG_SR: u32 = 17;
 const CPU_68020: u32 = 4;
 
 /// The guest side the CPU runs against.
@@ -71,6 +72,12 @@ impl Cpu {
     /// Set address register `n` (A7 = the active stack pointer). Only inside a Host callback, like every accessor here.
     pub fn set_areg(&mut self, n: u32, v: u32) { debug_assert!(n < 8); unsafe { m68k_set_reg(REG_A0 + n, v) } }
     pub fn pc(&self) -> u32 { unsafe { m68k_get_reg(core::ptr::null_mut(), REG_PC) } }
+    /// Continue at `pc` instead of the instruction after the trapped word: how an A-line handler redirects the guest
+    /// (the Segment Loader's `_LoadSeg` resumes at the jump-table entry it just patched). Only inside a Host callback.
+    pub fn set_pc(&mut self, pc: u32) { unsafe { m68k_set_reg(REG_PC, pc) } }
+    /// The status register (the condition codes are its low five bits).
+    pub fn sr(&self) -> u32 { unsafe { m68k_get_reg(core::ptr::null_mut(), REG_SR) } }
+    pub fn set_sr(&mut self, v: u32) { unsafe { m68k_set_reg(REG_SR, v) } }
     /// Stop after the current instruction.
     pub fn halt(&mut self) { self.halted = true; unsafe { m68k_end_timeslice() } }
     /// Stop after the current instruction WITHOUT ending the program: the trapped call is left unfinished, and the next
@@ -310,6 +317,27 @@ mod tests {
         assert_eq!(h.seen, vec![(0xA913, 0x1000), (0xA9F4, 0x1004)], "pc is the address of the A-line word");
         assert!(st.halted);
         assert_eq!(st.insns, 3, "moveq ran after the handled trap; no exception frame was taken");
+    }
+
+    /// A handled A-line word may redirect the guest: dc.w $A913 ; moveq #7,d1 ; dc.w $A9F4 with the first trap's handler
+    /// setting pc to the final trap (skipping the moveq). CONTROL: `handled_aline_continues_at_the_next_word` runs the
+    /// same bytes without redirecting and executes the moveq (3 instructions, not 2).
+    #[test]
+    fn a_handler_can_redirect_the_pc() {
+        struct R { mem: GuestMem }
+        impl Host for R {
+            fn mem(&mut self) -> &mut GuestMem { &mut self.mem }
+            fn illegal(&mut self, cpu: &mut Cpu, _pc: u32) -> bool { cpu.halt(); true }
+            fn aline(&mut self, cpu: &mut Cpu, opcode: u16, _pc: u32) -> bool {
+                match opcode { 0xA913 => cpu.set_pc(0x1004), _ => { cpu.set_d0(cpu.dreg(1)); cpu.halt() } }
+                true
+            }
+        }
+        let mut h = R { mem: GuestMem::new(1 << 20) };
+        h.mem.write_bytes(0x1000, &[0xA9, 0x13, 0x72, 0x07, 0xA9, 0xF4]).unwrap();
+        let st = run(&mut h, 0x1000, 0x8000, 1000);
+        assert!(st.halted);
+        assert_eq!(st.insns, 2, "the moveq was skipped");
     }
 
     #[test]

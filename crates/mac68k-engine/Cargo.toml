@@ -9,4 +9,5 @@ description = "Classic Mac OS 68k personality (skeleton): A-line trap bridge, Pa
 retro-common = { path = "../retro-common" }
 retro-guest-mem = { path = "../retro-guest-mem" }
 retro-m68k = { path = "../retro-m68k" }
+retro-resfork = { path = "../retro-resfork" }
 guestui-abi = { path = "../guestui-abi" }

@@ -42,6 +42,7 @@ dependencies = [
  "retro-common",
  "retro-guest-mem",
  "retro-m68k",
+ "retro-resfork",
 ]
 
 [[package]]
@@ -73,6 +74,10 @@ dependencies = [
 
 [[package]]
 name = "retro-raster"
+version = "0.1.0"
+
+[[package]]
+name = "retro-resfork"
 version = "0.1.0"
 
 [[package]]
