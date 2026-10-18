@@ -33,7 +33,9 @@ pub struct MacPpc<U: GuestUi> {
 
 impl<U: GuestUi> MacPpc<U> {
     pub fn new(ui: U) -> Result<Self, CfmError> {
-        let mac = Mac::new(ui).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
+        let mut mac = Mac::new(ui).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
+        // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
+        mac.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
         Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new() })
     }
 

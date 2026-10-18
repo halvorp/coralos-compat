@@ -36,6 +36,19 @@ fn init_fields<U: GuestUi>(m: &mut Mac<U>, port: u32, vis: u32, clip: u32) -> Re
 }
 
 /// A window exists: its canvas (white), regions and drawing state.
+
+/// `PortSize(width, height)`: the current port's `portRect` keeps its top-left and takes the new size (QuickDraw reference).
+fn port_size<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let port = super::target::current_port(m)?;
+    let (w, h) = (c.args.get(0) as u16 as i16, c.args.get(1) as u16 as i16);
+    let e = Refusal::mem("portRect");
+    let top = m.mem.read_i16(port.wrapping_add(P_RECT)).map_err(&e)?;
+    let left = m.mem.read_i16(port.wrapping_add(P_RECT + 2)).map_err(&e)?;
+    m.mem.write_u16(port.wrapping_add(P_RECT + 4), top.wrapping_add(h) as u16).map_err(&e)?;
+    m.mem.write_u16(port.wrapping_add(P_RECT + 6), left.wrapping_add(w) as u16).map_err(&e)?;
+    Ok(Done { result: 0, log: format!("[quickdraw] PortSize {w}x{h}") })
+}
+
 pub(crate) fn window_created<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(), Refusal> {
     let r = m.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?.rect;
     let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
@@ -81,10 +94,11 @@ pub(crate) fn window_disposed<U: GuestUi>(m: &mut Mac<U>, win: u32) {
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     use super::reg;
-    reg(m, 0xA86F, "OpenPort", &[Arg::L], None, open_port::<U>)?;
-    reg(m, 0xA86D, "InitPort", &[Arg::L], None, init_port::<U>)?;
-    reg(m, 0xA87D, "ClosePort", &[Arg::L], None, close_port::<U>)?;
-    reg(m, 0xA875, "SetPBits", &[Arg::L], None, set_port_bits::<U>)?;
+    reg(m, 0xA876, "PortSize", &[Arg::W, Arg::W], None, port_size::<U>)?;
+    reg(m, 0xA86F, "OpenPort", &[Arg::P], None, open_port::<U>)?;
+    reg(m, 0xA86D, "InitPort", &[Arg::P], None, init_port::<U>)?;
+    reg(m, 0xA87D, "ClosePort", &[Arg::P], None, close_port::<U>)?;
+    reg(m, 0xA875, "SetPBits", &[Arg::P], None, set_port_bits::<U>)?;
     reg(m, 0xA871, "GlobalToLocal", &[Arg::L], None, global_to_local::<U>)?;
     reg(m, 0xA870, "LocalToGlobal", &[Arg::L], None, local_to_global::<U>)
 }

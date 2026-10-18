@@ -11,6 +11,7 @@ use crate::pascal::{read_pstring_bytes, Arg};
 use crate::Refusal;
 use alloc::collections::BTreeMap;
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
@@ -42,6 +43,14 @@ pub struct ResMgr {
 }
 
 impl ResMgr {
+    /// CloseResFile: drop the file (and the handles loaded from it stop being resources); false if it is not open.
+    pub fn close(&mut self, ref_num: i16) -> bool {
+        let Some(pos) = self.files.iter().position(|f| f.ref_num == ref_num) else { return false };
+        let f = self.files.remove(pos);
+        for h in f.loaded.values() { self.by_handle.remove(h); }
+        if self.cur == ref_num { self.cur = self.files.last().map_or(0, |f| f.ref_num); }
+        true
+    }
     pub fn open_fork(&mut self, ref_num: i16, fork: ResFork) {
         self.files.push(ResFile { ref_num, fork, loaded: BTreeMap::new() });
         self.cur = ref_num;
@@ -75,6 +84,7 @@ impl<U: GuestUi> Mac<U> {
         let p = self.mm.block(h).map(|b| b.ptr).ok_or(RES_NOT_FOUND)?;
         self.mem.write_bytes(p, &data).map_err(|_| RES_NOT_FOUND)?;
         if let Some(b) = self.mm.block_mut(h) { b.resource = true; b.purgeable = attrs & ATTR_PURGEABLE != 0; b.locked = attrs & ATTR_LOCKED != 0; }
+        let _ = self.mm.sync_master(&mut self.mem, h);
         self.rm.by_handle.insert(h, (rn, entry));
         if let Some(f) = self.rm.files.iter_mut().find(|f| f.ref_num == rn) { f.loaded.insert(entry, h); }
         Ok(h)
@@ -106,6 +116,12 @@ impl<U: GuestUi> Mac<U> {
         }
         Err(RES_NOT_FOUND)
     }
+    /// The distinct resource types in the searched files, in the order first met.
+    pub fn resource_types(&self, only_cur: bool) -> Vec<OsType> {
+        let mut out: Vec<OsType> = Vec::new();
+        for rn in self.rm.chain(only_cur) { if let Some(f) = self.rm.file(rn) { for t in f.fork.types() { if !out.contains(&t) { out.push(t); } } } }
+        out
+    }
     /// The bytes of a loaded resource handle (or any handle).
     pub fn handle_bytes(&self, h: u32) -> Option<Vec<u8>> {
         let b = self.mm.block(h)?;
@@ -128,12 +144,17 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     for (t, one) in [(0xA9A1, false), (0xA820, true)] { m.register(t, &[Arg::L, Arg::L], Some(Arg::L), if one { get_named1::<U> } else { get_named::<U> })?; }
     for (t, one) in [(0xA99C, false), (0xA80D, true)] { m.register(t, &[Arg::L], Some(Arg::W), if one { count1::<U> } else { count::<U> })?; }
     for (t, one) in [(0xA99D, false), (0xA80E, true)] { m.register(t, &[Arg::L, Arg::W], Some(Arg::L), if one { get_ind1::<U> } else { get_ind::<U> })?; }
-    m.register(0xA9A3, &[Arg::L], None, release::<U>)?;
-    m.register(0xA9A2, &[Arg::L], None, load::<U>)?;
-    m.register(0xA992, &[Arg::L], None, detach::<U>)?;
-    m.register(0xA9A5, &[Arg::L], Some(Arg::L), size_rsrc::<U>)?;
-    m.register(0xA9A6, &[Arg::L], Some(Arg::W), get_attrs::<U>)?;
+    m.register(0xA9A3, &[Arg::P], None, release::<U>)?;
+    m.register(0xA9A2, &[Arg::P], None, load::<U>)?;
+    m.register(0xA992, &[Arg::P], None, detach::<U>)?;
+    m.register(0xA9A5, &[Arg::P], Some(Arg::L), size_rsrc::<U>)?;
+    m.register(0xA9A6, &[Arg::P], Some(Arg::W), get_attrs::<U>)?;
     m.register(0xA9A8, &[Arg::L, Arg::L, Arg::L, Arg::L], None, get_info::<U>)?;
+    m.register(0xA9B9, &[Arg::W], Some(Arg::L), get_cursor::<U>)?;
+    m.register(0xA99E, &[], Some(Arg::W), count_types::<U>)?;
+    m.register(0xA81C, &[], Some(Arg::W), count1_types::<U>)?;
+    m.register(0xA99F, &[Arg::P, Arg::W], None, get_ind_type::<U>)?;
+    m.register(0xA80F, &[Arg::P, Arg::W], None, get1_ind_type::<U>)?;
     m.register(0xA9AF, &[], Some(Arg::W), res_error::<U>)?;
     m.register(0xA994, &[], Some(Arg::W), cur_res_file::<U>)?;
     m.register(0xA998, &[Arg::W], None, use_res_file::<U>)
@@ -197,7 +218,7 @@ fn load<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refus
 }
 fn detach<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let h = c.args.get(0);
-    let r = if m.rm.is_resource(h) { m.rm.forget(h); if let Some(b) = m.mm.block_mut(h) { b.resource = false; } Ok(0) } else { Err(RES_NOT_FOUND) };
+    let r = if m.rm.is_resource(h) { m.rm.forget(h); if let Some(b) = m.mm.block_mut(h) { b.resource = false; } let _ = m.mm.sync_master(&mut m.mem, h); Ok(0) } else { Err(RES_NOT_FOUND) };
     finish(m, &format!("DetachResource {h:#x}"), r)
 }
 fn size_rsrc<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
@@ -238,3 +259,27 @@ fn use_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
     Ok(Done { result: 0, log: format!("[res] UseResFile {rn}") })
 }
 
+
+/// `GetCursor(id)`: a CURS resource is a handle like any other (`CursHandle`); the cursor image itself is the host's.
+fn get_cursor<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let id = c.args.get(0) as u16 as i16;
+    let r = m.get_resource(*b"CURS", id, false);
+    finish(m, &format!("GetCursor {id}"), r)
+}
+fn count_types_of<U: GuestUi>(m: &mut Mac<U>, only_cur: bool, what: &str) -> Result<Done, Refusal> {
+    let n = m.resource_types(only_cur).len() as u32;
+    m.set_res_err(0);
+    Ok(Done { result: n, log: format!("[res] {what} -> {n}") })
+}
+fn count_types<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> { count_types_of(m, false, "CountTypes") }
+fn count1_types<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> { count_types_of(m, true, "Count1Types") }
+/// `GetIndType(VAR theType, index)`: the index'th (1-based) type; an index out of range leaves theType 0 and sets resNotFound.
+fn ind_type<U: GuestUi>(m: &mut Mac<U>, c: &Call, only_cur: bool) -> Result<Done, Refusal> {
+    let (at, n) = (c.args.get(0), c.args.get(1) as u16 as i16);
+    let t = if n >= 1 { m.resource_types(only_cur).get(n as usize - 1).copied() } else { None };
+    m.mem.write_u32(at, t.map_or(0, u32::from_be_bytes)).map_err(Refusal::mem("GetIndType result"))?;
+    m.set_res_err(if t.is_some() { 0 } else { RES_NOT_FOUND });
+    Ok(Done { result: 0, log: format!("[res] {} #{n} -> {}", c.name, t.map_or(String::from("none"), ty_str)) })
+}
+fn get_ind_type<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { ind_type(m, c, false) }
+fn get1_ind_type<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { ind_type(m, c, true) }

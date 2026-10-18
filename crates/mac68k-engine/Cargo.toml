@@ -10,6 +10,7 @@ retro-common = { path = "../retro-common" }
 retro-guest-mem = { path = "../retro-guest-mem" }
 retro-m68k = { path = "../retro-m68k" }
 retro-resfork = { path = "../retro-resfork" }
+retro-volume = { path = "../retro-volume" }
 guestui-abi = { path = "../guestui-abi" }
 retro-present = { path = "../retro-present" }
 retro-raster = { path = "../retro-raster" }

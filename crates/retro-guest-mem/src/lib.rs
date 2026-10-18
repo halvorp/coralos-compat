@@ -37,45 +37,61 @@ impl core::error::Error for MemError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span { pub addr: u32, pub len: u32 }
 
-pub struct GuestMem { ram: Vec<u8> }
+/// The full 32-bit address space: no stripping (the default, and the Amiga's).
+pub const MASK_32: u32 = 0xFFFF_FFFF;
+/// The classic Mac 24-bit address space (68000 / 24-bit Memory Manager): the bus has 24 address lines, so the top
+/// byte of every address is ignored (Inside Macintosh: Memory, "24-bit addressing"; apps keep flags there).
+pub const MASK_24: u32 = 0x00FF_FFFF;
+
+pub struct GuestMem { ram: Vec<u8>, mask: u32 }
 
 impl GuestMem {
-    pub fn new(size: usize) -> Self { GuestMem { ram: vec![0; size] } }
+    pub fn new(size: usize) -> Self { GuestMem { ram: vec![0; size], mask: MASK_32 } }
+    /// Select the address bus width: every access (guest CPU and host handlers alike) drops the bits outside `mask`.
+    pub fn set_addr_mask(&mut self, mask: u32) { self.mask = mask; }
+    pub fn addr_mask(&self) -> u32 { self.mask }
+    /// `addr` as the bus sees it (StripAddress).
+    pub fn strip(&self, addr: u32) -> u32 { addr & self.mask }
     pub fn len(&self) -> usize { self.ram.len() }
     pub fn is_empty(&self) -> bool { self.ram.is_empty() }
 
     pub fn contains(&self, addr: u32, len: u32) -> bool {
+        let addr = self.strip(addr);
         (addr as u64) + (len as u64) <= self.ram.len() as u64
     }
     pub fn check(&self, addr: u32, len: u32) -> Result<(), MemError> {
         if self.contains(addr, len) { Ok(()) } else { Err(MemError::OutOfRange { addr, len }) }
     }
     pub fn span(&self, addr: u32, len: u32) -> Result<Span, MemError> {
-        self.check(addr, len).map(|_| Span { addr, len })
+        self.check(addr, len).map(|_| Span { addr: self.strip(addr), len })
     }
     pub fn bytes(&self, s: Span) -> Result<&[u8], MemError> {
         self.check(s.addr, s.len)?;
-        Ok(&self.ram[s.addr as usize..(s.addr + s.len) as usize])
+        let a = self.strip(s.addr);
+        Ok(&self.ram[a as usize..(a + s.len) as usize])
     }
     pub fn write_bytes(&mut self, addr: u32, src: &[u8]) -> Result<(), MemError> {
         let len = u32::try_from(src.len()).map_err(|_| MemError::OutOfRange { addr, len: u32::MAX })?;
         self.check(addr, len)?;
+        let addr = self.strip(addr);
         self.ram[addr as usize..addr as usize + src.len()].copy_from_slice(src);
         Ok(())
     }
     pub fn zero(&mut self, addr: u32, len: u32) -> Result<(), MemError> {
         self.check(addr, len)?;
+        let addr = self.strip(addr);
         self.ram[addr as usize..(addr + len) as usize].fill(0);
         Ok(())
     }
 
     fn read_be(&self, addr: u32, len: u32) -> Result<u32, MemError> {
         self.check(addr, len)?;
-        let a = addr as usize;
+        let a = self.strip(addr) as usize;
         Ok(self.ram[a..a + len as usize].iter().fold(0u32, |v, b| (v << 8) | *b as u32))
     }
     fn write_be(&mut self, addr: u32, len: u32, val: u32) -> Result<(), MemError> {
         self.check(addr, len)?;
+        let addr = self.strip(addr);
         for i in 0..len {
             self.ram[(addr + i) as usize] = (val >> (8 * (len - 1 - i))) as u8;
         }
@@ -136,6 +152,23 @@ mod tests {
         let mut small = GuestMem::new(8);
         small.write_bytes(4, b"abcd").unwrap();
         assert!(matches!(small.read_cstr(4), Err(MemError::OutOfRange { .. })));
+    }
+
+    /// 24-bit bus: the top byte is ignored by loads, stores, spans and strings; 32-bit leaves it significant.
+    #[test]
+    fn a_24_bit_bus_ignores_the_top_byte_and_a_32_bit_bus_does_not() {
+        let mut m = GuestMem::new(0x100);
+        m.write_u32(0x10, 0xCAFE_F00D).unwrap();
+        assert!(m.read_u32(0x8000_0010).is_err(), "32-bit: 0x80000010 is outside RAM");
+        m.set_addr_mask(MASK_24);
+        assert_eq!(m.read_u32(0x8000_0010), Ok(0xCAFE_F00D), "24-bit: the flag byte is ignored");
+        m.write_u8(0xFF00_0020, 7).unwrap();
+        assert_eq!(m.read_u8(0x20), Ok(7));
+        assert_eq!(m.span(0x4000_0010, 4), Ok(Span { addr: 0x10, len: 4 }));
+        assert_eq!(m.strip(0x8020_A9FA), 0x20_A9FA);
+        assert!(m.read_u8(0x0000_0100).is_err(), "past RAM is still a refusal");
+        m.set_addr_mask(MASK_32);
+        assert!(m.write_u8(0xFF00_0020, 7).is_err());
     }
 
     #[test]

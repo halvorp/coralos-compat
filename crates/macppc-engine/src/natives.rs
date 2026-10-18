@@ -30,7 +30,7 @@ impl<U: GuestUi> MacPpc<U> {
         let r = match res { Ok(r) => r, Err(e) => return GlueOutcome::Refused(format!("{name}: {e}")) };
         if r.blocked { return GlueOutcome::Refused(format!("{name}: the handler tried to block the caller; the PowerPC run loop cannot suspend it yet")); }
         if let Some(kind) = result {
-            regs[3] = match kind { Arg::B => r.value & 0xFF, Arg::W => r.value as u16 as i16 as i32 as u32, Arg::L => r.value };
+            regs[3] = match kind { Arg::B => r.value & 0xFF, Arg::W => r.value as u16 as i16 as i32 as u32, Arg::L | Arg::P => r.value };
         }
         if r.halted { GlueOutcome::Exit } else { GlueOutcome::Return }
     }

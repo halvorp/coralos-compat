@@ -34,8 +34,8 @@ pub(crate) fn invalidate_all<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(),
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     use super::reg;
-    reg(m, 0xA922, "BeginUpDate", &[Arg::L], None, begin_update::<U>)?;
-    reg(m, 0xA923, "EndUpDate", &[Arg::L], None, end_update::<U>)?;
+    reg(m, 0xA922, "BeginUpDate", &[Arg::P], None, begin_update::<U>)?;
+    reg(m, 0xA923, "EndUpDate", &[Arg::P], None, end_update::<U>)?;
     reg(m, 0xA928, "InvalRect", &[Arg::L], None, inval_rect::<U>)?;
     reg(m, 0xA92A, "ValidRect", &[Arg::L], None, valid_rect::<U>)?;
     reg(m, 0xA927, "InvalRgn", &[Arg::L], None, inval_rgn::<U>)?;

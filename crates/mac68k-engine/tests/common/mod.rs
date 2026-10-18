@@ -41,16 +41,16 @@ impl Prog {
         for c in calls {
             let op = mac68k_engine::mixed::trap_opcode(c.name).unwrap_or_else(|| panic!("{} is not a trap", c.name));
             let (layout, result) = m.pascal_signature(op).unwrap_or_else(|| panic!("{} is not implemented", c.name));
-            match result { Some(Arg::L) => { self.clr_l(); } Some(_) => { self.clr_w(); } None => {} }
+            match result { Some(Arg::L | Arg::P) => { self.clr_l(); } Some(_) => { self.clr_w(); } None => {} }
             for (k, a) in layout.iter().zip(&c.args) {
                 match (k, a) {
-                    (Arg::L, Lit(v)) => { self.l(*v); } (Arg::W, Lit(v)) => { self.w(*v as i16); } (Arg::B, Lit(v)) => { self.b(*v as u8); }
-                    (Arg::L, Mem(a)) => { self.rgn_arg(*a); } (_, Mem(a)) => { self.mem_w(*a); }
+                    (Arg::L | Arg::P, Lit(v)) => { self.l(*v); } (Arg::W, Lit(v)) => { self.w(*v as i16); } (Arg::B, Lit(v)) => { self.b(*v as u8); }
+                    (Arg::L | Arg::P, Mem(a)) => { self.rgn_arg(*a); } (_, Mem(a)) => { self.mem_w(*a); }
                 }
             }
             assert_eq!(layout.len(), c.args.len(), "{}: argument count", c.name);
             self.trap(op);
-            match (result, c.save) { (Some(Arg::L), s) => { self.pop_l(s.unwrap_or(0x3F80)); } (Some(_), s) => { self.pop_w(s.unwrap_or(0x3F80)); } (None, _) => {} }
+            match (result, c.save) { (Some(Arg::L | Arg::P), s) => { self.pop_l(s.unwrap_or(0x3F80)); } (Some(_), s) => { self.pop_w(s.unwrap_or(0x3F80)); } (None, _) => {} }
         }
         self
     }

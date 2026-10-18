@@ -35,7 +35,7 @@ fn call(m: &mut M, c: &mac68k_engine::fixture::ScriptCall) -> bool {
     }
     if let (Some(kind), Some(at)) = (result, c.save) {
         match kind {
-            Arg::L => m.mac.mem.write_u32(at, regs[3]).unwrap(),
+            Arg::L | Arg::P => m.mac.mem.write_u32(at, regs[3]).unwrap(),
             Arg::W => m.mac.mem.write_u16(at, regs[3] as u16).unwrap(),
             Arg::B => m.mac.mem.write_u16(at, ((regs[3] & 0xFF) << 8) as u16).unwrap(), // a 68k pop leaves a Boolean in the high byte
         }

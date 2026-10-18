@@ -19,11 +19,15 @@ pub enum Arg {
     W,
     /// LONGINT / any pointer or handle: 32 bits.
     L,
+    /// A pointer or handle (WindowPtr, GrafPtr, Handle, VAR parameter): 32 bits like [`Arg::L`], but on a 24-bit machine the
+    /// top byte (an application's flag bits) is dropped when the argument is read, so the engine's address-keyed
+    /// bookkeeping (windows, ports, handles) finds the object. Never used for a LONGINT or a packed Point.
+    P,
 }
 
 impl Arg {
     /// Bytes the argument occupies on the stack.
-    pub const fn size(self) -> u32 { match self { Arg::B | Arg::W => 2, Arg::L => 4 } }
+    pub const fn size(self) -> u32 { match self { Arg::B | Arg::W => 2, Arg::L | Arg::P => 4 } }
 }
 
 /// Total stack bytes of an argument list (what the callee pops).
@@ -38,7 +42,7 @@ impl Args {
     /// value per layout entry, each truncated to its slot width the way a 68k stack slot would hold it.
     pub fn from_values(layout: &[Arg], values: &[u32]) -> Result<Args, Refusal> {
         if layout.len() != values.len() { return Err(Refusal(alloc::format!("call passes {} arguments, the Toolbox signature takes {}", values.len(), layout.len()))); }
-        Ok(Args(layout.iter().zip(values).map(|(a, &v)| match a { Arg::B => v & 0xFF, Arg::W => v & 0xFFFF, Arg::L => v }).collect()))
+        Ok(Args(layout.iter().zip(values).map(|(a, &v)| match a { Arg::B => v & 0xFF, Arg::W => v & 0xFFFF, Arg::L | Arg::P => v }).collect()))
     }
     pub fn get(&self, i: usize) -> u32 { self.0[i] }
     pub fn len(&self) -> usize { self.0.len() }
@@ -55,6 +59,7 @@ pub fn read_args(mem: &GuestMem, sp: u32, layout: &[Arg]) -> Result<Args, Refusa
             Arg::B => mem.read_u8(at).map(u32::from),
             Arg::W => mem.read_u16(at).map(u32::from),
             Arg::L => mem.read_u32(at),
+            Arg::P => mem.read_u32(at).map(|v| mem.strip(v)),
         }.map_err(Refusal::mem("Pascal argument"))?;
     }
     Ok(Args(out))
@@ -68,7 +73,7 @@ pub fn complete(mem: &mut GuestMem, sp: u32, layout: &[Arg], result: Option<(Arg
         match kind {
             Arg::B => mem.write_u8(new_sp, v as u8),
             Arg::W => mem.write_u16(new_sp, v as u16),
-            Arg::L => mem.write_u32(new_sp, v),
+            Arg::L | Arg::P => mem.write_u32(new_sp, v),
         }.map_err(Refusal::mem("Pascal result"))?;
     }
     Ok(new_sp)

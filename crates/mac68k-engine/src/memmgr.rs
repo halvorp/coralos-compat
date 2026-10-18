@@ -4,7 +4,9 @@
 //! taken from the heap (MoreMasters); a Handle is the guest-visible address of its master pointer, so the classic
 //! `**h` double dereference works, and the engine can move a block (SetHandleSize) and fix only the master. Every
 //! flag the real Memory Manager keeps in the master pointer's high byte (locked, purgeable, resource) is kept
-//! HOST-side in [`HBlock`] instead, because the guest cannot corrupt it there; `HGetState` synthesises the byte.
+//! HOST-side in [`HBlock`], which is the authority (the guest cannot corrupt it); on a 24-bit machine
+//! ([`MemMgr::sync_master`]) the same bits are MIRRORED into the master pointer's high byte, as Inside Macintosh:
+//! Memory describes, because applications read `**h` and rely on the bus ignoring that byte. `HGetState` reads the host copy.
 //! Nothing is ever compacted or purged: a purgeable block is merely flagged.
 //!
 //! Results are Mac OS error codes (the second half of each `Result`); the trap glue in [`crate::memtraps`] puts them
@@ -12,7 +14,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use retro_guest_mem::heap::Heap;
-use retro_guest_mem::GuestMem;
+use retro_guest_mem::{GuestMem, MASK_32};
 
 pub const MEM_FULL_ERR: i16 = -108;
 pub const NIL_HANDLE_ERR: i16 = -109;
@@ -50,6 +52,20 @@ impl MemMgr {
     pub fn live_ptrs(&self) -> usize { self.ptrs.len() }
     pub fn block(&self, h: u32) -> Option<&HBlock> { self.handles.get(&h) }
     pub fn block_mut(&mut self, h: u32) -> Option<&mut HBlock> { self.handles.get_mut(&h) }
+
+    /// Rewrite handle `h`'s master pointer: the block address, plus (24-bit addressing only) the lock/purge/resource
+    /// bits in the high byte. A 32-bit machine's master pointer is the bare address (the Memory Manager there keeps
+    /// the flags elsewhere), so the guest never sees stale flag bits after a mode change.
+    pub fn sync_master(&self, mem: &mut GuestMem, h: u32) -> Result<(), i16> {
+        let b = self.handles.get(&h).ok_or(MEM_WZ_ERR)?;
+        let flags = if mem.addr_mask() == MASK_32 { 0 } else { u32::from(b.state()) << 24 };
+        mem.write_u32(h, b.ptr | flags).map_err(|_| MEM_WZ_ERR)
+    }
+
+    /// Resynchronise every master pointer (the addressing mode just changed).
+    pub fn sync_all_masters(&self, mem: &mut GuestMem) {
+        for &h in self.handles.keys() { let _ = self.sync_master(mem, h); }
+    }
 
     /// MoreMasters: add one block of master pointers.
     pub fn more_masters(&mut self, mem: &mut GuestMem, heap: &mut Heap) -> Result<(), i16> {
@@ -102,17 +118,16 @@ impl MemMgr {
         mem.zero(new, heap_len(size)).map_err(|_| MEM_WZ_ERR)?; // bytes past the old size are zero, deterministically
         mem.write_bytes(new, &old).map_err(|_| MEM_WZ_ERR)?;
         heap.free(b.ptr, heap_len(b.size)).map_err(|_| MEM_WZ_ERR)?;
-        mem.write_u32(h, new).map_err(|_| MEM_WZ_ERR)?;
         let e = self.handles.get_mut(&h).expect("checked above");
         e.ptr = new;
         e.size = size;
-        Ok(())
+        self.sync_master(mem, h)
     }
 
-    pub fn set_lock(&mut self, h: u32, locked: bool) -> Result<(), i16> {
+    pub fn set_lock(&mut self, mem: &mut GuestMem, h: u32, locked: bool) -> Result<(), i16> {
         if h == 0 { return Err(NIL_HANDLE_ERR); }
         self.handles.get_mut(&h).ok_or(MEM_WZ_ERR)?.locked = locked;
-        Ok(())
+        self.sync_master(mem, h)
     }
 
     pub fn state(&self, h: u32) -> Result<u8, i16> {
@@ -121,13 +136,13 @@ impl MemMgr {
     }
 
     /// HSetState: restore the lock/purge/resource bits `state` carries.
-    pub fn set_state(&mut self, h: u32, state: u8) -> Result<(), i16> {
+    pub fn set_state(&mut self, mem: &mut GuestMem, h: u32, state: u8) -> Result<(), i16> {
         if h == 0 { return Err(NIL_HANDLE_ERR); }
         let b = self.handles.get_mut(&h).ok_or(MEM_WZ_ERR)?;
         b.locked = state & LOCKED_BIT != 0;
         b.purgeable = state & PURGEABLE_BIT != 0;
         b.resource = state & RESOURCE_BIT != 0;
-        Ok(())
+        self.sync_master(mem, h)
     }
 
     pub fn new_ptr(&mut self, mem: &mut GuestMem, heap: &mut Heap, size: u32, clear: bool) -> Result<u32, i16> {
@@ -186,14 +201,14 @@ mod tests {
     fn locked_blocks_do_not_move_and_state_round_trips() {
         let (mut mm, mut mem, mut heap) = world();
         let h = mm.new_handle(&mut mem, &mut heap, 16, false).unwrap();
-        mm.set_lock(h, true).unwrap();
+        mm.set_lock(&mut mem, h, true).unwrap();
         assert_eq!(mm.state(h), Ok(LOCKED_BIT));
         assert_eq!(mm.set_handle_size(&mut mem, &mut heap, h, 64), Err(MEM_LOCKED_ERR));
         assert_eq!(mm.set_handle_size(&mut mem, &mut heap, h, 16), Ok(()), "same size does not move");
         let s = mm.state(h).unwrap();
-        mm.set_lock(h, false).unwrap();
+        mm.set_lock(&mut mem, h, false).unwrap();
         mm.set_handle_size(&mut mem, &mut heap, h, 64).unwrap();
-        mm.set_state(h, s).unwrap();
+        mm.set_state(&mut mem, h, s).unwrap();
         assert!(mm.block(h).unwrap().locked, "HSetState restored the lock");
     }
 

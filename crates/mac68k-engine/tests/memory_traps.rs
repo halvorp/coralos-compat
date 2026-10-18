@@ -56,10 +56,17 @@ fn clear_variant_is_the_same_trap_with_bit_9() {
 fn a_wild_blockmove_is_refused_by_name_and_the_run_goes_on() {
     // lea 0xFFFF0000,a0 ; move.l a0,a1 ; moveq #4,d0 ; _BlockMove ; _ExitToShell
     let prog = [0x41, 0xF9, 0xFF, 0xFF, 0x00, 0x00, 0x22, 0x48, 0x70, 0x04, 0xA0, 0x2E, 0xA9, 0xF4];
+    // 0xFFFF0000 is outside RAM only on a 32-bit machine; a 24-bit one ignores the top byte (CONTROL, below).
     let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+    m.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).unwrap();
     let r = m.run_program(&prog, 0, 100).unwrap();
     assert!(r.stats.halted && r.stats.bus_faults == 0);
     assert_eq!(m.refused.len(), 1, "{:?}", m.refused);
     assert!(m.refused[0].starts_with("BlockMove: 4 bytes 0xffff0000 -> 0xffff0000 leave guest RAM"), "{:?}", m.refused);
     assert_eq!(m.mem.read_u16(0x220).unwrap() as i16, -111);
+    // CONTROL: the same program on the default 24-bit machine copies within RAM (0xFF0000) and refuses nothing.
+    let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+    m.run_program(&prog, 0, 100).unwrap();
+    assert!(m.refused.is_empty(), "{:?}", m.refused);
+    assert_eq!(m.mem.read_u16(0x220).unwrap() as i16, 0);
 }

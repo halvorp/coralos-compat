@@ -163,9 +163,10 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA912, &[], None, init_windows::<U>)?;
     m.register(0xA913, &[Arg::L, Arg::L, Arg::L, Arg::B, Arg::W, Arg::L, Arg::B, Arg::L], Some(Arg::L), new_window::<U>)?;
     m.register(0xA9BD, &[Arg::W, Arg::L, Arg::L], Some(Arg::L), get_new_window::<U>)?;
-    m.register(0xA914, &[Arg::L], None, dispose_window::<U>)?;
-    m.register(0xA915, &[Arg::L], None, show_window::<U>)?;
-    m.register(0xA91F, &[Arg::L], None, select_window::<U>)?;
+    m.register(0xA914, &[Arg::P], None, dispose_window::<U>)?;
+    m.register(0xA915, &[Arg::P], None, show_window::<U>)?;
+    m.register(0xA91F, &[Arg::P], None, select_window::<U>)?;
+    m.register(0xA925, &[Arg::P, Arg::L, Arg::P], None, drag_window::<U>)?;
     m.register(0xA924, &[], Some(Arg::L), front_window::<U>)?;
     m.register(0xA92C, &[Arg::L, Arg::L], Some(Arg::W), find_window::<U>)?;
     m.register(0xA91E, &[Arg::L, Arg::L], Some(Arg::B), track_go_away::<U>)?;
@@ -283,6 +284,15 @@ fn find_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     let (part, win) = m.find_window(v, h);
     m.mem.write_u32(c.args.get(1), win).map_err(Refusal::mem("FindWindow result"))?;
     Ok(Done { result: u32::from(part), log: format!("[toolbox] FindWindow ({v},{h}) -> part {part} window {win:#x}") })
+}
+
+/// `DragWindow(window, startPt, boundsRect)`: the title bar is the host's, so the user's drag is a native window move and the
+/// guest has no mouse to track. The call validates the window and returns; the window's rectangle follows the native position
+/// through the same path a native move always takes (`set_window_rect`).
+fn drag_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = c.args.get(0);
+    if !m.windows.contains_key(&win) { return Err(Refusal(format!("DragWindow: {win:#x} is not an open window"))); }
+    done(format!("[toolbox] DragWindow {win:#x}: the host moves the window (native title bar); nothing for the guest to track"))
 }
 
 /// `TrackGoAway(window, startPt)`: TRUE when the point lies in that window's go-away box (there is no mouse to track).

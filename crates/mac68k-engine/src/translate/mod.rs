@@ -16,6 +16,7 @@
 //! changes the record the model is recomputed from guest memory and only the difference is pushed (a changed value is
 //! `set_control`, a moved rect `set_control_rect`, a changed title or shape a new incarnation: remove + add, which is a new
 //! generation, so the old ref is refused by name).
+pub mod alerts;
 pub mod controls;
 pub mod dialogs;
 pub mod fallback;
@@ -118,5 +119,6 @@ impl<U: GuestUi> Mac<U> {
 /// Register the Control Manager and Dialog Manager traps.
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     controls::register(m)?;
-    dialogs::register(m)
+    dialogs::register(m)?;
+    alerts::register(m)
 }
