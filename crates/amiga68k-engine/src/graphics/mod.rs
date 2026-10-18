@@ -16,6 +16,7 @@ mod draw;
 mod drawinfo;
 pub mod fonts;
 mod palette;
+mod pixelarrays;
 mod rastport;
 mod regions;
 mod setup;
@@ -23,6 +24,7 @@ pub mod state;
 mod target;
 mod text;
 mod windows;
+pub use windows::resize as resize_window;
 
 pub use setup::setup;
 pub use windows::{close as close_window_surface, open as open_window_surface};
@@ -35,7 +37,7 @@ pub const TOPAZ8_WIDTH: u32 = 8;
 
 /// graphics.library's implemented vectors.
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
-    b.with(modes::register::<U>).named("Flood", flood::flood::<U>).named("InitRastPort", rastport::init_rast_port::<U>)
+    b.with(modes::register::<U>).with(pixelarrays::register::<U>).named("Flood", flood::flood::<U>).named("InitRastPort", rastport::init_rast_port::<U>)
         .named("SetAPen", rastport::set_a_pen::<U>)
         .named("SetBPen", rastport::set_b_pen::<U>)
         .named("SetDrMd", rastport::set_dr_md::<U>)

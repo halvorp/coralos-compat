@@ -74,3 +74,35 @@ pub fn set_window_titles<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
     let screen_note = if screen_title == u32::MAX { "" } else { " (screen title not carried)" };
     Ok(format!("[intuition] SetWindowTitles {h:#x} title={shown}{screen_note}"))
 }
+
+/// WindowLimits(a0 = window, d0 = minWidth, d1 = minHeight, d2 = maxWidth, d3 = maxHeight) -> TRUE. A limit of 0 leaves that
+/// one as it is; -1 means "no limit" for the maxima (stored 0xFFFF). The values land in Window.MinWidth 16, MinHeight 18,
+/// MaxWidth 20, MaxHeight 22 (m68k gcc -mno-align-int over AROS intuition/intuition.h). The native window manager owns the
+/// size, so a window already outside the new limits is not resized (logged).
+pub fn window_limits<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let h = cpu.areg(0);
+    open_window(a, "WindowLimits", h)?;
+    let m = Refusal::mem("Window limits");
+    for (i, off) in [16u32, 18, 20, 22].into_iter().enumerate() {
+        let v = cpu.dreg(i as u32) as i32;
+        if v != 0 { a.mem.write_u16(h + off, if v < 0 { 0xFFFF } else { v.min(0xFFFF) as u16 }).map_err(&m)?; }
+    }
+    cpu.set_d0(1);
+    Ok(format!("[intuition] WindowLimits {h:#x} min {}x{} max {}x{} (the native window manager owns the size)", cpu.dreg(0) as i32, cpu.dreg(1) as i32, cpu.dreg(2) as i32, cpu.dreg(3) as i32))
+}
+
+/// ChangeWindowBox(a0 = window, d0 = left, d1 = top, d2 = width, d3 = height): moves and resizes. A new size resizes the
+/// window's surface (graphics::resize_window: the canvas keeps the pixels that fit, the whole of it is damaged) and updates the
+/// Window struct; the position is written to LeftEdge/TopEdge. GuestUi has no move/resize call, so the NATIVE window keeps its
+/// place and shows the new canvas size through the next present_content frame (logged). No NEWSIZE message is sent.
+pub fn change_window_box<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let h = cpu.areg(0);
+    open_window(a, "ChangeWindowBox", h)?;
+    let (l, t, w, hh) = (cpu.dreg(0) as i16, cpu.dreg(1) as i16, cpu.dreg(2) as i16, cpu.dreg(3) as i16);
+    let m = Refusal::mem("Window box");
+    let (cw, ch) = (a.mem.read_u16(h + 8).map_err(&m)? as i16, a.mem.read_u16(h + 10).map_err(&m)? as i16);
+    if w <= 0 || hh <= 0 { return Err(Refusal(format!("ChangeWindowBox {h:#x}: size {w}x{hh} is not positive"))); }
+    for (off, v) in [(4u32, l), (6, t), (8, w), (10, hh)] { a.mem.write_u16(h + off, v as u16).map_err(&m)?; }
+    let note = if (w, hh) != (cw, ch) { let (iw, ih) = crate::graphics::resize_window(a, h, (w as i32, hh as i32))?; format!("; canvas now {iw}x{ih}") } else { String::new() };
+    Ok(format!("[intuition] ChangeWindowBox {h:#x} -> {l},{t} {w}x{hh} (was {cw}x{ch}{note}; the native window is not moved)"))
+}

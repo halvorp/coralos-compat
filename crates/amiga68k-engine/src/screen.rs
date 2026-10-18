@@ -61,7 +61,7 @@ pub fn unlock_pub_screen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
 }
 
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
-    b.named("ScreenToFront", |a, c| screen_depth(a, c, "ScreenToFront")).named("ScreenToBack", |a, c| screen_depth(a, c, "ScreenToBack"))
+    b.named("LockPubScreenList", lock_pub_screen_list::<U>).named("UnlockPubScreenList", unlock_pub_screen_list::<U>).named("LockIBase", lock_ibase::<U>).named("UnlockIBase", unlock_ibase::<U>).named("ScreenToFront", |a, c| screen_depth(a, c, "ScreenToFront")).named("ScreenToBack", |a, c| screen_depth(a, c, "ScreenToBack"))
 }
 
 /// ScreenToFront / ScreenToBack(a0 = screen): there is one screen, so its depth order cannot change; the call is accepted for
@@ -71,3 +71,41 @@ fn screen_depth<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu, name: &str) -> Resu
     if s != SCREEN { return Err(Refusal(format!("{name} {s:#x}: not the screen (there is one screen)"))); }
     Ok(format!("[intuition] {name} (the only screen: nothing to reorder)"))
 }
+
+/// LockIBase(d0 = dontknow) -> a lock token for UnlockIBase. Tasks switch only after a library call, so the lock never has to
+/// exclude anybody; it is counted so an UnlockIBase without a LockIBase is a named refusal.
+fn lock_ibase<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    a.ibase_locks += 1;
+    cpu.set_d0(a.ibase_locks);
+    Ok(format!("[intuition] LockIBase -> token {}", a.ibase_locks))
+}
+
+fn unlock_ibase<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let token = cpu.areg(0);
+    a.ibase_locks = a.ibase_locks.checked_sub(1).ok_or_else(|| Refusal("UnlockIBase without LockIBase".into()))?;
+    Ok(format!("[intuition] UnlockIBase {token:#x}"))
+}
+
+/// LockPubScreenList() -> the list of public screens: a real List with the one PubScreenNode, "Workbench" (struct PubScreenNode,
+/// NDK intuition/screens.h: Node 14 bytes, psn_Screen 14, psn_Flags 18, psn_Size 20, psn_VisitorCount 22, psn_SigTask 24,
+/// psn_SigBit 28; 30 bytes) with psn_Flags 0, psn_VisitorCount = the current LockPubScreen count at
+/// each call. Built on first use in the engine's arena.
+fn lock_pub_screen_list<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    if a.pub_list == 0 {
+        let m = Refusal::mem("PubScreenList");
+        let blk = crate::fs::alloc_zeroed_sys(a, 14 + 30 + 16)?.ok_or_else(|| Refusal("LockPubScreenList: no memory (NOMEM)".into()))?;
+        let (list, node, name) = (blk, blk + 14, blk + 44);
+        a.mem.write_bytes(name, b"Workbench\0").map_err(&m)?;
+        crate::execlists::new_list(&mut a.mem, list, 0)?;
+        a.mem.write_u8(node + 8, 2).map_err(&m)?; // ln_Type NT_USER-ish: a plain node
+        a.mem.write_u32(node + 10, name).map_err(&m)?;
+        a.mem.write_u32(node + 14, SCREEN).map_err(&m)?;
+        crate::execlists::add_tail(&mut a.mem, list, node)?;
+        a.pub_list = list;
+    }
+    a.mem.write_u16(a.pub_list + 14 + 22, a.screen_locks as u16).map_err(Refusal::mem("psn_VisitorCount"))?;
+    cpu.set_d0(a.pub_list);
+    Ok(format!("[intuition] LockPubScreenList -> {:#x}", a.pub_list))
+}
+
+fn unlock_pub_screen_list<U: GuestUi>(_: &mut Amiga<U>, _: &mut Cpu) -> Result<String, Refusal> { Ok("[intuition] UnlockPubScreenList".into()) }

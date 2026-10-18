@@ -73,6 +73,10 @@ pub struct Amiga<U: GuestUi> {
     pub sched: crate::sched::Sched<U>,
     /// What the program wrote to its console.
     pub console: dos::Console,
+    /// The public screen list built by LockPubScreenList (screen.rs), 0 until first use.
+    pub pub_list: u32,
+    /// Outstanding LockIBase locks (screen.rs).
+    pub ibase_locks: u32,
     /// Outstanding LockPubScreen locks on the one public screen.
     pub screen_locks: u32,
     /// Live ReadArgs results: (RDArgs, value buffer, its size, RDArgs allocated by ReadArgs).
@@ -116,7 +120,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), workbench: Default::default(), notify: Default::default(), asl: Default::default(), cx: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), workbench: Default::default(), notify: Default::default(), asl: Default::default(), cx: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, ibase_locks: 0, pub_list: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), gfx: Default::default(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
@@ -216,6 +220,8 @@ impl<U: GuestUi> Amiga<U> {
             .func(menu_nav::LVO_ON_MENU, "OnMenu", menu_nav::on_menu::<U>)
             .func(menu_nav::LVO_OFF_MENU, "OffMenu", menu_nav::off_menu::<U>)
             .func(menu_nav::LVO_RESET_MENU_STRIP, "ResetMenuStrip", intuition::set_menu_strip::<U>)
+            .named("WindowLimits", intuition::window_limits::<U>)
+            .named("ChangeWindowBox", intuition::change_window_box::<U>)
             .func(intuition::LVO_ACTIVATE_WINDOW, "ActivateWindow", intuition::activate_window::<U>)
             .func(intuition::LVO_WINDOW_TO_FRONT, "WindowToFront", intuition::window_to_front::<U>)
             .func(intuition::LVO_WINDOW_TO_BACK, "WindowToBack", intuition::window_to_back::<U>)

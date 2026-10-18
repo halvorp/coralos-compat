@@ -57,3 +57,28 @@ pub fn close<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusal> {
     a.gfx.dropped_rps.remove(&brp);
     Ok(())
 }
+
+/// Resize `win`'s surface to the new OUTER size (the Window.Width/Height fields are updated by the caller): the canvas becomes
+/// the new inner area, keeping the pixels that still fit, the guest BitMap struct and the layer bounds follow, and the whole
+/// canvas is damaged so the next present shows the new size. Returns the new inner size.
+pub fn resize<U: GuestUi>(a: &mut Amiga<U>, win: u32, (ow, oh): (i32, i32)) -> Result<(i32, i32), Refusal> {
+    let m = Refusal::mem("Window resize");
+    let layer = a.mem.read_u32(win + WD_WLAYER).map_err(&m)?;
+    let (canvas, origin) = a.gfx.layers.get(&layer).map(|l| (l.canvas, l.origin)).ok_or_else(|| Refusal(alloc::format!("window {win:#x} has no surface")))?;
+    let b = |o: u32| a.mem.read_u8(win + o).map(|v| v as i32);
+    let (bl, bt, br, bb) = (b(54).map_err(&m)?, b(55).map_err(&m)?, b(56).map_err(&m)?, b(57).map_err(&m)?);
+    let (iw, ih) = ((ow - bl - br).max(1), (oh - bt - bb).max(1));
+    let depth = a.gfx.bitmaps.get(&canvas).map(|g| g.bm.depth()).ok_or_else(|| Refusal("window canvas vanished".into()))?;
+    let mut fresh = retro_raster::Bitmap::new(iw, ih, depth).ok_or_else(|| Refusal(alloc::format!("window canvas {iw}x{ih} is unsupported")))?;
+    let old = &a.gfx.bitmaps[&canvas].bm;
+    let keep = old.rect().intersect(&fresh.rect());
+    for y in keep.y0..keep.y1 { for x in keep.x0..keep.x1 { fresh.set(x, y, old.get(x, y).unwrap_or(0)); } }
+    a.gfx.bitmaps.get_mut(&canvas).expect("canvas").bm = fresh;
+    bitmaps::write_struct(a, canvas, iw, ih, depth)?;
+    let left = a.mem.read_u16(win + 4).map_err(&m)? as i16 as i32;
+    let top = a.mem.read_u16(win + 6).map_err(&m)? as i16 as i32;
+    let (ox, oy) = if origin == (0, 0) { (0, 0) } else { (bl, bt) };
+    for (i, v) in [left + ox, top + oy, left + ox + iw - 1, top + oy + ih - 1].into_iter().enumerate() { a.mem.write_u16(layer + LY_BOUNDS + 2 * i as u32, v as u16).map_err(&m)?; }
+    a.gfx.add_damage(win, retro_raster::Rect::new(0, 0, iw, ih));
+    Ok((iw, ih))
+}

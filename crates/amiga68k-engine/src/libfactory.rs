@@ -11,6 +11,8 @@ pub fn library<U: GuestUi>(name: &'static str, base: u32) -> LibraryBuilder<U> {
         "utility.library" => crate::utility::register(b),
         "icon.library" => crate::icon::register(b),
         "locale.library" => crate::locale::register(b),
+        "mathieeesingbas.library" => crate::mathieee::register_single(b),
+        "mathieeedoubbas.library" => crate::mathieee::register_double(b),
         "workbench.library" => crate::workbench::register(b),
         "asl.library" => crate::asl::register(b),
         "commodities.library" => crate::commodities::register(b),

@@ -33,7 +33,7 @@ pub fn alloc_signal_bit<U: GuestUi>(a: &mut Amiga<U>, wanted: i32) -> Result<Opt
 
 /// AllocSignal(d0 = signalNum or -1) -> the bit, or -1.
 pub fn alloc_signal<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let wanted = cpu.dreg(0) as i32;
+    let wanted = cpu.dreg(0) as i8 as i32; // signalNum is a BYTE (AROS AllocSignal): the rest of D0 is the caller's garbage
     let got = alloc_signal_bit(a, wanted)?;
     cpu.set_d0(got.map(|b| b).unwrap_or(u32::MAX));
     Ok(format!("[exec] AllocSignal {wanted} -> {}", got.map(|b| b as i64).unwrap_or(-1)))
@@ -41,7 +41,7 @@ pub fn alloc_signal<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
 
 /// FreeSignal(d0 = signalNum); -1 is a no-op. Freeing a signal that is not allocated is a named refusal.
 pub fn free_signal<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let n = cpu.dreg(0) as i32;
+    let n = cpu.dreg(0) as i8 as i32; // a BYTE, like AllocSignal
     if n == -1 { return Ok("[exec] FreeSignal -1".into()); }
     let map = sig_alloc(a)?;
     if !(16..32).contains(&n) || map & (1 << n) == 0 { return Err(Refusal(format!("FreeSignal {n}: not an allocated user signal"))); }

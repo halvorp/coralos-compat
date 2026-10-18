@@ -68,6 +68,7 @@ pub mod lowlevel;
 pub mod machine;
 pub mod menu_nav;
 pub mod makelib;
+pub mod mathieee;
 pub mod memheader;
 pub mod memory;
 pub mod mui;
