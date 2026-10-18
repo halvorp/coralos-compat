@@ -29,5 +29,6 @@ rect:   .short  40,30,240,350           | top, left, bottom, right
 title:  .byte   9
         .ascii  "Hello Mac"
         .align  2
+        .space  256                     | the QuickDraw globals live BELOW thePort: 206 bytes (76 private + 130 public)
 qdglobals:
         .long   0
