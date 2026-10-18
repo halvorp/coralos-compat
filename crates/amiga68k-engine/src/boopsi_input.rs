@@ -44,7 +44,7 @@ impl Input {
 
 /// A pointer event for guest window `win` (idcmp::deliver's arm).
 pub fn queue<U: GuestUi>(a: &mut Amiga<U>, win: u32, x: i32, y: i32, phase: PointerPhase) -> Result<Delivered, Refusal> {
-    let has = crate::boopsi_glist::window_gadgets(a, win)?.iter().any(|g| a.classes.class_of(*g).is_some());
+    let has = crate::boopsi_glist::window_gadgets(a, win)?.iter().any(|g| a.classes.class_of(*g).is_some() && !crate::native_gadgets::is_native(a, *g));
     if !has && a.input.active.is_none() { return Ok(Delivered::IgnoredUnsubscribed); }
     let port = a.mem.read_u32(win + crate::idcmp::WD_USERPORT).map_err(Refusal::mem("Window.UserPort"))?;
     if port == 0 { return Ok(Delivered::IgnoredUnsubscribed); } // no IDCMP port: nobody to post a GADGETUP to
@@ -73,7 +73,7 @@ pub fn pump<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, w: Waiting) -> Result<b
 fn rd16<U: GuestUi>(a: &Amiga<U>, at: u32) -> Result<i32, Refusal> { a.mem.read_u16(at).map(|v| v as i16 as i32).map_err(Refusal::mem("Gadget")) }
 
 /// The gadget's box in window coordinates (boopsigadgets.c: RELRIGHT adds Width-1, RELBOTTOM Height-1, RELWIDTH/RELHEIGHT the size).
-fn gadget_box<U: GuestUi>(a: &Amiga<U>, win: u32, g: u32) -> Result<(i32, i32, i32, i32), Refusal> {
+pub(crate) fn gadget_box<U: GuestUi>(a: &Amiga<U>, win: u32, g: u32) -> Result<(i32, i32, i32, i32), Refusal> {
     let fl = a.mem.read_u16(g + GAD_FLAGS).map_err(Refusal::mem("Gadget.Flags"))? as u32;
     let (ww, wh) = (rd16(a, win + 8)?, rd16(a, win + 10)?);
     let (mut l, mut t, mut w, mut h) = (rd16(a, g + GAD_LEFT)?, rd16(a, g + GAD_TOP)?, rd16(a, g + GAD_WIDTH)?, rd16(a, g + GAD_HEIGHT)?);
@@ -102,7 +102,7 @@ fn begin<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, wait: (Waiting, u32)) -> R
             (PointerPhase::Down, None) => {
                 let mut cands = Vec::new();
                 for g in crate::boopsi_glist::window_gadgets(a, ev.win)? {
-                    if a.classes.class_of(g).is_none() { continue; }
+                    if a.classes.class_of(g).is_none() || crate::native_gadgets::is_native(a, g) { continue; }
                     if a.mem.read_u16(g + GAD_FLAGS).map_err(Refusal::mem("Gadget.Flags"))? as u32 & GFLG_DISABLED != 0 { continue; }
                     let (l, t, w, h) = gadget_box(a, ev.win, g)?;
                     if ev.x >= l && ev.x < l + w && ev.y >= t && ev.y < t + h { cands.push(g); }

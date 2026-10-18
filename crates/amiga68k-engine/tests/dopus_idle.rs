@@ -204,3 +204,27 @@ fn directory_opus_disk_icons_come_from_the_host_when_it_has_artwork() {
         }
     }
 }
+
+#[test]
+fn the_lister_registers_its_gadgets_as_native_controls() {
+    use guestui_abi::{ArrowDir, ControlKind, GuestRect};
+    let Some(a) = run(5) else { return };
+    // The lister window (443x583 at 209,51) is the native window whose controls carry its border scrollbars and arrows, its drag strip
+    // and the path field; before the Gute Form spike the engine painted buttongclass / propgclass / strgclass in the AROS look instead.
+    let lister = a.ui.calls.iter().find_map(|c| match c { UiCall::OpenWindow(m) if (m.rect.width, m.rect.height) == (443, 583) => Some(m.token), _ => None }).expect("the lister window");
+    let native = *a.windows.get(&(lister.0 as u32)).expect("open lister");
+    let mine: Vec<_> = a.ui.controls.values().filter(|(w, _)| *w == native).map(|(_, m)| m).collect();
+    let rect = |l, t, w, h| GuestRect { left: l, top: t, width: w, height: h };
+    let has = |k: &ControlKind, r: GuestRect| mine.iter().any(|m| &m.kind == k && m.rect == r);
+    assert!(has(&ControlKind::ScrollBar { vertical: true, total: 3, visible: 63, top: 0 }, rect(439, 17, 4, 532)), "{mine:#?}");
+    assert!(has(&ControlKind::ScrollBar { vertical: false, total: 280, visible: 432, top: 0 }, rect(4, 579, 405, 4)), "{mine:#?}");
+    for (dir, r) in [(ArrowDir::Up, rect(439, 551, 4, 14)), (ArrowDir::Down, rect(439, 565, 4, 14)), (ArrowDir::Left, rect(411, 579, 14, 4)), (ArrowDir::Right, rect(425, 579, 14, 4))] {
+        assert!(has(&ControlKind::ArrowButton { dir }, r), "arrow {dir:?}: {mine:#?}");
+    }
+    assert!(has(&ControlKind::Hotspot, rect(0, 15, 4, 564)), "the left-border drag strip is an invisible hit area");
+    assert!(mine.iter().any(|m| matches!(&m.kind, ControlKind::Field { text, .. } if text == "RAM:") && m.rect == rect(8, 569, 427, 8)), "the path field (dopusstrgclass's super GM_RENDER): {mine:#?}");
+    assert_eq!(mine.len(), 8);
+    assert!(a.refused.is_empty(), "{:#?}", a.refused);
+    // Negative control: the other windows (progress, backdrop) have no such controls.
+    assert!(a.ui.controls.values().filter(|(w, _)| *w != native).all(|(_, m)| !matches!(m.kind, ControlKind::ScrollBar { .. })));
+}

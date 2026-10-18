@@ -20,13 +20,12 @@ fn bit<U: GuestUi>(a: &mut Amiga<U>, at: u32, bit: u32, on: bool) -> Result<(), 
 
 /// Run `method` of native class `cl` on `obj` (for OM_NEW, `obj` is the class the object is being made from).
 pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, native: Native, cl: u32, obj: u32, msg: u32) -> Result<u32, Refusal> {
-    // Native drawing (boopsi_draw.rs): buttongclass / propgclass render, sysiclass arrows. Their input methods and frameiclass drawing are
-    // still named refusals.
+    // GM_RENDER of a system gadget class puts / updates the NATIVE control (native_gadgets.rs; it paints nothing); sysiclass IM_DRAW paints
+    // nothing either (boopsi_draw.rs). Their input methods are the host's: GM_GOACTIVE / GM_HANDLEINPUT stay named refusals.
     if matches!(native, Native::Button | Native::Prop | Native::Sysi) {
         let id = rd(a, msg, "method id")?;
         match (native, id) {
-            (Native::Button, GM_RENDER) => return crate::boopsi_draw::button_render(a, obj, msg),
-            (Native::Prop, GM_RENDER) => return crate::boopsi_draw::prop_render(a, obj, msg),
+            (Native::Button | Native::Prop, GM_RENDER) => return crate::native_gadgets::render(a, obj, msg),
             (Native::Sysi, IM_DRAW) => {
                 let (rp, x, y, st) = (rd(a, msg + 4, "impDraw")?, r16(a, msg + 8, "impDraw")? as i16 as i32, r16(a, msg + 10, "impDraw")? as i16 as i32, rd(a, msg + 12, "impDraw")?);
                 crate::boopsi_draw::draw_native_image(a, obj, rp, x, y, st)?;

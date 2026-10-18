@@ -49,10 +49,7 @@ const GFLG_SELECTED: u16 = 0x0080;
 const GD_FLAGS: u32 = 12;
 const GD_SPECIAL_INFO: u32 = 34;
 const SI_SIZE: u32 = 36;
-const SI_BUFFER_POS: u32 = 8;
 const SI_MAX_CHARS: u32 = 10;
-const SI_NUM_CHARS: u32 = 16;
-const SI_LONG_INT: u32 = 28;
 
 /// What the host holds for a gadget beyond the generic record (the "native side's" copy of its value).
 #[derive(Debug, Clone, Default)]
@@ -142,17 +139,11 @@ fn number(text: &str) -> Result<i32, Refusal> {
 }
 
 /// Write `text` into the gadget's StringInfo buffer (NUL-terminated), NumChars, the cursor and, for INTEGER_KIND,
-/// LongInt.
+/// LongInt (the shared strgclass store, boopsi_strg.rs).
 fn write_buffer<U: GuestUi>(a: &mut Amiga<U>, kind: u32, st: &KindState, text: &str) -> Result<(), Refusal> {
     if st.string_info == 0 { return Ok(()); }
-    let m = Refusal::mem;
-    let bytes = truncate(text, st.max_chars).into_bytes();
-    a.mem.write_bytes(st.buffer, &bytes).map_err(m("StringInfo.Buffer"))?;
-    a.mem.write_u8(st.buffer + bytes.len() as u32, 0).map_err(m("StringInfo.Buffer"))?;
-    a.mem.write_u16(st.string_info + SI_NUM_CHARS, bytes.len() as u16).map_err(m("StringInfo.NumChars"))?;
-    a.mem.write_u16(st.string_info + SI_BUFFER_POS, bytes.len() as u16).map_err(m("StringInfo.BufferPos"))?;
-    if kind == INTEGER_KIND { a.mem.write_u32(st.string_info + SI_LONG_INT, number(text)? as u32).map_err(m("StringInfo.LongInt"))?; }
-    Ok(())
+    if kind == INTEGER_KIND { number(text)?; }
+    crate::boopsi_strg::store_text(a, st.string_info, &truncate(text, st.max_chars), kind == INTEGER_KIND)
 }
 
 fn set_selected<U: GuestUi>(a: &mut Amiga<U>, g: u32, on: bool) -> Result<(), Refusal> {
@@ -210,7 +201,7 @@ fn store<U: GuestUi>(a: &mut Amiga<U>, g: u32, v: &ControlValue) -> Result<(), R
         ControlValue::Checked(b) => info.state.checked = *b,
         ControlValue::Text(t) => info.text = t.clone(),
         ControlValue::Level(l) => info.state.level = *l,
-        ControlValue::Pressed => {}
+        ControlValue::Pressed | ControlValue::Scroll { .. } | ControlValue::Cancelled => {}
     }
     let (kind, st) = (info.kind, info.state.clone());
     match v {

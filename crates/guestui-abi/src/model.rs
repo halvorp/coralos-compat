@@ -55,7 +55,29 @@ pub enum ControlKind {
     Slider { min: i32, max: i32, value: i32 },
     /// Read-only text the guest updates (GadTools TEXT_KIND; `framed` = GTTX_Border's recessed box).
     Label { text: String, framed: bool },
+    /// A two-state push button that stays down (an Intuition GACT_TOGGLESELECT boolean gadget).
+    ToggleButton { on: bool },
+    /// A scrollbar over `total` units of which `visible` show, the first shown being `top` (all in the guest's own units).
+    /// `top` is at most `total - visible`; a `visible >= total` bar has nothing to scroll. The host draws the knob, the
+    /// arrows are separate [`ControlKind::ArrowButton`]s when the guest has them.
+    ScrollBar { vertical: bool, total: u32, visible: u32, top: u32 },
+    /// A one-line text or integer field. `editable` false = shown but not typed into; `integer` = digits (and a leading
+    /// minus) only; `max_len` counts characters.
+    Field { text: String, max_len: u32, editable: bool, integer: bool },
+    /// A static framed group around or behind other controls (frameiclass; no interaction, no events). Plan 16 §2a.1 `Group`.
+    Group { title: String, style: GroupStyle },
+    /// A button that shows a direction arrow instead of a label (scrollbar arrows, spinners).
+    ArrowButton { dir: ArrowDir },
+    /// An invisible hit area: no visuals, but pointer press/release inside it are events (a gadget with nothing to draw).
+    Hotspot,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrowDir { Up, Down, Left, Right }
+
+/// What a group frame looks like, as a role (the host maps it onto its own kit parts; Gute Form groups are flat, so the style may be metadata).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupStyle { Plain, Recessed, Raised }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlModel {
@@ -67,7 +89,32 @@ pub struct ControlModel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ControlValue { Pressed, Checked(bool), Text(String), Level(i32) }
+pub enum ControlValue { Pressed, Checked(bool), Text(String), Level(i32), Scroll { total: u32, visible: u32, top: u32 },
+    /// Only in a `ControlDriven` `Up`: the gesture ended outside the control (no activation, nothing changed).
+    Cancelled }
+
+impl ControlModel {
+    /// Apply `value` to this model the way a host applies `set_control`: the shared rule for what each kind can hold.
+    /// A value the kind cannot hold is `UiRefusal::Unsupported`; a `Scroll` with `top` past the end is clamped to it.
+    pub fn apply(&mut self, value: &ControlValue) -> Result<(), UiRefusal> {
+        match (&mut self.kind, value) {
+            (_, ControlValue::Pressed | ControlValue::Cancelled) => {}
+            (ControlKind::Checkbox { checked }, ControlValue::Checked(b)) => *checked = *b,
+            (ControlKind::ToggleButton { on }, ControlValue::Checked(b)) => *on = *b,
+            (ControlKind::String { text, .. } | ControlKind::Label { text, .. } | ControlKind::Field { text, .. }, ControlValue::Text(t)) => *text = t.clone(),
+            (ControlKind::Slider { min, max, value }, ControlValue::Level(l)) => {
+                if l < min || l > max { return Err(UiRefusal::InvalidGeometry("slider level outside its range")); }
+                *value = *l;
+            }
+            (ControlKind::ScrollBar { total: t, visible: v, top: p, .. }, ControlValue::Scroll { total, visible, top }) => {
+                (*t, *v) = (*total, *visible);
+                *p = (*top).min(total.saturating_sub(*visible));
+            }
+            _ => return Err(UiRefusal::Unsupported("a value the control's kind cannot hold")),
+        }
+        Ok(())
+    }
+}
 
 /// Native events back to the guest. Tokens identify the guest-side object.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +126,12 @@ pub enum GuestUiEvent {
     /// The pointer's primary button or motion, in the window's own coordinates (0,0 = its top-left corner). The smallest
     /// generic pointer input: a guest-drawn gadget (BOOPSI) needs it to be hit-tested and driven.
     Pointer { win: UiObjectRef, x: i32, y: i32, phase: PointerPhase },
+    /// The user is driving a native control, with its two-ended gesture (what Intuition reports as GADGETDOWN / MOUSEMOVE /
+    /// GADGETUP): `Down` = pressed (a button or arrow goes down, a scrollbar drag starts, a field takes focus); `Move` = the
+    /// value changed while the gesture is held (a scrollbar knob drag, a field edit; `value` is the new value); `Up` =
+    /// released / committed (a button release inside it, a scrollbar drag ends, a field's Return; `value` is the final one,
+    /// `Pressed` for a plain button). A toggle's `Up` carries its new `Checked`. Tokens are the guest's own.
+    ControlDriven { win: UiObjectRef, control: UiObjectRef, token: CallbackToken, phase: PointerPhase, value: ControlValue },
 }
 
 /// What the primary pointer button / motion did.
