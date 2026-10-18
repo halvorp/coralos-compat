@@ -88,4 +88,4 @@ fn the_application_draws_on_its_update_event_and_the_host_gets_one_frame() {
     assert_eq!(step, Step::Exited);
 }
 
-const GOLDEN: u64 = 15562557315887039366;
+const GOLDEN: u64 = 14743535372892140678; // re-recorded 2026-10-18 when lines (DrawLine.a slabs) and ovals (DrawArc.a INITOVAL/BUMPOVAL) became the original algorithms; see tests/oracle/systemless

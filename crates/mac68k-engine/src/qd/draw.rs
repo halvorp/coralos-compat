@@ -186,17 +186,43 @@ fn get_pen<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Re
     done("GetPen")
 }
 
+/// The pixels of the pen dragged from `from` to `to`, the way DrawLine.a (Atkinson's QuickDraw) scan-converts them: the
+/// line is cut into one horizontal slab per scanline, top to bottom; the slab's edges are 16.16 fixed-point values that
+/// start at the top point + 1/2 (+ slope/2, minus the pen height times the slope, then one more slope step when the line is
+/// shallower than 45 degrees, else the other edge loses a whole pixel) and advance by slope = FixRatio(dh, dv) per row.
+/// Every slab is clipped to LINERECT, the rectangle bounding the pen's travel (DrawLine.a: MINRECT is drawn into the mask
+/// buffer first), so a shallow line's first and last runs never poke past its end points. A horizontal line is that
+/// rectangle itself, a vertical one likewise (HVLINE).
 fn line_region(from: (i32, i32), to: (i32, i32), pw: i32, ph: i32) -> Region {
     let mut g = Region::new();
-    let (mut x, mut y) = from;
-    let (dx, dy, sx, sy) = ((to.0 - x).abs(), -(to.1 - y).abs(), if x < to.0 { 1 } else { -1 }, if y < to.1 { 1 } else { -1 });
-    let mut err = dx + dy;
-    loop {
-        g.or_rect(Rect::new(x, y, x + pw, y + ph));
-        if (x, y) == to { break; }
-        let e2 = 2 * err;
-        if e2 >= dy { err += dy; x += sx; }
-        if e2 <= dx { err += dx; y += sy; }
+    let (p1, p2) = if from.1 <= to.1 { (from, to) } else { (to, from) }; // sort by vertical (VSWAP)
+    let (dh, dv) = (i64::from(p2.0 - p1.0), i64::from(p2.1 - p1.1));
+    if dv == 0 {
+        g.or_rect(Rect::new(from.0.min(to.0), p1.1, from.0.max(to.0) + pw, p1.1 + ph));
+        return g;
+    }
+    if dh == 0 {
+        g.or_rect(Rect::new(p1.0, p1.1, p1.0 + pw, p2.1 + ph));
+        return g;
+    }
+    const ONE: i64 = 1 << 16;
+    let slope = (dh << 16) / dv; // FixRatio truncates toward zero (executor toolutil.cpp C_FixRatio)
+    let adjust = i64::from(ph) * slope; // FixMul(ph << 16, slope), exact for an integer factor
+    let mut left = (i64::from(p1.0) << 16) + 0x8000 + (slope >> 1);
+    let mut right = left + (i64::from(pw) << 16);
+    if slope >= 0 {
+        left -= adjust;
+        if slope < ONE { left += slope } else { right -= ONE }
+    } else {
+        right -= adjust;
+        if slope >= -ONE { right += slope } else { left += ONE }
+    }
+    let (bound_l, bound_r) = (p1.0.min(p2.0), p1.0.max(p2.0) + pw);
+    for row in 0..i64::from(ph) + dv {
+        let (l, r) = (((left >> 16) as i32).max(bound_l), ((right >> 16) as i32).min(bound_r)); // integer words of the edges: floor
+        if r > l { g.or_rect(Rect::new(l, p1.1 + row as i32, r, p1.1 + row as i32 + 1)); }
+        left += slope;
+        right += slope;
     }
     g
 }
@@ -264,3 +290,48 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     reg(m, 0xA892, "Line", &[Arg::W, Arg::W], None, line_by::<U>)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn pixels(g: &Region, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Vec<(i32, i32)> {
+        (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| g.contains(x, y)).collect()
+    }
+    /// DrawLine.a: `CMP.L #$00010000,D7 / BGE LESSV1` sends slope == 1.0 to the branch that trims the right edge, which makes a
+    /// 45-degree 1x1 line hit (x+i, y+i) from its first point to its last. (systemless, run as the oracle, puts it one pixel
+    /// right of that: it treats slope == 1.0 like slope < 1.0.)
+    #[test]
+    fn a_45_degree_line_hits_both_end_points_and_one_pixel_per_row() {
+        for (from, to) in [((4, 4), (36, 36)), ((36, 4), (4, 36)), ((10, 10), (11, 11))] {
+            let g = line_region(from, to, 1, 1);
+            let n = (to.0 - from.0).abs();
+            let (top, bot) = (if from.1 < to.1 { from } else { to }, if from.1 < to.1 { to } else { from });
+            let step = (bot.0 - top.0).signum();
+            let want: Vec<(i32, i32)> = (0..=n).map(|i| (top.0 + step * i, top.1 + i)).collect();
+            let mut got = pixels(&g, (0, 0, 50, 50));
+            got.sort_by_key(|&(x, y)| (y, x));
+            assert_eq!(got, want, "{from:?} -> {to:?}");
+        }
+    }
+    /// DrawLine.a: every slab is clipped to LINERECT (MINRECT goes into the mask buffer first), so no pixel lies outside the
+    /// rectangle bounding the pen's travel, however shallow the slope (the unclipped first run of a slope-1.27 line starts a pixel early).
+    #[test]
+    fn slabs_never_leave_the_rectangle_bounding_the_pens_travel() {
+        for (from, to, pw, ph) in [((8, 14), (36, 36), 1, 1), ((3, 4), (37, 12), 1, 1), ((4, 4), (35, 16), 3, 2), ((20, 3), (17, 37), 2, 3)] {
+            let g = line_region(from, to, pw, ph);
+            let b = g.bounds();
+            assert_eq!(b, Rect::new(from.0.min(to.0), from.1.min(to.1), from.0.max(to.0) + pw, from.1.max(to.1) + ph), "{from:?} {to:?} pen {pw}x{ph}");
+        }
+        // negative control: the end points really are inside, so the bound is tight, not vacuous
+        assert!(line_region((8, 14), (36, 36), 1, 1).contains(8, 14) && line_region((8, 14), (36, 36), 1, 1).contains(36, 36));
+    }
+    /// DrawLine.a HVLINE: a horizontal or vertical line is the rectangle the pen sweeps, whichever way it is drawn.
+    #[test]
+    fn horizontal_and_vertical_lines_are_the_swept_rectangle_in_either_direction() {
+        assert_eq!(line_region((4, 10), (36, 10), 4, 1), line_region((36, 10), (4, 10), 4, 1));
+        assert_eq!(line_region((4, 10), (36, 10), 4, 1).bounds(), Rect::new(4, 10, 40, 11));
+        assert_eq!(line_region((7, 3), (7, 30), 2, 3), line_region((7, 30), (7, 3), 2, 3));
+        assert_eq!(line_region((7, 3), (7, 30), 2, 3).bounds(), Rect::new(7, 3, 9, 33));
+        assert_ne!(line_region((4, 10), (36, 10), 4, 1), line_region((4, 10), (36, 12), 4, 1), "negative control: a slanted line differs");
+    }
+}
