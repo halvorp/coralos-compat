@@ -44,7 +44,7 @@ pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, native: Native, cl: u32, obj: u32,
         Native::Gadget | Native::Button => gadget(a, cl, obj, msg),
         Native::Prop => crate::boopsi_prop::prop(a, cl, obj, msg),
         Native::Strg => crate::boopsi_strg::strg(a, cl, obj, msg),
-        Native::Mui(_) => Err(Refusal(format!("{} cannot be reached through a class pointer (MUI objects are host-side)", a.classes.name_of(cl)))),
+        Native::Mui(_) => Err(Refusal(format!("{}: a MUI class is reached through its trap slot (boopsi.rs dispatcher), not dispatch_super", a.classes.name_of(cl)))),
     }
 }
 

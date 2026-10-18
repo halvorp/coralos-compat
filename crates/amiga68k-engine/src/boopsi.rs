@@ -70,16 +70,31 @@ pub fn alloc_object<U: GuestUi>(a: &mut Amiga<U>, kind: Kind) -> Result<u32, Ref
     let e = Refusal::mem("object header");
     for i in (0..BLOCK).step_by(4) { a.mem.write_u32(block + i, 0).map_err(&e)?; }
     a.mem.write_u32(block + O_CLASS, class_addr(kind)).map_err(&e)?;
-    let obj = block + HEADER;
+    track_object(a, kind, block + HEADER, block);
+    Ok(block + HEADER)
+}
+
+/// The host record of an object whose memory the BOOPSI core already allocated (an instance of a program's own subclass of a MUI
+/// class: rootclass made the block, `o_Class` is the subclass). `block` 0 = the BOOPSI core owns the memory.
+pub fn adopt_object<U: GuestUi>(a: &mut Amiga<U>, kind: Kind, obj: u32) { track_object(a, kind, obj, 0); }
+
+fn track_object<U: GuestUi>(a: &mut Amiga<U>, kind: Kind, obj: u32, block: u32) {
     let ext = match kind { Kind::Window => Ext::Win { native: None, content: (0, 0) }, Kind::Text => Ext::Text { label: false }, Kind::List => Ext::List(Default::default()), _ => Ext::None };
     a.objects.map.insert(obj, Obj { kind, block, attrs: BTreeMap::new(), strs: BTreeMap::new(), arrs: BTreeMap::new(), bufs: BTreeMap::new(), children: Vec::new(), parent: None, notifies: Vec::new(), ext });
-    Ok(obj)
 }
 
 /// Forget `obj` (already unlinked and torn down) and give its block back.
 pub fn free_object<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> {
     let o = a.objects.map.remove(&obj).ok_or_else(|| Refusal(format!("free object {obj:#x}: not an object")))?;
     for (addr, size) in o.bufs.into_values() { let _ = a.heap.free(addr, size); }
+    if o.block == 0 {
+        // An instance of a program's subclass: the memory is rootclass's (OM_DISPOSE of the root class does exactly this).
+        if let Some(rec) = a.classes.objs.remove(&obj) {
+            crate::iclass::count_object(a, rec.class, false)?;
+            a.heap.free(rec.block, rec.size).map_err(|e| Refusal(format!("free object: {e}")))?;
+        }
+        return Ok(());
+    }
     a.heap.free(o.block, BLOCK).map_err(|e| Refusal(format!("free object: {e}")))
 }
 
@@ -94,7 +109,7 @@ fn dispatcher<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Ref
         let id = a.mem.read_u32(msg).unwrap_or(0);
         return Ok(format!("[boopsi] {} method {id:#x} on {obj:#x} -> {r:#x}", a.classes.name_of(cl)));
     }
-    crate::mui::dispatch(a, cpu, obj, msg)
+    crate::mui::dispatch(a, cpu, cl, obj, msg)
 }
 
 /// intuition NewObjectA(a0 = class pointer (must be NULL), a1 = public class name, a2 = tags).

@@ -334,6 +334,7 @@ pub const MUIM_Popstring_Close: u32 = 0x8042dc52;
 pub const MUIM_Set: u32 = 0x8042549a;
 pub const MUIM_SetUData: u32 = 0x8042c920;
 pub const MUIM_SetUDataOnce: u32 = 0x8042ca19;
+pub const MUIM_Setup: u32 = 0x80428354;
 pub const MUIM_Window_AddEventHandler: u32 = 0x804203b7;
 pub const MUIM_Window_GetMenuCheck: u32 = 0x80420414;
 pub const MUIM_Window_GetMenuState: u32 = 0x80420d2f;

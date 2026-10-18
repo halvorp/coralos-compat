@@ -152,3 +152,27 @@ fn a_zune_screen_grabber_fills_its_native_list_through_its_own_display_hook_and_
     assert!(a.refused.is_empty(), "{:?}", a.refused);
 }
 const MUIV_OFF: u32 = u32::MAX; // MUIV_List_Active_Off
+
+#[test]
+fn the_zune_notify_demo_runs_the_notify_class_through_set_get_and_a_self_notification() {
+    // mui_notify1 checks the Notify class itself and prints "(should be N)" next to every value: set/get of MUIA_UserData and a MUIM_Notify
+    // whose follow-up is MUIM_Set on the object itself. Its last line expects 14 (a set to the SAME UserData value not notifying), but
+    // Zune's Notify class (AROS workbench/libs/muimaster/classes/notify.c, OM_SET -> check_notify for every tag, TrigVal EveryTime) notifies
+    // on every set, so the binary built against it prints 19 there: the engine follows the Zune code, not the demo's comment. (Not yet
+    // confirmed against the Copperline oracle: tests/oracle/README.md.)
+    let Ok(file) = std::fs::read(format!("{ROOT}/aros-m68k/sys/Demos/Zune/mui_notify1")) else { eprintln!("SKIPPED: mui_notify1 not present (see docs/CORPUS.md)"); return };
+    let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    load(&mut a, "SYS:", std::path::Path::new(&format!("{ROOT}/aros-m68k/mini")));
+    a.fs.vol.assign("LIBS", "SYS:Libs");
+    let r = a.run_hunk(&file, 20_000_000).unwrap();
+    assert!(r.stats.halted && a.refused.is_empty(), "{:?}", a.refused);
+    let out = String::from_utf8_lossy(&a.console.stdout).into_owned();
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(lines[0].starts_with("new Notify object = "), "{out}");
+    assert_eq!(&lines[1..], ["object UserData = 21 (should be 21)", "MUIM_Notify OK", "id = 12 (should be 12)", "id = 19 (should be 19) after notification", "id = 19 (should be 14) after notification"], "{out}");
+    assert!(a.objects.map.is_empty(), "MUI_DisposeObject freed the object");
+    // NEGATIVE CONTROL: the same program with the AROS Libs absent cannot even open muimaster.library, and prints none of it.
+    let mut bare = Amiga::new(RecordingGuestUi::new()).unwrap();
+    let _ = bare.run_hunk(&file, 20_000_000);
+    assert!(!String::from_utf8_lossy(&bare.console.stdout).contains("should be"), "{:?}", bare.console.stdout);
+}

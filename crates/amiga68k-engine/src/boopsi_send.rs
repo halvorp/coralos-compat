@@ -49,7 +49,11 @@ pub fn finish_gadget<U: GuestUi>(msg: u32, gi: u32, g: u32) -> Cont<U> {
     })
 }
 
-fn is_mui<U: GuestUi>(a: &Amiga<U>, obj: u32) -> bool { a.objects.map.contains_key(&obj) }
+/// A MUI object of a NATIVE MUI class (host-side). An instance of a program's own subclass of a MUI class is sent its methods through
+/// the class dispatcher like any BOOPSI object; the native half is reached by its `DoSuperMethod`.
+fn is_mui<U: GuestUi>(a: &Amiga<U>, obj: u32) -> bool {
+    a.objects.map.contains_key(&obj) && a.classes.class_of(obj).and_then(|c| a.classes.recs.get(&c)).map_or(true, |r| matches!(r.native, Some(Native::Mui(_))))
+}
 
 fn live_class<U: GuestUi>(a: &Amiga<U>, obj: u32, what: &str) -> Result<u32, Refusal> {
     a.classes.class_of(obj).ok_or_else(|| Refusal(format!("{what}: {obj:#x} is not a BOOPSI object")))

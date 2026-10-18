@@ -71,7 +71,7 @@ pub fn pump<U: GuestUi>(a: &mut Amiga<U>, app: u32) -> Result<(), Refusal> {
                 if a.objects.map.contains_key(&win) { object::set_attr(a, win, MUIA_Window_MenuAction, user)?; }
                 if user != 0 { return_id(a, app, user)?; }
             },
-            Inbound::Push { dest, id, args } => if a.objects.map.contains_key(&dest) { super::method(a, dest, id, &args)?; },
+            Inbound::Push { dest, id, args } => if a.objects.map.contains_key(&dest) { super::notify::send(a, dest, id, &args)?; },
             Inbound::Intent { obj, intent } => if a.objects.map.contains_key(&obj) { input::apply(a, obj, &intent)?; },
         }
     }

@@ -7,11 +7,11 @@ use super::classes::Kind;
 use super::hooks::{After, HookCall, Msg};
 use super::ids_gen::*;
 use super::{app, attrs, list, notify, object};
+use crate::boopsi_ids::OM_GET;
 use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 
 /// intuition/classusr.h.
-pub const OM_GET: u32 = 0x104;
 pub const OM_ADDMEMBER: u32 = 0x109;
 pub const OM_REMMEMBER: u32 = 0x10A;
 
@@ -40,15 +40,7 @@ fn bad_kind(kind: Kind, id: u32) -> Refusal { Refusal(format!("MUI {kind:?} clas
 
 /// A host or guest method call on `obj`: `args` are the longwords after the method id.
 pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> Result<u32, Refusal> {
-    let Some(kind) = a.objects.kind(obj) else {
-        // A BOOPSI object of the program's own class (a notification's destination): its dispatcher runs as a guest call, with
-        // A0 = class, A2 = object, A1 = the message (method id first) -- the call intuition's DoMethod makes.
-        let cl = a.classes.class_of(obj).ok_or_else(|| Refusal(format!("DoMethod: {obj:#x} is not a MUI object")))?;
-        let mut msg = alloc::vec![id];
-        msg.extend_from_slice(args);
-        a.objects.hooks.push_back(HookCall { hook: cl, obj, msg: Msg::Params(msg), after: After::Nothing });
-        return Ok(0);
-    };
+    let kind = a.objects.kind(obj).ok_or_else(|| Refusal(format!("DoMethod: {obj:#x} is not a MUI object")))?;
     let arg = |i: usize| args.get(i).copied().ok_or_else(|| Refusal(format!("{}: missing argument {i}", attrs::method_name(id))));
     match id {
         MUIM_Notify => notify::add(a, obj, args),

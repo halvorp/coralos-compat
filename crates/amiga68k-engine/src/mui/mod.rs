@@ -12,6 +12,7 @@
 pub mod app;
 pub mod attrs;
 pub mod classes;
+mod custom;
 pub mod hooks;
 mod ids_gen;
 mod input;
@@ -34,13 +35,15 @@ use guestui_abi::{GuestUi, GuestUiEvent};
 use retro_m68k::Cpu;
 
 pub use ids_gen::*;
-pub use methods::{method, OM_ADDMEMBER, OM_GET, OM_REMMEMBER};
+pub use methods::{method, OM_ADDMEMBER, OM_REMMEMBER};
 pub use object::{dispose, get_attr, set_attr, set_attr_quiet};
 pub use win::native_controls;
 
 const LVO_MUI_NEW_OBJECT_A: i32 = -30;
 const LVO_MUI_DISPOSE_OBJECT: i32 = -36;
 const LVO_MUI_MAKE_OBJECT_A: i32 = -120;
+const LVO_MUI_CREATE_CUSTOM_CLASS: i32 = -108;
+const LVO_MUI_DELETE_CUSTOM_CLASS: i32 = -114;
 
 /// muimaster.library with the functions the engine bridges; every other vector stays a named refusal.
 pub fn library<U: GuestUi>(base: u32) -> LibraryBuilder<U> {
@@ -48,6 +51,8 @@ pub fn library<U: GuestUi>(base: u32) -> LibraryBuilder<U> {
         .func(LVO_MUI_NEW_OBJECT_A, "MUI_NewObjectA", mui_new_object_a::<U>)
         .func(LVO_MUI_DISPOSE_OBJECT, "MUI_DisposeObject", mui_dispose_object::<U>)
         .func(LVO_MUI_MAKE_OBJECT_A, "MUI_MakeObjectA", mui_make_object_a::<U>)
+        .func(LVO_MUI_CREATE_CUSTOM_CLASS, "MUI_CreateCustomClass", custom::create_custom_class::<U>)
+        .func(LVO_MUI_DELETE_CUSTOM_CLASS, "MUI_DeleteCustomClass", custom::delete_custom_class::<U>)
 }
 
 /// Create the object of public class `name` from the tag list at `tags_at`.
@@ -81,8 +86,9 @@ fn mui_make_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
 }
 
 /// The shared class dispatcher's MUI branch: a guest `DoMethod(obj, ...)` with the message at `msg`.
-pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, obj: u32, msg: u32) -> Result<String, Refusal> {
+pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, cl: u32, obj: u32, msg: u32) -> Result<String, Refusal> {
     let id = a.mem.read_u32(msg).map_err(Refusal::mem("DoMethod message"))?;
+    if let Some(r) = custom::om_method(a, cl, obj, id, msg)? { hooks::after_call(a, cpu, r)?; return Ok(format!("[boopsi] {} method {id:#x} on {obj:#x} -> {r:#x}", a.classes.name_of(cl))); }
     if id == MUIM_Application_Execute && a.objects.kind(obj) == Some(classes::Kind::Application) {
         let next = app::execute(a, obj)?;
         crate::guest_call::start(a, cpu, next)?;

@@ -299,3 +299,17 @@ fn dispose_tree<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> {
     let r = boopsi::free_object(a, obj);
     if first.is_ok() { r } else { first }
 }
+
+/// The MUI half of an object the BOOPSI core made for a program's own subclass: its tags are applied like `MUI_NewObjectA`'s.
+pub(crate) fn init_adopted<U: GuestUi>(a: &mut Amiga<U>, obj: u32, kind: Kind, tags: &[(u32, u32)]) -> Result<(), Refusal> {
+    let r = init(a, obj, kind, tags);
+    if r.is_err() { for &(tag, data) in tags { if attrs::adopts(kind, tag) && a.objects.map.get(&data).is_some_and(|c| c.parent.is_none()) { let _ = dispose_tree(a, data); } } }
+    r
+}
+
+/// `OM_DISPOSE` reaching the native part of a subclass instance: the tree below it goes (its children's own dispatchers are not
+/// sent OM_DISPOSE: only the object the program disposed runs its destructor), and it leaves its parent.
+pub(crate) fn dispose_adopted<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> {
+    if let Some(p) = a.objects.map.get(&obj).and_then(|o| o.parent) { if let Some(po) = a.objects.map.get_mut(&p) { po.children.retain(|&c| c != obj); } }
+    dispose_tree(a, obj)
+}

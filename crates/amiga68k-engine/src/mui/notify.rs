@@ -3,6 +3,7 @@ use alloc::format;
 use alloc::vec::Vec;
 use super::classes::Kind;
 use super::ids_gen::*;
+use super::hooks::{After, HookCall, Msg};
 use super::{method, object::ancestor};
 use crate::boopsi::Notify;
 use crate::{machine::Amiga, Refusal};
@@ -45,10 +46,22 @@ pub fn trigger<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, val: u32) -> R
     for n in hits {
         let r = resolve(a, obj, n.dest).and_then(|dest| {
             let args: Vec<u32> = n.params[1..].iter().map(|&p| match p { MUIV_TriggerValue => val, MUIV_NotTriggerValue => (val == 0) as u32, p => p }).collect();
-            method(a, dest, n.params[0], &args).map(|_| ())
+            send(a, dest, n.params[0], &args).map(|_| ())
         });
         if result.is_ok() { result = r; }
     }
     a.objects.depth -= 1;
     result
+}
+
+/// Send method `id` to `dest` the way MUI's own notification does: an object of a program's OWN class (a BOOPSI object, or a MUI
+/// object of a subclass) is sent it through the class dispatcher, as a guest call with A0 = class, A2 = object, A1 = the message
+/// (method id first); a plain MUI object's method runs here.
+pub fn send<U: GuestUi>(a: &mut Amiga<U>, dest: u32, id: u32, args: &[u32]) -> Result<u32, Refusal> {
+    let guest_class = a.classes.class_of(dest).filter(|c| a.classes.recs.get(c).is_some_and(|r| r.native.is_none()));
+    let Some(cl) = guest_class else { return method(a, dest, id, args) };
+    let mut msg = alloc::vec![id];
+    msg.extend_from_slice(args);
+    a.objects.hooks.push_back(HookCall { hook: cl, obj: dest, msg: Msg::Params(msg), after: After::Nothing });
+    Ok(0)
 }
