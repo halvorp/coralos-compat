@@ -1,0 +1,14 @@
+[package]
+name = "macppc-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Classic Mac OS PowerPC personality (plumbing): CFM instantiation of PEF fragments, import binding by symbol name onto the mac68k Toolbox handlers (Mixed Mode seam)"
+
+[dependencies]
+retro-common = { path = "../retro-common" }
+retro-guest-mem = { path = "../retro-guest-mem" }
+retro-pef = { path = "../retro-pef" }
+retro-resfork = { path = "../retro-resfork" }
+mac68k-engine = { path = "../mac68k-engine" }
+guestui-abi = { path = "../guestui-abi" }

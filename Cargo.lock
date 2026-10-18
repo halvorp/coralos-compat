@@ -46,6 +46,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "macppc-engine"
+version = "0.1.0"
+dependencies = [
+ "guestui-abi",
+ "mac68k-engine",
+ "retro-common",
+ "retro-guest-mem",
+ "retro-pef",
+ "retro-resfork",
+]
+
+[[package]]
 name = "retro-common"
 version = "0.1.0"
 dependencies = [
