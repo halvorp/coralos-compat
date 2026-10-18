@@ -149,3 +149,13 @@ pub fn get_program_name<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
 pub fn delay<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     Ok(format!("[dos] Delay {} ticks (not modelled: returns at once)", cpu.dreg(1)))
 }
+
+pub const LVO_IS_INTERACTIVE: i32 = -216;
+
+/// IsInteractive(d1 = file) -> DOSTRUE for the console streams (a CLI window is interactive), FALSE otherwise.
+pub fn is_interactive<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let fh = cpu.dreg(1);
+    let yes = fh == STDIN_FH >> 2 || fh == STDOUT_FH >> 2;
+    cpu.set_d0(if yes { DOSTRUE } else { 0 });
+    Ok(format!("[dos] IsInteractive {fh:#x} -> {yes}"))
+}

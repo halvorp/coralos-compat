@@ -70,6 +70,8 @@ pub struct Amiga<U: GuestUi> {
     pub engine_msgs: BTreeMap<u32, bool>,
     /// The running guest's CPU context (run.rs).
     pub(crate) ctx: Option<retro_m68k::CpuContext>,
+    /// exec memory pools: handle -> (requirements, live blocks address -> size).
+    pub pools: BTreeMap<u32, (u32, BTreeMap<u32, u32>)>,
     next_lib_base: u32,
 }
 
@@ -81,7 +83,7 @@ impl<U: GuestUi> Amiga<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(),
-            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None,
+            waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(),
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
             .func(exec::LVO_OPEN_LIBRARY, "OpenLibrary", exec::open_library::<U>)
@@ -98,6 +100,10 @@ impl<U: GuestUi> Amiga<U> {
             .func(memory::LVO_PERMIT, "Permit", memory::permit::<U>)
             .func(memory::LVO_SET_SIGNAL, "SetSignal", memory::set_signal::<U>)
             .func(memory::LVO_STACK_SWAP, "StackSwap", memory::stack_swap::<U>)
+            .func(memory::LVO_CREATE_POOL, "CreatePool", memory::create_pool::<U>)
+            .func(memory::LVO_DELETE_POOL, "DeletePool", memory::delete_pool::<U>)
+            .func(memory::LVO_ALLOC_POOLED, "AllocPooled", memory::alloc_pooled::<U>)
+            .func(memory::LVO_FREE_POOLED, "FreePooled", memory::free_pooled::<U>)
             .func(ports::LVO_ALLOC_SIGNAL, "AllocSignal", ports::alloc_signal::<U>)
             .func(ports::LVO_FREE_SIGNAL, "FreeSignal", ports::free_signal::<U>)
             .func(ports::LVO_CREATE_MSG_PORT, "CreateMsgPort", ports::create_msg_port::<U>)
@@ -132,6 +138,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(dos::LVO_CLI, "Cli", dos::cli::<U>)
             .func(dos::LVO_GET_PROGRAM_NAME, "GetProgramName", dos::get_program_name::<U>)
             .func(dos::LVO_PUT_STR, "PutStr", dos::put_str::<U>)
+            .func(dos::LVO_IS_INTERACTIVE, "IsInteractive", dos::is_interactive::<U>)
             .func(rdargs::LVO_READ_ARGS, "ReadArgs", rdargs::read_args::<U>)
             .func(rdargs::LVO_FREE_ARGS, "FreeArgs", rdargs::free_args::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;

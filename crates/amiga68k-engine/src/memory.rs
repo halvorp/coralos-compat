@@ -4,6 +4,7 @@
 //! (The heap itself is retro_guest_mem::heap, shared with the other engines.) Its bookkeeping lives HOST-side (the guest cannot corrupt it): a first-fit free list and the set of live
 //! blocks. A FreeMem of an address this heap never returned, or with a size other than the one allocated, is a named
 //! refusal, not a silent corruption. One task only: Forbid/Permit are counted, not enforced.
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
 use alloc::format;
@@ -139,4 +140,59 @@ pub fn stack_swap<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     a.mem.write_u32(sss + 8, old_sp + 4).map_err(m("stk_Pointer"))?; // the caller's SP once the call has returned
     cpu.set_areg(7, new_ptr - 4);
     Ok(format!("[exec] StackSwap -> [{new_lower:#x}, {new_upper:#x}] sp={:#x}", new_ptr - 4))
+}
+
+pub const LVO_CREATE_POOL: i32 = -696;
+pub const LVO_DELETE_POOL: i32 = -702;
+pub const LVO_ALLOC_POOLED: i32 = -708;
+pub const LVO_FREE_POOLED: i32 = -714;
+/// A pool handle is a small guest block (programs only pass it back); its blocks are tracked host-side.
+const POOL_HANDLE_SIZE: u32 = 16;
+
+/// CreatePool(d0 = requirements, d1 = puddleSize, d2 = threshSize) -> a pool, or NULL. Puddles are not modelled:
+/// every AllocPooled is its own heap block, which is what a pool's caller can observe (an address, freed by
+/// FreePooled or all at once by DeletePool).
+pub fn create_pool<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let req = cpu.dreg(0);
+    let pool = a.heap.alloc(POOL_HANDLE_SIZE).unwrap_or(0);
+    if pool != 0 { a.pools.insert(pool, (req, BTreeMap::new())); }
+    cpu.set_d0(pool);
+    Ok(format!("[exec] CreatePool req={req:#x} puddle={} thresh={} -> {pool:#x}", cpu.dreg(1), cpu.dreg(2)))
+}
+
+/// AllocPooled(a0 = pool, d0 = size) -> a block or NULL; MEMF_CLEAR from the pool's requirements.
+pub fn alloc_pooled<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (pool, size) = (cpu.areg(0), cpu.dreg(0));
+    let req = a.pools.get(&pool).map(|p| p.0).ok_or_else(|| Refusal(format!("AllocPooled: {pool:#x} is not a pool")))?;
+    let at = if size == 0 { None } else { a.heap.alloc(size) };
+    if let Some(p) = at {
+        if req & MEMF_CLEAR != 0 { zero(a, p, size)?; }
+        if let Some(pl) = a.pools.get_mut(&pool) { pl.1.insert(p, size); }
+    }
+    cpu.set_d0(at.unwrap_or(0));
+    Ok(format!("[exec] AllocPooled {pool:#x} size={size} -> {:#x}", at.unwrap_or(0)))
+}
+
+/// FreePooled(a0 = pool, a1 = block, d0 = size). A block of another pool, or a wrong size, is refused by name.
+pub fn free_pooled<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (pool, at, size) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0));
+    let pl = a.pools.get_mut(&pool).ok_or_else(|| Refusal(format!("FreePooled: {pool:#x} is not a pool")))?;
+    match pl.1.get(&at) {
+        Some(&s) if s == size => { pl.1.remove(&at); }
+        Some(&s) => return Err(Refusal(format!("FreePooled: {at:#x} is a {s}-byte block, freed as {size}"))),
+        None => return Err(Refusal(format!("FreePooled: {at:#x} is not a block of pool {pool:#x}"))),
+    }
+    a.heap.free(at, size).map_err(|e| Refusal(format!("FreePooled: {e}")))?;
+    Ok(format!("[exec] FreePooled {pool:#x} {at:#x} size={size}"))
+}
+
+/// DeletePool(a0 = pool, or NULL): every block still in it goes back, then the pool.
+pub fn delete_pool<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let pool = cpu.areg(0);
+    if pool == 0 { return Ok("[exec] DeletePool NULL".into()); }
+    let (_, blocks) = a.pools.remove(&pool).ok_or_else(|| Refusal(format!("DeletePool: {pool:#x} is not a pool")))?;
+    let n = blocks.len();
+    for (at, size) in blocks { a.heap.free(at, size).map_err(|e| Refusal(format!("DeletePool: {e}")))?; }
+    a.heap.free(pool, POOL_HANDLE_SIZE).map_err(|e| Refusal(format!("DeletePool: {e}")))?;
+    Ok(format!("[exec] DeletePool {pool:#x} ({n} blocks returned)"))
 }
