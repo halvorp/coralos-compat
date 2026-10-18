@@ -68,6 +68,17 @@ fn directory_opus_starts_its_processes_ports_and_windows() {
     let main = &a.sched.tasks[&amiga68k_engine::process::PROCESS];
     assert!(matches!(main.waiting, Some(amiga68k_engine::exec_wait::Waiting::Signals(_))) && main.state == amiga68k_engine::sched::RunState::Wait, "main: {:?} {:?}", main.state, main.waiting);
 
+    // EXPECTATIONS.md item 11: update.module is tried first (absent, both spellings), then the ten modules at version 73, in order.
+    let modules: Vec<String> = a.log.iter().filter_map(|l| l.strip_prefix("[exec] OpenLibrary name=\"")).filter(|l| l.contains(".module\"")).map(|l| l.replace("\" ver=", " ").split(" ->").next().unwrap().to_string()).collect();
+    let expect = ["PROGDIR:Modules/update.module 0", "DOpus5:Modules/update.module 0"].iter().map(|s| s.to_string())
+        .chain(["cleanup", "diskinfo", "filetype", "fixicons", "ftp", "join", "misc", "pathformat", "themes", "xadopus"].iter().map(|m| format!("DOpus5:Modules/{m}.module 73"))).collect::<Vec<_>>();
+    assert_eq!(modules, expect);
+    // Items 8 and 10: FindPort before AddPort, "WORKBENCH" looked for, then DOPUS.1, then REXX.
+    let ports_seq: Vec<&str> = a.log.iter().filter(|l| l.starts_with("[exec] FindPort") || l.starts_with("[exec] AddPort")).map(|l| l.as_str()).collect();
+    assert_eq!(ports_seq.len(), 6, "{ports_seq:?}");
+    assert!(ports_seq[0].contains("\"Directory Opus\" -> NULL") && ports_seq[1].contains("\"WORKBENCH\"") && ports_seq[2].starts_with("[exec] AddPort")
+        && ports_seq[3].contains("\"DOPUS.1\" -> NULL") && ports_seq[4].starts_with("[exec] AddPort") && ports_seq[5].contains("\"REXX\" -> NULL"), "{ports_seq:?}");
+
     // Ports.
     let ports = public_ports(&a);
     assert!(ports.iter().any(|p| p == "Directory Opus") && ports.iter().any(|p| p == "DOPUS.1"), "{ports:?}");
@@ -87,6 +98,14 @@ fn directory_opus_starts_its_processes_ports_and_windows() {
     let frames = a.ui.calls.iter().filter(|c| matches!(c, UiCall::PresentContent { .. })).count();
     assert!(frames >= 10, "{frames} frames");
     let canvas = |w: i32, h: i32| a.ui.canvases.values().find(|(cw, ch, _)| (*cw, *ch) == (w, h)).unwrap_or_else(|| panic!("no {w}x{h} canvas: {:?}", a.ui.canvases.values().map(|c| (c.0, c.1)).collect::<Vec<_>>()));
+    // DOPUS_DUMP=<dir> writes every window canvas as a PPM there, to look at next to tests/oracle/dopus5/screens.
+    if let Ok(dir) = std::env::var("DOPUS_DUMP") {
+        for (id, (w, h, px)) in &a.ui.canvases {
+            let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+            for p in px { out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]); }
+            std::fs::write(format!("{dir}/window{id}-{w}x{h}.ppm"), out).unwrap();
+        }
+    }
     let main_px = &canvas(640, 241).2;
     let lister_px = &canvas(435, 564).2;
     assert!(distinct_pens(main_px) >= 3, "main window canvas is blank ({} colours)", distinct_pens(main_px));
