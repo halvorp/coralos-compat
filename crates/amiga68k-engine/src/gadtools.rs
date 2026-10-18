@@ -10,8 +10,8 @@
 //! ng_TextAttr 12, ng_GadgetID 16, ng_Flags 18, ng_VisualInfo 22, ng_UserData 26.
 use alloc::string::String;
 use alloc::format;
-use crate::{gt_kinds, machine::Amiga, tags, Refusal};
-use guestui_abi::{CallbackToken, ControlModel, GuestRect, GuestUi, UiObjectRef};
+use crate::{gt_kinds, gt_kinds_rows, machine::Amiga, tags, Refusal};
+use guestui_abi::{GuestRect, GuestUi, UiObjectRef};
 use retro_m68k::Cpu;
 
 pub const LVO_CREATE_GADGET_A: i32 = -30;
@@ -86,7 +86,7 @@ pub fn create_gadget<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
     let user = a.mem.read_u32(ng + 26).map_err(&e)?;
     let t = tags::walk(&a.mem, cpu.areg(2))?;
     let (state, text) = gt_kinds::state_from_tags(a, kind, &t)?;
-    let framed = tags::get(&t, GTTX_BORDER).unwrap_or(0) != 0;
+    let framed = tags::get(&t, if kind == gt_kinds::NUMBER_KIND { gt_kinds_rows::GTNM_BORDER } else { GTTX_BORDER }).unwrap_or(0) != 0;
     let g = new_gadget(a, GadgetInfo { kind, rect, label: label.clone(), text: text.clone(), framed, state })?;
     let made = (|| {
         a.mem.write_u16(g + 38, id).map_err(Refusal::mem("Gadget.GadgetID"))?;
@@ -115,7 +115,7 @@ pub fn attach<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, first
         if n > 4096 { return Err(Refusal("gadget list longer than 4096 (cyclic NextGadget?)".into())); }
         if let Some(info) = a.gadgets.get(&g).cloned() {
             if info.kind != CONTEXT {
-                let model = ControlModel { kind: gt_kinds::control_kind(&info), label: info.label.clone(), rect: info.rect, enabled: !info.state.disabled, token: CallbackToken(g as u64) };
+                let model = gt_kinds::control_model(&info, g);
                 a.gt_ctls.sync(&mut a.ui, Some(native), u64::from(g), win, Some(model)).map_err(Refusal::ui)?;
             }
         }

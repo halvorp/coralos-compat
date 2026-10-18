@@ -23,3 +23,4 @@ pub fn run_refusing(a: &mut Amiga<RecordingGuestUi>, blob: &[u8]) -> Vec<u32> {
     assert!(r.stats.halted && r.stats.bus_faults == 0, "{:?} {:?}\n{:#?}", r.stats, a.refused, a.log);
     (0..128).map(|i| a.mem.read_u32(RES + 4 * i).unwrap()).collect()
 }
+pub mod gtscript;

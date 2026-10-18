@@ -7,8 +7,8 @@
 //! | INTEGER_KIND (GTIN_Number, GTIN_MaxChars) | `String` (digits) | the same, plus `StringInfo.LongInt` |
 //! | SLIDER_KIND (GTSL_Min / Max / Level) | `Slider` | host-side level (read back with GT_GetGadgetAttrsA) |
 //!
-//! CYCLE_KIND and MX_KIND (a choice among N labels), LISTVIEW, PALETTE, SCROLLER and NUMBER stay NAMED refusals:
-//! `ControlKind` has no choice-list, list or number control and this lane does not invent one.
+//! CYCLE_KIND, MX_KIND, LISTVIEW_KIND, SCROLLER_KIND and NUMBER_KIND (`Choice`, `List`, `ScrollBar`, `Label`) are in
+//! [`crate::gt_kinds_rows`]; only PALETTE_KIND stays a NAMED refusal (guestui-abi has no swatch role).
 //!
 //! Native events come back through [`control_changed`]: a Button press, a Checkbox toggle, a String commit and a Slider
 //! release become IDCMP_GADGETUP with IAddress = the guest Gadget (Code = checked / level), after the guest-visible
@@ -21,14 +21,21 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
-use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, idcmp, machine::Amiga, memory, run::Delivered, tags, translate::{self, gadtools}, Refusal};
-use guestui_abi::{ControlKind, ControlValue, GuestUi, Intent};
+use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, gt_kinds_rows::{self as rows, RowState}, idcmp, machine::Amiga, memory, run::Delivered, tags, translate::{self, gadtools}, Refusal};
+use guestui_abi::{CallbackToken, ControlKind, ControlModel, ControlValue, GuestUi, Intent};
 use retro_m68k::Cpu;
 
 pub const LVO_GT_GET_GADGET_ATTRS_A: i32 = -174;
 
+/// Kind numbers: AROS include/libraries/gadtools.h.
 pub const CHECKBOX_KIND: u32 = 2;
 pub const INTEGER_KIND: u32 = 3;
+pub const LISTVIEW_KIND: u32 = 4;
+pub const MX_KIND: u32 = 5;
+pub const NUMBER_KIND: u32 = 6;
+pub const CYCLE_KIND: u32 = 7;
+pub const PALETTE_KIND: u32 = 8;
+pub const SCROLLER_KIND: u32 = 9;
 pub const SLIDER_KIND: u32 = 11;
 pub const STRING_KIND: u32 = 12;
 
@@ -64,19 +71,18 @@ pub struct KindState {
     pub string_info: u32,
     pub buffer: u32,
     pub allocs: Vec<(u32, u32)>,
+    /// The state of the row/position kinds (gt_kinds_rows.rs).
+    pub rows: RowState,
 }
 
-pub fn bridged(kind: u32) -> bool { matches!(kind, TEXT_KIND | BUTTON_KIND | CHECKBOX_KIND | INTEGER_KIND | SLIDER_KIND | STRING_KIND) }
+pub fn bridged(kind: u32) -> bool {
+    matches!(kind, TEXT_KIND | BUTTON_KIND | CHECKBOX_KIND | INTEGER_KIND | SLIDER_KIND | STRING_KIND) || rows::owns(kind)
+}
 
 /// Why a kind is refused, by name.
 pub fn refusal(kind: u32) -> Refusal {
     let why = match kind {
-        5 => "MX_KIND: guestui ControlKind has no radio-group (choice among N labels) control",
-        7 => "CYCLE_KIND: guestui ControlKind has no cycle (choice among N labels) control",
-        4 => "LISTVIEW_KIND: guestui ControlKind has no list control",
-        8 => "PALETTE_KIND: guestui ControlKind has no palette control",
-        9 => "SCROLLER_KIND: guestui ControlKind has no scrollbar control",
-        6 => "NUMBER_KIND: guestui ControlKind has no number display (TEXT_KIND is bridged)",
+        PALETTE_KIND => "PALETTE_KIND: guestui-abi has no swatch role, so palette gadgets are refused by name",
         _ => "no such GadTools kind is bridged",
     };
     Refusal(format!("CreateGadgetA: kind {kind} not bridged: {why}"))
@@ -94,7 +100,7 @@ fn truncate(s: &str, n: u32) -> String {
 }
 
 /// The kind's state and its initial text (TEXT: GTTX_Text, STRING: GTST_String, INTEGER: GTIN_Number) from the tags.
-pub fn state_from_tags<U: GuestUi>(a: &Amiga<U>, kind: u32, t: &[(u32, u32)]) -> Result<(KindState, String), Refusal> {
+pub fn state_from_tags<U: GuestUi>(a: &mut Amiga<U>, kind: u32, t: &[(u32, u32)]) -> Result<(KindState, String), Refusal> {
     let get = |tag| tags::get(t, tag);
     let mut st = KindState { disabled: get(GA_DISABLED).unwrap_or(0) != 0, ..Default::default() };
     let mut text = String::new();
@@ -115,9 +121,15 @@ pub fn state_from_tags<U: GuestUi>(a: &Amiga<U>, kind: u32, t: &[(u32, u32)]) ->
             text = (get(GTIN_NUMBER).unwrap_or(0) as i32).to_string();
             if text.len() as u32 > st.max_chars { return Err(Refusal(format!("CreateGadgetA: GTIN_Number {text} does not fit GTIN_MaxChars {}", st.max_chars))); }
         }
+        k if rows::owns(k) => st.rows = rows::from_tags(a, k, t, &mut text)?,
         _ => {}
     }
     Ok((st, text))
+}
+
+/// The native control model of gadget `g` (what a window gets when the chain is attached, and what a change re-projects).
+pub fn control_model(info: &GadgetInfo, g: u32) -> ControlModel {
+    ControlModel { kind: control_kind(info), label: info.label.clone(), rect: info.rect, enabled: !info.state.disabled, token: CallbackToken(u64::from(g)) }
 }
 
 /// The native control a gadget is.
@@ -128,6 +140,7 @@ pub fn control_kind(info: &GadgetInfo) -> ControlKind {
         CHECKBOX_KIND => ControlKind::Checkbox { checked: s.checked },
         STRING_KIND | INTEGER_KIND => ControlKind::String { text: info.text.clone(), max_len: s.max_chars },
         SLIDER_KIND => ControlKind::Slider { min: s.min, max: s.max, value: s.level },
+        k if rows::owns(k) => rows::control_kind(info),
         _ => ControlKind::Button,
     }
 }
@@ -190,6 +203,8 @@ fn normalize(info: &GadgetInfo, v: ControlValue) -> Result<ControlValue, Refusal
         }
         (SLIDER_KIND, ControlValue::Level(l)) if (s.min..=s.max).contains(&l) => Ok(ControlValue::Level(l)),
         (SLIDER_KIND, ControlValue::Level(l)) => Err(Refusal(format!("SLIDER_KIND: level {l} outside {}..={}", s.min, s.max))),
+        (CYCLE_KIND | MX_KIND, c @ ControlValue::Choice(_)) | (LISTVIEW_KIND, c @ ControlValue::Rows { .. }) | (SCROLLER_KIND, c @ ControlValue::Scroll { .. }) => Ok(c),
+        (NUMBER_KIND, t @ ControlValue::Text(_)) => Ok(t),
         (k, v) => Err(Refusal(format!("a {v:?} value cannot be held by a kind-{k} gadget"))),
     }
 }
@@ -203,6 +218,7 @@ fn store<U: GuestUi>(a: &mut Amiga<U>, g: u32, v: &ControlValue) -> Result<(), R
         ControlValue::Level(l) => info.state.level = *l,
         ControlValue::Pressed | ControlValue::Scroll { .. } | ControlValue::Cancelled | ControlValue::Choice(_) | ControlValue::Rows { .. } => {}
     }
+    rows::store(info, v);
     let (kind, st) = (info.kind, info.state.clone());
     match v {
         ControlValue::Checked(b) => set_selected(a, g, *b),
@@ -211,23 +227,33 @@ fn store<U: GuestUi>(a: &mut Amiga<U>, g: u32, v: &ControlValue) -> Result<(), R
     }
 }
 
-/// A native control changed: update the gadget's state and post IDCMP_GADGETUP (IAddress = the gadget).
+/// A native control changed: update the gadget's state and post the message the kind's row names (IAddress = the gadget).
+/// A row with no message (a list scrolled by the user) only updates the state.
 pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32, intent: Intent) -> Result<Delivered, Refusal> {
     let info = a.gadgets[&g].clone();
-    let row = translate::lookup(gadtools::TABLE, &control_kind(&info), &intent)?;
-    let value = match intent {
-        Intent::SetValue(v) => Some(normalize(&info, v)?),
-        Intent::CommitText(t) => Some(normalize(&info, ControlValue::Text(t))?),
-        _ => None,
+    let row = translate::lookup(gadtools::table_for(info.kind), &control_kind(&info), &intent)?;
+    let value = match rows::intent_value(&info, &intent)? {
+        Some(v) => Some(v),
+        None => match intent {
+            Intent::SetValue(v) => Some(normalize(&info, v)?),
+            Intent::CommitText(t) => Some(normalize(&info, ControlValue::Text(t))?),
+            _ => None,
+        },
     };
-    let (class, code) = translate::message(row, 0, value.as_ref()).ok_or_else(|| Refusal("deliver: a GadTools row sent no message".into()))?;
-    let changed = matches!(&value, Some(ControlValue::Level(l)) if *l != info.state.level);
-    let class = gadtools::filter_class(class, info.kind, changed);
-    let msg = if idcmp::subscribed(a, win, class)? { Some(idcmp::reserve(a)?) } else { None };
+    let posted = translate::message(row, 0, value.as_ref());
+    if posted.is_none() && row.post.is_some() { return Err(Refusal("deliver: a GadTools row sent no message".into())); }
+    let level_changed = matches!(&value, Some(ControlValue::Level(l)) if *l != info.state.level);
+    let changed = level_changed || value.as_ref().is_some_and(|v| rows::moved(&info, v));
+    let class = posted.map(|(c, _)| gadtools::filter_class(c, info.kind, changed));
+    let msg = match class { Some(c) if idcmp::subscribed(a, win, c)? => Some(idcmp::reserve(a)?), _ => None };
     if let Some(v) = &value {
         if let Err(e) = store(a, g, v) { if let Some(m) = msg { let _ = a.heap.free(m, idcmp::INTUIMESSAGE_SIZE); } return Err(e); }
     }
-    match msg { Some(m) => idcmp::queue(a, win, m, class, code, g), None => Ok(Delivered::IgnoredUnsubscribed) }
+    match (msg, posted, class) {
+        (Some(m), Some((_, code)), Some(class)) => idcmp::queue(a, win, m, class, code, g),
+        (_, None, _) => Ok(Delivered::Handled),
+        _ => Ok(Delivered::IgnoredUnsubscribed),
+    }
 }
 
 /// GT_SetGadgetAttrsA(a0 = gadget, a1 = window, a2 = requester, a3 = tags): GTTX_Text (text), GTCB_Checked, GTST_String,
@@ -240,6 +266,17 @@ pub fn set_gadget_attrs<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
     let info = a.gadgets.get(&g).cloned().ok_or_else(|| Refusal(format!("GT_SetGadgetAttrsA: {g:#x} is not a GadTools gadget")))?;
     let (mut changed, mut unsupported) = (String::new(), Vec::new());
     for (tag, data) in t {
+        if rows::owns(info.kind) {
+            let cur = a.gadgets[&g].clone();
+            if let Some(next) = rows::set_attr(a, &cur, tag, data)? {
+                if let Some((win, meta)) = a.gt_ctls.get(u64::from(g)).map(|p| (p.window, p.meta)) {
+                    a.gt_ctls.sync(&mut a.ui, Some(win), u64::from(g), meta, Some(control_model(&next, g))).map_err(Refusal::ui)?;
+                }
+                a.gadgets.insert(g, next);
+                changed += &format!(" {tag:#x}");
+                continue;
+            }
+        }
         let v = match (tag, info.kind) {
             (GTTX_TEXT, TEXT_KIND) => ControlValue::Text(opt_str(a, data, "GTTX_Text")?),
             (GTCB_CHECKED, CHECKBOX_KIND) => ControlValue::Checked(data != 0),
@@ -283,6 +320,7 @@ pub fn get_gadget_attrs<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
             (GTSL_MAX, SLIDER_KIND) => s.max as u32,
             (GTIN_NUMBER, INTEGER_KIND) => number(&info.text)? as u32,
             (GTST_STRING, STRING_KIND) => s.buffer,
+            (t, k) if rows::owns(k) && rows::get_attr(&info, t).is_some() => rows::get_attr(&info, t).unwrap_or(0),
             _ => { a.refused.push(format!("gadtools.library/GT_GetGadgetAttrsA: tag {tag:#x} is not readable on a kind-{} gadget", info.kind)); continue }
         };
         a.mem.write_u32(dest, v).map_err(Refusal::mem("GT_GetGadgetAttrsA destination"))?;
