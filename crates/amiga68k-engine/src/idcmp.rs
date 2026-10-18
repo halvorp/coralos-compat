@@ -38,6 +38,9 @@ const IM_REPLY_PORT: u32 = 14;
 const IM_LENGTH: u32 = 18;
 const IM_CLASS: u32 = 20;
 const IM_CODE: u32 = 24;
+const IM_QUALIFIER: u32 = 26;
+const IM_MOUSE_X: u32 = 32;
+const IM_MOUSE_Y: u32 = 34;
 const IM_IADDRESS: u32 = 28;
 const IM_SECONDS: u32 = 36;
 const IM_MICROS: u32 = 40;
@@ -102,14 +105,23 @@ pub fn subscribed<U: GuestUi>(a: &Amiga<U>, win: u32, class: u32) -> Result<bool
 /// A zeroed message block, not yet visible to the guest.
 pub fn reserve<U: GuestUi>(a: &mut Amiga<U>) -> Result<u32, Refusal> { memory::alloc_zeroed(a, INTUIMESSAGE_SIZE, "deliver: IntuiMessage") }
 
+/// The input-state fields of an IntuiMessage (Qualifier, MouseX, MouseY: window-relative); zero for a gadget message.
+#[derive(Clone, Copy, Default)]
+pub struct Stamp { pub qualifier: u16, pub mouse: (i16, i16) }
+
 /// Fill the reserved `msg` and link it on `win`'s UserPort (signalling the task). Any failure gives the block back.
 pub fn queue<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, code: u16, iaddress: u32) -> Result<Delivered, Refusal> {
-    let r = fill_and_link(a, win, msg, class, code, iaddress);
+    queue_stamped(a, win, msg, class, code, iaddress, Stamp::default())
+}
+
+/// [`queue`] with the input state the message carries.
+pub fn queue_stamped<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, code: u16, iaddress: u32, stamp: Stamp) -> Result<Delivered, Refusal> {
+    let r = fill_and_link(a, win, msg, class, code, iaddress, stamp);
     if r.is_err() { let _ = a.heap.free(msg, INTUIMESSAGE_SIZE); }
     r.map(|()| Delivered::Queued(msg))
 }
 
-fn fill_and_link<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, code: u16, iaddress: u32) -> Result<(), Refusal> {
+fn fill_and_link<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, code: u16, iaddress: u32, stamp: Stamp) -> Result<(), Refusal> {
     let m = Refusal::mem;
     let port = a.mem.read_u32(win + WD_USERPORT).map_err(m("Window.UserPort"))?;
     if port == 0 { return Err(Refusal(format!("deliver: window {win:#x} has no UserPort"))); }
@@ -118,6 +130,9 @@ fn fill_and_link<U: GuestUi>(a: &mut Amiga<U>, win: u32, msg: u32, class: u32, c
     a.mem.write_u16(msg + IM_LENGTH, INTUIMESSAGE_SIZE as u16).map_err(m("mn_Length"))?;
     a.mem.write_u32(msg + IM_CLASS, class).map_err(m("Class"))?;
     a.mem.write_u16(msg + IM_CODE, code).map_err(m("Code"))?;
+    a.mem.write_u16(msg + IM_QUALIFIER, stamp.qualifier).map_err(m("Qualifier"))?;
+    a.mem.write_u16(msg + IM_MOUSE_X, stamp.mouse.0 as u16).map_err(m("MouseX"))?;
+    a.mem.write_u16(msg + IM_MOUSE_Y, stamp.mouse.1 as u16).map_err(m("MouseY"))?;
     a.mem.write_u32(msg + IM_IADDRESS, iaddress).map_err(m("IAddress"))?;
     a.mem.write_u32(msg + IM_SECONDS, (a.clock_us / 1_000_000) as u32).map_err(m("Seconds"))?;
     a.mem.write_u32(msg + IM_MICROS, (a.clock_us % 1_000_000) as u32).map_err(m("Micros"))?;
@@ -156,11 +171,14 @@ pub fn deliver<U: GuestUi>(a: &mut Amiga<U>, ev: GuestUiEvent) -> Result<Deliver
             None => Ok(Delivered::NotForAGuestWindow),
         },
         GuestUiEvent::Pointer { win, x, y, button, phase, .. } => match guest_window(a, win) {
-            Some(_) if !matches!(button, PointerButton::Primary | PointerButton::None) =>
-                Err(Refusal(format!("deliver: a {button:?} pointer button is not bridged (Intuition gadgets use the primary button)"))),
-            Some(w) => crate::boopsi_input::queue(a, w, x, y, phase),
+            Some(w) if matches!(button, PointerButton::Primary | PointerButton::None) && crate::boopsi_input::claims(a, w, x, y, phase)? => crate::boopsi_input::queue(a, w, x, y, phase),
+            Some(w) => crate::content_input::pointer(a, w, x, y, button, phase),
             None => Ok(Delivered::NotForAGuestWindow),
         },
-        ev @ (GuestUiEvent::Resized { .. } | GuestUiEvent::Key { .. }) => Err(Refusal(format!("deliver: {ev:?} not bridged yet"))),
+        GuestUiEvent::Key { win, code, text, modifiers, down } => match guest_window(a, win) {
+            Some(w) => crate::content_input::key(a, w, code, &text, modifiers, down),
+            None => Ok(Delivered::NotForAGuestWindow),
+        },
+        ev @ GuestUiEvent::Resized { .. } => Err(Refusal(format!("deliver: {ev:?} not bridged yet"))),
     }
 }

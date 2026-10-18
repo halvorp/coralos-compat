@@ -34,12 +34,38 @@ pub struct Ptr { pub win: u32, pub owner: u32, pub x: i32, pub y: i32, pub phase
 
 /// Queued pointer events, the gadget that has the pointer (window, gadget), and the trap a blocked Wait sits on.
 #[derive(Default)]
-pub struct Input { pub q: VecDeque<Ptr>, pub active: Option<(u32, u32)>, pub trap_pc: u32, pub wait_trap: BTreeMap<u32, u32> }
+pub struct Input {
+    pub q: VecDeque<Ptr>, pub active: Option<(u32, u32)>, pub trap_pc: u32, pub wait_trap: BTreeMap<u32, u32>,
+    /// Plain content input (content_input.rs): the pointer buttons held per window (IEQUALIFIER_*BUTTON) and the last keyboard modifiers.
+    pub buttons: BTreeMap<u32, u16>, pub modifiers: guestui_abi::Modifiers,
+}
 
 impl Input {
     /// Events waiting for task `t`.
     pub fn pending_for(&self, t: u32) -> bool { self.q.iter().any(|p| p.owner == t) }
     fn pop_for(&mut self, t: u32) -> Option<Ptr> { let i = self.q.iter().position(|p| p.owner == t)?; self.q.remove(i) }
+}
+
+/// The guest-drawn (BOOPSI) gadgets of `win` whose box holds (x, y), in gadget-list order (native controls and disabled gadgets never).
+fn candidates<U: GuestUi>(a: &Amiga<U>, win: u32, x: i32, y: i32) -> Result<Vec<u32>, Refusal> {
+    let mut cands = Vec::new();
+    for g in crate::boopsi_glist::window_gadgets(a, win)? {
+        if a.classes.class_of(g).is_none() || crate::native_gadgets::is_native(a, g) { continue; }
+        if a.mem.read_u16(g + GAD_FLAGS).map_err(Refusal::mem("Gadget.Flags"))? as u32 & GFLG_DISABLED != 0 { continue; }
+        let (l, t, w, h) = gadget_box(a, win, g)?;
+        if x >= l && x < l + w && y >= t && y < t + h { cands.push(g); }
+    }
+    Ok(cands)
+}
+
+/// Does a guest-drawn gadget own this pointer event (it has the pointer already, or a press lands on one)? If not, the event is
+/// the window's own: plain IDCMP_MOUSEBUTTONS / MOUSEMOVE (content_input.rs).
+pub fn claims<U: GuestUi>(a: &Amiga<U>, win: u32, x: i32, y: i32, phase: PointerPhase) -> Result<bool, Refusal> {
+    Ok(match (phase, a.input.active) {
+        (_, Some((w, _))) if w == win => true,
+        (PointerPhase::Down, None) => !candidates(a, win, x, y)?.is_empty(),
+        _ => false,
+    })
 }
 
 /// A pointer event for guest window `win` (idcmp::deliver's arm).
@@ -100,13 +126,7 @@ fn begin<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, wait: (Waiting, u32)) -> R
         let base = Job { win: ev.win, x: ev.x, y: ev.y, phase: ev.phase, cands: Vec::new(), idx: 0, stage: Stage::Hit, g: 0, scratch: 0, gi: 0, wait };
         match (ev.phase, a.input.active) {
             (PointerPhase::Down, None) => {
-                let mut cands = Vec::new();
-                for g in crate::boopsi_glist::window_gadgets(a, ev.win)? {
-                    if a.classes.class_of(g).is_none() || crate::native_gadgets::is_native(a, g) { continue; }
-                    if a.mem.read_u16(g + GAD_FLAGS).map_err(Refusal::mem("Gadget.Flags"))? as u32 & GFLG_DISABLED != 0 { continue; }
-                    let (l, t, w, h) = gadget_box(a, ev.win, g)?;
-                    if ev.x >= l && ev.x < l + w && ev.y >= t && ev.y < t + h { cands.push(g); }
-                }
+                let cands = candidates(a, ev.win, ev.x, ev.y)?;
                 if cands.is_empty() { continue; }
                 return issue(a, Job { g: cands[0], cands, ..base });
             }

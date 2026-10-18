@@ -46,6 +46,7 @@ pub fn close<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusal> {
     let m = Refusal::mem("Window surface");
     let (layer, rp, brp) = (a.mem.read_u32(win + WD_WLAYER).map_err(&m)?, a.mem.read_u32(win + WD_RPORT).map_err(&m)?, a.mem.read_u32(win + WD_BORDER_RPORT).map_err(&m)?);
     a.gfx.present.forget(win);
+    a.input.buttons.remove(&win);
     if let Some(l) = a.gfx.layers.remove(&layer) {
         a.gfx.bitmaps.remove(&l.canvas);
         a.heap.free(l.canvas, BM_SIZE).map_err(|e| Refusal(alloc::format!("CloseWindow canvas: {e}")))?;

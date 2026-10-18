@@ -21,6 +21,7 @@ pub mod boopsi_prop;
 pub mod boopsi_glist;
 pub mod boopsi_ids;
 pub mod boopsi_input;
+pub mod content_input;
 pub mod boopsi_native;
 pub mod boopsi_send;
 pub mod boopsi_strg;
