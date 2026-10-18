@@ -23,6 +23,8 @@ pub use recording::{RecordingGuestUi, UiCall};
 pub trait GuestUi {
     fn open_window(&mut self, model: WindowModel) -> Result<UiObjectRef, UiRefusal>;
     fn close_window(&mut self, win: UiObjectRef) -> Result<(), UiRefusal>;
+    /// The guest retitled the window (Intuition SetWindowTitles).
+    fn set_window_title(&mut self, win: UiObjectRef, title: alloc::string::String) -> Result<(), UiRefusal>;
     /// Replaces the window's menu strip (the plan's `MenuModel`).
     fn set_menu_strip(&mut self, win: UiObjectRef, menu: MenuModel) -> Result<(), UiRefusal>;
     fn clear_menu_strip(&mut self, win: UiObjectRef) -> Result<(), UiRefusal>;

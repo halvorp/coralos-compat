@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use crate::libtable::{write_slot, Dispatch, LibraryBuilder};
-use crate::{devices, dos, exec, exec_wait, gadtools, graphics, intuition, memory, ports, process, rdargs, screen, timer, window, Refusal};
+use crate::{devices, dos, exec, exec_wait, gadtools, graphics, gt_kinds, gt_menus, idcmp, intuition, memory, menu_nav, ports, process, rdargs, screen, timer, window, Refusal};
 use guestui_abi::{GuestUi, UiObjectRef};
 use retro_guest_mem::{GuestMem, DEFAULT_SIZE};
 use retro_hunk::Loaded;
@@ -61,6 +61,9 @@ pub struct Amiga<U: GuestUi> {
     pub rdargs: Vec<(u32, u32, u32, bool)>,
     /// GadTools gadgets by guest address (gadtools.rs).
     pub gadgets: BTreeMap<u32, gadtools::GadgetInfo>,
+    /// Each open window's current menu strip (first Menu), and the blocks of every CreateMenusA result by its first menu.
+    pub menu_strips: BTreeMap<u32, u32>,
+    pub menu_allocs: BTreeMap<u32, Vec<(u32, u32)>>,
     /// What a blocked guest waits for (exec_wait.rs); None = runnable.
     pub waiting: Option<exec_wait::Waiting>,
     /// The virtual clock, microseconds (timer.rs), and the pending TR_ADDREQUEST timers: (deadline, IORequest).
@@ -82,7 +85,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None, pools: BTreeMap::new(),
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)
@@ -148,13 +151,29 @@ impl<U: GuestUi> Amiga<U> {
             .func(window::LVO_CLOSE_WINDOW, "CloseWindow", window::close_window::<U>)
             .func(intuition::LVO_SET_MENU_STRIP, "SetMenuStrip", intuition::set_menu_strip::<U>)
             .func(intuition::LVO_CLEAR_MENU_STRIP, "ClearMenuStrip", intuition::clear_menu_strip::<U>)
+            .func(idcmp::LVO_MODIFY_IDCMP, "ModifyIDCMP", idcmp::modify_idcmp::<U>)
+            .func(menu_nav::LVO_ITEM_ADDRESS, "ItemAddress", menu_nav::item_address::<U>)
+            .func(menu_nav::LVO_ON_MENU, "OnMenu", menu_nav::on_menu::<U>)
+            .func(menu_nav::LVO_OFF_MENU, "OffMenu", menu_nav::off_menu::<U>)
+            .func(menu_nav::LVO_RESET_MENU_STRIP, "ResetMenuStrip", intuition::set_menu_strip::<U>)
+            .func(intuition::LVO_ACTIVATE_WINDOW, "ActivateWindow", intuition::activate_window::<U>)
+            .func(intuition::LVO_WINDOW_TO_FRONT, "WindowToFront", intuition::window_to_front::<U>)
+            .func(intuition::LVO_WINDOW_TO_BACK, "WindowToBack", intuition::window_to_back::<U>)
+            .func(intuition::LVO_SET_WINDOW_TITLES, "SetWindowTitles", intuition::set_window_titles::<U>)
+            .func(intuition::LVO_REFRESH_GADGETS, "RefreshGadgets", intuition::refresh_gadgets::<U>)
+            .func(intuition::LVO_REFRESH_GLIST, "RefreshGList", intuition::refresh_gadgets::<U>)
             .func(screen::LVO_LOCK_PUB_SCREEN, "LockPubScreen", screen::lock_pub_screen::<U>)
             .func(screen::LVO_UNLOCK_PUB_SCREEN, "UnlockPubScreen", screen::unlock_pub_screen::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         LibraryBuilder::new("gadtools.library", GADTOOLS_BASE)
             .func(gadtools::LVO_CREATE_GADGET_A, "CreateGadgetA", gadtools::create_gadget::<U>)
             .func(gadtools::LVO_FREE_GADGETS, "FreeGadgets", gadtools::free_gadgets::<U>)
-            .func(gadtools::LVO_GT_SET_GADGET_ATTRS_A, "GT_SetGadgetAttrsA", gadtools::set_gadget_attrs::<U>)
+            .func(gadtools::LVO_GT_SET_GADGET_ATTRS_A, "GT_SetGadgetAttrsA", gt_kinds::set_gadget_attrs::<U>)
+            .func(gt_kinds::LVO_GT_GET_GADGET_ATTRS_A, "GT_GetGadgetAttrsA", gt_kinds::get_gadget_attrs::<U>)
+            .func(gt_menus::LVO_CREATE_MENUS_A, "CreateMenusA", gt_menus::create_menus::<U>)
+            .func(gt_menus::LVO_FREE_MENUS, "FreeMenus", gt_menus::free_menus::<U>)
+            .func(gt_menus::LVO_LAYOUT_MENU_ITEMS_A, "LayoutMenuItemsA", gt_menus::layout_menu_items::<U>)
+            .func(gt_menus::LVO_LAYOUT_MENUS_A, "LayoutMenusA", gt_menus::layout_menus::<U>)
             .func(gadtools::LVO_GT_GET_IMSG, "GT_GetIMsg", gadtools::get_imsg::<U>)
             .func(gadtools::LVO_GT_REPLY_IMSG, "GT_ReplyIMsg", gadtools::reply_imsg::<U>)
             .func(gadtools::LVO_GT_REFRESH_WINDOW, "GT_RefreshWindow", gadtools::refresh::<U>)

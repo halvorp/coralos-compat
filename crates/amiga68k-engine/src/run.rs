@@ -21,11 +21,7 @@ use retro_m68k::RunStats;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivered { Queued(u32), IgnoredUnsubscribed, NotForAGuestWindow }
 
-const IDCMP_CLOSEWINDOW: u32 = 0x200;
-const INTUIMESSAGE_SIZE: u32 = 52;
-const WD_IDCMP: u32 = 82;
-const WD_USERPORT: u32 = 86;
-const NT_MESSAGE: u8 = 5;
+use crate::idcmp::INTUIMESSAGE_SIZE;
 
 impl<U: GuestUi> Amiga<U> {
     pub fn start_hunk(&mut self, file: &[u8]) -> Result<Loaded, String> {
@@ -59,25 +55,9 @@ impl<U: GuestUi> Amiga<U> {
         (step, stats)
     }
 
-    /// A native event for the guest. Only CloseRequested becomes an IntuiMessage so far (IDCMP_CLOSEWINDOW); a
-    /// window that did not ask for that class gets nothing, as on AmigaOS.
-    pub fn deliver(&mut self, ev: GuestUiEvent) -> Result<Delivered, Refusal> {
-        let GuestUiEvent::CloseRequested { win: native, .. } = ev else { return Err(Refusal(format!("deliver: {ev:?} not bridged yet"))) };
-        let Some((&win, _)) = self.windows.iter().find(|(_, &n)| n == native) else { return Ok(Delivered::NotForAGuestWindow) };
-        let idcmp = self.mem.read_u32(win + WD_IDCMP).map_err(Refusal::mem("Window.IDCMPFlags"))?;
-        if idcmp & IDCMP_CLOSEWINDOW == 0 { return Ok(Delivered::IgnoredUnsubscribed); }
-        let port = self.mem.read_u32(win + WD_USERPORT).map_err(Refusal::mem("Window.UserPort"))?;
-        let msg = self.heap.alloc(INTUIMESSAGE_SIZE).ok_or_else(|| Refusal("deliver: no memory for an IntuiMessage (NOMEM)".into()))?;
-        for i in 0..INTUIMESSAGE_SIZE { self.mem.write_u8(msg + i, 0).map_err(Refusal::mem("IntuiMessage"))?; }
-        let m = Refusal::mem;
-        self.mem.write_u16(msg + 18, INTUIMESSAGE_SIZE as u16).map_err(m("mn_Length"))?;
-        self.mem.write_u32(msg + 20, IDCMP_CLOSEWINDOW).map_err(m("Class"))?;
-        self.mem.write_u32(msg + 28, win).map_err(m("IAddress"))?;
-        self.mem.write_u32(msg + 44, win).map_err(m("IDCMPWindow"))?;
-        exec_wait::put_msg(self, port, msg, NT_MESSAGE)?;
-        self.engine_msgs.insert(msg, false);
-        Ok(Delivered::Queued(msg))
-    }
+    /// A native event for the guest (idcmp.rs): a close request, a menu command or a control change becomes an
+    /// IntuiMessage on the window's UserPort if the window subscribes to that class, as on AmigaOS.
+    pub fn deliver(&mut self, ev: GuestUiEvent) -> Result<Delivered, Refusal> { crate::idcmp::deliver(self, ev) }
 
     /// GetMsg handed `msg` to the guest.
     pub(crate) fn delivered_msg(&mut self, msg: u32) { if let Some(d) = self.engine_msgs.get_mut(&msg) { *d = true; } }

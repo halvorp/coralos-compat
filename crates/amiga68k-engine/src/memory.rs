@@ -110,6 +110,13 @@ pub fn set_signal<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     Ok(format!("[exec] SetSignal new={new:#x} mask={mask:#x} -> {old:#x}"))
 }
 
+/// A zeroed guest block of `size` bytes, or a named NOMEM refusal (`what` says for what).
+pub fn alloc_zeroed<U: GuestUi>(a: &mut Amiga<U>, size: u32, what: &str) -> Result<u32, Refusal> {
+    let at = a.heap.alloc(size).ok_or_else(|| Refusal(format!("{what}: no memory (NOMEM)")))?;
+    a.mem.zero(at, size).map_err(Refusal::mem(what))?;
+    Ok(at)
+}
+
 fn zero<U: GuestUi>(a: &mut Amiga<U>, at: u32, n: u32) -> Result<(), Refusal> {
     for i in 0..n { a.mem.write_u8(at + i, 0).map_err(Refusal::mem("MEMF_CLEAR"))?; }
     Ok(())

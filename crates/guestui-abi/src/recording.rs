@@ -9,6 +9,7 @@ use crate::*;
 pub enum UiCall {
     OpenWindow(WindowModel),
     CloseWindow(UiObjectRef),
+    SetWindowTitle(UiObjectRef, alloc::string::String),
     SetMenuStrip(UiObjectRef, MenuModel),
     ClearMenuStrip(UiObjectRef),
     AddControl(UiObjectRef, ControlModel),
@@ -54,6 +55,11 @@ impl GuestUi for RecordingGuestUi {
         self.check(win)?;
         self.live.remove(&win.id);
         self.calls.push(UiCall::CloseWindow(win));
+        Ok(())
+    }
+    fn set_window_title(&mut self, win: UiObjectRef, title: alloc::string::String) -> Result<(), UiRefusal> {
+        self.check(win)?;
+        self.calls.push(UiCall::SetWindowTitle(win, title));
         Ok(())
     }
     fn set_menu_strip(&mut self, win: UiObjectRef, menu: MenuModel) -> Result<(), UiRefusal> {
@@ -113,10 +119,12 @@ mod tests {
             ControlKind::String { text: "a".into(), max_len: 8 }, ControlKind::Slider { min: 0, max: 10, value: 3 }];
         for k in kinds { ui.add_control(w, ctl(k)).unwrap(); }
         ui.set_menu_strip(w, MenuModel::default()).unwrap();
+        ui.set_window_title(w, "New".into()).unwrap();
         ui.close_window(w).unwrap();
-        assert_eq!(ui.calls.len(), 7);
+        assert_eq!(ui.calls.len(), 8);
         assert!(matches!(ui.calls[0], UiCall::OpenWindow(_)));
-        assert!(matches!(ui.calls[6], UiCall::CloseWindow(_)));
+        assert_eq!(ui.calls[6], UiCall::SetWindowTitle(w, "New".into()));
+        assert!(matches!(ui.calls[7], UiCall::CloseWindow(_)));
         ui.events.push_back(GuestUiEvent::CloseRequested { win: w, token: CallbackToken(1) });
         assert!(ui.poll_event().is_some() && ui.poll_event().is_none());
     }
@@ -127,6 +135,7 @@ mod tests {
         let w = ui.open_window(win()).unwrap();
         ui.close_window(w).unwrap();
         assert_eq!(ui.close_window(w), Err(UiRefusal::UnknownObject(w)));
+        assert_eq!(ui.set_window_title(w, "x".into()), Err(UiRefusal::UnknownObject(w)));
         assert_eq!(ui.clear_menu_strip(UiObjectRef { id: 99, generation: 1 }), Err(UiRefusal::UnknownObject(UiObjectRef { id: 99, generation: 1 })));
     }
 

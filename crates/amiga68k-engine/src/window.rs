@@ -7,7 +7,7 @@
 //! as native controls (gadtools.rs registers them host-side).
 use alloc::string::String;
 use alloc::format;
-use crate::{machine::Amiga, ports, screen, tags, Refusal};
+use crate::{idcmp::{self, WD_IDCMP, WD_USERPORT}, machine::Amiga, screen, tags, Refusal};
 use guestui_abi::{CallbackToken, GuestRect, GuestUi, WindowModel, WindowRole};
 use retro_m68k::Cpu;
 
@@ -16,7 +16,6 @@ pub const LVO_CLOSE_WINDOW: i32 = -72;
 pub const LVO_OPEN_WINDOW_TAG_LIST: i32 = -606;
 
 const WINDOW_SIZE: u32 = 136;
-const MSGPORT_SIZE: u32 = 34;
 // struct Window offsets.
 const WD_LEFT: u32 = 4;
 const WD_TOP: u32 = 6;
@@ -26,8 +25,6 @@ const WD_FLAGS: u32 = 24;
 const WD_TITLE: u32 = 32;
 const WD_WSCREEN: u32 = 46;
 const WD_BORDER_LEFT: u32 = 54;
-const WD_IDCMP: u32 = 82;
-const WD_USERPORT: u32 = 86;
 // WFLG_ bits (intuition/intuition.h).
 const WFLG_SIZEGADGET: u32 = 0x1;
 const WFLG_DRAGBAR: u32 = 0x2;
@@ -91,12 +88,7 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal>
     a.mem.write_u32(win + WD_WSCREEN, screen::SCREEN).map_err(m("Window.WScreen"))?;
     for (i, b) in [bl, bt, br, bb].iter().enumerate() { a.mem.write_u8(win + WD_BORDER_LEFT + i as u32, *b as u8).map_err(m("Window borders"))?; }
     a.mem.write_u32(win + WD_IDCMP, s.idcmp).map_err(m("Window.IDCMPFlags"))?;
-    if s.idcmp != 0 {
-        let bit = ports::alloc_signal_bit(a, -1)?.ok_or_else(|| Refusal("OpenWindow: no free signal for the UserPort".into()))?;
-        let port = a.heap.alloc(MSGPORT_SIZE).ok_or_else(|| Refusal("OpenWindow: no memory for the UserPort (NOMEM)".into()))?;
-        ports::init_port(a, port, bit)?;
-        a.mem.write_u32(win + WD_USERPORT, port).map_err(m("Window.UserPort"))?;
-    }
+    if s.idcmp != 0 { idcmp::create_user_port(a, win)?; }
     let model = WindowModel {
         title: title.clone(),
         rect: GuestRect { left: s.left, top: s.top, width, height },
@@ -148,11 +140,8 @@ pub fn close_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     a.windows.remove(&win);
     a.ui.close_window(native).map_err(Refusal::ui)?;
     crate::gadtools::detach(a, win);
-    if port != 0 {
-        let bit = a.mem.read_u8(port + 15).map_err(Refusal::mem("mp_SigBit"))? as i32;
-        ports::release_signal_bit(a, bit)?;
-        a.heap.free(port, MSGPORT_SIZE).map_err(|e| Refusal(format!("CloseWindow UserPort: {e}")))?;
-    }
+    idcmp::free_user_port(a, win)?;
+    a.menu_strips.remove(&win);
     a.heap.free(win, WINDOW_SIZE).map_err(|e| Refusal(format!("CloseWindow: {e}")))?;
     Ok(format!("[intuition] CloseWindow {win:#x}"))
 }
