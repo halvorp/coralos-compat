@@ -10,6 +10,8 @@ native CoralOS windows through `guestui`, not a pixel emulator. One concern per 
 | `retro-m68k` | Musashi 68k core wrapper (ONE guest CPU per process) |
 | `retro-hunk` | AmigaOS Hunk executable loader (+ test-only writer) |
 | `guestui-abi` | FIRST DRAFT of the normalized UI interface engines call (`GuestUi`) |
+| `retro-common` | `Refusal` and `Step`, shared by every engine |
+| `mac68k-engine` | classic Mac 68k skeleton: A-line trap bridge, Pascal-convention Toolbox calls (docs/MAC68K-SKELETON.md) |
 | `amiga68k-engine` | fake ExecBase, LVO trap bridge, Intuition handlers, host runner |
 
 The crates are `no_std` + `alloc`, so the same code runs on the host and in CoralOS user mode.

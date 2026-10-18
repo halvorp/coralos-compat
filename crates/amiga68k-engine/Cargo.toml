@@ -6,6 +6,7 @@ license.workspace = true
 description = "AmigaOS 68k personality: fake ExecBase, LVO trap bridge, Intuition handlers onto GuestUi"
 
 [dependencies]
+retro-common = { path = "../retro-common" }
 retro-guest-mem = { path = "../retro-guest-mem" }
 retro-m68k = { path = "../retro-m68k" }
 retro-hunk = { path = "../retro-hunk" }

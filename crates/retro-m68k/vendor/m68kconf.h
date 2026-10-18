@@ -217,6 +217,7 @@
 #ifndef M68K_INSTRUCTION_HOOK
 #define M68K_INSTRUCTION_HOOK       M68K_OPT_SPECIFY_HANDLER
 extern void retro_instr_hook(unsigned int pc);
+extern int retro_aline_hook(int opcode);
 #define M68K_INSTRUCTION_CALLBACK(pc) retro_instr_hook(pc)
 #endif
 

@@ -1975,6 +1975,10 @@ extern int cpu_log_enabled;
 static inline void m68ki_exception_1010(void)
 {
 	uint sr;
+	/* retro-m68k: the host may handle the A-line word itself (classic Mac Toolbox/OS traps). PC is already past it,
+	   so a handled trap simply continues with the next instruction and no exception frame is built. */
+	if (retro_aline_hook(REG_IR))
+		return;
 #if M68K_LOG_1010_1111 == M68K_OPT_ON
 	M68K_DO_LOG_EMU((M68K_LOG_FILEHANDLE "%s at %08x: called 1010 instruction %04x (%s)\n",
 					 m68ki_cpu_names[CPU_TYPE], ADDRESS_68K(REG_PPC), REG_IR,

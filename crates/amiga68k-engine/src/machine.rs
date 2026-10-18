@@ -51,6 +51,8 @@ pub struct Amiga<U: GuestUi> {
     pub stop_on_unimplemented: bool,
     /// The guest heap AllocMem/AllocVec serve from (bookkeeping host-side).
     pub heap: memory::Heap,
+    /// Forbid nesting depth (counted, not enforced: one task).
+    pub forbid: u32,
     /// What the program wrote to its console.
     pub console: dos::Console,
     /// Outstanding LockPubScreen locks on the one public screen.
@@ -78,7 +80,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), forbid: 0, console: Default::default(), screen_locks: 0, rdargs: vec![], gadgets: BTreeMap::new(),
             waiting: None, clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), ctx: None,
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)

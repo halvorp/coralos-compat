@@ -7,6 +7,7 @@ name = "amiga68k-engine"
 version = "0.1.0"
 dependencies = [
  "guestui-abi",
+ "retro-common",
  "retro-guest-mem",
  "retro-hunk",
  "retro-m68k",
@@ -31,6 +32,24 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 [[package]]
 name = "guestui-abi"
 version = "0.1.0"
+
+[[package]]
+name = "mac68k-engine"
+version = "0.1.0"
+dependencies = [
+ "guestui-abi",
+ "retro-common",
+ "retro-guest-mem",
+ "retro-m68k",
+]
+
+[[package]]
+name = "retro-common"
+version = "0.1.0"
+dependencies = [
+ "guestui-abi",
+ "retro-guest-mem",
+]
 
 [[package]]
 name = "retro-guest-mem"

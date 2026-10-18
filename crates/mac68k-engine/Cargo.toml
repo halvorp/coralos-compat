@@ -1,0 +1,12 @@
+[package]
+name = "mac68k-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Classic Mac OS 68k personality (skeleton): A-line trap bridge, Pascal-convention Toolbox calls onto GuestUi"
+
+[dependencies]
+retro-common = { path = "../retro-common" }
+retro-guest-mem = { path = "../retro-guest-mem" }
+retro-m68k = { path = "../retro-m68k" }
+guestui-abi = { path = "../guestui-abi" }

@@ -12,8 +12,6 @@
 //! need re-verification against a licence-checked source (see NOTICE).
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
-use alloc::string::String;
-use alloc::format;
 pub mod devices;
 pub mod dos;
 pub mod exec;
@@ -37,15 +35,7 @@ pub mod window;
 mod menu;
 
 pub use machine::{Amiga, RunReport};
-pub use run::{Delivered, Step};
+pub use retro_common::Step;
+pub use run::Delivered;
 
-/// A handler refused a call (bad guest pointer, unsupported feature, UI refusal).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Refusal(pub String);
-
-impl Refusal {
-    pub fn mem(what: &str) -> impl Fn(retro_guest_mem::MemError) -> Refusal + '_ {
-        move |e| Refusal(format!("{what}: {e}"))
-    }
-    pub fn ui(e: guestui_abi::UiRefusal) -> Refusal { Refusal(format!("guestui: {e}")) }
-}
+pub use retro_common::Refusal;

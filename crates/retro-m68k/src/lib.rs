@@ -9,7 +9,7 @@
 //!
 //! The core calls back into Rust for memory (`m68k_read_memory_*`) and for the ILLEGAL
 //! opcode ($4AFC), which engines use as the library-call trap. Both go through the
-//! [`Host`] passed to [`run`].
+//! [`Host`] passed to [`run`]. A-line words ($Axxx, the classic Mac traps) go to [`Host::aline`].
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 use alloc::vec;
@@ -53,6 +53,12 @@ pub trait Host {
     /// handled (execution continues at the next word); false lets Musashi raise the
     /// illegal-instruction exception.
     fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool;
+    /// Called on every A-line opcode ($Axxx: the classic Mac Toolbox/OS trap words). `pc` is the address of the
+    /// opcode word. Return true if handled: execution continues at the next word, with the stack exactly as the
+    /// handler left it (no exception frame is built, so the trap's stack arguments are still on top). False raises
+    /// the 68k line-1010 exception as before. The default declines, so hosts that never see A-line words (Amiga) need
+    /// nothing.
+    fn aline(&mut self, _cpu: &mut Cpu, _opcode: u16, _pc: u32) -> bool { false }
 }
 
 /// Register access and run control, valid only inside a callback.
@@ -182,6 +188,13 @@ fn activate<H: Host>(host: &mut H, cpu: &mut Cpu, f: impl FnOnce(&mut Cpu)) {
         h.illegal(c, pc) as i32
     })
 }
+/// Musashi's line-1010 exception path (vendor/m68kcpu.h `m68ki_exception_1010`) asks the host first.
+#[no_mangle] pub extern "C" fn retro_aline_hook(opcode: i32) -> i32 {
+    with(|h, c| {
+        let pc = c.pc().wrapping_sub(2); // PC has advanced past the opcode
+        h.aline(c, opcode as u16, pc) as i32
+    })
+}
 fn rdm(addr: u32, len: u32) -> u32 {
     with(|h, c| {
         let m = h.mem();
@@ -238,5 +251,43 @@ mod tests {
         h.mem.write_u16(0x200, 0x4AFC).unwrap();
         let st = run(&mut h, 0x1000, 0x8000, 1000);
         assert_eq!(st.bus_faults, 1);
+    }
+
+    /// Records A-line words; `handle` decides. dc.w $A913 ; moveq #7,d1 ; dc.w $A9F4 (halts) -- control: a host that
+    /// declines gets the line-1010 exception (vector 10 -> address 0x300, which halts through ILLEGAL).
+    struct A { mem: GuestMem, seen: Vec<(u16, u32)>, handle: bool }
+    impl Host for A {
+        fn mem(&mut self) -> &mut GuestMem { &mut self.mem }
+        fn illegal(&mut self, cpu: &mut Cpu, _pc: u32) -> bool { cpu.halt(); true }
+        fn aline(&mut self, cpu: &mut Cpu, opcode: u16, pc: u32) -> bool {
+            self.seen.push((opcode, pc));
+            if opcode == 0xA9F4 { cpu.halt(); }
+            self.handle
+        }
+    }
+    fn aline_host(handle: bool) -> A {
+        let mut h = A { mem: GuestMem::new(1 << 20), seen: vec![], handle };
+        h.mem.write_bytes(0x1000, &[0xA9, 0x13, 0x72, 0x07, 0xA9, 0xF4]).unwrap();
+        h.mem.write_u32(10 * 4, 0x300).unwrap(); // line-1010 vector
+        h.mem.write_u16(0x300, 0x4AFC).unwrap();
+        h
+    }
+
+    #[test]
+    fn handled_aline_continues_at_the_next_word() {
+        let mut h = aline_host(true);
+        let st = run(&mut h, 0x1000, 0x8000, 1000);
+        assert_eq!(h.seen, vec![(0xA913, 0x1000), (0xA9F4, 0x1004)], "pc is the address of the A-line word");
+        assert!(st.halted);
+        assert_eq!(st.insns, 3, "moveq ran after the handled trap; no exception frame was taken");
+    }
+
+    #[test]
+    fn declined_aline_raises_the_1010_exception() {
+        let mut h = aline_host(false);
+        let st = run(&mut h, 0x1000, 0x8000, 1000);
+        assert_eq!(h.seen, vec![(0xA913, 0x1000)]);
+        assert!(st.halted, "vector 10 -> the ILLEGAL at 0x300 halted");
+        assert_eq!(st.insns, 2, "moveq never ran");
     }
 }

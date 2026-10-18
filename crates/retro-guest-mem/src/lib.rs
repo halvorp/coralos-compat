@@ -2,6 +2,7 @@
 //! [`MemError`]; nothing here panics on a guest-controlled address.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+pub mod heap;
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;

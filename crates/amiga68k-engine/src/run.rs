@@ -12,14 +12,10 @@
 use alloc::string::{String, ToString};
 use alloc::format;
 use crate::machine::{Amiga, RunReport, EMPTY_ARGS, EXEC_BASE, EXIT_SLOT, LOAD_BASE, STACK_SIZE, STACK_TOP};
-use crate::{dos, exec_wait, process, screen, Refusal};
+use crate::{dos, exec_wait, process, screen, Refusal, Step};
 use guestui_abi::{GuestUi, GuestUiEvent};
 use retro_hunk::Loaded;
 use retro_m68k::RunStats;
-
-/// How a [`Amiga::step`] ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Step { Exited, Blocked, BudgetSpent, Fault(String) }
 
 /// What [`Amiga::deliver`] did with an event.
 #[derive(Debug, Clone, PartialEq, Eq)]

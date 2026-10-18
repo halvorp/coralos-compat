@@ -1,0 +1,10 @@
+[package]
+name = "retro-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Types every retro-compat engine shares: the named Refusal and the resumable-run Step"
+
+[dependencies]
+retro-guest-mem = { path = "../retro-guest-mem" }
+guestui-abi = { path = "../guestui-abi" }
