@@ -122,7 +122,7 @@ impl<U: GuestUi> Amiga<U> {
     /// A Wait-ing task whose condition now holds becomes ready (exec's Signal moving it from TaskWait to TaskReady).
     pub fn wake(&mut self, task: u32) -> Result<(), Refusal> {
         let Some(w) = self.sched.tasks.get(&task).and_then(|t| if t.state == RunState::Wait { t.waiting } else { None }) else { return Ok(()) };
-        if self.satisfy(task, w, false)?.is_some() {
+        if self.satisfy(task, w, false)?.is_some() || crate::boopsi_input::wakes(self, task) {
             let seq = self.sched.next_seq();
             let t = self.sched.tasks.get_mut(&task).expect("task");
             t.state = RunState::Ready;
@@ -187,6 +187,7 @@ impl<U: GuestUi> Amiga<U> {
     fn run_slice(&mut self, t: u32, slice: u64, tot: &mut RunStats) -> Outcome {
         // Complete a wait that was satisfied before this dispatch (or find it no longer is: back to TaskWait).
         let mut d0 = None;
+        crate::boopsi_input::redirect(self, t); // pointer events for a gadget of this task's window run before its wait resumes
         if let Some(w) = self.sched.tasks[&t].waiting {
             match self.satisfy(t, w, true) {
                 Ok(None) => { self.sched.tasks.get_mut(&t).expect("task").state = RunState::Wait; return Outcome::Continue; }

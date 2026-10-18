@@ -23,8 +23,6 @@ pub const LVO_GET_ATTR: i32 = -654;
 /// The pseudo-library whose one vector (-6) is every class's `h_Entry`. Free guest RAM below LOAD_BASE.
 pub const BOOPSI_BASE: u32 = 0xE000;
 const DISPATCH_LVO: i32 = -6;
-const CLASS_TABLE: u32 = BOOPSI_BASE + 0x100;
-const CLASS_SIZE: u32 = 32;
 /// `struct _Object` = MinNode (8) + o_Class (4); the heap block adds 4 spare bytes after it.
 const HEADER: u32 = 12;
 const BLOCK: u32 = 16;
@@ -52,18 +50,14 @@ pub struct Obj {
 #[derive(Default)]
 pub struct Objects { pub map: BTreeMap<u32, Obj>, pub depth: u32 }
 
-fn kind_index(k: Kind) -> u32 { CLASSES.iter().position(|c| c.1 == k).unwrap_or(0) as u32 }
-fn class_addr(k: Kind) -> u32 { CLASS_TABLE + CLASS_SIZE * kind_index(k) }
+fn class_addr(k: Kind) -> u32 { crate::iclass::native_addr(crate::iclass::Native::Mui(k)) }
 
-/// Write the dispatcher trap slot and one `struct IClass` per kind (Hook.h_Entry at +8, h_Data at +16 = kind index).
+/// The trap slot every native class's `h_Entry` points at.
+pub fn trap_entry() -> u32 { BOOPSI_BASE.wrapping_add(DISPATCH_LVO as u32) }
+
+/// Register the one dispatcher trap slot (the native `struct IClass`es are built by iclass::init).
 pub fn install<U: GuestUi>(mem: &mut GuestMem, dispatch: &mut Dispatch<U>) -> Result<(), Refusal> {
-    LibraryBuilder::new("boopsi.dispatcher", BOOPSI_BASE).func(DISPATCH_LVO, "ClassDispatcher", dispatcher::<U>).install(mem, dispatch)?;
-    let e = Refusal::mem("IClass");
-    for (_, k) in CLASSES {
-        mem.write_u32(class_addr(k) + 8, BOOPSI_BASE.wrapping_add(DISPATCH_LVO as u32)).map_err(&e)?;
-        mem.write_u32(class_addr(k) + 16, kind_index(k)).map_err(&e)?;
-    }
-    Ok(())
+    LibraryBuilder::new("boopsi.dispatcher", BOOPSI_BASE).func(DISPATCH_LVO, "ClassDispatcher", dispatcher::<U>).install(mem, dispatch)
 }
 
 /// A new guest-visible object of `kind` (no attributes yet).
@@ -97,7 +91,15 @@ fn arity<U: GuestUi>(a: &Amiga<U>, id: u32, msg: u32) -> Result<u32, Refusal> {
 
 /// The shared `h_Entry`: a0 = class, a1 = message, a2 = object -> d0 = the method's result.
 fn dispatcher<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (msg, obj) = (cpu.areg(1), cpu.areg(2));
+    let (cl, msg, obj) = (cpu.areg(0), cpu.areg(1), cpu.areg(2));
+    let native = a.classes.recs.get(&cl).and_then(|r| r.native)
+        .ok_or_else(|| Refusal(format!("class dispatcher trap entered with A0={cl:#x}, which is not a native class")))?;
+    if !matches!(native, crate::iclass::Native::Mui(_)) {
+        let r = crate::boopsi_native::dispatch(a, native, cl, obj, msg)?;
+        cpu.set_d0(r);
+        let id = a.mem.read_u32(msg).unwrap_or(0);
+        return Ok(format!("[boopsi] {} method {id:#x} on {obj:#x} -> {r:#x}", a.classes.name_of(cl)));
+    }
     let id = a.mem.read_u32(msg).map_err(Refusal::mem("DoMethod message"))?;
     let n = arity(a, id, msg)?;
     let mut args = Vec::new();

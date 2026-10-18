@@ -59,14 +59,6 @@ accepted!(activate_window, "ActivateWindow");
 accepted!(window_to_front, "WindowToFront");
 accepted!(window_to_back, "WindowToBack");
 
-/// RefreshGadgets(a0 = gadgets, a1 = window, a2 = requester) / RefreshGList(..., d0 = count): native gadgets draw
-/// themselves, so there is nothing to redraw; the window must be a real open window.
-pub fn refresh_gadgets<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (g, h) = (cpu.areg(0), cpu.areg(1));
-    open_window(a, "RefreshGadgets", h)?;
-    Ok(format!("[intuition] RefreshGadgets {g:#x} in {h:#x} (native gadgets draw themselves)"))
-}
-
 /// SetWindowTitles(a0 = window, a1 = window title, a2 = screen title). (UBYTE *)-1 leaves a title as it is; NULL clears
 /// the window title. The screen title belongs to the one native screen and is not carried.
 pub fn set_window_titles<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {

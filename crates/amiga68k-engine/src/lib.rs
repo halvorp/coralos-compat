@@ -13,6 +13,15 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 pub mod boopsi;
+pub mod boopsi_gadget;
+pub mod boopsi_glist;
+pub mod boopsi_ids;
+pub mod boopsi_input;
+pub mod boopsi_native;
+pub mod boopsi_send;
+pub mod boopsi_strg;
+pub mod iclass;
+pub mod utility;
 pub mod census;
 pub mod devices;
 pub mod devproc;

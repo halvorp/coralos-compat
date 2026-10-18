@@ -131,6 +131,10 @@ pub fn deliver<U: GuestUi>(a: &mut Amiga<U>, ev: GuestUiEvent) -> Result<Deliver
             Some(w) => gt_kinds::control_changed(a, w, win, control, token, value),
             None => Ok(Delivered::NotForAGuestWindow),
         },
+        GuestUiEvent::Pointer { win, x, y, phase } => match guest_window(a, win) {
+            Some(w) => crate::boopsi_input::queue(a, w, x, y, phase),
+            None => Ok(Delivered::NotForAGuestWindow),
+        },
         ev @ GuestUiEvent::Resized { .. } => Err(Refusal(format!("deliver: {ev:?} not bridged yet"))),
     }
 }

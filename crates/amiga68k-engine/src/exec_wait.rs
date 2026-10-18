@@ -162,6 +162,11 @@ pub fn wait_port<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
 /// Complete `w` now if it holds, else park the running task on it and end its slice.
 pub fn block_on<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, w: Waiting, what: String) -> Result<String, Refusal> {
     let cur = a.sched.cur;
+    if matches!(w, Waiting::Signals(_) | Waiting::Port(_)) {
+        let trap = a.input.trap_pc;
+        a.input.wait_trap.insert(cur, trap);
+        if crate::boopsi_input::pump(a, cpu, w)? { return Ok(format!("[exec] {what} (pointer input for gadgets first)")); }
+    }
     match a.satisfy(cur, w, true)? {
         Some(v) => { cpu.set_d0(v); Ok(format!("[exec] {what} -> {v:#x}")) }
         None => { a.park(w); cpu.block(); Ok(format!("[exec] {what} (blocked)")) }

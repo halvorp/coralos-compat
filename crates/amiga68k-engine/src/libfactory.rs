@@ -8,6 +8,7 @@ pub fn library<U: GuestUi>(name: &'static str, base: u32) -> LibraryBuilder<U> {
     let b = LibraryBuilder::new(name, base);
     match name {
         "lowlevel.library" => crate::lowlevel::register(b),
+        "utility.library" => crate::utility::register(b),
         "icon.library" => crate::icon::register(b),
         "locale.library" => crate::locale::register(b),
         _ => b,
