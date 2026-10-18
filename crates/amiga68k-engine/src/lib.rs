@@ -15,6 +15,7 @@ extern crate alloc;
 pub mod asl;
 pub mod boopsi;
 pub mod boopsi_gadget;
+pub mod boopsi_draw;
 pub mod boopsi_glist;
 pub mod boopsi_ids;
 pub mod boopsi_input;

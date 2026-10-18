@@ -26,6 +26,8 @@ const WD_TITLE: u32 = 32;
 const WD_WSCREEN: u32 = 46;
 const WD_BORDER_LEFT: u32 = 54;
 // WFLG_ bits (intuition/intuition.h).
+const WFLG_NOCAREREFRESH: u32 = 0x2_0000;
+use crate::idcmp::{IDCMP_ACTIVEWINDOW, IDCMP_REFRESHWINDOW};
 const WFLG_SIZEGADGET: u32 = 0x1;
 const WFLG_DRAGBAR: u32 = 0x2;
 const WFLG_DEPTHGADGET: u32 = 0x4;
@@ -101,6 +103,10 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal>
     a.windows.insert(win, native);
     crate::graphics::open_window_surface(a, win, (s.left, s.top), (width - bl - br, height - bt - bb), (bl, bt), s.flags & WFLG_GIMMEZEROZERO != 0)?;
     if s.gadgets != 0 { crate::gadtools::attach(a, win, native, s.gadgets)?; }
+    // Intuition's first messages to a new window (AROS inputhandler_support.c WindowNeedsRefresh, the activation): IDCMP_ACTIVEWINDOW
+    // when it opens active, IDCMP_REFRESHWINDOW when it is a simple-refresh window that cares about refresh. Unsubscribed classes post nothing.
+    if s.flags & WFLG_ACTIVATE != 0 { idcmp::post(a, win, IDCMP_ACTIVEWINDOW, 0, win)?; }
+    if s.flags & WFLG_SIMPLE_REFRESH != 0 && s.flags & WFLG_NOCAREREFRESH == 0 { crate::graphics::mark_damaged(a, win)?; idcmp::post(a, win, IDCMP_REFRESHWINDOW, 0, win)?; }
     Ok(win)
 }
 

@@ -20,11 +20,22 @@ fn bit<U: GuestUi>(a: &mut Amiga<U>, at: u32, bit: u32, on: bool) -> Result<(), 
 
 /// Run `method` of native class `cl` on `obj` (for OM_NEW, `obj` is the class the object is being made from).
 pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, native: Native, cl: u32, obj: u32, msg: u32) -> Result<u32, Refusal> {
-    // The classes that are only a gadgetclass/imageclass underneath so far: their own drawing and input are named refusals.
+    // Native drawing (boopsi_draw.rs): buttongclass / propgclass render, sysiclass arrows. Their input methods and frameiclass drawing are
+    // still named refusals.
     if matches!(native, Native::Button | Native::Prop | Native::Sysi | Native::Frame) {
         let id = rd(a, msg, "method id")?;
-        if matches!(id, GM_RENDER | GM_GOACTIVE | GM_HANDLEINPUT | IM_DRAW) {
-            return Err(Refusal(format!("{}: method {id:#x} (its own drawing / input) is not implemented yet; only the gadgetclass/imageclass struct and attributes are", a.classes.name_of(cl))));
+        match (native, id) {
+            (Native::Button, GM_RENDER) => return crate::boopsi_draw::button_render(a, obj, msg),
+            (Native::Prop, GM_RENDER) => return crate::boopsi_draw::prop_render(a, obj, msg),
+            (Native::Sysi, IM_DRAW) => {
+                let (rp, x, y, st) = (rd(a, msg + 4, "impDraw")?, r16(a, msg + 8, "impDraw")? as i16 as i32, r16(a, msg + 10, "impDraw")? as i16 as i32, rd(a, msg + 12, "impDraw")?);
+                crate::boopsi_draw::draw_native_image(a, obj, rp, x, y, st)?;
+                return Ok(1);
+            }
+            (_, GM_RENDER | GM_GOACTIVE | GM_HANDLEINPUT | IM_DRAW) => {
+                return Err(Refusal(format!("{}: method {id:#x} (its own drawing / input) is not implemented yet; only the gadgetclass/imageclass struct and attributes are", a.classes.name_of(cl))));
+            }
+            _ => {}
         }
     }
     match native {
@@ -78,6 +89,7 @@ fn image<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u32,
             w16(a, im + IMG_DEPTH, 0xFFFF, "Image.Depth")?; // CUSTOMIMAGEDEPTH: how intuition knows a boopsi image
             let t = rd(a, msg + 4, "ops_AttrList")?;
             image_set(a, im, t)?;
+            if a.classes.recs.get(&cl).and_then(|r| r.native) == Some(Native::Sysi) { crate::boopsi_draw::sysi_new(a, im, t)?; }
             Ok(im)
         }
         OM_SET | OM_UPDATE => { let t = rd(a, msg + 4, "ops_AttrList")?; image_set(a, o, t) }

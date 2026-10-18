@@ -57,12 +57,20 @@ fn image_pens<U: GuestUi>(a: &Amiga<U>, i: &Im, dest_depth: u8) -> Result<Vec<u8
     Ok(out)
 }
 
-fn draw_chain<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut im: u32, left: i32, top: i32, what: &str) -> Result<usize, Refusal> {
+fn draw_chain<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut im: u32, left: i32, top: i32, state: u32, what: &str) -> Result<usize, Refusal> {
     let mask = a.mem.read_u8(rp + RP_MASK).map_err(Refusal::mem("Mask"))?;
     let mut n = 0;
     while im != 0 && n < 64 {
         let i = read_image(a, im)?;
-        if i.depth == CUSTOMIMAGEDEPTH { return Err(Refusal(format!("{what}: image {im:#x} is a BOOPSI image object (IM_DRAW is not implemented here)"))); }
+        if i.depth == CUSTOMIMAGEDEPTH {
+            // A BOOPSI image object: IM_DRAW. Native classes draw host-side (boopsi_draw.rs); a guest class would need a guest call.
+            if a.classes.class_of(im).and_then(|c| a.classes.recs.get(&c)).map_or(true, |r| r.native.is_none()) {
+                return Err(Refusal(format!("{what}: image {im:#x} is an image object of a guest class (IM_DRAW through a guest dispatcher is not implemented here)")));
+            }
+            crate::boopsi_draw::draw_native_image(a, im, rp, left, top, state)?;
+            im = i.next; n += 1;
+            continue;
+        }
         if i.data == 0 { return Err(Refusal(format!("{what}: image {im:#x} has no ImageData"))); }
         let dd = match target::resolve(a, rp)? { target::Dest::Bitmap { bm, .. } => a.gfx.bitmaps[&bm].bm.depth(), target::Dest::Dropped(_) => 8 };
         let pens = image_pens(a, &i, dd)?;
@@ -87,7 +95,7 @@ fn draw_chain<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut im: u32, left: i32, top
 /// DrawImage(a0 = rp, a1 = image, d0 = left, d1 = top).
 pub fn draw_image<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (rp, im, l, t) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)));
-    let n = draw_chain(a, rp, im, l, t, "DrawImage")?;
+    let n = draw_chain(a, rp, im, l, t, 0, "DrawImage")?;
     Ok(format!("[intuition] DrawImage {im:#x} ({n} images) at {l},{t}"))
 }
 
@@ -95,7 +103,7 @@ pub fn draw_image<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
 /// every state (the ghosting of IDS_DISABLED is a BOOPSI sysiclass job).
 pub fn draw_image_state<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (rp, im, l, t, st) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)), cpu.dreg(2));
-    let n = draw_chain(a, rp, im, l, t, "DrawImageState")?;
+    let n = draw_chain(a, rp, im, l, t, st, "DrawImageState")?;
     Ok(format!("[intuition] DrawImageState {im:#x} ({n} images) at {l},{t} state {st}"))
 }
 
@@ -231,3 +239,6 @@ pub fn get_screen_data<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
     cpu.set_d0(1);
     Ok(format!("[intuition] GetScreenData {n} bytes"))
 }
+
+/// DrawImageState for `img` (classic Image chain or a BOOPSI image object) at (x, y): the entry the native gadget classes use.
+pub fn draw_image_at<U: GuestUi>(a: &mut Amiga<U>, rp: u32, img: u32, x: i32, y: i32, state: u32) -> Result<(), Refusal> { draw_chain(a, rp, img, x, y, state, "DrawImageState").map(|_| ()) }

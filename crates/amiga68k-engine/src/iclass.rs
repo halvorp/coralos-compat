@@ -63,6 +63,8 @@ pub struct Classes {
     pub recs: BTreeMap<u32, ClassRec>, pub names: BTreeMap<String, u32>, pub objs: BTreeMap<u32, ObjRec>,
     /// strgclass buffers it allocated for a string gadget (freed on OM_DISPOSE): gadget -> (block, size).
     pub strg_bufs: BTreeMap<u32, alloc::vec::Vec<(u32, u32)>>,
+    /// sysiclass object -> its SYSIA_Which (boopsi_draw.rs).
+    pub sysi_type: BTreeMap<u32, u32>,
 }
 
 impl Classes {

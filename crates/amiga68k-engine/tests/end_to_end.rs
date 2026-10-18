@@ -60,32 +60,32 @@ fn out_of_range_title_pointer_is_refused_by_name() {
 fn unimplemented_lvo_is_a_named_refusal() {
     use amiga68k_engine::machine::GRAPHICS_BASE;
     use retro_hunk::writer::{be16, be32, build, Hunk};
-    // movea.l #GRAPHICS_BASE,a6 ; jsr -330(a6) (graphics PolyDraw: not implemented) ; rts
+    // movea.l #GRAPHICS_BASE,a6 ; jsr -330(a6) (graphics AreaDraw: not implemented) ; rts
     let mut c = vec![];
     be16(&mut c, 0x2C7C); be32(&mut c, GRAPHICS_BASE);
-    be16(&mut c, 0x4EAE); be16(&mut c, 0xFEB0);
+    be16(&mut c, 0x4EAE); be16(&mut c, 0xFEFE);
     be16(&mut c, 0x4E75);
     let (a, _) = run(&build(&[Hunk::code(c, vec![])], None));
-    assert_eq!(a.refused, vec!["graphics.library/PolyDraw: unimplemented".to_string()]);
-    assert_eq!(a.log, vec!["[graphics.library] PolyDraw REFUSED: unimplemented".to_string()]);
+    assert_eq!(a.refused, vec!["graphics.library/AreaDraw: unimplemented".to_string()]);
+    assert_eq!(a.log, vec!["[graphics.library] AreaDraw REFUSED: unimplemented".to_string()]);
 }
 
 #[test]
 fn census_stops_at_the_first_unimplemented_call_and_names_it() {
     use amiga68k_engine::machine::GRAPHICS_BASE;
     use retro_hunk::writer::{be16, be32, build, Hunk};
-    // movea.l #GRAPHICS_BASE,a6 ; jsr -336(a6) (PolyDraw, unimplemented) ; jsr -312(a6) (BltPattern, unimplemented) ; rts
+    // movea.l #GRAPHICS_BASE,a6 ; jsr -258(a6) (AreaDraw, unimplemented) ; jsr -312(a6) (BltPattern, unimplemented) ; rts
     let mut c = vec![];
     be16(&mut c, 0x2C7C); be32(&mut c, GRAPHICS_BASE);
-    be16(&mut c, 0x4EAE); be16(&mut c, 0xFEB0);
+    be16(&mut c, 0x4EAE); be16(&mut c, 0xFEFE);
     be16(&mut c, 0x4EAE); be16(&mut c, 0xFEC8);
     be16(&mut c, 0x4E75);
     let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
     a.stop_on_unimplemented = true;
     let r = a.run_hunk(&build(&[Hunk::code(c.clone(), vec![])], None), 10_000).unwrap();
     assert!(r.stats.halted);
-    assert_eq!(a.refused, vec!["graphics.library/PolyDraw: unimplemented".to_string()], "stopped at the FIRST one");
-    // CONTROL: without census mode the same program continues past PolyDraw and reaches BltPattern.
+    assert_eq!(a.refused, vec!["graphics.library/AreaDraw: unimplemented".to_string()], "stopped at the FIRST one");
+    // CONTROL: without census mode the same program continues past AreaDraw and reaches BltPattern.
     let mut b = Amiga::new(RecordingGuestUi::new()).unwrap();
     b.run_hunk(&build(&[Hunk::code(c, vec![])], None), 10_000).unwrap();
     assert_eq!(b.refused.len(), 2, "{:?}", b.refused);

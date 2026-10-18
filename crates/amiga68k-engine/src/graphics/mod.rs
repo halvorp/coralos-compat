@@ -17,13 +17,15 @@ mod drawinfo;
 pub mod fonts;
 mod palette;
 mod pixelarrays;
-mod rastport;
+pub mod rastport;
 mod regions;
 mod setup;
 pub mod state;
-mod target;
+pub mod target;
 mod text;
 mod windows;
+pub use drawinfo::draw_image_at;
+pub use regions::mark_damaged;
 pub use windows::resize as resize_window;
 
 pub use setup::setup;
@@ -37,7 +39,7 @@ pub const TOPAZ8_WIDTH: u32 = 8;
 
 /// graphics.library's implemented vectors.
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
-    b.with(modes::register::<U>).with(pixelarrays::register::<U>).named("Flood", flood::flood::<U>).named("InitRastPort", rastport::init_rast_port::<U>)
+    b.named("PolyDraw", draw::poly_draw::<U>).with(modes::register::<U>).with(pixelarrays::register::<U>).named("Flood", flood::flood::<U>).named("InitRastPort", rastport::init_rast_port::<U>)
         .named("SetAPen", rastport::set_a_pen::<U>)
         .named("SetBPen", rastport::set_b_pen::<U>)
         .named("SetDrMd", rastport::set_dr_md::<U>)
@@ -127,8 +129,8 @@ pub fn register_intuition<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U>
         .named("IntuiTextLength", drawinfo::intui_text_length::<U>)
         .named("ObtainGIRPort", drawinfo::obtain_gi_rport::<U>)
         .named("ReleaseGIRPort", drawinfo::log_only::<U>)
-        .named("BeginRefresh", drawinfo::true_noop::<U>)
-        .named("EndRefresh", drawinfo::log_only::<U>)
+        .named("BeginRefresh", regions::begin_refresh::<U>)
+        .named("EndRefresh", regions::end_refresh::<U>)
         .named("RefreshWindowFrame", drawinfo::log_only::<U>)
         .named("DisplayBeep", drawinfo::log_only::<U>)
         .named("ClearPointer", drawinfo::log_only::<U>)

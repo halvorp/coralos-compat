@@ -148,3 +148,14 @@ pub fn scroll_raster<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
     scroll(a, rp, dx, dy, r)?;
     Ok(format!("[graphics] ScrollRaster {rp:#x} by ({dx},{dy}) in ({},{})-({},{})", r.x0, r.y0, r.x1 - 1, r.y1 - 1))
 }
+
+/// PolyDraw(a1 = rp, d0 = count, a0 = array of WORD x, y pairs): Move to the first point, Draw to each of the others.
+pub fn poly_draw<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (rp, n, arr) = (cpu.areg(1), cpu.dreg(0) as u16 as u32, cpu.areg(0));
+    for i in 0..n {
+        let (x, y) = (a.mem.read_u16(arr + 4 * i).map_err(Refusal::mem("PolyDraw array"))? as u32, a.mem.read_u16(arr + 4 * i + 2).map_err(Refusal::mem("PolyDraw array"))? as u32);
+        cpu.set_areg(1, rp); cpu.set_d0(x); cpu.set_dreg(1, y);
+        if i == 0 { super::rastport::move_(a, cpu)?; } else { draw(a, cpu)?; }
+    }
+    Ok(format!("[graphics] PolyDraw {rp:#x} {n} points"))
+}
