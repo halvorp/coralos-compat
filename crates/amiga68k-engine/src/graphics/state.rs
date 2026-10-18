@@ -27,6 +27,7 @@ impl Palette {
     pub fn new() -> Palette {
         let mut p = Palette { rgb: [0; 256], refs: [0; 256], exclusive: [false; 256] };
         for (i, c) in retro_theme::amiga::system_palette().into_iter().enumerate() { p.rgb[i] = c; p.refs[i] = 1; }
+        for (i, c) in retro_theme::amiga::mirror_palette().into_iter().enumerate() { p.rgb[248 + i] = c; p.refs[248 + i] = 1; }
         p
     }
 }

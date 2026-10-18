@@ -123,7 +123,7 @@ fn the_screen_draw_info_is_a_real_struct_with_pens_and_the_default_font() {
     // each pen resolves, through the screen palette the guest reads (ViewPort ColorMap -> RGB4 table), to its Gute Form token (RGB4 = the top nibble)
     let rgb4 = |c: retro_theme::Rgb| ((c.0 as u32 >> 4) << 8 | (c.1 as u32 >> 4) << 4 | c.2 as u32 >> 4) as u16;
     let table = 0x8C00; // SCREEN_COLOR_TABLE (graphics/layout.rs)
-    for (pen, want) in [(am::TEXTPEN, T.text), (am::BACKGROUNDPEN, T.surface), (am::FILLPEN, T.accent), (am::FILLTEXTPEN, T.text_on_accent), (am::SHINEPEN, T.shine), (am::SHADOWPEN, T.border), (am::BARBLOCKPEN, T.surface)] {
+    for (pen, want) in [(am::TEXTPEN, T.text), (am::BACKGROUNDPEN, T.surface), (am::FILLPEN, T.accent_press), (am::FILLTEXTPEN, T.text_on_accent), (am::SHINEPEN, T.border), (am::SHADOWPEN, T.border), (am::BARBLOCKPEN, T.surface)] {
         assert_eq!(g.r16(table + 2 * p[pen] as u32), rgb4(want), "{} -> {:?}", am::DRI_PEN_NAMES[pen], want);
     }
     assert_ne!(g.r16(table + 2 * p[am::FILLPEN] as u32), 0x68B, "control: the AROS FILLPEN blue 6688BB is not what the guest reads");

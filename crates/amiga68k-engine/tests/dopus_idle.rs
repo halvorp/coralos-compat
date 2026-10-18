@@ -49,6 +49,8 @@ fn use_topaz(a: &mut Amiga<RecordingGuestUi>) {
     a.mem.write_u32(0x6400 + 84 + 52, 0x8000).unwrap(); // Screen.RastPort.rp_Font
     for (i, b) in b"topaz.font\0".iter().enumerate() { a.mem.write_u8(0x6570 + i as u32, *b).unwrap(); }
     a.mem.write_u16(0x6560 + 4, 8).unwrap();
+    // Gute Form's SHINEPEN == SHADOWPEN (one flat hairline); the oracle fixtures tell light edges from dark, so they run with a distinct SHINEPEN (pen 2).
+    a.mem.write_u16(0x8E40 + 2 * 3, 2).unwrap();
 }
 
 /// DOPUS_DUMP=<dir> writes every window canvas as a PPM there (`<tag>-window<id>-<w>x<h>.ppm`), to look at next to tests/oracle/dopus5/screens.
@@ -157,7 +159,7 @@ fn region(name: &str) -> Vec<Vec<char>> {
 /// oracle's 0x6688BB fill), 'W' the shine (the oracle's light pen); everything else '.'. The fixtures hold GEOMETRY; the colours are ours.
 fn class(p: u32) -> char {
     use retro_theme::GUTE_FORM as T;
-    match p & 0xFF_FFFF { c if c == T.text.packed() || c == T.border.packed() => '#', c if c == T.accent.packed() => 'B', c if c == T.shine.packed() => 'W', _ => '.' }
+    match p & 0xFF_FFFF { c if c == T.text.packed() || c == T.border.packed() => '#', c if c == T.accent_press.packed() => 'B', c if c == T.shine.packed() => 'W', _ => '.' }
 }
 
 /// Compare a w x h patch of `canvas` at (cx, cy) with an oracle region ('?' = not compared); returns the mismatching positions.

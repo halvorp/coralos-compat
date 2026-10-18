@@ -44,9 +44,10 @@ pub fn di(n: u32, v: i32) -> (R, V) { (R::D(n), V::Imm(v as u32)) }
 pub fn a_res(n: u32, i: u32) -> (R, V) { (R::A(n), V::Res(i)) }
 pub fn d_res(n: u32, i: u32) -> (R, V) { (R::D(n), V::Res(i)) }
 
-pub struct G { pub a: Amiga<RecordingGuestUi>, pub next: u32 }
+pub struct G { pub a: Amiga<RecordingGuestUi>, pub next: u32, /// Overrides dri_Pens[SHINEPEN] after every start (setup rewrites the DrawInfo per run).
+    pub shine_pen: Option<u16> }
 impl G {
-    pub fn new() -> G { G { a: Amiga::new(RecordingGuestUi::new()).unwrap(), next: DATA } }
+    pub fn new() -> G { G { a: Amiga::new(RecordingGuestUi::new()).unwrap(), next: DATA, shine_pen: None } }
     pub fn bytes(&mut self, b: &[u8]) -> u32 {
         let at = (self.next + 3) & !3;
         self.a.mem.write_bytes(at, b).unwrap();
@@ -64,6 +65,7 @@ impl G {
     /// Run a call script to its end (the program exits; windows stay open).
     pub fn run(&mut self, calls: &[Call]) {
         self.a.start_hunk(&script(calls)).unwrap();
+        if let Some(p) = self.shine_pen { self.a.mem.write_u16(0x8E40 + 2 * 3, p).unwrap(); }
         let (s, _) = self.a.step(10_000_000);
         assert_eq!(s, Step::Exited, "{:?}", self.a.refused);
     }

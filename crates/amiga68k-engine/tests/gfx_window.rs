@@ -58,7 +58,7 @@ fn a_program_draws_a_rect_and_text_and_the_host_receives_one_frame_with_the_pixe
     assert_eq!(c.2.iter().filter(|&&p| p == BLACK).count() as u32, ink, "exactly the glyph ink bits of 'A' and 'B' in the Gute Form face");
     assert_eq!(c.2.iter().filter(|&&p| p == BLUE).count() as u32, cells as u32 - ink);
     // the golden fingerprint of the whole frame (pin; re-derive by dumping the canvas if the font or palette is changed on purpose)
-    assert_eq!(pixel_hash(&c.2), 7210240583585732937, "golden hash of the whole 200x100 frame (the pixel assertions above pin its content)");
+    assert_eq!(pixel_hash(&c.2), 8958424030460047928, "golden hash of the whole 200x100 frame (the pixel assertions above pin its content)");
 }
 
 #[test]

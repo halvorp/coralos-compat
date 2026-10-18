@@ -15,7 +15,9 @@ const BG: u8 = 0;
 /// Draw a frameiclass object made from `tags` (IA_ tag pairs) at (1,1) in `state` on a 20x14 bitmap; returns the bitmap rows.
 fn drawn(tags: &[(u32, u32)], state: u32) -> Vec<Vec<u8>> {
     let mut g = G::new();
+    // Gute Form's SHINEPEN == SHADOWPEN (flat hairline) would hide the bevel-swap logic under test: give SHINEPEN its own pen (2) here.
     let (bm, rp) = g.bitmap_rp(20, 14, 8);
+    g.shine_pen = Some(SHINE as u16);
     let cn = g.s("frameiclass");
     let t = g.tags(tags);
     g.run(&[intu(NEW_OBJECT_A, &[a(0, 0), a(1, cn), a(2, t)])]);

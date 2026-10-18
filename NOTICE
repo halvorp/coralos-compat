@@ -40,3 +40,5 @@ crates/retro-pef: the PEF container format (headers, loader section, pattern-dat
 written from Apple's "Mac OS Runtime Architectures" facts, cross-read against Apple's CFMLateImport sample (opcode
 numbering, TVector12/8 strides) and Executor's MIT cfm.cpp / pef_hash.cpp (hash word, pattern data semantics); no code
 from them is included. Executor's loader implements RelocSmRepeat (chunk rewind, which ours matches) but asserts on RelocLgRepeat/LgSetOrBySection; ours implements all three.
+
+crates/retro-theme/src/uifont_data.rs: Nunito Sans Regular bitmap strip (generated), Copyright 2016 The Nunito Sans Project Authors (https://github.com/Fonthausen/NunitoSans), SIL Open Font License 1.1.
