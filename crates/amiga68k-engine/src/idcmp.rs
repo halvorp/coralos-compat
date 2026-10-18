@@ -20,6 +20,8 @@ pub const IDCMP_MOUSEMOVE: u32 = 0x10;
 pub const IDCMP_GADGETUP: u32 = 0x40;
 pub const IDCMP_MENUPICK: u32 = 0x100;
 pub const IDCMP_CLOSEWINDOW: u32 = 0x200;
+pub const IDCMP_REFRESHWINDOW: u32 = 0x4;
+pub const IDCMP_ACTIVEWINDOW: u32 = 0x40000;
 pub const INTUIMESSAGE_SIZE: u32 = 52;
 /// Intuition's "no menu selected" number.
 pub const MENUNULL: u16 = 0xFFFF;

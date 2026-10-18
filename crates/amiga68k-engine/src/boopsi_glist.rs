@@ -27,7 +27,7 @@ fn open<U: GuestUi>(a: &Amiga<U>, win: u32, what: &str) -> Result<(), Refusal> {
 pub fn chain<U: GuestUi>(a: &Amiga<U>, mut g: u32, num: i32) -> Result<Vec<u32>, Refusal> {
     let mut v = Vec::new();
     while g != 0 && (num < 0 || (v.len() as i32) < num) {
-        if v.len() >= MAX_LIST { return Err(Refusal("gadget list longer than 4096 (cyclic NextGadget?)".into())); }
+        if v.len() >= MAX_LIST { return Err(Refusal(format!("gadget list longer than 4096 (cyclic NextGadget?): starts {:#x?}", &v[..v.len().min(12)]))); }
         v.push(g);
         g = rd(a, g + GAD_NEXT, "Gadget.NextGadget")?;
     }
@@ -54,7 +54,7 @@ fn link_in<U: GuestUi>(a: &mut Amiga<U>, win: u32, first: u32, pos: u32, num: i3
 
 /// AddGList(a0 = window, a1 = gadget, d0 = position, d1 = numGad, a2 = requester) -> the position used.
 pub fn add_glist<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (win, g, pos, num) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0) as u16 as u32, cpu.dreg(1) as i32);
+    let (win, g, pos, num) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0) as u16 as u32, cpu.dreg(1) as i16 as i32); // numGad is a WORD: -1 = all (the upper half of D1 is the caller's)
     open(a, win, "AddGList")?;
     let used = link_in(a, win, g, pos, num)?;
     // boopsigadgets.c DoGMLayout: only custom gadgets with some relativity are laid out.
@@ -96,7 +96,7 @@ fn unlink<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32, num: i32) -> Result<u3
 
 /// RemoveGList(a0 = window, a1 = gadget, d0 = numGad) -> the old position (0xFFFF = not found).
 pub fn remove_glist<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (win, g, num) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0) as i32);
+    let (win, g, num) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0) as i16 as i32);
     open(a, win, "RemoveGList")?;
     let p = unlink(a, win, g, num)?;
     cpu.set_d0(p);
@@ -113,7 +113,7 @@ pub fn remove_gadget<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
 }
 
 /// RefreshGList(a0 = gadgets, a1 = window, a2 = requester, d0 = numGad) / RefreshGadgets(.., all).
-pub fn refresh_glist<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { refresh(a, cpu, cpu.dreg(0) as i32, "RefreshGList") }
+pub fn refresh_glist<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { refresh(a, cpu, cpu.dreg(0) as i16 as i32, "RefreshGList") }
 pub fn refresh_gadgets<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { refresh(a, cpu, -1, "RefreshGadgets") }
 
 fn refresh<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, num: i32, what: &'static str) -> Result<String, Refusal> {

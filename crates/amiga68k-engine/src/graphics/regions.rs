@@ -124,3 +124,67 @@ pub fn install_clip_region<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Resul
     cpu.set_d0(old);
     Ok(format!("[layers] InstallClipRegion layer {layer:#x} region {rg:#x} (was {old:#x})"))
 }
+
+const LY_DAMAGE_LIST: u32 = 156;
+
+/// BeginRefresh(a0 = window): the layer's DamageList becomes a real Region covering the whole window area (the engine's canvas is
+/// never partially damaged), so a program that ANDs its own region with `window->WLayer->DamageList` (DOpus's refresh) has one to
+/// use. It is in screen coordinates, the layer's bounds. EndRefresh disposes it.
+pub fn begin_refresh<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let win = cpu.areg(0);
+    let m = Refusal::mem("Layer");
+    let layer = a.mem.read_u32(win + WD_WLAYER).map_err(&m)?;
+    if layer == 0 || !a.gfx.layers.contains_key(&layer) { cpu.set_d0(1); return Ok("[intuition] BeginRefresh: no engine layer (nothing to damage)".into()); }
+    if a.mem.read_u32(layer + LY_DAMAGE_LIST).map_err(&m)? != 0 { cpu.set_d0(1); return Ok(format!("[intuition] BeginRefresh {win:#x}: DamageList already set")); }
+    let b: [i32; 4] = [0, 1, 2, 3].map(|i| a.mem.read_u16(layer + LY_BOUNDS + 2 * i).map(|v| v as i16 as i32).unwrap_or(0));
+    let rg = damage_whole(a, layer, b)?;
+    cpu.set_d0(1);
+    Ok(format!("[intuition] BeginRefresh {win:#x}: DamageList {rg:#x} covers the whole window"))
+}
+
+/// Give `layer` a DamageList Region covering `b` (screen coordinates, inclusive).
+fn damage_whole<U: GuestUi>(a: &mut Amiga<U>, layer: u32, b: [i32; 4]) -> Result<u32, Refusal> {
+    let rg = memory::alloc_zeroed(a, RG_SIZE, "DamageList")?;
+    let mut region = Region::new();
+    region.or_rect(Rect::from_inclusive(b[0], b[1], b[2], b[3]));
+    a.gfx.regions.insert(rg, GRegion { region, chain: None });
+    sync(a, rg)?;
+    a.mem.write_u32(layer + LY_DAMAGE_LIST, rg).map_err(Refusal::mem("Layer"))?;
+    Ok(rg)
+}
+
+/// A window that is about to be told IDCMP_REFRESHWINDOW has its whole area damaged: its layer's DamageList is a real Region.
+pub fn mark_damaged<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusal> {
+    let m = Refusal::mem("Layer");
+    let layer = a.mem.read_u32(win + WD_WLAYER).map_err(&m)?;
+    if layer == 0 || !a.gfx.layers.contains_key(&layer) || a.mem.read_u32(layer + LY_DAMAGE_LIST).map_err(&m)? != 0 { return Ok(()); }
+    let b: [i32; 4] = [0, 1, 2, 3].map(|i| a.mem.read_u16(layer + LY_BOUNDS + 2 * i).map(|v| v as i16 as i32).unwrap_or(0));
+    damage_whole(a, layer, b).map(|_| ())
+}
+
+pub(crate) fn end_refresh_of<U: GuestUi>(a: &mut Amiga<U>, layer: u32) -> Result<(), Refusal> {
+    let rg = a.mem.read_u32(layer + LY_DAMAGE_LIST).map_err(Refusal::mem("Layer"))?;
+    if rg != 0 {
+        if let Some(g) = a.gfx.regions.remove(&rg) {
+            if let Some((p, n)) = g.chain { a.heap.free(p, n).map_err(|e| Refusal(format!("DamageList chain: {e}")))?; }
+            a.heap.free(rg, RG_SIZE).map_err(|e| Refusal(format!("DamageList: {e}")))?;
+        }
+        a.mem.write_u32(layer + LY_DAMAGE_LIST, 0).map_err(Refusal::mem("Layer"))?;
+    }
+    Ok(())
+}
+
+/// EndRefresh(a0 = window, d0 = complete).
+pub fn end_refresh<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let win = cpu.areg(0);
+    let layer = a.mem.read_u32(win + WD_WLAYER).map_err(Refusal::mem("Layer"))?;
+    if layer != 0 && a.gfx.layers.contains_key(&layer) { end_refresh_of(a, layer)?; }
+    Ok(format!("[intuition] EndRefresh {win:#x}"))
+}
+
+/// CloseWindow: give back a DamageList nobody refreshed (mark_damaged made it; the program never ran BeginRefresh/EndRefresh).
+pub fn release_damage<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusal> {
+    let layer = a.mem.read_u32(win + WD_WLAYER).map_err(Refusal::mem("Layer"))?;
+    if layer != 0 && a.gfx.layers.contains_key(&layer) { end_refresh_of(a, layer)?; }
+    Ok(())
+}

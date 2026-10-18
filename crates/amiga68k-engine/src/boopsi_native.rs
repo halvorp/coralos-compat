@@ -20,17 +20,29 @@ fn bit<U: GuestUi>(a: &mut Amiga<U>, at: u32, bit: u32, on: bool) -> Result<(), 
 
 /// Run `method` of native class `cl` on `obj` (for OM_NEW, `obj` is the class the object is being made from).
 pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, native: Native, cl: u32, obj: u32, msg: u32) -> Result<u32, Refusal> {
-    // The classes that are only a gadgetclass/imageclass underneath so far: their own drawing and input are named refusals.
+    // Native drawing (boopsi_draw.rs): buttongclass / propgclass render, sysiclass arrows. Their input methods and frameiclass drawing are
+    // still named refusals.
     if matches!(native, Native::Button | Native::Prop | Native::Sysi | Native::Frame) {
         let id = rd(a, msg, "method id")?;
-        if matches!(id, GM_RENDER | GM_GOACTIVE | GM_HANDLEINPUT | IM_DRAW) {
-            return Err(Refusal(format!("{}: method {id:#x} (its own drawing / input) is not implemented yet; only the gadgetclass/imageclass struct and attributes are", a.classes.name_of(cl))));
+        match (native, id) {
+            (Native::Button, GM_RENDER) => return crate::boopsi_draw::button_render(a, obj, msg),
+            (Native::Prop, GM_RENDER) => return crate::boopsi_draw::prop_render(a, obj, msg),
+            (Native::Sysi, IM_DRAW) => {
+                let (rp, x, y, st) = (rd(a, msg + 4, "impDraw")?, r16(a, msg + 8, "impDraw")? as i16 as i32, r16(a, msg + 10, "impDraw")? as i16 as i32, rd(a, msg + 12, "impDraw")?);
+                crate::boopsi_draw::draw_native_image(a, obj, rp, x, y, st)?;
+                return Ok(1);
+            }
+            (_, GM_RENDER | GM_GOACTIVE | GM_HANDLEINPUT | IM_DRAW) => {
+                return Err(Refusal(format!("{}: method {id:#x} (its own drawing / input) is not implemented yet; only the gadgetclass/imageclass struct and attributes are", a.classes.name_of(cl))));
+            }
+            _ => {}
         }
     }
     match native {
         Native::Root => root(a, cl, obj, msg),
         Native::Image | Native::Sysi | Native::Frame => image(a, cl, obj, msg),
-        Native::Gadget | Native::Button | Native::Prop => gadget(a, cl, obj, msg),
+        Native::Gadget | Native::Button => gadget(a, cl, obj, msg),
+        Native::Prop => crate::boopsi_prop::prop(a, cl, obj, msg),
         Native::Strg => crate::boopsi_strg::strg(a, cl, obj, msg),
         Native::Mui(_) => Err(Refusal(format!("{} cannot be reached through a class pointer (MUI objects are host-side)", a.classes.name_of(cl)))),
     }
@@ -78,6 +90,7 @@ fn image<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u32,
             w16(a, im + IMG_DEPTH, 0xFFFF, "Image.Depth")?; // CUSTOMIMAGEDEPTH: how intuition knows a boopsi image
             let t = rd(a, msg + 4, "ops_AttrList")?;
             image_set(a, im, t)?;
+            if a.classes.recs.get(&cl).and_then(|r| r.native) == Some(Native::Sysi) { crate::boopsi_draw::sysi_new(a, im, t)?; }
             Ok(im)
         }
         OM_SET | OM_UPDATE => { let t = rd(a, msg + 4, "ops_AttrList")?; image_set(a, o, t) }
@@ -120,7 +133,7 @@ fn image_set<U: GuestUi>(a: &mut Amiga<U>, im: u32, tag_list: u32) -> Result<u32
     Ok(all as u32)
 }
 
-fn gadget<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u32, Refusal> {
+pub(crate) fn gadget<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u32, Refusal> {
     let id = rd(a, msg, "method id")?;
     match id {
         OM_NEW => {
@@ -176,9 +189,13 @@ fn gadget_set<U: GuestUi>(a: &mut Amiga<U>, g: u32, tag_list: u32, method: u32) 
             }
             GA_NEXT => w32(a, GAD_NEXT, d)?,
             GA_PREVIOUS => if on && method == OM_NEW {
+                // Link after `previous` once: the tag list reaches gadgetclass again when a subclass re-applies it, and a second
+                // pass would make the gadget its own successor.
                 let n = rd(a, d + GAD_NEXT, "previous gadget")?;
-                w32(a, GAD_NEXT, n)?;
-                a.mem.write_u32(d + GAD_NEXT, g).map_err(Refusal::mem("previous gadget"))?;
+                if n != g {
+                    w32(a, GAD_NEXT, n)?;
+                    a.mem.write_u32(d + GAD_NEXT, g).map_err(Refusal::mem("previous gadget"))?;
+                }
             },
             GA_INTUI_TEXT | GA_TEXT | GA_LABEL_IMAGE => {
                 w32(a, GAD_TEXT, d)?;

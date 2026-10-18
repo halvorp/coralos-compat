@@ -74,3 +74,29 @@ fn strgclass_keeps_its_text_in_a_real_string_info() {
     assert_eq!(g.r32(si + 24), si + 36, "StringInfo.Extension points at the StringExtend");
     assert!(g.a.classes.strg_bufs.is_empty(), "OM_DISPOSE freed the buffers strgclass allocated");
 }
+
+const PGA: u32 = TAG_USER + 0x31000;
+
+#[test]
+fn propgclass_keeps_a_real_prop_info_and_derives_pot_and_body_from_total_visible_top() {
+    let mut g = G::new();
+    let cn = g.s("propgclass");
+    let t = g.tags(&[(PGA + 7, 100), (PGA + 8, 25), (PGA + 9, 30)]);
+    let t2 = g.tags(&[(PGA + 9, 500)]); // past the end: clamped to Total - Visible
+    let out = g.zeroed(8);
+    g.run(&[intu(NEW_OBJECT_A, &[a(0, 0), a(1, cn), a(2, t)]), intu(GET_ATTR, &[d(0, PGA + 9), a_res(0, 0), a(1, out)])]);
+    let o = g.result(0);
+    let pi = g.r32(o + 34);
+    assert_eq!(pi, o + 72, "Gadget.SpecialInfo points at the PropInfo, the instance data after the gadgetclass part");
+    assert_eq!(g.r16(pi) & 0x15, 0x15, "defaults AUTOKNOB|FREEVERT|PROPNEWLOOK");
+    assert_eq!(g.r16(pi + 8), (25u32 * 0xFFFF / 100) as u16, "VertBody = Visible/Total of MAXBODY");
+    assert_eq!(g.r16(pi + 4), (30u32 * 0xFFFF / 75) as u16, "VertPot = Top/(Total-Visible) of MAXPOT");
+    assert_eq!(g.r32(out), 30, "PGA_Top reads back");
+    assert_eq!(g.r16(pi + 2), 0, "control: the horizontal pot was never touched");
+    g.run(&[intu(SET_ATTRS_A, &[a(0, o), a(1, t2)])]);
+    assert_eq!(g.r16(pi + 4), 0xFFFF, "Top past the end is clamped to the last position");
+    let t3 = g.tags(&[(PGA + 1, 2), (PGA + 8, 100)]); // PGA_Freedom FREEHORIZ, everything visible
+    g.run(&[intu(SET_ATTRS_A, &[a(0, o), a(1, t3)])]);
+    assert_eq!(g.r16(pi) & 6, 2, "PGA_Freedom replaced FREEVERT by FREEHORIZ");
+    assert_eq!((g.r16(pi + 6), g.r16(pi + 2)), (0xFFFF, 0), "Visible >= Total: full body, pot 0 (the knob fills the container)");
+}

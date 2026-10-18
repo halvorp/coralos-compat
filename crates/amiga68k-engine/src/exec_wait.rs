@@ -43,7 +43,7 @@ pub enum Waiting {
     /// Delay(): until the virtual clock reaches this many microseconds.
     Until(u64),
     /// ObtainSemaphore on one another task holds: done when it is free (and then it is the task's).
-    Sem(u32),
+    Sem { ss: u32, shared: bool },
 }
 
 fn m(what: &'static str) -> impl Fn(retro_guest_mem::MemError) -> Refusal { Refusal::mem(what) }
@@ -196,7 +196,7 @@ impl<U: GuestUi> Amiga<U> {
             }
             Waiting::Io { io, remove } => crate::timer::io_done(self, io, remove && commit),
             Waiting::Until(t) => Ok(if self.clock_us >= t { Some(0) } else { None }),
-            Waiting::Sem(ss) => crate::semaphores::try_take(self, task, ss, commit),
+            Waiting::Sem { ss, shared } => crate::semaphores::try_take(self, task, ss, shared, commit),
         }
     }
 }

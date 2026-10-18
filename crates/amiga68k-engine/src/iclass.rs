@@ -29,7 +29,7 @@ pub const NATIVE: [(&str, &str, Native, u16); 15] = [
     ("gadgetclass", "rootclass", Native::Gadget, GDATA_SIZE as u16),
     ("buttongclass", "gadgetclass", Native::Button, 0),
     ("strgclass", "gadgetclass", Native::Strg, STRG_DATA as u16),
-    ("propgclass", "gadgetclass", Native::Prop, 0),
+    ("propgclass", "gadgetclass", Native::Prop, PROP_DATA as u16),
     ("sysiclass", "imageclass", Native::Sysi, 0),
     ("frameiclass", "imageclass", Native::Frame, 0),
     ("Application.mui", "rootclass", Native::Mui(Kind::Application), 0),
@@ -63,6 +63,8 @@ pub struct Classes {
     pub recs: BTreeMap<u32, ClassRec>, pub names: BTreeMap<String, u32>, pub objs: BTreeMap<u32, ObjRec>,
     /// strgclass buffers it allocated for a string gadget (freed on OM_DISPOSE): gadget -> (block, size).
     pub strg_bufs: BTreeMap<u32, alloc::vec::Vec<(u32, u32)>>,
+    /// sysiclass object -> its SYSIA_Which (boopsi_draw.rs).
+    pub sysi_type: BTreeMap<u32, u32>,
 }
 
 impl Classes {
@@ -99,6 +101,10 @@ pub fn init<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
         a.mem.zero(cl, CL_SIZE).map_err(Refusal::mem("IClass"))?;
         wr(&mut a.mem, cl + CL_H_ENTRY, crate::boopsi::trap_entry())?;
         wr(&mut a.mem, cl + CL_H_DATA, i as u32)?;
+        // cl_ID: the public name as a guest C string (programs read it: DOpus's FindBOOPSIGadget compares cl_Super->cl_ID to "gadgetclass")
+        let id = crate::fs::alloc_zeroed_sys(a, name.len() as u32 + 1)?.ok_or_else(|| Refusal("native class names: engine arena full (NOMEM)".into()))?;
+        a.mem.write_bytes(id, name.as_bytes()).map_err(Refusal::mem("IClass cl_ID"))?;
+        wr(&mut a.mem, cl + CL_ID, id)?;
         a.mem.write_u32(cl + CL_FLAGS, CLF_INLIST).map_err(Refusal::mem("IClass"))?;
         fill(a, cl, ClassRec { name: Some((*name).into()), native: Some(*native), sup: sup_addr, inst_offset: off, inst_size: *size as u32, subclasses: 0, objects: 0, public: true })?;
     }

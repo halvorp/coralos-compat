@@ -140,7 +140,7 @@ pub fn strg<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u
             dispatch_super(a, cl, o, msg)
         }
         GM_RENDER | GM_GOACTIVE | GM_HANDLEINPUT | GM_GOINACTIVE =>
-            Err(Refusal(format!("strgclass method {id}: string editing and rendering are not implemented (a subclass must draw and handle input itself)"))),
+            if id == GM_RENDER { crate::boopsi_draw::strg_render(a, o, msg) } else { Err(Refusal(format!("strgclass method {id}: string editing and input are not implemented (a subclass must handle input itself)"))) },
         _ => dispatch_super(a, cl, o, msg),
     }
 }
