@@ -5,9 +5,8 @@ use super::{bitmaps, fonts, palette, rastport};
 use crate::{machine::Amiga, screen, Refusal};
 use guestui_abi::GuestUi;
 
-/// DrawInfo pens of a screen with 4 or more colours (AROS intuition_misc.c DriPens4).
-const DEFAULT_DRI_PENS: [u16; DRIPEN_COUNT] = [1, 0, 1, 2, 1, 3, 1, 0, 2, 1, 2, 1];
 pub const DRI_VERSION_V: u16 = 3;
+const _: () = assert!(DRIPEN_COUNT == retro_theme::amiga::NUMDRIPENS);
 const DRIF_NEWLOOK: u32 = 1;
 const COLORMAP_TYPE_V39: u8 = 2;
 const CHECK_MARK: u32 = 0x8F40;
@@ -57,8 +56,8 @@ pub fn setup<U: GuestUi>(a: &mut Amiga<U>) -> Result<(), Refusal> {
     a.mem.write_u16(SCREEN_DRAWINFO + DRI_VERSION, DRI_VERSION_V).map_err(&m)?;
     a.mem.write_u16(SCREEN_DRAWINFO + DRI_NUM_PENS, DRIPEN_COUNT as u16).map_err(&m)?;
     a.mem.write_u32(SCREEN_DRAWINFO + DRI_PENS, SCREEN_DRI_PENS).map_err(&m)?;
-    for (i, p) in DEFAULT_DRI_PENS.iter().enumerate() { a.mem.write_u16(SCREEN_DRI_PENS + 2 * i as u32, *p).map_err(&m)?; }
-    a.mem.write_u32(SCREEN_DRAWINFO + DRI_FONT, ROM_FONT).map_err(&m)?;
+    for (i, p) in retro_theme::amiga::DRI_PENS.iter().enumerate() { a.mem.write_u16(SCREEN_DRI_PENS + 2 * i as u32, *p).map_err(&m)?; }
+    a.mem.write_u32(SCREEN_DRAWINFO + DRI_FONT, GF_FONT).map_err(&m)?;
     a.mem.write_u16(SCREEN_DRAWINFO + DRI_DEPTH, SCREEN_DEPTH as u16).map_err(&m)?;
     a.mem.write_u16(SCREEN_DRAWINFO + DRI_RESOLUTION, 44).map_err(&m)?;
     a.mem.write_u16(SCREEN_DRAWINFO + DRI_RESOLUTION + 2, 44).map_err(&m)?;

@@ -11,7 +11,8 @@ const PROG: &[u8] = include_bytes!("guest/icon_def.bin");
 fn synthetic(seed: u32) -> Vec<u32> {
     (0..32 * 32u32).map(|i| { let (x, y) = (i % 32, i / 32); if x < 4 && y < 4 { 0 } else { 0xFF00_0000 | ((x * 8 + seed) & 0xFF) << 16 | (y * 8) << 8 | ((x ^ y) * 8 & 0xFF) } }).collect()
 }
-const SYS: [u32; ICON_PENS] = [0xAAAAAA, 0x000000, 0xFFFFFF, 0x6688BB, 0x999999, 0xBBBBBB, 0xEEBB99, 0x4488DD];
+/// The live system pens 0..7: the Gute Form palette the screen carries (retro-theme), which icon quantisation reads.
+const SYS: [u32; ICON_PENS] = retro_theme::amiga::system_palette();
 
 /// The Image (width, height, depth, planar bytes) of the DiskObject at guest address `d`.
 fn gadget_image(a: &amiga68k_engine::Amiga<guestui_abi::RecordingGuestUi>, d: u32) -> (u16, u16, u16, Vec<u8>) {

@@ -1,5 +1,5 @@
 //! frameiclass drawing through DrawImageState (AROS frameiclass.c draw_frameiclass / DrawFrame): the bevel pens, the selected and recessed
-//! swaps, the ridge's inner bevel, EdgesOnly. Pens of the engine screen: SHINEPEN white (2), SHADOWPEN black (1), FILLPEN blue (3),
+//! swaps, the ridge's inner bevel, EdgesOnly. Pens of the engine screen: SHINEPEN white (2), SHADOWPEN the border colour (4), FILLPEN blue (3),
 //! BACKGROUNDPEN grey (0).
 mod gfxcommon;
 use gfxcommon::*;
@@ -8,14 +8,16 @@ const NEW_OBJECT_A: i32 = -636;
 const DRAW_IMAGE_STATE: i32 = -618;
 const IA: u32 = TAG_USER + 0x20000;
 const SHINE: u8 = 2;
-const SHADOW: u8 = 1;
+const SHADOW: u8 = retro_theme::amiga::DRI_PENS[retro_theme::amiga::SHADOWPEN] as u8; // 4 (AROS: 1)
 const FILL: u8 = 3;
 const BG: u8 = 0;
 
 /// Draw a frameiclass object made from `tags` (IA_ tag pairs) at (1,1) in `state` on a 20x14 bitmap; returns the bitmap rows.
 fn drawn(tags: &[(u32, u32)], state: u32) -> Vec<Vec<u8>> {
     let mut g = G::new();
+    // Gute Form's SHINEPEN == SHADOWPEN (flat hairline) would hide the bevel-swap logic under test: give SHINEPEN its own pen (2) here.
     let (bm, rp) = g.bitmap_rp(20, 14, 8);
+    g.shine_pen = Some(SHINE as u16);
     let cn = g.s("frameiclass");
     let t = g.tags(tags);
     g.run(&[intu(NEW_OBJECT_A, &[a(0, 0), a(1, cn), a(2, t)])]);

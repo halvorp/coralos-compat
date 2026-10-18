@@ -144,6 +144,7 @@ fn blt_mask_bitmap_rastport_only_changes_where_the_mask_is_set() {
 fn set_rast_and_clear_eol_and_the_write_mask() {
     let mut g = G::new();
     let (bm, rp) = g.bitmap_rp(24, 16, 3);
+    g.set_topaz(rp);
     g.run(&[gfx(SET_RAST, &[a(1, rp), d(0, 4)])]);
     assert!(g.rows(bm, 0, 0, 24, 16).iter().flatten().all(|&p| p == 4));
     g.run(&[gfx(SET_BPEN, &[a(1, rp), d(0, 1)]), gfx(MOVE, &[a(1, rp), d(0, 8), d(1, 10)]), gfx(CLEAR_EOL, &[a(1, rp)])]);

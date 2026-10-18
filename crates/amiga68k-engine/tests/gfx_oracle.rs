@@ -12,6 +12,9 @@ const AROS: &[u8] = include_bytes!("oracle/gfxprobe.aros");
 fn ours(code: &[u8]) -> Vec<u8> {
     let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
     let loaded = a.start_hunk(&build(&[Hunk::code(code.to_vec(), vec![])], None)).unwrap();
+    // AROS is the BEHAVIOUR reference, not the pixel target: the engine's default font is the Gute Form face, so the oracle's text
+    // (topaz 8) is compared with topaz 8 selected as the default for this run. Primitives (rectangles, lines) are font-independent.
+    a.mem.write_u32(0x3000 + 154, 0x8000).unwrap(); // GfxBase.DefaultFont = the resident topaz
     let (_s, st) = a.step(3_000_000);
     assert!(a.refused.is_empty(), "{:?}", a.refused);
     assert!(st.insns > 1000);

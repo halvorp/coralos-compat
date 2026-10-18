@@ -13,6 +13,7 @@ dependencies = [
  "retro-m68k",
  "retro-present",
  "retro-raster",
+ "retro-theme",
 ]
 
 [[package]]
@@ -123,6 +124,9 @@ dependencies = [
 [[package]]
 name = "retro-raster"
 version = "0.1.0"
+dependencies = [
+ "retro-theme",
+]
 
 [[package]]
 name = "retro-resfork"
@@ -130,6 +134,10 @@ version = "0.1.0"
 dependencies = [
  "retro-common",
 ]
+
+[[package]]
+name = "retro-theme"
+version = "0.1.0"
 
 [[package]]
 name = "shlex"

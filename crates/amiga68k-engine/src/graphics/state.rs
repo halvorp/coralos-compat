@@ -23,11 +23,11 @@ pub struct GRegion { pub region: Region, pub chain: Option<(u32, u32)> }
 pub struct Palette { pub rgb: [u32; 256], pub refs: [u16; 256], pub exclusive: [bool; 256] }
 
 impl Palette {
-    /// The reserved system pens (the classic Workbench 2.x 4-colour look, then four more) and everything else black.
+    /// The reserved system pens 0..8 (Gute Form: retro_theme::amiga::SYSTEM_PENS) and everything else black.
     pub fn new() -> Palette {
         let mut p = Palette { rgb: [0; 256], refs: [0; 256], exclusive: [false; 256] };
-        let sys = [0xAAAAAA, 0x000000, 0xFFFFFF, 0x6688BB, 0x999999, 0xBBBBBB, 0xEEBB99, 0x4488DD];
-        for (i, c) in sys.into_iter().enumerate() { p.rgb[i] = c; p.refs[i] = 1; }
+        for (i, c) in retro_theme::amiga::system_palette().into_iter().enumerate() { p.rgb[i] = c; p.refs[i] = 1; }
+        for (i, c) in retro_theme::amiga::mirror_palette().into_iter().enumerate() { p.rgb[248 + i] = c; p.refs[248 + i] = 1; }
         p
     }
 }
@@ -41,7 +41,8 @@ pub struct State {
     pub dropped_rps: BTreeMap<u32, &'static str>,
     /// Fonts the guest has AddFont()ed or that the engine registered (guest TextFont addresses), in registration order.
     pub fonts: Vec<u32>,
-    pub rom_font: Option<Rc<Font>>,
+    /// The parsed renderer fonts of the two resident ROM faces (topaz 8 and the Gute Form face), by guest address.
+    pub rom_fonts: BTreeMap<u32, Rc<Font>>,
     pub palette: Option<Palette>,
     /// Per-window damage and first-frame state; flushed by `content::flush` through the shared `retro-present`.
     pub present: retro_present::Presenter,

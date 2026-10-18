@@ -1,10 +1,11 @@
-//! Fonts and text: the resident topaz 8 as a real guest TextFont, OpenFont/AskFont/SetFont, TextLength/TextExtent/TextFit,
+//! Fonts and text: the resident Gute Form default face and topaz 8 as real guest TextFonts, OpenFont/AskFont/SetFont, TextLength/TextExtent/TextFit,
 //! Text on a bitmap, soft styles, and a font the PROGRAM builds in guest memory (proportional, kerned) drawn by the same
 //! renderer. Controls: other sizes/names are not resident, other characters have other widths.
 mod gfxcommon;
 use gfxcommon::*;
 
 const ROM_FONT: u32 = 0x8000;
+const GET_SCREEN_DRAW_INFO: i32 = -690;
 const OPEN_FONT: i32 = -72;
 const CLOSE_FONT: i32 = -78;
 const SET_FONT: i32 = -66;
@@ -45,6 +46,7 @@ fn topaz8_is_resident_with_real_metrics_and_other_fonts_are_not() {
 fn text_length_extent_and_fit_follow_the_font_advance() {
     let mut g = G::new();
     let (_bm, rp) = g.bitmap_rp(64, 16, 3);
+    g.set_topaz(rp);
     let hello = g.s("Hello");
     let long = g.s("abcdefgh");
     let te = g.zeroed(12);
@@ -67,6 +69,7 @@ fn text_length_extent_and_fit_follow_the_font_advance() {
 fn text_draws_glyphs_at_the_baseline_advances_the_cursor_and_jam2_fills_the_cell() {
     let mut g = G::new();
     let (bm, rp) = g.bitmap_rp(32, 16, 3);
+    g.set_topaz(rp);
     let ab = g.s("AB");
     g.run(&[gfx(SET_APEN, &[a(1, rp), d(0, 1)]), gfx(SET_BPEN, &[a(1, rp), d(0, 3)]), gfx(MOVE, &[a(1, rp), d(0, 4), d(1, 10)]), gfx(TEXT, &[a(1, rp), a(0, ab), d(0, 2)])]);
     assert_eq!((g.r16(rp + 36), g.r16(rp + 38)), (20, 10), "cp_x advanced by 16");
@@ -127,4 +130,66 @@ fn a_font_the_program_builds_in_guest_memory_is_added_opened_and_drawn() {
     let ink: Vec<String> = rows.iter().map(|r| r.iter().map(|&p| if p == 5 { '#' } else { '.' }).collect()).collect();
     // A at x 0..3 (kern 0); B drawn at cursor 4 + kern 1 = x 5..7
     assert_eq!(ink, ["###..##..", "#.#..##..", "###...#..", "#.#..##.."].map(String::from).to_vec());
+}
+
+const ASK_FONT: i32 = -474;
+const GUTE_FORM_FONT: u32 = 0x9000;
+const DEFAULT_FONT_AT: u32 = 0x3000 + 154; // GfxBase.DefaultFont (graphics/layout.rs GB_DEFAULT_FONT)
+
+#[test]
+fn the_default_font_is_the_gute_form_face_and_topaz_is_only_an_explicit_request() {
+    use retro_theme::uifont as ui;
+    let mut g = G::new();
+    let (_bm, rp) = g.bitmap_rp(16, 16, 3);
+    let ta = g.zeroed(8);
+    let (gf, gf_wrong, topaz) = (text_attr(&mut g, ui::NAME, ui::Y_SIZE), text_attr(&mut g, ui::NAME, 8), text_attr(&mut g, "topaz.font", 8));
+    g.run(&[gfx(ASK_FONT, &[a(1, rp), a(0, ta)]), gfx(OPEN_FONT, &[a(0, gf)]), gfx(OPEN_FONT, &[a(0, gf_wrong)]), gfx(OPEN_FONT, &[a(0, topaz)])]);
+    // AskFont of a fresh RastPort answers the default: name, size, flags
+    let name = g.a.mem.read_cstr(g.r32(ta)).unwrap();
+    assert_eq!((name.as_str(), g.r16(ta + 4)), (ui::NAME, ui::Y_SIZE), "AskFont: the default font is the Gute Form face");
+    assert_eq!(g.r8(ta + 7) & 0x20, 0x20, "FPF_PROPORTIONAL");
+    assert_eq!(g.r32(DEFAULT_FONT_AT), GUTE_FORM_FONT, "GfxBase.DefaultFont");
+    assert_eq!([g.result(1), g.result(2), g.result(3)], [GUTE_FORM_FONT, 0, ROM_FONT], "resident by its own size only; an explicit topaz.font 8 is still topaz");
+    let tf = GUTE_FORM_FONT;
+    assert_eq!((g.r16(tf + 20), g.r16(tf + 24), g.r16(tf + 26), g.r8(tf + 32), g.r8(tf + 33)), (ui::Y_SIZE, ui::X_SIZE, ui::BASELINE, 32, 255));
+    assert_ne!(g.r32(tf + 44), 0, "tf_CharSpace");
+    assert_ne!(g.r32(tf + 48), 0, "tf_CharKern");
+}
+
+#[test]
+fn the_screen_font_and_drawinfo_font_are_the_default_face() {
+    use retro_theme::uifont as ui;
+    let mut g = G::new();
+    g.run(&[intu(GET_SCREEN_DRAW_INFO, &[a(0, amiga68k_engine::screen::SCREEN)])]);
+    let dri = g.result(0);
+    assert_eq!(g.r32(dri + 8), GUTE_FORM_FONT, "dri_Font");
+    let ta = g.r32(amiga68k_engine::screen::SCREEN + 40);
+    assert_eq!((g.a.mem.read_cstr(g.r32(ta)).unwrap().as_str(), g.r16(ta + 4)), (ui::NAME, ui::Y_SIZE), "Screen.Font");
+}
+
+#[test]
+fn text_length_and_text_extent_are_the_drawn_proportional_widths() {
+    use retro_raster::font::Font;
+    use retro_theme::uifont as ui;
+    let f = Font::gute_form();
+    let mut g = G::new();
+    let (bm, rp) = g.bitmap_rp(120, 24, 3);
+    let (s, narrow, wide) = (g.s("Hill Wm,"), g.s("iiii"), g.s("mmmm"));
+    let te = g.zeroed(12);
+    g.run(&[gfx(TEXT_LENGTH, &[a(1, rp), a(0, s), d(0, 8)]), gfx(TEXT_LENGTH, &[a(1, rp), a(0, narrow), d(0, 4)]), gfx(TEXT_LENGTH, &[a(1, rp), a(0, wide), d(0, 4)]),
+        gfx(TEXT_EXTENT, &[a(1, rp), a(0, s), d(0, 8), a(2, te)]),
+        gfx(SET_APEN, &[a(1, rp), d(0, 1)]), gfx(SET_DRMD, &[a(1, rp), d(0, 0)]), gfx(MOVE, &[a(1, rp), d(0, 4), d(1, 16)]), gfx(TEXT, &[a(1, rp), a(0, s), d(0, 8)])]);
+    let len = g.result(0) as i32;
+    assert_eq!(len, f.text_length(b"Hill Wm,"), "TextLength is the sum of the face's advances");
+    assert!(g.result(1) < g.result(2), "proportional: iiii {} is narrower than mmmm {}", g.result(1), g.result(2));
+    assert_ne!(len, 8 * 8, "control: not the 8-px pitch of a fixed face");
+    assert_eq!(g.r16(te) as i32, len, "te_Width");
+    assert_eq!(g.r16(te + 2), ui::Y_SIZE, "te_Height");
+    assert_eq!((g.r16(te + 4) as i16, g.r16(te + 6) as i16), (0, -(ui::BASELINE as i16)), "te_Extent MinX MinY");
+    assert_eq!(g.r16(rp + 36) as i32, 4 + len, "the cursor advanced by TextLength");
+    // every inked pixel lies inside [4, 4 + len) x [16 - baseline, 16 - baseline + ysize); and the ink reaches the last glyph
+    let top = 16 - ui::BASELINE as i32;
+    let mut xs = vec![];
+    for y in 0..24 { for x in 0..120 { if g.px(bm, x, y) == Some(1) { assert!(x >= 4 && x < 4 + len && y >= top && y < top + ui::Y_SIZE as i32, "ink at ({x},{y}) outside the extent"); xs.push(x); } } }
+    assert!(!xs.is_empty() && *xs.iter().max().unwrap() >= 4 + len - 4, "the comma at the end is drawn within the last cell: {:?}", xs.iter().max());
 }

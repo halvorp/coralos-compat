@@ -44,9 +44,10 @@ pub fn di(n: u32, v: i32) -> (R, V) { (R::D(n), V::Imm(v as u32)) }
 pub fn a_res(n: u32, i: u32) -> (R, V) { (R::A(n), V::Res(i)) }
 pub fn d_res(n: u32, i: u32) -> (R, V) { (R::D(n), V::Res(i)) }
 
-pub struct G { pub a: Amiga<RecordingGuestUi>, pub next: u32 }
+pub struct G { pub a: Amiga<RecordingGuestUi>, pub next: u32, /// Overrides dri_Pens[SHINEPEN] after every start (setup rewrites the DrawInfo per run).
+    pub shine_pen: Option<u16> }
 impl G {
-    pub fn new() -> G { G { a: Amiga::new(RecordingGuestUi::new()).unwrap(), next: DATA } }
+    pub fn new() -> G { G { a: Amiga::new(RecordingGuestUi::new()).unwrap(), next: DATA, shine_pen: None } }
     pub fn bytes(&mut self, b: &[u8]) -> u32 {
         let at = (self.next + 3) & !3;
         self.a.mem.write_bytes(at, b).unwrap();
@@ -64,6 +65,7 @@ impl G {
     /// Run a call script to its end (the program exits; windows stay open).
     pub fn run(&mut self, calls: &[Call]) {
         self.a.start_hunk(&script(calls)).unwrap();
+        if let Some(p) = self.shine_pen { self.a.mem.write_u16(0x8E40 + 2 * 3, p).unwrap(); }
         let (s, _) = self.a.step(10_000_000);
         assert_eq!(s, Step::Exited, "{:?}", self.a.refused);
     }
@@ -80,6 +82,9 @@ impl G {
         self.a.mem.write_u32(rp + 4, bm).unwrap();
         (bm, rp)
     }
+    /// Select topaz 8 (the fixed 8x8 face, resident at 0x8000) on `rp`, as a program that asks for "topaz.font" by name does:
+    /// the DEFAULT font is the Gute Form face (retro-theme), so tests of topaz mechanics say so explicitly.
+    pub fn set_topaz(&mut self, rp: u32) { self.run(&[gfx(-66, &[a(1, rp), a(0, 0x8000)])]); }
     /// The host-side pixel of a guest bitmap.
     pub fn px(&self, bm: u32, x: i32, y: i32) -> Option<u8> { self.a.gfx.bitmaps[&bm].bm.get(x, y) }
     pub fn rows(&self, bm: u32, x0: i32, y0: i32, w: i32, h: i32) -> Vec<Vec<u8>> {
