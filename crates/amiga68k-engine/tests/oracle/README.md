@@ -21,3 +21,11 @@ Pointers are AROS's own addresses: compare offsets, field values and invariants,
   `spin` loop, then `mem.read` of `out`. `tests/gfx_oracle.rs` runs the same binary here and requires identical pixels and
   RastPort pen/mode/cursor fields. Differences found and left: `linpatcnt` after multi-segment Draw (AROS 13, here 10) and
   `minterms[]` (not mirrored).
+
+- `boopsiprobe.s` / `boopsiprobe.bin` / `boopsiprobe.aros` (BOOPSI, 2026-10-18): MakeClass("probeclass","gadgetclass",0,8,0) + AddClass +
+  NewObjectA, then the program copies into `out` the new 60-byte IClass, the object's memory from its _Object header (12+72+8 bytes) and
+  the built-in gadgetclass / rootclass / imageclass IClass structs. Run under `--control`: `ccp.py` `continue` stops at "loadseg"
+  (the reply names the first hunk), then `mem.read` of `hunk + 0xE8` (`out`) once the machine sits in the final `spin` loop.
+  `tests/boopsi_oracle.rs` runs the same binary here. Findings: probeclass cl_InstOffset 72 / cl_InstSize 8 / cl_ObjectSize 92 / cl_Flags 1
+  (CLF_INLIST), gadgetclass InstSize 72 and ObjectSize 84, imageclass InstSize 20 and ObjectSize 32, rootclass ObjectSize 0; gadgetclass's
+  OM_NEW sets Flags 0x8000, GadgetType 5, MoreFlags 8, MutualExclude = the class pointer (= o_Class).

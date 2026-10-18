@@ -20,6 +20,13 @@ fn bit<U: GuestUi>(a: &mut Amiga<U>, at: u32, bit: u32, on: bool) -> Result<(), 
 
 /// Run `method` of native class `cl` on `obj` (for OM_NEW, `obj` is the class the object is being made from).
 pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, native: Native, cl: u32, obj: u32, msg: u32) -> Result<u32, Refusal> {
+    // The classes that are only a gadgetclass/imageclass underneath so far: their own drawing and input are named refusals.
+    if matches!(native, Native::Button | Native::Prop | Native::Sysi | Native::Frame) {
+        let id = rd(a, msg, "method id")?;
+        if matches!(id, GM_RENDER | GM_GOACTIVE | GM_HANDLEINPUT | IM_DRAW) {
+            return Err(Refusal(format!("{}: method {id:#x} (its own drawing / input) is not implemented yet; only the gadgetclass/imageclass struct and attributes are", a.classes.name_of(cl))));
+        }
+    }
     match native {
         Native::Root => root(a, cl, obj, msg),
         Native::Image | Native::Sysi | Native::Frame => image(a, cl, obj, msg),

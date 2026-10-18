@@ -59,7 +59,11 @@ impl ClassRec { pub fn object_size(&self) -> u32 { OBJ_HEADER + self.inst_offset
 pub struct ObjRec { pub class: u32, pub block: u32, pub size: u32 }
 
 #[derive(Default)]
-pub struct Classes { pub recs: BTreeMap<u32, ClassRec>, pub names: BTreeMap<String, u32>, pub objs: BTreeMap<u32, ObjRec> }
+pub struct Classes {
+    pub recs: BTreeMap<u32, ClassRec>, pub names: BTreeMap<String, u32>, pub objs: BTreeMap<u32, ObjRec>,
+    /// strgclass buffers it allocated for a string gadget (freed on OM_DISPOSE): gadget -> (block, size).
+    pub strg_bufs: BTreeMap<u32, alloc::vec::Vec<(u32, u32)>>,
+}
 
 impl Classes {
     pub fn find(&self, name: &str) -> Option<u32> { self.names.get(name).copied() }
@@ -78,7 +82,8 @@ fn fill<U: GuestUi>(a: &mut Amiga<U>, cl: u32, rec: ClassRec) -> Result<(), Refu
     a.mem.write_u32(cl + CL_SUPER, rec.sup).map_err(&e)?;
     a.mem.write_u16(cl + CL_INST_OFFSET, rec.inst_offset as u16).map_err(&e)?;
     a.mem.write_u16(cl + CL_INST_SIZE, rec.inst_size as u16).map_err(&e)?;
-    a.mem.write_u32(cl + CL_OBJECT_SIZE, rec.object_size()).map_err(&e)?;
+    // rootclass keeps cl_ObjectSize 0 on a real AROS (oracle: tests/oracle/boopsiprobe.aros); the host record still knows its size
+    a.mem.write_u32(cl + CL_OBJECT_SIZE, if rec.sup == 0 { 0 } else { rec.object_size() }).map_err(&e)?;
     if rec.sup != 0 { if let Some(s) = a.classes.recs.get_mut(&rec.sup) { s.subclasses += 1; let n = s.subclasses; wr(&mut a.mem, rec.sup + CL_SUBCLASS_COUNT, n)?; } }
     if rec.public { if let Some(n) = &rec.name { a.classes.names.insert(n.clone(), cl); } }
     a.classes.recs.insert(cl, rec);
