@@ -2,33 +2,14 @@
 //! scroll bar with `NewControl`, waits for an event and answers it with `GlobalToLocal`/`FindControl`/`TrackControl`; the
 //! native intents arrive through `RecordingGuestUi::push_intent` and the guest must see exactly what a Mac would have shown it.
 mod common;
-use common::{put, pstr, set_rect, Prog, Rig, SCRATCH, WIN_LEFT, WIN_TOP};
+use common::{put, pstr, set_rect, Prog, Rig, WIN_LEFT, WIN_TOP};
 use guestui_abi::{CallbackToken, ControlKind, ControlModel, ControlValue, GuestRect, GuestUiEvent, Intent, UiCall, UiObjectRef};
 use mac68k_engine::translate::Obj;
 use mac68k_engine::Step;
 
 const RECT: u32 = 0x3100;
 const TITLE: u32 = 0x3140;
-const EV: u32 = 0x3200;
-const WHICH: u32 = 0x3300;
-const OUT: u32 = SCRATCH; // results: +0 ctl, +4 event what, +6 FindControl part, +8 TrackControl part, +10 value
-
-/// NewControl(win, &RECT, &TITLE, visible, value, min, max, proc, 0) -> control handle, saved at `save`.
-fn new_control(p: &mut Prog, win: u32, rect: u32, title: u32, value: i16, max: i16, proc_id: i16, save: u32) {
-    p.clr_l().l(win).l(rect).l(title).b(1).w(value).w(0).w(max).w(proc_id).l(0).trap(0xA954).pop_l(save);
-}
-
-/// WaitNextEvent(everyEvent, &EV, 60, nil), then GlobalToLocal(EV.where).
-fn wait_and_localise(p: &mut Prog, win: u32) {
-    p.set_port(win).clr_w().w(-1).l(EV).l(60).l(0).trap(0xA860).pop_w(OUT + 4);
-    p.l(EV + 10).trap(0xA871);
-}
-
-/// FindControl(EV.where, win, &WHICH) then TrackControl(which, EV.where, nil).
-fn find_and_track(p: &mut Prog, win: u32) {
-    p.clr_w().rgn_arg(EV + 10).l(win).l(WHICH).trap(0xA96C).pop_w(OUT + 6);
-    p.clr_w().rgn_arg(WHICH).rgn_arg(EV + 10).l(0).trap(0xA968).pop_w(OUT + 8);
-}
+use common::ctl::{find_and_track, new_control, wait_and_localise, EV, OUT, WHICH};
 
 struct World { rig: Rig, btn: u32, chk: u32, bar: u32 }
 
@@ -253,8 +234,9 @@ fn a_native_click_ends_with_the_button_up_so_a_stale_gesture_cannot_replay() {
 #[test]
 fn controls_with_no_kit_part_are_drawn_into_the_content_plane_and_counted() {
     use mac68k_engine::pascal::Rect;
-    // a radio button (no kit role yet) and a control whose procID has no row at all (popupMenuProc 1008)
-    for (proc_id, name) in [(2u16, "Radio"), (1008, "Popup")] {
+    // a pop-up whose MENU resource is missing, one that builds its menu at run time (popupUseAddResMenu), and a procID with no
+    // row at all (not a CDEF)
+    for (proc_id, name) in [(1008u16, "Popup"), (1012, "AddRes"), (0x7ffe, "Unknown")] {
         let mut rig = Rig::new();
         let (win, nwin) = (rig.win, rig.m.windows[&rig.win].native.unwrap());
         let rect = Rect { top: 20, left: 20, bottom: 40, right: 120 };
