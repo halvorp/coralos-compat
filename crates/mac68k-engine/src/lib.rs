@@ -32,6 +32,7 @@ pub mod resmgr;
 pub mod run;
 pub mod segment;
 pub mod toolbox;
+pub mod traptable;
 pub mod trap_names;
 pub mod traps;
 

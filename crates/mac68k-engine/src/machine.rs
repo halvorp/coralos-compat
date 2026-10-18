@@ -115,6 +115,7 @@ impl<U: GuestUi> Mac<U> {
         segment::register(&mut m)?;
         menu::register(&mut m)?;
         events::register(&mut m)?;
+        crate::traptable::register(&mut m)?;
         m.mem.write_u16(EXIT_STUB, 0xA9F4).map_err(Refusal::mem("exit stub"))?; // _ExitToShell
         Ok(m)
     }

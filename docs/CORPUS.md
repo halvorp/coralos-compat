@@ -1,0 +1,472 @@
+# The retro-compat corpus: real binaries, census results, and the toolkit usage matrix
+
+Peter, 2026-10-18: "Do not just focus on DOpus, but the entire Amiga UI/MUI and test more apps! Also check how this will work
+with MacOS apps, both m68k and PPC." This file is the evidence behind the per-TOOLKIT translation tables of
+`docs/retro-compat/17-TRANSLATION-ARCHITECTURE.md` (in the CoralOS repo): which apps exist to test with, how far the engines get
+on each today, which toolkit rows each one uses, and therefore which table rows matter first.
+
+**No third-party binary is in this repository.** Downloads live under `/data/build/corpus-bin/<app>/` (untrusted data, one
+directory per source), each recorded with URL, version, sha256 and licence in `/data/build/corpus-bin/CORPUS.tsv` (reproduced
+in the table below). `tests/census_corpus.rs` in `amiga68k-engine`, `mac68k-engine` and `macppc-engine` drive them and SKIP loudly when a binary is absent.
+
+## How this was produced (all reproducible)
+
+```
+tools/corpus-census.py APPS.tsv --out census.json     # amiga68k-run --census per app; keeps going with --stub to record the NEXT-NEEDED chain
+tools/corpus-strings.py APPS.tsv > strings.json       # static name evidence: libraries, MUI classes/MCCs, BOOPSI classes in the hunk
+tools/corpus-census-mac.py MAC_APPS.tsv --out mac.json # mac68k-run / macppc-run --census
+tools/corpus-traps-mac.py FILE...                     # static: resource types + Toolbox traps in CODE, by manager
+tools/corpus-report.py census.json strings.json [mac.json]   # renders the tables below
+```
+
+"Name evidence" is a string found in the executable: a class named there may be unused and an indirectly built class is missed.
+"Created at run time" comes from the engine's own log of the run and is only as deep as the run got (most runs stop early, see
+the findings). Read both columns together; neither is a call graph.
+
+## The Amiga corpus
+
+64 binaries are censused: 53 from the AROS nightly, 11 classic AmigaOS ones (3 amimcp tools, iGame, 3 Directory Opus programs, YAM, AWeb, AWebCfg, SnoopDos).
+
+* **AROS m68k nightly 20261018** (`amiga-m68k-boot-iso.zip`, APL): the system's own Workbench programs. 43 of the 53 are
+  Zune/MUI programs (Prefs editors, System/, Tools/, Utilities/Clock, Installer...), 10 GadTools/Intuition/BOOPSI ones
+  (MultiView, More, Editor, Workbook, AHIRecord, gtdemo, menudemo...). They are the broadest MUI sample there is, and the only one built
+  against Zune (AROS's MUI).
+* **Classic AmigaOS 3.x binaries**: YAM 2.9p1 (GPL-2, MUI + the NList/TextEditor/TheBar MCCs), AWeb 3.6b8 (AWeb Public License 1.0,
+  ReAction-style `layout.gadget`), SnoopDos 3.11 (freely distributable, GadTools + custom), Directory Opus 5.102 (APL,
+  nine own BOOPSI classes), iGame (GPL-3, MUI + TextEditor.mcc), amimcp (Apache-2.0).
+* **Not usable**: the AROS m68k *contrib* archive (10,213 files; its programs, e.g. `C/UnZip`, `AmiChess`) are ELF 32-bit MSB
+  *relocatable* objects (`ET_REL`), not Hunk executables, so the engine cannot load them (an AROS ELF loader would unlock BGUI, MCC_TheBar, Scout, games, AMP2...).
+  SimpleMail, FastForward and Legadon publish no m68k binary release; FileX-68K has no licence text (skipped).
+
+### Running the AROS programs (the `mini` volume)
+
+AROS-built programs need AROS's own `stdc.library`, `stdcio.library`, `posixc.library` (rellibs) from `LIBS:`. The engine bridges
+the standard libraries itself and prefers a disk file of the same name, so the volume must NOT contain the ones it bridges:
+
+```
+cd /data/build/corpus-bin/aros-m68k           # nightly iso extracted with 7z into sys/
+for d in Libs Classes Devs S L Locale; do cp -rl sys/$d mini/$d; done       # hard links, ~63 MB
+cd mini/Libs && rm -f locale.library muimaster.library asl.library commodities.library diskfont.library \
+  cybergraphics.library datatypes.library iffparse.library mathieee*.library rexxsyslib.library   # the engine's own
+amiga68k-run --census --sys mini --assign LIBS=SYS:Libs sys/Utilities/Clock
+```
+
+The classic binaries get the MCC classes YAM ships (`/data/build/corpus-bin/mccs/Libs/mui/*.mcc`: NList, NListtree, TextEditor,
+BetterString, TheBar; LGPL-2.1) as `LIBS:mui/` through `--mount MCC=... --assign-add LIBS=MCC:Libs`.
+
+
+### Sources, versions, checksums, licences (`/data/build/corpus-bin/CORPUS.tsv`)
+
+| app | version | source_url | sha256_of_download | licence | notes |
+|---|---|---|---|---|---|
+| aros-m68k system (Utilities/Prefs/Tools/System/Demos/C/Libs/Classes) | nightly 20261018 amiga-m68k boot-iso | https://sourceforge.net/projects/aros/files/nightly2/20261018/Binaries/AROS-20261018-amiga-m68k-boot-iso.zip | c5eaff3ebffba3ef0cddeab2f7d74cf500c9b8c071b602f69fd7d1d1e615eb3f | AROS Public License (APL), file LICENSE in the archive | extracted with 7z; HUNK executables carrying HUNK_RELRELOC32 (0x3FD); need task.resource + stdc.library |
+| aros-m68k contrib | nightly 20261018 amiga-m68k contrib | https://sourceforge.net/projects/aros/files/nightly2/20261018/Binaries/AROS-20261018-amiga-m68k-contrib.tar.bz2 | 42058eb8e7a5477126d6f7547b2d16f0e5c4d037a2a13f262abbb5ee36525337 | per-package (see ACKNOWLEDGEMENTS in the archive) | ELF 32-bit MSB RELOCATABLE objects, not HUNK: not runnable by the engine (no ELF/AROS loader); downloaded for the inventory only |
+| YAM | 2.9p1 AmigaOS3 | https://github.com/jens-maus/yam/releases/download/2.9p1/YAM29p1-AmigaOS3.lha | 2df011722d29bb9a7bcb76f7176c60e85370957ca29d59d1532cdd6177054e6c | GPL-2.0 (repo COPYING) | MUI; ships NList/NListtree/TextEditor/BetterString/TheBar MCCs (LGPL-2.1) in Install/MUI |
+| AWeb | 3.6b8 | https://github.com/amigazen/AWeb3/releases/download/AWeb3.6b8/AWeb36b8.lha | 85232ba1f82a3cfa6aab0469ea0994df9e9b8927a7d5bace37419bd3c19bf0a8 | AWeb Public License 1.0 (repo LICENSE) | ReAction-style layout.gadget; not MUI |
+| SnoopDos | 3.11 | https://aminet.net/util/moni/SnoopDos.lha | 0fb51361fe82b125971b190b78a81cb43c0a631c9d075a37b0110a0617612aba | Freely distributable (Eddy Carroll, readme) | GadTools + custom; test-only, never redistributed here |
+| amimcp (amiagent/amimon/amimon-mui) | 0.13.2 | https://github.com/thomas-luebker/amimcp (release) | d893cabeb50e49678f47bbad192a0c921bde0ee410d61ee65b1724b05430fae3 | Apache-2.0 (repo LICENSE) | already in the corpus before this lane |
+| iGame | 2.6.x (extracted tree) | https://github.com/MrZammler/iGame/releases | n/a (archive not retained) | GPL-3.0 (repo LICENSE) | MUI + TextEditor.mcc; already in the corpus |
+| Directory Opus 5 (Magellan) | 5.102 OS3 | https://github.com/BlitterStudio/dopus5/releases | ea6f59d23a9256227781824b24e78b67642fd1fababd94c01829e458e2f98cfa | AROS Public License (repo COPYING / THIRD_PARTY_NOTICES) | own BOOPSI classes; already in the corpus |
+| Executor packages/go (go.appl, icontest.appl) | tree of /data/refs/retro/executor | https://github.com/autc04/executor | 5b81b2047bb186da9c8e4ee9d6357a33a052ab01757476d1240dfca0179d776d (go) fa1e5a7186686aa063787163fd9d42a5057105b07916aa1d3703b241d39be9a2 (icontest) | MIT (Executor tree) | AppleDouble header files holding the resource forks |
+| Retro68 Samples + the toolchain that built them | Retro68 afedcdc (autc04/Retro68) + multiversal 057c802, GCC 16.1.0 for m68k-apple-macos and powerpc-apple-macos | built locally: /data/build/retro68 (log /data/build/retro68/build.log, host tools build-host.log); outputs copied to /data/build/corpus-bin/mac-retro68/{68k,ppc}/ (16 .bin MacBinary files, hashes in mac-retro68/SHA256SUMS) | see mac-retro68/SHA256SUMS | toolchain GPL-3; the Samples sources are Retro68 (GPL-3 with the GCC runtime exception for the linked runtime); outputs are test data only, never redistributed | prerequisites installed locally without sudo: Boost 1.86.0 (built into /data/build/retro68/boost), texinfo stubbed (docs not built) |
+| Skipped: FileX-68K 2.7a | 2.7a | https://aminet.net/disk/moni/FileX-68K.lha | 3b78a191c875ad560f71fee798d29d97048c4bf609af40270332cc529a66610a | UNCLEAR ("Open Source Team", no licence text in readme) | downloaded, NOT used (instruction: skip unclear licences) |
+| Skipped: SimpleMail | - | https://github.com/sba1/simplemail | - | GPL-2.0 | repo publishes no m68k release asset; Aminet name search found no SimpleMail binary |
+| Skipped: FastForward, Legadon | - | https://github.com/amigazen/FastForward , https://github.com/alb42/Legadon | - | - | no release assets; Legadon's package/ directory holds only the .info icon |
+| systemless Toolbox Showcase (fat app, forks cut out of the stored SIT5) | tests/toolbox-showcase of benletchford/systemless | /data/refs/retro/systemless/tests/toolbox-showcase/toolbox-showcase.sit | 373a6a1e268b558228d4bd911b3982557c32d52d75ff9bccbb65eff89c1eb254 (archive); showcase.rsrc 3021fd64872986a0c9903adbbca6fcb773cf7883e8b231d9ece60c7c069197bf; showcase.pef db1ddcad335d9ccc3b5d1fec654273b84c78fcab7b47f59c28dfda008fd77472 | GPL-3 (systemless); test data only, never committed | tools/corpus-extract-showcase.py cuts the forks out |
+
+## What the census found and fixed (all in this branch, each with a test and a negative control)
+
+The first run of the engine over the AROS binaries stopped at the loader. Each fix below moved the whole set one step; the
+"before" is the count of the 53 AROS programs that stopped there.
+
+1. **`HUNK_RELRELOC32` (0x3FD)** in `retro-hunk` (53 of 53 refused at load: "unsupported hunk type 0x3fd"). Word-encoded like
+   RELOC32SHORT; the field gains `base[target] - base[this hunk]` (AROS `rom/dos/internalloadseg_aos.c`).
+2. **`exec.library/OpenResource` + AROS `task.resource`** (UNIMPLEMENTED within the first 12 instructions of every AROS program;
+   then `stdc.library`'s init returned NULL in 50 of 53). New `task_resource.rs`: Alloc/Free/Set/Get storage slots per task, InitTaskHooks/AddTaskHook/RunTaskHooks.
+   Running a *registered* hook, Save/RestoreTaskStorage and a created task's parent slot are named refusals. Any other resource
+   name is NULL, as on real exec.
+3. **`timer.device/GetSysTime`/`GetUpTime`** on the virtual clock (21 stdc-only programs stopped there) and **`aros.library` v41**
+   (29 `posixc.library` programs stopped asking for it; `LibraryBuilder::version`).
+4. **A disk library that gives every opener its own base** (AROS rellibs build one with `MakeLibrary` in `Open`; 45 of 53 then
+   ended with "CloseLibrary: 0x... is not an open library base"). `DiskLib.openers` + Close with A6 = the base passed.
+5. **dos `SetVBuf`** (30 of 53, the stdcio startup) and **ExecBase `lib_Version`** (was 0; AmigaOS 3.1 = 40.68).
+
+With these, AROS-built programs run their real startup (`task.resource`, three rellibs, locale, dos), and **`gtdemo` creates its
+real GadTools `BUTTON_KIND` gadget** and `Clock` builds its MUI application tree. This is the first time the engine has run
+AROS-built code at all; it is the only source of MUI/Zune programs, and AROS-built binaries are 53 of the 64 in the corpus.
+
+## Where each group stops now (the next work, ranked by apps blocked)
+
+| gap | apps | owner lane |
+|---|---|---|
+| `dos Open("NIL:")` is "not modelled yet", then `Close(0)` ("not an open file") in stdcio/posixc cleanup | 30 / 26 | dos |
+| MUI custom classes: `muimaster/MUI_CreateCustomClass` (NEXT-NEEDED), disk classes `Clock.mcc`, `SystemPrefsWindow.mcc`, `PrefsEditor.mcc`, MCCs from `LIBS:mui/` | 16 + 8 | mui |
+| MUI attributes: `MUIA_Application_SingleTask` 0x8042a2c8 (10 apps), `_DiskObject` 0x804235cb, `_BrokerPri` 0x8042c8d0, `_UseCommodities` 0x80425ee5, `_UsedClasses` 0x8042e9a7, `MUIA_Window_Activate` 0x80428d2f, `_Window_AppWindow` 0x804280cf, `MUIA_Group_PageMode` 0x80421a5f (the Register/page layouts), `MUIA_Frame` | 3-10 each | mui |
+| `MUI_MakeObjectA` types other than `MUIO_Label`: 2 `Button` (6 apps), 13 `MenustripNM` (4), 3 `Checkmark`, 4 `Cycle`, 8 `PopButton` (2 each) | 6+4+2+2+2 | mui |
+| `intuition/EasyRequestArgs` (3), `DupLockFromFH` on the console handles (3), `WindowAction` (1), `iffparse/AllocIFF` (2), `MUI_RequestA` (2), `exec/RawPutChar` (2, AROS debug output) | 1-3 each | intuition / dos |
+| YAM: `AllocDosObject type 5` (DOS_CLI), `locale/ParseDate` with a hook | 1 | dos / locale |
+
+And three things about the *classic* binaries:
+
+* **MUI apps ship their own MCC classes as disk libraries** (`LIBS:mui/TextEditor.mcc`...). iGame loads `TextEditor.mcc` v15 and
+  stops at `MUI_CreateCustomClass`: a custom-class host for MUI is on the critical path exactly like DOpus's `MakeClass`, and
+  doc 17's "app-defined classes inherit the contract of their nearest standard ancestor" must be implemented for MUI *and*
+  BOOPSI (`dopusstrgclass` < `strgclass`, a TextEditor < `Area`).
+* **AWeb needs a ReAction class set** (`OpenLibrary("gadgets/layout.gadget")`; AWebCfg and the OS 3.2 style apps use
+  `window.class`, `layout.gadget`, `button.gadget`...). That is a fourth toolkit layer, not covered by the doc 17 tables.
+  AROS ships `Classes/window.class` (found in the nightly) so there is a reference.
+* **Directory Opus is the only binary that reaches an event loop with real UI today** (4 windows, 60 content planes, 3 menu
+  strips), through nine own BOOPSI classes over `gadgetclass`/`imageclass`/`strgclass`, `NewObjectA` and `CreateMenusA`: the plane
+  and binding path of doc 17 is what makes it usable, not the MUI table. SnoopDos prints "I need AT LEAST Kickstart 2.0" and quits
+  (a version gate that is not ExecBase's `lib_Version`; not yet identified).
+
+The AROS m68k *contrib* archive is ELF relocatable (`ET_REL`), not Hunk: an AROS ELF loader would unlock 10,213 files (BGUI,
+MCC_TheBar, Scout, MultiMedia, games...) and is worth a lane of its own.
+
+## The top rows the translation layer must cover first
+
+Ranked by how many corpus binaries use the row (name evidence over 64 Amiga binaries, plus the runs; full ranking of 21 rows in
+"The data" below). Layout-only classes (`Rectangle`, `Balance`) and no-UI libraries (commodities) are left out of the list: they
+need no role.
+
+**Amiga, in order:**
+
+| # | table row | apps | role | note |
+|---|---|---|---|---|
+| 1 | MUI `Application` + `Window` (shell, title, close, menu strip, `Notify`) | 44 | window | every MUI app; needs the attribute list above (`Activate`, `AppWindow`, `SingleTask`, `UseCommodities`...) |
+| 2 | MUI `Group` (H/V/virtual, frame, title, **PageMode**) | 43 | group | PageMode is the Register/prefs page layout |
+| 3 | MUI `Text` + `MUI_MakeObjectA` (`MUIO_Label`, `Button`, `Checkmark`, `Cycle`, `PopButton`) | 33 | label / button / checkbox / choice | only `MUIO_Label` exists today |
+| 4 | MUI `String` / `BetterString` | 26 | field | `String.mui` is refused by name in `RequestString` |
+| 5 | MUI `List` / `Listview` / `NList` / `NListtree` / `IconList` | 23 | list | `NList` is an MCC: needs the custom-class host |
+| 6 | ASL requesters + MUI `Popasl` | 22 | modal dialog | file/font/screenmode; a native picker, not a drawn one |
+| 7 | MUI `Slider` / `Gauge` / `Scale` | 17 | slider / gauge | |
+| 8 | **GadTools kinds** (`CreateGadgetA`; seen: TEXT, BUTTON, STRING, CYCLE, SLIDER, MX, INTEGER, LISTVIEW, PALETTE, GENERIC) | 15 | button / field / choice / slider / list | the classic apps (SnoopDos 9 buttons, DOpus, AWebCfg); AROS tools too |
+| 9 | MUI `Register` (tabs) | 11 | choice (tabs) | |
+| 10 | MUI `Image` / `Dtpic` / `IconImage` / `Pixmap` | 11 | image | |
+
+Next five: MUI prefs-window family `PrefsEditor`/`SystemPrefsWindow` (11, window + groups, an MCC), BOOPSI system gadget/image
+classes (`propgclass`, `sysiclass`, `buttongclass`, `strgclass`, `frameiclass`; 9), MUI `Scrollgroup`/`Virtgroup`/`Scrollbar` (9),
+MUI menus `Menustrip`/`Menu`/`Menuitem` + GadTools menus (8), MUI `Cycle`/`Radio` (8); then `EasyRequest` (3 reached, 5 named),
+`TextEditor` (3), and custom BOOPSI classes over a standard ancestor (DOpus, 2 apps but the most complex window in the corpus).
+
+## The data
+
+### Amiga census, one row per binary
+
+| app | toolkit | ran | NEXT-NEEDED (first) | window UI calls | refused |
+|---|---|---|---|---|---|
+| amiagent | CLI | 15,281 insns | none | - | - |
+| amimon | GadTools | 50,000,156 insns (budget, still running) | none | OpenWindowx1, AddControlx8 | - |
+| amimon-mui | MUI | 50,000,154 insns (budget, still running) | none | OpenWindowx1, AddControlx8, SetMenuStripx1 | - |
+| iGame | MUI | 553 insns | muimaster.library/MUI_CreateCustomClass | - | - |
+| DirectoryOpus | dopus-own | 50,000,046 insns (budget, still running) | none | OpenWindowx4, PresentContentx60, SetMenuStripx3, AddControlx8 | - |
+| dopus-viewfont | dopus-own | 9,422 insns | intuition.library/QueryOverscan | - | - |
+| DOpusRT5 | CLI | 1,329 insns | none | - | - |
+| YAM | MUI | 88,428 insns | none | - | dos.library/AllocDosObject AllocDosObject type 5 not modelled; locale.library/ParseDate P~ |
+| AWeb | custom (ReAction layout.gadget) | 1,959 insns | none | - | - |
+| AWebCfg | GadTools+BOOPSI | 908 insns | intuition.library/EasyRequestArgs | - | - |
+| SnoopDos | GadTools+custom | 11,778 insns | none | - | - |
+| aros-Clock | MUI | 3,055 insns | none | - | muimaster.library/MUI_NewObjectA MUI Window class: attribute 0x80428d2f is not implemente~ |
+| aros-MultiView | GadTools+BOOPSI | 4,413 insns | intuition.library/WindowAction | - | - |
+| aros-More | GadTools+BOOPSI | 3,226 insns | none | - | - |
+| aros-Installer | MUI | 9,048 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-Calculator | MUI | 50,000,027 insns (budget, still running) | none | - | dos.library/Open Open NIL: is not modelled yet; intuition.library/SetAttrsA SetAttrsA: 0x~ |
+| aros-Editor | GadTools+BOOPSI | 13,865 insns | iffparse.library/AllocIFF | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-KeyShow | MUI | 1,347 insns | muimaster.library/MUI_CreateCustomClass | - | intuition.library/SetAttrsA SetAttrsA: 0x0 is not a BOOPSI object; muimaster.library/MUI_~ |
+| aros-HDToolBox | MUI | 2,546 insns | none | - | - |
+| aros-ScreenGrabber | MUI | 8,539 insns | muimaster.library/MUI_RequestA | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-SysExplorer | MUI | 3,339 insns | none | - | - |
+| aros-WiMP | MUI | 6,844 insns | none | - | muimaster.library/MUI_DisposeObject DisposeObject: 0x0 is not a MUI object (or already di~ |
+| aros-Exchange | MUI | 2,971 insns | commodities.library/BrokerCommand | - | muimaster.library/MUI_DisposeObject DisposeObject: 0x0 is not a MUI object (or already di~ |
+| aros-ASCIITable | MUI | 1,326 insns | muimaster.library/MUI_CreateCustomClass | - | muimaster.library/MUI_DisposeObject DisposeObject: 0x0 is not a MUI object (or already di~ |
+| aros-FKey | MUI | 10,591 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-QuickPart | MUI | 9,818 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-AHIRecord | GadTools+BOOPSI | 12,836 insns | intuition.library/EasyRequestArgs | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-BoingIconBar | GadTools+BOOPSI | 7,561 insns | none | - | dos.library/DupLockFromFH DupLockFromFH on 0x6300: not an open file; dos.library/DupLockF~ |
+| aros-Find | MUI | 1,326 insns | muimaster.library/MUI_CreateCustomClass | - | muimaster.library/MUI_DisposeObject DisposeObject: 0x0 is not a MUI object (or already di~ |
+| aros-Format | MUI | 3,381 insns | none | - | - |
+| aros-SysMon | MUI | 3,133 insns | muimaster.library/MUI_DeleteCustomClass | - | - |
+| aros-VMM | MUI | 8,067 insns | exec.library/RawPutChar | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-Snoopy | MUI | 13,735 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-About | MUI | 1,326 insns | muimaster.library/MUI_CreateCustomClass | - | - |
+| aros-Workbook | GadTools+BOOPSI | 3,286 insns | none | - | - |
+| aros-Wanderer | MUI | 3,379 insns | intuition.library/EasyRequestArgs | - | dos.library/DupLockFromFH DupLockFromFH on 0x6300: not an open file; dos.library/DupLockF~ |
+| aros-Info | MUI | 2,588 insns | none | - | - |
+| aros-DiskInfo | MUI | 1,721 insns | muimaster.library/MUI_CreateCustomClass | - | - |
+| aros-WBRename | MUI | 2,282 insns | none | - | muimaster.library/MUI_DisposeObject DisposeObject: 0x0 is not a MUI object (or already di~ |
+| aros-prefs-Appearance | MUI-prefs | 6,693 insns | muimaster.library/MUI_CreateCustomClass | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-prefs-Font | MUI-prefs | 6,672 insns | muimaster.library/MUI_CreateCustomClass | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-prefs-Palette | MUI-prefs | 6,714 insns | muimaster.library/MUI_CreateCustomClass | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-prefs-Input | MUI-prefs | 6,715 insns | muimaster.library/MUI_CreateCustomClass | - | dos.library/MatchFirst MatchFirst: AnchorPath 0x1ffdbe is not longword aligned; dos.libra~ |
+| aros-prefs-Time | MUI-prefs | 3,391 insns | none | - | - |
+| aros-prefs-ScreenMode | MUI-prefs | 6,714 insns | muimaster.library/MUI_CreateCustomClass | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-prefs-Zune | MUI-prefs | 2,530 insns | none | - | - |
+| aros-prefs-Locale | MUI-prefs | 9,825 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-prefs-Editor | MUI-prefs | 8,307 insns | iffparse.library/AllocIFF | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-prefs-Pointer | MUI-prefs | 6,756 insns | muimaster.library/MUI_CreateCustomClass | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-prefs-IControl | MUI-prefs | 6,693 insns | muimaster.library/MUI_CreateCustomClass | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-prefs-Wanderer | MUI-prefs | 1,195 insns | muimaster.library/MUI_CreateCustomClass | - | muimaster.library/MUI_NewObjectA MUI Application class: attribute 0x8042a2c8 is not imple~ |
+| aros-prefs-ReqTools | MUI-prefs | 6,651 insns | muimaster.library/MUI_CreateCustomClass | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-prefs-OpenURL | MUI-prefs | 10,638 insns | muimaster.library/MUI_RequestA | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-gtdemo | GadTools | 7,169 insns | exec.library/RawPutChar | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-gtmultiselect | GadTools | 38,776 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-menudemo | GadTools | 7,099 insns (budget, still running) | none | OpenWindowx1, SetMenuStripx1 | dos.library/Open Open NIL: is not modelled yet |
+| aros-mui_notify1 | MUI | 10,018 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-mui_layout1 | MUI | 9,051 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/FPuts Write on 0x0: not an ope~ |
+| aros-mui_pages | MUI | 9,159 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/FPuts Write on 0x0: not an ope~ |
+| aros-mui_slider | MUI | 8,850 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/FPuts Write on 0x0: not an ope~ |
+| aros-NList-Demo | MUI | 7,016 insns | muimaster.library/MUI_CreateCustomClass | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-NListtree-Demo | MUI | 10,100 insns | none | - | dos.library/Close Close 0x0: not an open file; dos.library/Open Open NIL: is not modelled~ |
+| aros-RequestString | MUI | 950 insns | none | - | muimaster.library/MUI_NewObjectA MUI Application class: attribute 0x80425ee5 is not imple~ |
+| aros-MountHDF | MUI | 3,185 insns | none | - | - |
+
+### Toolkit usage matrix, Amiga (name evidence from the hunk + what the census run created)
+
+| app | GadTools | GadTools kinds (run time + static heuristic) | MUI classes named | BOOPSI system classes named | custom classes named | ASL | other system libs | disk/3rd-party libs |
+|---|---|---|---|---|---|---|---|---|
+| amiagent |  | - | - | - | - |  | cybergraphics | bsdsocket |
+| amimon | GT | TEXT | - | - | - |  | - | - |
+| amimon-mui |  | - | 7 | - | - |  | - | - |
+| iGame |  | - | 18 | - | - |  | workbench | guigfx, lowlevel, render |
+| DirectoryOpus | GT | BUTTON,INTEGER,MX,PALETTE | - | buttongclass, propgclass, strgclass, sysiclass | Nudopusgaugeclass, Nudopusiclass, Nudopusstrgclass | asl | commodities, cybergraphics, datatypes, workbench | Picasso96API, SysInfo, amigaguide, cgxsystem, cyberintuition |
+| dopus-viewfont |  | - | - | - | - | asl | workbench | dopus5 |
+| DOpusRT5 |  | - | - | - | - |  | - | dopus5 |
+| YAM |  | - | 52 | - | subclass |  | cybergraphics, datatypes, iffparse, workbench | Nqrexxsyslib, amissl, amisslmaster, application, bamissl |
+| AWeb | GT | BUTTON,GENERIC,INTEGER,LISTVIEW | - | buttongclass, gadgetclass, imageclass, pointerclass, propgclass, sysiclass | - | asl | commodities, datatypes, iffparse, workbench | AwebAmiSSL, AwebAmiTcp, Picasso96API, amissl, amisslmaster |
+| AWebCfg | GT | BUTTON,SLIDER | - | sysiclass | - | asl | workbench | - |
+| SnoopDos | GT | BUTTON,CYCLE,LISTVIEW,MX,SLIDER | - | buttongclass, propgclass, sysiclass | - | asl | commodities, workbench | amigaguide, ramlib-patch |
+| aros-Clock |  | - | 3 | - | - |  | - | - |
+| aros-MultiView | GT | - | - | buttongclass, icclass, modelclass, propgclass, sysiclass | datatypesclass | asl | datatypes, workbench | - |
+| aros-More | GT | - | - | buttongclass, propgclass, sysiclass | - | asl | workbench | - |
+| aros-Installer |  | - | 13 | - | - |  | datatypes, workbench | - |
+| aros-Calculator |  | - | 4 | rootclass | - |  | - | - |
+| aros-Editor | GT | - | - | propgclass, sysiclass | - | asl | iffparse, workbench | - |
+| aros-KeyShow |  | - | 5 | - | - |  | commodities | - |
+| aros-HDToolBox |  | - | 14 | frameiclass, gadgetclass | - |  | - | partition, uuid |
+| aros-ScreenGrabber |  | - | 10 | - | - |  | cybergraphics, datatypes | - |
+| aros-SysExplorer |  | - | 13 | - | hiddclass |  | - | aros, oop |
+| aros-WiMP |  | - | 6 | - | - |  | - | - |
+| aros-Exchange |  | - | 8 | - | - |  | commodities | - |
+| aros-ASCIITable |  | - | 6 | - | - |  | commodities | - |
+| aros-FKey |  | - | 10 | - | - |  | commodities | - |
+| aros-QuickPart |  | - | 13 | - | - |  | - | expansion, oop, partition, uuid |
+| aros-AHIRecord | GT | - | - | - | - | asl | cybergraphics | asyncio |
+| aros-BoingIconBar | GT | - | - | - | - |  | datatypes, workbench | - |
+| aros-Find |  | - | 10 | - | - |  | workbench | - |
+| aros-Format |  | - | 9 | - | - |  | - | - |
+| aros-SysMon |  | - | 16 | - | - |  | - | debug, oop |
+| aros-VMM |  | - | 14 | - | - | asl | commodities | - |
+| aros-Snoopy |  | - | 6 | - | - |  | - | - |
+| aros-About |  | - | 9 | - | - |  | workbench | aros |
+| aros-Workbook | GT | - | - | gadgetclass, groupgclass, propgclass, rootclass | - |  | workbench | - |
+| aros-Wanderer |  | - | 15 | - | - |  | datatypes, iffparse, workbench | aros |
+| aros-Info |  | - | 14 | - | - |  | workbench | - |
+| aros-DiskInfo |  | - | 7 | - | - |  | - | - |
+| aros-WBRename |  | - | 6 | - | - |  | workbench | - |
+| aros-prefs-Appearance |  | - | 8 | - | - |  | - | decorator, decortheme |
+| aros-prefs-Font |  | - | 6 | - | - |  | iffparse | - |
+| aros-prefs-Palette |  | - | 10 | - | - |  | iffparse | - |
+| aros-prefs-Input |  | - | 12 | - | - |  | commodities, iffparse | - |
+| aros-prefs-Time |  | - | 8 | - | - |  | - | - |
+| aros-prefs-ScreenMode |  | - | 11 | - | - |  | iffparse | - |
+| aros-prefs-Zune |  | - | 27 | - | - | asl | - | muiscreen |
+| aros-prefs-Locale |  | - | 9 | - | - |  | cybergraphics, iffparse | codesets |
+| aros-prefs-Editor | GT | BUTTON,PALETTE | - | - | - | asl | iffparse | - |
+| aros-prefs-Pointer |  | - | 10 | - | - |  | cybergraphics, datatypes, iffparse | - |
+| aros-prefs-IControl |  | - | 8 | - | - |  | commodities, iffparse | - |
+| aros-prefs-Wanderer |  | - | 11 | - | - |  | iffparse, workbench | - |
+| aros-prefs-ReqTools |  | - | 7 | - | - |  | - | - |
+| aros-prefs-OpenURL |  | - | 14 | - | - |  | - | openurl |
+| aros-gtdemo | GT | BUTTON,CHECKBOX,INTEGER,LISTVIEW,MX,NUMBER,PALETTE,SCROLLER,SLIDER,STRING,TEXT | - | - | - |  | - | - |
+| aros-gtmultiselect | GT | - | - | - | - |  | - | - |
+| aros-menudemo | GT | - | - | - | - |  | - | - |
+| aros-mui_notify1 |  | - | 1 | - | - |  | - | - |
+| aros-mui_layout1 |  | - | 4 | - | - |  | - | - |
+| aros-mui_pages |  | - | 4 | - | - |  | - | - |
+| aros-mui_slider |  | - | 4 | - | - |  | - | - |
+| aros-NList-Demo |  | - | 13 | - | - |  | - | - |
+| aros-NListtree-Demo |  | - | 10 | - | - |  | - | - |
+| aros-RequestString |  | - | 5 | - | - |  | - | - |
+| aros-MountHDF |  | - | - | - | - |  | - | expansion |
+### What the engine refuses most (count of apps; last run of each, first 6 refusals + the NEXT-NEEDED)
+
+| apps | refusal |
+|---|---|
+| 30 | dos.library/Open: Open NIL: is not modelled yet |
+| 26 | dos.library/Close: Close 0x0: not an open file |
+| 16 | NEXT-NEEDED muimaster.library/MUI_CreateCustomClass |
+| 10 | muimaster.library/MUI_NewObjectA: MUI Application class: attribute 0x8042a2c8 is not implemented |
+| 8 | muimaster.library/MUI_NewObjectA: MUI class "SystemPrefsWindow.mcc" is not implemented |
+| 6 | muimaster.library/MUI_MakeObjectA: MUI_MakeObjectA: object type 2 is not implemented (only MUIO_Label) |
+| 6 | muimaster.library/MUI_DisposeObject: DisposeObject: <addr> is not a MUI object (or already disposed) |
+| 4 | muimaster.library/MUI_MakeObjectA: MUI_MakeObjectA: object type 13 is not implemented (only MUIO_Label) |
+| 3 | intuition.library/EasyRequestArgs |
+| 3 | muimaster.library/MUI_NewObjectA: MUIA_Application_Window: the child object is NULL (its creation failed) |
+| 3 | intuition.library/SetAttrsA: SetAttrsA: <addr> is not a BOOPSI object |
+| 3 | muimaster.library/MUI_NewObjectA: MUIA_Window_RootObject: the child object is NULL (its creation failed) |
+| 3 | muimaster.library/MUI_NewObjectA: MUI Group class: attribute MUIA_Frame is not implemented |
+| 3 | dos.library/FPuts: Write on 0x0: not an open file |
+| 2 | muimaster.library/MUI_NewObjectA: MUI Window class: attribute 0x804280cf is not implemented |
+| 2 | iffparse.library/AllocIFF |
+| 2 | muimaster.library/MUI_NewObjectA: MUI Application class: attribute 0x804235cb is not implemented |
+| 2 | muimaster.library/MUI_MakeObjectA: MUI_MakeObjectA: object type 8 is not implemented (only MUIO_Label) |
+| 2 | muimaster.library/MUI_RequestA |
+| 2 | muimaster.library/MUI_MakeObjectA: MUI_MakeObjectA: object type 3 is not implemented (only MUIO_Label) |
+| 2 | muimaster.library/MUI_NewObjectA: MUI Group class: attribute 0x80421a5f is not implemented |
+| 2 | muimaster.library/MUI_MakeObjectA: MUI_MakeObjectA: object type 4 is not implemented (only MUIO_Label) |
+| 2 | muimaster.library/MUI_NewObjectA: MUI Application class: attribute 0x8042c8d0 is not implemented |
+| 2 | dos.library/DupLockFromFH: DupLockFromFH on 0x6340: not an open file |
+| 2 | dos.library/DupLockFromFH: DupLockFromFH on 0x6300: not an open file |
+| 2 | exec.library/RawPutChar |
+
+### Aggregates over 64 Amiga binaries
+
+Libraries named (count of apps): dos 64, intuition 63, exec 53, stdc 52, locale 47, muimaster 46, utility 38, icon 37, graphics 32, stdcio 31, posixc 31, workbench 19, gadtools 15, iffparse 13, asl 12, diskfont 10, commodities 10, layers 10, datatypes 9, keymap 8, cybergraphics 7, rexxsyslib 6, mathieeedoubbas 3, bsdsocket 3
+
+MUI classes named (count of apps): Group.mui 44, Application.mui 44, Window.mui 34, Text.mui 34, Rectangle.mui 31, String.mui 25, List.mui 19, Listview.mui 18, Popasl.mui 12, Register.mui 11, SystemPrefsWindow.mcc 11, PrefsEditor.mcc 11, Gauge.mui 10, Slider.mui 10, Menuitem.mui 9, Menustrip.mui 8, Balance.mui 8, Menu.mui 7, Cycle.mui 7, Image.mui 7, Scrollgroup.mui 7, Virtgroup.mui 7, NListview.mcc 5, Popobject.mui 5, Scrollbar.mui 5, Area.mui 4, NFloattext.mcc 4, NList.mcc 4, Radio.mui 3, TextEditor.mcc 3
+
+BOOPSI system classes named: sysiclass 7, propgclass 7, buttongclass 5, gadgetclass 3, rootclass 2, strgclass 1, pointerclass 1, imageclass 1, icclass 1, modelclass 1, frameiclass 1, groupgclass 1
+
+GadTools kinds (apps using each; run time + static heuristic): BUTTON 6, INTEGER 3, MX 3, PALETTE 3, LISTVIEW 3, SLIDER 3, TEXT 2, GENERIC 1, CYCLE 1, NUMBER 1, STRING 1, SCROLLER 1, CHECKBOX 1
+
+Custom BOOPSI classes made at run time (MakeClass name : super): dopusbuttongclass : gadgetclass, dopuscheckgclass : gadgetclass, dopusframeclass : gadgetclass, dopusgaugeclass : gadgetclass, dopusiclass : imageclass, dopuslistviewgclass : gadgetclass, dopuspalettegclass : gadgetclass, dopusstrgclass : strgclass, dopusviewgclass : gadgetclass, <private> : rootclass
+
+Library functions called at run time by the binaries that reached them, by app count: intuition/NewObjectA 15, intuition/LockPubScreen 8, gadtools/GetVisualInfoA 6, muimaster/MUI_MakeObjectA 6, intuition/GetScreenDrawInfo 6, intuition/UnlockPubScreen 6, graphics/GetVPModeID 5, intuition/FreeScreenDrawInfo 5, MUI Text.mui 4, muimaster/MUI_NewObjectA 4, gadtools/FreeVisualInfo 4, asl/FreeAslRequest 4, graphics/TextLength 3, gadtools/CreateContext 3, intuition/OpenWindowTagList 3, intuition/MakeClass 3, asl/AllocAslRequest 3, gadtools/CreateMenusA 3, gadtools/LayoutMenusA 3, graphics/ReleasePen 3, intuition/DisposeObject 3, intuition/LockIBase 3, intuition/UnlockIBase 3, gadtools/CreateGadgetA 2
+
+### Translation-table rows ranked by app count (Amiga, name evidence + census)
+
+| # | apps | table row | role it feeds | e.g. |
+|---|---|---|---|---|
+| 1 | 44 | MUI Application + Window (shell, title, close, menus) | window | amimon-mui, iGame, YAM, aros-Clock ... |
+| 2 | 43 | MUI Group (horizontal/vertical/virtual, frame, title) | group | amimon-mui, iGame, YAM, aros-Installer ... |
+| 3 | 33 | MUI Text (labels, text buttons via MUIO_Label/Button) | label/button | amimon-mui, iGame, YAM, aros-Installer ... |
+| 4 | 32 | MUI Balance / Rectangle spacing | (layout only) | iGame, YAM, aros-KeyShow, aros-HDToolBox ... |
+| 5 | 26 | MUI String (text field) | field | iGame, YAM, aros-Installer, aros-HDToolBox ... |
+| 6 | 23 | MUI List + Listview (rows, selection) incl. NList/NListtree | list | iGame, YAM, aros-Installer, aros-HDToolBox ... |
+| 7 | 22 | ASL requesters (file/font/screenmode) | modal dialog | iGame, DirectoryOpus, dopus-viewfont, YAM ... |
+| 8 | 17 | MUI Slider / Gauge / Scale | slider/gauge | YAM, aros-Installer, aros-ScreenGrabber, aros-QuickPart ... |
+| 9 | 15 | GadTools gadget kinds (CreateGadgetA) | button/checkbox/choice/field/slider/list | amimon, DirectoryOpus, AWeb, AWebCfg ... |
+| 10 | 11 | MUI Register (tabs) | choice (tabs) | YAM, aros-SysExplorer, aros-SysMon, aros-VMM ... |
+| 11 | 11 | MUI Image / Dtpic / IconImage | image | iGame, YAM, aros-Installer, aros-QuickPart ... |
+| 12 | 11 | MUI prefs window family (PrefsEditor/SystemPrefsWindow MCCs) | window + groups | aros-prefs-Appearance, aros-prefs-Font, aros-prefs-Palette, aros-prefs-Input ... |
+| 13 | 10 | Commodities (Exchange/hotkeys; no UI) | (none) | DirectoryOpus, AWeb, SnoopDos, aros-KeyShow ... |
+| 14 | 9 | BOOPSI system gadget/image classes (propg, strg, buttong, sysi, frame) | scrollbar/field/button/image | DirectoryOpus, AWeb, AWebCfg, SnoopDos ... |
+| 15 | 9 | MUI Scrollgroup / Virtgroup / Scrollbar | scrollbar | YAM, aros-Installer, aros-SysExplorer, aros-QuickPart ... |
+| 16 | 9 | datatypes (picture/text/sound viewers) | image/plane | DirectoryOpus, YAM, AWeb, aros-MultiView ... |
+| 17 | 8 | MUI Menustrip / Menu / Menuitem | menu | amimon-mui, iGame, YAM, aros-HDToolBox ... |
+| 18 | 8 | MUI Cycle / Radio (choice) | choice | iGame, YAM, aros-Installer, aros-HDToolBox ... |
+| 19 | 5 | EasyRequest (system alert/confirm) | modal dialog | AWebCfg, aros-KeyShow, aros-AHIRecord, aros-Find ... |
+| 20 | 3 | MUI TextEditor / TextEditor.mcp | multiline field | iGame, YAM, aros-Info |
+| 21 | 3 | Custom BOOPSI classes (MakeClass; DOpus-style) | plane unless ancestor used | DirectoryOpus, dopus-viewfont, aros-Calculator |
+
+### Mac census, one row per binary
+
+| app | arch | ran | NEXT-NEEDED | Toolbox managers called |
+|---|---|---|---|---|
+| executor-go | 68k | 25474 instructions, halted=true, blocke~ | _GetCCursor ($AA1B) at pc=0x204f06 | toolbox: InitDialogs,InitFonts,InitGraf,InitWindows,REFUSED,TEInit; menu: InitMenus; event: FlushEvents |
+| executor-icontest | 68k | 507 instructions, halted=true, blocked=~ | _NewCWindow ($AA45) at pc=0x20077a | toolbox: InitCursor,InitDialogs,InitFonts,InitGraf,InitWindows,REFUSED; menu: InitMenus; event: FlushEvents; ~ |
+| retro68-Dialog-68k | 68k | 4083 instructions, halted=true, blocked~ | _GetNewDialog ($A97C) at pc=0x200a10 | toolbox: InitDialogs,InitFonts,InitGraf,InitWindows,REFUSED,TEInit; menu: InitMenus |
+| retro68-FixedBenchmark-68k | 68k | 143738 instructions, halted=true, block~ | _SetToolBoxTrapAddress ($A647) at pc=0x20e43a | toolbox: GetTrapAddress,REFUSED |
+| retro68-HelloWorld-68k | 68k | 118301 instructions, halted=true, block~ | _SetToolBoxTrapAddress ($A647) at pc=0x20afc0 | toolbox: GetTrapAddress,REFUSED |
+| retro68-HelloWorldCpp-68k | 68k | 122180 instructions, halted=true, block~ | _SetToolBoxTrapAddress ($A647) at pc=0x22f210 | toolbox: GetTrapAddress,REFUSED |
+| retro68-Launcher-68k | 68k | 124862 instructions, halted=true, block~ | _SetToolBoxTrapAddress ($A647) at pc=0x20b374 | toolbox: GetTrapAddress,REFUSED |
+| retro68-Raytracer2-68k | 68k | 51554 instructions, halted=true, blocke~ | _SetToolBoxTrapAddress ($A647) at pc=0x202124 | toolbox: GetTrapAddress,REFUSED |
+| retro68-Raytracer-68k | 68k | 9172 instructions, halted=true, blocked~ | _SetToolBoxTrapAddress ($A647) at pc=0x2014f4 | toolbox: GetTrapAddress,REFUSED |
+| retro68-WDEFShell-68k | 68k | 7397 instructions, halted=true, blocked~ | _SetToolBoxTrapAddress ($A647) at pc=0x20144c | toolbox: GetTrapAddress,REFUSED |
+| retro68-Application-ppc | ppc |  |  Library/beep (tvector): library Library is not provided by the engine | Other: GetVRefNum[NEXT-NEEDED],beep[NEXT-NEEDED],is_computer_on[NEXT-NEEDED]; Package/Misc: ExitToShell; File~ |
+| retro68-Dialog-ppc | ppc |  | unimplemented trap import GetNewDialog: _GetNewDialog ($A97C) has no handler yet | QuickDraw: FrameRoundRect,InitCursor,InitGraf,InsetRect,PenSize; TextEdit: TEInit; Dialog: GetDialogItem[NEXT~ |
+| retro68-FixedBenchmark-ppc | ppc |  |  InterfaceLib/GetFPos (tvector): _GetFPos ($A018) has no handler yet | File/Device: FSClose[NEXT-NEEDED],FSRead[NEXT-NEEDED],FSWrite[NEXT-NEEDED],FlushVol[NEXT-NEEDED],GetFPos[NEXT~ |
+| retro68-HelloWorld-ppc | ppc |  | unimplemented trap import NGetTrapAddress: NGetTrapAddress is not a Toolbox or OS trap name in the engine's tables | File/Device: FSClose[NEXT-NEEDED],FSRead[NEXT-NEEDED],FSWrite[NEXT-NEEDED],FlushVol[NEXT-NEEDED],GetFPos[NEXT~ |
+| retro68-HelloWorldCpp-ppc | ppc |  | unimplemented trap import NGetTrapAddress: NGetTrapAddress is not a Toolbox or OS trap name in the engine's tables | File/Device: FSClose[NEXT-NEEDED],FSRead[NEXT-NEEDED],FSWrite[NEXT-NEEDED],FlushVol[NEXT-NEEDED],GetFPos[NEXT~ |
+| retro68-Raytracer2-ppc | ppc |  | unimplemented trap import Button: _Button ($A974) has no handler yet | QuickDraw: CopyBits,EraseRect,FrameRect,InitGraf,MoveTo,PaintRect; Font/Text: DrawString,InitFonts,StringWidt~ |
+| retro68-Raytracer-ppc | ppc |  | unimplemented trap import Button: _Button ($A974) has no handler yet | Event: Button[NEXT-NEEDED],FlushEvents[NEXT-NEEDED],TickCount; Package/Misc: ExitToShell; File/Device: FSClos~ |
+| retro68-WDEFShell-ppc | ppc |  | unimplemented trap import NewRoutineDescriptor: NewRoutineDescriptor is not a Toolbox or OS trap name in the engine's tables | QuickDraw: DiffRgn,DisposeRgn,FillRect,FillRgn,FillRoundRect,FrameOval; Window: BeginUpdate,DisposeWindow,Dra~ |
+| systemless-showcase-68k | 68k | 46345 instructions, halted=true, blocke~ | _HFSDispatch ($A260) at pc=0x2077c8 | toolbox: GetOSTrapAddress,GetTrapAddress,REFUSED |
+
+### Mac matrix: resource types (68k: static) and distinct Toolbox routines per manager
+
+68k rows count A-line traps found in CODE resources (an upper bound: data that looks like a trap word counts, and the Retro68 runtime's own
+libc file I/O inflates every Retro68 sample); PPC rows count the PEF's imports from InterfaceLib (exact). `Init*` and `TEInit` do not count.
+
+| app | arch | WIND | ALRT | DLOG | DITL | CNTL | MENU | MBAR | CDEF | WDEF | LDEF | STR# | PICT | ICN# | TEXT | Window | Control | Dialog | Menu | List | TE | StdFile | QD | ColorQD | Font/Text | Event | Res | File | Mem | Misc |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| executor-go | 68k | 1 | 7 | 10 | 17 | 10 | 6 | 1 | 3 |  |  |  | 1 | 16 |  | 21 | 18 | 14 | 13 |  | 14 | 1 | 38 | 2 | 12 | 8 | 11 | 24 | 21 | 12 |
+| executor-icontest | 68k |  |  |  |  |  |  |  |  |  |  |  |  | 11 |  | 2 |  |  |  |  |  |  | 3 | 1 |  | 1 | 3 |  | 4 | 1 |
+| retro68-Dialog-68k | 68k |  |  | 1 | 1 |  |  |  |  |  |  |  |  |  |  |  | 2 | 5 |  |  |  |  | 3 |  |  | 1 | 2 |  | 6 | 4 |
+| retro68-FixedBenchmark-68k | 68k |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 11 | 7 | 3 | 4 |  | 3 |  | 24 | 15 | 9 | 5 | 10 | 29 | 16 | 24 |
+| retro68-HelloWorld-68k | 68k |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 11 | 3 |  |  |  | 2 |  | 23 | 12 | 8 | 5 | 8 | 16 | 15 | 23 |
+| retro68-HelloWorldCpp-68k | 68k |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 9 | 4 |  | 3 |  | 1 |  | 27 | 17 | 10 | 5 | 8 | 14 | 16 | 31 |
+| retro68-Launcher-68k | 68k |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 11 | 3 | 2 | 2 |  | 1 |  | 23 | 16 | 12 | 8 | 10 | 17 | 16 | 23 |
+| retro68-Raytracer2-68k | 68k |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 1 |  |  |  |  | 1 |  | 8 |  | 3 | 3 | 5 | 7 | 12 | 9 |
+| retro68-Raytracer-68k | 68k |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 1 |  |  |  |  |  |  | 8 |  | 3 | 3 | 3 |  | 10 | 8 |
+| retro68-WDEFShell-68k | 68k | 1 |  |  |  |  | 3 | 1 |  | 2 |  | 1 |  |  | 1 | 10 |  |  | 10 |  | 1 |  | 20 |  | 2 | 5 | 3 | 2 | 10 | 9 |
+| retro68-Application-ppc | ppc |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 6 | 2 | 1 |
+| retro68-Dialog-ppc | ppc |  |  | 1 | 1 |  |  |  |  |  |  |  |  |  |  |  | 2 | 5 |  |  |  |  | 3 |  |  | 1 |  | 6 | 2 | 1 |
+| retro68-FixedBenchmark-ppc | ppc |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 10 |  |  |  |  |  |  | 10 |  | 5 | 5 |  | 9 | 5 | 2 |
+| retro68-HelloWorld-ppc | ppc |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 10 |  |  |  |  |  |  | 10 |  | 5 | 5 |  | 6 | 5 | 2 |
+| retro68-HelloWorldCpp-ppc | ppc |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 10 |  |  |  |  |  |  | 10 |  | 5 | 5 |  | 6 | 5 | 2 |
+| retro68-Raytracer2-ppc | ppc |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 1 |  |  |  |  |  |  | 8 |  | 3 | 3 |  | 6 | 5 | 1 |
+| retro68-Raytracer-ppc | ppc |  |  |  |  |  |  |  |  |  |  |  |  |  |  | 1 |  |  |  |  |  |  | 8 |  | 4 | 3 |  | 6 | 3 | 1 |
+| retro68-WDEFShell-ppc | ppc | 1 |  |  |  |  | 3 | 1 |  | 2 |  | 1 |  |  | 1 | 12 |  |  | 10 |  | 1 |  | 20 |  | 3 | 5 | 2 | 8 | 5 | 1 |
+| systemless-showcase-68k | 68k | 1 | 1 | 1 | 2 | 1 | 9 | 1 |  |  |  |  |  |  |  | 15 | 8 | 5 | 13 | 1 | 17 | 1 | 51 | 19 | 11 | 10 | 15 | 1 | 6 | 10 |
+
+Managers used beyond their Init* call, by app count (of 19 Mac apps): Memory 19, Package/Misc 19, QuickDraw 18, Event 18, Window 16, File/Device 16, Font/Text 15, Resource 12, TextEdit 9, Control 8, Menu 7, Color QD 7, Dialog 6, StandardFile 2, List 1
+
+
+## The Mac corpus
+
+19 classic Mac applications: 2 from the Executor tree (ARDI's own `go` launcher and `icontest`, MIT), and the Retro68
+Samples built for BOTH architectures with the toolchain built here (Dialog, HelloWorld, HelloWorldCpp, Raytracer, Raytracer2,
+FixedBenchmark, WDEFShell for 68k and PPC; Launcher for 68k; SharedLibrary/Application for PPC). Retro68 builds were produced by
+`/data/build/retro68/build-all.sh` and `build-host.sh` (log paths in the sources table); they need Boost, which was missing
+on this machine and was built locally (`/data/build/retro68/boost`), and texinfo, which was stubbed (only docs).
+
+The richest app is `systemless`'s **Toolbox Showcase** (a fat application, 5,000 lines of C exercising Window/Menu/List/Resource/
+TextEdit/StandardFile/Control/Dialog/Sound/Palette; GPL-3, used as test data only). Its source cannot be rebuilt here (Retro68's
+open *Multiversal* interfaces lack `Controls.h`, `Lists.h`, `Palettes.h`, `QDOffscreen.h`, as its README says, and Apple's Universal
+Interfaces cannot be redistributed), but its `.sit` stores the forks uncompressed, so `tools/corpus-extract-showcase.py` cuts
+the 68k resource fork (`showcase.rsrc`) and the PPC PEF (`showcase.pef`) out of it; the PPC half is driven by
+`macppc-engine/tests/real_app.rs` already. No other freely redistributable classic Mac application with an explicit licence turned
+up (Macintosh Garden has none stated, so it was not used). **For Peter, if wanted: Apple's Universal Interfaces 3.4 in
+`/data/refs/retro/Retro68/InterfacesAndLibraries/` would let Retro68 build the Showcase and any other Toolbox source.**
+
+### Results
+
+* **68k (mac68k-run --census)**. Both Executor apps and the Dialog sample stop at a Toolbox routine nobody has written:
+  `_GetCCursor` (go, after the init sequence and `LoadSeg 6`), `_NewCWindow` (icontest), `_GetNewDialog` (Dialog).
+  **Every other Retro68 sample, and the Showcase, first stopped at the same place: the startup's "does this trap exist?" probe,
+  `_GetToolBoxTrapAddress` ($A746) / `_GetOSTrapAddress` ($A346)** (9 of 11 68k apps). That is now implemented
+  (`traptable.rs`: the answer is a 4-byte stub that runs the same bridged trap, the `_Unimplemented` stub for an absent one, as a
+  real ROM does); past it the Retro68 samples stop at `_SetToolBoxTrapAddress` ($A647: the runtime patches a trap) and the
+  Showcase runs 46k instructions to `_HFSDispatch` ($A260, the File Manager).
+* **PPC (macppc-run --census --run)**: every sample is instantiated and its `InterfaceLib` imports are bound or named
+  (static census: 11 to 21 unbound per sample). The run stops: `NGetTrapAddress` (HelloWorld, HelloWorldCpp; the PPC InterfaceLib
+  spells the same probe by that name, which the engine's trap-name table does not know), `GetNewDialog` (Dialog, whose
+  first-listed unbound import is `ModalDialog`), `Button` (Raytracer, Raytracer2), `NewRoutineDescriptor` (WDEFShell: the
+  Mixed Mode UPP builder), and the shared-library sample's `Library/beep` (a CFM shared library, which `macppc` cannot load yet).
+* **Managers by app count (of 19)**: Memory and Package/Misc 19, QuickDraw 18, Event 18, Window 16, File/Device 16, Font/Text 15,
+  Resource 12, TextEdit 9, **Control 8, Menu 7, Color QD 7, Dialog 6, StandardFile 2, List 1** (the matrix above has the per-app
+  counts). The two rich apps (`go`: 10 CNTL, 10 DLOG, 17 DITL, 7 ALRT, 6 MENU, 3 own CDEFs; the Showcase: every manager) use all of
+  them, which is the distribution doc 17 expects: Window + QuickDraw + Event carry every app, Control/Dialog/Menu carry the apps
+  with a UI. The Retro68 samples are small and inflate Memory/File counts with their libc glue: weigh the two rich apps more.
+
+### The top rows for the Mac side (by app count and by what a user sees)
+
+1. **Window Manager** (`NewWindow`/`NewCWindow`/`GetNewWindow`, `BeginUpdate`/`EndUpdate`, `FindWindow`, `DragWindow`,
+   `GrowWindow`, `TrackGoAway`): 16 of 19; a window is the unit of the projection. `_NewCWindow` is the next gap for icontest.
+2. **QuickDraw drawing** (Rect/Oval/RoundRect/Rgn/Poly/Text, `CopyBits`, patterns, pen): 18 of 19: content planes replayed
+   through the kit (doc 17 piece 5). `_GetCCursor`/colour is the next gap for go (Color QD: 7 apps).
+3. **Event Manager** (`GetNextEvent`/`WaitNextEvent`, `Button`, `StillDown`, `TickCount`): 18 of 19, plus input in/exact guest out.
+4. **Control Manager + standard CDEFs** (`NewControl`/`GetNewControl`, `TrackControl`, `HiliteControl`, `Get/SetControlValue`;
+   push button, checkbox, radio, scrollbar via `CNTL`): 8 apps and the whole `go`/Dialog UI. Custom CDEFs (3 in `go`) are
+   planes unless they inherit the standard part.
+5. **Dialog Manager** (`GetNewDialog`/`ModalDialog`/`DrawDialog`/alerts, `DITL` item types: button, checkbox, radio, statText,
+   editText, icon, pict, userItem, control): 6 apps. `ModalDialog` is the PPC Dialog sample's next gap and `_GetNewDialog` the 68k one.
+6. **Menu Manager** (`MBAR`/`MENU`, `MenuSelect`, `MenuKey`, `AppendResMenu`, `HiliteMenu`): 7 apps; maps to the global menu bar.
+7. **TextEdit** (`TENew`, `TEKey`, `TEClick`, `TEUpdate`, `TECut/Copy/Paste`): 9 (mostly the runtime's console); a `field`/multiline
+   role for editText items and a plane for free TE.
+8. **Font/Text** (`TextFont/Size/Face`, `DrawString`, `StringWidth`, `GetFontInfo`): 15: the kit's font engine at kit sizes.
+9. **Resource Manager** (`GetResource`, `Get1Resource`, `ReleaseResource`, `LoadSeg`, `OpenResFile`): 12: the substrate for
+   every `CNTL`/`DLOG`/`DITL`/`MENU`/`WIND` projection.
+10. **List Manager and StandardFile** (`LNew`, `LAddRow`, `LClick`, `Pack0`/`Pack3`): 1 and 2 apps here (the Showcase uses a List, `go` and the Showcase `Pack3`),
+    and every real document app uses both: they stay on the list because the corpus is thin on them, not because they are rare.

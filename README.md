@@ -21,4 +21,8 @@ The crates are `no_std` + `alloc`, so the same code runs on the host and in Cora
 `cargo test --workspace` runs everything. `cargo run -p amiga68k-engine --bin amiga68k-run -- --fixture`
 runs the built-in demo program and prints the recorded UI calls.
 
+Real binaries (never committed): `docs/CORPUS.md` lists the 64 Amiga and 19 Mac programs the engines are censused on, where each
+came from and under which licence, the toolkit usage matrix, and the table rows to cover first; `tools/corpus-*.py` reproduce it
+and the `census_corpus.rs` tests of each engine run the binaries (they skip loudly when `/data/build/corpus-bin` is absent).
+
 Licensing: MIT (our code, Musashi) plus SoftFloat's own permissive terms; see `LICENSES.md` and `NOTICE`.

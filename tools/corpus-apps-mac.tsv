@@ -1,0 +1,20 @@
+#name	arch	path	note
+executor-go	68k	macexec/go.appl.AD	ARDI go launcher (Executor tree, MIT)
+executor-icontest	68k	macexec/icontest.appl.AD	ARDI icon control test (Executor tree, MIT)
+retro68-Dialog-68k	68k	mac-retro68/68k/Dialog.bin	Retro68 sample, built here
+retro68-FixedBenchmark-68k	68k	mac-retro68/68k/FixedBenchmark.bin	Retro68 sample, built here
+retro68-HelloWorld-68k	68k	mac-retro68/68k/HelloWorld.bin	Retro68 sample, built here
+retro68-HelloWorldCpp-68k	68k	mac-retro68/68k/HelloWorldCpp.bin	Retro68 sample, built here
+retro68-Launcher-68k	68k	mac-retro68/68k/Launcher.bin	Retro68 sample, built here
+retro68-Raytracer2-68k	68k	mac-retro68/68k/Raytracer2.bin	Retro68 sample, built here
+retro68-Raytracer-68k	68k	mac-retro68/68k/Raytracer.bin	Retro68 sample, built here
+retro68-WDEFShell-68k	68k	mac-retro68/68k/WDEFShell.bin	Retro68 sample, built here
+retro68-Application-ppc	ppc	mac-retro68/ppc/Application.bin	Retro68 sample, built here
+retro68-Dialog-ppc	ppc	mac-retro68/ppc/Dialog.bin	Retro68 sample, built here
+retro68-FixedBenchmark-ppc	ppc	mac-retro68/ppc/FixedBenchmark.bin	Retro68 sample, built here
+retro68-HelloWorld-ppc	ppc	mac-retro68/ppc/HelloWorld.bin	Retro68 sample, built here
+retro68-HelloWorldCpp-ppc	ppc	mac-retro68/ppc/HelloWorldCpp.bin	Retro68 sample, built here
+retro68-Raytracer2-ppc	ppc	mac-retro68/ppc/Raytracer2.bin	Retro68 sample, built here
+retro68-Raytracer-ppc	ppc	mac-retro68/ppc/Raytracer.bin	Retro68 sample, built here
+retro68-WDEFShell-ppc	ppc	mac-retro68/ppc/WDEFShell.bin	Retro68 sample, built here
+systemless-showcase-68k	68k	systemless-showcase/showcase.rsrc	fat Toolbox Showcase: 68k CODE in the resource fork (systemless, GPL-3, test data only)
