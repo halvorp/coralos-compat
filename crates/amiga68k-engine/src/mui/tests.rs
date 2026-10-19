@@ -284,3 +284,25 @@ fn a_menustrip_is_built_from_a_newmenu_array_and_make_object_refuses_what_it_doe
     let e = make::make(&mut a, MUIO_NumericButton, p).unwrap_err().0;
     assert!(e.contains("type 16 is not implemented"), "{e}");
 }
+
+#[test]
+fn a_control_the_host_refuses_costs_the_control_never_the_window() {
+    use crate::mui::win::{degrade, is_open};
+    use guestui_abi::ControlModel;
+    let mut a = machine();
+    a.ui.refuse_kinds.push("Gauge");
+    let g = make(&mut a, "Gauge.mui", &[(MUIA_Gauge_Max, 200), (MUIA_Gauge_Current, 50)]).unwrap();
+    let b = made(&mut a, MUIO_Button, &[0]);
+    let (_app, win) = open_ui(&mut a, &[g, b]);
+    assert!(is_open(&a, win), "the window is open: one refused control did not close it");
+    // The refusal is named, the Gauge is a framed label reading its value, and the sibling control is natively there.
+    assert!(a.refused.iter().any(|r| r.contains("refused to draw it (Gauge)")), "refused: {:?}", a.refused);
+    assert_eq!(kind_of_obj(&a, g), ControlKind::Label { text: "25%".into(), framed: true });
+    assert!(matches!(kind_of_obj(&a, b), ControlKind::Button));
+    // The value moving re-shows the new label, with no second refusal line.
+    let n = a.refused.len();
+    set_attr(&mut a, g, MUIA_Gauge_Current, 100).unwrap();
+    assert_eq!(kind_of_obj(&a, g), ControlKind::Label { text: "50%".into(), framed: true });
+    assert_eq!(a.refused.len(), n);
+    assert_eq!(degrade(&ControlModel { kind: ControlKind::Gauge { value: 1, max: 3 }, label: "".into(), rect: guestui_abi::GuestRect { left: 0, top: 0, width: 1, height: 1 }, enabled: true, token: CallbackToken(0) }).kind, ControlKind::Label { text: "33%".into(), framed: true });
+}
