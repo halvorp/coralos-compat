@@ -70,7 +70,11 @@ impl<U: GuestUi> Mac<U> {
         let code0 = {
             let f = &self.rm.files.last().ok_or("no resource file open")?.fork;
             let i = f.find(*b"CODE", 0).ok_or("no 'CODE' 0 resource: not a 68k application")?;
-            f.data(i).ok_or("CODE 0 unreadable")?.to_vec()
+            let d = f.data(i).ok_or("CODE 0 unreadable")?;
+            if f.entry(i).is_some_and(|e| e.attrs & crate::compressed::RES_COMPRESSED != 0) && d.starts_with(&crate::compressed::SIGNATURE.to_be_bytes()) {
+                return Err("CODE 0 is a compressed resource: launch reads it before any trap can run its 'dcmp' (refused by name, not misread)".into());
+            }
+            d.to_vec()
         };
         let (c, jt) = parse_code0(&code0)?;
         if c.jt_size == 0 { return Err("CODE 0: an empty jump table has no entry point".into()); }
@@ -84,7 +88,7 @@ impl<U: GuestUi> Mac<U> {
         lowmem::set_app(&mut self.mem, &opened.name.unwrap_or_else(|| "Application".into()), a5, c.jt_offset as u16, APP_REF_NUM).map_err(|e| e.0)?;
         self.seg = SegLoader { a5, jt_offset: c.jt_offset, jt_size: c.jt_size, loaded: BTreeSet::new() };
         self.mem.write_u32(STACK_TOP - 4, EXIT_STUB).map_err(|e| e.to_string())?;
-        self.ctx = Some(retro_m68k::start_with(self, a5 + c.jt_offset + 2, STACK_TOP - 4, &[(REG_A0 + 5, a5)]));
+        self.ctx = Some(retro_m68k::start_model(self, a5 + c.jt_offset + 2, STACK_TOP - 4, &[(REG_A0 + 5, a5)], self.profile.cpu));
         self.log.push(format!("[segment] launch: A5 {a5:#x}, jump table {} entries at A5+{}", c.jt_size / 8, c.jt_offset));
         Ok(())
     }

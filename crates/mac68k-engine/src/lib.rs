@@ -17,6 +17,7 @@
 extern crate alloc;
 pub mod addrmode;
 pub mod clock;
+pub mod compressed;
 pub mod cursor;
 pub mod events;
 pub mod fm;
@@ -37,6 +38,7 @@ pub mod pack7;
 pub mod package;
 pub mod pascal;
 pub mod procmgr;
+pub mod profile;
 pub mod qd;
 pub mod quickdraw;
 pub mod pack2;

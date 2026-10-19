@@ -8,6 +8,9 @@ ROOT = os.environ.get("MAC_CORPUS_ROOT", "/data/build/corpus-bin")
 BIN = os.environ.get("RETRO_BIN", "/data/wt/compat-corpus/target/release")
 def run(arch, path):
     cmd = [BIN + ("/mac68k-run" if arch == "68k" else "/macppc-run"), "--census"]
+    if arch == "68k":
+        cmd += ["--insns", os.environ.get("MAC_INSNS", "50000000")]   # compressed resources run a guest decompressor: 5M is not enough
+        if os.environ.get("MAC_MACHINE"): cmd += ["--machine", os.environ["MAC_MACHINE"]]   # a machine profile (mac-ii default, mac-plus, mac-se)
     if arch == "ppc": cmd += ["--run", "--insns", "50000000"]
     p = subprocess.run(cmd + [path], capture_output=True, text=True, timeout=600)
     return p.stdout.splitlines(), p.stderr.strip().splitlines()

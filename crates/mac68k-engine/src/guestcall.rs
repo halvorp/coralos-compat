@@ -28,6 +28,15 @@ pub struct GuestCall {
     pub restore: Option<(u32, u32)>,
 }
 
+/// What the trampoline's `ILLEGAL` undoes when a guest routine returns to it.
+#[derive(Debug, Clone)]
+pub(crate) enum Frame {
+    /// A completion routine: put the trap's own D0 and A0 back.
+    D0A0(u32, u32),
+    /// A resource decompressor ([`crate::compressed`]): every register and the SR, then free the scratch.
+    Decomp(crate::compressed::DecompDone),
+}
+
 impl<U: GuestUi> Mac<U> {
     /// Write the trampoline into low memory (once, at machine creation).
     pub(crate) fn install_trampoline(&mut self) -> Result<(), crate::Refusal> {
@@ -39,7 +48,7 @@ impl<U: GuestUi> Mac<U> {
         let mut sp = cpu.areg(7);
         let mut push = |m: &mut Self, v: u32| { sp = sp.wrapping_sub(4); let _ = m.mem.write_u32(sp, v); };
         push(self, pc.wrapping_add(2));
-        if let Some(saved) = call.restore { self.call_stack.push(saved); push(self, TRAMPOLINE); }
+        if let Some((d0, a0)) = call.restore { self.call_stack.push(Frame::D0A0(d0, a0)); push(self, TRAMPOLINE); }
         cpu.set_areg(7, sp);
         if let Some(v) = call.d0 { cpu.set_d0(v); }
         if let Some(v) = call.a0 { cpu.set_areg(0, v); }
@@ -47,11 +56,12 @@ impl<U: GuestUi> Mac<U> {
         cpu.set_pc(call.target);
     }
 
-    /// The trampoline's `ILLEGAL`: put the trap's own D0 / A0 back.
+    /// The trampoline's `ILLEGAL`: undo what the call that returned here changed (its [`Frame`]).
     pub(crate) fn leave_guest(&mut self, cpu: &mut Cpu) -> bool {
-        let Some((d0, a0)) = self.call_stack.pop() else { return false };
-        cpu.set_d0(d0);
-        cpu.set_areg(0, a0);
-        true
+        match self.call_stack.pop() {
+            None => false,
+            Some(Frame::D0A0(d0, a0)) => { cpu.set_d0(d0); cpu.set_areg(0, a0); true }
+            Some(Frame::Decomp(done)) => { self.finish_decompress(cpu, done); true }
+        }
     }
 }

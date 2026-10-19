@@ -99,7 +99,11 @@ pub struct Mac<U: GuestUi> {
     pub scrap: crate::scrap::Scrap,
     /// A guest routine a handler asked for; the A-line bridge enters it after the handler returns (guestcall.rs).
     pub(crate) pending_call: Option<crate::guestcall::GuestCall>,
-    pub(crate) call_stack: Vec<(u32, u32)>,
+    pub(crate) call_stack: Vec<crate::guestcall::Frame>,
+    /// A resource decompression a handler queued; the A-line bridge runs it and retries the trap (compressed.rs).
+    pub(crate) dcmp_pending: Option<crate::compressed::Decomp>,
+    /// True while a registered handler runs on the real CPU (a decompression can only be deferred then).
+    pub(crate) in_trap: bool,
     /// Trap patches (`_SetTrapAddress`): trap key -> the guest routine that replaces it.
     pub patches: BTreeMap<u16, u32>,
     pub(crate) ctx: Option<retro_m68k::CpuContext>,
@@ -108,6 +112,8 @@ pub struct Mac<U: GuestUi> {
     pub clock: crate::clock::Clock,
     /// The engine's own International Resource handles (intl.rs).
     pub intl: crate::intl::IntlHandles,
+    /// Which classic Mac this is (profile.rs): the CPU model, the boot address mode, what Gestalt / SysEnvirons answer.
+    pub profile: crate::profile::MachineProfile,
 }
 
 /// The prefix every unimplemented-trap refusal starts with (a census runner keys on it).
@@ -120,7 +126,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), intl: Default::default(),
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), intl: Default::default(), profile: crate::profile::DEFAULT,
         };
         lowmem::init(&mut m.mem)?;
         m.set_address_mode(crate::addrmode::AddrMode::Bit24)?; // a classic 68k Mac boots in 24-bit mode
@@ -155,6 +161,16 @@ impl<U: GuestUi> Mac<U> {
         crate::translate::register(&mut m)?;
         m.mem.write_u16(EXIT_STUB, 0xA9F4).map_err(Refusal::mem("exit stub"))?; // _ExitToShell
         Ok(m)
+    }
+
+    /// Become the machine called `name` (profile.rs; a bundle's `(guest (machine "mac-plus"))`): the CPU model the NEXT
+    /// [`Mac::launch`] / [`Mac::start`] runs on, the address mode, and the Gestalt / SysEnvirons answers. An unknown name is a
+    /// named refusal and changes nothing.
+    pub fn set_machine(&mut self, name: &str) -> Result<(), Refusal> {
+        let p = crate::profile::lookup(name).ok_or_else(|| Refusal(format!("unknown machine profile \"{name}\" (known: {})", crate::profile::PROFILES.iter().map(|p| p.name).collect::<Vec<_>>().join(", "))))?;
+        self.set_address_mode(p.addr)?;
+        self.profile = p;
+        Ok(())
     }
 
     /// Implement `opcode` (a Toolbox trap) with this Pascal signature. The name comes from the generated table; a
@@ -240,7 +256,12 @@ impl<U: GuestUi> Host for Mac<U> {
                 // Entered through a stub, the trap's own address is the original call site: just before the return address.
                 let site = stub_ret.map_or(pc, |r| r.wrapping_sub(2));
                 let pc_before = cpu.pc();
+                self.dcmp_pending = None;
+                self.in_trap = true;
                 let outcome = pascal::read_args(&self.mem, sp, layout).and_then(|args| handler(self, cpu, &Call { opcode, pc: site, name, args }));
+                self.in_trap = false;
+                // A resource the handler needed is compressed: expand it in the guest, then run this very trap again.
+                if let Some(d) = self.dcmp_pending.take() { self.enter_decompress(cpu, pc, d); return true; }
                 let redirected = cpu.pc() != pc_before; // a handler that moves the PC (LoadSeg) takes the return address with it
                 let result = self.finish_pascal(name, outcome);
                 // The convention is applied once, here: pop the arguments whatever the handler did, store the result.
@@ -257,7 +278,11 @@ impl<U: GuestUi> Host for Mac<U> {
                 // A0/A1 carry pointers and handles whose high byte a 24-bit application may use for flags: the bus ignores it.
                 regs.a0 = self.mem.strip(regs.a0);
                 regs.a1 = self.mem.strip(regs.a1);
+                self.dcmp_pending = None;
+                self.in_trap = true;
                 let outcome = handler(self, cpu, &mut regs);
+                self.in_trap = false;
+                if let Some(d) = self.dcmp_pending.take() { self.enter_decompress(cpu, pc, d); return true; }
                 self.finish_os(name, outcome, &mut regs);
                 cpu.set_d0(regs.d0);
                 cpu.set_areg(0, regs.a0);
