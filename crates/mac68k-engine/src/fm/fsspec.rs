@@ -57,14 +57,14 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> { m.register_
 fn mem<U: GuestUi>(_: &Mac<U>) -> impl Fn(retro_guest_mem::MemError) -> i16 { |_| err::PARAM_ERR }
 
 /// An FSSpec in guest memory -> the entry it names.
-fn spec_loc<U: GuestUi>(m: &Mac<U>, p: u32) -> Result<Located, i16> {
+pub(super) fn spec_loc<U: GuestUi>(m: &Mac<U>, p: u32) -> Result<Located, i16> {
     let g = mem(m);
     let (vref, par) = (m.mem.read_i16(p + FSS_VREF).map_err(&g)?, m.mem.read_u32(p + FSS_PAR_ID).map_err(&g)?);
     let name = pascal::read_pstring_bytes(&m.mem, p + FSS_NAME).map_err(|_| err::BD_NAM_ERR)?;
     m.fm.locate(vref, par, Some(&name))
 }
 
-fn write_spec<U: GuestUi>(m: &mut Mac<U>, p: u32, loc: &Located) -> Result<(), i16> {
+pub(super) fn write_spec<U: GuestUi>(m: &mut Mac<U>, p: u32, loc: &Located) -> Result<(), i16> {
     let g = mem(m);
     let vol = loc.vol;
     let (name, par) = match (loc.node, &loc.leaf) {

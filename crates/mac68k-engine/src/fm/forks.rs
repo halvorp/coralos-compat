@@ -67,6 +67,26 @@ impl FileMgr {
         Err(err::TMFO_ERR)
     }
 
+    /// The running application's own file: it lives on the default volume under its name (an existing file of that name is
+    /// kept as it is) and its resource fork is OPEN, read-only, under `refnum` (the Resource Manager's number for it), so the
+    /// program can find itself the way a real one does: `CurApName`, `PBGetFCBInfo(CurApRefNum)`, `OpenRF` of its own name.
+    pub fn install_app(&mut self, name: &str, data: &[u8], rsrc: &[u8], file_type: [u8; 4], creator: [u8; 4], refnum: i16) -> Result<(), i16> {
+        let dir = self.def_dir;
+        let node = match self.tree.find_child(dir, name) {
+            Some(n) => n,
+            None => {
+                let n = self.tree.put_file(dir, name, data.to_vec()).map_err(super::os_err)?;
+                let node = self.tree.get_mut(n);
+                node.rsrc = rsrc.to_vec();
+                node.finfo.file_type = file_type;
+                node.finfo.creator = creator;
+                n
+            }
+        };
+        self.forks.insert(refnum, OpenFork { node, rsrc: true, perm: Perm { read: true, write: false }, mark: 0 });
+        Ok(())
+    }
+
     pub fn close(&mut self, refnum: i16) -> Result<(), i16> { self.forks.remove(&refnum).map(|_| ()).ok_or(err::RF_NUM_ERR) }
     pub fn eof(&self, refnum: i16) -> Result<u32, i16> { let f = self.fork_of(refnum)?; Ok(self.fork_bytes(&f).len() as u32) }
     pub fn mark(&self, refnum: i16) -> Result<u32, i16> { self.fork_of(refnum).map(|f| f.mark) }

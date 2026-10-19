@@ -215,7 +215,7 @@ impl<U: GuestUi> Mac<U> {
 }
 
 fn done(log: String) -> Result<Done, Refusal> { Ok(Done { result: 0, log }) }
-fn h_of<U: GuestUi>(m: &Mac<U>, what: &str, h: u32) -> Result<(), Refusal> {
+pub(crate) fn h_of<U: GuestUi>(m: &Mac<U>, what: &str, h: u32) -> Result<(), Refusal> {
     if m.menu_view(h).is_ok() { Ok(()) } else { Err(Refusal(format!("{what}: {h:#x} is not a MenuHandle"))) }
 }
 
@@ -397,7 +397,7 @@ fn count_mitems<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
     Ok(Done { result: n, log: format!("[menu] CountMItems {h:#x} -> {n}") })
 }
 
-fn edit_item<U: GuestUi>(m: &mut Mac<U>, what: &str, h: u32, item: u16, f: impl FnOnce(&mut Parsed, usize)) -> Result<(), Refusal> {
+pub(crate) fn edit_item<U: GuestUi>(m: &mut Mac<U>, what: &str, h: u32, item: u16, f: impl FnOnce(&mut Parsed, usize)) -> Result<(), Refusal> {
     h_of(m, what, h)?;
     let mut p = m.menu_view(h)?;
     if item as usize > p.items.len() { return Err(Refusal(format!("{what}: menu {} has {} items, not {item}", p.id, p.items.len()))); }

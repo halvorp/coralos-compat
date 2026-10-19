@@ -105,7 +105,11 @@ fn put_name<U: GuestUi>(m: &mut Mac<U>, np: u32, name: &[u8]) -> Result<(), i16>
 fn open_fork<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool, rsrc: bool) -> Result<(), i16> {
     let l = loc(m, pb, hfs)?;
     let perm = pb.u8(&m.mem, IO_PERMSSN).map_err(mem_err("perm"))?;
-    let r = m.fm.open(&l, rsrc, perm)?;
+    let r = m.fm.open(&l, rsrc, perm);
+    let (vref, np) = (pb.i16(&m.mem, IO_VREF_NUM).unwrap_or(0), pb.u32(&m.mem, IO_NAME_PTR).unwrap_or(0));
+    let shown = if np == 0 { String::new() } else { read_name(m, np).map(|n| n.iter().map(|&b| char::from(b)).collect()).unwrap_or_default() };
+    m.log.push(format!("[file] open {} fork \"{shown}\" vRef {vref} perm {perm} -> {}", if rsrc { "resource" } else { "data" }, match &r { Ok(n) => *n, Err(e) => *e }));
+    let r = r?;
     pb.put_i16(&mut m.mem, IO_REF_NUM, r).map_err(mem_err("refnum"))
 }
 fn open_data<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool) -> Result<(), i16> { open_fork(m, pb, hfs, false) }
@@ -143,7 +147,9 @@ fn write<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
 
 fn get_eof<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
     let g = mem_err("block");
-    let e = m.fm.eof(pb.i16(&m.mem, IO_REF_NUM).map_err(&g)?)?;
+    let r = pb.i16(&m.mem, IO_REF_NUM).map_err(&g)?;
+    let e = m.fm.eof(r)?;
+    m.log.push(format!("[file] GetEOF refnum {r} = {e}"));
     pb.put_u32(&mut m.mem, IO_MISC, e).map_err(&g)
 }
 fn set_eof<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {

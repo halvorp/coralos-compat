@@ -141,12 +141,14 @@ impl<U: GuestUi> Mac<U> {
         segment::register(&mut m)?;
         crate::fm::traps::register(&mut m)?;
         crate::fm::fsspec::register(&mut m)?;
+        crate::fm::alias::register(&mut m)?;
         crate::fm::resfiles::register(&mut m)?;
         crate::scrap::register(&mut m)?;
         crate::sysenv::register(&mut m)?;
         crate::gestalt::register(&mut m)?;
         crate::pack2::register(&mut m)?;
         crate::pack7::register(&mut m)?;
+        crate::toolutil::register(&mut m)?;
         crate::package::register(&mut m)?;
         crate::intl::register(&mut m)?;
         crate::strcmp::register(&mut m)?;
@@ -156,6 +158,7 @@ impl<U: GuestUi> Mac<U> {
         crate::winmgr::register(&mut m)?;
         crate::fontnames::register(&mut m)?;
         menu::register(&mut m)?;
+        crate::menu_items::register(&mut m)?;
         events::register(&mut m)?;
         crate::traptable::register(&mut m)?;
         crate::translate::register(&mut m)?;
