@@ -17,7 +17,7 @@ use retro_m68k::Cpu;
 const MAX_ITEMS: u32 = 4096;
 
 /// The next real item at or after `*state`: (address, tag, data); `*state` moves past it. None at TAG_DONE / NULL.
-fn next_item<U: GuestUi>(a: &Amiga<U>, state: &mut u32) -> Result<Option<(u32, u32, u32)>, Refusal> {
+pub(crate) fn next_item<U: GuestUi>(a: &Amiga<U>, state: &mut u32) -> Result<Option<(u32, u32, u32)>, Refusal> {
     for _ in 0..MAX_ITEMS {
         if *state == 0 { return Ok(None); }
         let at = *state;
@@ -33,7 +33,7 @@ fn next_item<U: GuestUi>(a: &Amiga<U>, state: &mut u32) -> Result<Option<(u32, u
     Err(Refusal("TagItem list longer than 4096 items (cyclic TAG_MORE?)".into()))
 }
 
-fn find<U: GuestUi>(a: &Amiga<U>, tag: u32, list: u32) -> Result<Option<(u32, u32)>, Refusal> {
+pub(crate) fn find<U: GuestUi>(a: &Amiga<U>, tag: u32, list: u32) -> Result<Option<(u32, u32)>, Refusal> {
     let mut st = list;
     while let Some((at, t, d)) = next_item(a, &mut st)? { if t == tag { return Ok(Some((at, d))); } }
     Ok(None)
