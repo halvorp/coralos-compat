@@ -2,8 +2,8 @@
 //! any `BrokerCommand`) can disable, enable, show, hide or kill it. Done through the commodities lane's object graph ([`crate::commodities`]):
 //! * OM_NEW (unless `MUIA_Application_UseCommodities` is FALSE): a message port, and `CxBroker({NB_VERSION, Name = MUIA_Application_Title or
 //!   "Unnamed", Title = MUIA_Application_Version (a leading "$VER: " removed) or "Unnamed", Descr = MUIA_Application_Description or "?", Unique 0,
-//!   COF_SHOW_HIDE, Pri = MUIA_Application_BrokerPri, Port})`; the object graph keeps the NAME, priority and port (Title/Descr/Flags are what
-//!   a commodity manager would list, and the engine has none), activated when `MUIA_Application_Active` (default TRUE) is.
+//!   COF_SHOW_HIDE, Pri = MUIA_Application_BrokerPri, Port})`; the object graph keeps name, title, description, priority and port (CopyBrokerList
+//!   hands them to Exchange; nb_Flags is not kept, as in AROS), activated when `MUIA_Application_Active` (default TRUE) is.
 //! * `MUIA_Application_Active` set: ActivateCxObj on the broker. GetAttr: `MUIA_Application_Broker` / `_BrokerPort` the object / the port.
 //! * Inside `MUIM_Application_NewInput` (the signal of the port is part of the mask it returns): every message on the port is a CxMsg; a
 //!   CXM_COMMAND is handled CXCMD_DISABLE = `set(app, Active, FALSE)`, CXCMD_ENABLE = `set(app, Active, TRUE)`, CXCMD_KILL = `SetSignal(CTRL_C)` of
@@ -38,10 +38,14 @@ pub(super) fn create<U: GuestUi>(a: &mut Amiga<U>, app: u32, tags: &[(u32, u32)]
     if !use_cx { return Ok(()); }
     let title = a.objects.text(app, MUIA_Application_Title);
     let name = String::from(if title.is_empty() { NB_NAME_DEFAULT } else { title });
+    let text = |a: &Amiga<U>, attr, default: &str| { let s = a.objects.text(app, attr); String::from(if s.is_empty() { default } else { s }) };
+    let btitle = text(a, MUIA_Application_Version, NB_NAME_DEFAULT);
+    let btitle = String::from(btitle.strip_prefix("$VER: ").unwrap_or(&btitle)); // application.c: nb_Title += 6
+    let descr = text(a, MUIA_Application_Description, "?");
     let pri = a.objects.num_or(app, MUIA_Application_BrokerPri, 0) as i8; // a BYTE
     super::object::store_num(a, app, MUIA_Application_BrokerPri, pri as i32 as u32);
     let Some(port) = ports::new_port(a)? else { return Ok(()) }; // no signal or memory: no commodity, as Zune
-    let (co, _) = commodities::add_broker(a, &name, false, pri, port)?;
+    let (co, _) = commodities::add_broker(a, (&name, &btitle, &descr), false, pri, port)?;
     if co == 0 { ports::free_port(a, port)?; return Ok(()); }
     if a.objects.flag(app, MUIA_Application_Active) { commodities::set_active(a, co, true); }
     if let Some(Ext::App { broker, .. }) = a.objects.map.get_mut(&app).map(|o| &mut o.ext) { *broker = Some(Broker { co, port }); }

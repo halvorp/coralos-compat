@@ -26,13 +26,14 @@ pub(crate) const CXM_COMMAND: u8 = 64;
 pub(crate) const CXCMD_DISABLE: u32 = 15;
 pub(crate) const CXCMD_ENABLE: u32 = 17;
 pub(crate) const CXCMD_KILL: u32 = 23;
+pub(crate) const CXCMD_LIST_CHG: u32 = 27;
 const SIGBREAKF_CTRL_E: u32 = 1 << 12;
 const MN_REPLY_PORT: u32 = 14;
 const MN_LENGTH: u32 = 18;
 const MSGPORT_SIZE: u32 = 34;
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
-    b.named("BrokerCommand", broker_command::<U>).named("CxMsgType", cx_msg_type::<U>).named("CxMsgID", cx_msg_id::<U>).named("CxMsgData", cx_msg_data::<U>)
+    b.named("BrokerCommand", broker_command::<U>).named("CopyBrokerList", copy_broker_list::<U>).named("FreeBrokerList", free_broker_list::<U>).named("CxMsgType", cx_msg_type::<U>).named("CxMsgID", cx_msg_id::<U>).named("CxMsgData", cx_msg_data::<U>)
 }
 
 /// The port replies come back to, made at the first use (PA_IGNORE: nothing waits on it, the next BrokerCommand frees its messages).
@@ -50,6 +51,15 @@ fn reply_port<U: GuestUi>(a: &mut Amiga<U>) -> Result<u32, Refusal> {
 fn broker_command<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (name_p, command) = (cpu.areg(0), cpu.dreg(0));
     let name = if name_p == 0 { String::from("Exchange") } else { a.mem.read_cstr(name_p).map_err(Refusal::mem("BrokerCommand name"))? };
+    let (r, what) = send_command_why(a, &name, command)?;
+    cpu.set_d0(r as u32);
+    Ok(format!("[commodities] BrokerCommand \"{name}\" {command} -> {r} ({what})"))
+}
+
+/// BrokerCommand without the registers: the result (0 sent, -1 / -2 / -3).
+pub(crate) fn send_command<U: GuestUi>(a: &mut Amiga<U>, name: &str, command: u32) -> Result<i32, Refusal> { send_command_why(a, name, command).map(|(r, _)| r) }
+
+fn send_command_why<U: GuestUi>(a: &mut Amiga<U>, name: &str, command: u32) -> Result<(i32, &'static str), Refusal> {
     let rp = reply_port(a)?;
     loop { // the replies of earlier commands: freed here
         let m = exec_wait::rem_head(a, rp + 20)?;
@@ -57,7 +67,7 @@ fn broker_command<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
         a.heap.free(m, CXMSG_SIZE).map_err(|e| Refusal(format!("BrokerCommand: {e}")))?;
     }
     let found = a.cx.brokers.iter().copied().find(|b| a.cx.objs.get(b).map_or(false, |o| o.name == name));
-    let (r, what) = match found {
+    Ok(match found {
         None => (-1, "unknown broker"),
         Some(b) => {
             let (port, task) = { let o = &a.cx.objs[&b]; (o.port, o.task) };
@@ -74,9 +84,63 @@ fn broker_command<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
                 (0, "sent")
             } else { (-3, "no memory") }
         }
-    };
-    cpu.set_d0(r as u32);
-    Ok(format!("[commodities] BrokerCommand \"{name}\" {command} -> {r} ({what})"))
+    })
+}
+
+// struct BrokerCopy (libraries/commodities.h, m68k gcc -mno-align-int): Node 14, bc_Name[24] 14, bc_Title[40] 38, bc_Descr[40] 78, bc_Task 118,
+// bc_Port 122, bc_Dummy 126, bc_Flags 128; 132 bytes.
+const BC_SIZE: u32 = 132;
+const BC_NAME: u32 = 14;
+const BC_TITLE: u32 = 38;
+const BC_DESCR: u32 = 78;
+const BC_TASK: u32 = 118;
+const BC_PORT: u32 = 122;
+const BC_FLAGS: u32 = 128;
+const LN_NAME: u32 = 10;
+const COF_ACTIVE: u32 = 1 << 1;
+
+/// FreeBrokerList(a0 = list): every BrokerCopy node is removed and freed.
+fn free_broker_list<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let list = cpu.areg(0);
+    let n = free_nodes(a, list)?;
+    Ok(format!("[commodities] FreeBrokerList {list:#x} ({n} nodes)"))
+}
+
+fn free_nodes<U: GuestUi>(a: &mut Amiga<U>, list: u32) -> Result<u32, Refusal> {
+    let mut n = 0;
+    loop {
+        let node = exec_wait::rem_head(a, list)?;
+        if node == 0 { return Ok(n); }
+        a.heap.free(node, BC_SIZE).map_err(|e| Refusal(format!("FreeBrokerList: {e}")))?;
+        n += 1;
+    }
+}
+
+/// CopyBrokerList(a0 = list) -> the number of brokers: the old nodes are freed, then one BrokerCopy per broker, in priority order
+/// (AROS commodities copybrokerlist.c). Name, title and description are cut to CBD_NAMELEN / TITLELEN / DESCRLEN with a NUL.
+fn copy_broker_list<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let list = cpu.areg(0);
+    free_nodes(a, list)?;
+    let mut count = 0;
+    for b in a.cx.brokers.clone() {
+        let Some(node) = a.heap.alloc(BC_SIZE) else { break };
+        a.mem.zero(node, BC_SIZE).map_err(Refusal::mem("BrokerCopy"))?;
+        let o = &a.cx.objs[&b];
+        let (name, title, descr, task, port, active) = (o.name.clone(), o.title.clone(), o.descr.clone(), o.task, o.port, o.active);
+        let m = Refusal::mem("BrokerCopy");
+        for (off, s, cap) in [(BC_NAME, &name, 24usize), (BC_TITLE, &title, 40), (BC_DESCR, &descr, 40)] {
+            let bytes: alloc::vec::Vec<u8> = s.chars().map(|c| c as u32 as u8).take(cap - 1).collect();
+            a.mem.write_bytes(node + off, &bytes).map_err(&m)?;
+        }
+        a.mem.write_u32(node + LN_NAME, node + BC_NAME).map_err(&m)?;
+        a.mem.write_u32(node + BC_TASK, task).map_err(&m)?;
+        a.mem.write_u32(node + BC_PORT, port).map_err(&m)?;
+        a.mem.write_u32(node + BC_FLAGS, if active { COF_ACTIVE } else { 0 }).map_err(&m)?;
+        exec_wait::add_tail(a, list, node)?;
+        count += 1;
+    }
+    cpu.set_d0(count);
+    Ok(format!("[commodities] CopyBrokerList {list:#x} -> {count}"))
 }
 
 fn cx_msg_type<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {

@@ -3,7 +3,7 @@
  * ENABLE, KILL, unknown name), 9 = Active after DISABLE's NewInput, 10 = Active after ENABLE's, 11 = hook calls, 12..15 = the CxMsg ids the hook saw,
  * 16 = hook's object == app, 17 = CTRL_C set after KILL, 18 = NewInput's mask has the port signal, 20 = app2 (UseCommodities FALSE) broker,
  * 21 = app3 (no title) "Unnamed" BrokerCommand result, 22 = after dispose BrokerCommand("Notes"), 23 = hook calls before any command,
- * 24 = Active at birth. */
+ * 24 = Active at birth, 26 = CopyBrokerList count, 27..30,33 = its node (name, $VER cut title, descr "?", flags, port), 31 = list empty after FreeBrokerList. */
 #include "rt.h"
 #define V(i) (*(volatile u32 *)&RES[i])
 #define MUIA_Application_Active 0x804260abu
@@ -42,6 +42,17 @@ void _start(void) {
   V(0) = app;
   V(1) = get(app, MUIA_Application_Broker); V(2) = get(app, MUIA_Application_BrokerPort); V(3) = get(app, MUIA_Application_BrokerPri);
   V(24) = get(app, MUIA_Application_Active);
+  /* what Exchange lists: CopyBrokerList over a fresh List, then FreeBrokerList */
+  u32 list[3] = { (u32)&list[1], 0, (u32)&list[0] };
+  V(26) = LVOA(cx, LVO_commodities_CopyBrokerList, 0, (u32)list, 0, 0, 0);
+  u32 node = list[0];
+  V(27) = node && !strcmp((const char *)(node + 14), "Notes") && rd32((const void *)(node + 10)) == node + 14;
+  V(28) = node && !strcmp((const char *)(node + 38), "Notes 1.0");   /* the "$VER: " is cut, as application.c does */
+  V(29) = node && !strcmp((const char *)(node + 78), "?");          /* no MUIA_Application_Description: "?" */
+  V(30) = node ? rd32((const void *)(node + 128)) : 0xDEAD;         /* COF_ACTIVE */
+  V(33) = node ? rd32((const void *)(node + 122)) == V(2) : 0;      /* bc_Port is the BrokerPort */
+  LVOA(cx, LVO_commodities_FreeBrokerList, 0, (u32)list, 0, 0, 0);
+  V(31) = list[0] == (u32)&list[1];
   u32 sigs = 0;
   newinput(app, &sigs);                                   /* nothing was sent: the hook is not called */
   V(23) = V(11); V(18) = (sigs >> *(volatile u8 *)(V(2) + 15)) & 1;

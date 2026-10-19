@@ -34,6 +34,16 @@ fn an_application_owns_a_broker_and_its_attributes_read_back() {
 }
 
 #[test]
+fn exchange_sees_the_applications_broker_in_copy_broker_list() {
+    let a = run();
+    assert_eq!(r(&a, 26), 1, "CopyBrokerList counts the one broker");
+    assert_eq!((r(&a, 27), r(&a, 28), r(&a, 29)), (1, 1, 1), "BrokerCopy name, title without \"$VER: \", description \"?\"");
+    assert_eq!(r(&a, 30), 2, "COF_ACTIVE: the Application is active");
+    assert_eq!(r(&a, 33), 1, "bc_Port is the BrokerPort");
+    assert_eq!(r(&a, 31), 1, "FreeBrokerList emptied the list");
+}
+
+#[test]
 fn commodity_commands_are_handled_in_new_input_as_zune_does() {
     let a = run();
     assert_eq!(r(&a, 23), 0, "NEGATIVE CONTROL: with nothing sent, NewInput calls no hook");

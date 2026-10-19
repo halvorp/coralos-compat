@@ -9,7 +9,7 @@
 //! sets COERR_NULLATTACH on the head, and attaching to a NULL head deletes the object.
 //!
 //! What is NOT modelled: there is no input.device stream, so no InputEvent ever reaches a filter and a hot key never
-//! fires; DivertCxMsg / RouteCxMsg / DisposeCxMsg, MatchIX and the broker list calls (CopyBrokerList ...) stay named refusals.
+//! fires; DivertCxMsg / RouteCxMsg / DisposeCxMsg and MatchIX stay named refusals. CopyBrokerList / FreeBrokerList (what Exchange lists) and BrokerCommand are commodities_cmd.rs; a new broker tells Exchange CXCMD_LIST_CHG.
 //! BrokerCommand and the three CxMsg readers a broker's own command messages need are commodities_cmd.rs. SetFilter stores the description text unparsed (ParseIX itself is commodities_parse.rs).
 //! Offsets (m68k-linux-gnu-gcc -m68020 -mno-align-int over AROS libraries/commodities.h, 2026-10-18): struct NewBroker is 26
 //! bytes: nb_Version 0, nb_Name 2, nb_Title 6, nb_Descr 10, nb_Unique 14, nb_Flags 16, nb_Pri 18, nb_Port 20; struct IX 12.
@@ -40,9 +40,10 @@ const COERR_NULLATTACH: u8 = 1;
 const OBJ_SIZE: u32 = 32;
 const IX_SIZE: usize = 12;
 
-pub(crate) struct Obj { pub(crate) ty: u32, parent: u32, kids: Vec<u32>, active: bool, pri: i8, err: u8, pub(crate) name: String, ix: Option<[u8; IX_SIZE]>, filter_text: Option<String>,
+pub(crate) struct Obj { pub(crate) ty: u32, parent: u32, kids: Vec<u32>, pub(crate) active: bool, pri: i8, err: u8, pub(crate) name: String, ix: Option<[u8; IX_SIZE]>, filter_text: Option<String>,
     /// A broker's nb_Port and the task that created it (CxBroker's `FindTask(NULL)`), for BrokerCommand.
-    pub(crate) port: u32, pub(crate) task: u32 }
+    pub(crate) port: u32, pub(crate) task: u32,
+    /** A broker's nb_Title and nb_Descr (what Exchange lists: CopyBrokerList). */ pub(crate) title: String, pub(crate) descr: String }
 
 #[derive(Default)]
 pub struct State { pub(crate) objs: BTreeMap<u32, Obj>, pub(crate) brokers: Vec<u32>, /** The port CxMsg replies go to (commodities_cmd.rs); 0 until the first BrokerCommand. */ pub(crate) reply_port: u32 }
@@ -60,7 +61,7 @@ fn new_obj<U: GuestUi>(a: &mut Amiga<U>, ty: u32, active: bool, pri: i8, name: S
     let Some(p) = crate::fs::alloc_zeroed_sys(a, OBJ_SIZE)? else { return Err(Refusal("commodities: no memory for a CxObj (NOMEM)".into())) };
     a.mem.write_u8(p + 8, ty as u8).map_err(Refusal::mem("CxObj.ln_Type"))?;
     a.mem.write_u8(p + 9, pri as u8).map_err(Refusal::mem("CxObj.ln_Pri"))?;
-    a.cx.objs.insert(p, Obj { ty, parent: 0, kids: Vec::new(), active, pri, err: 0, name, ix: None, filter_text: None, port: 0, task: 0 });
+    a.cx.objs.insert(p, Obj { ty, parent: 0, kids: Vec::new(), active, pri, err: 0, name, ix: None, filter_text: None, port: 0, task: 0, title: String::new(), descr: String::new() });
     Ok(p)
 }
 
@@ -83,11 +84,13 @@ fn create<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal
 
 /// A broker in the object graph (inactive), enqueued by priority, FIFO among equals: the part of CxBroker that needs no NewBroker struct, so
 /// a MUI Application can make its own. `(object, error)`: a unique name that is taken is CBERR_DUP and no object.
-pub(crate) fn add_broker<U: GuestUi>(a: &mut Amiga<U>, name: &str, unique: bool, pri: i8, port: u32) -> Result<(u32, u32), Refusal> {
+pub(crate) fn add_broker<U: GuestUi>(a: &mut Amiga<U>, (name, title, descr): (&str, &str, &str), unique: bool, pri: i8, port: u32) -> Result<(u32, u32), Refusal> {
     if unique && a.cx.brokers.iter().any(|b| a.cx.objs.get(b).map_or(false, |o| o.name == name)) { return Ok((0, CBERR_DUP)); }
     let co = new_obj(a, CX_BROKER, false, pri, name.into())?;
     let task = a.sched.cur;
-    if let Some(o) = a.cx.objs.get_mut(&co) { o.port = port; o.task = task; }
+    if let Some(o) = a.cx.objs.get_mut(&co) { o.port = port; o.task = task; o.title = title.into(); o.descr = descr.into(); }
+    // cxbroker.c: once the system is running, a new broker tells the commodity manager (Exchange) that the list changed - before it is enqueued.
+    crate::commodities_cmd::send_command(a, "Exchange", crate::commodities_cmd::CXCMD_LIST_CHG)?;
     let at = a.cx.brokers.iter().position(|b| a.cx.objs.get(b).map_or(false, |o| o.pri < pri)).unwrap_or(a.cx.brokers.len());
     a.cx.brokers.insert(at, co);
     Ok((co, CBERR_OK))
@@ -100,10 +103,12 @@ fn broker<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal
     let version = a.mem.read_u8(nb).map_err(&m)?;
     let name_p = a.mem.read_u32(nb + 2).map_err(&m)?;
     let name = if name_p == 0 { String::new() } else { a.mem.read_cstr(name_p).map_err(&m)? };
+    let text = |a: &Amiga<U>, off: u32| -> Result<String, Refusal> { let p = a.mem.read_u32(nb + off).map_err(Refusal::mem("NewBroker"))?; if p == 0 { Ok(String::new()) } else { a.mem.read_cstr(p).map_err(Refusal::mem("NewBroker")) } };
+    let (title, descr) = (text(a, 6)?, text(a, 10)?);
     let (unique, pri) = (a.mem.read_u16(nb + 14).map_err(&m)?, a.mem.read_u8(nb + 18).map_err(&m)? as i8);
     let (co, err) = if version != NB_VERSION { (0, CBERR_VERSION) } else {
         let port = a.mem.read_u32(nb + 20).map_err(&m)?;
-        add_broker(a, &name, unique & NBU_UNIQUE != 0, pri, port)?
+        add_broker(a, (&name, &title, &descr), unique & NBU_UNIQUE != 0, pri, port)?
     };
     if errp != 0 { a.mem.write_u32(errp, err).map_err(Refusal::mem("CxBroker error"))?; }
     cpu.set_d0(co);
