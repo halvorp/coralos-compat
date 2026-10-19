@@ -31,6 +31,7 @@ pub mod translate;
 pub mod iclass;
 pub mod utility;
 mod utility_date;
+mod utility_tags;
 pub mod census;
 pub mod devices;
 pub mod task_resource;

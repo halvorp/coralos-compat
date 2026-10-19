@@ -14,6 +14,7 @@ pub enum Kind {
     Area, Rectangle, Balance, Image, Group, Virtgroup, Scrollgroup, Register, Text, String, Cycle, Radio,
     Numeric, Slider, Gauge, Prop, Scrollbar, List, Listview, Popstring, Popasl, Popobject,
     Bitmap, ChunkyImage, Bodychunk, Imagedisplay,
+    Semaphore, Dataspace,
 }
 
 /// `(public class name, its superclass, kind, abstract)`. Supers come first (the IClass table is built in this order).
@@ -54,6 +55,8 @@ pub const CLASSES: &[Class] = &[
     c("ChunkyImage.mui", Some(Kind::Bitmap), Kind::ChunkyImage, false),
     c("Bodychunk.mui", Some(Kind::Bitmap), Kind::Bodychunk, false),
     c("Imagedisplay.mui", Some(Kind::Area), Kind::Imagedisplay, false),
+    c("Semaphore.mui", None, Kind::Semaphore, false),
+    c("Dataspace.mui", Some(Kind::Semaphore), Kind::Dataspace, false),
 ];
 
 impl Kind {

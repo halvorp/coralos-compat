@@ -84,7 +84,9 @@ const RADIO: &[(u32, Ty)] = &[(MUIA_Radio_Active, Num), (MUIA_Radio_Entries, Str
 const NUMERIC: &[(u32, Ty)] = &[(MUIA_Numeric_Value, Num), (MUIA_Numeric_Min, Num), (MUIA_Numeric_Max, Num), (MUIA_Numeric_Default, Num),
     (MUIA_Numeric_Format, Str), (MUIA_Numeric_Reverse, Num), (MUIA_Numeric_RevLeftRight, Num), (MUIA_Numeric_RevUpDown, Num),
     (MUIA_Numeric_CheckAllSizes, Num)];
-const SLIDER: &[(u32, Ty)] = &[(MUIA_Slider_Horiz, Num), (MUIA_Slider_Quiet, Num)];
+// MUIA_Group_Horiz: Zune's coloradjust.c passes it to SliderObject (a Slider is no Group, so its dispatcher never looks at it and
+// rootclass drops it; a slider's orientation is MUIA_Slider_Horiz, default horizontal). Held and ignored here too.
+const SLIDER: &[(u32, Ty)] = &[(MUIA_Slider_Horiz, Num), (MUIA_Slider_Quiet, Num), (MUIA_Group_Horiz, Num)];
 const GAUGE: &[(u32, Ty)] = &[(MUIA_Gauge_Current, Num), (MUIA_Gauge_Max, Num), (MUIA_Gauge_Horiz, Num), (MUIA_Gauge_Divide, Num),
     (MUIA_Gauge_InfoText, Str), (MUIA_Gauge_InfoRate, Num), (MUIA_Gauge_FullFrame, Num), (MUIA_Gauge_EmptyImage, Num), (MUIA_Gauge_FullImage, Num)];
 const PROP: &[(u32, Ty)] = &[(MUIA_Prop_First, Num), (MUIA_Prop_Entries, Num), (MUIA_Prop_Visible, Num), (MUIA_Prop_Horiz, Num),
@@ -112,6 +114,7 @@ const BITMAP: &[(u32, Ty)] = &[(MUIA_Bitmap_Alpha, Num), (MUIA_Bitmap_Bitmap, Nu
     (MUIA_Bitmap_UseFriend, Num), (MUIA_Bitmap_Width, Num)];
 const CHUNKYIMAGE: &[(u32, Ty)] = &[(MUIA_ChunkyImage_Pixels, Num), (MUIA_ChunkyImage_Palette, Num), (MUIA_ChunkyImage_NumColors, Num), (MUIA_ChunkyImage_Modulo, Num)];
 const BODYCHUNK: &[(u32, Ty)] = &[(MUIA_Bodychunk_Body, Num), (MUIA_Bodychunk_Compression, Num), (MUIA_Bodychunk_Depth, Num), (MUIA_Bodychunk_Masking, Num)];
+const DATASPACE: &[(u32, Ty)] = &[(MUIA_Dataspace_Pool, Num)];
 const IMAGEDISPLAY: &[(u32, Ty)] = &[(MUIA_Imagedisplay_Spec, Num), (MUIA_Imagedisplay_UseDefSize, Num), (MUIA_Imagedisplay_FreeHoriz, Num), (MUIA_Imagedisplay_FreeVert, Num)];
 
 /// The attributes `kind` itself defines (ancestors' are looked up separately).
@@ -123,7 +126,7 @@ fn own(kind: Kind) -> &'static [(u32, Ty)] {
         Kind::Register => REGISTER, Kind::Text => TEXT, Kind::String => STRING, Kind::Cycle => CYCLE, Kind::Radio => RADIO,
         Kind::Numeric => NUMERIC, Kind::Slider => SLIDER, Kind::Gauge => GAUGE, Kind::Prop => PROP, Kind::Scrollbar => SCROLLBAR,
         Kind::List => LIST, Kind::Listview => LISTVIEW, Kind::Popstring => POPSTRING, Kind::Popasl => POPASL, Kind::Popobject => POPOBJECT,
-        Kind::Bitmap => BITMAP, Kind::ChunkyImage => CHUNKYIMAGE, Kind::Bodychunk => BODYCHUNK, Kind::Imagedisplay => IMAGEDISPLAY,
+        Kind::Bitmap => BITMAP, Kind::ChunkyImage => CHUNKYIMAGE, Kind::Bodychunk => BODYCHUNK, Kind::Imagedisplay => IMAGEDISPLAY, Kind::Semaphore => &[], Kind::Dataspace => DATASPACE,
     }
 }
 

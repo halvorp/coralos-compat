@@ -19,6 +19,10 @@ use guestui_abi::GuestUi;
 /// sizeof(struct MUI_NotifyData) and the room reserved for struct MUI_AreaData (the class instance sizes of Notify.mui / Area.mui).
 pub const NOTIFY_SIZE: u32 = 28;
 pub const AREA_SIZE: u32 = 256;
+/// Semaphore.mui's instance is a `struct SignalSemaphore` (46 bytes, exec/semaphores.h); Dataspace.mui adds a list, a pool and a pool flag (16 bytes
+/// reserved). The state is host-side; the room is reserved so a subclass's own data starts where Zune's does.
+pub const SEMAPHORE_SIZE: u32 = 46;
+pub const DATASPACE_SIZE: u32 = 16;
 const MND_GLOBAL_INFO: u32 = 0;
 const MND_USER_DATA: u32 = 4;
 /// `struct MUI_GlobalInfo`: priv0, mgi_ApplicationObject, and room for the private pointers.
@@ -75,7 +79,7 @@ pub fn forget_application<U: GuestUi>(a: &mut Amiga<U>, app: u32) {
 /// The instance size the native class of `kind` has: Notify.mui holds a `MUI_NotifyData`, Area.mui a `MUI_AreaData`; every other
 /// class's data is the engine's own (host-side), so a subclass's data follows right after its nearest sized ancestor.
 pub const fn instance_size(kind: Kind) -> u16 {
-    match kind { Kind::Notify => NOTIFY_SIZE as u16, Kind::Area => AREA_SIZE as u16, _ => 0 }
+    match kind { Kind::Notify => NOTIFY_SIZE as u16, Kind::Area => AREA_SIZE as u16, Kind::Semaphore => SEMAPHORE_SIZE as u16, Kind::Dataspace => (SEMAPHORE_SIZE + DATASPACE_SIZE) as u16, _ => 0 }
 }
 
 /// Where `mad_*` field `off` of `obj` lives in guest memory (`None` for a native object).

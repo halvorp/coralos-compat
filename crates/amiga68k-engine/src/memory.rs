@@ -46,19 +46,32 @@ pub fn free_mem<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
     Ok(format!("[exec] FreeMem {at:#x} size={size}"))
 }
 
-/// AllocVec(d0 = byteSize, d1 = requirements): AllocMem with the size kept in the longword before the block.
-pub fn alloc_vec<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (size, req) = (cpu.dreg(0), cpu.dreg(1));
+/// A zeroed-or-not AllocVec block (size word in front) for host code that makes what the guest later FreeVec()s; 0 when out of memory.
+pub fn alloc_vec_block<U: GuestUi>(a: &mut Amiga<U>, size: u32, clear: bool) -> Result<u32, Refusal> {
     let total = size.checked_add(GRAIN).ok_or_else(|| Refusal("AllocVec: size overflows".into()))?;
     let at = if size == 0 { None } else { a.heap.alloc(total) };
-    let user = match at {
+    Ok(match at {
         Some(p) => {
             a.mem.write_u32(p, total).map_err(Refusal::mem("AllocVec size word"))?;
-            if req & MEMF_CLEAR != 0 { zero(a, p + GRAIN, size)?; }
+            if clear { zero(a, p + GRAIN, size)?; }
             p + GRAIN
         }
         None => 0,
-    };
+    })
+}
+
+/// FreeVec of a block from [`alloc_vec_block`] / AllocVec (NULL is a no-op).
+pub fn free_vec_block<U: GuestUi>(a: &mut Amiga<U>, user: u32) -> Result<(), Refusal> {
+    if user == 0 { return Ok(()); }
+    let at = user.wrapping_sub(GRAIN);
+    let total = a.mem.read_u32(at).map_err(Refusal::mem("FreeVec size word"))?;
+    a.heap.free(at, total).map_err(|e| Refusal(format!("FreeVec: {e}")))
+}
+
+/// AllocVec(d0 = byteSize, d1 = requirements): AllocMem with the size kept in the longword before the block.
+pub fn alloc_vec<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (size, req) = (cpu.dreg(0), cpu.dreg(1));
+    let user = alloc_vec_block(a, size, req & MEMF_CLEAR != 0)?;
     cpu.set_d0(user);
     Ok(format!("[exec] AllocVec size={size} req={req:#x} -> {user:#x}"))
 }
@@ -67,9 +80,7 @@ pub fn alloc_vec<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
 pub fn free_vec<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let user = cpu.areg(1);
     if user == 0 { return Ok("[exec] FreeVec NULL".into()); }
-    let at = user.wrapping_sub(GRAIN);
-    let total = a.mem.read_u32(at).map_err(Refusal::mem("FreeVec size word"))?;
-    a.heap.free(at, total).map_err(|e| Refusal(format!("FreeVec: {e}")))?;
+    free_vec_block(a, user)?;
     Ok(format!("[exec] FreeVec {user:#x}"))
 }
 

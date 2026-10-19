@@ -6,7 +6,7 @@ use alloc::format;
 use super::classes::Kind;
 use super::hooks::{After, HookCall, Msg};
 use super::ids_gen::*;
-use super::{app, attrs, handlers, list, notify, object};
+use super::{app, attrs, handlers, list, notify, object, store};
 use crate::boopsi_ids::OM_GET;
 use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
@@ -21,16 +21,16 @@ pub fn arity<U: GuestUi>(a: &Amiga<U>, id: u32, msg: u32) -> Result<u32, Refusal
     let until_null = |from: u32| -> Result<u32, Refusal> { let mut n = from; while n < from + 4096 && word(n + 1)? != 0 { n += 1; } Ok(n) };
     Ok(match id {
         MUIM_Notify => 4 + word(4)?.min(64),
-        MUIM_Set | MUIM_NoNotifySet | OM_GET | MUIM_KillNotifyObj | MUIM_WriteLong | MUIM_WriteString | MUIM_Family_Insert
+        MUIM_Set | MUIM_NoNotifySet | OM_GET | MUIM_GetConfigItem | MUIM_Dataspace_Find | MUIM_KillNotifyObj | MUIM_WriteLong | MUIM_WriteString | MUIM_Family_Insert
         | MUIM_List_InsertSingle | MUIM_List_GetEntry | MUIM_List_Exchange | MUIM_List_Move | MUIM_Window_SetMenuCheck | MUIM_Window_SetMenuState => 2,
-        MUIM_SetUData | MUIM_SetUDataOnce | MUIM_GetUData | MUIM_List_Insert | MUIM_List_Select => 3,
+        MUIM_SetUData | MUIM_SetUDataOnce | MUIM_GetUData | MUIM_List_Insert | MUIM_List_Select | MUIM_Dataspace_Add | MUIM_Dataspace_ReadIFF | MUIM_Dataspace_WriteIFF => 3,
         MUIM_MultiSet => until_null(2)?,
         MUIM_Application_PushMethod => 2 + word(2)?.min(64),
         MUIM_Application_NewInput | MUIM_Application_ReturnID | MUIM_Application_OpenConfigWindow | MUIM_Application_AddInputHandler
         | MUIM_Application_RemInputHandler | MUIM_FindUData | MUIM_KillNotify | MUIM_Family_AddHead | MUIM_Family_AddTail | MUIM_Family_Remove
         | OM_ADDMEMBER | OM_REMMEMBER | MUIM_Numeric_Increase | MUIM_Numeric_Decrease | MUIM_List_Remove | MUIM_List_Redraw | MUIM_List_Jump
         | MUIM_Window_AddEventHandler | MUIM_Window_RemEventHandler | MUIM_Window_Snapshot | MUIM_Window_GetMenuCheck | MUIM_Window_GetMenuState
-        | MUIM_List_NextSelected | MUIM_Popstring_Close => 1,
+        | MUIM_List_NextSelected | MUIM_Popstring_Close | MUIM_Dataspace_Remove | MUIM_Dataspace_Merge | MUIM_Application_Load | MUIM_Application_Save => 1,
         MUIM_Window_SetCycleChain | MUIM_Group_Sort => until_null(0)?,
         _ => 0,
     })
@@ -58,6 +58,10 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
             a.objects.hooks.push_back(HookCall { hook: arg(0)?, obj, msg: Msg::Params(args[1..].to_vec()), after: After::Nothing });
             Ok(0)
         }
+        // Notify.mui: MUIM_Dataspace_Find on the application's configuration dataspace, which holds only what the user SAVED (the defaults are
+        // applied by the class that asks, not stored: configdata.c GetConfigString/GetConfigULong). Nothing is saved here, so no item is found
+        // and the caller (an MCC reading its pen specs, a window its spacing) uses its own default.
+        MUIM_GetConfigItem => Ok(0),
         MUIM_KillNotify => { let t = arg(0)?; if let Some(o) = a.objects.map.get_mut(&obj) { o.notifies.retain(|n| n.attr != t); } Ok(0) }
         MUIM_KillNotifyObj => { let (t, d) = (arg(0)?, arg(1)?); if let Some(o) = a.objects.map.get_mut(&obj) { o.notifies.retain(|n| !(n.attr == t && n.dest == d)); } Ok(0) }
         MUIM_SetUData | MUIM_SetUDataOnce => { let (u, at, v) = (arg(0)?, arg(1)?, arg(2)?); set_udata(a, obj, u, at, v, id == MUIM_SetUData)?; Ok(0) }
@@ -66,6 +70,8 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_WriteLong => { a.mem.write_u32(arg(1)?, arg(0)?).map_err(Refusal::mem("MUIM_WriteLong"))?; Ok(0) }
         MUIM_WriteString => { let s = a.mem.read_cstr(arg(0)?).map_err(Refusal::mem("MUIM_WriteString"))?; a.mem.write_bytes(arg(1)?, s.as_bytes()).map_err(Refusal::mem("MUIM_WriteString"))?; a.mem.write_u8(arg(1)? + s.len() as u32, 0).map_err(Refusal::mem("MUIM_WriteString"))?; Ok(0) }
         MUIM_MultiSet => { let (at, v) = (arg(0)?, arg(1)?); for &t in &args[2..] { object::set_attr(a, t, at, v)?; } Ok(0) }
+        MUIM_Application_Load if kind == Kind::Application => { let r = store::load(a, obj, arg(0)?)?; a.log.push(format!("[muimaster] MUIM_Application_Load: {r}")); Ok(0) }
+        MUIM_Application_Save if kind == Kind::Application => { let r = store::save(a, obj, arg(0)?)?; a.log.push(format!("[muimaster] MUIM_Application_Save: {r}")); Ok(0) }
         MUIM_Application_NewInput if kind == Kind::Application => app::new_input(a, obj, arg(0)?),
         MUIM_Application_ReturnID if kind == Kind::Application => { app::return_id(a, obj, arg(0)?)?; Ok(0) }
         MUIM_Application_PushMethod if kind == Kind::Application => {
@@ -82,6 +88,16 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_Application_InputBuffered if kind == Kind::Application => { app::pump(a, obj)?; Ok(0) }
         MUIM_Group_InitChange if kind.is_container() => Ok(1),
         MUIM_Group_ExitChange if kind.is_container() => { super::win::refresh(a, obj)?; Ok(1) }
+        // Application.mui: the windows are the members of its window family; a window added after creation joins it and learns the application
+        // (MUIM_ConnectParent), exactly what MUIA_Application_Window does at creation.
+        OM_ADDMEMBER if kind == Kind::Application => { object::adopt(a, obj, MUIA_Application_Window, arg(0)?)?; Ok(1) }
+        OM_REMMEMBER if kind == Kind::Application => {
+            // Window__MUIM_DisconnectParent: a window leaving the application closes first.
+            let w = arg(0)?;
+            if a.objects.flag(w, MUIA_Window_Open) { object::set_attr(a, w, MUIA_Window_Open, 0)?; }
+            remove_child(a, obj, w)?;
+            Ok(1)
+        }
         OM_ADDMEMBER if kind.is_container() => { add_child(a, obj, arg(0)?, false)?; Ok(0) }
         OM_REMMEMBER if kind.is_container() => { remove_child(a, obj, arg(0)?)?; Ok(0) }
         MUIM_Family_AddTail | MUIM_Family_AddHead if kind.is_a(Kind::Family) => { add_child(a, obj, arg(0)?, id == MUIM_Family_AddHead)?; Ok(0) }
@@ -100,6 +116,11 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_List_GetEntry if kind == Kind::List => { list::get_entry(a, obj, arg(0)?, arg(1)?)?; Ok(0) }
         MUIM_List_Redraw if kind == Kind::List => { list::redraw(a, obj, arg(0)?)?; super::win::refresh(a, obj)?; Ok(0) }
         MUIM_List_Jump if kind == Kind::List => { super::win::refresh(a, obj)?; Ok(0) }
+        _ if kind.is_a(Kind::Semaphore) => {
+            if let Some(r) = store::semaphore_method(a, obj, id)? { return Ok(r); }
+            if kind == Kind::Dataspace { if let Some(r) = store::dataspace_method(a, obj, id, args)? { return Ok(r); } }
+            Err(bad_kind(kind, id))
+        }
         _ => Err(bad_kind(kind, id)),
     }
 }

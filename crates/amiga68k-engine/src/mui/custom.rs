@@ -120,7 +120,8 @@ pub fn om_method<U: GuestUi>(a: &mut Amiga<U>, native_cl: u32, obj: u32, id: u32
             let attrs = a.mem.read_u32(msg + 4).map_err(Refusal::mem("ops_AttrList"))?;
             let k = a.objects.kind(obj).unwrap_or(kind);
             let t = muis(&tags::walk(&a.mem, attrs)?);
-            for (tag, v) in native_tags(a, k, t) { object::set_attr(a, obj, tag, v)?; }
+            let t = native_tags(a, k, t);
+            object::set_list(a, obj, &t)?;
             0
         }
         OM_GET => {

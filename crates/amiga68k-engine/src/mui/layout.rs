@@ -37,9 +37,9 @@ struct Size { w: i32, h: i32, gw: bool, gh: bool }
 
 /// What `place` produces: the controls, and the rectangle of every self-drawing object ([`super::drawn`]).
 #[derive(Default)]
-pub struct Placed { pub elems: Vec<Elem>, pub drawn: Vec<(u32, GuestRect)> }
+pub struct Placed { pub elems: Vec<Elem>, pub drawn: Vec<(u32, GuestRect)>, pub images: Vec<(u32, GuestRect)> }
 
-pub struct Layout { pub width: i32, pub height: i32, pub elems: Vec<Elem>, pub drawn: Vec<(u32, GuestRect)> }
+pub struct Layout { pub width: i32, pub height: i32, pub elems: Vec<Elem>, pub drawn: Vec<(u32, GuestRect)>, pub images: Vec<(u32, GuestRect)> }
 
 /// The host's control metrics (ruling 17 piece 7: a declarative layout opts into host metrics as a MEASURED profile, never silently).
 /// Floors and paddings in window pixels that the host's native controls need; the default is all zero = Zune's own sizes. A host whose
@@ -222,6 +222,8 @@ fn leaf_size(c: &Ctx, o: u32, kind: Kind) -> Size {
             }
             Kind::Balance => Size { w: 4, h: 4, gw: false, gh: false },
             Kind::Image => Size { w: 0, h: 0, gw: false, gh: false },
+            // Zune's AskMinMax of the image classes (bitmap.c, imagedisplay.c): Bitmap family 1x1, Imagedisplay default 16x16; both stretch.
+            k if super::images::is_image(k) => { let (w, h) = super::images::size(k); Size { w, h, gw: true, gh: true } }
             _ => Size { w: 0, h: 0, gw: true, gh: true },
         },
     }
@@ -236,7 +238,7 @@ pub fn compute(o: &Objects, root: u32, font: &Font, avail: (i32, i32), metrics: 
     let mut placed = Placed::default();
     let rect = GuestRect { left: WIN_PAD.0, top: WIN_PAD.2, width: w - px, height: h - py };
     place(&c, root, rect, &mut placed, &mut None);
-    Layout { width: w, height: h, elems: placed.elems, drawn: placed.drawn }
+    Layout { width: w, height: h, elems: placed.elems, drawn: placed.drawn, images: placed.images }
 }
 
 fn push(c: &Ctx, o: u32, rect: GuestRect, label: Option<String>, out: &mut Placed) {
@@ -252,6 +254,7 @@ fn place(c: &Ctx, o: u32, r: GuestRect, out: &mut Placed, pending: &mut Option<S
     match shape(kind) {
         Shape::Leaf => {
             if c.o.drawn.contains_key(&o) { out.drawn.push((o, r)); }
+            if super::images::is_image(kind) { out.images.push((o, r)); }
             let label = if roles::is_label(c.o, o) { None } else { pending.take() };
             push(c, o, r, label, out);
         }

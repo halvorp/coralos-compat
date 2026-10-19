@@ -65,6 +65,135 @@ fn set_and_get_store_values_notify_fires_and_dispose_needs_the_root() {
 }
 
 #[test]
+fn a_no_notify_true_anywhere_in_a_set_list_silences_the_whole_call() {
+    // Notify.mui's OM_SET checks the list for MUIA_NoNotify first: `nnset(obj, attr, v)` is SetAttrs(obj, MUIA_NoNotify, TRUE, attr, v, TAG_DONE).
+    let mut a = machine();
+    let win = make(&mut a, "Window.mui", &[]).unwrap();
+    let app = make(&mut a, "Application.mui", &[(MUIA_Application_Window, win)]).unwrap();
+    method(&mut a, win, MUIM_Notify, &[MUIA_Window_CloseRequest, 1, app, 2, MUIM_Application_ReturnID, MUIV_Application_ReturnID_Quit]).unwrap();
+    set_list(&mut a, win, &[(MUIA_Window_CloseRequest, 1), (MUIA_NoNotify, 1)]).unwrap(); // the NoNotify AFTER the tag still silences it
+    assert_eq!(get_attr(&mut a, win, MUIA_Window_CloseRequest).unwrap(), 1, "the value is stored");
+    assert_eq!(method(&mut a, app, MUIM_Application_NewInput, &[0]).unwrap(), 0, "no notification ran");
+    // NEGATIVE CONTROLS: without the tag, or with it FALSE, the same set notifies.
+    set_attr(&mut a, win, MUIA_Window_CloseRequest, 0).unwrap();
+    set_list(&mut a, win, &[(MUIA_Window_CloseRequest, 1)]).unwrap();
+    assert_eq!(method(&mut a, app, MUIM_Application_NewInput, &[0]).unwrap(), MUIV_Application_ReturnID_Quit);
+    set_list(&mut a, win, &[(MUIA_Window_CloseRequest, 0)]).unwrap();
+    set_list(&mut a, win, &[(MUIA_NoNotify, 0), (MUIA_Window_CloseRequest, 1)]).unwrap();
+    assert_eq!(method(&mut a, app, MUIM_Application_NewInput, &[0]).unwrap(), MUIV_Application_ReturnID_Quit);
+}
+
+#[test]
+fn windows_join_and_leave_a_live_application_with_om_addmember_and_remmember() {
+    let mut a = machine();
+    let app = make(&mut a, "Application.mui", &[]).unwrap();
+    let txt = make(&mut a, "Text.mui", &[]).unwrap();
+    let win = make(&mut a, "Window.mui", &[(MUIA_Window_RootObject, txt)]).unwrap();
+    assert_eq!(method(&mut a, app, OM_ADDMEMBER, &[win]).unwrap(), 1);
+    assert_eq!(a.objects.children(app), &[win], "the application owns the window now");
+    set_attr(&mut a, win, MUIA_Window_Open, 1).unwrap();
+    assert_eq!(a.ui.calls.iter().filter(|c| matches!(c, UiCall::OpenWindow(_))).count(), 1);
+    method(&mut a, app, OM_REMMEMBER, &[win]).unwrap();
+    assert_eq!(get_attr(&mut a, win, MUIA_Window_Open).unwrap(), 0, "a window leaving the application closes first");
+    assert!(a.objects.children(app).is_empty() && a.objects.map[&win].parent.is_none(), "the program owns it again");
+    // NEGATIVE CONTROLS: a second removal, and a child that is no window.
+    assert!(method(&mut a, app, OM_REMMEMBER, &[win]).unwrap_err().0.contains("is not a child"));
+    let t2 = make(&mut a, "Text.mui", &[]).unwrap();
+    assert!(method(&mut a, app, OM_ADDMEMBER, &[t2]).unwrap_err().0.contains("cannot be a child of a Application"));
+}
+
+#[test]
+fn semaphore_nests_for_its_owner_refuses_to_block_and_release_needs_a_hold() {
+    let mut a = machine();
+    let sem = make(&mut a, "Semaphore.mui", &[]).unwrap();
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Obtain, &[]).unwrap(), 1);
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Obtain, &[]).unwrap(), 1, "the owner nests");
+    a.sched.cur = 0x1234; // another task
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Attempt, &[]).unwrap(), 0, "Attempt answers FALSE while another task holds it");
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_AttemptShared, &[]).unwrap(), 0);
+    assert!(method(&mut a, sem, MUIM_Semaphore_Obtain, &[]).unwrap_err().0.contains("would block"), "an Obtain that would wait is a named refusal");
+    assert!(method(&mut a, sem, MUIM_Semaphore_Release, &[]).unwrap_err().0.contains("does not hold"), "only the holder releases");
+    a.sched.cur = crate::process::PROCESS;
+    method(&mut a, sem, MUIM_Semaphore_Release, &[]).unwrap();
+    a.sched.cur = 0x1234;
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Attempt, &[]).unwrap(), 0, "still held: the nesting count was 2");
+    a.sched.cur = crate::process::PROCESS;
+    method(&mut a, sem, MUIM_Semaphore_Release, &[]).unwrap();
+    a.sched.cur = 0x1234;
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_ObtainShared, &[]).unwrap(), 1, "free now");
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_AttemptShared, &[]).unwrap(), 1, "shared holders add up");
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Attempt, &[]).unwrap(), 0, "but exclude an exclusive request");
+    a.sched.cur = crate::process::PROCESS;
+    assert!(method(&mut a, sem, MUIM_Semaphore_Obtain, &[]).unwrap_err().0.contains("would block"));
+    // A Semaphore.mui subclass is a class of the tree: Dataspace.mui is one.
+    assert!(classes::Kind::Dataspace.is_a(classes::Kind::Semaphore) && !classes::Kind::Semaphore.is_a(classes::Kind::Notify));
+}
+
+#[test]
+fn dataspace_adds_replaces_finds_removes_and_clears() {
+    let mut a = machine();
+    let ds = make(&mut a, "Dataspace.mui", &[]).unwrap();
+    let put = |a: &mut Amiga<RecordingGuestUi>, bytes: &[u8]| { let p = a.heap.alloc(bytes.len() as u32).unwrap(); a.mem.write_bytes(p, bytes).unwrap(); p };
+    let d1 = put(&mut a, &[1, 2, 3, 4]);
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Add, &[d1, 4, 7]).unwrap(), 1);
+    let at = method(&mut a, ds, MUIM_Dataspace_Find, &[7]).unwrap();
+    assert_eq!(a.mem.read_u32(at).unwrap(), 0x0102_0304, "Find returns the address of the stored bytes");
+    let d2 = put(&mut a, &[9, 9]);
+    method(&mut a, ds, MUIM_Dataspace_Add, &[d2, 2, 7]).unwrap();
+    let at2 = method(&mut a, ds, MUIM_Dataspace_Find, &[7]).unwrap();
+    assert_eq!(a.mem.read_u16(at2).unwrap(), 0x0909, "the same id is replaced");
+    // NEGATIVE CONTROLS (dataspace.c Add): no data, len < 1 and id < 1 add nothing; an unknown id finds nothing.
+    assert_eq!((method(&mut a, ds, MUIM_Dataspace_Add, &[0, 4, 8]).unwrap(), method(&mut a, ds, MUIM_Dataspace_Add, &[d1, 0, 8]).unwrap(), method(&mut a, ds, MUIM_Dataspace_Add, &[d1, 4, 0]).unwrap()), (0, 0, 0));
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Find, &[8]).unwrap(), 0);
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Remove, &[8]).unwrap(), 0);
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Remove, &[7]).unwrap(), 1);
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Find, &[7]).unwrap(), 0);
+    method(&mut a, ds, MUIM_Dataspace_Add, &[d1, 4, 3]).unwrap();
+    method(&mut a, ds, MUIM_Dataspace_Clear, &[]).unwrap();
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Find, &[3]).unwrap(), 0);
+    assert!(method(&mut a, ds, MUIM_Dataspace_WriteIFF, &[0, 0, 0]).unwrap_err().0.contains("iffparse.library"));
+    dispose(&mut a, ds).unwrap();
+}
+
+#[test]
+fn application_save_and_load_keep_the_objects_that_have_an_object_id() {
+    let mut a = machine();
+    let (base, one, two) = (cstr(&mut a, "TestApp"), cstr(&mut a, "one"), cstr(&mut a, "two"));
+    let arr = a.heap.alloc(12).unwrap();
+    for (i, p) in [one, two, 0].into_iter().enumerate() { a.mem.write_u32(arr + 4 * i as u32, p).unwrap(); }
+    let hello = cstr(&mut a, "hello");
+    let s = make(&mut a, "String.mui", &[(MUIA_ObjectID, 5), (MUIA_String_Contents, hello)]).unwrap();
+    let cy = make(&mut a, "Cycle.mui", &[(MUIA_ObjectID, 6), (MUIA_Cycle_Entries, arr), (MUIA_Cycle_Active, 1)]).unwrap();
+    let sl = make(&mut a, "Slider.mui", &[(MUIA_ObjectID, 7), (MUIA_Numeric_Value, 40)]).unwrap();
+    let anon = make(&mut a, "Slider.mui", &[(MUIA_Numeric_Value, 11)]).unwrap(); // no ObjectID: not saved
+    let grp = make(&mut a, "Group.mui", &[(MUIA_Group_Child, s), (MUIA_Group_Child, cy), (MUIA_Group_Child, sl), (MUIA_Group_Child, anon)]).unwrap();
+    let win = make(&mut a, "Window.mui", &[(MUIA_Window_RootObject, grp)]).unwrap();
+    let app = make(&mut a, "Application.mui", &[(MUIA_Application_Base, base), (MUIA_Application_Window, win)]).unwrap();
+    method(&mut a, app, MUIM_Application_Save, &[0]).unwrap();
+    let file = { let n = a.fs.vol.resolve(crate::fs::cur_dir(&a), "ENV:Zune/TestApp.cfg").unwrap(); a.fs.vol.file_data(n).unwrap().to_vec() };
+    assert_eq!(store::decode(&file), alloc::vec![(5, b"hello\0".to_vec()), (6, 1u32.to_be_bytes().to_vec()), (7, 40u32.to_be_bytes().to_vec())], "the three identified objects, in tree order");
+    // Change everything, load, and see the saved state back.
+    let bye = cstr(&mut a, "bye");
+    set_attr(&mut a, s, MUIA_String_Contents, bye).unwrap();
+    set_attr(&mut a, cy, MUIA_Cycle_Active, 0).unwrap();
+    set_attr(&mut a, sl, MUIA_Numeric_Value, 90).unwrap();
+    set_attr(&mut a, anon, MUIA_Numeric_Value, 12).unwrap();
+    method(&mut a, app, MUIM_Application_Load, &[0]).unwrap();
+    assert_eq!((get_attr(&mut a, cy, MUIA_Cycle_Active).unwrap(), get_attr(&mut a, sl, MUIA_Numeric_Value).unwrap()), (1, 40));
+    let sp = get_attr(&mut a, s, MUIA_String_Contents).unwrap();
+    assert_eq!(a.mem.read_cstr(sp).unwrap(), "hello");
+    assert_eq!(get_attr(&mut a, anon, MUIA_Numeric_Value).unwrap(), 12, "NEGATIVE CONTROL: an object without an ObjectID is untouched");
+    // NEGATIVE CONTROLS: a missing file imports nothing; an application without MUIA_Application_Base saves and loads nothing.
+    set_attr(&mut a, sl, MUIA_Numeric_Value, 90).unwrap();
+    method(&mut a, app, MUIM_Application_Load, &[u32::MAX]).unwrap(); // ENVARC:Zune/TestApp.cfg was never saved
+    assert_eq!(get_attr(&mut a, sl, MUIA_Numeric_Value).unwrap(), 90);
+    let app2 = make(&mut a, "Application.mui", &[]).unwrap();
+    method(&mut a, app2, MUIM_Application_Save, &[0]).unwrap();
+    method(&mut a, app2, MUIM_Application_Load, &[0]).unwrap();
+    assert_eq!(get_attr(&mut a, sl, MUIA_Numeric_Value).unwrap(), 90);
+}
+
+#[test]
 fn a_label_before_a_text_is_that_texts_label_and_the_window_is_sized_by_the_screen_fonts_metrics() {
     let mut a = machine();
     let hello = cstr(&mut a, "hello");
@@ -305,4 +434,134 @@ fn a_control_the_host_refuses_costs_the_control_never_the_window() {
     assert_eq!(kind_of_obj(&a, g), ControlKind::Label { text: "50%".into(), framed: true });
     assert_eq!(a.refused.len(), n);
     assert_eq!(degrade(&ControlModel { kind: ControlKind::Gauge { value: 1, max: 3 }, label: "".into(), rect: guestui_abi::GuestRect { left: 0, top: 0, width: 1, height: 1 }, enabled: true, token: CallbackToken(0) }).kind, ControlKind::Label { text: "33%".into(), framed: true });
+}
+
+// ---- the image classes draw (images.rs) ------------------------------------------------------------------------------------------------
+
+use guestui_abi::{DrawOp, GuestRect, IconRole, PenRole};
+
+fn bytes(a: &mut Amiga<RecordingGuestUi>, b: &[u8]) -> u32 { let p = a.heap.alloc(b.len() as u32 + 4).unwrap(); a.mem.write_bytes(p, b).unwrap(); p }
+
+/// A window holding `child` in a group, opened; the planes the host was shown.
+fn planes_of(a: &mut Amiga<RecordingGuestUi>, child: u32) -> Vec<guestui_abi::Plane> {
+    let grp = make(a, "Group.mui", &[(MUIA_Group_Child, child)]).unwrap();
+    let win = make(a, "Window.mui", &[(MUIA_Window_RootObject, grp)]).unwrap();
+    let _app = make(a, "Application.mui", &[(MUIA_Application_Window, win)]).unwrap();
+    set_attr(a, win, MUIA_Window_Open, 1).unwrap();
+    a.ui.calls.iter().filter_map(|c| match c { UiCall::PresentPlane(_, p) => Some(p.clone()), _ => None }).collect()
+}
+
+fn pixels(p: &guestui_abi::Plane) -> Vec<(GuestRect, Vec<u32>)> { p.ops.iter().filter_map(|o| match o { DrawOp::Pixels { rect, rgb } => Some((*rect, rgb.clone())), _ => None }).collect() }
+
+#[test]
+fn a_chunky_image_draws_its_pixels_through_its_palette_honouring_modulo_and_the_transparent_pen() {
+    let mut a = machine();
+    // 3x2 pens in rows of modulo 4 (a pad byte per row); palette: 0 black, 1 red, 2 green.
+    let px = bytes(&mut a, &[1, 2, 0, 9, 0, 1, 2, 9]);
+    let pal = bytes(&mut a, &[0, 0, 0, 255, 0, 0, 0, 255, 0]);
+    let mk = |a: &mut Amiga<RecordingGuestUi>, extra: &[(u32, u32)]| {
+        let mut t = alloc::vec![(MUIA_ChunkyImage_Pixels, px), (MUIA_ChunkyImage_Palette, pal), (MUIA_ChunkyImage_NumColors, 3), (MUIA_ChunkyImage_Modulo, 4), (MUIA_Bitmap_Width, 3), (MUIA_Bitmap_Height, 2), (MUIA_FixWidth, 3), (MUIA_FixHeight, 2)];
+        t.extend_from_slice(extra);
+        make(a, "ChunkyImage.mui", &t).unwrap()
+    };
+    let img = mk(&mut a, &[]);
+    let planes = planes_of(&mut a, img);
+    assert_eq!(planes.len(), 1, "one content plane for the image");
+    let px_ops = pixels(&planes[0]);
+    assert_eq!(px_ops.len(), 1);
+    assert_eq!((px_ops[0].0.width, px_ops[0].0.height), (3, 2));
+    assert_eq!(px_ops[0].1, alloc::vec![0xFF0000, 0x00FF00, 0, 0, 0xFF0000, 0x00FF00], "pens through the palette; the modulo pad byte is skipped");
+    // Transparent pen 0: those pixels are not drawn (runs of opaque pixels only).
+    let mut b = machine();
+    let (px, pal) = (bytes(&mut b, &[1, 2, 0, 9, 0, 1, 2, 9]), bytes(&mut b, &[0, 0, 0, 255, 0, 0, 0, 255, 0]));
+    let t = make(&mut b, "ChunkyImage.mui", &[(MUIA_ChunkyImage_Pixels, px), (MUIA_ChunkyImage_Palette, pal), (MUIA_ChunkyImage_NumColors, 3), (MUIA_ChunkyImage_Modulo, 4), (MUIA_Bitmap_Width, 3), (MUIA_Bitmap_Height, 2), (MUIA_FixWidth, 3), (MUIA_FixHeight, 2), (MUIA_Bitmap_Transparent, 0)]).unwrap();
+    let runs = pixels(&planes_of(&mut b, t)[0]);
+    assert_eq!(runs.iter().map(|(r, c)| (r.width, r.height, c.clone())).collect::<Vec<_>>(), alloc::vec![(2, 1, alloc::vec![0xFF0000, 0x00FF00]), (2, 1, alloc::vec![0xFF0000, 0x00FF00])], "NEGATIVE CONTROL: the pen-0 pixels are holes");
+    // NEGATIVE CONTROL: chunkyimage.c's make_bitmap fails without pixels / with no colours: named, nothing drawn.
+    let mut c = machine();
+    let bad = make(&mut c, "ChunkyImage.mui", &[(MUIA_Bitmap_Width, 3), (MUIA_Bitmap_Height, 2), (MUIA_ChunkyImage_NumColors, 3)]).unwrap();
+    let grp = make(&mut c, "Group.mui", &[(MUIA_Group_Child, bad)]).unwrap();
+    let win = make(&mut c, "Window.mui", &[(MUIA_Window_RootObject, grp)]).unwrap();
+    let e = set_attr(&mut c, win, MUIA_Window_Open, 1).unwrap_err().0;
+    assert!(e.contains("make_bitmap fails"), "{e}");
+}
+
+#[test]
+fn a_bodychunk_decodes_planar_rows_plain_and_byterun1_the_same() {
+    // 8x2, depth 2: row 0 pens 0,1,2,3,0,1,2,3 ; row 1 all 3. plane0 bits, plane1 bits; bpr = 2 (16-bit padded).
+    let plane = |bits: [u8; 8]| bits.iter().fold(0u8, |v, b| v << 1 | b);
+    let r0 = [plane([0, 1, 0, 1, 0, 1, 0, 1]), 0, plane([0, 0, 1, 1, 0, 0, 1, 1]), 0]; // plane0 (2 bytes), plane1 (2 bytes)
+    let r1 = [0xFF, 0, 0xFF, 0];
+    let plain: Vec<u8> = r0.iter().chain(r1.iter()).copied().collect();
+    // ByteRun1 per row: a literal run of 4 bytes (count 3) for row 0; a repeat for row 1: 0xFF x1, 0 x1, 0xFF x1, 0 x1 as literals too.
+    let packed: Vec<u8> = [&[3u8][..], &r0[..], &[3u8][..], &r1[..]].concat();
+    let render = |body: &[u8], comp: u32, depth: u32| {
+        let mut a = machine();
+        let b = bytes(&mut a, body);
+        let img = make(&mut a, "Bodychunk.mui", &[(MUIA_Bodychunk_Body, b), (MUIA_Bodychunk_Compression, comp), (MUIA_Bodychunk_Depth, depth), (MUIA_Bitmap_Width, 8), (MUIA_Bitmap_Height, 2), (MUIA_FixWidth, 8), (MUIA_FixHeight, 2)]).unwrap();
+        let planes = planes_of(&mut a, img);
+        planes.first().map(pixels)
+    };
+    let pal = |a: &mut Amiga<RecordingGuestUi>| (a.gfx.palette().rgb[0], a.gfx.palette().rgb[1], a.gfx.palette().rgb[2], a.gfx.palette().rgb[3]);
+    let mut probe = machine();
+    let (c0, c1, c2, c3) = pal(&mut probe);
+    let plain_px = render(&plain, 0, 2).unwrap();
+    assert_eq!(plain_px.len(), 1);
+    assert_eq!(plain_px[0].1, [c0, c1, c2, c3, c0, c1, c2, c3, c3, c3, c3, c3, c3, c3, c3, c3], "pens 0..3 of the screen palette (no SourceColors)");
+    assert_eq!(render(&packed, 1, 2).unwrap(), plain_px, "ByteRun1 decodes to the same picture");
+    // NEGATIVE CONTROLS: depth 9 and a missing body are bodychunk.c failures; the two bytes of a mask plane are skipped when Masking is 1.
+    let mut a = machine();
+    let b = bytes(&mut a, &plain);
+    let bad = make(&mut a, "Bodychunk.mui", &[(MUIA_Bodychunk_Body, b), (MUIA_Bodychunk_Depth, 9), (MUIA_Bitmap_Width, 8), (MUIA_Bitmap_Height, 2)]).unwrap();
+    let grp = make(&mut a, "Group.mui", &[(MUIA_Group_Child, bad)]).unwrap();
+    let win = make(&mut a, "Window.mui", &[(MUIA_Window_RootObject, grp)]).unwrap();
+    assert!(set_attr(&mut a, win, MUIA_Window_Open, 1).unwrap_err().0.contains("make_bitmap fails"));
+}
+
+#[test]
+fn a_bitmap_draws_the_program_bitmap_with_its_source_colours_clipped_to_its_box() {
+    let mut a = machine();
+    let bm = crate::graphics::bitmaps::create(&mut a, 4, 4, 2, None).unwrap();
+    { let g = a.gfx.bitmaps.get_mut(&bm).unwrap(); for y in 0..4 { for x in 0..4 { g.bm.set(x, y, ((x + y) % 4) as u8); } } }
+    // SourceColors: ULONG red, green, blue per pen (top byte used): pen 0 white, 1 red, 2 green, 3 blue.
+    let mut cols = Vec::new();
+    for (r, g, b) in [(255u32, 255, 255), (255, 0, 0), (0, 255, 0), (0, 0, 255)] { for v in [r, g, b] { cols.extend((v << 24).to_be_bytes()); } }
+    let src = bytes(&mut a, &cols);
+    let img = make(&mut a, "Bitmap.mui", &[(MUIA_Bitmap_Bitmap, bm), (MUIA_Bitmap_Width, 4), (MUIA_Bitmap_Height, 4), (MUIA_Bitmap_SourceColors, src), (MUIA_FixWidth, 3), (MUIA_FixHeight, 2)]).unwrap();
+    let planes = planes_of(&mut a, img);
+    let px = pixels(&planes[0]);
+    assert_eq!((px[0].0.width, px[0].0.height), (3, 2), "bitmap.c Draw clips to the object's box (MUIA_FixWidth/Height here)");
+    assert_eq!(px[0].1, alloc::vec![0xFFFFFF, 0xFF0000, 0x00FF00, 0xFF0000, 0x00FF00, 0x0000FF], "SourceColors, not the screen palette");
+    // NEGATIVE CONTROL: without a BitMap (or a size) bitmap.c draws nothing.
+    let mut b = machine();
+    let none = make(&mut b, "Bitmap.mui", &[(MUIA_Bitmap_Width, 4), (MUIA_Bitmap_Height, 4)]).unwrap();
+    assert!(planes_of(&mut b, none).is_empty());
+}
+
+#[test]
+fn an_imagedisplay_draws_its_spec_as_theme_roles_glyphs_and_icons_and_refuses_what_it_cannot() {
+    let spec_ops = |spec: &str| -> Result<Vec<DrawOp>, String> {
+        let mut a = machine();
+        let s = cstr(&mut a, spec);
+        let img = make(&mut a, "Imagedisplay.mui", &[(MUIA_Imagedisplay_Spec, s), (MUIA_FixWidth, 12), (MUIA_FixHeight, 12)]).unwrap();
+        let grp = make(&mut a, "Group.mui", &[(MUIA_Group_Child, img)]).unwrap();
+        let win = make(&mut a, "Window.mui", &[(MUIA_Window_RootObject, grp)]).unwrap();
+        set_attr(&mut a, win, MUIA_Window_Open, 1).map_err(|e| e.0)?;
+        Ok(a.ui.calls.iter().filter_map(|c| match c { UiCall::PresentPlane(_, p) => Some(p.ops.clone()), _ => None }).next().unwrap_or_default())
+    };
+    assert!(matches!(spec_ops("0:128").unwrap()[..], [DrawOp::Fill { pen_role: PenRole::Background, .. }]), "a standard background is a theme fill");
+    assert!(matches!(spec_ops("0:131").unwrap()[..], [DrawOp::Fill { pen_role: PenRole::Fill, .. }]));
+    assert!(matches!(spec_ops("2:m5").unwrap()[..], [DrawOp::Fill { pen_role: PenRole::Text, .. }]), "MUI pen 5 is the text pen");
+    let up = spec_ops("1:11").unwrap();
+    assert!(up.len() >= 6 && up.iter().all(|o| matches!(o, DrawOp::Line { pen_role: PenRole::Text, .. })), "an arrow is lines in the text pen");
+    let widths = |ops: &[DrawOp]| ops.iter().map(|o| match o { DrawOp::Line { a, b, .. } => (b.x - a.x).abs(), _ => 0 }).collect::<Vec<_>>();
+    assert!(widths(&up).first() < widths(&up).last(), "an up arrow widens downwards");
+    assert!(matches!(spec_ops("1:24").unwrap()[..], [DrawOp::Icon { role: IconRole::Disk, .. }]), "MUII_Disk is the host's disk icon");
+    assert!(matches!(spec_ops("1:22").unwrap()[..], [DrawOp::Icon { role: IconRole::Drawer, .. }]));
+    assert!(!spec_ops("1:15").unwrap().is_empty(), "the check mark is drawn");
+    // NEGATIVE CONTROLS: named refusals, never a guessed picture.
+    assert!(spec_ops("5:SYS:Prefs/x.png").unwrap_err().contains("type 5"));
+    assert!(spec_ops("1:17").unwrap_err().contains("no glyph"), "the cycle image has no glyph here");
+    assert!(spec_ops("nonsense").unwrap_err().contains("no type prefix"));
+    assert!(spec_ops("2:m9").unwrap_err().contains("outside 0..8"));
 }

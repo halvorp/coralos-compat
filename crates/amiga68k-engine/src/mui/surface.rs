@@ -18,6 +18,8 @@ pub fn render_info<U: GuestUi>(a: &mut Amiga<U>, w: u32) -> Result<u32, Refusal>
     a.mem.write_u32(ri + O.0, w).map_err(&e)?;
     a.mem.write_u32(ri + O.1, crate::screen::SCREEN).map_err(&e)?;
     a.mem.write_u32(ri + O.2, ri + O.6).map_err(&e)?;
+    a.mem.write_u32(ri + 8, crate::graphics::layout::SCREEN_DRAWINFO).map_err(&e)?; // mri_DrawInfo
+    a.mem.write_u32(ri + 28, crate::graphics::layout::SCREEN_COLORMAP).map_err(&e)?; // mri_Colormap
     for (i, p) in drawn::pens().into_iter().enumerate() { a.mem.write_u16(ri + O.6 + 2 * i as u32, p).map_err(&e)?; }
     a.objects.surfaces.insert(w, Surface { win: 0, ri });
     Ok(ri)

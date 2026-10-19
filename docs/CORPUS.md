@@ -720,3 +720,27 @@ Programs not listed did not change. The Prefs editors open because `PrefsEditor.
 | **all 47** | 15 / 216 / 3 / 43 | 19 / 285 / 15 / 24 | | |
 
 Clock now draws its face and hands (AreaEnd fills into an off-screen bitmap, blitted) and ticks on the virtual clock (MUIIHNF_TIMER, 1000 ms); the Pointer preview's MUIM_Window_AddEventHandler node receives native pointer events. Programs not listed did not change.
+
+## Pens, display modes, images, settings (mui4 lane), 2026-10-19
+`tools/corpus-mui.py` over the 47 MUI programs, before (push-mui3) and after. Columns: windows / native controls / planes / distinct named refusals. The census volume now
+assigns `LIBS:` the way AROS's Startup-Sequence does (`SYS:Libs`, then `SYS:Classes`, where `colorwheel.gadget` lives): without it the Palette editor's Coloradjust
+class jumped through a NULL colorwheel base.
+
+| program | before | after | next missing function | first named refusal left |
+|---|---|---|---|---|
+| aros-Find | 1 / 16 / 0 / 2 | 1 / 16 / 0 / 0 | none |  |
+| aros-prefs-Palette | 0 / 0 / 0 / 1 | 1 / 7 / 0 / 0 | none |  |
+| aros-prefs-Input | 0 / 0 / 0 / 3 | 1 / 22 / 0 / 0 | none |  |
+| aros-prefs-ScreenMode | 0 / 0 / 0 / 3 | 1 / 48 / 0 / 0 | none |  |
+| aros-prefs-IControl | 0 / 0 / 0 / 3 | 1 / 15 / 0 / 0 | none |  |
+| aros-prefs-Wanderer | 1 / 12 / 0 / 1 | 1 / 12 / 0 / 0 | none |  |
+| aros-NList-Demo | 2 / 23 / 0 / 1 | 2 / 23 / 2 / 0 | none |  |
+| **all 47** | 19 / 285 / 15 / 24 | 23 / 377 / 17 / 10 | | |
+
+Programs not listed did not change. What each step was: the Input and IControl editors' BetterString objects ask `MUI_ObtainPen` in Setup (and read
+`_screen(obj)` before Area's Setup, so `mad_RenderInfo` had to be set first); ScreenMode asks `BestModeIDA` and `DTAG_DIMS/NAME`, and its own `nnset` calls
+recursed until `MUIA_NoNotify` silenced a whole call; Palette needed the `CloneTagItems` family, the Slider's `MUIA_Group_Horiz` tag and `colorwheel.gadget` on
+`LIBS:`; Wanderer prefs adds a window to its live application (`OM_ADDMEMBER`); Find's `Process.mui` is a class over `Semaphore.mui`; the NList demo
+loads its settings (`MUIM_Application_Load`) and shows two Bodychunk pictures (the two planes). IControl's ChunkyImages sit on a register page that is not
+the open one, so its planes appear when the page is shown. What still stops programs is not MUI (the refusals left are `EasyRequestArgs`, `AskKeyMapDefault`,
+`BrokerCommand`, `RawPutChar`, `ArosInquireA`, `AllocIFF`, and two `DupLockFromFH` in Wanderer).

@@ -24,6 +24,7 @@ pub fn machine_for(rel: &str, without: &[&str]) -> Option<Amiga<RecordingGuestUi
     let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
     load(&mut a, "SYS:", std::path::Path::new(&format!("{ROOT}/aros-m68k/mini")), without);
     a.fs.vol.assign("LIBS", "SYS:Libs");
+    a.fs.vol.assign_add("LIBS", "SYS:Classes"); // AROS S/Startup-Sequence: Assign LIBS: SYS:Classes ADD (the BOOPSI gadgets live there)
     a.stop_on_unimplemented = true;
     a.start_hunk_as(&file, rel.rsplit('/').next().unwrap()).unwrap();
     Some(a)
