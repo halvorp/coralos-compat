@@ -62,29 +62,34 @@ pub fn init_port<U: GuestUi>(a: &mut Amiga<U>, port: u32, bit: u32) -> Result<()
     Ok(())
 }
 
+/// A new signalling port of the running task (CreateMsgPort), or None when it has no free signal or there is no memory.
+pub fn new_port<U: GuestUi>(a: &mut Amiga<U>) -> Result<Option<u32>, Refusal> {
+    let Some(bit) = alloc_signal_bit(a, -1)? else { return Ok(None) };
+    let Some(port) = a.heap.alloc(MSGPORT_SIZE) else { release_signal_bit(a, bit as i32)?; return Ok(None) };
+    init_port(a, port, bit)?;
+    Ok(Some(port))
+}
+
+/// Free a port from [`new_port`] and give its signal bit back to the running task (DeleteMsgPort).
+pub fn free_port<U: GuestUi>(a: &mut Amiga<U>, port: u32) -> Result<(), Refusal> {
+    let bit = a.mem.read_u8(port + 15).map_err(Refusal::mem("mp_SigBit"))? as u32;
+    a.heap.free(port, MSGPORT_SIZE).map_err(|e| Refusal(format!("DeleteMsgPort: {e}")))?;
+    release_signal_bit(a, bit as i32)
+}
+
 /// CreateMsgPort() -> a new signalling port of this task, or NULL (no signal / no memory).
 pub fn create_msg_port<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let Some(bit) = alloc_signal_bit(a, -1)? else { cpu.set_d0(0); return Ok("[exec] CreateMsgPort -> 0 (no free signal)".into()) };
-    let Some(port) = a.heap.alloc(MSGPORT_SIZE) else {
-        let map = sig_alloc(a)?;
-        a.mem.write_u32(a.sched.cur + TC_SIG_ALLOC, map & !(1 << bit)).map_err(Refusal::mem("tc_SigAlloc"))?;
-        cpu.set_d0(0);
-        return Ok("[exec] CreateMsgPort -> 0 (no memory)".into());
-    };
-    init_port(a, port, bit)?;
+    let Some(port) = new_port(a)? else { cpu.set_d0(0); return Ok("[exec] CreateMsgPort -> 0 (no free signal, or no memory)".into()) };
     cpu.set_d0(port);
-    Ok(format!("[exec] CreateMsgPort -> {port:#x} (signal {bit})"))
+    Ok(format!("[exec] CreateMsgPort -> {port:#x} (signal {})", a.mem.read_u8(port + 15).map_err(Refusal::mem("mp_SigBit"))?))
 }
 
 /// DeleteMsgPort(a0 = port from CreateMsgPort, or NULL).
 pub fn delete_msg_port<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let port = cpu.areg(0);
     if port == 0 { return Ok("[exec] DeleteMsgPort NULL".into()); }
-    let bit = a.mem.read_u8(port + 15).map_err(Refusal::mem("mp_SigBit"))? as u32;
-    a.heap.free(port, MSGPORT_SIZE).map_err(|e| Refusal(format!("DeleteMsgPort: {e}")))?;
-    let map = sig_alloc(a)?;
-    a.mem.write_u32(a.sched.cur + TC_SIG_ALLOC, map & !(1 << bit)).map_err(Refusal::mem("tc_SigAlloc"))?;
-    Ok(format!("[exec] DeleteMsgPort {port:#x} (signal {bit})"))
+    free_port(a, port)?;
+    Ok(format!("[exec] DeleteMsgPort {port:#x}"))
 }
 
 pub const LVO_CREATE_IO_REQUEST: i32 = -654;

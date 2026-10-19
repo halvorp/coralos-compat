@@ -802,3 +802,21 @@ WriteResource are not modelled yet, so it does not write the defaults a first ru
 non-fatal refusals are `GetDialogItem(NIL, ...)` after an activate event for the "Clipboard" window (segment 5): the program holds a NIL
 DialogPtr; the cause (a GetNewDialog/NewDialog it should have made earlier, `NewDialog` is not implemented and is not reached by the
 census) was NOT found in the time.
+
+## MUI_RequestA, the Application's commodity, the Editor's exit (mui5 lane), 2026-10-19
+`tools/corpus-mui.py` (47 MUI programs) and `tools/corpus-census.py` (all 64), before (push-amilibs 1e283ee) and after. Columns: windows / native controls / planes / distinct named refusals.
+
+| program | before | after | what changed |
+|---|---|---|---|
+| aros-VMM | 0 / 0 / 0 / 2, next `MUI_RequestA` | 1 / 21 / 0 / 6, none | its requester class is on the seam; it opens its window (the 6 refusals are new MUI gaps it now reaches: `MUIM_Window_SetCycleChain`, `MUIM_List_Clear` on its Listview, `MUIA_List_Active`, `MUIM_SetAsString`, `MUIM_Application_Input`) |
+| aros-FKey | 0 / 0 / 0 / 0 | 1 / 9 / 0 / 0 | its Application now has a broker (`MUIA_Application_Broker` / `BrokerPort`), so it gets past "Can't create CxBroker object!" and opens |
+| aros-Exchange | 0 / 0 / 0 / 0, "Can't create CxBroker object!" | runs its main loop (hidden: `CX_POPUP` defaults to NO), none | `Broker` + `BrokerPort` of its Application, then `CopyBrokerList` / `FreeBrokerList` |
+| aros-prefs-Editor | 0 / 0 / 0 / 1 | 1 / 0 / 0 / 2, next `gadtools.library/DrawBevelBoxA` | opens its window (named refusals: GadTools `PALETTE_KIND`, `DrawBevelBoxA`) |
+| aros-Editor (GadTools) | ends with "Main interface failed to open!" | opens its window with menu strip, prop and arrows; next `intuition.library/NewModifyProp` | **cause: `IntuitionBase->ActiveScreen` was NULL** |
+| aros-WiMP | 1 / 15 / 0 / 0 | 1 / 15 / 0 / 0 | unchanged, but only after a fix: once `FirstScreen` named the screen, WiMP listed it and its List construct hook got `A2 = 0` instead of the pool (`MUIA_List_Pool` absent: Zune makes one) |
+| **all 47** | 24 windows / 491 controls / 17 planes / 7 | 27 / 521 / 17 / 12 | |
+
+The all-64 census counts programs whose run reaches no unimplemented function: 61 before, 60 after (VMM joins; the Editor pair moves on to its next real gap, so the number goes down while the programs go further).
+
+The Editor's exit was not silent: the line is `Main interface failed to open!` (the census tool prints the log only from the first unimplemented call, and none was reached).
+Jano's `setup()` takes its screen from `prefs.parent`, which `set_default_prefs` copies from `IntuitionBase->ActiveScreen`; the engine's `IntuitionBase` had no ActiveScreen/FirstScreen, so `setup()` returned 1 before any library call.

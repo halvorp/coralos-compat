@@ -20,8 +20,8 @@ use guestui_abi::{ControlKind, GuestUi};
 pub struct Entry { pub id: u32, pub ptr: u32, pub cells: Vec<String>, pub owned: Option<(u32, u32)> }
 
 #[derive(Debug, Clone)]
-pub struct ListData { pub entries: Vec<Entry>, pub active: i32, pub first: u32, pub next_id: u32, pub titles: Vec<String>, pub titles_asked: bool }
-impl Default for ListData { fn default() -> Self { Self { entries: Vec::new(), active: -1, first: 0, next_id: 1, titles: Vec::new(), titles_asked: false } } }
+pub struct ListData { pub entries: Vec<Entry>, pub active: i32, pub first: u32, pub next_id: u32, pub titles: Vec<String>, pub titles_asked: bool, /** The pool the List made for itself when none was given (0 = not yet). */ pub own_pool: u32 }
+impl Default for ListData { fn default() -> Self { Self { entries: Vec::new(), active: -1, first: 0, next_id: 1, titles: Vec::new(), titles_asked: false, own_pool: 0 } } }
 
 fn data<'a>(o: &'a Objects, list: u32) -> Option<&'a ListData> {
     match o.map.get(&list).map(|x| &x.ext) { Some(Ext::List(d)) => Some(d), _ => None }
@@ -71,6 +71,19 @@ pub fn get<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32) -> Result<u32, Ref
 pub fn release<U: GuestUi>(a: &mut Amiga<U>, list: u32) {
     let owned: Vec<(u32, u32)> = data(&a.objects, list).map(|d| d.entries.iter().filter_map(|e| e.owned).collect()).unwrap_or_default();
     for (addr, size) in owned { let _ = a.heap.free(addr, size); }
+    let own = data(&a.objects, list).map_or(0, |d| d.own_pool);
+    if own != 0 { crate::memory::drop_pool(a, own); }
+}
+
+/// The pool the construct and destruct hooks get in A2: `MUIA_List_Pool`, else the List's own (list.c OM_SET: "No memory pool given, so we create our own").
+pub(super) fn pool_of<U: GuestUi>(a: &mut Amiga<U>, list: u32) -> u32 {
+    let given = a.objects.num_or(list, MUIA_List_Pool, 0);
+    if given != 0 { return given; }
+    let own = data(&a.objects, list).map_or(0, |d| d.own_pool);
+    if own != 0 { return own; }
+    let p = crate::memory::new_pool(a, 0);
+    if let Ok(d) = data_mut(a, list) { d.own_pool = p; }
+    p
 }
 
 fn text_at<U: GuestUi>(a: &Amiga<U>, ptr: u32) -> Result<String, Refusal> {
@@ -106,7 +119,7 @@ pub(crate) fn ask_titles<U: GuestUi>(a: &mut Amiga<U>, list: u32) -> Result<(), 
 /// A hook the List queued has returned `d0`: store what it produced.
 pub fn hook_returned<U: GuestUi>(a: &mut Amiga<U>, after: &After, d0: u32) -> Result<(), Refusal> {
     match *after {
-        After::Nothing => Ok(()),
+        After::Nothing | After::ReplyCx(_) => Ok(()),
         After::Constructed { list, id } => {
             let Some(d) = a.objects.map.get_mut(&list).and_then(|o| if let Ext::List(d) = &mut o.ext { Some(d) } else { None }) else { return Ok(()) };
             let Some(i) = d.entries.iter().position(|e| e.id == id) else { return Ok(()) };
@@ -190,7 +203,8 @@ fn insert_many<U: GuestUi>(a: &mut Amiga<U>, list: u32, ptrs: &[u32], pos: u32) 
     }
     for (id, p, at) in queued {
         if construct != 0 {
-            a.objects.hooks.push_back(HookCall { hook: construct, obj: a.objects.num_or(list, MUIA_List_Pool, 0), msg: Msg::Word(p), after: After::Constructed { list, id } });
+            let pool = pool_of(a, list);
+            a.objects.hooks.push_back(HookCall { hook: construct, obj: pool, msg: Msg::Word(p), after: After::Constructed { list, id } });
         } else if display != 0 {
             let entry = data(&a.objects, list).and_then(|d| d.entries.iter().find(|e| e.id == id)).map_or(p, |e| e.ptr);
             queue_display(a, list, Some(id), entry, at as i32)?;
@@ -203,7 +217,7 @@ fn insert_many<U: GuestUi>(a: &mut Amiga<U>, list: u32, ptrs: &[u32], pos: u32) 
 fn destroy<U: GuestUi>(a: &mut Amiga<U>, list: u32, e: Entry) {
     if let Some((addr, size)) = e.owned { let _ = a.heap.free(addr, size); }
     let hook = hook_of(&a.objects, list, MUIA_List_DestructHook);
-    if hook != 0 { a.objects.hooks.push_back(HookCall { hook, obj: a.objects.num_or(list, MUIA_List_Pool, 0), msg: Msg::Word(e.ptr), after: After::Nothing }); }
+    if hook != 0 { let pool = pool_of(a, list); a.objects.hooks.push_back(HookCall { hook, obj: pool, msg: Msg::Word(e.ptr), after: After::Nothing }); }
 }
 
 /// MUIM_List_Remove(pos).

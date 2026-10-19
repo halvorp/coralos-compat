@@ -130,6 +130,11 @@ pub fn reply_msg<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     let msg = cpu.areg(1);
     if msg == 0 { return Ok("[exec] ReplyMsg NULL".into()); }
     if a.reclaim_engine_msg(msg)? { return Ok(format!("[exec] ReplyMsg {msg:#x} (engine message, reclaimed)")); }
+    reply_to_port(a, msg)
+}
+
+/// The rest of ReplyMsg for a message that is not the engine's own: it goes back to its mn_ReplyPort (or is just marked replied).
+pub fn reply_to_port<U: GuestUi>(a: &mut Amiga<U>, msg: u32) -> Result<String, Refusal> {
     let rp = a.mem.read_u32(msg + MN_REPLYPORT).map_err(m("mn_ReplyPort"))?;
     if rp == 0 { a.mem.write_u8(msg + LN_TYPE, NT_REPLYMSG).map_err(m("ln_Type"))?; return Ok(format!("[exec] ReplyMsg {msg:#x} (no reply port)")); }
     put_msg(a, rp, msg, NT_REPLYMSG)?;

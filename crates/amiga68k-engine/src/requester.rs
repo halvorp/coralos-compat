@@ -52,7 +52,7 @@ const MAX_STRING: usize = 8192;
 
 /// What the guest called, which fixes how a click or an early close maps to its return value.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind { Easy, Auto { pos_flag: u32 } }
+pub(crate) enum Kind { Easy, Auto { pos_flag: u32 }, /** `MUI_RequestA` with an Application (mui/request.rs). */ Mui }
 
 struct Pending {
     ui: RequestRef,
@@ -87,6 +87,18 @@ fn text_at<U: GuestUi>(a: &Amiga<U>, p: u32, what: &'static str) -> Result<Vec<u
 /// The value a click on button `i` of `n` returns (GadgetID of gadget i): 1..n-1 left to right, the last 0.
 pub fn button_value(n: u32, i: u32) -> i32 { if i + 1 == n { 0 } else { (i + 1) as i32 } }
 
+/// What `MUI_RequestA` returns for button `i` of `n` (Zune mui_request.c): button j sends ReturnID j+2 (the LAST sends 1, and a LONE button 2), the
+/// call returns ID-1: 1..n-1 left to right, the rightmost 0, a lone button 1 (Intuition's EasyRequest would give it 0).
+pub fn mui_value(n: u32, i: u32) -> i32 { if n == 1 { 1 } else { button_value(n, i) } }
+
+/// Ask the host for `m` on behalf of the calling task and park it until the answer (what EasyRequestArgs does, for any requester kind).
+pub(crate) fn ask_sync<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, ui_win: Option<guestui_abi::UiObjectRef>, m: RequestModel, kind: Kind, (idcmp, out_ptr): (u32, u32), what: String) -> Result<String, Refusal> {
+    let (nb, ui) = (m.buttons.len() as u32, a.ask(ui_win, m)?);
+    let k = SYNC_KEY_BASE + { a.requests.next_key += 1; a.requests.next_key };
+    a.requests.pending.insert(k, Pending { ui, owner: a.sched.cur, buttons: nb, kind, idcmp, out_ptr, window: None, answer: None, taken: false });
+    exec_wait::block_on(a, cpu, Waiting::Request(k), what)
+}
+
 fn ref_window<U: GuestUi>(a: &Amiga<U>, what: &str, w: u32) -> Result<(Option<guestui_abi::UiObjectRef>, Option<String>), Refusal> {
     if w == 0 { return Ok((None, None)); }
     let ui = *a.windows.get(&w).ok_or_else(|| Refusal(format!("{what}: reference window {w:#x} is not an open window")))?;
@@ -108,7 +120,7 @@ fn easy_model<U: GuestUi>(a: &Amiga<U>, win_title: Option<String>, es: u32, args
     Ok(model(title, latin1(&text.bytes), parts.iter().map(|p| latin1(p)).collect()))
 }
 
-fn model(title: String, text: String, buttons: Vec<String>) -> RequestModel {
+pub(crate) fn model(title: String, text: String, buttons: Vec<String>) -> RequestModel {
     let n = buttons.len() as u32;
     // Return = the first button (LCommand-V is ic_ReqTrue: gadget id 1 when there are two or more); Escape = the last (ic_ReqFalse: 0).
     RequestModel { title, text, buttons, default: Some(0), cancel: Some(n - 1) }
@@ -182,7 +194,7 @@ impl<U: GuestUi> Amiga<U> {
         let Some((&k, p)) = self.requests.pending.iter().find(|(_, p)| p.ui == req) else { return Err(Refusal(format!("RequestAnswered: {req:?} is not an open request (stale or never asked)"))) };
         if p.answer.is_some() { return Err(Refusal(format!("RequestAnswered: {req:?} was answered already"))); }
         if button >= p.buttons { return Err(Refusal(format!("RequestAnswered: button {button} of a request with {} buttons", p.buttons))); }
-        let v = button_value(p.buttons, button);
+        let v = match p.kind { Kind::Mui => mui_value(p.buttons, button), _ => button_value(p.buttons, button) };
         self.settle(k, v, 0)
     }
 
@@ -228,10 +240,7 @@ fn easy_request_args<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
     let mask = if idcmp_ptr == 0 { 0 } else { a.mem.read_u32(idcmp_ptr).map_err(Refusal::mem("IDCMP flags pointer"))? };
     let m = easy_model(a, win_title, es, args)?;
     let what = format!("[intuition] EasyRequestArgs {:?} {:?} {:?}", m.title, m.text, m.buttons);
-    let (nb, ui) = (m.buttons.len() as u32, a.ask(ui_win, m)?);
-    let k = SYNC_KEY_BASE + { a.requests.next_key += 1; a.requests.next_key };
-    a.requests.pending.insert(k, Pending { ui, owner: a.sched.cur, buttons: nb, kind: Kind::Easy, idcmp: mask & !IDCMP_VANILLAKEY, out_ptr: idcmp_ptr, window: None, answer: None, taken: false });
-    exec_wait::block_on(a, cpu, Waiting::Request(k), what)
+    ask_sync(a, cpu, ui_win, m, Kind::Easy, (mask & !IDCMP_VANILLAKEY, idcmp_ptr), what)
 }
 
 /// AutoRequest(a0 = window, a1 = body, a2 = positive, a3 = negative, d0 = pFlag, d1 = nFlag, d2/d3 = size) -> TRUE (positive) / FALSE.

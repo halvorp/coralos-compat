@@ -565,3 +565,20 @@ fn an_imagedisplay_draws_its_spec_as_theme_roles_glyphs_and_icons_and_refuses_wh
     assert!(spec_ops("nonsense").unwrap_err().contains("no type prefix"));
     assert!(spec_ops("2:m9").unwrap_err().contains("outside 0..8"));
 }
+
+#[test]
+fn a_list_without_a_pool_makes_its_own_and_gives_it_back() {
+    let mut a = machine();
+    let list = make(&mut a, "List.mui", &[]).unwrap();
+    let p = list::pool_of(&mut a, list);
+    assert_ne!(p, 0, "the construct hook's A2 is a real pool, not NULL");
+    assert!(a.pools.contains_key(&p));
+    assert_eq!(list::pool_of(&mut a, list), p, "one pool per list");
+    // NEGATIVE CONTROL: a pool the program gave (MUIA_List_Pool) is used as it is and no second one is made.
+    let given = a.heap.alloc(16).unwrap();
+    let mine = make(&mut a, "List.mui", &[(MUIA_List_Pool, given)]).unwrap();
+    assert_eq!(list::pool_of(&mut a, mine), given);
+    assert_eq!(a.pools.len(), 1);
+    dispose(&mut a, list).unwrap();
+    assert!(a.pools.is_empty(), "disposing the list deleted its own pool");
+}

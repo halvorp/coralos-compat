@@ -156,13 +156,27 @@ pub const LVO_FREE_POOLED: i32 = -714;
 /// A pool handle is a small guest block (programs only pass it back); its blocks are tracked host-side.
 const POOL_HANDLE_SIZE: u32 = 16;
 
+/// A pool for the engine's own use (a MUI List without `MUIA_List_Pool` makes one, as Zune's list.c does); 0 when out of memory.
+pub fn new_pool<U: GuestUi>(a: &mut Amiga<U>, req: u32) -> u32 {
+    let pool = a.heap.alloc(POOL_HANDLE_SIZE).unwrap_or(0);
+    if pool != 0 { a.pools.insert(pool, (req, BTreeMap::new())); }
+    pool
+}
+
+/// Give back a pool from [`new_pool`] with everything still in it.
+pub fn drop_pool<U: GuestUi>(a: &mut Amiga<U>, pool: u32) {
+    if let Some((_, blocks)) = a.pools.remove(&pool) {
+        for (at, size) in blocks { let _ = a.heap.free(at, size); }
+        let _ = a.heap.free(pool, POOL_HANDLE_SIZE);
+    }
+}
+
 /// CreatePool(d0 = requirements, d1 = puddleSize, d2 = threshSize) -> a pool, or NULL. Puddles are not modelled:
 /// every AllocPooled is its own heap block, which is what a pool's caller can observe (an address, freed by
 /// FreePooled or all at once by DeletePool).
 pub fn create_pool<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let req = cpu.dreg(0);
-    let pool = a.heap.alloc(POOL_HANDLE_SIZE).unwrap_or(0);
-    if pool != 0 { a.pools.insert(pool, (req, BTreeMap::new())); }
+    let pool = new_pool(a, req);
     cpu.set_d0(pool);
     Ok(format!("[exec] CreatePool req={req:#x} puddle={} thresh={} -> {pool:#x}", cpu.dreg(1), cpu.dreg(2)))
 }
