@@ -17,9 +17,11 @@
 //! Dialog controls report through the Dialog Manager instead ([`super::dialogs`]).
 //!
 //! **Radio buttons** (`radioButProc`, 2) are check-box-shaped on the Mac: the CDEF only draws, the PROGRAM keeps the group (it clears
-//! the others itself), and a click is `inCheckBox` with the value untouched. They therefore take the check box's role and rows. The
-//! seam's `Choice` cannot stand for ONE radio: it holds an index into its labels and has no "none selected", so a lone radio that
-//! is off could not be said (`ControlKind::validate`); the round look is the host's to choose for a boolean part.
+//! the others itself), and a click is `inCheckBox` with the value untouched. They therefore take the check box's role and rows (the
+//! intent table is the CDEF's, so a click is the same `inCheckBox` gesture). What the host SHOWS is a one-label radio choice,
+//! `Choice{Radio, [title], selected}`: `selected` is 0 while `contrlValue` is non-zero and `CHOICE_NONE` while it is 0 (the Control Manager's
+//! "off"; the seam's `Choice` can say "nothing chosen" since 2026-10-19, which a boolean part could not do round). The press that comes back
+//! is `SetValue(Choice(0))` and, like a check box's, is never written: the program decides what the group becomes.
 //!
 //! **Pop-up menus** (`popupMenuProc`, 1008 + variation bits 1/2/4/8 = fixed width / reserved / `popupUseAddResMenu` / `useWFont`)
 //! are a `Choice{Popup}`. Facts (systemless as behaviour oracle, Macintosh Toolbox Essentials 5-25..5-27): `NewControl`'s
@@ -40,7 +42,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use guestui_abi::{CallbackToken, ChoiceStyle, ControlKind, ControlModel, ControlValue, GuestUi, Intent};
+use guestui_abi::{CallbackToken, ChoiceStyle, ControlKind, ControlModel, ControlValue, GuestUi, Intent, CHOICE_NONE};
 use retro_translate::{row, On, Role};
 use retro_m68k::Cpu;
 
@@ -113,7 +115,8 @@ pub fn row_of(proc_id: u16) -> Option<&'static Proc> {
 pub enum Effect {
     /// Nothing: a click on a button or a check box leaves `contrlValue` as it is (the program flips a check box itself).
     None,
-    /// The intent's value must be a Checked state; it is not written either (the same rule: the program owns the value).
+    /// The intent's value must be the control's own on-state press (`Checked(_)` on a check box, `Choice(0)` on a radio button, the one
+    /// label it shows); it is not written either (the same rule: the program owns the value).
     Checked,
     /// `contrlValue` becomes the dragged / scrolled-to position before `TrackControl` returns.
     Value,
@@ -150,6 +153,9 @@ fn model(row: &Proc, f: &Facts, token: u32) -> Option<ControlModel> {
     let (w, h) = (i32::from(f.rect.right) - i32::from(f.rect.left), i32::from(f.rect.bottom) - i32::from(f.rect.top));
     let kind = match row.cdef.role()? {
         Role::Button => ControlKind::Button,
+        Role::Check if row.cdef == Cdef::RadioButton => {
+            ControlKind::Choice { style: ChoiceStyle::Radio, labels: alloc::vec![f.title.clone()], selected: if f.value != 0 { 0 } else { CHOICE_NONE } }
+        }
         Role::Check => ControlKind::Checkbox { checked: f.value != 0 },
         // The Control Manager has no "visible amount": the value ranges min..=max one unit at a time.
         Role::Scroll => ControlKind::ScrollBar { vertical: h >= w, total: (i32::from(f.max) - i32::from(f.min)).max(0) as u32 + 1, visible: 1, top: (i32::from(f.value) - i32::from(f.min)).max(0) as u32 },
@@ -221,7 +227,9 @@ fn gesture(row: &Proc, f: &Facts, intent: &Intent) -> Result<Gesture, Refusal> {
     let r = retro_translate::lookup_role(TABLE, role, intent).map_err(|e| Refusal(format!("{e} ({}); Press/Release gestures are not bridged, a complete click arrives as Activate", row.name)))?;
     let part = r.post.map_or(0, |p| p.part);
     match (r.effect, intent) {
-        (Effect::None, _) | (Effect::Checked, Intent::SetValue(ControlValue::Checked(_))) => Ok(Gesture { part, value: None }),
+        (Effect::None, _) => Ok(Gesture { part, value: None }),
+        (Effect::Checked, Intent::SetValue(ControlValue::Checked(_))) if row.cdef != Cdef::RadioButton => Ok(Gesture { part, value: None }),
+        (Effect::Checked, Intent::SetValue(ControlValue::Choice(0))) if row.cdef == Cdef::RadioButton => Ok(Gesture { part, value: None }),
         (Effect::Value, Intent::ScrollTo(top) | Intent::Drag(ControlValue::Scroll { top, .. })) => {
             let v = (i32::from(f.min) + (*top).min(i32::MAX as u32) as i32).clamp(i32::from(f.min), i32::from(f.max).max(i32::from(f.min)));
             Ok(Gesture { part, value: Some(v as i16) })

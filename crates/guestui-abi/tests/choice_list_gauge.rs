@@ -37,3 +37,22 @@ fn a_list_replaces_its_rows_whole_and_a_gauge_stays_inside_its_range() {
     assert!(ui.add_control(w, model(ControlKind::Gauge { value: 0, max: 0 })).is_err(), "max is at least 1");
     assert_eq!(ui.route_census(w), RouteCensus { native: 2, replayed: 0, raw: 0 });
 }
+
+#[test]
+fn a_radio_can_say_none_chosen_and_nothing_else_can() {
+    let mut ui = RecordingGuestUi::new();
+    let w = window(&mut ui);
+    // a radio whose buttons are all off: a Mac radio that is off, a GadTools MX nobody has picked in
+    let r = ui.add_control(w, model(ControlKind::Choice { style: ChoiceStyle::Radio, labels: s(&["Fast"]), selected: CHOICE_NONE })).unwrap();
+    ui.set_control(w, r, ControlValue::Choice(0)).unwrap();
+    ui.set_control(w, r, ControlValue::Choice(CHOICE_NONE)).unwrap();
+    assert!(matches!(&ui.calls.last(), Some(UiCall::SetControl(_, _, ControlValue::Choice(CHOICE_NONE)))));
+    // NEGATIVE CONTROLS: a cycle, a pop-up and a tab strip always show one label, and an index is still bounded by the labels
+    for style in [ChoiceStyle::Cycle, ChoiceStyle::Popup, ChoiceStyle::Tabs] {
+        assert!(ui.add_control(w, model(ControlKind::Choice { style, labels: s(&["a", "b"]), selected: CHOICE_NONE })).is_err(), "{style:?} cannot be none-selected");
+        let c = ui.add_control(w, model(ControlKind::Choice { style, labels: s(&["a", "b"]), selected: 0 })).unwrap();
+        assert_eq!(ui.set_control(w, c, ControlValue::Choice(CHOICE_NONE)), Err(UiRefusal::InvalidGeometry("a choice with nothing selected is a radio's")));
+    }
+    assert_eq!(ui.set_control(w, r, ControlValue::Choice(1)), Err(UiRefusal::InvalidGeometry("choice index past its labels")));
+    assert_eq!(ChoiceStyle::Radio.allows_none(), true);
+}

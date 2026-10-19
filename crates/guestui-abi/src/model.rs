@@ -70,8 +70,9 @@ pub enum ControlKind {
     ArrowButton { dir: ArrowDir },
     /// An invisible hit area: no visuals, but pointer press/release inside it are events (a gadget with nothing to draw).
     Hotspot,
-    /// One choice among `labels` (a MUI Cycle / Radio / Register, a Mac pop-up): `selected` indexes `labels`, which are
-    /// the guest's own strings in the guest's own order. The `style` is how the host offers them.
+    /// One choice among `labels` (a MUI Cycle / Radio / Register, a GadTools MX, a Mac pop-up or radio button): `selected` indexes `labels`,
+    /// which are the guest's own strings in the guest's own order, or is [`CHOICE_NONE`] for NO label chosen (a Radio style only: a radio
+    /// group whose buttons are all off). The `style` is how the host offers them.
     Choice { style: ChoiceStyle, labels: Vec<String>, selected: u32 },
     /// A table of text rows under optional `columns` headings (a MUI List/Listview): every row has one cell per column
     /// (a headless single-column list has one). `selected` is a row index into `rows`; `top` the first row in view.
@@ -85,7 +86,8 @@ impl ControlKind {
     pub fn validate(&self) -> Result<(), UiRefusal> {
         match self {
             ControlKind::Slider { min, max, value } if min > max || value < min || value > max => Err(UiRefusal::InvalidGeometry("slider range")),
-            ControlKind::Choice { labels, selected, .. } if !labels.is_empty() && *selected as usize >= labels.len() => Err(UiRefusal::InvalidGeometry("choice index past its labels")),
+            ControlKind::Choice { style, selected, .. } if *selected == CHOICE_NONE && !style.allows_none() => Err(UiRefusal::InvalidGeometry("a choice with nothing selected is a radio's")),
+            ControlKind::Choice { labels, selected, .. } if *selected != CHOICE_NONE && !labels.is_empty() && *selected as usize >= labels.len() => Err(UiRefusal::InvalidGeometry("choice index past its labels")),
             ControlKind::List { columns, rows, selected, .. } => {
                 let width = columns.len().max(1);
                 if rows.iter().any(|r| r.len() != width) { return Err(UiRefusal::InvalidGeometry("list row with the wrong number of cells")); }
@@ -101,6 +103,15 @@ impl ControlKind {
 /// How a [`ControlKind::Choice`] is offered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChoiceStyle { Cycle, Radio, Popup, Tabs }
+
+/// [`ControlKind::Choice`]'s `selected` when no label is chosen: a Mac radio button that is off, a GadTools MX nothing has been picked in.
+/// `u32::MAX` can never be a label index (a label list that long is refused by `add_control` long before), so it needs no second field.
+pub const CHOICE_NONE: u32 = u32::MAX;
+
+impl ChoiceStyle {
+    /// Only a radio offers "none of these": a cycle, a pop-up and a tab strip always show one of their labels.
+    pub const fn allows_none(self) -> bool { matches!(self, ChoiceStyle::Radio) }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrowDir { Up, Down, Left, Right }
@@ -144,8 +155,10 @@ impl ControlModel {
                 (*t, *v) = (*total, *visible);
                 *p = (*top).min(total.saturating_sub(*visible));
             }
-            (ControlKind::Choice { labels, selected, .. }, ControlValue::Choice(i)) => {
-                if (*i as usize) >= labels.len() { return Err(UiRefusal::InvalidGeometry("choice index past its labels")); }
+            (ControlKind::Choice { style, labels, selected }, ControlValue::Choice(i)) => {
+                if *i == CHOICE_NONE {
+                    if !style.allows_none() { return Err(UiRefusal::InvalidGeometry("a choice with nothing selected is a radio's")); }
+                } else if (*i as usize) >= labels.len() { return Err(UiRefusal::InvalidGeometry("choice index past its labels")); }
                 *selected = *i;
             }
             (ControlKind::List { columns, rows: r, selected, top }, ControlValue::Rows { rows, selected: sel, top: t }) => {
