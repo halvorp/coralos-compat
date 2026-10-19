@@ -110,7 +110,7 @@ list names (and to name at least 60 % of them).
   `Get/SetCRefCon`, `UpdtControl`, `LActivate`, `DrawDialog` / `UpdtDialog` / `CloseDialog` / `SelectDialogItemText`, `BringToFront`
   / `SendBehind` / `HiliteWindow` / `DrawGrowIcon` / `CloseWindow`.
 
-Next walls (census): TextEdit (`TENew`, `TEStyleNew`: SimpleText 1.3/1.4, Toolbox Showcase), `FontMetrics` and window regions
+Next walls (census): TextEdit (`TENew`, `TEStyleNew`: SimpleText 1.3/1.4, Toolbox Showcase), window regions
 (WriteNow 2.0 / 2.2 call `PtInRgn` on NIL `contRgn`), `SetDialogItem` (a user item's draw procedure is a guest callback), PICT v2
 (`DrawPicture` of Moving Van's pictures), the List Manager's scroll-bar controls (`vScroll` is NIL, so `SetCRefCon(NIL)` is
 refused), `ModalDialog` filter procedures.

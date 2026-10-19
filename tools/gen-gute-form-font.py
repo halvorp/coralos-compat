@@ -59,12 +59,15 @@ for code in range(LO, HI + 2):   # HI + 1 = the default glyph
     x0, x1, _, _ = b
     rows = []
     for yy in range(Y):
-        sy = BASE - baseline + yy
+        sy = BASE - asc + yy   # strip row 0 = the ascender top (scratch row BASE - asc); row `baseline` = BASE - 1, the last ink row above the baseline
         rows.append([px[sy][x] if 0 <= sy < H else False for x in range(x0, x1 + 1)])
     lsb = x0 - OX
     w = x1 - x0 + 1
     adv = max(adv, lsb + w)
     glyphs.append((rows, w, lsb, adv))
+    if code < 128 and (ch.isupper() or ch in "bdfhklt"):   # plain ascenders and capitals must keep every ink row the rasteriser drew
+        kept = [y for y in range(Y) if any(rows[y])]
+        assert kept and kept[-1] - kept[0] == b[3] - b[2], f"{ch!r} clipped: strip ink rows {kept}, ttf ink rows {b[2]}..{b[3]}"
 
 total = sum(g[1] for g in glyphs)
 modulo = ((total + 15) // 16) * 2

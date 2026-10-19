@@ -352,3 +352,51 @@ fn init_port_restores_the_screen_bitmap_the_port_rect_and_the_vis_region() {
     let r = g.m.read_region(vis).unwrap();
     assert_eq!((r.bounds().x0, r.bounds().y0, r.bounds().x1, r.bounds().y1), (i32::from(i16::from_be_bytes([screen[8], screen[9]])), i32::from(i16::from_be_bytes([screen[6], screen[7]])), i32::from(i16::from_be_bytes([screen[12], screen[13]])), i32::from(i16::from_be_bytes([screen[10], screen[11]]))), "visRgn := the screen bounds");
 }
+
+const FMETRIC: u32 = SCRATCH + 0x40;
+
+#[test]
+fn font_metrics_is_the_fmetricrec_of_the_font_get_font_info_and_char_width_describe() {
+    let mut g = Rig::new();
+    let mut p = Prog::new();
+    p.w(3).trap(0xA887).w(12).trap(0xA88A).w(1).trap(0xA888); // TextFont 3, TextSize 12, TextFace bold
+    p.l(SCRATCH).trap(0xA88B); // GetFontInfo, for the same port
+    p.l(FMETRIC).trap(0xA835); // FontMetrics
+    for ch in [b'W', b' ', b'i'] { p.clr_w().ch(ch).trap(0xA88D).pop_w(SCRATCH + 0x20 + 2 * (ch as u32 % 7)); }
+    g.run(p.exit());
+    g.no_refusals();
+    let (m, fixed) = (&g.m.mem, |o: u32| g.m.mem.read_u32(FMETRIC + o).unwrap());
+    // ascent, descent, leading, widMax: Fixed, and the INTEGERs GetFontInfo returned (ascent, descent, widMax, leading)
+    let info = |o: u32| u32::from(m.read_u16(SCRATCH + o).unwrap()) << 16;
+    assert_eq!((fixed(0), fixed(4), fixed(8), fixed(12)), (info(0), info(2), info(6), info(4)));
+    assert_eq!((fixed(0), fixed(4), fixed(8), fixed(12)), (7 << 16, 1 << 16, 0, 8 << 16));
+    // wTabHandle: a live handle to the 1072-byte WidthTable, also in WidthTabHandle ($B2A) and WidthPtr ($B10)
+    let h = fixed(16);
+    assert_eq!(m.read_u32(0xB2A).unwrap(), h);
+    let ptr = g.m.mm.block(h).expect("wTabHandle is a Memory Manager handle").ptr;
+    assert_eq!((g.m.mm.handle_size(h).unwrap(), m.read_u32(0xB10).unwrap(), m.read_u32(h).unwrap()), (1072, ptr, ptr));
+    let tab = |o: u32| m.read_u32(ptr + o).unwrap();
+    let tab16 = |o: u32| m.read_u16(ptr + o).unwrap();
+    // tabData[c] = Fixed CharWidth(c): 'W', ' ' and 'i' were measured above at SCRATCH + 0x20 + ...
+    for ch in [b'W', b' ', b'i'] {
+        assert_eq!(tab(4 * ch as u32), u32::from(m.read_u16(SCRATCH + 0x20 + 2 * (ch as u32 % 7)).unwrap()) << 16, "tabData[{}]", ch as char);
+    }
+    assert_eq!((tab(4 * b'W' as u32), tab(4 * b' ' as u32)), (8 << 16, 8 << 16));
+    // fID 3, fSize 12, face 1 (bold), device 0, inNumer/inDenom 1/1, aFID 3, aFace bold, tabSize 1072
+    assert_eq!([tab16(1036), tab16(1038), tab16(1040), tab16(1042)], [3, 12, 1, 0]);
+    assert_eq!([tab16(1044), tab16(1046), tab16(1048), tab16(1050), tab16(1052)], [1, 1, 1, 1, 3]);
+    assert_eq!((m.read_u8(ptr + 1058).unwrap(), m.read_u8(ptr + 1059).unwrap(), tab16(1070)), (0, 1, 1072));
+}
+
+#[test]
+fn font_metrics_called_twice_keeps_one_width_table_and_refreshes_it_for_the_current_font() {
+    let mut g = Rig::new();
+    let mut p = Prog::new();
+    p.w(4).trap(0xA887).l(FMETRIC).trap(0xA835).w(9).trap(0xA887).l(FMETRIC + 0x20).trap(0xA835);
+    g.run(p.exit());
+    g.no_refusals();
+    let (h1, h2) = (g.m.mem.read_u32(FMETRIC + 16).unwrap(), g.m.mem.read_u32(FMETRIC + 0x20 + 16).unwrap());
+    assert_eq!(h1, h2, "one global table");
+    let ptr = g.m.mm.block(h1).unwrap().ptr;
+    assert_eq!(g.m.mem.read_u16(ptr + 1036).unwrap(), 9, "rebuilt for the font in use");
+}

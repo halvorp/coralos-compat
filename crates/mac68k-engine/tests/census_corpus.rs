@@ -52,8 +52,8 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // Real shipped classic Mac applications (Macintosh Garden, owner-authorised local test use; docs/CORPUS.md, tools/corpus-apps-mac-garden.tsv).
     // Each pins how far the app gets TODAY; when a trap lands the stop moves on and the row is updated deliberately.
     for (app, stop) in [
-        ("mac/writenow/fx/z20_0/WriteNow 2.0.bin", "unimplemented trap _FontMetrics ($A835)"), // past the stray jump (Pack7), FixRatio, DrawGrowIcon, InsertMenuItem
-        ("mac/writenow/fx/z22_1/WriteNow 2.2.bin", "unimplemented trap _FontMetrics ($A835)"), // past VInstall (a vertical-retrace task), SendBehind
+        ("mac/writenow/fx/z20_0/WriteNow 2.0.bin", "unimplemented trap _SetDialogItem ($A98E)"), // past the stray jump (Pack7), FixRatio, DrawGrowIcon, InsertMenuItem, FontMetrics
+        ("mac/writenow/fx/z22_1/WriteNow 2.2.bin", "unimplemented trap _SetDialogItem ($A98E)"), // past VInstall (a vertical-retrace task), SendBehind, FontMetrics
         ("mac/glider-pro/fx/Utilities_Moving Van.bin", "DrawPicture 0x"), // past SetControlReference: its PICT is a version-2 picture
         ("mac/simpletext/ux/SimpleText.rsrc", "unimplemented trap _TEStyleNew ($A83E)"), // 1.4: past Pack7 (register package), ResErr after GetNewMBar, Pack8 and the Finder's oapp event: its Untitled window wants styled TextEdit
     ] {

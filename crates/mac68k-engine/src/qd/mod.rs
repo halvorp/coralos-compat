@@ -16,6 +16,7 @@
 pub mod colorpen;
 pub mod copybits;
 pub mod draw;
+pub mod fontmetrics;
 pub mod inset;
 pub mod origin;
 pub mod picture;
@@ -46,6 +47,8 @@ pub struct Qd {
     pub canvases: BTreeMap<u32, Bitmap>,
     pub present: Presenter,
     pub font: Font,
+    /// The Font Manager's global width table (a guest handle, 0 until `FontMetrics` first builds it; [`fontmetrics`]).
+    pub width_table: u32,
     /// Ports between `OpenRgn` and `CloseRgn`: the region collected so far (local coordinates).
     pub rgn_open: BTreeMap<u32, Region>,
     /// Per window: the update region (local coordinates).
@@ -60,7 +63,7 @@ pub struct Qd {
 
 impl Default for Qd {
     fn default() -> Self {
-        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new() }
+        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new() }
     }
 }
 
