@@ -31,7 +31,9 @@ pub enum After {
 /// message area (a direct DoMethod: the parameters follow the hook in the message).
 #[derive(Debug, Clone)]
 pub enum Msg { Params(Vec<u32>), Addr(u32), /// `A1` is this value itself (a List's entry).
-    Word(u32) }
+    Word(u32),
+    /// An `OM_SET` message (`{ OM_SET, AttrList, GInfo }`) over a tag list the engine writes behind it, TAG_DONE-terminated.
+    Set(Vec<(u32, u32)>) }
 
 /// Run every queued hook, then finish the trapped call with `d0`.
 pub fn run<U: GuestUi>(a: &mut Amiga<U>, d0: u32) -> Result<Next<U>, Refusal> {
@@ -44,6 +46,15 @@ pub fn run<U: GuestUi>(a: &mut Amiga<U>, d0: u32) -> Result<Next<U>, Refusal> {
     let (msg, owned) = match &h.msg {
         Msg::Addr(p) => (*p, None),
         Msg::Word(w) => (*w, None),
+        Msg::Set(tags) => {
+            let size = 4 * (3 + 2 * tags.len() as u32 + 2);
+            let p = a.heap.alloc(size).ok_or_else(|| Refusal("OM_SET: no memory for the message (NOMEM)".into()))?;
+            let mut words = alloc::vec![crate::boopsi_ids::OM_SET, p + 12, 0];
+            for (t, v) in tags { words.push(*t); words.push(*v); }
+            words.extend([0, 0]);
+            for (i, x) in words.iter().enumerate() { a.mem.write_u32(p + 4 * i as u32, *x).map_err(Refusal::mem("OM_SET message"))?; }
+            (p, Some(size))
+        }
         Msg::Params(v) => {
             let size = 4 * (v.len() as u32 + 1);
             let p = a.heap.alloc(size).ok_or_else(|| Refusal("MUIM_CallHook: no memory for the parameters (NOMEM)".into()))?;

@@ -27,6 +27,10 @@ pub enum Inbound {
     Push { dest: u32, id: u32, args: Vec<u32> },
     /// The layout of a window with self-drawing objects changed (a resize): wakes the loop, whose `NewInput` then sends them `MUIM_Draw`.
     Redraw,
+    /// An input-handler timer (`MUIIHNF_TIMER`) came due: the node (mui/handlers.rs).
+    Timer(u32),
+    /// A native pointer or key event for a window with event handlers.
+    Event(super::handlers::Event),
 }
 
 fn bit_of<U: GuestUi>(a: &Amiga<U>, app: u32) -> Result<u32, Refusal> {
@@ -50,6 +54,11 @@ pub fn return_id<U: GuestUi>(a: &mut Amiga<U>, app: u32, id: u32) -> Result<(), 
 pub fn post<U: GuestUi>(a: &mut Amiga<U>, obj: u32, ev: Inbound) -> Result<(), Refusal> {
     let app = object::ancestor(&a.objects, obj, Kind::Application)
         .ok_or_else(|| Refusal(format!("native event for {obj:#x}: the object belongs to no Application, so no program loop would process it")))?;
+    post_to(a, app, ev)
+}
+
+/// [`post`] when the Application is known.
+pub fn post_to<U: GuestUi>(a: &mut Amiga<U>, app: u32, ev: Inbound) -> Result<(), Refusal> {
     if let Some(Ext::App { inbox, .. }) = a.objects.map.get_mut(&app).map(|o| &mut o.ext) { inbox.push_back(ev); }
     wake(a, app)
 }
@@ -75,6 +84,8 @@ pub fn pump<U: GuestUi>(a: &mut Amiga<U>, app: u32) -> Result<(), Refusal> {
             },
             Inbound::Push { dest, id, args } => if a.objects.map.contains_key(&dest) { super::notify::send(a, dest, id, &args)?; },
             Inbound::Redraw => {} // the queued draw steps run when this NewInput finishes (hooks::after_call)
+            Inbound::Timer(node) => super::handlers::timer_fired(a, node)?,
+            Inbound::Event(ev) => super::handlers::dispatch(a, ev)?,
             Inbound::Intent { obj, intent } => if a.objects.map.contains_key(&obj) { input::apply(a, obj, &intent)?; },
         }
     }
@@ -84,12 +95,16 @@ pub fn pump<U: GuestUi>(a: &mut Amiga<U>, app: u32) -> Result<(), Refusal> {
 /// signal mask to Wait on, or 0 while more ids are queued (MUI's "do not wait yet").
 pub fn new_input<U: GuestUi>(a: &mut Amiga<U>, app: u32, sigs_ptr: u32) -> Result<u32, Refusal> {
     let bit = bit_of(a, app)?;
+    // application.c: the signals the program was woken by; a program that passes 0 (it never learned them) gets "all of them" assumed.
+    let handler_mask = super::handlers::signal_mask(a, app);
+    let woken = if sigs_ptr != 0 { a.mem.read_u32(sigs_ptr).map_err(Refusal::mem("NewInput signal"))? } else { 0 };
     pump(a, app)?;
+    super::handlers::signalled(a, app, if woken == 0 { u32::MAX } else { woken })?;
     let (id, more) = match a.objects.map.get_mut(&app).map(|o| &mut o.ext) {
         Some(Ext::App { pending, .. }) => (pending.pop_front().unwrap_or(0), !pending.is_empty()),
         _ => (0, false),
     };
-    if sigs_ptr != 0 { a.mem.write_u32(sigs_ptr, if more { 0 } else { 1 << bit }).map_err(Refusal::mem("NewInput signal"))?; }
+    if sigs_ptr != 0 { a.mem.write_u32(sigs_ptr, if more { 0 } else { (1 << bit) | handler_mask }).map_err(Refusal::mem("NewInput signal"))?; }
     Ok(id)
 }
 
@@ -101,14 +116,14 @@ pub const EXECUTE_AT: u32 = 0x540;
 
 /// `MUIM_Application_Execute` (Zune): the application's own main loop, `while (DoMethod(app, MUIM_Application_NewInput, &sigs) != Quit)
 /// { if (sigs) Wait(sigs); }`, run as guest code so that every `NewInput` is a real trapped call (and the hooks a notification
-/// queues run as guest calls inside it). The 64 bytes are 68020 code written for this repo (A2 = the application):
+/// queues run as guest calls inside it). The 68 bytes are 68020 code written for this repo (A2 = the application):
 /// `link a5,#-12; clr.l -4(a5); loop: move.l #MUIM_Application_NewInput,-12(a5); lea -4(a5),a0; move.l a0,-8(a5); movea.l -4(a2),a0;
 /// lea -12(a5),a1; movea.l 8(a0),a3; jsr (a3); moveq #-1,d1; cmp.l d1,d0; beq done; move.l -4(a5),d0; beq loop; movea.l 4.w,a6;
-/// jsr -318(a6); bra loop; done: unlk a5; rts`  (-318 is exec's Wait, `-4(a2)` the object's class, `8(a0)` its h_Entry).
-const EXECUTE_STUB: [u8; 64] = [
+/// jsr -318(a6); move.l d0,-4(a5); bra loop; done: unlk a5; rts`  (-318 is exec's Wait, `-4(a2)` the object's class, `8(a0)` its h_Entry).
+const EXECUTE_STUB: [u8; 68] = [
     0x4E, 0x55, 0xFF, 0xF4, 0x42, 0xAD, 0xFF, 0xFC, 0x2B, 0x7C, 0x80, 0x42, 0x3B, 0xA6, 0xFF, 0xF4, 0x41, 0xED, 0xFF, 0xFC, 0x2B, 0x48, 0xFF, 0xF8,
-    0x20, 0x6A, 0xFF, 0xFC, 0x43, 0xED, 0xFF, 0xF4, 0x26, 0x68, 0x00, 0x08, 0x4E, 0x93, 0x72, 0xFF, 0xB0, 0x81, 0x67, 0x10, 0x20, 0x2D, 0xFF, 0xFC,
-    0x67, 0xD6, 0x2C, 0x78, 0x00, 0x04, 0x4E, 0xAE, 0xFE, 0xC2, 0x60, 0xCC, 0x4E, 0x5D, 0x4E, 0x75,
+    0x20, 0x6A, 0xFF, 0xFC, 0x43, 0xED, 0xFF, 0xF4, 0x26, 0x68, 0x00, 0x08, 0x4E, 0x93, 0x72, 0xFF, 0xB0, 0x81, 0x67, 0x14, 0x20, 0x2D, 0xFF, 0xFC,
+    0x67, 0xD6, 0x2C, 0x78, 0x00, 0x04, 0x4E, 0xAE, 0xFE, 0xC2, 0x2B, 0x40, 0xFF, 0xFC, 0x60, 0xC8, 0x4E, 0x5D, 0x4E, 0x75,
 ];
 
 /// Start the loop: the guest call that returns 0 when the loop saw `MUIV_Application_ReturnID_Quit`.

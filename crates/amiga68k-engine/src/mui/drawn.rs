@@ -64,7 +64,11 @@ pub struct Drawn {
 
 /// One queued step of opening, drawing or closing a window that holds self-drawing objects.
 #[derive(Debug, Clone, Copy)]
-pub enum Step { Setup(u32), AskMinMax(u32), Open(u32), Show(u32), Draw(u32, u32), Hide(u32), Cleanup(u32), Close(u32) }
+pub enum Step {
+    Setup(u32), AskMinMax(u32), Open(u32), Show(u32), Draw(u32, u32), Hide(u32), Cleanup(u32), Close(u32),
+    /// `MUIM_HandleEvent` for one event-handler node (handlers.rs); `last` = the last node that will see this message.
+    Handle { imsg: u32, ehn: u32, last: bool },
+}
 
 /// A window's drawing surface: the `struct Window` the graphics layer draws into, and the `struct MUI_RenderInfo` its objects share.
 #[derive(Debug, Clone, Copy)]
@@ -124,6 +128,7 @@ pub fn run_next<U: GuestUi>(a: &mut Amiga<U>, d0: u32) -> Result<Option<Next<U>>
             Step::Draw(o, flags) => return method(a, o, &[MUIM_Draw, flags], d0, Some(Step::Draw(o, flags))),
             Step::Hide(o) => return method(a, o, &[MUIM_Hide], d0, Some(Step::Hide(o))),
             Step::Cleanup(o) => return method(a, o, &[MUIM_Cleanup], d0, Some(Step::Cleanup(o))),
+            Step::Handle { imsg, ehn, last } => { if let Some(n) = super::handlers::handle_step(a, imsg, ehn, last, d0)? { return Ok(Some(n)); } }
         }
     }
 }
@@ -140,16 +145,27 @@ fn ri_of<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<u32, Refusal> {
 /// mirror is applied and the queue goes on.
 fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, words: &[u32], d0: u32, step: Option<Step>) -> Result<Option<Next<U>>, Refusal> {
     let cl = a.classes.class_of(obj).ok_or_else(|| Refusal(format!("{obj:#x} has no guest class to send {} to", super::attrs::method_name(words[0]))))?;
+    if let Some(s) = step { before(a, obj, s)?; }
+    call(a, cl, obj, words, d0, Box::new(move |a: &mut Amiga<U>, r: u32| match step { Some(s) => after(a, obj, s, r), None => Ok(()) }))
+}
+
+/// A guest call of class `cl`'s dispatcher with `words` as the message and `obj` as the object (`CoerceMethod`, when `cl` is not the
+/// object's own class); `done` sees the dispatcher's D0, then the queue goes on.
+pub(super) fn call<U: GuestUi>(a: &mut Amiga<U>, cl: u32, obj: u32, words: &[u32], d0: u32, done: Box<dyn FnOnce(&mut Amiga<U>, u32) -> Result<(), Refusal>>) -> Result<Option<Next<U>>, Refusal> {
     let entry = a.mem.read_u32(cl + CL_H_ENTRY).map_err(Refusal::mem("cl_Dispatcher.h_Entry"))?;
     let msg = crate::boopsi_send::make_msg(a, words)?;
-    if let Some(s) = step { before(a, obj, s)?; }
     a.objects.draw_busy = true;
     Ok(Some(Next::Call { target: entry, d0: 0, aregs: vec![(0, cl), (1, msg), (2, obj)], then: Box::new(move |a: &mut Amiga<U>, _cpu: &mut Cpu, r: u32| {
         a.objects.draw_busy = false;
         a.heap.free(msg, crate::boopsi_send::MSG_BLOCK).map_err(|e| Refusal(format!("BOOPSI message: {e}")))?;
-        if let Some(s) = step { after(a, obj, s, r)?; }
+        done(a, r)?;
         super::hooks::run(a, d0)
     }) }))
+}
+
+/// May `obj` draw (`MADF_CANDRAW`) and is it shown (`MADF_SHOWME`)?
+pub(super) fn can_draw<U: GuestUi>(a: &Amiga<U>, obj: u32) -> bool {
+    mirror::area_at(a, obj, MAD_FLAGS).and_then(|at| a.mem.read_u32(at).ok()).is_some_and(|f| f & MADF_CANDRAW != 0 && f & MADF_SHOWME != 0)
 }
 
 /// The mirror before a method is sent.

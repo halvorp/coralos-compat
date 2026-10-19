@@ -6,7 +6,7 @@ use alloc::format;
 use super::classes::Kind;
 use super::hooks::{After, HookCall, Msg};
 use super::ids_gen::*;
-use super::{app, attrs, list, notify, object};
+use super::{app, attrs, handlers, list, notify, object};
 use crate::boopsi_ids::OM_GET;
 use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
@@ -44,7 +44,14 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
     let arg = |i: usize| args.get(i).copied().ok_or_else(|| Refusal(format!("{}: missing argument {i}", attrs::method_name(id))));
     match id {
         MUIM_Notify => notify::add(a, obj, args),
-        MUIM_Set => { object::set_attr(a, obj, arg(0)?, arg(1)?)?; Ok(0) }
+        // Notify.mui's MUIM_Set is `SetAttrs(obj, attr, value, TAG_DONE)`: for an object of the program's own class that is OM_SET through its dispatcher.
+        MUIM_Set => {
+            match super::custom::own_class(a, obj) {
+                Some(cl) => super::custom::queue_om_set(a, cl, obj, Msg::Set(alloc::vec![(arg(0)?, arg(1)?)])),
+                None => object::set_attr(a, obj, arg(0)?, arg(1)?)?,
+            }
+            Ok(0)
+        }
         MUIM_NoNotifySet => { object::set_attr_quiet(a, obj, arg(0)?, arg(1)?)?; Ok(0) }
         OM_GET => { let v = object::get_attr(a, obj, arg(0)?)?; a.mem.write_u32(arg(1)?, v).map_err(Refusal::mem("MUIM_Get storage"))?; Ok(1) }
         MUIM_CallHook => {
@@ -67,20 +74,10 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
             app::post(a, obj, app::Inbound::Push { dest, id: follow[0], args: follow[1..].to_vec() })?;
             Ok(0)
         }
-        MUIM_Application_AddInputHandler if kind == Kind::Application => { a.objects.input_handlers.insert(arg(0)?, obj); Ok(0) }
-        MUIM_Application_RemInputHandler if kind == Kind::Application => {
-            let node = arg(0)?;
-            if a.objects.input_handlers.remove(&node).is_none() { return Err(Refusal(format!("MUIM_Application_RemInputHandler: {node:#x} was never added"))); }
-            Ok(0)
-        }
-        // Event handlers (MUIM_Window_AddEventHandler) are recorded like input handlers: no native pointer or key event is turned into an
-        // IDCMP message for them yet, so a class that listens (a preview, an editor) is drawn but not interactive.
-        MUIM_Window_AddEventHandler if kind == Kind::Window => { a.objects.input_handlers.insert(arg(0)?, obj); Ok(0) }
-        MUIM_Window_RemEventHandler if kind == Kind::Window => {
-            let node = arg(0)?;
-            if a.objects.input_handlers.remove(&node).is_none() { return Err(Refusal(format!("MUIM_Window_RemEventHandler: {node:#x} was never added"))); }
-            Ok(0)
-        }
+        MUIM_Application_AddInputHandler if kind == Kind::Application => { handlers::add_input(a, obj, arg(0)?)?; Ok(1) }
+        MUIM_Application_RemInputHandler if kind == Kind::Application => { handlers::rem_input(a, arg(0)?)?; Ok(1) }
+        MUIM_Window_AddEventHandler if kind == Kind::Window => { handlers::add_event(a, obj, arg(0)?)?; Ok(1) }
+        MUIM_Window_RemEventHandler if kind == Kind::Window => { handlers::rem_event(a, arg(0)?)?; Ok(1) }
         MUIM_Application_CheckRefresh if kind == Kind::Application => Ok(0),
         MUIM_Application_InputBuffered if kind == Kind::Application => { app::pump(a, obj)?; Ok(0) }
         MUIM_Group_InitChange if kind.is_container() => Ok(1),

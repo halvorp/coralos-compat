@@ -12,10 +12,11 @@
 pub mod app;
 pub mod attrs;
 pub mod classes;
-mod custom;
+pub(crate) mod custom;
 pub mod disk;
 mod dispose;
 pub mod drawn;
+pub mod handlers;
 pub mod hooks;
 mod ids_gen;
 mod input;
@@ -193,7 +194,16 @@ pub fn try_deliver<U: GuestUi>(a: &mut Amiga<U>, ev: &GuestUiEvent) -> Result<Op
             app::post(a, obj, app::Inbound::Intent { obj, intent: intent.clone() })?;
             Ok(Some(Delivered::Handled))
         }
-        _ => Ok(None),
+        GuestUiEvent::Pointer { win, x, y, button, phase, .. } => match win::find_by_native(a, *win) {
+            Some(w) if handlers::listening(a, w) => { handlers::deliver(a, w, handlers::Event::Pointer { win: w, x: *x, y: *y, button: *button, phase: *phase })?; Ok(Some(Delivered::Handled)) }
+            Some(_) => Ok(Some(Delivered::IgnoredUnsubscribed)),
+            None => Ok(None),
+        },
+        GuestUiEvent::Key { win, code, modifiers, down, .. } => match win::find_by_native(a, *win) {
+            Some(w) if handlers::listening(a, w) => { a.input.modifiers = *modifiers; handlers::deliver(a, w, handlers::Event::Key { win: w, code: *code, down: *down })?; Ok(Some(Delivered::Handled)) }
+            Some(_) => Ok(Some(Delivered::IgnoredUnsubscribed)),
+            None => Ok(None),
+        },
     }
 }
 

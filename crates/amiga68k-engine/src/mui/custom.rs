@@ -120,3 +120,15 @@ pub fn om_method<U: GuestUi>(a: &mut Amiga<U>, native_cl: u32, obj: u32, id: u32
         _ => return Ok(None),
     }))
 }
+
+/// The program's own (guest) class `obj` was made from, if any: its dispatcher sees every method sent to the object first.
+pub fn own_class<U: GuestUi>(a: &Amiga<U>, obj: u32) -> Option<u32> {
+    a.classes.class_of(obj).filter(|c| a.classes.recs.get(c).is_some_and(|r| r.native.is_none()))
+}
+
+/// `OM_SET` for an object of a program's own class, through ITS dispatcher (as BOOPSI's `SetAttrsA` is `DoMethod(obj, OM_SET, tags)`): the
+/// subclass sees its own attributes first and `DoSuperMethod` reaches the native class for the MUI ones ([`om_method`]). The call is queued
+/// and runs before the trapped call returns ([`super::hooks`]).
+pub fn queue_om_set<U: GuestUi>(a: &mut Amiga<U>, cl: u32, obj: u32, msg: super::hooks::Msg) {
+    a.objects.hooks.push_back(super::hooks::HookCall { hook: cl, obj, msg, after: super::hooks::After::Nothing });
+}
