@@ -283,7 +283,7 @@ fn cat_move<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
 
 // ---- volumes and working directories -----------------------------------------------------------------------------------
 
-fn get_vol_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
+fn get_vol_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool) -> Result<(), i16> {
     let g = mem_err("block");
     let (index, vref, np) = (pb.i16(&m.mem, IO_VOL_INDEX).map_err(&g)?, pb.i16(&m.mem, IO_VREF_NUM).map_err(&g)?, pb.u32(&m.mem, IO_NAME_PTR).map_err(&g)?);
     let name = if np == 0 || index >= 0 { None } else { Some(read_name(m, np)?) };
@@ -304,9 +304,14 @@ fn get_vol_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> 
     pb.put_i16(mm, IO_AL_BL_ST, 8).map_err(&g)?;
     pb.put_u32(mm, IO_VNXT_FNUM, 0x1000).map_err(&g)?;
     pb.put_i16(mm, IO_VFR_BLK, i.free_blocks as i16).map_err(&g)?;
-    pb.put_i16(mm, IO_VSIG_WORD, 0x4244).map_err(&g)?; // 'BD': an HFS volume
-    pb.put_u32(mm, IO_VFIL_CNT, i.file_count).map_err(&g)?;
-    pb.put_u32(mm, IO_VDIR_CNT, i.dir_count).map_err(&g)
+    // Only PBHGetVInfo's HParamBlockRec has the fields past ioVFrBlk: a plain PBGetVInfo caller's block ends at 64 bytes, and
+    // writing further corrupts whatever follows it on the program's stack (MacWrite 4.5 returned through a cleared word).
+    if hfs {
+        pb.put_i16(mm, IO_VSIG_WORD, 0x4244).map_err(&g)?; // 'BD': an HFS volume
+        pb.put_u32(mm, IO_VFIL_CNT, i.file_count).map_err(&g)?;
+        pb.put_u32(mm, IO_VDIR_CNT, i.dir_count).map_err(&g)?;
+    }
+    Ok(())
 }
 
 fn get_vol<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool) -> Result<(), i16> {

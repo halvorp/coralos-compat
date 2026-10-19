@@ -92,6 +92,13 @@ pub fn read_pstring_bytes(mem: &GuestMem, addr: u32) -> Result<Vec<u8>, Refusal>
     Ok(mem.bytes(span).map_err(Refusal::mem("Str255"))?.to_vec())
 }
 
+/// Store `bytes` (at most 255) as a Str255 at `addr`: the length byte, then the bytes.
+pub fn write_pstring(mem: &mut GuestMem, addr: u32, bytes: &[u8]) -> Result<(), Refusal> {
+    let n = u8::try_from(bytes.len()).map_err(|_| Refusal(alloc::format!("Str255: {} bytes do not fit", bytes.len())))?;
+    mem.write_u8(addr, n).map_err(Refusal::mem("Str255 length"))?;
+    mem.write_bytes(addr + 1, bytes).map_err(Refusal::mem("Str255"))
+}
+
 /// A classic Mac `Rect`: four 16-bit INTEGERs, top, left, bottom, right (the reverse of x,y habit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect { pub top: i16, pub left: i16, pub bottom: i16, pub right: i16 }

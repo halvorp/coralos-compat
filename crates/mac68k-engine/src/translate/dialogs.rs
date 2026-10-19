@@ -94,6 +94,8 @@ pub struct State {
     pub modal: Option<u32>,
     /// The alert a blocked `Alert` call is showing: disposed when its hit arrives (alerts are not the program's to dispose).
     pub alert: Option<u32>,
+    /// `ParamText`'s four strings (`^0`..`^3`), as raw bytes; a NIL argument leaves its string as it was.
+    pub params: [Vec<u8>; 4],
 }
 
 /// What a dialog or alert window is built from.
@@ -278,7 +280,8 @@ impl<U: GuestUi> Mac<U> {
     /// One DITL item -> its guest object (a control, or a text handle) and its slot.
     fn make_item(&mut self, win: u32, n: i16, r: &Raw) -> Result<Slot, Refusal> {
         let item = item_of(r.ty).ok_or_else(|| Refusal(format!("GetNewDialog: item {n} has type {}, which is not in the Dialog Manager table", r.ty)))?;
-        let pstr = |d: &[u8]| -> String { d.first().map_or(String::new(), |&l| d[1..(1 + l as usize).min(d.len())].iter().map(|&c| char::from(c)).collect()) };
+        // A DITL item's data IS the text (the item's length byte counts it); there is no Pascal length inside (Inside Macintosh: Dialog Manager).
+        let pstr = |d: &[u8]| -> String { d.iter().map(|&c| char::from(c)).collect() };
         let handle = match item {
             Item::Control { proc_id } => self.create_control(win, r.rect, &pstr(&r.data), true, 0, 0, 1, proc_id, 0)?,
             Item::ResControl => {
@@ -288,7 +291,8 @@ impl<U: GuestUi> Mac<U> {
             }
             Item::StaticText | Item::EditText => {
                 let h = self.mm.new_handle(&mut self.mem, &mut self.heap, 0, false).map_err(|e| Refusal(format!("GetNewDialog: no memory for item {n} (memFullErr {e})")))?;
-                self.set_handle_text(h, &pstr(&r.data))?;
+                let text = if item == Item::StaticText { self.substitute_params(&pstr(&r.data)) } else { pstr(&r.data) };
+                self.set_handle_text(h, &text)?;
                 h
             }
             Item::NoContract(why) => { self.log.push(format!("[dialog] item {n} of {win:#x}: {why}; not shown")); 0 }
@@ -375,8 +379,68 @@ fn modal_dialog<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<D
     done(format!("[dialog] ModalDialog {win:#x} blocks"))
 }
 
+impl<U: GuestUi> Mac<U> {
+    /// Replace `^0`..`^3` in a static text with `ParamText`'s strings (the Dialog Manager does this when it draws the item; the
+    /// engine does it when the item is made, so a `ParamText` BEFORE `GetNewDialog`/`Alert` is honoured and one after is not).
+    pub(crate) fn substitute_params(&self, text: &str) -> String {
+        let mut out = String::new();
+        let mut it = text.chars().peekable();
+        while let Some(c) = it.next() {
+            match (c, it.peek().and_then(|d| d.to_digit(10))) {
+                ('^', Some(n)) if n < 4 => { it.next(); out.extend(self.tr.dlg.params[n as usize].iter().map(|&b| char::from(b))); }
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+}
+
+/// `IsDialogEvent(theEvent): BOOLEAN` (Inside Macintosh I, "The Dialog Manager"): is this event one `DialogSelect` should handle? An
+/// activate or update event for a dialog window; a mouse-down in a dialog window's content; any key or auto-key while a dialog is
+/// the front window. Everything else (and every event while no dialog exists) is not a dialog event.
+fn is_dialog_event<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let e = Refusal::mem("EventRecord");
+    let at = c.args.get(0);
+    let (what, message) = (m.mem.read_u16(at).map_err(&e)?, m.mem.read_u32(at + 2).map_err(&e)?);
+    let (v, h) = (m.mem.read_i16(at + 10).map_err(&e)?, m.mem.read_i16(at + 12).map_err(&e)?);
+    let is_dialog = |w: u32| m.tr.dlg.dialogs.contains_key(&w);
+    let hit = match what {
+        6 | 8 => is_dialog(message),
+        1 => { let (part, win) = m.find_window(v, h); part == crate::toolbox::IN_CONTENT && is_dialog(win) }
+        3 | 5 => m.z.first().is_some_and(|&w| is_dialog(w)),
+        _ => false,
+    };
+    Ok(Done { result: u32::from(hit), log: format!("[dialog] IsDialogEvent what {what} -> {hit}") })
+}
+
+/// `DialogSelect(theEvent, VAR theDialog, VAR itemHit): BOOLEAN`: the modeless counterpart of `ModalDialog`. When the user has hit an
+/// item of a dialog since the last call (a native control's intent was turned into an item hit, see the module docs) the oldest
+/// hit is returned: TRUE, with `theDialog` and `itemHit` set. Otherwise FALSE and both are left alone. What a real
+/// `DialogSelect` also does with an event (drawing the items on an update, the text-edit field's key handling) the host's native
+/// controls already did, so an update or activate event for a dialog window is simply FALSE here.
+fn dialog_select<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (dlg_out, item_out) = (c.args.get(1), c.args.get(2));
+    let Some((dlg, item)) = m.tr.dlg.hits.pop_front() else { return Ok(Done { result: 0, log: "[dialog] DialogSelect -> FALSE (no item hit pending)".into() }) };
+    m.mem.write_u32(dlg_out, dlg).map_err(Refusal::mem("DialogSelect theDialog"))?;
+    m.mem.write_u16(item_out, item as u16).map_err(Refusal::mem("DialogSelect itemHit"))?;
+    Ok(Done { result: 1, log: format!("[dialog] DialogSelect -> TRUE, dialog {dlg:#x} item {item}") })
+}
+
+/// `ParamText(param0, param1, param2, param3)`: four Str255 pointers; a NIL pointer leaves that string unchanged.
+fn param_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    for i in 0..4 {
+        let p = c.args.get(i);
+        if p != 0 { m.tr.dlg.params[i] = crate::pascal::read_pstring_bytes(&m.mem, p)?; }
+    }
+    let shown: Vec<String> = m.tr.dlg.params.iter().map(|p| p.iter().map(|&b| char::from(b)).collect()).collect();
+    Ok(Done { result: 0, log: format!("[dialog] ParamText {shown:?}") })
+}
+
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     use Arg::{L, W};
+    m.register(0xA98B, &[L, L, L, L], None, param_text::<U>)?;
+    m.register(0xA97F, &[Arg::P], Some(Arg::B), is_dialog_event::<U>)?;
+    m.register(0xA980, &[Arg::P, Arg::P, Arg::P], Some(Arg::B), dialog_select::<U>)?;
     m.register(0xA97C, &[W, L, L], Some(L), get_new_dialog::<U>)?;
     m.register(0xA983, &[L], None, dispose_dialog::<U>)?;
     m.register(0xA98D, &[L, W, L, L, L], None, get_dialog_item::<U>)?;

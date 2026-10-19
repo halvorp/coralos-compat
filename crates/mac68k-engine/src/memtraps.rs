@@ -62,6 +62,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register_os(0xA04C, compact_mem::<U>)?;
     m.register_os(0xA04D, purge_mem::<U>)?;
     m.register_os(0xA11D, max_mem::<U>)?;
+    m.register_os(0xA162, purge_space::<U>)?;
     m.register_os(0xA064, move_hhi::<U>)?;
     m.register_os(0xA065, stack_space::<U>)?;
     m.register_os(0xA128, recover_handle::<U>)?;
@@ -232,6 +233,14 @@ fn max_mem<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
     r.d0 = m.heap.available(true);
     r.a0 = 0; // the heap cannot grow
     Ok(format!("[mem] MaxMem -> {}", r.d0))
+}
+
+/// `PurgeSpace`: D0 = the total free bytes if every purgeable block were purged, A0 = the largest contiguous block that would give.
+/// Nothing is ever purged here, so these are the heap's free bytes now (purgeable blocks are not counted as space).
+fn purge_space<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    r.d0 = m.heap.available(false);
+    r.a0 = m.heap.available(true);
+    Ok(format!("[mem] PurgeSpace -> total {}, contiguous {}", r.d0, r.a0))
 }
 
 fn move_hhi<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {

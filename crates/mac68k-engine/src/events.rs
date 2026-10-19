@@ -72,6 +72,7 @@ impl<U: GuestUi> Mac<U> {
     pub fn advance_ticks(&mut self, n: u32) {
         self.ev.ticks = self.ev.ticks.wrapping_add(n);
         let _ = self.mem.write_u32(TICKS, self.ev.ticks);
+        let _ = self.update_time();
     }
 
     /// Take events the host UI has for this guest into the queue.

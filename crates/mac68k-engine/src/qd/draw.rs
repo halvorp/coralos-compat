@@ -34,6 +34,7 @@ pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16, 
 
 /// [`paint`], recording a pen line as ONE line op (`line`: its end points, LOCAL coordinates) when nothing of it is clipped.
 fn paint_with<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16, pat: &[u8; 8], line: Option<((i32, i32), (i32, i32))>) -> Result<(), Refusal> {
+    super::picture::note_drawing(m, port);
     if m.mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(Refusal::mem("pnVis"))? < 0 { return Ok(()); }
     let (pt, brush) = (pattern(pat), brush_for(mode));
     target::with(m, port, |m, t| {

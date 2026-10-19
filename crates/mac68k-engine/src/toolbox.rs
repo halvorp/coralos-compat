@@ -34,7 +34,7 @@ const WR_VISIBLE: u32 = 110;
 const WR_HILITED: u32 = 111;
 const WR_GO_AWAY: u32 = 112;
 const WR_NEXT: u32 = 144;
-const WR_REF_CON: u32 = 152;
+pub(crate) const WR_REF_CON: u32 = 152;
 /// userKind: a window the application owns (system windows have a negative kind).
 const USER_KIND: u16 = 8;
 const PAT_COPY: u16 = 8;
@@ -184,7 +184,7 @@ fn exit_to_shell<U: GuestUi>(_: &mut Mac<U>, cpu: &mut Cpu, _: &Call) -> Result<
     done("[toolbox] ExitToShell".into())
 }
 
-fn created<U: GuestUi>(m: &mut Mac<U>, what: &str, s: WindowSpec) -> Result<Done, Refusal> {
+pub(crate) fn created<U: GuestUi>(m: &mut Mac<U>, what: &str, s: WindowSpec) -> Result<Done, Refusal> {
     let (title, r, proc_id) = (s.title.clone(), s.rect, s.proc_id);
     let win = m.make_window(s)?;
     Ok(Done { result: win, log: format!("[toolbox] {what} \"{title}\" top={} left={} w={} h={} proc={proc_id} -> {win:#x}", r.top, r.left, r.right - r.left, r.bottom - r.top) })
@@ -200,19 +200,22 @@ fn new_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
 }
 
 /// `WIND` resource: boundsRect (8), procID (2), visible (2), goAwayFlag (2), refCon (4), title (Pascal string).
-fn get_new_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+fn get_new_window<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> { get_new_window_named(m, cpu, c, "GetNewWindow") }
+
+/// `GetNewWindow` and the Color Window Manager's `GetNewCWindow`: the same `WIND` resource, the same native window.
+pub(crate) fn get_new_window_named<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call, what: &str) -> Result<Done, Refusal> {
     let id = c.args.get(0) as u16 as i16;
-    let Ok(h) = m.get_resource(*b"WIND", id, false) else { return done(format!("[toolbox] GetNewWindow {id}: no WIND resource")) };
+    let Ok(h) = m.get_resource(*b"WIND", id, false) else { return done(format!("[toolbox] {what} {id}: no WIND resource")) };
     let b = m.handle_bytes(h).unwrap_or_default();
     let be = |i: usize| i16::from_be_bytes([b[i], b[i + 1]]);
-    if b.len() < 19 || b.len() < 19 + b[18] as usize { return Err(Refusal(format!("GetNewWindow {id}: WIND resource is {} bytes, too short for its fields and title", b.len()))); }
+    if b.len() < 19 || b.len() < 19 + b[18] as usize { return Err(Refusal(format!("{what} {id}: WIND resource is {} bytes, too short for its fields and title", b.len()))); }
     let spec = WindowSpec {
         storage: c.args.get(1), rect: Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) },
         title: b[19..19 + b[18] as usize].iter().map(|&x| char::from(x)).collect(),
         proc_id: be(8) as u16, visible: be(10) != 0, go_away: be(12) != 0,
         ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]), behind: c.args.get(2),
     };
-    created(m, &format!("GetNewWindow {id}"), spec)
+    created(m, &format!("{what} {id}"), spec)
 }
 
 fn dispose_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
@@ -258,17 +261,25 @@ impl<U: GuestUi> Mac<U> {
 
 fn select_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let win = c.args.get(0);
-    if !m.windows.contains_key(&win) { return Err(Refusal(format!("SelectWindow: {win:#x} is not an open window"))); }
-    let old = m.z.first().copied();
-    if old != Some(win) {
-        m.z.retain(|&z| z != win);
-        m.z.insert(0, win);
-        if let Some(o) = old { m.post(ACTIVATE_EVT, o, 0, 0); }
-        m.post(ACTIVATE_EVT, win, 0, 0);
-        m.ev.queue.back_mut().map(|e| e.modifiers = 1);
-        m.relink_windows()?;
-    }
+    m.select_window_front(win)?;
     done(format!("[toolbox] SelectWindow {win:#x}"))
+}
+
+impl<U: GuestUi> Mac<U> {
+    /// Bring `win` to the front: activate events for the old front window (deactivate) and for `win`, WindowList relinked.
+    pub(crate) fn select_window_front(&mut self, win: u32) -> Result<(), Refusal> {
+        if !self.windows.contains_key(&win) { return Err(Refusal(format!("SelectWindow: {win:#x} is not an open window"))); }
+        let old = self.z.first().copied();
+        if old != Some(win) {
+            self.z.retain(|&z| z != win);
+            self.z.insert(0, win);
+            if let Some(o) = old { self.post(ACTIVATE_EVT, o, 0, 0); }
+            self.post(ACTIVATE_EVT, win, 0, 0);
+            self.ev.queue.back_mut().map(|e| e.modifiers = 1);
+            self.relink_windows()?;
+        }
+        Ok(())
+    }
 }
 
 fn front_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {

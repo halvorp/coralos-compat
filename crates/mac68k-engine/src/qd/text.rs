@@ -43,6 +43,7 @@ pub(crate) fn draw_on<U: GuestUi>(m: &mut Mac<U>, port: u32, bytes: &[u8], name:
     let pen = read_pen(&m.mem, port)?;
     let (face, tmode) = (m.mem.read_u8(port.wrapping_add(P_TX_FACE)).map_err(Refusal::mem("txFace"))?, m.mem.read_u16(port.wrapping_add(P_TX_MODE)).map_err(Refusal::mem("txMode"))?);
     let width = m.qd.font.text_length(bytes);
+    super::picture::note_drawing(m, port);
     if pen.vis >= 0 && !bytes.is_empty() {
         let (brush, style) = (brush_for(tmode), style_of(face));
         target::with(m, port, |m, t| {
@@ -117,5 +118,14 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     reg(m, 0xA88D, "CharWidth", &[Arg::W], Some(Arg::W), char_width::<U>)?;
     reg(m, 0xA88C, "StringWidth", &[Arg::L], Some(Arg::W), string_width::<U>)?;
     reg(m, 0xA886, "TextWidth", &[Arg::L, Arg::W, Arg::W], Some(Arg::W), text_width::<U>)?;
-    reg(m, 0xA88B, "GetFontInfo", &[Arg::L], None, get_font_info::<U>)
+    reg(m, 0xA88B, "GetFontInfo", &[Arg::L], None, get_font_info::<U>)?;
+    reg(m, 0xA88E, "SpaceExtra", &[Arg::L], None, space_extra::<U>)
+}
+
+/// `SpaceExtra(extra: Fixed)`: extra pixels added to every space (justification); stored in the port's `spExtra` (76). The
+/// stand-in text routine advances by its fixed cell, so the stored value does not move glyphs yet.
+fn space_extra<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let p = current_port(m)?;
+    m.mem.write_u32(p.wrapping_add(super::port::P_SP_EXTRA), c.args.get(0)).map_err(Refusal::mem("spExtra"))?;
+    Ok(Done { result: 0, log: format!("[quickdraw] SpaceExtra {:#x} (stored in spExtra; the stand-in text does not justify)", c.args.get(0)) })
 }

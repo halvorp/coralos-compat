@@ -12,10 +12,13 @@
 //!
 //! Substitutions, named once here: text is drawn in `retro-raster`'s topaz-8 for EVERY font id and size (Chicago and
 //! Geneva are not bundled), see [`text`]; each window has its own canvas, so `visRgn` is the window's portRect and
-//! never carves out overlapping windows; color (CGrafPort/PixMap) is refused by name; `SetOrigin` is not implemented.
+//! never carves out overlapping windows; color (CGrafPort/PixMap) is refused by name.
+pub mod colorpen;
 pub mod copybits;
 pub mod draw;
 pub mod inset;
+pub mod origin;
+pub mod picture;
 pub mod lifecycle;
 pub mod plane;
 pub mod port;
@@ -51,11 +54,13 @@ pub struct Qd {
     pub saved_vis: BTreeMap<u32, Region>,
     /// Per window: the retained display list the host replays (plane.rs).
     pub plane: plane::Planes,
+    /// Per port: the picture being recorded (picture.rs).
+    pub pictures: BTreeMap<u32, picture::OpenPic>,
 }
 
 impl Default for Qd {
     fn default() -> Self {
-        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default() }
+        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new() }
     }
 }
 
@@ -72,6 +77,9 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     draw::register(m)?;
     regions::register(m)?;
     copybits::register(m)?;
+    origin::register(m)?;
+    picture::register(m)?;
+    colorpen::register(m)?;
     text::register(m)?;
     update::register(m)?;
     lifecycle::register(m)

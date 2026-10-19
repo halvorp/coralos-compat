@@ -305,10 +305,17 @@ fn add_res_menu<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
     h_of(m, "AddResMenu", h)?;
     let mut p = m.menu_view(h)?;
     let mut added = 0;
+    let mut names: alloc::vec::Vec<alloc::vec::Vec<u8>> = alloc::vec::Vec::new();
     for n in 1..=m.count_resources(ty, false) {
         let rh = m.get_ind_resource(ty, n, false).map_err(|e| Refusal(format!("AddResMenu: ResErr {e}")))?;
         let Some((_, _, Some(name))) = m.res_info(rh) else { continue };
-        if name.is_empty() { continue; }
+        if !name.is_empty() { names.push(name); }
+    }
+    // The System file's own fonts: a `FONT`/`FOND` menu lists the standard families too (no System file exists to enumerate).
+    if &ty == b"FONT" || &ty == b"FOND" { names.extend(crate::fontnames::MENU_FAMILIES.iter().map(|n| n.as_bytes().to_vec())); }
+    names.sort_by_key(|n| n.to_ascii_lowercase());
+    names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    for name in names {
         p.items.push(Item { text: name, icon: 0, key: 0, mark: 0, style: 0 });
         let k = p.items.len() as u32;
         if k <= 31 { p.flags |= 1 << k; }
@@ -416,7 +423,9 @@ fn get_item<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, R
     let (h, item, out) = (c.args.get(0), c.args.get(1) as u16, c.args.get(2));
     h_of(m, "GetItem", h)?;
     let p = m.menu_view(h)?;
-    let text = p.items.get((item as usize).wrapping_sub(1)).map(|i| i.text.clone()).ok_or_else(|| Refusal(format!("GetItem: menu {} has no item {item}", p.id)))?;
+    // Past the last item the Menu Manager reads the menu data's zero terminator: an EMPTY string, not a fault (a program
+    // counts a menu's items by calling GetItem until the string is empty).
+    let text = p.items.get((item as usize).wrapping_sub(1)).map(|i| i.text.clone()).unwrap_or_default();
     m.mem.write_u8(out, text.len() as u8).map_err(Refusal::mem("GetItem"))?;
     m.mem.write_bytes(out + 1, &text).map_err(Refusal::mem("GetItem"))?;
     done(format!("[menu] GetItem {h:#x} #{item} -> \"{}\"", mac_text(&text)))

@@ -143,10 +143,11 @@ pub fn dialog_fork() -> alloc::vec::Vec<u8> {
         if data.len() & 1 == 1 { v.push(0); }
         v
     };
+    // A DITL item's data is the text itself (its length byte counts it); only the DLOG title is a Pascal string.
     let ps = |s: &str| { let mut v = alloc::vec![s.len() as u8]; v.extend_from_slice(s.as_bytes()); v };
     let mut ditl = 5i16.to_be_bytes().to_vec(); // count - 1
-    for it in [item([80, 200, 100, 260], 4, &ps("OK")), item([80, 120, 100, 180], 4, &ps("Cancel")), item([50, 20, 66, 140], 5, &ps("Remember")),
-               item([10, 20, 26, 200], 8, &ps("Name:")), item([30, 20, 46, 200], 16, &ps("Hello")), item([60, 220, 76, 260], 128, &[])] { ditl.extend_from_slice(&it); }
+    for it in [item([80, 200, 100, 260], 4, "OK".as_bytes()), item([80, 120, 100, 180], 4, "Cancel".as_bytes()), item([50, 20, 66, 140], 5, "Remember".as_bytes()),
+               item([10, 20, 26, 200], 8, "Name:".as_bytes()), item([30, 20, 46, 200], 16, "Hello".as_bytes()), item([60, 220, 76, 260], 128, &[])] { ditl.extend_from_slice(&it); }
     let mut dlog = alloc::vec::Vec::new();
     for v in [60i16, 40, 180, 300, 1, 0x0100, 0x0000] { dlog.extend_from_slice(&v.to_be_bytes()); } // rect, procID, visible, goAway
     dlog.extend_from_slice(&0u32.to_be_bytes()); // refCon

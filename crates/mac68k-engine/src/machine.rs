@@ -103,6 +103,11 @@ pub struct Mac<U: GuestUi> {
     /// Trap patches (`_SetTrapAddress`): trap key -> the guest routine that replaces it.
     pub patches: BTreeMap<u16, u32>,
     pub(crate) ctx: Option<retro_m68k::CpuContext>,
+    /// The cursor the program set and its hide level (cursor.rs).
+    pub cursor: crate::cursor::CursorState,
+    pub clock: crate::clock::Clock,
+    /// The engine's own International Resource handles (intl.rs).
+    pub intl: crate::intl::IntlHandles,
 }
 
 /// The prefix every unimplemented-trap refusal starts with (a census runner keys on it).
@@ -115,7 +120,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], patches: BTreeMap::new(),
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), intl: Default::default(),
         };
         lowmem::init(&mut m.mem)?;
         m.set_address_mode(crate::addrmode::AddrMode::Bit24)?; // a classic 68k Mac boots in 24-bit mode
@@ -135,6 +140,15 @@ impl<U: GuestUi> Mac<U> {
         crate::sysenv::register(&mut m)?;
         crate::gestalt::register(&mut m)?;
         crate::pack2::register(&mut m)?;
+        crate::pack7::register(&mut m)?;
+        crate::package::register(&mut m)?;
+        crate::intl::register(&mut m)?;
+        crate::strcmp::register(&mut m)?;
+        crate::procmgr::register(&mut m)?;
+        crate::cursor::register(&mut m)?;
+        crate::clock::register(&mut m)?;
+        crate::winmgr::register(&mut m)?;
+        crate::fontnames::register(&mut m)?;
         menu::register(&mut m)?;
         events::register(&mut m)?;
         crate::traptable::register(&mut m)?;

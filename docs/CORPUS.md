@@ -604,6 +604,57 @@ Census, mac68k-run --census, before (971d664) and after this lane:
 | Retro68 Raytracer | `_SetToolBoxTrapAddress` | `_Button` ($A974) |
 | Toolbox Showcase (68k) | `_HFSDispatch` | `_GetNewCWindow` ($AA46) |
 
+### macwin lane (2026-10-19): the first Garden application opens its window
+
+**MacWrite 4.6 opens "Untitled" on the engine** (document window with go-away and grow box, seven native menus, ruler and scroll bar drawn into
+the content plane) and parks in `GetNextEvent`; `census_corpus.rs::macwrite_4_6_opens_its_window_with_menus_and_parks_in_its_event_loop` pins it.
+MacPaint 2.1F also reaches its event loop (its palettes are created hidden, so no native window yet). Implemented, each with a host test and a
+negative control: a real `_UnloadSeg` (`segment.rs`), `_SetCursor`/`_HideCursor`/`_ShowCursor`/`_ObscureCursor` (`cursor.rs`), `_SetWTitle`/`_GetWTitle`/
+`_SetWRefCon`/`_GetWRefCon`/`_MoveWindow`/`_SizeWindow`/`_NewCWindow`/`_GetNewCWindow` (`winmgr.rs`), `_Pack6` International Utilities (`intl.rs`),
+`_Pack7` Binary-Decimal (`pack7.rs`), one Package Manager convention (`package.rs`, also `_InitAllPacks`/`_InitPack`), `_GetFNum`/`_GetFontName`/
+`_SetFScaleDisable`/`_SetFractEnable` (`fontnames.rs`), `_ParamText`/`_IsDialogEvent`/`_DialogSelect` (`translate/dialogs.rs`), `_OSDispatch` Process
+Manager + Temporary Memory (`procmgr.rs`), `_CmpString`/`_RelString` (`strcmp.rs`), `_ReadDateTime`/`_SecondsToDate`/`_DateToSeconds` and a running
+`Time` (`clock.rs`), `_SetOrigin` (`qd/origin.rs`), `_ForeColor`/`_BackColor`/`_ColorBit` (`qd/colorpen.rs`), `_SpaceExtra`, pictures `_OpenPicture`/
+`_ClosePicture`/`_KillPicture`/`_PicComment`/`_DrawPicture` (`qd/picture.rs`), `_PurgeSpace`, `_GetString`, and `AddResMenu('FONT')` listing the System families.
+
+Findings, in the order they were found (each is fixed or named):
+
+* **`_UnloadSeg` was NOT what stopped ResEdit 2.1.3 and SimpleText 1.3.** Their `CODE` resources are **compressed** (resource attribute bit 0, header
+  `$A89F6572`; ResEdit v8 with its own `dcmp` 0, SimpleText v9 with its own `dcmp` 3): the Resource Manager here never expands them, so `LoadSeg` read the
+  compressed header as a segment header (`25970 entries at offset 43167` is the ASCII `"er"` of the signature). The next lane's task is Resource Manager
+  decompression: run the file's own `dcmp` through the guest-call path (v8 dcmp 0/1/2: `dcmp(src, dst, work, len)` Pascal; v9 dcmp 3 has init / decompress /
+  exit entry offsets in its first three words) or port a decompressor from ResourceDASM. Executor's `resOpen.cpp` only handles the v8 header.
+* **DITL text items were shown without their first character** (every real dialog: "Sorry" -> "orry"). The item's length byte counts the text; there is no
+  Pascal length inside. The hand-made fixtures wrapped their text in a Pascal string, so no test saw it.
+* **`PBGetVInfo` overwrote 22 bytes past its 64-byte block** (the HFS-only `ioVSigWord`/`ioVFilCnt`/`ioVDirCnt` fields were written for every caller): MacWrite 4.5's
+  frame held the block next to its saved A6 and return address and it returned through a cleared word. Now only `PBHGetVInfo` writes them.
+* **Heap walkers**: MacWrite 4.6 counts free memory by walking `TheZone + 52` block by block, masking each size with the `Lo3Bytes` global ($31A) which was 0
+  (an endless loop). `Lo3Bytes` is set, and the stub zone holds ONE free block spanning the heap (the engine's real allocations are host-side, not walkable).
+* `GetItem` past the last item returns the empty string (the menu data's terminator), not a refusal: MacWrite counts a menu's items that way.
+* **Open: MacWrite 4.5** returns through a 68000-style `TRAP #4` handler (`addq.w #2,sp; rts` assumes a 6-byte exception frame; the 68020 core pushes 8) and wanders
+  into low memory. WriteNow 2.0 and Glider PRO (68k half) wander into address 0 the same way after a heap-block walk (they test block headers the engine does not have).
+  Glider Edit and Moving Van need Color QuickDraw (`Gestalt 'qdrw'` undefined, then `_SetControlReference`): Glider Edit honestly shows its "needs Colour
+  Quickdraw" alert; Moving Van runs to `_SetControlReference`.
+
+Census, `mac68k-run --census --insns 50000000`, NEXT-NEEDED before this lane (the macfm table above) and after:
+
+| app | NEXT-NEEDED before | NEXT-NEEDED after | window |
+|---|---|---|---|
+| MacWrite 4.6 | `_SetCursor` | **none: parked in `GetNextEvent`** | **opens "Untitled", 7 menus, ruler drawn** |
+| MacWrite 4.5 | `_SetCursor` | none missing; wanders into address 0 (`TRAP #4` frame, see above) | none yet |
+| MacPaint 2.1F | `_SetWRefCon` | **none: parked in `GetNextEvent`** | 5 windows created hidden |
+| WriteNow 2.0 | `_Pack6` | none missing; wanders into address 0 (heap walk) | none yet |
+| WriteNow 2.2 | `_Pack6` | `_VInstall` ($A033, vertical retrace) | none yet |
+| WriteNow installer 4.0 | `_GetFNum` | `_GetAppParms` ($A9F5) | none yet |
+| WriteNow updater 4.02 | `_Pack7` | none missing; wanders into address 0 | none yet |
+| ResEdit 2.1.3 | LoadSeg refusal | LoadSeg refusal: compressed CODE (see above) | none yet |
+| SimpleText 1.3 | LoadSeg refusal | LoadSeg refusal: compressed CODE | none yet |
+| SimpleText 1.4 | `_OSDispatch` | `_Unimplemented` ($A89F) called from the stack area | none yet |
+| Glider PRO (68k) | `_Pack7` | none missing; wanders into address 0 | none yet |
+| Glider Edit | `_ParamText` | **none: runs; shows its "needs Colour Quickdraw" alert** | alert window (dialog) opens |
+| Moving Van | `_GetNewCWindow` | `_SetControlReference` ($A95B) | its colour window opens |
+| Toolbox Showcase (68k) | `_GetNewCWindow` | `_GetPalette` ($AA96) | |
+
 ### The next 10 traps by app count, whole Mac corpus (68k, static)
 
 `tools/corpus-traps-mac.py --rank IMPLEMENTED.txt FILE...` counts, over every 68k application in the corpus (32 files: executor, the Retro68 samples, systemless-showcase and the Garden apps; PPC fragments have no CODE and are ranked by imports above), how many apps contain each trap in their CODE resources and the engine's table (`Mac::implemented()`) does not implement, compared by table KEY so aliases (`_GetOSTrapAddress`, `_NewPtrClear`) count as implemented. An upper bound: data that looks like a trap word counts; the Retro68 runtime's libc inflates the file calls.

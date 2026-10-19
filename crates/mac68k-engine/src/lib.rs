@@ -16,10 +16,14 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 pub mod addrmode;
+pub mod clock;
+pub mod cursor;
 pub mod events;
 pub mod fm;
+pub mod fontnames;
 pub mod gestalt;
 pub mod guestcall;
+pub mod intl;
 #[cfg(feature = "fixtures")]
 pub mod fixture;
 pub mod lowmem;
@@ -29,7 +33,10 @@ pub mod memtraps;
 pub mod menu;
 pub mod mixed;
 pub mod osconv;
+pub mod pack7;
+pub mod package;
 pub mod pascal;
+pub mod procmgr;
 pub mod qd;
 pub mod quickdraw;
 pub mod pack2;
@@ -38,8 +45,10 @@ pub mod resmgr;
 pub mod run;
 pub mod scrap;
 pub mod segment;
+pub mod strcmp;
 pub mod sysenv;
 pub mod toolbox;
+pub mod winmgr;
 pub mod traptable;
 pub mod translate;
 pub mod trap_names;

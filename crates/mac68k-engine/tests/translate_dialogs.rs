@@ -177,7 +177,7 @@ fn scroll_dialog_fork() -> Vec<u8> {
         v
     };
     let mut ditl = 1i16.to_be_bytes().to_vec();
-    for it in [item([80, 200, 100, 260], 4, &ps("OK")), item([10, 220, 70, 236], 7, &130i16.to_be_bytes())] { ditl.extend_from_slice(&it); }
+    for it in [item([80, 200, 100, 260], 4, b"OK"), item([10, 220, 70, 236], 7, &130i16.to_be_bytes())] { ditl.extend_from_slice(&it); }
     let mut dlog = Vec::new();
     for v in [60i16, 40, 180, 300, 1, 0x0100, 0x0000] { dlog.extend_from_slice(&v.to_be_bytes()); }
     dlog.extend_from_slice(&0u32.to_be_bytes());

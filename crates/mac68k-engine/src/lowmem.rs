@@ -19,6 +19,7 @@ pub const APPL_LIMIT: u32 = 0x130; // Ptr: heap growth limit; StackSpace = SP - 
 pub const TIME: u32 = 0x20C; // long: seconds since 1904-01-01 (the clock)
 pub const TICKS: u32 = 0x16A; // long: 60 Hz tick count
 pub const MB_STATE: u32 = 0x172; // byte: mouse button state, bit 7 SET = button up
+pub const LO_3_BYTES: u32 = 0x31A; // long: $00FFFFFF, the mask 24-bit code applies to a pointer or block size
 pub const MEM_ERR: u32 = 0x220; // short: the last Memory Manager result
 pub const SYS_ZONE: u32 = 0x2A6; // THz
 pub const APPL_ZONE: u32 = 0x2AA; // THz
@@ -44,8 +45,8 @@ pub type Global = (u32, u32, &'static str);
 /// Every global the engine initialises or maintains, ascending and non-overlapping.
 pub static MAP: &[Global] = &[
     (SCREEN_ROW, 2, "ScreenRow"), (MEM_TOP, 4, "MemTop"), (BUF_PTR, 4, "BufPtr"), (HEAP_END_G, 4, "HeapEnd"),
-    (THE_ZONE, 4, "TheZone"), (APPL_LIMIT, 4, "ApplLimit"), (TICKS, 4, "Ticks"), (MB_STATE, 1, "MBState"), (MEM_ERR, 2, "MemErr"),
-    (SYS_ZONE, 4, "SysZone"), (APPL_ZONE, 4, "ApplZone"), (SCRN_BASE, 4, "ScrnBase"), (RAW_MOUSE, 4, "RawMouse"), (MOUSE, 4, "Mouse"), (CRSR_PIN, 8, "CrsrPin"),
+    (THE_ZONE, 4, "TheZone"), (APPL_LIMIT, 4, "ApplLimit"), (TICKS, 4, "Ticks"), (MB_STATE, 1, "MBState"), (TIME, 4, "Time"), (MEM_ERR, 2, "MemErr"),
+    (SYS_ZONE, 4, "SysZone"), (APPL_ZONE, 4, "ApplZone"), (LO_3_BYTES, 4, "Lo3Bytes"), (SCRN_BASE, 4, "ScrnBase"), (RAW_MOUSE, 4, "RawMouse"), (MOUSE, 4, "Mouse"), (CRSR_PIN, 8, "CrsrPin"),
     (CUR_AP_REF_NUM, 2, "CurApRefNum"), (CURRENT_A5, 4, "CurrentA5"), (CUR_STACK_BASE, 4, "CurStackBase"),
     (CUR_AP_NAME, 32, "CurApName"), (CUR_JT_OFFSET, 2, "CurJTOffset"), (WINDOW_LIST, 4, "WindowList"),
     (MENU_LIST, 4, "MenuList"), (RES_LOAD, 2, "ResLoad"), (RES_ERR, 2, "ResErr"), (MBAR_HEIGHT, 2, "MBarHeight"), (MMU_32_BIT, 1, "MMU32Bit"),
@@ -59,7 +60,7 @@ pub const MENU_BAR_HEIGHT: i16 = 20;
 /// ApplLimit: the engine's stack lies between here and `STACK_TOP` (the heap is above the stack, the reverse of a real
 /// Mac, so StackSpace = SP - ApplLimit is the stack headroom).
 pub const APPL_LIMIT_ADDR: u32 = 0x2_0000;
-/// Where the 52-byte stub Zone record lives (inside low RAM, below `CODE_BASE`).
+/// Where the 52-byte stub Zone record (plus one 8-byte free-block header after it) lives (inside low RAM, below `CODE_BASE`).
 pub const ZONE_STUB: u32 = 0xC00;
 /// The screen's pretend bitmap address (the engine draws nothing to it: QuickDraw output is a later step).
 pub const SCREEN_BASE: u32 = DEFAULT_SIZE as u32 - 0x5580; // 342 rows x 64 bytes, at the very top of RAM; the heap ends below it
@@ -72,16 +73,23 @@ pub fn init(mem: &mut GuestMem) -> Result<(), Refusal> {
     mem.write_u32(BUF_PTR, SCREEN_BASE).map_err(&e)?;
     mem.write_u32(HEAP_END_G, HEAP_END).map_err(&e)?;
     for z in [THE_ZONE, SYS_ZONE, APPL_ZONE] { mem.write_u32(z, ZONE_STUB).map_err(&e)?; }
-    // The stub Zone: bkLim = the end of the heap, moreMast = 64 (the Memory Manager's master-pointer block size).
-    // Every other field is zero: this is a name for ApplZone to point at, not a zone the guest may walk.
-    mem.zero(ZONE_STUB, 52).map_err(&e)?;
-    mem.write_u32(ZONE_STUB, HEAP_END).map_err(&e)?;
+    // The stub Zone: bkLim = the end of the walkable block list, moreMast = 64 (the master-pointer block size). A program that
+    // WALKS its heap (`zone + 52`, block after block by the 24-bit size in each header until it reaches bkLim: MacWrite's
+    // free-space count) finds ONE free block, the whole application heap. The zone's individual allocations are not
+    // represented as blocks in guest memory (the Memory Manager keeps them host-side), so the walk sees no detail.
+    // Every other field is zero: this is a name for ApplZone to point at, not a zone the guest may modify.
+    mem.zero(ZONE_STUB, 52 + 8).map_err(&e)?;
+    let heap_bytes = HEAP_END - crate::machine::HEAP_START;
+    mem.write_u32(ZONE_STUB, ZONE_STUB + 52 + heap_bytes).map_err(&e)?;
     mem.write_u16(ZONE_STUB + 20, 64).map_err(&e)?;
+    mem.write_u32(ZONE_STUB + 52, heap_bytes).map_err(&e)?; // block header: tag 0 (free), 24-bit size
     mem.write_u32(APPL_LIMIT, APPL_LIMIT_ADDR).map_err(&e)?;
     mem.write_u32(CUR_STACK_BASE, STACK_TOP).map_err(&e)?;
     mem.write_u32(SCRN_BASE, SCREEN_BASE).map_err(&e)?;
     for (i, v) in [0, 0, SCREEN_H, SCREEN_W].into_iter().enumerate() { mem.write_u16(CRSR_PIN + 2 * i as u32, v as u16).map_err(&e)?; }
     mem.write_u8(MB_STATE, 0x80).map_err(&e)?; // button up
+    mem.write_u32(TIME, crate::clock::DEFAULT_BOOT_SECS).map_err(&e)?;
+    mem.write_u32(LO_3_BYTES, 0x00FF_FFFF).map_err(&e)?;
     mem.write_u16(RES_LOAD, 0x0100).map_err(&e)?; // ResLoad = TRUE (Boolean in the high byte)
     mem.write_u16(MBAR_HEIGHT, MENU_BAR_HEIGHT as u16).map_err(&e)
 }
@@ -113,7 +121,7 @@ mod tests {
         set_app(&mut m, "Test", 0x44444, 32, 2).unwrap();
         for a in 0..0x1000u32 {
             if m.read_u8(a).unwrap() != 0 {
-                assert!(MAP.iter().any(|&(g, n, _)| (g..g + n).contains(&a)) || (ZONE_STUB..ZONE_STUB + 52).contains(&a),
+                assert!(MAP.iter().any(|&(g, n, _)| (g..g + n).contains(&a)) || (ZONE_STUB..ZONE_STUB + 60).contains(&a),
                     "byte {a:#x} written outside the documented map");
             }
         }

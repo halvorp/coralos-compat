@@ -151,6 +151,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9A6, &[Arg::P], Some(Arg::W), get_attrs::<U>)?;
     m.register(0xA9A8, &[Arg::L, Arg::L, Arg::L, Arg::L], None, get_info::<U>)?;
     m.register(0xA9B9, &[Arg::W], Some(Arg::L), get_cursor::<U>)?;
+    m.register(0xA9BA, &[Arg::W], Some(Arg::L), get_string::<U>)?;
     m.register(0xA99E, &[], Some(Arg::W), count_types::<U>)?;
     m.register(0xA81C, &[], Some(Arg::W), count1_types::<U>)?;
     m.register(0xA99F, &[Arg::P, Arg::W], None, get_ind_type::<U>)?;
@@ -265,6 +266,12 @@ fn get_cursor<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
     let id = c.args.get(0) as u16 as i16;
     let r = m.get_resource(*b"CURS", id, false);
     finish(m, &format!("GetCursor {id}"), r)
+}
+/// `GetString(stringID)`: the `STR ` resource as a `StringHandle` (NIL, with ResErr, when there is none).
+fn get_string<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let id = c.args.get(0) as u16 as i16;
+    let r = m.get_resource(*b"STR ", id, false);
+    finish(m, &format!("GetString {id}"), r)
 }
 fn count_types_of<U: GuestUi>(m: &mut Mac<U>, only_cur: bool, what: &str) -> Result<Done, Refusal> {
     let n = m.resource_types(only_cur).len() as u32;

@@ -37,6 +37,10 @@ macppc-engine adds nothing but one native (`ModalDialog` parks the PowerPC calle
 A stale or forged generation, a role that does not have the intent (`SelectRow` on a button), an inactive control: each is a
 named refusal and produces NO guest input.
 
+`ParamText` fills `^0`..`^3` in a dialog's static text when the item is made (a `ParamText` before `GetNewDialog`/`Alert`, as programs call it; a later one does
+not re-fill an item already shown). `IsDialogEvent` is true for an update/activate of a dialog window, a mouse-down in its content and any key while a dialog is
+front; `DialogSelect` returns the oldest pending item hit (the same queue `ModalDialog` drains) and is FALSE when there is none.
+
 ## Honest limits (all named in the log, none silent)
 
 * `radioButProc` is a check-box-shaped boolean part (a lone radio cannot be a `Choice`: it has no "none selected"; the app keeps the group), `popupMenuProc` (1008 + variation bits) is a `Choice{Popup}` over its MENU resource and a choice returns `inButton` with the value set, `_Pack0` is the List Manager (`translate/lists.rs`: a real `ListRec`, standard text LDEF shown as a native `List`, a custom LDEF stays a plane). A `procID` with no table row has no part at all: the control exists in guest memory and is DRAWN into the content plane as its default look (`fallback.rs`), so it is visible and the census counts it as `replayed`. A custom CDEF's own art is not run.
