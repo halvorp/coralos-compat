@@ -108,10 +108,12 @@ fn yam_runs_its_startup_and_the_igame_mcc_load_reaches_custom_class_creation() {
 #[test]
 fn the_aros_gadtools_demo_creates_its_real_button_gadget_before_the_next_missing_function() {
     // gtdemo is AROS-built (stdc + stdcio + posixc rellibs, task.resource, per-opener bases): it can only get this far because of
-    // the engine work recorded in docs/CORPUS.md. The window opens after the gadgets; its debug output hits RawPutChar first.
+    // the engine work recorded in docs/CORPUS.md. The window opens after the gadgets; its debug output (exec RawPutChar, now the
+    // engine log) was the first missing function until the amilibs lane, and the next gap is the GadTools PALETTE_KIND.
     let Some(r) = run_app("aros-m68k/sys/Demos/gtdemo", Some("aros-m68k/mini"), &[], None, 20_000_000) else { return };
     assert!(logged(&r, "CreateGadgetA kind=1 id=1") && logged(&r, "label=\"Exit (1)\""), "{:#?}", r.log);
-    assert!(r.refused.iter().any(|x| x == "exec.library/RawPutChar: unimplemented"), "{:?}", r.refused);
+    assert!(r.refused.iter().all(|x| !x.contains("RawPutChar")), "RawPutChar is bridged now: {:?}", r.refused);
+    assert!(r.refused.iter().any(|x| x.contains("CreateGadgetA: kind 8 not bridged: PALETTE_KIND")), "{:?}", r.refused);
     // NEGATIVE CONTROL: no gadget is created before the libraries are initialised.
     let Some(bare) = run_app("aros-m68k/sys/Demos/gtdemo", None, &[], None, 20_000_000) else { return };
     assert!(!logged(&bare, "CreateGadgetA"), "{:#?}", bare.log);
