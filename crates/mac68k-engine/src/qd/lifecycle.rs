@@ -20,12 +20,19 @@ const WHITE_COLOR: u32 = 30;
 
 /// Write the default pen/text/pattern state of a fresh port (the bitmap, rect and visRgn are set by the callers).
 fn init_fields<U: GuestUi>(m: &mut Mac<U>, port: u32, vis: u32, clip: u32) -> Result<(), Refusal> {
+    if !is_cport(&m.mem, port) {
+        write_pat(&mut m.mem, port.wrapping_add(P_BK_PAT), &WHITE)?;
+        write_pat(&mut m.mem, port.wrapping_add(P_FILL_PAT), &[0xFF; 8])?;
+        write_pat(&mut m.mem, port.wrapping_add(P_PN_PAT), &[0xFF; 8])?;
+    }
+    init_common_fields(m, port, vis, clip)
+}
+
+/// The fields a GrafPort and a CGrafPort share (same offsets): regions, pen, text, colour codes.
+pub(crate) fn init_common_fields<U: GuestUi>(m: &mut Mac<U>, port: u32, vis: u32, clip: u32) -> Result<(), Refusal> {
     let e = Refusal::mem("GrafPort");
     m.mem.write_u32(port.wrapping_add(P_VIS), vis).map_err(&e)?;
     m.mem.write_u32(port.wrapping_add(P_CLIP), clip).map_err(&e)?;
-    write_pat(&mut m.mem, port.wrapping_add(P_BK_PAT), &WHITE)?;
-    write_pat(&mut m.mem, port.wrapping_add(P_FILL_PAT), &[0xFF; 8])?;
-    write_pat(&mut m.mem, port.wrapping_add(P_PN_PAT), &[0xFF; 8])?;
     set_pen_loc(&mut m.mem, port, 0, 0)?;
     for (off, v) in [(P_PN_SIZE, 1u16), (P_PN_SIZE + 2, 1), (P_PN_MODE, PAT_COPY), (P_PN_VIS, 0), (P_TX_FONT, 0), (P_TX_MODE, SRC_OR), (P_TX_SIZE, 0)] {
         m.mem.write_u16(port.wrapping_add(off), v).map_err(&e)?;
@@ -49,10 +56,15 @@ fn port_size<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, 
     Ok(Done { result: 0, log: format!("[quickdraw] PortSize {w}x{h}") })
 }
 
+/// The depth of a window's canvas: 1 for a classic window; a colour window (`NewCWindow`) has the main device's depth.
+fn window_depth<U: GuestUi>(m: &Mac<U>, win: u32) -> u8 {
+    if m.windows.get(&win).is_some_and(|w| w.color) { crate::cqd::gdevice::SCREEN_DEPTH } else { 1 }
+}
+
 pub(crate) fn window_created<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(), Refusal> {
     let r = m.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?.rect;
     let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
-    let canvas = Bitmap::new(w, h, 1).ok_or_else(|| Refusal(format!("window {w}x{h}: no canvas of that size")))?;
+    let canvas = Bitmap::new(w, h, window_depth(m, win)).ok_or_else(|| Refusal(format!("window {w}x{h}: no canvas of that size")))?;
     let vis = m.new_region(&Region::from_rect(Rect::new(0, 0, w, h)))?;
     let clip = m.new_region(&Region::from_rect(WIDE_OPEN))?;
     init_fields(m, win, vis, clip)?;
@@ -70,7 +82,7 @@ pub(crate) fn window_shown<U: GuestUi>(m: &mut Mac<U>, win: u32) {
 pub(crate) fn window_resized<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(), Refusal> {
     let r = m.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?.rect;
     let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
-    let canvas = Bitmap::new(w, h, 1).ok_or_else(|| Refusal(format!("window {w}x{h}: no canvas of that size")))?;
+    let canvas = Bitmap::new(w, h, window_depth(m, win)).ok_or_else(|| Refusal(format!("window {w}x{h}: no canvas of that size")))?;
     m.qd.canvases.insert(win, canvas);
     m.qd.present.forget(win);
     m.qd.plane.reset(win);
@@ -87,6 +99,8 @@ pub(crate) fn window_disposed<U: GuestUi>(m: &mut Mac<U>, win: u32) {
     m.qd.rgn_open.remove(&win);
     m.qd.present.forget(win);
     m.qd.plane.forget(win);
+    m.qd.palettes.remove(&win);
+    if is_cport(&m.mem, win) { m.release_cport(win); }
     for off in [P_VIS, P_CLIP] {
         if let Ok(h) = m.mem.read_u32(win.wrapping_add(off)) { if h != 0 { let _ = m.dispose_handle(h); } }
     }
@@ -149,6 +163,7 @@ fn close_port<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
 fn set_port_bits<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let port = current_port(m)?;
     if m.qd.canvases.contains_key(&port) { return Err(Refusal(format!("SetPortBits: {port:#x} is a window's port; its bitmap is the window"))); }
+    if is_cport(&m.mem, port) { return Err(Refusal(format!("SetPortBits: {port:#x} is a CGrafPort: its pixels are set with SetPortPix (SetPortBits would overwrite its portPixMap and portVersion)"))); }
     let e = Refusal::mem("BitMap");
     let b = m.mem.bytes(m.mem.span(c.args.get(0), 14).map_err(&e)?).map_err(&e)?.to_vec();
     m.mem.write_bytes(port.wrapping_add(P_BITS), &b).map_err(&e)?;
@@ -159,7 +174,8 @@ fn set_port_bits<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
 fn convert<U: GuestUi>(m: &mut Mac<U>, pt: u32, sign: i16, name: &str) -> Result<Done, Refusal> {
     let port = current_port(m)?;
     let e = Refusal::mem("Point");
-    let (bt, bl) = (m.mem.read_i16(port.wrapping_add(P_BITS + BM_BOUNDS)).map_err(&e)?, m.mem.read_i16(port.wrapping_add(P_BITS + BM_BOUNDS + 2)).map_err(&e)?);
+    let bits = bits_addr(&m.mem, port)?;
+    let (bt, bl) = (m.mem.read_i16(bits.wrapping_add(BM_BOUNDS)).map_err(&e)?, m.mem.read_i16(bits.wrapping_add(BM_BOUNDS + 2)).map_err(&e)?);
     let (v, h) = (m.mem.read_i16(pt).map_err(&e)?, m.mem.read_i16(pt + 2).map_err(&e)?);
     m.mem.write_u16(pt, v.wrapping_add(sign * bt) as u16).map_err(&e)?;
     m.mem.write_u16(pt + 2, h.wrapping_add(sign * bl) as u16).map_err(&e)?;

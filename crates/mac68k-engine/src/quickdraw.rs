@@ -77,6 +77,7 @@ fn init_graf<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, 
     let a5 = m.mem.read_u32(CURRENT_A5).map_err(Refusal::mem("CurrentA5"))?;
     if a5 != 0 { m.mem.write_u32(a5, p).map_err(Refusal::mem("A5 world"))?; }
     m.qd_globals = p;
+    m.init_devices()?; // Color QuickDraw machines: the main screen device exists from here on
     Ok(Done { result: 0, log: format!("[toolbox] InitGraf thePort at {p:#x}") })
 }
 

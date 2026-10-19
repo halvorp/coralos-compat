@@ -44,6 +44,7 @@ pub mod package;
 pub mod pascal;
 pub mod procmgr;
 pub mod profile;
+pub mod cqd;
 pub mod qd;
 pub mod quickdraw;
 pub mod pack2;

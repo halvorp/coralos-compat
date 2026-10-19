@@ -37,7 +37,7 @@ fn load(pef: &[u8], rsrc: Option<&[u8]>) -> (MacPpc<RecordingGuestUi>, macppc_en
 }
 
 #[test]
-fn the_real_application_starts_up_loads_its_menus_and_stops_at_setpalette() {
+fn the_real_application_starts_up_loads_its_menus_and_stops_at_tenew() {
     let Some((pef, rsrc)) = showcase() else { return };
     let (mut m, frag) = load(&pef, Some(&rsrc));
     let c = Census::of(&frag);
@@ -52,9 +52,10 @@ fn the_real_application_starts_up_loads_its_menus_and_stops_at_setpalette() {
     let at = |needle: &str| log.find(needle).unwrap_or_else(|| panic!("{needle} missing:\n{log}"));
     assert!(at("InitGraf") < at("InitWindows") && at("InitWindows") < at("GetNewMBar 128: menus [128, 129, 130, 131]") && at("GetNewMBar") < at("GetMenu 132 -> menu 132 \"Options\" 6 items"), "{log}");
     assert!(log.contains("GetMenu 142 -> menu 142 \"Renderer\" 3 items") && log.contains("DrawMenuBar: 4 menus"), "{log}");
-    // ...and stops at SetPalette (the PowerPC import name of NSetPalette: the Palette Manager answers GetPalette now, palette.rs; _GetNewCWindow is modelled now: winmgr.rs), by name, with the interpreter's instruction count
-    assert!(matches!(&step, Step::Fault(f) if f.starts_with("NEXT-NEEDED SetPalette")), "{step:?}");
-    assert!((200..400).contains(&insns), "{insns} PowerPC instructions executed");
+    // ...and stops at TENew (TextEdit), by name, with the interpreter's instruction count. It used to stop earlier, at SetPalette:
+    // the PowerPC import name of NSetPalette (symbols.rs INTERFACELIB_ALIASES); the colour window and its palette now go through.
+    assert!(matches!(&step, Step::Fault(f) if f.starts_with("NEXT-NEEDED TENew")), "{step:?}");
+    assert!(insns > 400, "{insns} PowerPC instructions executed: past the SetPalette that used to stop it");
     // negative control: without the resource fork the same code asks for MBAR 128, finds none, and the application quits
     let (mut m2, _) = load(&pef, None);
     let (step2, _) = m2.run_loop(1_000_000);

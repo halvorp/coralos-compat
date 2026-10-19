@@ -61,6 +61,12 @@ impl<U: GuestUi> MacPpc<U> {
                 GlueOutcome::Return
             }
             Native::InitDone => GlueOutcome::Return,
+            Native::HasDepth => {
+                // HasDepth(gd, depth, whichFlags, flags): INTEGER; only the device and depth matter to the screen
+                regs[3] = u32::from(mac68k_engine::cqd::depth::has_depth(&self.mac, a(0), a(1) as u16)) as u16 as i16 as i32 as u32;
+                GlueOutcome::Return
+            }
+            Native::SetDepth => { regs[3] = mac68k_engine::cqd::depth::set_depth(&mut self.mac, a(0), a(1) as u16) as i32 as u32; GlueOutcome::Return }
             Native::SetJmp | Native::CExit | Native::BreakPoint => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
             Native::WaitNextEvent | Native::GetNextEvent => {
                 // eventMask, EventRecord*, [sleep, mouseRgn]. The handler is polled with sleep 0 (it pumps the GuestUi and

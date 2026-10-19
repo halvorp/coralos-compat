@@ -3,7 +3,7 @@
 //! by (+dh, +dv); `clipRgn` is NOT touched (the program owns it and keeps it in the coordinates it set it in); a call that
 //! leaves the origin where it is does nothing. The window's pending update region is kept in local coordinates here, so it moves
 //! with them (a real Window Manager keeps it global, where nothing needs to change).
-use super::port::{P_BITS, P_RECT, P_VIS};
+use super::port::{bits_addr, P_RECT, P_VIS};
 use super::target::current_port;
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::Arg;
@@ -22,7 +22,7 @@ fn set_origin<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
     let (dh, dv) = (h.wrapping_sub(left), v.wrapping_sub(top));
     if dh == 0 && dv == 0 { return Ok(Done { result: 0, log: format!("[quickdraw] SetOrigin {h},{v} (already the origin)") }); }
     // portBits.bounds = top, left, bottom, right at +6; portRect likewise at P_RECT: both move by (dv, dh, dv, dh).
-    for base in [port.wrapping_add(P_BITS + 6), port.wrapping_add(P_RECT)] {
+    for base in [bits_addr(&m.mem, port)?.wrapping_add(6), port.wrapping_add(P_RECT)] {
         for (i, d) in [dv, dh, dv, dh].into_iter().enumerate() {
             let a = base + 2 * i as u32;
             let old = m.mem.read_i16(a).map_err(&e)?;

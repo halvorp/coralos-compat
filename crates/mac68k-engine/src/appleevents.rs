@@ -20,6 +20,9 @@
 //! its OSErr becomes `AEProcessAppleEvent`'s. The event is an empty one (no parameters: `AEGetParamPtr` finds none), the reply
 //! is the null descriptor (no reply wanted). An event with no handler is `errAEEventNotHandled` (-1708).
 //!
+//! `AESetInteractionAllowed` (0x011E) / `AEGetInteractionAllowed` (0x021D) keep the process's interaction level (default
+//! `kAEInteractWithLocal`); no event is ever sent, so nothing consults it yet.
+//!
 //! `AEDisposeDesc` (0x0204) is modelled (it frees the descriptor's handle and nulls it); building, sending and reading events
 //! (`AECreateAppleEvent`, `AESend`, `AEGetParamPtr`, lists) answer `paramErr` with a named refusal and pop their frame.
 use crate::machine::Mac;
@@ -40,6 +43,8 @@ mod sel {
     pub const GET_EVENT_HANDLER: u16 = 0x0921;
     pub const PROCESS_APPLE_EVENT: u16 = 0x021B;
     pub const DISPOSE_DESC: u16 = 0x0204;
+    pub const SET_INTERACTION_ALLOWED: u16 = 0x011E;
+    pub const GET_INTERACTION_ALLOWED: u16 = 0x021D;
 }
 
 pub const ERR_AE_EVENT_NOT_HANDLED: i16 = -1708;
@@ -51,7 +56,10 @@ const FOUR_NULL: u32 = u32::from_be_bytes(*b"null");
 
 /// (event class, event id, isSysHandler) -> (handler address, refcon).
 #[derive(Default)]
-pub struct AppleEvents { pub handlers: BTreeMap<(u32, u32, bool), (u32, u32)>, oapp_sent: bool }
+pub struct AppleEvents { pub handlers: BTreeMap<(u32, u32, bool), (u32, u32)>, oapp_sent: bool, interaction: Option<u16> }
+
+/// `kAEInteractWithLocal`: the level a process starts with (Inside Macintosh: Interapplication Communication, "Apple Event Manager").
+const INTERACT_WITH_LOCAL: u16 = 1;
 
 /// What the trampoline needs when a handler returns: the program's stack and PC to resume at, the descriptors to free.
 #[derive(Debug, Clone)]
@@ -104,6 +112,17 @@ fn pack8<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> Result<String
             if handle != 0 { let _ = m.dispose_handle(handle); }
             m.mem.write_u32(d, FOUR_NULL).and_then(|_| m.mem.write_u32(d + 4, 0)).map_err(&e)?;
             (0, format!("[ae] AEDisposeDesc {d:#x}"))
+        }
+        sel::SET_INTERACTION_ALLOWED => {
+            // AESetInteractionAllowed(level): the level is the process's policy for AEInteractWithUser; kAEInteractWithSelf 0, Local 1, All 2
+            let level = u16::from(m.mem.read_u8(sp).map_err(&e)?); // AEInteractAllowed is a byte: in a 16-bit slot it is the first (low-address) byte
+            if level > 2 { (PARAM_ERR, format!("[ae] AESetInteractionAllowed {level}: not an AEInteractAllowed level")) }
+            else { m.ae.interaction = Some(level); (0, format!("[ae] AESetInteractionAllowed {level}")) }
+        }
+        sel::GET_INTERACTION_ALLOWED => {
+            let (out, level) = (m.mem.read_u32(sp).map_err(&e)?, m.ae.interaction.unwrap_or(INTERACT_WITH_LOCAL));
+            m.mem.write_u8(out, level as u8).map_err(&e)?;
+            (0, format!("[ae] AEGetInteractionAllowed -> {level}"))
         }
         sel::PROCESS_APPLE_EVENT => return process_apple_event(m, c, r, sp),
         other => {

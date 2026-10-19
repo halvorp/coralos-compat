@@ -2,8 +2,8 @@
 //! the program runs on. `D0.W` = the SysEnvRec version the program understands, `A0` = the record; the result code is in D0.
 //!
 //! The answer is the machine this engine IS: a 68020 Macintosh II class machine (the CPU core is a 68020), System 7.0.0,
-//! a standard ADB keyboard, no FPU (the 68881 is not modelled), and black-and-white QuickDraw (`hasColorQD` FALSE: the
-//! engine's QuickDraw is 1 bit deep). Nothing is claimed that the engine does not do.
+//! a standard ADB keyboard, no FPU (the 68881 is not modelled), and `hasColorQD` by machine profile (TRUE on the
+//! Macintosh II: 8-bit Color QuickDraw, [`crate::cqd`]; FALSE on the Plus and the SE). Nothing is claimed that the engine does not do.
 //!
 //! SysEnvRec (16 bytes): environsVersion 0, machineType 2, systemVersion 4, processor 6, hasFPU 8 (Boolean), hasColorQD 9,
 //! keyBoardType 10, atDrvrVersNum 12, sysVRefNum 14.
@@ -35,10 +35,11 @@ fn sys_environs<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> Result
     m.mem.write_u16(p + 2, m.profile.env_machine).map_err(&e)?;
     m.mem.write_u16(p + 4, SYSTEM_VERSION).map_err(&e)?;
     m.mem.write_u16(p + 6, m.profile.env_processor).map_err(&e)?;
-    m.mem.write_u16(p + 8, 0).map_err(&e)?; // hasFPU = FALSE, hasColorQD = FALSE
+    // hasFPU = FALSE (byte 8), hasColorQD (byte 9) by profile
+    m.mem.write_u16(p + 8, u16::from(m.profile.color_qd)).map_err(&e)?;
     m.mem.write_u16(p + 10, ENV_STAND_ADB_KBD).map_err(&e)?;
     m.mem.write_u16(p + 12, 0).map_err(&e)?;
     m.mem.write_u16(p + 14, sys_vref).map_err(&e)?;
     r.err(if want > VERSION { ENV_VERS_TOO_BIG } else { 0 });
-    Ok(format!("[toolbox] SysEnvirons {want} -> machine {}, System {SYSTEM_VERSION:#06x}, processor {}, no FPU, no colour QD", m.profile.env_machine, m.profile.env_processor))
+    Ok(format!("[toolbox] SysEnvirons {want} -> machine {}, System {SYSTEM_VERSION:#06x}, processor {}, no FPU, {} colour QD", m.profile.env_machine, m.profile.env_processor, if m.profile.color_qd { "has" } else { "no" }))
 }
