@@ -185,6 +185,14 @@ impl<U: GuestUi> Mac<U> {
         Ok(m)
     }
 
+    /// A machine of the profile called `name` (profile.rs), for a host that chooses it before anything exists: [`Mac::new`] then
+    /// [`Mac::set_machine`]. An unknown name is a named refusal.
+    pub fn with_profile(ui: U, name: &str) -> Result<Self, Refusal> {
+        let mut m = Self::new(ui)?;
+        m.set_machine(name)?;
+        Ok(m)
+    }
+
     /// Become the machine called `name` (profile.rs; a bundle's `(guest (machine "mac-plus"))`): the CPU model the NEXT
     /// [`Mac::launch`] / [`Mac::start`] runs on, the address mode, and the Gestalt / SysEnvirons answers. An unknown name is a
     /// named refusal and changes nothing.

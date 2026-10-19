@@ -63,11 +63,15 @@ pub fn parse_code0(d: &[u8]) -> Result<(Code0, &[u8]), String> {
 impl<U: GuestUi> Mac<U> {
     /// Launch a classic Mac application from its file: MacBinary, an AppleDouble header file or a raw resource fork.
     /// Builds the A5 world and the jump table and leaves the CPU at the first jump-table entry, ready to [`Mac::step`].
-    pub fn launch(&mut self, file: &[u8]) -> Result<(), String> {
+    pub fn launch(&mut self, file: &[u8]) -> Result<(), String> { self.launch_as(file, "Application") }
+
+    /// [`launch`](Self::launch) for a file with a name: the application's name when its container (an AppleDouble header, a raw
+    /// fork) carries none; a MacBinary header's own name wins.
+    pub fn launch_as(&mut self, file: &[u8], name: &str) -> Result<(), String> {
         let opened = retro_resfork::open(file).map_err(|e| e.to_string())?;
         let fork = ResFork::parse(file[opened.rsrc.clone()].to_vec()).map_err(|e| e.to_string())?;
         self.rm.open_fork(APP_REF_NUM, fork);
-        let app_name = opened.name.clone().unwrap_or_else(|| "Application".into());
+        let app_name = opened.name.clone().unwrap_or_else(|| name.into());
         let (ft, cr) = (opened.file_type.unwrap_or(*b"APPL"), opened.creator.unwrap_or(*b"????"));
         let data = opened.data.clone().map_or(&[][..], |r| &file[r]);
         self.fm.install_app(&app_name, data, &file[opened.rsrc.clone()], ft, cr, APP_REF_NUM).map_err(|e| format!("the application's own file could not be installed on the boot volume (OSErr {e})"))?;

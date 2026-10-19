@@ -68,9 +68,12 @@ returns through LR. Arguments past r10 are read from the stack parameter area (r
 Boolean zero-extended. Pascal strings, VAR parameters and Rect/Point pointers are identical to the 68k conventions (a pointer is a
 pointer; a Point is the two shorts packed in one register). `qd` is the real QDGlobals block; `InitGraf(&qd.thePort)` fills it in place.
 `WaitNextEvent` with sleep != 0 and no matching event returns `GlueOutcome::Idle`: the CPU is parked ON the call
-(`Step::Blocked`, no instructions run) and the call is retried when a queued event matches its mask. `GetNextEvent` never waits
-(Inside Macintosh): FALSE and a null event at once. (mac68k's `GetNextEvent` still blocks; that is its lane's to change.) The sleep's tick count is not
-honoured (no timer wakes the guest).
+(`Step::Blocked`, no instructions run) and the call is retried when a queued event matches its mask, or when the host's clock reaches the
+sleep's deadline (`Runtime::wait_deadline`, the same rule as the 68k engine's blocked call: at least one tick, 0x50000+ ticks = until an event;
+the retry then returns the null event instead of parking again). `GetNextEvent` never waits
+(Inside Macintosh): FALSE and a null event at once. (mac68k's `GetNextEvent` still blocks; that is its lane's to change.) The host moves the
+clock in virtual microseconds (`GuestMachine::advance_clock_to`; the 60 Hz boundary rule is in `mac68k_engine::clock`) and reads the wake-up
+from `GuestMachine::next_timer_deadline`.
 
 Not handled, each a named limit: floating-point arguments/results (f1..f13; no InterfaceLib import this engine binds takes one),
 64-bit results in r3:r4, Mixed Mode UPPs/RoutineDescriptors (callbacks into PPC or 68k code), `longjmp`, `atexit`, term routines.

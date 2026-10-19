@@ -1,8 +1,10 @@
 //! What every engine (amiga68k, mac68k, ...) shares beyond the CPU, RAM and UI crates: the named [`Refusal`] and
 //! the [`Step`] a resumable machine's `step` returns. Moved out of amiga68k-engine so the second engine did not copy
-//! them.
+//! them, and the [`GuestMachine`] surface a host drives any of them through.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+pub mod driver;
+pub use driver::{Delivery, GuestMachine, RunStats};
 use alloc::format;
 use alloc::string::String;
 

@@ -13,6 +13,7 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 pub mod asl;
+pub mod driver;
 pub mod boopsi;
 pub mod boopsi_gadget;
 pub mod boopsi_draw;

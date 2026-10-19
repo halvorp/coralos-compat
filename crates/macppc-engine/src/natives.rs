@@ -71,16 +71,19 @@ impl<U: GuestUi> MacPpc<U> {
             Native::WaitNextEvent | Native::GetNextEvent => {
                 // eventMask, EventRecord*, [sleep, mouseRgn]. The handler is polled with sleep 0 (it pumps the GuestUi and
                 // returns a queued event or the null event). A null event for a caller that asked to sleep (WaitNextEvent
-                // sleep != 0) is `Idle`: the run loop parks the CPU on this very call
-                // and retries it when a matching event is queued. GetNextEvent never waits (Inside Macintosh): with nothing
-                // pending it returns FALSE with a null event at once, so idle loops built on it keep running. No timer wakes it: the sleep's tick count is not honoured
-                // (a sleeping caller that wants its idle work done on time would not get it; named in docs/MACPPC-PLUMBING.md).
+                // sleep != 0) is `Idle`: the run loop parks the CPU on this very call and retries it when a matching event is
+                // queued or the sleep's ticks are up (`wait_deadline`: the host's clock then wakes it, and the retry returns the null
+                // event, as the 68k engine's blocked call does). GetNextEvent never waits (Inside Macintosh): with nothing pending
+                // it returns FALSE with a null event at once, so idle loops built on it keep running.
                 let name = if n == Native::WaitNextEvent { "WaitNextEvent" } else { "GetNextEvent" };
                 let Some(op) = mac68k_engine::mixed::trap_opcode("WaitNextEvent") else { return GlueOutcome::Refused("WaitNextEvent has no trap word".into()) };
-                let sleeps = n == Native::WaitNextEvent && a(2) != 0;
+                let timed_out = core::mem::take(&mut self.rt.wait_timed_out);
+                let sleep = if n == Native::WaitNextEvent { a(2) } else { 0 };
                 let r = self.mac.pascal_call(op, &[a(0), a(1), 0, 0]);
-                if sleeps && matches!(r, Ok(rr) if rr.value == 0 && !rr.halted) {
+                if sleep != 0 && !timed_out && matches!(r, Ok(rr) if rr.value == 0 && !rr.halted) {
                     self.rt.wait_mask = Some(a(0) as u16);
+                    // the same rule as the 68k engine's blocked call (events.rs): at least one tick, and a sleep of 0x50000+ ticks is "until an event"
+                    self.rt.wait_deadline = (sleep < 0x0005_0000).then(|| self.mac.ev.ticks.wrapping_add(sleep.max(1)));
                     self.mac.log.push(format!("[cfm] {name} mask {:#06x}: no event, the caller waits", a(0) as u16));
                     return GlueOutcome::Idle;
                 }

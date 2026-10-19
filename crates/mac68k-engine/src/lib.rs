@@ -20,6 +20,7 @@ pub mod appleevents;
 pub mod clock;
 pub mod compressed;
 pub mod cursor;
+pub mod driver;
 pub mod events;
 pub mod fixmath;
 pub mod fm;

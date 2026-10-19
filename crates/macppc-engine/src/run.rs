@@ -37,6 +37,10 @@ pub struct Runtime {
     bound: usize,
     /// Set by a `WaitNextEvent` that parked the CPU: the event mask a queued event must match to resume.
     pub(crate) wait_mask: Option<u16>,
+    /// The tick at which that wait times out (`WaitNextEvent`'s sleep; none for "until an event comes", sleep >= 0x50000).
+    pub(crate) wait_deadline: Option<u32>,
+    /// The parked wait ran out of time: the retried call must return the null event instead of parking again.
+    pub(crate) wait_timed_out: bool,
     /// Set by a `ModalDialog` that parked the CPU: it resumes when the front dialog has an item hit.
     pub(crate) wait_dialog: bool,
     /// `main`'s entry state, held while the init routine runs.
@@ -88,8 +92,11 @@ impl<U: GuestUi> MacPpc<U> {
         let Some(mut cpu) = self.rt.cpu.take() else { return (Step::Exited, gone) };
         if let Some(mask) = self.rt.wait_mask {
             self.mac.pump_ui();
-            if !self.mac.event_pending(mask) { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
+            let timed_out = self.rt.wait_deadline.is_some_and(|d| self.mac.ev.ticks.wrapping_sub(d) < 0x8000_0000);
+            if !self.mac.event_pending(mask) && !timed_out { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
+            self.rt.wait_timed_out = timed_out;
             self.rt.wait_mask = None;
+            self.rt.wait_deadline = None;
         }
         if self.rt.wait_dialog {
             if !self.mac.modal_ready() { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }

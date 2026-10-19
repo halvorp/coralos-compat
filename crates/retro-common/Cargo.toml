@@ -3,8 +3,15 @@ name = "retro-common"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Types every retro-compat engine shares: the named Refusal and the resumable-run Step"
+description = "Types every retro-compat engine shares: the named Refusal, the resumable-run Step and the GuestMachine driver trait"
 
 [dependencies]
 retro-guest-mem = { path = "../retro-guest-mem" }
 guestui-abi = { path = "../guestui-abi" }
+retro-volume = { path = "../retro-volume" }
+
+[dev-dependencies]
+# The driver trait is tested through all three engines it fronts (a dev-dependency cycle is fine for cargo).
+amiga68k-engine = { path = "../amiga68k-engine" }
+mac68k-engine = { path = "../mac68k-engine", features = ["fixtures"] }
+macppc-engine = { path = "../macppc-engine", features = ["fixtures"] }

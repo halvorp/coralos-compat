@@ -20,6 +20,7 @@ pub mod asm;
 pub mod census;
 pub mod cfm;
 pub mod cfrg;
+pub mod driver;
 pub mod error;
 #[cfg(feature = "fixtures")]
 pub mod fixture;

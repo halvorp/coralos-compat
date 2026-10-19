@@ -51,6 +51,8 @@ pub struct EventMgr {
     pub queue: VecDeque<MacEvent>,
     pub waiting: Option<Wait>,
     pub ticks: u32,
+    /// Every tick the host has ever fed [`Mac::advance_ticks`]: `ticks` without the 2^32 wrap, so the virtual-microsecond clock (clock.rs) never loses its place.
+    pub ticks_total: u64,
     /// Menu choices (`menuID << 16 | item`) for `MenuSelect` to return, oldest first.
     pub choices: VecDeque<u32>,
 }
@@ -71,6 +73,7 @@ impl<U: GuestUi> Mac<U> {
     /// The host's 60 Hz clock: advance `Ticks` (and so `TickCount` and event timestamps).
     pub fn advance_ticks(&mut self, n: u32) {
         self.ev.ticks = self.ev.ticks.wrapping_add(n);
+        self.ev.ticks_total += u64::from(n);
         let _ = self.mem.write_u32(TICKS, self.ev.ticks);
         let _ = self.update_time();
         for _ in 0..n.min(600) { self.vbl_tick(); } // at most ten seconds of retraces per call: a host that sleeps does not owe them all

@@ -884,3 +884,20 @@ Manager (`Color2Index`, `Index2Color`, `RealColor`, `InvertColor`, `GetCTable`, 
 The ops are the SAME ones as before, made depth-aware: the pen is a pair of pen numbers, the Boolean transfer modes act on pixel values (`qd::draw::PenOp`), `retro-raster` gained
 `stencil_with`. Refused by name: direct (16/32-bit) pixel maps, colour patterns (`patType` 1/2), arithmetic modes 32..39, `SetDepth` to another depth, `Index2Color` outside the table, a scaling `CopyMask`, `SetPortBits` on a CGrafPort, `NewCWindow` on a machine without Color QuickDraw.
 Heap addresses of an app that calls `InitGraf` on mac-ii move by about 2.3 KB (the main device's records), which is why two tests that pinned a handle address now pin its form.
+
+## One driver interface for the three engines (engine lane), 2026-10-19
+`retro_common::GuestMachine` is the single surface a host app drives an Amiga, a Mac 68k or a Mac PowerPC program through
+(`start_file(bytes, name)`, `deliver`, `step`, `advance_clock_to(virtual_us)`, `next_timer_deadline`, `ui`, `volume`, `drain_log`,
+`drain_refused`, `set_stop_on_unimplemented`); the clock is virtual microseconds for all three, and the Mac engines convert to their 60 Hz
+tick at one documented boundary (`ticks_at` / `us_at_tick` in `mac68k_engine::clock`). Tests: `crates/retro-common/tests/guest_machine.rs`
+drives every engine only through the trait (fixtures, amimon, and the corpus apps below, which skip when `/data/build/corpus-bin` is absent).
+Real applications reaching their window through the trait. Census: `macppc-run --census --run` output over the 10 PowerPC corpus apps (Retro68 x8, Glider PRO, Toolbox Showcase) is byte-identical before (58e4459) and after (the runners never advance the PowerPC clock); `mac68k-run` is untouched:
+
+| platform | app | through the trait |
+|---|---|---|
+| Amiga | amimon (committed fixture) | GadTools window, parks on its timer, native close ends it |
+| Mac 68k (mac-ii) | MacWrite 4.6 | "Untitled" document window + 7-menu strip, parks in GetNextEvent |
+| Mac PowerPC | Retro68 HelloWorld | "Retro68 Console" window, then `NGetTrapAddress` by name (unchanged) |
+
+One behaviour change underneath: a PowerPC `WaitNextEvent` with a sleep was parked until an event and never woke on time (the sleep was not
+honoured); it now times out when the host's clock reaches the sleep's deadline, as the 68k engine's call does, so a PowerPC app's idle work runs.

@@ -9,6 +9,7 @@ description = "Classic Mac OS PowerPC personality (plumbing): CFM instantiation 
 retro-common = { path = "../retro-common" }
 retro-guest-mem = { path = "../retro-guest-mem" }
 retro-pef = { path = "../retro-pef" }
+retro-volume = { path = "../retro-volume" }
 retro-resfork = { path = "../retro-resfork" }
 mac68k-engine = { path = "../mac68k-engine" }
 guestui-abi = { path = "../guestui-abi" }

@@ -73,14 +73,19 @@ dependencies = [
  "retro-ppc",
  "retro-raster",
  "retro-resfork",
+ "retro-volume",
 ]
 
 [[package]]
 name = "retro-common"
 version = "0.1.0"
 dependencies = [
+ "amiga68k-engine",
  "guestui-abi",
+ "mac68k-engine",
+ "macppc-engine",
  "retro-guest-mem",
+ "retro-volume",
 ]
 
 [[package]]
