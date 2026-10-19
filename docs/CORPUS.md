@@ -901,3 +901,13 @@ Real applications reaching their window through the trait. Census: `macppc-run -
 
 One behaviour change underneath: a PowerPC `WaitNextEvent` with a sleep was parked until an event and never woke on time (the sleep was not
 honoured); it now times out when the host's clock reaches the sleep's deadline, as the 68k engine's call does, so a PowerPC app's idle work runs.
+
+## 2026-10-19: a host's MUI layout profile (group band, text measurer, label gap, spacing, window inset)
+
+`mui::layout::Metrics` (ruling 17 piece 7, still a measured host profile, all-zero = Zune's own sizes) gained six fields: `text_w` (the host's
+own width of a text, `None` = the screen font), `group_head` and `group_inset` (a titled group's contents start `head + inset` under its top edge
+and `inset` inside its other three sides), `label_gap` (room right of a label that labels a control), `spacing` (the host's default neighbour gap,
+a guest's own `MUIA_Group_*Spacing` still wins) and `win_pad`. Census: the AROS Snoopy window (corpus `aros-m68k/sys/System/Snoopy`) with the old
+four-field kit profile versus the full profile, host-measured by the RetroCompat.app test; no corpus app's Zune-default layout changes (the
+workspace corpus tests with a default profile are unchanged: 864 passed, 0 failed, debug and release). New corpus test:
+`a_host_group_profile_keeps_every_group_member_inside_the_panel_and_labels_with_their_controls` (skips when the corpus is absent).

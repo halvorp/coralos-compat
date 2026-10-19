@@ -45,7 +45,7 @@ pub struct Layout { pub width: i32, pub height: i32, pub elems: Vec<Elem>, pub d
 /// Floors and paddings in window pixels that the host's native controls need; the default is all zero = Zune's own sizes. A host whose
 /// kit draws a toggle 56x28 or a 28 px field sets them, and MUI's layout then sizes every cell, group and the window for those
 /// controls, so nothing overlaps; the guest never sees the profile (its tree, attributes and notifications are untouched).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Metrics {
     /// Smallest check box / toggle (width, height).
     pub toggle: (i32, i32),
@@ -56,12 +56,35 @@ pub struct Metrics {
     /// The host draws a check box's label to the RIGHT of its toggle, `gap` px away (Gute Form order), instead of in MUI's label column to
     /// the left: the label's own cell collapses and the box's cell holds toggle + gap + label, so the text never lands in a neighbour.
     pub label_right: Option<i32>,
+    /// The host measures text (the width, in window pixels, of one line) with its own face: every label, caption and entry is sized by
+    /// what the host will DRAW, not by the screen font the guest believes in, so the host's wider or narrower letters never overflow a cell.
+    /// `None` for a text the host cannot measure: that one text is sized by the screen font.
+    pub text_w: Option<fn(&str) -> Option<i32>>,
+    /// The title band a host group draws above its panel (0 = Zune's own frame). The title lives in this band, so the panel under it, and
+    /// the group's contents with it, begin `group_head` below the group's top edge; an untitled group has no band.
+    pub group_head: i32,
+    /// The host panel's padding on all four sides of a group's contents (0 = Zune's own 5 px frame inset).
+    pub group_inset: i32,
+    /// Room added to the right of a label that labels a control, so the host can draw the text this far from the control (0 = none).
+    pub label_gap: i32,
+    /// The host's default gap between neighbouring objects (horizontal, vertical); 0 = Zune's 6/3. A guest's explicit spacing wins.
+    pub spacing: (i32, i32),
+    /// The host's inset of a window's contents on every side (0 = Zune's 4/4/3/3).
+    pub win_pad: i32,
 }
+
+impl PartialEq for Metrics {
+    fn eq(&self, o: &Self) -> bool {
+        (self.toggle, self.control_h, self.pad_w, self.label_right, self.text_w.map(|f| f as usize)) == (o.toggle, o.control_h, o.pad_w, o.label_right, o.text_w.map(|f| f as usize))
+            && (self.group_head, self.group_inset, self.label_gap, self.spacing, self.win_pad) == (o.group_head, o.group_inset, o.label_gap, o.spacing, o.win_pad)
+    }
+}
+impl Eq for Metrics {}
 
 struct Ctx<'a> { o: &'a Objects, font: &'a Font, m: Metrics }
 impl Ctx<'_> {
     fn fy(&self) -> i32 { self.font.y_size as i32 }
-    fn text_w(&self, s: &str) -> i32 { self.font.text_length(s.as_bytes()) }
+    fn text_w(&self, s: &str) -> i32 { self.m.text_w.and_then(|f| f(s)).unwrap_or_else(|| self.font.text_length(s.as_bytes())) }
     fn num(&self, obj: u32, attr: u32) -> Option<i32> { self.o.num(obj, attr).map(|v| v as i32) }
 }
 
@@ -93,7 +116,8 @@ struct Grid { cols: usize, col_w: Vec<i32>, row_h: Vec<i32>, col_g: Vec<bool>, r
 
 fn spacing(c: &Ctx, g: u32) -> (i32, i32) {
     let both = c.num(g, MUIA_Group_Spacing);
-    (c.num(g, MUIA_Group_HorizSpacing).or(both).unwrap_or(GROUP_HSPACE), c.num(g, MUIA_Group_VertSpacing).or(both).unwrap_or(GROUP_VSPACE))
+    let (dh, dv) = (if c.m.spacing.0 > 0 { c.m.spacing.0 } else { GROUP_HSPACE }, if c.m.spacing.1 > 0 { c.m.spacing.1 } else { GROUP_VSPACE });
+    (c.num(g, MUIA_Group_HorizSpacing).or(both).unwrap_or(dh), c.num(g, MUIA_Group_VertSpacing).or(both).unwrap_or(dv))
 }
 
 /// The inner padding a group adds around its children (left, right, top, bottom): its frame and title, and a register's tab strip.
@@ -101,7 +125,12 @@ fn group_pad(c: &Ctx, g: u32) -> (i32, i32, i32, i32) {
     let kind = c.o.kind(g).unwrap_or(Kind::Group);
     if kind == Kind::Register { return (GROUP_FRAME, GROUP_FRAME, tab_h(c) + GROUP_FRAME, GROUP_FRAME); }
     if roles::frame_group(c.o, g).is_none() { return (0, 0, 0, 0); }
-    let title = if c.o.text(g, MUIA_FrameTitle).is_empty() { 0 } else { c.fy() };
+    let titled = !c.o.text(g, MUIA_FrameTitle).is_empty();
+    if c.m.group_inset > 0 {
+        let i = c.m.group_inset;
+        return (i, i, i + if titled { c.m.group_head } else { 0 }, i);
+    }
+    let title = if titled { c.fy() } else { 0 };
     (GROUP_FRAME, GROUP_FRAME, GROUP_FRAME + title, GROUP_FRAME)
 }
 
@@ -150,6 +179,9 @@ fn measure_cell(c: &Ctx, kids: &[u32], i: usize) -> Size {
     let mut s = measure(c, kids[i]);
     if let (Some(gap), Some(text)) = (c.m.label_right, toggle_label(c, kids, i)) { s.w += gap + c.text_w(&text); }
     if roles::is_label(c.o, kids[i]) && toggle_label(c, kids, i + 1).is_some() { s.w = 0; }
+    else if roles::is_label(c.o, kids[i]) && kids.get(i + 1).is_some_and(|&n| !roles::is_label(c.o, n) && shape(c.o.kind(n).unwrap_or(Kind::Area)) == Shape::Leaf && roles::leaf(c.o, n).is_some()) {
+        s.w += c.m.label_gap;
+    }
     s
 }
 
@@ -233,10 +265,11 @@ fn leaf_size(c: &Ctx, o: u32, kind: Kind) -> Size {
 pub fn compute(o: &Objects, root: u32, font: &Font, avail: (i32, i32), metrics: Metrics) -> Layout {
     let c = Ctx { o, font, m: metrics };
     let s = measure(&c, root);
-    let (px, py) = (WIN_PAD.0 + WIN_PAD.1, WIN_PAD.2 + WIN_PAD.3);
+    let pad = if metrics.win_pad > 0 { (metrics.win_pad, metrics.win_pad, metrics.win_pad, metrics.win_pad) } else { WIN_PAD };
+    let (px, py) = (pad.0 + pad.1, pad.2 + pad.3);
     let (w, h) = ((s.w + px).max(avail.0), (s.h + py).max(avail.1));
     let mut placed = Placed::default();
-    let rect = GuestRect { left: WIN_PAD.0, top: WIN_PAD.2, width: w - px, height: h - py };
+    let rect = GuestRect { left: pad.0, top: pad.2, width: w - px, height: h - py };
     place(&c, root, rect, &mut placed, &mut None);
     Layout { width: w, height: h, elems: placed.elems, drawn: placed.drawn, images: placed.images }
 }

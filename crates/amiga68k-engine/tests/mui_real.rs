@@ -244,7 +244,7 @@ fn zune_calculator_and_screengrabber_are_laid_out_without_overlap() {
 /// every cell and the window for them, so the kit's parts never overlap and never leave the window.
 #[test]
 fn a_host_metrics_profile_grows_the_layout_so_larger_native_controls_still_never_overlap() {
-    let kit = amiga68k_engine::mui::layout::Metrics { toggle: (56, 28), control_h: 28, pad_w: 24, label_right: Some(8) };
+    let kit = amiga68k_engine::mui::layout::Metrics { toggle: (56, 28), control_h: 28, pad_w: 24, label_right: Some(8), ..Default::default() };
     for p in ["System/Snoopy", "Tools/Calculator", "Tools/ScreenGrabber"] {
         let (Some(zune), Some(a)) = (start(p), start_with(p, kit)) else { continue };
         assert_laid_out(p, &a);
@@ -260,4 +260,23 @@ fn a_host_metrics_profile_grows_the_layout_so_larger_native_controls_still_never
         let tight = zune.ui.controls.values().filter(|(_, m)| matches!(m.kind, ControlKind::Checkbox { .. })).count();
         assert!(tight == 0 || zune.ui.controls.values().any(|(_, m)| matches!(m.kind, ControlKind::Checkbox { .. }) && m.rect.width < 56), "{p}");
     }
+}
+
+#[test]
+fn a_host_group_profile_keeps_every_group_member_inside_the_panel_and_labels_with_their_controls() {
+    let host = amiga68k_engine::mui::layout::Metrics { toggle: (56, 28), control_h: 28, pad_w: 24, label_right: Some(8), group_head: 28, group_inset: 12, label_gap: 12, spacing: (12, 8), win_pad: 16, ..Default::default() };
+    let Some(a) = start_with("System/Snoopy", host) else { return };
+    assert_laid_out("System/Snoopy", &a);
+    let controls: Vec<_> = a.ui.controls.values().map(|(_, m)| m).collect();
+    let groups: Vec<_> = controls.iter().filter(|m| matches!(m.kind, ControlKind::Group { .. })).collect();
+    assert!(groups.len() >= 3, "Snoopy's framed groups");
+    for g in &groups {
+        let (r, _) = (g.rect, ());
+        for m in controls.iter().filter(|m| !matches!(m.kind, ControlKind::Group { .. }) && m.rect.left >= r.left && m.rect.left + m.rect.width <= r.left + r.width && m.rect.top >= r.top && m.rect.top + m.rect.height <= r.top + r.height) {
+            assert!(m.rect.top >= r.top + 28 + 12 && m.rect.left >= r.left + 12 && m.rect.left + m.rect.width <= r.left + r.width - 12 && m.rect.top + m.rect.height <= r.top + r.height - 12, "{:?} {:?} sits in the panel of {:?}: {:?}", m.kind, m.rect, g.kind, r);
+        }
+    }
+    // the sliders and the match field arrive WITH the labels the guest gave them
+    let named = controls.iter().filter(|m| matches!(m.kind, ControlKind::Slider { .. } | ControlKind::Field { .. })).count();
+    assert!(named >= 5 && controls.iter().filter(|m| matches!(m.kind, ControlKind::Slider { .. } | ControlKind::Field { .. })).all(|m| !m.label.is_empty()));
 }

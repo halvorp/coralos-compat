@@ -666,3 +666,102 @@ fn application_input_reports_the_signals_to_wait_on_and_returns_the_next_id() {
     a.mem.write_u32(sigs, 0).unwrap();
     assert_eq!(method(&mut a, app, MUIM_Application_Input, &[sigs]).unwrap(), 9, "the queued ReturnID comes back from Input as from NewInput");
 }
+
+/// Open a window over `root` on a machine carrying `metrics`; the controls the host was handed, in order.
+fn controls_under(metrics: layout::Metrics, build: impl FnOnce(&mut Amiga<RecordingGuestUi>) -> u32) -> (guestui_abi::WindowModel, Vec<guestui_abi::ControlModel>) {
+    let mut a = machine();
+    a.objects.mui_metrics = metrics;
+    let root = build(&mut a);
+    let title = cstr(&mut a, "T");
+    let win = make(&mut a, "Window.mui", &[(MUIA_Window_Title, title), (MUIA_Window_RootObject, root)]).unwrap();
+    set_attr(&mut a, win, MUIA_Window_Open, 1).unwrap();
+    let m = a.ui.calls.iter().find_map(|c| if let UiCall::OpenWindow(m) = c { Some(m.clone()) } else { None }).unwrap();
+    (m, a.ui.calls.iter().filter_map(|c| if let UiCall::AddControl(_, c) = c { Some(c.clone()) } else { None }).collect())
+}
+
+/// Any frame but None makes a Group a framed group (roles::frame_group); the style value does not matter to the layout.
+fn text_cell(a: &mut Amiga<RecordingGuestUi>, s: &str) -> u32 {
+    let p = zstr(a, s);
+    make(a, "Text.mui", &[(MUIA_Text_Contents, p), (MUIA_Frame, MUIV_Frame_Text)]).unwrap()
+}
+
+fn titled_group(a: &mut Amiga<RecordingGuestUi>, title: &str, kids: &[u32]) -> u32 {
+    let t = zstr(a, title);
+    let mut items: Vec<(u32, u32)> = alloc::vec![(MUIA_Frame, MUIV_Frame_Button), (MUIA_FrameTitle, t)];
+    items.extend(kids.iter().map(|&k| (MUIA_Group_Child, k)));
+    make(a, "Group.mui", &items).unwrap()
+}
+
+#[test]
+fn a_host_group_keeps_its_contents_below_its_title_band_and_inside_its_padding() {
+    let build = |a: &mut Amiga<RecordingGuestUi>| { let t = text_cell(a, "row"); titled_group(a, "Settings", &[t]) };
+    let host = layout::Metrics { group_head: 28, group_inset: 12, ..Default::default() };
+    let (_, c) = controls_under(host, build);
+    let (g, row) = (&c[0], &c[1]);
+    assert!(matches!(g.kind, guestui_abi::ControlKind::Group { .. }));
+    assert_eq!(row.rect.top - g.rect.top, 28 + 12, "contents start under the 28 px title band plus the panel's padding");
+    assert_eq!(row.rect.left - g.rect.left, 12, "the panel's padding on the left");
+    assert_eq!((g.rect.left + g.rect.width) - (row.rect.left + row.rect.width), 12, "and on the right");
+    assert_eq!((g.rect.top + g.rect.height) - (row.rect.top + row.rect.height), 12, "and under the contents");
+    // NEGATIVE CONTROL: no host profile = Zune's own frame, a one-line title and a 5 px border (the contents sit well above the host's band).
+    let (_, z) = controls_under(layout::Metrics::default(), build);
+    assert!(z[1].rect.top - z[0].rect.top < 28, "Zune's own title row is not the host's 28 px band: {}", z[1].rect.top - z[0].rect.top);
+}
+
+#[test]
+fn an_untitled_host_group_has_no_title_band() {
+    let host = layout::Metrics { group_head: 28, group_inset: 12, ..Default::default() };
+    let (_, c) = controls_under(host, |a| {
+        let t = text_cell(a, "row");
+        make(a, "Group.mui", &[(MUIA_Frame, MUIV_Frame_Button), (MUIA_Group_Child, t)]).unwrap()
+    });
+    assert_eq!(c[1].rect.top - c[0].rect.top, 12);
+}
+
+fn wide(s: &str) -> Option<i32> { Some(20 * s.chars().count() as i32) }
+
+#[test]
+fn the_host_measures_the_text_the_layout_is_sized_by() {
+    let build = |a: &mut Amiga<RecordingGuestUi>| text_cell(a, "abc");
+    let (m1, c1) = controls_under(layout::Metrics { text_w: Some(wide), ..Default::default() }, build);
+    assert_eq!(c1[0].rect.width, 3 * 20 + 8, "the cell is the host's width of the text plus the frame");
+    // NEGATIVE CONTROL: with no measurer, or one that cannot measure this text, the screen font decides.
+    let (_, unmeasurable) = controls_under(layout::Metrics { text_w: Some(|_| None), ..Default::default() }, build);
+    assert_eq!(unmeasurable[0].rect.width, controls_under(layout::Metrics::default(), build).1[0].rect.width);
+    let (m0, c0) = controls_under(layout::Metrics::default(), build);
+    assert_ne!(c0[0].rect.width, c1[0].rect.width);
+    assert_eq!(m1.rect.width - m0.rect.width, c1[0].rect.width - c0[0].rect.width, "the window grows with the cell");
+}
+
+#[test]
+fn a_label_has_room_for_the_gap_the_host_draws_before_its_control() {
+    let build = |a: &mut Amiga<RecordingGuestUi>| {
+        let lab = { let p = a.heap.alloc(8).unwrap(); let s = cstr(a, "Agent"); a.mem.write_u32(p, s).unwrap(); a.mem.write_u32(p + 4, 0).unwrap(); make::make(a, MUIO_Label, p).unwrap() };
+        let txt = text_cell(a, "hello");
+        make(a, "Group.mui", &[(MUIA_Group_Columns, 2), (MUIA_Group_Child, lab), (MUIA_Group_Child, txt)]).unwrap()
+    };
+    let (_, base) = controls_under(layout::Metrics { text_w: Some(wide), ..Default::default() }, build);
+    let (_, gapped) = controls_under(layout::Metrics { text_w: Some(wide), label_gap: 12, ..Default::default() }, build);
+    assert_eq!(gapped[0].rect.left - base[0].rect.left, 12, "the label cell is the measured text plus the host's gap");
+    assert_eq!(base[0].label, "Agent");
+    assert_eq!(gapped[0].label, "Agent", "the label still belongs to its control");
+}
+
+#[test]
+fn the_host_spacing_and_window_inset_apply_unless_the_guest_names_its_own() {
+    let build = |a: &mut Amiga<RecordingGuestUi>| { let (x, y) = (text_cell(a, "a"), text_cell(a, "b")); make(a, "Group.mui", &[(MUIA_Group_Child, x), (MUIA_Group_Child, y)]).unwrap() };
+    let (_, zune) = controls_under(layout::Metrics::default(), build);
+    assert_eq!(zune[1].rect.top - (zune[0].rect.top + zune[0].rect.height), 3, "Zune's 3 px");
+    let host = layout::Metrics { spacing: (12, 8), win_pad: 16, ..Default::default() };
+    let (_, h) = controls_under(host, build);
+    assert_eq!(h[1].rect.top - (h[0].rect.top + h[0].rect.height), 8);
+    assert_eq!(h[0].rect.left - zune[0].rect.left, 16 - layout::WIN_PAD.0, "the window inset");
+    let side = |a: &mut Amiga<RecordingGuestUi>| { let (x, y) = (text_cell(a, "a"), text_cell(a, "b")); make(a, "Group.mui", &[(MUIA_Group_Horiz, 1), (MUIA_Group_Child, x), (MUIA_Group_Child, y)]).unwrap() };
+    let (_, row) = controls_under(host, side);
+    assert_eq!(row[1].rect.left - (row[0].rect.left + row[0].rect.width), 12, "the host's horizontal gap");
+    let zrow = controls_under(layout::Metrics::default(), side).1;
+    assert_eq!(zrow[1].rect.left - (zrow[0].rect.left + zrow[0].rect.width), 6, "Zune's 6 px");
+    // the guest's own spacing wins over the host's default
+    let (_, own) = controls_under(host, |a| { let (x, y) = (text_cell(a, "a"), text_cell(a, "b")); make(a, "Group.mui", &[(MUIA_Group_VertSpacing, 1), (MUIA_Group_Child, x), (MUIA_Group_Child, y)]).unwrap() });
+    assert_eq!(own[1].rect.top - (own[0].rect.top + own[0].rect.height), 1);
+}
