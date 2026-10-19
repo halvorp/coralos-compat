@@ -49,6 +49,8 @@ pub struct RecordingGuestUi {
     /// What the host still shows of each plane: every frame not fully repainted by a later one (a frame replaces the frames its rect
     /// covers entirely). A hole that a later PARTIAL frame did not repaint is still on screen, so the census reads this, not `planes`.
     pub plane_frames: BTreeMap<(u32, u32), Vec<Plane>>,
+    /// Control kind names (`"Gauge"`) this host REFUSES to draw (`UiRefusal::Unsupported`): a test of a host that lacks a part.
+    pub refuse_kinds: Vec<&'static str>,
     next_id: u32,
     /// live object id -> generation
     live: BTreeMap<u32, u32>,
@@ -152,6 +154,10 @@ impl GuestUi for RecordingGuestUi {
     fn add_control(&mut self, win: UiObjectRef, control: ControlModel) -> Result<UiObjectRef, UiRefusal> {
         self.check(win)?;
         control.kind.validate()?;
+        let name = alloc::format!("{:?}", control.kind);
+        if self.refuse_kinds.iter().any(|k| name.starts_with(k)) {
+            return Err(UiRefusal::Unsupported("control: this host draws no such kind"));
+        }
         self.calls.push(UiCall::AddControl(win, control.clone()));
         let id = self.alloc(win.id, control.token);
         self.controls.insert(id.id, (win, control));

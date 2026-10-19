@@ -50,6 +50,9 @@ pub struct Objects {
     pub map: BTreeMap<u32, Obj>, pub depth: u32,
     /// Which MUI object is which native control (token = the object's address): the one generic mapper of ruling 17.
     pub proj: retro_translate::Projections<u32>,
+    /// Tokens whose native control the host REFUSED to draw: they are projected as the named label of [`crate::mui::win::degrade`]
+    /// from then on (one control the host cannot draw never costs the window; the refusal is named in `Amiga::refused`).
+    pub degraded: alloc::collections::BTreeSet<u64>,
     /// `MUIM_CallHook` follow-ups waiting to run as guest calls (mui/hooks.rs).
     pub hooks: VecDeque<crate::mui::hooks::HookCall>,
     /// The host's control metrics for MUI's layout (mui/layout.rs `Metrics`); default = Zune's own sizes.

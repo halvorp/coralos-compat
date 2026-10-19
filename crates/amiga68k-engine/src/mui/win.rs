@@ -11,7 +11,7 @@ use super::{drawn, menu, object, surface};
 use crate::boopsi::Ext;
 use crate::graphics::fonts;
 use crate::{machine::Amiga, Refusal};
-use guestui_abi::{CallbackToken, ControlModel, GuestRect, GuestUi, UiObjectRef, WindowModel, WindowRole};
+use guestui_abi::{CallbackToken, ControlKind, ControlModel, GuestRect, GuestUi, UiObjectRef, WindowModel, WindowRole};
 
 /// The chrome window.rs gives an Intuition window with a title bar (borders 4/15/4/4), so a MUI window of the same
 /// content is the same size as the GadTools one. Controls are offset by the left/top border.
@@ -84,15 +84,43 @@ fn menu_strip<U: GuestUi>(a: &mut Amiga<U>, w: u32, native: UiObjectRef) -> Resu
     Ok(())
 }
 
-/// Make the host's controls match the layout: new and changed ones are synced, ones no longer wanted are retired.
+/// The stand-in for a control the host refused to draw: a framed label that NAMES it and shows its value (a Gauge reads "42%").
+/// Every host draws a label, so the window keeps all its other controls and the user still sees the state.
+pub fn degrade(m: &ControlModel) -> ControlModel {
+    let text = match &m.kind {
+        ControlKind::Gauge { value, max } => format!("{}%", u64::from(*value) * 100 / u64::from((*max).max(1))),
+        k => format!("({} not drawn)", format!("{k:?}").split([' ', '{', '(']).next().unwrap_or("control")),
+    };
+    ControlModel { kind: ControlKind::Label { text, framed: true }, ..m.clone() }
+}
+
+/// Make the host's controls match the layout: new and changed ones are synced, ones no longer wanted are retired. A control the host
+/// refuses is NEVER fatal for the window: it is recorded by name in `a.refused`, degraded to its [`degrade`] label and the rest goes on.
 fn project<U: GuestUi>(a: &mut Amiga<U>, w: u32, native: UiObjectRef, l: &layout::Layout) -> Result<(), Refusal> {
     place_drawn(a, w, native, l)?;
     let wanted: Vec<u64> = l.elems.iter().map(|e| e.obj as u64).collect();
     let stale: Vec<u64> = a.objects.proj.iter().filter(|(t, p)| p.window == native && !wanted.contains(t)).map(|(t, _)| t).collect();
-    for t in stale { a.objects.proj.retire(&mut a.ui, t).map_err(Refusal::ui)?; }
+    for t in stale { a.objects.degraded.remove(&t); a.objects.proj.retire(&mut a.ui, t).map_err(Refusal::ui)?; }
     for e in &l.elems {
         let token = e.obj as u64;
-        a.objects.proj.sync(&mut a.ui, Some(native), token, e.obj, Some(model_of(e))).map_err(Refusal::ui)?;
+        let want = model_of(e);
+        if a.objects.degraded.contains(&token) {
+            let shown = degrade(&want);
+            // A label's text is not a pushed state: a changed value is a retire + add.
+            if a.objects.proj.get(token).is_some_and(|p| p.model.kind != shown.kind) { let _ = a.objects.proj.retire(&mut a.ui, token); }
+            if let Err(err) = a.objects.proj.sync(&mut a.ui, Some(native), token, e.obj, Some(shown)) {
+                a.refused.push(format!("MUI control {token:#x}: even its stand-in label was refused: {}", Refusal::ui(err).0));
+            }
+            continue;
+        }
+        if let Err(err) = a.objects.proj.sync(&mut a.ui, Some(native), token, e.obj, Some(want.clone())) {
+            a.refused.push(format!("MUI control {token:#x}: the host refused to draw it ({}): {}; shown as a label instead",
+                format!("{:?}", want.kind).split([' ', '{', '(']).next().unwrap_or("control"), Refusal::ui(err).0));
+            a.objects.degraded.insert(token);
+            if let Err(err) = a.objects.proj.sync(&mut a.ui, Some(native), token, e.obj, Some(degrade(&want))) {
+                a.refused.push(format!("MUI control {token:#x}: even its stand-in label was refused: {}", Refusal::ui(err).0));
+            }
+        }
     }
     Ok(())
 }
