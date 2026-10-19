@@ -39,6 +39,7 @@ fn main() {
         std::fs::read(&arg).unwrap_or_else(|e| { eprintln!("{arg}: {e}"); std::process::exit(1) })
     };
     a.stop_on_unimplemented = census;
+    a.ui.auto_cancel_requests = true; // nobody to answer a requester here: it is dismissed with its Escape button
     match a.run_hunk(&file, max_insns) {
         Ok(r) => println!("ran {} instructions, halted={}, bus_faults={}", r.stats.insns, r.stats.halted, r.stats.bus_faults),
         Err(e) => { eprintln!("load failed: {e}"); std::process::exit(1) }

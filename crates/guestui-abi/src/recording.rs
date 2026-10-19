@@ -58,6 +58,9 @@ pub struct RecordingGuestUi {
     pub request_answers: VecDeque<u32>,
     /// Make `request` refuse by name (a host with no alert part).
     pub refuse_requests: bool,
+    /// A headless run with nobody to answer: every request not covered by `request_answers` is answered at once with its Escape
+    /// button (`cancel`, else the last one), as a user dismissing the alert would.
+    pub auto_cancel_requests: bool,
     /// The requests asked and not yet answered or closed: request id -> the question.
     pub requests: BTreeMap<u32, RequestModel>,
     next_id: u32,
@@ -244,7 +247,9 @@ impl GuestUi for RecordingGuestUi {
         self.calls.push(UiCall::Request(win, model.clone()));
         let req = self.alloc(0, CallbackToken(0));
         self.requests.insert(req.id, model);
-        if let Some(b) = self.request_answers.pop_front() { self.answer_request(req, b)?; }
+        let queued = self.request_answers.pop_front();
+        let cancel = self.requests.get(&req.id).map(|m| m.cancel.unwrap_or(m.buttons.len() as u32 - 1));
+        if let Some(b) = queued.or(cancel.filter(|_| self.auto_cancel_requests)) { self.answer_request(req, b)?; }
         Ok(req)
     }
     fn close_request(&mut self, req: RequestRef) -> Result<(), UiRefusal> {
@@ -384,6 +389,22 @@ mod tests {
         assert!(ui.requests.contains_key(&r2.id), "a refused answer leaves the request open");
         ui.answer_request(r2, 0).unwrap();
         assert_eq!(ui.poll_event(), Some(GuestUiEvent::RequestAnswered { req: r2, button: 0 }));
+    }
+
+    #[test]
+    fn a_headless_run_dismisses_requests_with_their_escape_button() {
+        let mut ui = RecordingGuestUi::new();
+        ui.auto_cancel_requests = true;
+        let r = ui.request(None, RequestModel { cancel: Some(1), ..ask(&["A", "B", "C"]) }).unwrap();
+        assert_eq!(ui.poll_event(), Some(GuestUiEvent::RequestAnswered { req: r, button: 1 }), "its cancel button");
+        let r = ui.request(None, RequestModel { cancel: None, ..ask(&["A", "B", "C"]) }).unwrap();
+        assert_eq!(ui.poll_event(), Some(GuestUiEvent::RequestAnswered { req: r, button: 2 }), "no cancel: the last button");
+        ui.request_answers.push_back(0);
+        let r = ui.request(None, ask(&["A", "B"])).unwrap();
+        assert_eq!(ui.poll_event(), Some(GuestUiEvent::RequestAnswered { req: r, button: 0 }), "a queued answer wins");
+        ui.auto_cancel_requests = false;
+        ui.request(None, ask(&["A", "B"])).unwrap();
+        assert_eq!(ui.poll_event(), None, "negative control: off, a request just waits");
     }
 
     #[test]
