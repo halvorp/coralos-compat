@@ -15,6 +15,7 @@ pub mod classes;
 mod custom;
 pub mod disk;
 mod dispose;
+pub mod drawn;
 pub mod hooks;
 mod ids_gen;
 mod input;
@@ -28,6 +29,7 @@ mod names;
 mod notify;
 mod object;
 pub mod roles;
+pub mod surface;
 pub mod win;
 
 use alloc::boxed::Box;
@@ -47,6 +49,9 @@ pub use win::native_controls;
 const LVO_MUI_NEW_OBJECT_A: i32 = -30;
 const LVO_MUI_ALLOC_ASL_REQUEST: i32 = -48;
 const LVO_MUI_FREE_ASL_REQUEST: i32 = -60;
+const LVO_MUI_REDRAW: i32 = -102;
+const LVO_MUI_ADD_CLIP_REGION: i32 = -180;
+const LVO_MUI_REMOVE_CLIP_REGION: i32 = -186;
 const LVO_MUI_DISPOSE_OBJECT: i32 = -36;
 const LVO_MUI_MAKE_OBJECT_A: i32 = -120;
 const LVO_MUI_CREATE_CUSTOM_CLASS: i32 = -108;
@@ -61,6 +66,9 @@ pub fn library<U: GuestUi>(base: u32) -> LibraryBuilder<U> {
         // muimaster.library/MUI_AllocAslRequest(type, tags) is asl.library's AllocAslRequest with the same registers (Zune: mui_allocaslrequest.c).
         .func(LVO_MUI_ALLOC_ASL_REQUEST, "MUI_AllocAslRequest", crate::asl::alloc_request::<U>)
         .func(LVO_MUI_FREE_ASL_REQUEST, "MUI_FreeAslRequest", crate::asl::free_request::<U>)
+        .func(LVO_MUI_ADD_CLIP_REGION, "MUI_AddClipRegion", surface::add_clip_region::<U>)
+        .func(LVO_MUI_REMOVE_CLIP_REGION, "MUI_RemoveClipRegion", surface::remove_clip_region::<U>)
+        .func(LVO_MUI_REDRAW, "MUI_Redraw", mui_redraw::<U>)
         .func(LVO_MUI_CREATE_CUSTOM_CLASS, "MUI_CreateCustomClass", custom::create_custom_class::<U>)
         .func(LVO_MUI_DELETE_CUSTOM_CLASS, "MUI_DeleteCustomClass", custom::delete_custom_class::<U>)
 }
@@ -108,6 +116,14 @@ pub fn dispose_start<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, obj: u32) -> R
     guest_call::start(a, cpu, next)
 }
 
+/// MUI_Redraw(a0 = object, d0 = flags): the object is drawn again (MUIM_Draw, as the window does it).
+fn mui_redraw<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (obj, flags) = (cpu.areg(0), cpu.dreg(0));
+    drawn::redraw(a, obj, flags);
+    hooks::after_call(a, cpu, 0)?;
+    Ok(format!("[muimaster] MUI_Redraw {obj:#x} flags {flags:#x}"))
+}
+
 /// MUI_MakeObjectA(d0 = type, a0 = parameter array): NULL (with the reason) when it cannot be built.
 fn mui_make_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (ty, params) = (cpu.dreg(0), cpu.areg(0));
@@ -125,6 +141,7 @@ pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, cl: u32, obj: u32, 
         guest_call::start(a, cpu, next)?;
         return Ok(format!("[boopsi] {} OM_DISPOSE on {obj:#x}", a.classes.name_of(cl)));
     }
+    if let Some(r) = drawn::area_method(a, obj, id, msg)? { hooks::after_call(a, cpu, r)?; return Ok(format!("[boopsi] {} {} on {obj:#x} -> {r:#x}", a.classes.name_of(cl), attrs::method_name(id))); }
     if let Some(r) = custom::om_method(a, cl, obj, id, msg)? { hooks::after_call(a, cpu, r)?; return Ok(format!("[boopsi] {} method {id:#x} on {obj:#x} -> {r:#x}", a.classes.name_of(cl))); }
     if id == MUIM_Application_Execute && a.objects.kind(obj) == Some(classes::Kind::Application) {
         let next = app::execute(a, obj)?;
@@ -161,7 +178,11 @@ pub fn try_deliver<U: GuestUi>(a: &mut Amiga<U>, ev: &GuestUiEvent) -> Result<Op
             None => Ok(None),
         },
         GuestUiEvent::Resized { win, rect } => match win::find_by_native(a, *win) {
-            Some(w) => { win::resized(a, w, rect.width, rect.height)?; Ok(Some(Delivered::Handled)) }
+            Some(w) => {
+                win::resized(a, w, rect.width, rect.height)?;
+                if !a.objects.draw_steps.is_empty() { app::post(a, w, app::Inbound::Redraw)?; } // self-drawing objects are drawn in the program's loop
+                Ok(Some(Delivered::Handled))
+            }
             None => Ok(None),
         },
         GuestUiEvent::Intent { win, control, token, generation, intent } => {

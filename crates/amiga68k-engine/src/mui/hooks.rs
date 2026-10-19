@@ -35,7 +35,10 @@ pub enum Msg { Params(Vec<u32>), Addr(u32), /// `A1` is this value itself (a Lis
 
 /// Run every queued hook, then finish the trapped call with `d0`.
 pub fn run<U: GuestUi>(a: &mut Amiga<U>, d0: u32) -> Result<Next<U>, Refusal> {
-    let Some(h) = a.objects.hooks.pop_front() else { return Ok(Next::Return(d0)) };
+    let Some(h) = a.objects.hooks.pop_front() else {
+        // Notifications first; then the methods a window with self-drawing objects is owed (drawn.rs).
+        return match super::drawn::run_next(a, d0)? { Some(next) => Ok(next), None => Ok(Next::Return(d0)) };
+    };
     let entry = a.mem.read_u32(h.hook + H_ENTRY).map_err(Refusal::mem("Hook.h_Entry"))?;
     if entry == 0 { return Err(Refusal(format!("MUIM_CallHook: the hook {:#x} has no h_Entry", h.hook))); }
     let (msg, owned) = match &h.msg {
@@ -59,7 +62,7 @@ pub fn run<U: GuestUi>(a: &mut Amiga<U>, d0: u32) -> Result<Next<U>, Refusal> {
 /// Called by a trapped MUI entry point after it has done its work and chosen its result `d0`: if notifications queued hooks,
 /// they run now; the entry point's own result is returned when the last one is done.
 pub fn after_call<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, d0: u32) -> Result<(), Refusal> {
-    if a.objects.hooks.is_empty() { cpu.set_d0(d0); return Ok(()); }
+    if a.objects.hooks.is_empty() && (a.objects.draw_steps.is_empty() || a.objects.draw_busy) { cpu.set_d0(d0); return Ok(()); }
     let next = run(a, d0)?;
     guest_call::start(a, cpu, next)
 }

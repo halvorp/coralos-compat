@@ -60,6 +60,9 @@ fn a_disk_class_instance_is_disposed_with_its_window_and_releases_the_class() {
     let Some((mut a, _)) = aros::start("Prefs/Pointer", &[]) else { return };
     assert_eq!(title(&a).as_deref(), Some("Pointer Preferences"), "{:?}", a.refused);
     assert!(a.objects.disk_classes.values().all(|d| d.users >= 1), "while the window lives, each class is in use: {:?}", a.objects.disk_classes);
+    // The Pointer editor also has its own preview class (a drawing Area subclass): a plane next to the native controls.
+    assert!(a.ui.calls.iter().any(|c| matches!(c, UiCall::PresentPlane(..))), "the preview is a plane");
+    assert!(a.ui.controls.len() >= 10, "and the form is native controls: {}", a.ui.controls.len());
     let (w, _, _) = a.ui.find_control(|_| true).unwrap();
     assert_eq!(a.deliver(GuestUiEvent::CloseRequested { win: w, token: guestui_abi::CallbackToken(0) }).unwrap(), Delivered::Handled);
     assert_eq!(a.step(40_000_000).0, Step::Exited, "{:?}", a.refused);
@@ -71,4 +74,27 @@ fn a_disk_class_instance_is_disposed_with_its_window_and_releases_the_class() {
     let users: Vec<(&str, u32)> = a.objects.disk_classes.iter().map(|(k, d)| (k.as_str(), d.users)).collect();
     // Every use the program held was given back; PrefsWindow.mcc stays held by the loaded SystemPrefsWindow.mcc class built over it.
     assert_eq!(users, [("PrefsEditor.mcc", 0), ("PrefsWindow.mcc", 1), ("SystemPrefsWindow.mcc", 0)]);
+}
+
+#[test]
+fn the_clock_loads_its_class_from_disk_and_its_window_is_a_plane_not_a_control() {
+    // Clock.mcc is a Zune class over Area.mui that draws its own face: no role of its own, so a content plane. The run reaches the
+    // methods MUI sends (Setup, AskMinMax, Show, Draw) and stops at the first graphics function nobody has written (AreaDraw's InitArea).
+    let Some((a, s)) = aros::start("Utilities/Clock", &[]) else { return };
+    assert_eq!(s, Step::Exited, "{:?}", a.refused); // stop_on_unimplemented: the census halts at the gap
+    assert_eq!(disk_classes(&a), ["Clock.mcc"]);
+    assert_eq!(title(&a).as_deref(), Some("Clock"));
+    let order: Vec<&str> = a.log.iter().filter(|l| ["Setup(", "AskMinMax(", "Open(", "Show(", "Draw("].iter().any(|n| l.starts_with(&format!("[muimaster] {n}"))))
+        .map(|l| l.trim_start_matches("[muimaster] ").split('(').next().unwrap()).collect();
+    assert_eq!(order, ["Setup", "AskMinMax", "Open", "Show", "Draw"], "Zune's order");
+    assert!(a.ui.controls.is_empty(), "the face is not a native control: {:?}", a.ui.controls);
+    assert!(a.ui.calls.iter().any(|c| matches!(c, UiCall::PresentPlane(..))), "its box is a plane");
+    // The window is as big as Clock's own AskMinMax (31 + the frame sums: Min = Def) plus MUI's padding and the native frame.
+    let win = a.ui.calls.iter().find_map(|c| match c { UiCall::OpenWindow(m) => Some(m.clone()), _ => None }).unwrap();
+    assert_eq!((win.rect.width, win.rect.height), (31 + 8 + 8, 31 + 6 + 19), "{win:?}");
+    assert!(a.refused.iter().all(|r| r.contains("InitArea")), "the one gap is named: {:?}", a.refused);
+    // NEGATIVE CONTROL: without Clock.mcc on the volume the class is not implemented, by name, and no window opens.
+    let (b, _) = aros::start("Utilities/Clock", &["SYS:Classes/Zune/Clock.mcc"]).unwrap();
+    assert!(b.refused.iter().any(|r| r.contains("MUI class \"Clock.mcc\" is not implemented")), "{:?}", b.refused);
+    assert!(title(&b).is_none() && b.ui.calls.iter().all(|c| !matches!(c, UiCall::PresentPlane(..))));
 }

@@ -72,11 +72,11 @@ fn an_aros_built_binary_gets_through_task_resource_and_stdc_library_and_loads_it
     assert!(logged(&r, "OpenResource \"task.resource\" ->") && !logged(&r, "OpenResource \"task.resource\" -> NULL"), "{:#?}", r.log);
     assert!(logged(&r, "AllocTaskStorageSlot") && logged(&r, "SetTaskStorageSlot"), "stdc.library's init took a storage slot: {:#?}", r.log);
     // stdc.library's init needs timer.device/GetSysTime (implemented in this lane); Clock then builds its MUI application, loads its custom
-    // class Clock.mcc from disk (docs/MUI-NATIVE.md: MCC_Query in the guest) and opens its window; the next gap is a utility.library date
-    // function this lane implements, so the run now goes to the end without a refusal.
+    // class Clock.mcc from disk (docs/MUI-NATIVE.md: MCC_Query in the guest) and opens its window (drawn as a plane); utility.library's date
+    // functions are written, and the next missing function is graphics.library/InitArea, named.
     assert!(logged(&r, "disk class \"Clock.mcc\" ="), "{:#?}", r.log);
     assert!(r.ui.iter().any(|c| c.starts_with("OpenWindow") && c.contains("title: \"Clock\"")), "{:?}", r.ui);
-    assert!(r.refused.is_empty(), "{:?}", r.refused);
+    assert!(r.refused.iter().all(|x| x == "graphics.library/InitArea: unimplemented"), "{:?}", r.refused);
     assert!(!r.refused.iter().any(|x| x.contains("GetSysTime")), "{:?}", r.refused);
     assert!(!r.refused.iter().any(|x| x.contains("init routine returned NULL")), "stdc.library initialised: {:?}", r.refused);
     // NEGATIVE CONTROL: without the AROS Libs the same binary cannot open stdc.library at all and says so.

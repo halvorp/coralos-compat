@@ -77,3 +77,23 @@ pub fn forget_application<U: GuestUi>(a: &mut Amiga<U>, app: u32) {
 pub const fn instance_size(kind: Kind) -> u16 {
     match kind { Kind::Notify => NOTIFY_SIZE as u16, Kind::Area => AREA_SIZE as u16, _ => 0 }
 }
+
+/// Where `mad_*` field `off` of `obj` lives in guest memory (`None` for a native object).
+pub fn area_at<U: GuestUi>(a: &Amiga<U>, obj: u32, off: u32) -> Option<u32> { block(a, obj).map(|b| b + MAD + off) }
+
+/// Store the longword `v` in `mad_*` field `off` of `obj` (a native object has none: nothing to write).
+pub fn set_area<U: GuestUi>(a: &mut Amiga<U>, obj: u32, off: u32, v: u32) -> Result<(), Refusal> {
+    match area_at(a, obj, off) { Some(at) => a.mem.write_u32(at, v).map_err(Refusal::mem("MUI_AreaData")), None => Ok(()) }
+}
+
+/// Write what layout decided for a self-drawing object: its box (`_left` ... `_height`), the font, and no frame/inner spacing.
+pub fn area_geometry<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> {
+    let Some(d) = a.objects.drawn.get(&obj).cloned() else { return Ok(()) };
+    let (Some(rect), Some(at)) = (d.rect, area_at(a, obj, 0)) else { return Ok(()) };
+    let e = Refusal::mem("MUI_AreaData");
+    for (i, v) in [rect.left, rect.top, rect.width, rect.height].into_iter().enumerate() { a.mem.write_u16(at + 24 + 2 * i as u32, v as u16).map_err(&e)?; }
+    for i in 0..4 { a.mem.write_u8(at + 32 + i, 0).map_err(&e)?; } // mad_addleft, addtop, subwidth, subheight
+    for (i, v) in [d.min.0, d.min.1, d.max.0, d.max.1, d.def.0, d.def.1].into_iter().enumerate() { a.mem.write_u16(at + 12 + 2 * i as u32, v as u16).map_err(&e)?; }
+    let font = crate::graphics::fonts::default_font(a)?;
+    a.mem.write_u32(at + 8, font).map_err(&e)
+}

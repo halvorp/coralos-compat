@@ -58,6 +58,17 @@ pub struct Objects {
     pub disk_classes: BTreeMap<String, crate::mui::disk::DiskClass>,
     /// Application -> its guest `struct MUI_GlobalInfo` (mui/mirror.rs).
     pub global_info: BTreeMap<u32, u32>,
+    /// Self-drawing objects (mui/drawn.rs), the queue of methods still to send them, and each open window's drawing surface.
+    pub drawn: BTreeMap<u32, crate::mui::drawn::Drawn>,
+    pub draw_steps: VecDeque<crate::mui::drawn::Step>,
+    /// A queued method is running as a guest call: a handler it reaches (its DoSuperMethod) must not start the next step inside it.
+    pub draw_busy: bool,
+    pub surfaces: BTreeMap<u32, crate::mui::drawn::Surface>,
+    /// `struct MUI_InputHandlerNode`s a class registered with `MUIM_Application_AddInputHandler`: node -> its application. They are
+    /// recorded and given back on RemInputHandler; the host does not fire them (no timer or signal source drives them yet).
+    pub input_handlers: BTreeMap<u32, u32>,
+    /// `MUI_AddClipRegion` stacks (mri_rArray): RenderInfo -> the regions installed, innermost last.
+    pub clip_stack: BTreeMap<u32, Vec<u32>>,
 }
 
 fn class_addr(k: Kind) -> u32 { crate::iclass::native_addr(crate::iclass::Native::Mui(k)) }

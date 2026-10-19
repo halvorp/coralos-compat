@@ -35,7 +35,11 @@ pub struct Elem { pub obj: u32, pub kind: ControlKind, pub label: String, pub re
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Size { w: i32, h: i32, gw: bool, gh: bool }
 
-pub struct Layout { pub width: i32, pub height: i32, pub elems: Vec<Elem> }
+/// What `place` produces: the controls, and the rectangle of every self-drawing object ([`super::drawn`]).
+#[derive(Default)]
+pub struct Placed { pub elems: Vec<Elem>, pub drawn: Vec<(u32, GuestRect)> }
+
+pub struct Layout { pub width: i32, pub height: i32, pub elems: Vec<Elem>, pub drawn: Vec<(u32, GuestRect)> }
 
 /// The host's control metrics (ruling 17 piece 7: a declarative layout opts into host metrics as a MEASURED profile, never silently).
 /// Floors and paddings in window pixels that the host's native controls need; the default is all zero = Zune's own sizes. A host whose
@@ -178,6 +182,8 @@ fn measure(c: &Ctx, o: u32) -> Size {
 
 fn leaf_size(c: &Ctx, o: u32, kind: Kind) -> Size {
     let (fy, fx) = (c.fy(), c.font.x_size as i32);
+    // A self-drawing object is as big as its own MUIM_AskMinMax said, and stretches where it allows more than its default.
+    if let Some(d) = c.o.drawn.get(&o) { return Size { w: d.def.0, h: d.def.1, gw: d.max.0 > d.def.0, gh: d.max.1 > d.def.1 }; }
     match roles::leaf(c.o, o) {
         Some(ControlKind::Label { text, framed }) => {
             let (pw, ph) = if framed { (FRAME_W, FRAME_H) } else { (0, 0) };
@@ -227,24 +233,28 @@ pub fn compute(o: &Objects, root: u32, font: &Font, avail: (i32, i32), metrics: 
     let s = measure(&c, root);
     let (px, py) = (WIN_PAD.0 + WIN_PAD.1, WIN_PAD.2 + WIN_PAD.3);
     let (w, h) = ((s.w + px).max(avail.0), (s.h + py).max(avail.1));
-    let mut elems = Vec::new();
+    let mut placed = Placed::default();
     let rect = GuestRect { left: WIN_PAD.0, top: WIN_PAD.2, width: w - px, height: h - py };
-    place(&c, root, rect, &mut elems, &mut None);
-    Layout { width: w, height: h, elems }
+    place(&c, root, rect, &mut placed, &mut None);
+    Layout { width: w, height: h, elems: placed.elems, drawn: placed.drawn }
 }
 
-fn push(c: &Ctx, o: u32, rect: GuestRect, label: Option<String>, out: &mut Vec<Elem>) {
+fn push(c: &Ctx, o: u32, rect: GuestRect, label: Option<String>, out: &mut Placed) {
     if let Some(kind) = roles::leaf(c.o, o) {
         let label = match kind { ControlKind::Button | ControlKind::ToggleButton { .. } => roles::caption(c.o, o), _ => label.unwrap_or_default() };
-        out.push(Elem { obj: o, kind, label, rect, enabled: roles::enabled(c.o, o) });
+        out.elems.push(Elem { obj: o, kind, label, rect, enabled: roles::enabled(c.o, o) });
     }
 }
 
 /// Give `o` the rectangle `r` (already the cell's, or the space the parent chose) and recurse.
-fn place(c: &Ctx, o: u32, r: GuestRect, out: &mut Vec<Elem>, pending: &mut Option<String>) {
+fn place(c: &Ctx, o: u32, r: GuestRect, out: &mut Placed, pending: &mut Option<String>) {
     let Some(kind) = c.o.kind(o) else { return };
     match shape(kind) {
-        Shape::Leaf => { let label = if roles::is_label(c.o, o) { None } else { pending.take() }; push(c, o, r, label, out); }
+        Shape::Leaf => {
+            if c.o.drawn.contains_key(&o) { out.drawn.push((o, r)); }
+            let label = if roles::is_label(c.o, o) { None } else { pending.take() };
+            push(c, o, r, label, out);
+        }
         Shape::Wrapper => if let Some(&k) = members(c, o).first() { place(c, k, r, out, pending); },
         Shape::Pair => {
             let kids = members(c, o);
@@ -261,7 +271,7 @@ fn place(c: &Ctx, o: u32, r: GuestRect, out: &mut Vec<Elem>, pending: &mut Optio
         }
         Shape::Grid => {
             let g = grid(c, o);
-            if let Some(frame) = roles::frame_group(c.o, o) { out.push(Elem { obj: o, kind: frame, label: String::new(), rect: r, enabled: roles::enabled(c.o, o) }); }
+            if let Some(frame) = roles::frame_group(c.o, o) { out.elems.push(Elem { obj: o, kind: frame, label: String::new(), rect: r, enabled: roles::enabled(c.o, o) }); }
             let inner = GuestRect { left: r.left + g.pad.0, top: r.top + g.pad.2, width: r.width - g.pad.0 - g.pad.1, height: r.height - g.pad.2 - g.pad.3 };
             if kind == Kind::Register {
                 push(c, o, GuestRect { left: r.left, top: r.top, width: r.width, height: tab_h(c) }, None, out);

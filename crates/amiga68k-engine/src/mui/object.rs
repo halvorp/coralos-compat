@@ -308,6 +308,7 @@ fn dispose_tree<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> {
     for c in children { let r = dispose_tree(a, c); if first.is_ok() { first = r; } }
     if let Some(b) = bit { let r = ports::release_signal_bit(a, b as i32); if first.is_ok() { first = r; } }
     if kind == Kind::List { super::list::release(a, obj); }
+    a.objects.drawn.remove(&obj);
     let r = boopsi::free_object(a, obj);
     if first.is_ok() { r } else { first }
 }

@@ -25,6 +25,8 @@ pub enum Inbound {
     Intent { obj: u32, intent: Intent },
     /// `MUIM_Application_PushMethod`: a method to run in the program's own loop.
     Push { dest: u32, id: u32, args: Vec<u32> },
+    /// The layout of a window with self-drawing objects changed (a resize): wakes the loop, whose `NewInput` then sends them `MUIM_Draw`.
+    Redraw,
 }
 
 fn bit_of<U: GuestUi>(a: &Amiga<U>, app: u32) -> Result<u32, Refusal> {
@@ -72,6 +74,7 @@ pub fn pump<U: GuestUi>(a: &mut Amiga<U>, app: u32) -> Result<(), Refusal> {
                 if user != 0 { return_id(a, app, user)?; }
             },
             Inbound::Push { dest, id, args } => if a.objects.map.contains_key(&dest) { super::notify::send(a, dest, id, &args)?; },
+            Inbound::Redraw => {} // the queued draw steps run when this NewInput finishes (hooks::after_call)
             Inbound::Intent { obj, intent } => if a.objects.map.contains_key(&obj) { input::apply(a, obj, &intent)?; },
         }
     }
