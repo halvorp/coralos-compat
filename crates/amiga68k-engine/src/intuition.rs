@@ -1,8 +1,8 @@
 //! intuition.library handlers that translate onto [`GuestUi`].
 //! Menus (windows are window.rs), and the window calls a program makes that the native window manager owns: they are
 //! accepted and logged (ActivateWindow, WindowToFront / Back, RefreshGadgets / RefreshGList: the native side stacks,
-//! focuses and draws), or forwarded (SetWindowTitles). EasyRequestArgs is deliberately NOT bridged: GuestUi has no
-//! requester call, so it stays the named `intuition.library/EasyRequestArgs: unimplemented` refusal.
+//! focuses and draws), or forwarded (SetWindowTitles). The requesters (EasyRequestArgs, AutoRequest, BuildSysRequest ...) are
+//! requester.rs: one generic `GuestUi::request`, native alerts.
 use alloc::string::String;
 use alloc::format;
 use crate::{machine::Amiga, menu, Refusal};
