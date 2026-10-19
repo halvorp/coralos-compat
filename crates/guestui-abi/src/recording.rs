@@ -21,6 +21,10 @@ pub enum UiCall {
     PresentContent { win: UiObjectRef, damage: GuestRect, width: i32, height: i32, hash: u64 },
     /// `present_plane`: the window and the plane frame as given.
     PresentPlane(UiObjectRef, Plane),
+    /// `request`: the window it belongs to (if any) and the question as asked.
+    Request(Option<UiObjectRef>, RequestModel),
+    /// `close_request`: an unanswered request the guest withdrew.
+    CloseRequest(RequestRef),
 }
 
 /// FNV-1a 64 over pixels as big-endian bytes: the stable fingerprint tests pin.
@@ -49,6 +53,13 @@ pub struct RecordingGuestUi {
     /// What the host still shows of each plane: every frame not fully repainted by a later one (a frame replaces the frames its rect
     /// covers entirely). A hole that a later PARTIAL frame did not repaint is still on screen, so the census reads this, not `planes`.
     pub plane_frames: BTreeMap<(u32, u32), Vec<Plane>>,
+    /// Test answers (button indexes) handed out to the next requests in order: a request made while this has an entry is answered
+    /// at once (the event is queued for `poll_event`); with none, the request stays in `requests` until `answer_request`.
+    pub request_answers: VecDeque<u32>,
+    /// Make `request` refuse by name (a host with no alert part).
+    pub refuse_requests: bool,
+    /// The requests asked and not yet answered or closed: request id -> the question.
+    pub requests: BTreeMap<u32, RequestModel>,
     next_id: u32,
     /// live object id -> generation
     live: BTreeMap<u32, u32>,
@@ -97,6 +108,21 @@ impl RecordingGuestUi {
     /// a program's controls through this (the first match in creation order).
     pub fn find_control(&self, pred: impl Fn(&ControlModel) -> bool) -> Option<(UiObjectRef, UiObjectRef, ControlModel)> {
         self.controls.iter().find(|(_, (_, m))| pred(m)).map(|(&id, (w, m))| (*w, UiObjectRef { id, generation: self.live[&id] }, m.clone()))
+    }
+    /// The user answers request `req` with button `button` (an index into its buttons): the event is queued like a host's. A closed,
+    /// answered or unknown request is refused by name; a button past the question's buttons is `InvalidGeometry`.
+    pub fn answer_request(&mut self, req: RequestRef, button: u32) -> Result<(), UiRefusal> {
+        self.check(req)?;
+        let m = self.requests.get(&req.id).ok_or(UiRefusal::UnknownObject(req))?;
+        if button as usize >= m.buttons.len() { return Err(UiRefusal::InvalidGeometry("answer past the request's buttons")); }
+        self.requests.remove(&req.id);
+        self.retire(req.id);
+        self.events.push_back(GuestUiEvent::RequestAnswered { req, button });
+        Ok(())
+    }
+    /// The requests asked and not yet answered or closed, as the refs the host would answer them by (oldest first).
+    pub fn open_requests(&self) -> Vec<RequestRef> {
+        self.requests.keys().map(|&id| UiObjectRef { id, generation: self.live[&id] }).collect()
     }
     /// How the window's content reaches the host right now (see [`RouteCensus`]), from what this host holds. A closed or
     /// unknown window holds nothing and counts zero.
@@ -211,6 +237,23 @@ impl GuestUi for RecordingGuestUi {
         self.calls.push(UiCall::PresentPlane(win, plane_damage));
         Ok(())
     }
+    fn request(&mut self, win: Option<UiObjectRef>, model: RequestModel) -> Result<RequestRef, UiRefusal> {
+        if self.refuse_requests { return Err(UiRefusal::Unsupported("requests (no alert part in this host)")); }
+        if let Some(w) = win { self.check(w)?; }
+        model.validate()?;
+        self.calls.push(UiCall::Request(win, model.clone()));
+        let req = self.alloc(0, CallbackToken(0));
+        self.requests.insert(req.id, model);
+        if let Some(b) = self.request_answers.pop_front() { self.answer_request(req, b)?; }
+        Ok(req)
+    }
+    fn close_request(&mut self, req: RequestRef) -> Result<(), UiRefusal> {
+        self.check(req)?;
+        self.requests.remove(&req.id).ok_or(UiRefusal::UnknownObject(req))?;
+        self.retire(req.id);
+        self.calls.push(UiCall::CloseRequest(req));
+        Ok(())
+    }
     fn poll_event(&mut self) -> Option<GuestUiEvent> { self.events.pop_front() }
 }
 
@@ -319,5 +362,41 @@ mod tests {
         // CONTROL: a frame that repaints the hole's frame entirely replaces it, and the plane is replayed.
         ui.present_plane(w, Plane { id: 0, rect: r(0, 8), ops: alloc::vec![fill(r(0, 8))] }).unwrap();
         assert_eq!(ui.route_census(w), RouteCensus { native: 0, replayed: 1, raw: 0 });
+    }
+
+    fn ask(buttons: &[&str]) -> RequestModel {
+        RequestModel { title: "T".into(), text: "Q?".into(), buttons: buttons.iter().map(|b| (*b).into()).collect(), default: Some(0), cancel: Some(buttons.len() as u32 - 1) }
+    }
+
+    #[test]
+    fn a_request_is_answered_once_by_a_queued_or_manual_answer() {
+        let mut ui = RecordingGuestUi::new();
+        ui.request_answers.push_back(1);
+        let r1 = ui.request(None, ask(&["Yes", "No"])).unwrap();
+        assert_eq!(ui.poll_event(), Some(GuestUiEvent::RequestAnswered { req: r1, button: 1 }), "the queued answer comes back as the host's event");
+        // Negative controls: an answered request is gone, so a second answer is stale and nothing more is queued.
+        assert_eq!(ui.answer_request(r1, 0), Err(UiRefusal::StaleGeneration(r1)));
+        assert_eq!(ui.poll_event(), None);
+        // No queued answer: the request stays pending until the test answers it.
+        let r2 = ui.request(None, ask(&["OK"])).unwrap();
+        assert_eq!(ui.poll_event(), None);
+        assert_eq!(ui.answer_request(r2, 3), Err(UiRefusal::InvalidGeometry("answer past the request's buttons")));
+        assert!(ui.requests.contains_key(&r2.id), "a refused answer leaves the request open");
+        ui.answer_request(r2, 0).unwrap();
+        assert_eq!(ui.poll_event(), Some(GuestUiEvent::RequestAnswered { req: r2, button: 0 }));
+    }
+
+    #[test]
+    fn a_withdrawn_request_gets_no_answer_and_bad_questions_are_refused() {
+        let mut ui = RecordingGuestUi::new();
+        let r = ui.request(None, ask(&["A", "B"])).unwrap();
+        ui.close_request(r).unwrap();
+        assert!(matches!(ui.calls.last(), Some(UiCall::CloseRequest(x)) if *x == r));
+        assert_eq!(ui.answer_request(r, 0), Err(UiRefusal::StaleGeneration(r)), "closed means stale");
+        assert_eq!(ui.close_request(r), Err(UiRefusal::StaleGeneration(r)));
+        assert!(ui.request(None, RequestModel { buttons: vec![], ..ask(&["x"]) }).is_err(), "no buttons");
+        assert!(ui.request(None, RequestModel { cancel: Some(5), ..ask(&["x"]) }).is_err(), "cancel past the buttons");
+        let ghost = UiObjectRef { id: 99, generation: 1 };
+        assert_eq!(ui.request(Some(ghost), ask(&["x"])), Err(UiRefusal::UnknownObject(ghost)), "a window that is not open");
     }
 }

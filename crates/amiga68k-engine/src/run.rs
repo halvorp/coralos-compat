@@ -97,10 +97,14 @@ impl<U: GuestUi> Amiga<U> {
             total.insns += s.insns; total.bus_faults += s.bus_faults;
             match step {
                 Step::Exited => { total.halted = true; break; }
-                Step::Blocked => match self.next_timer_deadline() {
-                    Some(t) if total.insns < max_insns => self.advance_clock_to(t).map_err(|r| r.0)?,
-                    _ => { total.blocked = true; break; }
-                },
+                Step::Blocked => {
+                    // A task parked on a requester resumes when the host answers it: take what the host has queued.
+                    if crate::requester::pump(self).map_err(|r| r.0)? { continue; }
+                    match self.next_timer_deadline() {
+                        Some(t) if total.insns < max_insns => self.advance_clock_to(t).map_err(|r| r.0)?,
+                        _ => { total.blocked = true; break; }
+                    }
+                }
                 Step::BudgetSpent => break,
                 Step::Fault(e) => return Err(e),
             }

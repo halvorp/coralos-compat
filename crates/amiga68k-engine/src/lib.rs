@@ -99,6 +99,7 @@ pub mod exec_misc;
 pub mod exec_patch;
 pub mod fmt;
 pub mod rawdofmt;
+pub mod requester;
 pub mod locale;
 pub mod locale_fmt;
 pub mod locale_tables;

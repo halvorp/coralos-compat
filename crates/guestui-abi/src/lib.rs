@@ -17,10 +17,12 @@ mod event;
 mod model;
 mod plane;
 mod recording;
+mod request;
 
 pub use event::*;
 pub use model::*;
 pub use plane::*;
+pub use request::*;
 pub use recording::{pixel_hash, RecordingGuestUi, UiCall};
 
 /// What an icon depicts, in generic terms (a host maps each to its own artwork).
@@ -87,6 +89,17 @@ pub trait GuestUi: 'static {
     /// opaque, below it transparent), exactly `width * height` values. `None` = this host has no artwork for the role
     /// (the engine then draws its own plain placeholder and logs that). Engines own no icon artwork: it lives host-side.
     fn icon_image(&mut self, _role: IconRole, _width: u32, _height: u32) -> Option<alloc::vec::Vec<u32>> { None }
+    /// Ask the user a modal question (an alert with buttons). `win` is the window it belongs to, if the guest named one. The
+    /// answer arrives later as `GuestUiEvent::RequestAnswered { req, button }`; the ENGINE parks the asking task, not the host.
+    /// Hosts without alerts refuse by name (the engine then answers the guest as its OS does for a requester that could not open).
+    fn request(&mut self, _win: Option<UiObjectRef>, _model: RequestModel) -> Result<RequestRef, UiRefusal> {
+        Err(UiRefusal::Unsupported("requests (no alert part in this host)"))
+    }
+    /// The guest withdrew a request that was not answered (the requester was freed while open): the host closes the alert and
+    /// will send no answer for it. An answered request needs no close.
+    fn close_request(&mut self, _req: RequestRef) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("closing a request (no alert part in this host)"))
+    }
     /// Next native event for the guest, if any.
     fn poll_event(&mut self) -> Option<GuestUiEvent>;
 }

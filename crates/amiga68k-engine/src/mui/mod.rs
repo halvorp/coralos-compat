@@ -212,6 +212,7 @@ pub fn try_deliver<U: GuestUi>(a: &mut Amiga<U>, ev: &GuestUiEvent) -> Result<Op
             Some(_) => Ok(Some(Delivered::IgnoredUnsubscribed)),
             None => Ok(None),
         },
+        GuestUiEvent::RequestAnswered { .. } => Ok(None), // a requester's answer is intuition's (requester.rs)
     }
 }
 
