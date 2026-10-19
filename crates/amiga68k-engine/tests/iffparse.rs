@@ -57,7 +57,6 @@ fn parse(b: &[u8]) -> Result<Vec<N>, String> {
 }
 fn ck(id: &str, data: &[u8]) -> N { N::Chunk { id: id.into(), data: data.to_vec() } }
 
-fn id(s: &str) -> u32 { u32::from_be_bytes(s.as_bytes().try_into().unwrap()) }
 fn neg(v: i32) -> u32 { v as u32 }
 
 #[test]
