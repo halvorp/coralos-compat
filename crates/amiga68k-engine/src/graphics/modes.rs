@@ -22,7 +22,7 @@ const DTAG_DISP: u32 = 0x8000_0000;
 const DISPLAYINFO_SIZE: usize = 56;
 
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
-    b.named("InitTmpRas", init_tmp_ras::<U>).named("GetVPModeID", get_vp_mode_id::<U>).named("GetDisplayInfoData", get_display_info_data::<U>)
+    b.named("InitTmpRas", init_tmp_ras::<U>).named("GetVPModeID", get_vp_mode_id::<U>).named("NextDisplayInfo", next_display_info::<U>).named("GetDisplayInfoData", get_display_info_data::<U>)
 }
 
 fn get_vp_mode_id<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
@@ -30,6 +30,16 @@ fn get_vp_mode_id<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     let id = if vp == 0 { INVALID_ID } else { WORKBENCH_MODE };
     cpu.set_d0(id);
     Ok(format!("[graphics] GetVPModeID {vp:#x} -> {id:#x}"))
+}
+
+/// NextDisplayInfo(d0 = last ID or INVALID_ID to begin) -> the next mode ID of the display database, INVALID_ID at the end. The database is the
+/// one mode the engine's single screen has ([`WORKBENCH_MODE`]): the first call answers it, the call after it answers INVALID_ID; an ID that is
+/// not in the database ends the iteration too (graphics/nextdisplayinfo.c walks its list from the entry it finds for `last_ID`).
+fn next_display_info<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let last = cpu.dreg(0);
+    let next = if last == INVALID_ID { WORKBENCH_MODE } else { INVALID_ID };
+    cpu.set_d0(next);
+    Ok(format!("[graphics] NextDisplayInfo {last:#x} -> {next:#x}"))
 }
 
 fn get_display_info_data<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {

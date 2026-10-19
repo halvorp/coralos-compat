@@ -51,8 +51,6 @@ pub struct State {
     pub present: retro_present::Presenter,
     /// Images (guest addresses) of default icons that carry the host's artwork for a role: a draw of one is an `Icon` op.
     pub icon_images: BTreeMap<u32, guestui_abi::IconRole>,
-    /// Pending AreaMove/AreaDraw polygons by RastPort: (points, closed-at).
-    pub areas: BTreeMap<u32, Vec<(i32, i32)>>,
 }
 
 impl State {

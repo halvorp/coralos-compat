@@ -36,6 +36,7 @@ pub(crate) const DOS_FILEHANDLE: u32 = 0;
 pub(crate) const DOS_EXALLCONTROL: u32 = 1;
 pub(crate) const EXALLCONTROL_SIZE: u32 = 16;
 const DOS_FIB: u32 = 2;
+const DOS_RDARGS: u32 = 5;
 const BLOCK: usize = 512;
 
 /// Write `s` as a C string into a `max`-byte field at `at` (truncated, NUL-terminated).
@@ -251,10 +252,10 @@ pub fn same_lock<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     Ok(format!("[dos] SameLock -> {r}"))
 }
 
-/// AllocDosObject(d1 = type, d2 = tags): DOS_FIB and DOS_FILEHANDLE are modelled; the rest are named refusals.
+/// AllocDosObject(d1 = type, d2 = tags): DOS_FIB, DOS_FILEHANDLE, DOS_EXALLCONTROL and DOS_RDARGS (a zeroed struct RDArgs, AROS allocdosobject.c) are modelled; the rest are named refusals.
 pub fn alloc_dos_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let ty = cpu.dreg(1);
-    let size = match ty { DOS_FIB => FIB_SIZE, DOS_FILEHANDLE => FH_SIZE, DOS_EXALLCONTROL => EXALLCONTROL_SIZE, t => return Err(Refusal(format!("AllocDosObject type {t} not modelled"))) };
+    let size = match ty { DOS_FIB => FIB_SIZE, DOS_FILEHANDLE => FH_SIZE, DOS_EXALLCONTROL => EXALLCONTROL_SIZE, DOS_RDARGS => crate::rdargs::RDARGS_SIZE, t => return Err(Refusal(format!("AllocDosObject type {t} not modelled"))) };
     let p = alloc_zeroed(a, size)?.unwrap_or(0);
     cpu.set_d0(p);
     Ok(format!("[dos] AllocDosObject {ty} -> {p:#x}"))
@@ -263,7 +264,7 @@ pub fn alloc_dos_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
 /// FreeDosObject(d1 = type, d2 = object).
 pub fn free_dos_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (ty, p) = (cpu.dreg(1), cpu.dreg(2));
-    let size = match ty { DOS_FIB => FIB_SIZE, DOS_FILEHANDLE => FH_SIZE, DOS_EXALLCONTROL => EXALLCONTROL_SIZE, t => return Err(Refusal(format!("FreeDosObject type {t} not modelled"))) };
+    let size = match ty { DOS_FIB => FIB_SIZE, DOS_FILEHANDLE => FH_SIZE, DOS_EXALLCONTROL => EXALLCONTROL_SIZE, DOS_RDARGS => crate::rdargs::RDARGS_SIZE, t => return Err(Refusal(format!("FreeDosObject type {t} not modelled"))) };
     if p != 0 { a.heap.free(p, size).map_err(|e| Refusal(format!("FreeDosObject: {e}")))?; a.fs.scans.remove(&p); a.fs.exall.remove(&p); }
     Ok(format!("[dos] FreeDosObject {ty} {p:#x}"))
 }

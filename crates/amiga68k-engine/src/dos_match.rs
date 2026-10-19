@@ -163,7 +163,8 @@ fn match_first<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Re
     let (pat, ap) = (cpu.dreg(1), cpu.dreg(2));
     let text = crate::guest_str::read_bytes_z(&a.mem, pat, 0x1_0000).map_err(Refusal::mem("MatchFirst.pattern"))?;
     let what = format!("[dos] MatchFirst \"{}\"", String::from_utf8_lossy(&text));
-    if ap & 3 != 0 { return Err(Refusal(format!("MatchFirst: AnchorPath {ap:#x} is not longword aligned"))); }
+    // dosasl.h says an AnchorPath "must" be longword aligned (a 68000 rule); AROS's matchfirst.c never checks, and the 68020 core reads
+    // unaligned longwords: an AROS-built program keeps its AnchorPath on a 2-aligned stack, so a refusal here would stop a correct program.
     teardown(a, ap)?;
     let m = Refusal::mem("AnchorPath");
     for off in [AP_BASE, AP_LAST] { a.mem.write_u32(ap + off, 0).map_err(&m)?; }
