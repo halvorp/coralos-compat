@@ -681,7 +681,7 @@ Census, `mac68k-run --census --insns 50000000`, NEXT-NEEDED before this lane (th
 
 | program | before | after | next missing function | first named refusal left |
 |---|---|---|---|---|
-| aros-Clock | 0 / 0 / 0 / 3 | 1 / 0 / 1 / 1 | graphics.library/InitArea | unimplemented |
+| aros-Clock | 0 / 0 / 0 / 3 | 1 / 0 / 1 / 1 | (see the mui3 table below) | unimplemented |
 | aros-Find | 0 / 0 / 0 / 6 | 0 / 0 / 0 / 5 | intuition.library/EasyRequestArgs | AllocDosObject type 5 not modelled |
 | aros-WBRename | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 0 | none |  |
 | aros-prefs-Appearance | 0 / 0 / 0 / 1 | 1 / 31 / 1 / 0 | none |  |
@@ -700,3 +700,23 @@ Census, `mac68k-run --census --insns 50000000`, NEXT-NEEDED before this lane (th
 | **all 47** | 9 / 115 / 0 / 47 | 15 / 216 / 3 / 43 | | |
 
 Programs not listed did not change. The Prefs editors open because `PrefsEditor.mcc` / `PrefsWindow.mcc` / `SystemPrefsWindow.mcc` load from `SYS:Classes/Zune` (docs/MUI-NATIVE.md); the planes are the Appearance and Pointer previews and the Clock face (its hands need `graphics.library/InitArea`: AreaDraw polygons). The NList demos now load `NList.mcc` and stop on `dos/AllocDosObject` type 5 and `Bodychunk.mui`.
+## Events, area fills, own-dispatcher sets, image classes (mui3 lane), 2026-10-19
+`tools/corpus-mui.py` over the 47 MUI programs, before (push-mcc) and after. Columns: windows / native controls / planes / distinct named refusals.
+
+| program | before | after | next missing function | first named refusal left |
+|---|---|---|---|---|
+| YAM | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 1 | intuition.library/EasyRequestArgs | unimplemented |
+| aros-Clock | 1 / 0 / 1 / 1 | 1 / 0 / 13 / 0 | none |  |
+| aros-FKey | 0 / 0 / 0 / 4 | 0 / 0 / 0 / 0 | none |  |
+| aros-Find | 0 / 0 / 0 / 5 | 1 / 16 / 0 / 2 | none | MUI_CreateCustomClass: the superclass "Semaphore.mui" is not implemented |
+| aros-prefs-Palette | 0 / 0 / 0 / 3 | 0 / 0 / 0 / 1 | utility.library/CloneTagItems | unimplemented |
+| aros-prefs-Input | 0 / 0 / 0 / 2 | 0 / 0 / 0 / 3 | muimaster.library/MUI_ObtainPen | BitMap 0x0: BytesPerRow 41 Rows 8212 Depth 0 is not a usable bitmap (chunky 1..=8 bits) |
+| aros-prefs-ScreenMode | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 3 | graphics.library/BestModeIDA | GetDisplayInfoData: record kind 0x80003000 is not modelled (only DTAG_DISP) |
+| aros-prefs-IControl | 0 / 0 / 0 / 4 | 0 / 0 / 0 / 3 | muimaster.library/MUI_ObtainPen | BitMap 0x0: BytesPerRow 40 Rows 62660 Depth 0 is not a usable bitmap (chunky 1..=8 bits) |
+| aros-prefs-Wanderer | 1 / 12 / 0 / 3 | 1 / 12 / 0 / 1 | none | MUI Application class: method 0x00000109 is not implemented |
+| aros-prefs-ReqTools | 1 / 32 / 0 / 1 | 1 / 32 / 0 / 0 | none |  |
+| aros-NList-Demo | 0 / 0 / 0 / 5 | 2 / 23 / 0 / 1 | none | MUI Application class: MUIM_Application_Load is not implemented |
+| aros-NListtree-Demo | 0 / 0 / 0 / 4 | 1 / 30 / 0 / 0 | none |  |
+| **all 47** | 15 / 216 / 3 / 43 | 19 / 285 / 15 / 24 | | |
+
+Clock now draws its face and hands (AreaEnd fills into an off-screen bitmap, blitted) and ticks on the virtual clock (MUIIHNF_TIMER, 1000 ms); the Pointer preview's MUIM_Window_AddEventHandler node receives native pointer events. Programs not listed did not change.

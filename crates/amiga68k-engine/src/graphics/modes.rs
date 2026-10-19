@@ -22,7 +22,7 @@ const DTAG_DISP: u32 = 0x8000_0000;
 const DISPLAYINFO_SIZE: usize = 56;
 
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
-    b.named("InitTmpRas", init_tmp_ras::<U>).named("GetVPModeID", get_vp_mode_id::<U>).named("GetDisplayInfoData", get_display_info_data::<U>)
+    b.named("InitTmpRas", init_tmp_ras::<U>).named("GetVPModeID", get_vp_mode_id::<U>).named("NextDisplayInfo", next_display_info::<U>).named("FindDisplayInfo", find_display_info::<U>).named("GetDisplayInfoData", get_display_info_data::<U>)
 }
 
 fn get_vp_mode_id<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
@@ -32,8 +32,28 @@ fn get_vp_mode_id<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     Ok(format!("[graphics] GetVPModeID {vp:#x} -> {id:#x}"))
 }
 
+/// NextDisplayInfo(d0 = last ID or INVALID_ID to begin) -> the next mode ID of the display database, INVALID_ID at the end. The database is the
+/// one mode the engine's single screen has ([`WORKBENCH_MODE`]): the first call answers it, the call after it answers INVALID_ID; an ID that is
+/// not in the database ends the iteration too (graphics/nextdisplayinfo.c walks its list from the entry it finds for `last_ID`).
+fn next_display_info<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let last = cpu.dreg(0);
+    let next = if last == INVALID_ID { WORKBENCH_MODE } else { INVALID_ID };
+    cpu.set_d0(next);
+    Ok(format!("[graphics] NextDisplayInfo {last:#x} -> {next:#x}"))
+}
+
+/// FindDisplayInfo(d0 = ID) -> a DisplayInfoHandle, NULL when the database has no such mode. A handle is opaque to programs; here it is the
+/// mode ID itself (non-zero), which `GetDisplayInfoData` accepts back.
+fn find_display_info<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let id = cpu.dreg(0);
+    let h = if id == WORKBENCH_MODE { id } else { 0 };
+    cpu.set_d0(h);
+    Ok(format!("[graphics] FindDisplayInfo {id:#x} -> {h:#x}"))
+}
+
 fn get_display_info_data<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (buf, size, tag, id) = (cpu.areg(1), cpu.dreg(0) as usize, cpu.dreg(1), cpu.dreg(2));
+    let (handle, buf, size, tag) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0) as usize, cpu.dreg(1));
+    let id = if handle != 0 { handle } else { cpu.dreg(2) }; // a handle (FindDisplayInfo) names the mode; without one the ID does
     if tag != DTAG_DISP { return Err(Refusal(format!("GetDisplayInfoData: record kind {tag:#x} is not modelled (only DTAG_DISP)"))); }
     if id != WORKBENCH_MODE { cpu.set_d0(0); return Ok(format!("[graphics] GetDisplayInfoData mode {id:#x}: no such mode -> 0")); }
     let mut rec = [0u8; DISPLAYINFO_SIZE];

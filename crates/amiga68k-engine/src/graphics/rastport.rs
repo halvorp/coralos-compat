@@ -115,11 +115,16 @@ pub fn set_max_pen<U: GuestUi>(_a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
 
 pub fn move_<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (rp, x, y) = (cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)));
+    move_to(a, rp, x, y)?;
+    Ok(format!("[graphics] Move {rp:#x} {x},{y}"))
+}
+
+/// `Move`: the cursor, the line-pattern counter back to its first bit and FRST_DOT.
+pub fn move_to<U: GuestUi>(a: &mut Amiga<U>, rp: u32, x: i32, y: i32) -> Result<(), Refusal> {
     set_cp(a, rp, x, y)?;
     put8(a, rp, RP_LINPATCNT, 15)?;
     let f = a.mem.read_u16(rp + RP_FLAGS).map_err(Refusal::mem("RastPort.Flags"))?;
-    a.mem.write_u16(rp + RP_FLAGS, f | FRST_DOT).map_err(Refusal::mem("RastPort.Flags"))?;
-    Ok(format!("[graphics] Move {rp:#x} {x},{y}"))
+    a.mem.write_u16(rp + RP_FLAGS, f | FRST_DOT).map_err(Refusal::mem("RastPort.Flags"))
 }
 
 // RPTAG_ (graphics/rpattr.h)

@@ -41,7 +41,7 @@ fn m(what: &'static str) -> impl Fn(retro_guest_mem::MemError) -> Refusal { Refu
 
 impl<U: GuestUi> Amiga<U> {
     /// The earliest pending timer deadline, if any (the host advances the clock to it when the guest is blocked).
-    pub fn next_timer_deadline(&self) -> Option<u64> { self.timers.iter().map(|t| t.0).min() }
+    pub fn next_timer_deadline(&self) -> Option<u64> { self.timers.iter().map(|t| t.0).chain(crate::mui::handlers::next_deadline(self)).min() }
 
     /// Move the virtual clock to `t` (never backwards) and complete every timer request due by then.
     pub fn advance_clock_to(&mut self, t: u64) -> Result<(), Refusal> {
@@ -50,7 +50,7 @@ impl<U: GuestUi> Amiga<U> {
         let (due, keep): (alloc::vec::Vec<_>, alloc::vec::Vec<_>) = self.timers.drain(..).partition(|x| x.0 <= now);
         self.timers = keep;
         for (_, io) in due { if io != 0 { complete(self, io, 0)?; } } // io 0 = a Delay() deadline: the clock reaching it is the wake-up
-        Ok(())
+        crate::mui::handlers::fire_due(self) // the timers of MUI input handlers (mui/handlers.rs)
     }
 }
 

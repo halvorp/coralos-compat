@@ -11,7 +11,7 @@ use retro_m68k::Cpu;
 use retro_raster::{blit::blit_within, paint::{self, Brush, Clip, Pattern, JAM2}, Rect, Region};
 
 /// The AreaPtrn as rows, if the RastPort has a single-plane one (AreaPtSz > 0: 2^AreaPtSz words).
-fn pattern<U: GuestUi>(a: &Amiga<U>, st: &Rp) -> Result<Option<Pattern>, Refusal> {
+pub(super) fn pattern<U: GuestUi>(a: &Amiga<U>, st: &Rp) -> Result<Option<Pattern>, Refusal> {
     if st.area_ptrn == 0 || st.area_pt_sz == 0 { return Ok(None); }
     if st.area_pt_sz < 0 { return Err(Refusal(format!("AreaPtrn with AreaPtSz {} (multi-plane pattern) is not implemented", st.area_pt_sz))); }
     if st.area_pt_sz > 8 { return Err(Refusal(format!("AreaPtSz {} is out of range", st.area_pt_sz))); }
@@ -23,8 +23,10 @@ fn pattern<U: GuestUi>(a: &Amiga<U>, st: &Rp) -> Result<Option<Pattern>, Refusal
 fn solid(pen: u8, mask: u8) -> Brush { Brush { fg: pen, bg: pen, mode: JAM2, mask } }
 
 /// Draw(a1 = rp, d0 = x, d1 = y): a line from the cursor, in the pen/mode/LinePtrn; the cursor moves to (x,y).
-pub fn draw<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (rp, x, y) = (cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)));
+pub fn draw<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { draw_to(a, cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1))) }
+
+/// `Draw` with its arguments: a line from the cursor to (x, y).
+pub fn draw_to<U: GuestUi>(a: &mut Amiga<U>, rp: u32, x: i32, y: i32) -> Result<String, Refusal> {
     let st = rastport::read(a, rp)?;
     let (brush, mut phase) = (st.brush(), st.linpatcnt);
     let ptrn = if st.mode & INVERSVID != 0 { !st.line_ptrn } else { st.line_ptrn };

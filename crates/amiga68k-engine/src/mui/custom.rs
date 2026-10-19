@@ -89,6 +89,16 @@ fn kind_of_class<U: GuestUi>(a: &Amiga<U>, cl: u32) -> Option<Kind> {
 /// its own attributes down in the same tag list; the native class has nothing to say about them, exactly as in BOOPSI.
 fn muis(t: &[(u32, u32)]) -> alloc::vec::Vec<(u32, u32)> { t.iter().copied().filter(|(tag, _)| matches!(tag >> 16, 0x8042 | 0x9042)).collect() }
 
+/// The tags the native class `kind` is to act on. A tag in MUI's ranges that no class of `kind`'s chain defines is another class's attribute
+/// (the Palette editor's own class over Group takes `MUIA_Palette_Entries` itself; a program numbers its own attributes in the same range):
+/// BOOPSI ignores a tag no class of the chain knows, and so does this, with a line in the log. A plain (native) object keeps the strict
+/// rule, a named refusal, in `object::set_attr`.
+fn native_tags<U: GuestUi>(a: &mut Amiga<U>, kind: Kind, t: alloc::vec::Vec<(u32, u32)>) -> alloc::vec::Vec<(u32, u32)> {
+    let (known, ignored): (alloc::vec::Vec<_>, alloc::vec::Vec<_>) = t.into_iter().partition(|(tag, _)| super::attrs::lookup(kind, *tag).is_some());
+    for (tag, _) in ignored { a.log.push(format!("[muimaster] {} class: tag {} is no attribute of its chain: left to the subclass", kind.name(), super::attrs::name(tag))); }
+    known
+}
+
 /// `OM_NEW` / `OM_DISPOSE` / `OM_SET` / `OM_GET` reaching a native MUI class through `DoSuperMethod`. `Some(result)` = handled.
 pub fn om_method<U: GuestUi>(a: &mut Amiga<U>, native_cl: u32, obj: u32, id: u32, msg: u32) -> Result<Option<u32>, Refusal> {
     let kind = kind_of_class(a, native_cl).ok_or_else(|| Refusal(format!("{}: not a native MUI class", a.classes.name_of(native_cl))))?;
@@ -98,6 +108,7 @@ pub fn om_method<U: GuestUi>(a: &mut Amiga<U>, native_cl: u32, obj: u32, id: u32
             let o = boopsi_native::dispatch(a, Native::Root, native_cl, obj, msg)?;
             let attrs = a.mem.read_u32(msg + 4).map_err(Refusal::mem("ops_AttrList"))?;
             let t = muis(&tags::walk(&a.mem, attrs)?);
+            let t = native_tags(a, kind, t);
             crate::boopsi::adopt_object(a, kind, o);
             if let Err(e) = object::init_adopted(a, o, kind, &t) {
                 let _ = object::dispose_adopted(a, o);
@@ -107,7 +118,9 @@ pub fn om_method<U: GuestUi>(a: &mut Amiga<U>, native_cl: u32, obj: u32, id: u32
         }
         OM_SET | OM_UPDATE => {
             let attrs = a.mem.read_u32(msg + 4).map_err(Refusal::mem("ops_AttrList"))?;
-            for (tag, v) in muis(&tags::walk(&a.mem, attrs)?) { object::set_attr(a, obj, tag, v)?; }
+            let k = a.objects.kind(obj).unwrap_or(kind);
+            let t = muis(&tags::walk(&a.mem, attrs)?);
+            for (tag, v) in native_tags(a, k, t) { object::set_attr(a, obj, tag, v)?; }
             0
         }
         OM_GET => {
@@ -119,4 +132,16 @@ pub fn om_method<U: GuestUi>(a: &mut Amiga<U>, native_cl: u32, obj: u32, id: u32
         }
         _ => return Ok(None),
     }))
+}
+
+/// The program's own (guest) class `obj` was made from, if any: its dispatcher sees every method sent to the object first.
+pub fn own_class<U: GuestUi>(a: &Amiga<U>, obj: u32) -> Option<u32> {
+    a.classes.class_of(obj).filter(|c| a.classes.recs.get(c).is_some_and(|r| r.native.is_none()))
+}
+
+/// `OM_SET` for an object of a program's own class, through ITS dispatcher (as BOOPSI's `SetAttrsA` is `DoMethod(obj, OM_SET, tags)`): the
+/// subclass sees its own attributes first and `DoSuperMethod` reaches the native class for the MUI ones ([`om_method`]). The call is queued
+/// and runs before the trapped call returns ([`super::hooks`]).
+pub fn queue_om_set<U: GuestUi>(a: &mut Amiga<U>, cl: u32, obj: u32, msg: super::hooks::Msg) {
+    a.objects.hooks.push_back(super::hooks::HookCall { hook: cl, obj, msg, after: super::hooks::After::Nothing });
 }

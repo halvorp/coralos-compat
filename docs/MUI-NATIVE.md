@@ -64,9 +64,31 @@ and a resize's draw runs in the program's loop (`NewInput`). The class reads its
 regions). The graphics layer records those RastPort calls as a replayed plane in the object's rectangle. The native Area half answers what
 Zune's `area.c` answers when the dispatcher passes a method up: no frame and no inner spacing (AskMinMax sums are 0), the host's own
 background (Draw and DrawBackground draw nothing).
-NOT done: frames and inner spacing of such objects, `MUIM_HandleEvent` / `MUIM_Window_AddEventHandler` and `MUIM_Application_AddInputHandler`
-nodes are RECORDED but nothing fires them (no pointer/key event is turned into IDCMP for them, no timer drives `ihn_Millis`: a Clock does
-not tick), `MADF_DRAWUPDATE` partial redraws, off-screen buffers a class draws through (`MUIM_DrawBackground` into its own bitmap).
+NOT done: frames and inner spacing of such objects, `MADF_DRAWUPDATE` partial redraws, off-screen buffers a class draws through with
+`MUIM_DrawBackground` into its own bitmap (the native Area draws no background, so an off-screen buffer starts as the program cleared it).
+
+## Handlers that fire (`mui/handlers.rs`)
+`MUIM_Application_AddInputHandler` (`struct MUI_InputHandlerNode`: ihn_Object 8, ihn_Millis(UWORD) / ihn_Signals(ULONG) 12, ihn_Flags 16,
+ihn_Method 20): with `MUIIHNF_TIMER` the node is a deadline on the engine's VIRTUAL clock (`next_timer_deadline` / `advance_clock_to`, the same
+clock `timer.device` and `Delay` use). When it is due the application's task is woken; its next `NewInput` re-arms the node from the clock at
+that moment (Zune's `SendIO` of the timerequest) and sends `DoMethod(ihn_Object, ihn_Method)`. Without the flag the node waits for `ihn_Signals`:
+`NewInput` returns `1<<sigbit | every handler's signals` for the program's `Wait`, and the Execute loop keeps `Wait`'s result, so the node's method
+runs when its signals woke the program (a program that passes 0 gets "all signals set", as application.c does: handlers run once at start).
+A 0 ms timer is a named refusal (it would fire without end).
+`MUIM_Window_AddEventHandler` (`struct MUI_EventHandlerNode`: ehn_Priority 9, ehn_Flags 10, ehn_Object 12, ehn_Class 16, ehn_Events 20): a native
+pointer or key event for the window becomes the `struct IntuiMessage` Intuition would send (`content_input::pointer_message`, shared with plain
+windows) and window.c's `HandleInputEvent` / `HandleRawkey` offer it to the nodes in list order (priority, then address, both descending): a node
+whose `ehn_Events` has the class and whose object is enabled (with `MUI_EHF_GUIMODE`: can draw and is shown) gets `MUIM_HandleEvent(imsg, muikey)`
+through `CoerceMethod(ehn_Class)` or `DoMethod`, and `MUI_EventHandlerRC_Eat` ends the walk. RAWKEY visits the active object's nodes, the default
+object's, then the rest. NOT modelled: the user's MUI key preferences (`muikey` is always `MUIKEY_NONE`), virtual-group clipping of a press, drag
+and drop. `OM_SET` / `MUIM_Set` on an object of a program's own class go through ITS dispatcher first (`SetAttrs` is `DoMethod(OM_SET)`); the
+subclass's `DoSuperMethod` reaches the native half, which acts on the attributes of its own chain and ignores (with a log line) a MUI-range tag no
+class of the chain defines, as BOOPSI does.
+
+## Image classes
+`Bitmap.mui`, `ChunkyImage.mui`, `Bodychunk.mui`, `Imagedisplay.mui` exist as classes (their attributes are held, they can be subclassed and take
+their place in the layout as Areas). Their PIXELS ARE NOT DRAWN yet (a ChunkyImage's pixel data would need pen allocation per palette entry and a
+native Draw; the self-drawing pipeline is built around guest classes).
 
 ## Classes on disk (`.mcc` / `.mcp`, `mui/disk.rs`)
 A class that is not built in is a real disk library: `MUI_NewObjectA("Foo.mcc")` and `MUI_CreateCustomClass(.., "Foo.mcc", ..)` open it
@@ -83,6 +105,5 @@ and user data the host writes there (state stays host-side; a guest write is nev
 (`MUI_DisposeObject(child)`), then the free; a disk class's use count goes down with each object.
 
 ## Not done (named)
-`MUI_RequestA`, `MUIM_Application_OpenConfigWindow`, the Popasl/Popobject requester (a press is a named refusal), input handlers and timers
-(`AddInputHandler`) and event handlers (`MUIM_Window_AddEventHandler`) FIRING (they are recorded), NList / TextEditor / BetterString / TheBar and every other MCC's own behaviour (the classes LOAD from disk; what they need next is named in the census),
+`MUI_RequestA`, `MUIM_Application_OpenConfigWindow`, `MUIM_Application_Load/Save`, the Popasl/Popobject requester (a press is a named refusal), NList / TextEditor / BetterString / TheBar and every other MCC's own behaviour (the classes LOAD from disk; what they need next is named in the census),
 multi-selection, list sorting with a compare hook, drag and drop, scrollbars on a Scrollgroup (its contents show at their natural size).

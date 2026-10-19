@@ -64,9 +64,8 @@ pub struct Objects {
     /// A queued method is running as a guest call: a handler it reaches (its DoSuperMethod) must not start the next step inside it.
     pub draw_busy: bool,
     pub surfaces: BTreeMap<u32, crate::mui::drawn::Surface>,
-    /// `struct MUI_InputHandlerNode`s a class registered with `MUIM_Application_AddInputHandler`: node -> its application. They are
-    /// recorded and given back on RemInputHandler; the host does not fire them (no timer or signal source drives them yet).
-    pub input_handlers: BTreeMap<u32, u32>,
+    /// Input handlers (timers on the virtual clock, signals) and window event handlers a class registered (mui/handlers.rs).
+    pub handlers: crate::mui::handlers::Handlers,
     /// `MUI_AddClipRegion` stacks (mri_rArray): RenderInfo -> the regions installed, innermost last.
     pub clip_stack: BTreeMap<u32, Vec<u32>>,
 }
@@ -102,6 +101,7 @@ fn track_object<U: GuestUi>(a: &mut Amiga<U>, kind: Kind, obj: u32, block: u32) 
 
 /// Forget `obj` (already unlinked and torn down) and give its block back.
 pub fn free_object<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> {
+    crate::mui::handlers::forget(a, obj);
     let o = a.objects.map.remove(&obj).ok_or_else(|| Refusal(format!("free object {obj:#x}: not an object")))?;
     for (addr, size) in o.bufs.into_values() { let _ = a.heap.free(addr, size); }
     if o.block == 0 {
@@ -149,7 +149,11 @@ pub fn dispose_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Str
 pub fn set_attrs_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let obj = cpu.areg(0);
     let t = tags::walk(&a.mem, cpu.areg(1))?;
-    for &(tag, data) in &t { crate::mui::set_attr(a, obj, tag, data)?; }
+    match crate::mui::custom::own_class(a, obj) {
+        // An object of the program's own class: OM_SET goes to ITS dispatcher, which hands the MUI attributes down with DoSuperMethod.
+        Some(cl) => crate::mui::custom::queue_om_set(a, cl, obj, crate::mui::hooks::Msg::Params(alloc::vec![crate::boopsi_ids::OM_SET, cpu.areg(1), 0])),
+        None => for &(tag, data) in &t { crate::mui::set_attr(a, obj, tag, data)?; },
+    }
     crate::mui::after_set(a, cpu)?;
     Ok(format!("[intuition] SetAttrsA {obj:#x} ({} tags)", t.len()))
 }

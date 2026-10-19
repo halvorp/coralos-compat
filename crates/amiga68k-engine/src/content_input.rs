@@ -56,28 +56,41 @@ fn post<U: GuestUi>(a: &mut Amiga<U>, win: u32, class: u32, code: u16, stamp: St
     idcmp::queue_stamped(a, win, msg, class, code, 0, stamp)
 }
 
-/// A pointer event on the window's own content (no guest-drawn gadget owns it).
-pub fn pointer<U: GuestUi>(a: &mut Amiga<U>, win: u32, x: i32, y: i32, button: PointerButton, phase: PointerPhase) -> Result<Delivered, Refusal> {
-    let m = Refusal::mem("Window.MouseX/MouseY");
-    a.mem.write_u16(win + WD_MOUSE_X, x as u16).map_err(&m)?;
-    a.mem.write_u16(win + WD_MOUSE_Y, y as u16).map_err(&m)?;
-    let held = a.input.buttons.entry(win).or_insert(0);
+/// The IDCMP message a pointer event is, as Intuition's input handler makes it: `None` = no message (a move nobody asked for, the menu
+/// button, which the menu system owns unless the window traps it). `reports_move` = WFLG_REPORTMOUSE, `traps_menu` = WFLG_RMBTRAP.
+pub fn pointer_message(button: PointerButton, phase: PointerPhase, reports_move: bool, traps_menu: bool) -> Result<Option<(u32, u16)>, Refusal> {
+    let down = match button { PointerButton::Primary => SELECTDOWN, PointerButton::Middle => MIDDLEDOWN, PointerButton::Secondary => MENUDOWN, PointerButton::None => 0 };
+    match phase {
+        PointerPhase::Move if reports_move => Ok(Some((idcmp::IDCMP_MOUSEMOVE, 0))),
+        PointerPhase::Move => Ok(None),
+        _ if button == PointerButton::Secondary && !traps_menu => Ok(None),
+        _ if button == PointerButton::None => Err(Refusal(format!("deliver: a {phase:?} pointer event with no button"))),
+        PointerPhase::Down => Ok(Some((IDCMP_MOUSEBUTTONS, down))),
+        PointerPhase::Up => Ok(Some((IDCMP_MOUSEBUTTONS, down | UP))),
+    }
+}
+
+/// Track the buttons held over window `key` and give the qualifier the message carries.
+pub fn hold_buttons<U: GuestUi>(a: &mut Amiga<U>, key: u32, button: PointerButton, phase: PointerPhase) -> Stamp {
+    let held = a.input.buttons.entry(key).or_insert(0);
     match phase {
         PointerPhase::Down => *held |= button_bit(button),
         PointerPhase::Up => *held &= !button_bit(button),
         PointerPhase::Move => {}
     }
-    let stamp = Stamp { qualifier: *held | qualifier(a.input.modifiers),  };
+    Stamp { qualifier: *held | qualifier(a.input.modifiers) }
+}
+
+/// A pointer event on the window's own content (no guest-drawn gadget owns it).
+pub fn pointer<U: GuestUi>(a: &mut Amiga<U>, win: u32, x: i32, y: i32, button: PointerButton, phase: PointerPhase) -> Result<Delivered, Refusal> {
+    let m = Refusal::mem("Window.MouseX/MouseY");
+    a.mem.write_u16(win + WD_MOUSE_X, x as u16).map_err(&m)?;
+    a.mem.write_u16(win + WD_MOUSE_Y, y as u16).map_err(&m)?;
+    let stamp = hold_buttons(a, win, button, phase);
     let flags = a.mem.read_u32(win + WD_FLAGS).map_err(Refusal::mem("Window.Flags"))?;
-    let down = match button { PointerButton::Primary => SELECTDOWN, PointerButton::Middle => MIDDLEDOWN, PointerButton::Secondary => MENUDOWN, PointerButton::None => 0 };
-    match phase {
-        PointerPhase::Move if flags & WFLG_REPORTMOUSE != 0 => post(a, win, idcmp::IDCMP_MOUSEMOVE, 0, stamp),
-        PointerPhase::Move => Ok(Delivered::Handled),
-        // Intuition's menu system owns the right button unless the window traps it.
-        _ if button == PointerButton::Secondary && flags & WFLG_RMBTRAP == 0 => Ok(Delivered::Handled),
-        _ if button == PointerButton::None => Err(Refusal(format!("deliver: a {phase:?} pointer event with no button"))),
-        PointerPhase::Down => post(a, win, IDCMP_MOUSEBUTTONS, down, stamp),
-        PointerPhase::Up => post(a, win, IDCMP_MOUSEBUTTONS, down | UP, stamp),
+    match pointer_message(button, phase, flags & WFLG_REPORTMOUSE != 0, flags & WFLG_RMBTRAP != 0)? {
+        Some((class, code)) => post(a, win, class, code, stamp),
+        None => Ok(Delivered::Handled),
     }
 }
 

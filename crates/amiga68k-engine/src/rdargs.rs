@@ -103,7 +103,7 @@ pub fn parse(template: &str, line: &str) -> Result<Vec<Value>, u32> {
 
 /// struct RDArgs (dos/rdargs.h): RDA_Source (CSource, 12 bytes), RDA_DAList 12, RDA_Buffer 16, RDA_BufSiz 20,
 /// RDA_ExtHelp 24, RDA_Flags 28; 32 bytes. This engine keeps its value buffer's address in RDA_DAList.
-const RDARGS_SIZE: u32 = 32;
+pub(crate) const RDARGS_SIZE: u32 = 32;
 const RDA_DALIST: u32 = 12;
 const DOSTRUE: u32 = 0xFFFF_FFFF;
 const PR_RESULT2: u32 = 148;
@@ -112,7 +112,7 @@ const PR_RESULT2: u32 = 148;
 pub fn read_args<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let m = Refusal::mem;
     let (tp, array, given) = (cpu.dreg(1), cpu.dreg(2), cpu.dreg(3));
-    let template = a.mem.read_cstr(tp).map_err(m("ReadArgs.template"))?;
+    let template = String::from_utf8_lossy(&crate::guest_str::read_bytes_z(&a.mem, tp, 0x1_0000).map_err(m("ReadArgs.template"))?).into_owned(); // templates may be long (a command table's)
     let line = a.mem.read_cstr(crate::process::arg_ptr(a)).map_err(m("argument line"))?;
     let vals = match parse(&template, &line) {
         Ok(v) => v,
