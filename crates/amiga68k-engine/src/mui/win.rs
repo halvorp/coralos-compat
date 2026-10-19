@@ -20,7 +20,7 @@ const BORDER_H: i32 = 19;
 const BORDER_LEFT: i32 = 4;
 const BORDER_TOP: i32 = 15;
 
-fn native_of<U: GuestUi>(a: &Amiga<U>, w: u32) -> Option<UiObjectRef> {
+pub(super) fn native_of<U: GuestUi>(a: &Amiga<U>, w: u32) -> Option<UiObjectRef> {
     match a.objects.map.get(&w).map(|o| &o.ext) { Some(Ext::Win { native, .. }) => *native, _ => None }
 }
 

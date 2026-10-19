@@ -26,6 +26,7 @@ pub mod list;
 mod make;
 mod menu;
 mod methods;
+mod request;
 pub mod mirror;
 mod names;
 mod notify;
@@ -54,6 +55,7 @@ pub use win::native_controls;
 const LVO_MUI_NEW_OBJECT_A: i32 = -30;
 const LVO_MUI_ALLOC_ASL_REQUEST: i32 = -48;
 const LVO_MUI_FREE_ASL_REQUEST: i32 = -60;
+const LVO_MUI_REQUEST_A: i32 = -42;
 const LVO_MUI_REDRAW: i32 = -102;
 const LVO_MUI_ADD_CLIP_REGION: i32 = -180;
 const LVO_MUI_REMOVE_CLIP_REGION: i32 = -186;
@@ -68,6 +70,7 @@ const LVO_MUI_RELEASE_PEN: i32 = -162;
 pub fn library<U: GuestUi>(base: u32) -> LibraryBuilder<U> {
     LibraryBuilder::new("muimaster.library", base)
         .func(LVO_MUI_NEW_OBJECT_A, "MUI_NewObjectA", mui_new_object_a::<U>)
+        .func(LVO_MUI_REQUEST_A, "MUI_RequestA", request::mui_request_a::<U>)
         .func(LVO_MUI_DISPOSE_OBJECT, "MUI_DisposeObject", mui_dispose_object::<U>)
         .func(LVO_MUI_MAKE_OBJECT_A, "MUI_MakeObjectA", mui_make_object_a::<U>)
         // muimaster.library/MUI_AllocAslRequest(type, tags) is asl.library's AllocAslRequest with the same registers (Zune: mui_allocaslrequest.c).
