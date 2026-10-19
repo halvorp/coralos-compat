@@ -30,8 +30,64 @@ pub const BM_BASE: u32 = 0;
 pub const BM_ROW: u32 = 4;
 pub const BM_BOUNDS: u32 = 6;
 
+/// CGrafPort fields (Imaging With QuickDraw, "Color Graphics Ports"): `portVersion` shares the word of a GrafPort's
+/// `portBits.rowBytes`, so its two high bits mark a colour port; `portPixMap` (a PixMapHandle) takes the place of
+/// `portBits`; the three patterns are PixPatHandles; `rgbFgColor`/`rgbBkColor` are real RGBColors.
+pub const P_PORT_VERSION: u32 = 6;
+pub const CPORT_VERSION: u16 = 0xC000;
+pub const CP_PIXMAP: u32 = 2;
+pub const CP_BK_PIXPAT: u32 = 32;
+pub const CP_RGB_FG: u32 = 36;
+pub const CP_RGB_BK: u32 = 42;
+pub const CP_PN_PIXPAT: u32 = 58;
+pub const CP_FILL_PIXPAT: u32 = 62;
+/// PixPat: `patType` 0 (an old-style pattern), `patMap` 2, `patData` 6, `patXData` 10, `patXValid` 14, `patXMap` 18,
+/// `pat1Data` 22 (the 8-byte Pattern), 28 bytes.
+pub const PIXPAT_SIZE: u32 = 28;
+pub const PIXPAT_1DATA: u32 = 22;
+
 pub const PAT_COPY: u16 = 8;
 pub const SRC_OR: u16 = 1;
+
+/// Which of a port's three patterns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatSlot { Bk, Pn, Fill }
+
+/// Is `port` a CGrafPort (its `portVersion` word has both high bits set)?
+pub fn is_cport(mem: &GuestMem, port: u32) -> bool { mem.read_u16(port.wrapping_add(P_PORT_VERSION)).is_ok_and(|v| v & CPORT_VERSION == CPORT_VERSION) }
+
+/// The address of the BitMap or PixMap record `port` draws into: its embedded `portBits`, or the PixMap `portPixMap` names.
+pub fn bits_addr(mem: &GuestMem, port: u32) -> Result<u32, Refusal> {
+    if !is_cport(mem, port) { return Ok(port.wrapping_add(P_BITS)); }
+    let h = mem.read_u32(port.wrapping_add(CP_PIXMAP)).map_err(Refusal::mem("portPixMap"))?;
+    mem.read_u32(h).map_err(Refusal::mem("portPixMap"))
+}
+
+/// The 8 pattern bytes of a port's pattern slot. A GrafPort holds them inline; a CGrafPort holds a PixPatHandle, whose
+/// `pat1Data` is the pattern when `patType` is 0. A colour pattern (`patType` 1 or 2) is refused by name.
+pub fn pat_addr(mem: &GuestMem, port: u32, slot: PatSlot) -> Result<u32, Refusal> {
+    if !is_cport(mem, port) {
+        return Ok(port.wrapping_add(match slot { PatSlot::Bk => P_BK_PAT, PatSlot::Pn => P_PN_PAT, PatSlot::Fill => P_FILL_PAT }));
+    }
+    let e = Refusal::mem("PixPat");
+    let h = mem.read_u32(port.wrapping_add(match slot { PatSlot::Bk => CP_BK_PIXPAT, PatSlot::Pn => CP_PN_PIXPAT, PatSlot::Fill => CP_FILL_PIXPAT })).map_err(&e)?;
+    let p = mem.read_u32(h).map_err(&e)?;
+    let kind = mem.read_u16(p).map_err(&e)?;
+    if kind != 0 { return Err(Refusal(alloc::format!("{slot:?} pattern of port {port:#x} is a colour pattern (patType {kind}): colour patterns are not implemented (old-style patterns only)"))); }
+    Ok(p + PIXPAT_1DATA)
+}
+
+pub fn read_port_pat(mem: &GuestMem, port: u32, slot: PatSlot) -> Result<[u8; 8], Refusal> { read_pat(mem, pat_addr(mem, port, slot)?) }
+pub fn write_port_pat(mem: &mut GuestMem, port: u32, slot: PatSlot, p: &[u8; 8]) -> Result<(), Refusal> { let a = pat_addr(mem, port, slot)?; write_pat(mem, a, p) }
+
+/// The port's pen colours as RGB: a CGrafPort's `rgbFgColor`/`rgbBkColor`, else the colour constants in `fgColor`/`bkColor`.
+pub fn port_rgb(mem: &GuestMem, port: u32) -> Result<(crate::cqd::color::Rgb, crate::cqd::color::Rgb), Refusal> {
+    use crate::cqd::color::{read_rgb, standard_color, Rgb};
+    if is_cport(mem, port) { return Ok((read_rgb(mem, port.wrapping_add(CP_RGB_FG))?, read_rgb(mem, port.wrapping_add(CP_RGB_BK))?)); }
+    let e = Refusal::mem("GrafPort");
+    let code = |off: u32, d: Rgb| -> Result<Rgb, Refusal> { Ok(standard_color(mem.read_u32(port.wrapping_add(off)).map_err(&e)?).unwrap_or(d)) };
+    Ok((code(P_FG, Rgb::BLACK)?, code(P_BK, Rgb::WHITE)?))
+}
 
 /// Everything a pen operation reads from the port.
 #[derive(Debug, Clone, Copy)]
@@ -55,7 +111,7 @@ pub fn read_pen(mem: &GuestMem, port: u32) -> Result<Pen, Refusal> {
     Ok(Pen {
         v: mem.read_i16(port.wrapping_add(P_PN_LOC)).map_err(&e)?, h: mem.read_i16(port.wrapping_add(P_PN_LOC + 2)).map_err(&e)?,
         height: mem.read_i16(port.wrapping_add(P_PN_SIZE)).map_err(&e)?, width: mem.read_i16(port.wrapping_add(P_PN_SIZE + 2)).map_err(&e)?,
-        mode: mem.read_u16(port.wrapping_add(P_PN_MODE)).map_err(&e)?, pat: read_pat(mem, port.wrapping_add(P_PN_PAT))?, vis: mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(&e)?,
+        mode: mem.read_u16(port.wrapping_add(P_PN_MODE)).map_err(&e)?, pat: read_port_pat(mem, port, PatSlot::Pn)?, vis: mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(&e)?,
     })
 }
 

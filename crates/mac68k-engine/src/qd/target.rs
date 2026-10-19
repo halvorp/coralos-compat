@@ -1,11 +1,16 @@
 //! A drawing destination: the chunky [`Bitmap`] a port draws into, taken out of its home (the window's canvas, or a real
 //! 1-bit BitMap in guest memory) for the duration of one operation and put back (and its damage recorded) after.
 //!
+//! * A target is 1 bit deep (a classic port) or an indexed colour depth (2, 4 or 8 bits: a CGrafPort or a PixMap), and then
+//!   carries the colour table that gives its pixel values meaning ([`Target::clut`]). Every drawing op reads its pens from
+//!   [`pens`], so one implementation serves both.
 //! * `local0`: the LOCAL coordinate of pixel (0,0): `pixel = local - local0`.
 //! * Pattern alignment is to LOCAL coordinates (Atkinson's QuickDraw/Util.a PATEXPAND "ALIGN TO LOCAL COORDS": the
 //!   pattern is rotated by the global-local offset), so a pattern bit is chosen by `pixel + local0`, in a window and in an
 //!   offscreen BitMap alike.
 use super::port::*;
+use crate::cqd::color::{self, Rgb};
+use crate::cqd::pixmap::{self, PIXMAP_FLAG, PM_PIXEL_SIZE, PM_TABLE};
 use crate::machine::Mac;
 use crate::pascal::read_rect;
 use crate::Refusal;
@@ -17,6 +22,8 @@ pub enum Home { Canvas, Guest { addr: u32, row_bytes: u16 } }
 
 pub struct Target {
     pub port: u32, pub bm: Bitmap, pub local0: (i32, i32), pub home: Home,
+    /// The colour table of a deeper-than-1-bit target (`None`: 1 bit, white 0 / black 1).
+    pub clut: Option<alloc::vec::Vec<Rgb>>,
     /// A display-list recorder (plane.rs) already accounted for this drawing; `finish` records the touched pixels when none did.
     pub recorded: bool,
 }
@@ -24,6 +31,20 @@ pub struct Target {
 impl Target {
     /// Local rectangle -> pixel rectangle.
     pub fn to_pixels(&self, r: Rect) -> Rect { r.translate(-self.local0.0, -self.local0.1) }
+
+    /// A pen number as the host's `0x00RRGGBB`.
+    pub fn host_color(&self, pen: u8) -> u32 {
+        match &self.clut { Some(t) => t.get(usize::from(pen)).map_or(0, |c| c.to_host()), None => super::PALETTE[usize::from(pen).min(1)] }
+    }
+}
+
+/// The pen numbers of `port`'s foreground and background colours in `t`: 1 and 0 in a 1-bit target (black ink, white
+/// paper; a colour on a classic port is not rendered), else the nearest entries of the target's table to the port's RGB pens.
+pub fn pens<U: GuestUi>(m: &Mac<U>, port: u32, t: &Target) -> Result<(u8, u8), Refusal> {
+    let Some(table) = &t.clut else { return Ok((1, 0)) };
+    if port == 0 { return Ok((color::nearest(table, Rgb::BLACK), color::nearest(table, Rgb::WHITE))); }
+    let (fg, bg) = port_rgb(&m.mem, port)?;
+    Ok((color::nearest(table, fg), color::nearest(table, bg)))
 }
 
 /// thePort, or the refusal that says there is none.
@@ -40,46 +61,61 @@ pub fn checked_port(p: u32) -> Result<u32, Refusal> {
     if p.checked_add(PORT_SIZE).is_none() { Err(Refusal(format!("QuickDraw: GrafPort pointer {p:#010x} runs past the end of the address space"))) } else { Ok(p) }
 }
 
-/// Unpack a 1-bit guest BitMap (`bm` = the struct's address) into a chunky bitmap; 1 = black = pen 1.
-pub fn read_bitmap<U: GuestUi>(m: &Mac<U>, bm: u32) -> Result<(Bitmap, u32, u16, Rect), Refusal> {
+/// A guest BitMap or PixMap unpacked into a chunky bitmap: (bitmap, base address, row bytes, bounds, colour table).
+pub type Unpacked = (Bitmap, u32, u16, Rect, Option<alloc::vec::Vec<Rgb>>);
+
+/// Unpack the BitMap or PixMap at `bm` (`rowBytes` bit 15 = PixMap) into a chunky bitmap; in a 1-bit map 1 = black = pen 1.
+pub fn read_bitmap<U: GuestUi>(m: &Mac<U>, bm: u32) -> Result<Unpacked, Refusal> {
     let e = Refusal::mem("BitMap");
-    let (base, row) = (m.mem.read_u32(bm.wrapping_add(BM_BASE)).map_err(&e)?, m.mem.read_u16(bm.wrapping_add(BM_ROW)).map_err(&e)?);
-    if row & 0x8000 != 0 { return Err(Refusal(format!("BitMap {bm:#x}: rowBytes {row:#06x} has the PixMap flag; color pixel maps are not implemented (1-bit BitMaps only)"))); }
+    let (base, raw_row) = (m.mem.strip(m.mem.read_u32(bm.wrapping_add(BM_BASE)).map_err(&e)?), m.mem.read_u16(bm.wrapping_add(BM_ROW)).map_err(&e)?);
+    let is_pixmap = raw_row & PIXMAP_FLAG != 0;
+    let (row, depth) = if is_pixmap { (raw_row & 0x3FFF, m.mem.read_u16(bm.wrapping_add(PM_PIXEL_SIZE)).map_err(&e)?) } else { (raw_row, 1) };
+    if !pixmap::supported_depth(depth) { return Err(Refusal(format!("PixMap {bm:#x}: {depth}-bit pixels are not implemented (indexed 1, 2, 4 and 8 bits only)"))); }
     let b = read_rect(&m.mem, bm.wrapping_add(BM_BOUNDS))?;
     let (w, h) = (i32::from(b.right) - i32::from(b.left), i32::from(b.bottom) - i32::from(b.top));
-    let mut out = Bitmap::new(w, h, 1).ok_or_else(|| Refusal(format!("BitMap {bm:#x}: bounds ({},{},{},{}) are empty or too large", b.top, b.left, b.bottom, b.right)))?;
-    if i32::from(row) * 8 < w { return Err(Refusal(format!("BitMap {bm:#x}: rowBytes {row} is too small for {w} pixels"))); }
+    if w <= 0 || h <= 0 || w > 1 << 15 || h > 1 << 15 { return Err(Refusal(format!("BitMap {bm:#x}: bounds ({},{},{},{}) are empty or too large", b.top, b.left, b.bottom, b.right))); }
+    if i32::from(row) * 8 < w * i32::from(depth) { return Err(Refusal(format!("BitMap {bm:#x}: rowBytes {row} is too small for {w} pixels of {depth} bits"))); }
     let bytes = m.mem.bytes(m.mem.span(base, u32::from(row) * h as u32).map_err(&e)?).map_err(&e)?;
-    for y in 0..h { for x in 0..w { out.set(x, y, (bytes[y as usize * row as usize + (x >> 3) as usize] >> (7 - (x & 7))) & 1); } }
-    Ok((out, base, row, Rect::new(i32::from(b.left), i32::from(b.top), i32::from(b.right), i32::from(b.bottom))))
+    let out = pixmap::unpack(bytes, usize::from(row), w, h, depth as u8)?;
+    let clut = if is_pixmap && depth > 1 { Some(m.pixmap_clut(bm, depth as u8)?) } else { None };
+    Ok((out, base, row, Rect::new(i32::from(b.left), i32::from(b.top), i32::from(b.right), i32::from(b.bottom)), clut))
 }
 
 fn write_bitmap<U: GuestUi>(m: &mut Mac<U>, bm: &Bitmap, base: u32, row: u16) -> Result<(), Refusal> {
     let mut out = alloc::vec![0u8; usize::from(row) * bm.height() as usize];
-    for y in 0..bm.height() { for x in 0..bm.width() { if bm.get(x, y) == Some(1) { out[y as usize * usize::from(row) + (x >> 3) as usize] |= 0x80 >> (x & 7); } } }
+    pixmap::pack(bm, usize::from(row), &mut out);
     m.mem.write_bytes(base, &out).map_err(Refusal::mem("BitMap"))
+}
+
+impl<U: GuestUi> Mac<U> {
+    /// The colour table of the PixMap at `pm`: its `pmTable`, or the standard table of its depth when it has none.
+    pub(crate) fn pixmap_clut(&self, pm: u32, depth: u8) -> Result<alloc::vec::Vec<Rgb>, Refusal> {
+        let h = self.mem.read_u32(pm.wrapping_add(PM_TABLE)).map_err(Refusal::mem("PixMap"))?;
+        if h != 0 { return self.read_ctab(h); }
+        Ok(match depth { 4 => color::clut4(), 8 => color::clut8(), d => color::gray(d) })
+    }
 }
 
 /// Open the BitMap struct at `bm`: the window canvas whose embedded `portBits` it is (`bm == port + 2`), else the real
 /// 1-bit BitMap in guest memory. `port` is the window's port for a canvas, 0 for a plain BitMap.
 pub fn open_bits<U: GuestUi>(m: &mut Mac<U>, bm_addr: u32) -> Result<Target, Refusal> {
-    let port = bm_addr.wrapping_sub(P_BITS);
+    let port = m.cqd.window_pix.get(&bm_addr).copied().unwrap_or_else(|| bm_addr.wrapping_sub(P_BITS));
     if let Some(bm) = m.qd.canvases.remove(&port) {
-        let r = port_rect(&m.mem, port);
-        let g = m.windows.get(&port).map(|w| w.rect);
-        return match (r, g) {
-            (Ok(r), Some(_)) => Ok(Target { port, bm, local0: (i32::from(r.left), i32::from(r.top)), home: Home::Canvas, recorded: false }),
-            (r, _) => { m.qd.canvases.insert(port, bm); Err(r.err().unwrap_or_else(|| Refusal(format!("{port:#x}: a canvas without a window record")))) }
+        let (r, g, deep) = (port_rect(&m.mem, port), m.windows.get(&port).map(|w| w.rect), bm.depth() > 1);
+        let clut = if deep { m.pixmap_clut(bm_addr, bm.depth()).map_err(|e| { Refusal(format!("window {port:#x}: {}", e.0)) }) } else { Ok(alloc::vec::Vec::new()) };
+        return match (r, g, clut) {
+            (Ok(r), Some(_), Ok(t)) => Ok(Target { port, bm, local0: (i32::from(r.left), i32::from(r.top)), home: Home::Canvas, recorded: false, clut: deep.then_some(t) }),
+            (r, _, c) => { m.qd.canvases.insert(port, bm); Err(r.err().or(c.err()).unwrap_or_else(|| Refusal(format!("{port:#x}: a canvas without a window record")))) }
         };
     }
-    let (bm, base, row, bounds) = read_bitmap(m, bm_addr)?;
-    Ok(Target { port: 0, bm, local0: (bounds.x0, bounds.y0), home: Home::Guest { addr: base, row_bytes: row }, recorded: false })
+    let (bm, base, row, bounds, clut) = read_bitmap(m, bm_addr)?;
+    Ok(Target { port: 0, bm, local0: (bounds.x0, bounds.y0), home: Home::Guest { addr: base, row_bytes: row }, recorded: false, clut })
 }
 
 /// Open the destination of `port`'s drawing.
 pub fn open<U: GuestUi>(m: &mut Mac<U>, port: u32) -> Result<Target, Refusal> {
-    let mut t = open_bits(m, port.wrapping_add(P_BITS))
-        .map_err(|Refusal(e)| Refusal(format!("port {port:#x} has no drawable bitmap ({e}); it is neither a window nor an OpenPort'd port with a 1-bit portBits")))?;
+    let mut t = open_bits(m, bits_addr(&m.mem, port)?)
+        .map_err(|Refusal(e)| Refusal(format!("port {port:#x} has no drawable bitmap ({e}); it is neither a window nor an OpenPort'd/OpenCPort'd port over an indexed (1, 2, 4 or 8 bit) pixel map")))?;
     t.port = port;
     Ok(t)
 }

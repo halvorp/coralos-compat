@@ -37,7 +37,7 @@ fn sys_environs_describes_the_machine_the_engine_is() {
     assert_eq!(rec[2] as u16, 0x0700, "systemVersion: System 7.0.0");
     assert_eq!(rec[3], 3, "processor: env68020");
     assert_eq!(m.mem.read_u8(0x3108).unwrap(), 0, "hasFPU: FALSE (not modelled)");
-    assert_eq!(m.mem.read_u8(0x3109).unwrap(), 0, "hasColorQD: FALSE (1-bit QuickDraw)");
+    assert_eq!(m.mem.read_u8(0x3109).unwrap(), 1, "hasColorQD: TRUE (the default machine is the Macintosh II: 8-bit Color QuickDraw, src/cqd)");
     assert_eq!(rec[7], -1, "sysVRefNum: the boot volume");
 }
 

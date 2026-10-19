@@ -39,15 +39,23 @@ fn combine(old: u8, new: u8, mask: u8) -> u8 { (old & !mask) | (new & mask) }
 /// COMPLEMENT inverts the pixel there. Returns the touched rectangle (empty if the clip rejected everything).
 pub fn stencil(dst: &mut Bitmap, area: Rect, b: &Brush, clip: &Clip, ink: impl Fn(i32, i32) -> bool) -> Rect {
     let full = dst.pen_mask();
+    stencil_with(dst, area, clip, |x, y, old| {
+        let bit = ink(x, y) ^ (b.mode & INVERSVID != 0);
+        let new = if b.mode & COMPLEMENT != 0 { if bit { Some(old ^ full) } else { None } }
+            else if bit { Some(b.fg) } else if b.mode & JAM2 != 0 { Some(b.bg) } else { None };
+        new.map(|v| combine(old, v, b.mask))
+    })
+}
+
+/// The loop under every stencil: for each pixel of `area` the clip allows, `f(x, y, old)` gives the pixel's new pen
+/// (`None` leaves it). A caller whose rule is not a brush (a raster operation over the destination pens, as QuickDraw's
+/// Boolean transfer modes are) supplies its own `f`. Returns the touched rectangle.
+pub fn stencil_with(dst: &mut Bitmap, area: Rect, clip: &Clip, mut f: impl FnMut(i32, i32, u8) -> Option<u8>) -> Rect {
     let mut touched = Rect::default();
     for p in clip.pieces(area.intersect(&dst.rect())) {
         for y in p.y0..p.y1 {
             for x in p.x0..p.x1 {
-                let bit = ink(x, y) ^ (b.mode & INVERSVID != 0);
-                let old = dst.get(x, y).unwrap_or(0);
-                let new = if b.mode & COMPLEMENT != 0 { if bit { Some(old ^ full) } else { None } }
-                    else if bit { Some(b.fg) } else if b.mode & JAM2 != 0 { Some(b.bg) } else { None };
-                if let Some(v) = new { dst.set(x, y, combine(old, v, b.mask)); }
+                if let Some(v) = f(x, y, dst.get(x, y).unwrap_or(0)) { dst.set(x, y, v); }
             }
         }
         touched = touched.union(&p);
@@ -122,6 +130,15 @@ mod tests {
         assert_eq!(b.get(0, 0), Some(7), "depth 3: complement of 0 is 7, not 255");
         fill_rect(&mut b, Rect::new(0, 0, 16, 8), &Brush::new(1, 0, COMPLEMENT), None, &clip);
         assert_eq!(px(&b), before);
+    }
+    #[test]
+    fn stencil_with_runs_the_callers_rule_inside_the_clip_only() {
+        let mut b = bm();
+        let clip = Clip::rect(Rect::new(1, 1, 3, 2));
+        let t = stencil_with(&mut b, Rect::new(0, 0, 16, 8), &clip, |x, _, old| Some(old | (x as u8 + 1)));
+        assert_eq!(b.pixels().iter().filter(|&&p| p != 0).count(), 2);
+        assert_eq!((b.get(1, 1), b.get(2, 1), b.get(0, 1)), (Some(2), Some(3), Some(0)));
+        assert_eq!(t, Rect::new(1, 1, 3, 2));
     }
     #[test]
     fn inversvid_swaps_ink_and_paper() {

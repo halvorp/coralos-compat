@@ -65,8 +65,9 @@ impl<U: GuestUi> Mac<U> {
         w.rect = r;
         let (h, wd) = (r.bottom - r.top, r.right - r.left);
         for (i, v) in [0, 0, h, wd].into_iter().enumerate() { self.mem.write_u16(win + WR_PORT_RECT + 2 * i as u32, v as u16).map_err(&e)?; }
+        let bits = crate::qd::port::bits_addr(&self.mem, win)?; // portBits, or a colour window's PixMap
         // portBits.bounds maps local coordinates to the screen: its top-left is minus the global origin of the content.
-        for (i, v) in [-r.top, -r.left, -r.top + h, -r.left + wd].into_iter().enumerate() { self.mem.write_u16(win + WR_PORT_BITS + 6 + 2 * i as u32, v as u16).map_err(&e)?; }
+        for (i, v) in [-r.top, -r.left, -r.top + h, -r.left + wd].into_iter().enumerate() { self.mem.write_u16(bits + 6 + 2 * i as u32, v as u16).map_err(&e)?; }
         Ok(())
     }
 
@@ -99,7 +100,11 @@ impl<U: GuestUi> Mac<U> {
         Ok(())
     }
 
-    pub fn make_window(&mut self, s: WindowSpec) -> Result<u32, Refusal> {
+    pub fn make_window(&mut self, s: WindowSpec) -> Result<u32, Refusal> { self.make_window_as(s, false) }
+
+    /// [`Mac::make_window`], with a colour window's CGrafPort (8-bit canvas) when `color` and the machine has Color QuickDraw.
+    pub fn make_window_as(&mut self, s: WindowSpec, color: bool) -> Result<u32, Refusal> {
+        let color = color && self.profile.color_qd;
         let r = s.rect;
         let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
         if w <= 0 || h <= 0 { return Err(Refusal(format!("NewWindow: empty boundsRect ({},{},{},{})", r.top, r.left, r.bottom, r.right))); }
@@ -110,9 +115,11 @@ impl<U: GuestUi> Mac<U> {
         let fill = (|| {
             let e = Refusal::mem("WindowRecord");
             self.mem.zero(win, WINDOW_RECORD_SIZE).map_err(&e)?;
-            let (base, row) = (self.mem.read_u32(SCRN_BASE).map_err(&e)?, self.mem.read_u16(SCREEN_ROW).map_err(&e)?);
-            self.mem.write_u32(win + WR_PORT_BITS, base).map_err(&e)?;
-            self.mem.write_u16(win + WR_PORT_BITS + 4, row).map_err(&e)?;
+            if color { self.begin_window_cport(win)?; } else {
+                let (base, row) = (self.mem.read_u32(SCRN_BASE).map_err(&e)?, self.mem.read_u16(SCREEN_ROW).map_err(&e)?);
+                self.mem.write_u32(win + WR_PORT_BITS, base).map_err(&e)?;
+                self.mem.write_u16(win + WR_PORT_BITS + 4, row).map_err(&e)?;
+            }
             self.mem.write_u16(win + WR_PN_SIZE, 1).map_err(&e)?;
             self.mem.write_u16(win + WR_PN_SIZE + 2, 1).map_err(&e)?;
             self.mem.write_u16(win + WR_PN_MODE, PAT_COPY).map_err(&e)?;
@@ -125,7 +132,7 @@ impl<U: GuestUi> Mac<U> {
         })();
         let undo = |m: &mut Self| if owned { let _ = m.mm.dispose_ptr(&mut m.heap, win); };
         if let Err(e) = fill { undo(self); return Err(e); }
-        self.windows.insert(win, MacWindow { native: None, owned, rect: r, title: s.title, go_away: s.go_away, visible: s.visible, proc_id: s.proc_id });
+        self.windows.insert(win, MacWindow { native: None, owned, rect: r, title: s.title, go_away: s.go_away, visible: s.visible, proc_id: s.proc_id, color });
         // behind: -1 = in front of all, 0 = behind all, else behind that window
         let at = match s.behind { 0xFFFF_FFFF => 0, 0 => self.z.len(), b => self.z.iter().position(|&z| z == b).map_or(0, |i| i + 1) };
         self.z.insert(at, win);
@@ -184,9 +191,12 @@ fn exit_to_shell<U: GuestUi>(_: &mut Mac<U>, cpu: &mut Cpu, _: &Call) -> Result<
     done("[toolbox] ExitToShell".into())
 }
 
-pub(crate) fn created<U: GuestUi>(m: &mut Mac<U>, what: &str, s: WindowSpec) -> Result<Done, Refusal> {
+pub(crate) fn created<U: GuestUi>(m: &mut Mac<U>, what: &str, s: WindowSpec) -> Result<Done, Refusal> { created_as(m, what, s, false) }
+
+/// [`created`] for a colour window (`NewCWindow`/`GetNewCWindow`) when `color`.
+pub(crate) fn created_as<U: GuestUi>(m: &mut Mac<U>, what: &str, s: WindowSpec, color: bool) -> Result<Done, Refusal> {
     let (title, r, proc_id) = (s.title.clone(), s.rect, s.proc_id);
-    let win = m.make_window(s)?;
+    let win = m.make_window_as(s, color)?;
     Ok(Done { result: win, log: format!("[toolbox] {what} \"{title}\" top={} left={} w={} h={} proc={proc_id} -> {win:#x}", r.top, r.left, r.right - r.left, r.bottom - r.top) })
 }
 
@@ -200,10 +210,10 @@ fn new_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
 }
 
 /// `WIND` resource: boundsRect (8), procID (2), visible (2), goAwayFlag (2), refCon (4), title (Pascal string).
-fn get_new_window<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> { get_new_window_named(m, cpu, c, "GetNewWindow") }
+fn get_new_window<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> { get_new_window_named(m, cpu, c, "GetNewWindow", false) }
 
 /// `GetNewWindow` and the Color Window Manager's `GetNewCWindow`: the same `WIND` resource, the same native window.
-pub(crate) fn get_new_window_named<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call, what: &str) -> Result<Done, Refusal> {
+pub(crate) fn get_new_window_named<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call, what: &str, color: bool) -> Result<Done, Refusal> {
     let id = c.args.get(0) as u16 as i16;
     let Ok(h) = m.get_resource(*b"WIND", id, false) else { return done(format!("[toolbox] {what} {id}: no WIND resource")) };
     let b = m.handle_bytes(h).unwrap_or_default();
@@ -215,7 +225,7 @@ pub(crate) fn get_new_window_named<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &
         proc_id: be(8) as u16, visible: be(10) != 0, go_away: be(12) != 0,
         ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]), behind: c.args.get(2),
     };
-    created(m, &format!("{what} {id}"), spec)
+    created_as(m, &format!("{what} {id}"), spec, color)
 }
 
 fn dispose_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

@@ -854,3 +854,33 @@ Census (68k, mac-plus and mac-ii, `--idle 300`, identical on both machines):
 
 All-64 census: 62 programs reach no unimplemented function (60 after mui5); the two others (`dopus-viewfont` `QueryOverscan`, `aros-MultiView` `WindowAction`) are unchanged.
 Findings. (1) Zune's window.c has no `MUIM_Window_SetCycleChain` (it falls to rootclass and answers 0); the engine records the program's order and the seam cannot carry it (no focus order in guestui-abi). (2) Listview.mui passes the List methods, the List attributes and the notifications on them to its List (listview.c:126-266), which is what VMM's refusals were. (3) `MUIM_Application_Input` has no `MUIA_` counterpart; it is `NewInput` with all signals taken as fired.
+
+## Color QuickDraw on the Macintosh II profile (cqd lane), 2026-10-19
+`tools/corpus-census-mac.py` over `corpus-apps-mac.tsv` and `corpus-apps-mac-garden.tsv` (`MAC_IDLE=300`, default profile mac-ii), runners built from the parent
+commit (e1965da) and from this branch. What Glider PRO tests, found by tracing its startup (a disassembly of its CODE segment at the SysEnvirons call,
+not a guess): `SysEnvirons(2, &rec)` and the byte at offset 9, `hasColorQD`. Not Gestalt `'qd  '`, not `ROM85`; it also reads `systemVersion` (>= $0605, >= $0700)
+and probes `_Unimplemented` ($A89F) against `$A0AD`/`$A1AD`. Glider Edit asks Gestalt `'qdrw'` (`gestaltHasColor`), then `'fs  '`, then `'stdf'`.
+The three answers (SysEnvirons, Gestalt `'qd  '`/`'qdrw'`, low-memory `ROM85`) now come from the machine profile; mac-plus and mac-se still say no.
+
+| app | before | after | next wall |
+|---|---|---|---|
+| Glider PRO (68k) | alert "Need Color Quickdraw" (error 12), 146082 insns | past the colour test; asks `GetMainDevice`, `HasDepth` 1/4/8, `AESetInteractionAllowed`, plays its 12-frame animated cursor (`GetCCursor`/`SetCCursor`), Gestalt `'fold'` (honest "no"), then dies on its Preferences file: alert "A File Error Loading/Saving Preferences" (-120), 147100 insns | File Manager: `PBHOpenDF("Glider Prefs")` with vRefNum = the working directory its own `PBOpenWD` made and `ioDirID` 0x1f is `dirNFErr` here (not diagnosed further: not a Color QuickDraw matter) |
+| Glider Edit | alert "Colour Quickdraw (system 7.0 or higher)" | passes `'qdrw'` and `'fs  '` (now bit 1, `gestaltHasFSSpecCalls`: the FSp calls exist), alert "the new filesystem" from `'stdf'` | Gestalt `'stdf'` (Standard File 3.0 attributes): Standard File (`_Pack3`) is not implemented, so there is no honest answer |
+| Toolbox Showcase (68k) | `_TENew` | `_TENew` | unchanged: TextEdit |
+| Toolbox Showcase (PowerPC) | `SetPalette` import (the known gap: the PowerPC name of `NSetPalette`, an alias now) | `TENew` | TextEdit |
+| Executor `go` | `_GetCCursor` | `_SetDialogItem` | Dialog Manager |
+| Executor `icontest` | `_CopyMask` | no unimplemented trap reached | (`CopyMask` is modelled) |
+| Glider PRO (PowerPC) | `FlushEvents` import | `FlushEvents` import; 185 of 312 imports bound (was 167): the colour ones (`GetMainDevice`, `RGBForeColor`, `GetCCursor`, `OpenCPort`...), `SetPortBits`, `HasDepth`, `SetDepth`, `CopyMask` | the OS-trap C prototypes (`FlushEvents` ...) |
+
+No other census row changed (the 33 programs of the two lists keep the same stop or final alert; SimpleText 1.4's `_TEStyleNew` is the same stop at a shifted address; run lengths differ by a few instructions).
+Glider's own offscreen port is `OpenCPort` + `SetPortBits`/the PixMap fields + `CopyBits`/`CopyMask` (its PowerPC imports show `OpenCPort`, `CloseCPort`, no `NewGWorld`), which is
+why the work is the colour PORT and the indexed pixel maps and not GWorlds (not implemented, not reached).
+
+What was built (`crates/mac68k-engine/src/cqd/`, the drawing in `src/qd/`): the structures in guest memory at their documented offsets (`CGrafPort`, `PixMap`,
+`ColorTable`, `GDevice`, `PixPat`, `CCrsr`), the standard 8-bit table (checked entry by entry against Pomme's `clut8`), the main device (8 bits deep, standard table), the Color
+Manager (`Color2Index`, `Index2Color`, `RealColor`, `InvertColor`, `GetCTable`, `GetCTSeed`, `QDError`), `OpenCPort`/`InitCPort`/`CloseCPort`/`SetPortPix`, colour windows
+(`NewCWindow`/`GetNewCWindow`: native frame, 8-bit canvas shown to the host as exact RGB pixels, never theme roles; a colour-table change repaints the window),
+`RGBForeColor`/`RGBBackColor`/`GetForeColor`/`GetBackColor` and the classic `ForeColor`/`BackColor` on a colour port, `HasDepth`/`SetDepth`, `CopyBits` between depths and tables, `CopyMask`.
+The ops are the SAME ones as before, made depth-aware: the pen is a pair of pen numbers, the Boolean transfer modes act on pixel values (`qd::draw::PenOp`), `retro-raster` gained
+`stencil_with`. Refused by name: direct (16/32-bit) pixel maps, colour patterns (`patType` 1/2), arithmetic modes 32..39, `SetDepth` to another depth, `Index2Color` outside the table, a scaling `CopyMask`, `SetPortBits` on a CGrafPort, `NewCWindow` on a machine without Color QuickDraw.
+Heap addresses of an app that calls `InitGraf` on mac-ii move by about 2.3 KB (the main device's records), which is why two tests that pinned a handle address now pin its form.

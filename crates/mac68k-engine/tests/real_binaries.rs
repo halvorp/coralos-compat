@@ -29,7 +29,7 @@ fn go_runs_its_think_c_startup_and_the_init_sequence_before_the_first_missing_tr
     }
     assert_eq!(m.mem.read_u32(0x908).unwrap(), m.seg.a5 - 12524, "CurStackBase is the bottom of go's 12524-byte below-A5 world");
     // The census names exactly one missing trap and nothing else went wrong before it.
-    assert_eq!(m.refused, vec!["unimplemented trap _GetCCursor ($AA1B)".to_string()]);
+    assert_eq!(m.refused, vec!["unimplemented trap _SetDialogItem ($A98E)".to_string()]);
 }
 
 #[test]

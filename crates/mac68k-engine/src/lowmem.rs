@@ -21,12 +21,15 @@ pub const TICKS: u32 = 0x16A; // long: 60 Hz tick count
 pub const MB_STATE: u32 = 0x172; // byte: mouse button state, bit 7 SET = button up
 pub const LO_3_BYTES: u32 = 0x31A; // long: $00FFFFFF, the mask 24-bit code applies to a pointer or block size
 pub const MEM_ERR: u32 = 0x220; // short: the last Memory Manager result
+pub const ROM85: u32 = 0x28E; // short: ROM generation, $7FFF on a Plus, $3FFF on color-era ROMs (profile.rs)
 pub const SYS_ZONE: u32 = 0x2A6; // THz
 pub const APPL_ZONE: u32 = 0x2AA; // THz
 pub const SCRN_BASE: u32 = 0x824; // Ptr: main screen bitmap
 pub const RAW_MOUSE: u32 = 0x82C; // Point: v, h (global)
 pub const MOUSE: u32 = 0x830; // Point: v, h (global), the processed mouse
 pub const CRSR_PIN: u32 = 0x834; // Rect: the cursor's bound = screen bounds
+pub const MAIN_DEVICE: u32 = 0x8A4; // GDHandle: the main screen device (Color QuickDraw machines, cqd/gdevice.rs)
+pub const DEVICE_LIST: u32 = 0x8A8; // GDHandle: the head of the device list
 pub const CUR_AP_REF_NUM: u32 = 0x900; // short: the application's resource-file refNum
 pub const CURRENT_A5: u32 = 0x904; // Ptr: the application's A5
 pub const CUR_STACK_BASE: u32 = 0x908; // Ptr: top of the application's stack
@@ -40,6 +43,7 @@ pub const APP_PARM_HANDLE: u32 = 0xAEC; // Handle: the Finder's startup informat
 pub const WIDTH_PTR: u32 = 0xB10; // Ptr: the Font Manager's global width table (fontmetrics.rs)
 pub const WIDTH_TAB_HANDLE: u32 = 0xB2A; // Handle: the same table
 pub const MBAR_HEIGHT: u32 = 0xBAA; // short
+pub const THE_GDEVICE: u32 = 0xCC8; // GDHandle: the current graphics device (SetGDevice)
 pub const MMU_32_BIT: u32 = 0xCB2; // byte: the Memory Manager's mode, true (1) = 32-bit addressing (Inside Macintosh: Memory)
 
 /// One entry of the map: address, size in bytes, name.
@@ -48,11 +52,11 @@ pub type Global = (u32, u32, &'static str);
 /// Every global the engine initialises or maintains, ascending and non-overlapping.
 pub static MAP: &[Global] = &[
     (SCREEN_ROW, 2, "ScreenRow"), (MEM_TOP, 4, "MemTop"), (BUF_PTR, 4, "BufPtr"), (HEAP_END_G, 4, "HeapEnd"),
-    (THE_ZONE, 4, "TheZone"), (APPL_LIMIT, 4, "ApplLimit"), (TICKS, 4, "Ticks"), (MB_STATE, 1, "MBState"), (TIME, 4, "Time"), (MEM_ERR, 2, "MemErr"),
-    (SYS_ZONE, 4, "SysZone"), (APPL_ZONE, 4, "ApplZone"), (LO_3_BYTES, 4, "Lo3Bytes"), (SCRN_BASE, 4, "ScrnBase"), (RAW_MOUSE, 4, "RawMouse"), (MOUSE, 4, "Mouse"), (CRSR_PIN, 8, "CrsrPin"),
+    (THE_ZONE, 4, "TheZone"), (APPL_LIMIT, 4, "ApplLimit"), (TICKS, 4, "Ticks"), (MB_STATE, 1, "MBState"), (TIME, 4, "Time"), (MEM_ERR, 2, "MemErr"), (ROM85, 2, "ROM85"),
+    (SYS_ZONE, 4, "SysZone"), (APPL_ZONE, 4, "ApplZone"), (LO_3_BYTES, 4, "Lo3Bytes"), (SCRN_BASE, 4, "ScrnBase"), (RAW_MOUSE, 4, "RawMouse"), (MOUSE, 4, "Mouse"), (CRSR_PIN, 8, "CrsrPin"), (MAIN_DEVICE, 4, "MainDevice"), (DEVICE_LIST, 4, "DeviceList"),
     (CUR_AP_REF_NUM, 2, "CurApRefNum"), (CURRENT_A5, 4, "CurrentA5"), (CUR_STACK_BASE, 4, "CurStackBase"),
     (CUR_AP_NAME, 32, "CurApName"), (CUR_JT_OFFSET, 2, "CurJTOffset"), (WINDOW_LIST, 4, "WindowList"),
-    (MENU_LIST, 4, "MenuList"), (RES_LOAD, 2, "ResLoad"), (RES_ERR, 2, "ResErr"), (APP_PARM_HANDLE, 4, "AppParmHandle"), (WIDTH_PTR, 4, "WidthPtr"), (WIDTH_TAB_HANDLE, 4, "WidthTabHandle"), (MBAR_HEIGHT, 2, "MBarHeight"), (MMU_32_BIT, 1, "MMU32Bit"),
+    (MENU_LIST, 4, "MenuList"), (RES_LOAD, 2, "ResLoad"), (RES_ERR, 2, "ResErr"), (APP_PARM_HANDLE, 4, "AppParmHandle"), (WIDTH_PTR, 4, "WidthPtr"), (WIDTH_TAB_HANDLE, 4, "WidthTabHandle"), (MBAR_HEIGHT, 2, "MBarHeight"), (MMU_32_BIT, 1, "MMU32Bit"), (THE_GDEVICE, 4, "TheGDevice"),
 ];
 
 /// The emulated screen (a 1-bit Mac Plus-sized display: what a 1984-era application expects to find), until a real
@@ -96,6 +100,9 @@ pub fn init(mem: &mut GuestMem) -> Result<(), Refusal> {
     mem.write_u16(RES_LOAD, 0x0100).map_err(&e)?; // ResLoad = TRUE (Boolean in the high byte)
     mem.write_u16(MBAR_HEIGHT, MENU_BAR_HEIGHT as u16).map_err(&e)
 }
+
+/// The machine profile's `ROM85` word (`Mac::new` and `Mac::set_machine` call this).
+pub fn set_rom85(mem: &mut GuestMem, v: u16) -> Result<(), Refusal> { mem.write_u16(ROM85, v).map_err(Refusal::mem("ROM85")) }
 
 /// Name `app` in CurApName (a Str31) and record the launch state (`launch` calls this).
 pub fn set_app(mem: &mut GuestMem, name: &str, a5: u32, jt_offset: u16, ref_num: i16) -> Result<(), Refusal> {

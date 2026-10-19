@@ -5,6 +5,18 @@ use mac68k_engine::Mac;
 
 fn census(rel: &str) -> Option<Mac<RecordingGuestUi>> { census_in(rel, mac68k_engine::addrmode::AddrMode::Bit24) }
 
+/// [`census`] on the named machine profile.
+fn census_on(rel: &str, machine: &str) -> Option<Mac<RecordingGuestUi>> {
+    let path = format!("/data/build/corpus-bin/{rel}");
+    let file = std::fs::read(&path).ok().or_else(|| { eprintln!("SKIPPED: corpus binary {path} not present (docs/CORPUS.md)"); None })?;
+    let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+    m.stop_on_unimplemented = true;
+    m.set_machine(machine).unwrap();
+    m.launch(&file).unwrap();
+    m.run_loop(50_000_000).unwrap();
+    Some(m)
+}
+
 fn census_in(rel: &str, mode: mac68k_engine::addrmode::AddrMode) -> Option<Mac<RecordingGuestUi>> {
     let path = format!("/data/build/corpus-bin/{rel}");
     let file = std::fs::read(&path).ok().or_else(|| { eprintln!("SKIPPED: corpus binary {path} not present (docs/CORPUS.md)"); None })?;
@@ -79,12 +91,18 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
         if app.contains("Glider") { continue; } // fat app: its 68k half stops in its own code before any of those
         assert!(m.log.iter().any(|l| l.contains("[menu] DrawMenuBar") || l.contains("GetNewWindow") || l.contains("[pack6]") || l.contains("[font]") || l.contains("[clock]")), "{app}: it got past the trap walls this lane cleared");
     }
-    // Glider PRO needs Color QuickDraw and SAYS SO in its own alert: this machine is monochrome (honest absence), so the alert is the
-    // program's real, documented answer. It used to die first: the File Manager's first refnum (2) was the application's own resource
-    // fork, so closing the first file the program opened (`Close(2)`) unloaded the app's resources.
+    // Glider PRO needs Color QuickDraw and SAYS SO in its own alert on a machine without it: the Plus profile gets the program's real,
+    // documented answer (it tests SysEnvirons' hasColorQD, byte 9 of the record, nothing else). The default Macintosh II has Color
+    // QuickDraw, so it goes on: past its colour/depth checks, through the animated cursor, to the Preferences folder, where it stops
+    // at a File Manager answer (OpenDF of "Glider Prefs" under a working directory is dirNFErr), which is the next wall.
+    let Some(m) = census_on("mac/glider-pro/fx/Glider PRO\u{2122}.bin", "mac-plus") else { return };
+    assert!(m.log.iter().any(|l| l.contains("[dialog] ParamText [\"Need Color Quickdraw\"")), "{:#?}", m.log);
     let Some(m) = census("mac/glider-pro/fx/Glider PRO\u{2122}.bin") else { return };
     assert!(m.refused.iter().all(|r| !r.contains("unimplemented")), "{:?}", m.refused);
-    assert!(m.log.iter().any(|l| l.contains("[dialog] ParamText [\"Need Color Quickdraw\"")), "{:#?}", m.log);
+    assert!(!m.log.iter().any(|l| l.contains("Need Color Quickdraw")), "the Macintosh II has Color QuickDraw: {:#?}", m.log);
+    assert!(m.log.iter().any(|l| l.contains("[quickdraw] GetMainDevice")) && m.log.iter().any(|l| l.contains("[palette] HasDepth")), "it asked for the main device and its depths");
+    assert!(m.log.iter().any(|l| l.contains("[toolbox] SetCCursor")), "its animated cursor ran");
+    assert!(m.log.iter().any(|l| l.contains("[file] OpenDF (HFS) -> -120")), "the next wall is the Preferences file: {:#?}", m.log);
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.
@@ -107,7 +125,7 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // MacWrite 4.5 no longer records the OpenPort refusal: its flagged GrafPort pointer (0x8020a9xx) is a good address on a 24-bit machine.
     let Some(m) = census("mac/macwrite/u45/MacWrite.rsrc") else { return };
     assert!(!m.refused.iter().any(|r| r.starts_with("OpenPort")), "{:?}", m.refused);
-    assert!(m.log.iter().any(|l| l.contains("OpenPort 0x20a")), "OpenPort was called with the stripped pointer: {:#?}", m.log);
+    assert!(m.log.iter().any(|l| l.strip_prefix("[quickdraw] OpenPort 0x").is_some_and(|h| h.len() == 6 && h.starts_with("20"))), "OpenPort was called with the stripped pointer (no flag byte): {:#?}", m.log);
     // NEGATIVE CONTROL: on a 32-bit machine the same pointer is outside RAM, as before the 24-bit work.
     let Some(m) = census_in("mac/macwrite/u45/MacWrite.rsrc", mac68k_engine::addrmode::AddrMode::Bit32) else { return };
     assert!(m.refused.iter().any(|r| r.starts_with("OpenPort: GrafPort: pointer")), "{:?}", m.refused);

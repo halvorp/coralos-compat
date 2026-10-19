@@ -4,15 +4,17 @@
 //! The GrafPort, the BitMap, the Region and the Pattern are REAL STRUCTS IN GUEST MEMORY at their Inside Macintosh
 //! offsets ([`port`]); the pixels live host-side:
 //!
-//! * a window's content is a host canvas (1-bit chunky [`retro_raster::Bitmap`], pen 0 = white, pen 1 = black, the
-//!   palette `[white, black]`). The window's `portBits` still names the screen (a program that reads it is not lied to),
-//!   but drawing goes to the canvas, in local coordinates (`pixel = local - portRect.topleft`).
-//! * any other port (an `OpenPort`ed offscreen one with `SetPortBits`) draws into a REAL 1-bit packed BitMap in guest
-//!   memory: it is unpacked to a chunky bitmap, drawn into, and packed back ([`target`]).
+//! * a window's content is a host canvas (a chunky [`retro_raster::Bitmap`]). A classic window's is 1 bit deep, pen 0 = white,
+//!   pen 1 = black, the palette `[white, black]`; a colour window's (`NewCWindow`) is 8 bits deep and its pen numbers are the
+//!   entries of its PixMap's colour table ([`crate::cqd`]). The window's `portBits` (or `portPixMap`) still names the screen (a
+//!   program that reads it is not lied to), but drawing goes to the canvas, in local coordinates (`pixel = local - portRect.topleft`).
+//! * any other port (an `OpenPort`ed offscreen one with `SetPortBits`, an `OpenCPort`ed one over a PixMap) draws into a REAL
+//!   packed BitMap / PixMap in guest memory (1, 2, 4 or 8 bits): it is unpacked to a chunky bitmap, drawn into, and packed back
+//!   ([`target`]).
 //!
 //! Substitutions, named once here: text is drawn in `retro-raster`'s topaz-8 for EVERY font id and size (Chicago and
 //! Geneva are not bundled), see [`text`]; each window has its own canvas, so `visRgn` is the window's portRect and
-//! never carves out overlapping windows; color (CGrafPort/PixMap) is refused by name.
+//! never carves out overlapping windows; direct (16/32-bit) pixel maps and colour patterns are refused by name.
 pub mod colorpen;
 pub mod copybits;
 pub mod draw;
@@ -34,6 +36,7 @@ use crate::machine::Mac;
 use crate::Refusal;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::vec::Vec;
 use guestui_abi::GuestUi;
 use retro_present::{Presenter, Source};
 use retro_raster::{font::Font, Bitmap, Region};
@@ -59,11 +62,13 @@ pub struct Qd {
     pub plane: plane::Planes,
     /// Per port: the picture being recorded (picture.rs).
     pub pictures: BTreeMap<u32, picture::OpenPic>,
+    /// Per colour window: the host colours of its colour table as last presented (a change repaints the window).
+    pub palettes: BTreeMap<u32, alloc::vec::Vec<u32>>,
 }
 
 impl Default for Qd {
     fn default() -> Self {
-        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new() }
+        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new(), palettes: BTreeMap::new() }
     }
 }
 
@@ -91,15 +96,31 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
 /// Publish every window's accumulated drawing: one `present_plane` per changed window (the display list), or, for a host
 /// without plane replay, one `present_content` per damaged window. Called by `Mac::step`.
 pub fn flush<U: GuestUi>(m: &mut Mac<U>) {
+    refresh_palettes(m);
     plane::flush(m);
     let mut presenter = core::mem::take(&mut m.qd.present);
-    let (windows, canvases) = (&m.windows, &m.qd.canvases);
+    let (windows, canvases, palettes) = (&m.windows, &m.qd.canvases, &m.qd.palettes);
     presenter.flush(&mut m.ui, "[quickdraw]", &mut m.log, &mut m.refused, |win| {
-        Some(Source { native: windows.get(&win)?.native?, canvas: canvases.get(&win)?, palette: &PALETTE })
+        Some(Source { native: windows.get(&win)?.native?, canvas: canvases.get(&win)?, palette: palettes.get(&win).map_or(&PALETTE[..], Vec::as_slice) })
     });
     m.qd.present = presenter;
 }
 
+/// A colour window shows its canvas through its pixel map's colour table; when the table changes, the whole window is shown again.
+fn refresh_palettes<U: GuestUi>(m: &mut Mac<U>) {
+    let wins: Vec<u32> = m.qd.canvases.iter().filter(|(_, c)| c.depth() > 1).map(|(&w, _)| w).collect();
+    for win in wins {
+        let depth = m.qd.canvases[&win].depth();
+        let table = port::bits_addr(&m.mem, win).and_then(|pm| m.pixmap_clut(pm, depth));
+        let host: Vec<u32> = match table { Ok(t) => t.iter().map(|c| c.to_host()).collect(), Err(e) => { m.refused.push(alloc::format!("[quickdraw] window {win:#x}: colour table: {}", e.0)); continue } };
+        if m.qd.palettes.get(&win) == Some(&host) { continue; }
+        if m.qd.palettes.insert(win, host.clone()).is_some() {
+            plane::palette_changed(&mut m.qd.plane, win, &m.qd.canvases[&win], &host);
+            let r = m.qd.canvases[&win].rect();
+            m.qd.present.add_damage(win, r);
+        }
+    }
+}
 
 /// A one-line description for logs.
 pub(crate) fn rect_str(r: &retro_raster::Rect) -> String { alloc::format!("({},{},{},{})", r.y0, r.x0, r.y1, r.x1) }

@@ -192,11 +192,28 @@ fn drawing_with_no_port_or_before_initgraf_is_a_named_refusal() {
 }
 
 #[test]
-fn get_ccursor_is_refused_by_name_not_answered_with_a_fake_nil() {
+fn color_cursors_record_their_one_bit_image_and_a_missing_one_is_nil() {
     let mut g = Rig::new();
+    // GetCCursor of a 'crsr' that does not exist is NIL (Imaging With QuickDraw), not a refusal
     g.m.start(&Prog::new().clr_l().w(128).trap(0xAA1B).pop_l(SCRATCH).exit().0, 0).unwrap();
     let _ = g.m.run_loop(100_000).unwrap();
-    assert!(g.m.refused.iter().any(|r| r.contains("GetCCursor")), "{:?}", g.m.refused);
-    assert_eq!(g.m.refused.len(), 1, "exactly the one named refusal: {:?}", g.m.refused);
-    assert!(g.m.log.iter().all(|l| !l.contains("-> NIL")), "no invented NIL answer is logged");
+    assert_eq!(g.m.mem.read_u32(SCRATCH).unwrap(), 0);
+    assert!(g.m.refused.is_empty(), "{:?}", g.m.refused);
+    // a CCrsr (96 bytes): crsr1Data at 20, crsrMask at 52, crsrHotSpot at 84
+    let h = g.m.mm.new_handle(&mut g.m.mem, &mut g.m.heap, 96, true).unwrap();
+    let p = g.m.mm.block(h).unwrap().ptr;
+    g.m.mem.write_u16(p, 0x8001).unwrap();
+    for i in 0..16u32 { g.m.mem.write_u16(p + 20 + 2 * i, 0x8000 >> i).unwrap(); g.m.mem.write_u16(p + 52 + 2 * i, 0xC000 >> i).unwrap(); }
+    g.m.mem.write_u16(p + 84, 3).unwrap();
+    g.m.mem.write_u16(p + 86, 5).unwrap();
+    g.m.start(&Prog::new().l(h).trap(0xAA1C).exit().0, 0).unwrap();
+    let _ = g.m.run_loop(100_000).unwrap();
+    let s = g.m.cursor.shape.expect("SetCCursor recorded a shape");
+    assert_eq!((u16::from_be_bytes([s[2], s[3]]), u16::from_be_bytes([s[34], s[35]]), u16::from_be_bytes([s[64], s[65]]), u16::from_be_bytes([s[66], s[67]])), (0x4000, 0x6000, 3, 5), "data row 1, mask row 1, hot spot v/h");
+    // DisposeCCursor frees the handle
+    let live = g.m.mm.live_handles();
+    g.m.start(&Prog::new().l(h).trap(0xAA26).exit().0, 0).unwrap();
+    let _ = g.m.run_loop(100_000).unwrap();
+    assert_eq!(g.m.mm.live_handles(), live - 1);
+    assert!(g.m.refused.is_empty(), "{:?}", g.m.refused);
 }

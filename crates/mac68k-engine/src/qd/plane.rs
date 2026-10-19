@@ -17,7 +17,6 @@
 //! * **One present per step per window**, as `present_content` is. A host that refuses planes by name
 //!   (`UiRefusal::Unsupported`) puts the engine back on the canvas route for good (`Planes::unsupported`).
 use super::target::{Home, Target};
-use super::PALETTE;
 use crate::machine::Mac;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -104,7 +103,7 @@ fn snapshot(t: &Target, r: Rect) -> Option<(DrawOp, Rect)> {
     let r = r.intersect(&t.bm.rect());
     if r.is_empty() { return None; }
     let mut rgb = Vec::with_capacity(((r.x1 - r.x0) * (r.y1 - r.y0)) as usize);
-    for y in r.y0..r.y1 { for x in r.x0..r.x1 { rgb.push(PALETTE[usize::from(t.bm.get(x, y).unwrap_or(0)).min(1)]); } }
+    for y in r.y0..r.y1 { for x in r.x0..r.x1 { rgb.push(t.host_color(t.bm.get(x, y).unwrap_or(0))); } }
     Some((DrawOp::Pixels { rect: grect(&r), rgb }, r))
 }
 
@@ -121,7 +120,8 @@ pub fn record_fill(planes: &mut Planes, t: &mut Target, region: &Region, mode: u
     if !recording(planes, t) { return; }
     t.recorded = true;
     let win = t.port;
-    match ink(mode, pat) {
+    // a colour window's pens are RGB pixels, not theme roles: only the raw route can say them exactly
+    match if t.bm.depth() > 1 { Ink::Raw } else { ink(mode, pat) } {
         Ink::Nothing => {}
         Ink::Role(pen_role) => for r in region.rects() { planes.push(win, DrawOp::Fill { rect: grect(r), pen_role }, *r, true); },
         Ink::Invert => for r in region.rects() {
@@ -136,6 +136,7 @@ pub fn record_fill(planes: &mut Planes, t: &mut Target, region: &Region, mode: u
 /// The pen's 1x1 line from `a` to `b` (PIXEL coordinates) when nothing of it was clipped; `false` = the caller records the region.
 pub fn record_line(planes: &mut Planes, t: &mut Target, a: (i32, i32), b: (i32, i32), mode: u16, pat: &[u8; 8]) -> bool {
     if !recording(planes, t) { return true; }
+    if t.bm.depth() > 1 { return false; }
     let Ink::Role(pen_role) = ink(mode, pat) else { return false };
     t.recorded = true;
     let bounds = Rect::new(a.0.min(b.0), a.1.min(b.1), a.0.max(b.0) + 1, a.1.max(b.1) + 1);
@@ -163,7 +164,7 @@ pub fn record_text(planes: &mut Planes, t: &mut Target, run: &Run, clip: &Region
     if !recording(planes, t) { return; }
     t.recorded = true;
     let (win, b) = (t.port, run.box_px);
-    let inside = clip.rects().iter().any(|r| covers(r, &b));
+    let inside = clip.rects().iter().any(|r| covers(r, &b)) && t.bm.depth() == 1; // colour text goes raw (its pen is an RGB, not a role)
     let back = match ink(8, run.back) { Ink::Role(r) => Some(r), _ => None };
     // (ink role, background role) by text mode: srcCopy paints the box, srcOr only the glyphs, srcBic clears the glyphs,
     // notSrcCopy is white glyphs on black; every other mode has no role.
@@ -176,6 +177,15 @@ pub fn record_text(planes: &mut Planes, t: &mut Target, run: &Run, clip: &Region
     let font_role = if run.face & 1 != 0 { FontRole::Title } else if MONO_FONTS.contains(&run.font) { FontRole::Mono } else { FontRole::Ui };
     let op = DrawOp::Text { at: GuestPoint { x: b.x0, y: b.y0 }, string: to_string(run.text), font_role, px, width: b.x1 - b.x0, pen_role, bg_role };
     planes.push(win, op, b, bg_role.is_some());
+}
+
+/// A colour window's colour table changed (`SetEntries`, an activated palette): what was recorded as RGB pixels is stale, so
+/// the list becomes one raw frame of the canvas through the new table. The first call for a window only remembers its table.
+pub fn palette_changed(planes: &mut Planes, win: u32, canvas: &retro_raster::Bitmap, palette: &[u32]) {
+    planes.reset(win);
+    let r = canvas.rect();
+    let rgb = canvas.pixels().iter().map(|&p| palette.get(usize::from(p)).copied().unwrap_or(0)).collect();
+    planes.push(win, DrawOp::Pixels { rect: grect(&r), rgb }, r, true);
 }
 
 /// Present every window's list: one `present_plane` per changed window, and the window's canvas damage is dropped (the

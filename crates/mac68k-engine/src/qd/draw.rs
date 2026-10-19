@@ -3,7 +3,8 @@
 //!
 //! Transfer modes. A pattern mode (8..15) or a source mode (0..7) means the same thing for a pattern fill, so `mode & 7`
 //! selects the operation: 0 copy, 1 or, 2 xor, 3 bic (clear), 4..7 the same with the pattern/source inverted
-//! ([`brush_for`] maps them onto `retro-raster`'s stencil modes). Black is 1.
+//! ([`PenOp`] applies them to pixel VALUES, so the one implementation serves a 1-bit and an indexed-colour target; [`brush_for`]
+//! is the same table for text, which `retro-raster`'s glyph drawing takes as a brush). In a 1-bit target black is 1.
 //!
 //! Pen hidden (`pnVis < 0`) draws nothing but still moves; with a region open, Frame* records the shape instead.
 use super::port::*;
@@ -15,17 +16,33 @@ use crate::Refusal;
 use alloc::format;
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
-use retro_raster::paint::{stencil, Brush, COMPLEMENT, INVERSVID, JAM1, JAM2};
+use retro_raster::paint::{stencil_with, Brush, COMPLEMENT, INVERSVID, JAM1, JAM2};
 use retro_raster::{Rect, Region};
 
 pub const BLACK: [u8; 8] = [0xFF; 8];
 
-/// Transfer mode -> the raster stencil brush (fg 1 = black).
-pub fn brush_for(mode: u16) -> Brush {
+/// Transfer mode -> the raster brush for text and templates, with the pen numbers of the foreground and background.
+pub fn brush_for(mode: u16, fg: u8, bg: u8) -> Brush {
     match mode & 7 {
-        0 => Brush::new(1, 0, JAM2), 1 => Brush::new(1, 0, JAM1), 2 => Brush::new(1, 0, COMPLEMENT), 3 => Brush::new(0, 0, JAM1),
-        4 => Brush::new(1, 0, JAM2 | INVERSVID), 5 => Brush::new(1, 0, JAM1 | INVERSVID), 6 => Brush::new(1, 0, COMPLEMENT | INVERSVID),
+        0 => Brush::new(fg, bg, JAM2), 1 => Brush::new(fg, bg, JAM1), 2 => Brush::new(fg, bg, COMPLEMENT), 3 => Brush::new(0, 0, JAM1),
+        4 => Brush::new(fg, bg, JAM2 | INVERSVID), 5 => Brush::new(fg, bg, JAM1 | INVERSVID), 6 => Brush::new(fg, bg, COMPLEMENT | INVERSVID),
         _ => Brush::new(0, 0, JAM1 | INVERSVID),
+    }
+}
+
+/// A pattern or source transfer mode (`mode & 7`: 0 copy, 1 or, 2 xor, 3 bic; 4..7 the same with the pattern inverted)
+/// over the pen numbers `fg` (pattern bit 1) and `bg` (bit 0). The pattern bit selects the PIXEL (`fg` or `bg`) and the
+/// mode combines it with what is there, bit by bit: Boolean modes on an indexed device act on pixel values (Imaging With
+/// QuickDraw, "Transfer Modes"). With `fg` 1 and `bg` 0 in a 1-bit target this is the classic black-and-white table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PenOp { pub op: u8, pub invert: bool, pub fg: u8, pub bg: u8 }
+
+impl PenOp {
+    pub fn new(mode: u16, fg: u8, bg: u8) -> PenOp { PenOp { op: (mode & 3) as u8, invert: mode & 4 != 0, fg, bg } }
+    /// The pixel after the mode, for pattern bit `bit` over the old pixel `old`.
+    pub fn apply(&self, bit: bool, old: u8) -> u8 {
+        let p = if bit ^ self.invert { self.fg } else { self.bg };
+        match self.op { 0 => p, 1 => old | p, 2 => old ^ p, _ => old & !p }
     }
 }
 
@@ -36,14 +53,16 @@ pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16, 
 fn paint_with<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16, pat: &[u8; 8], line: Option<((i32, i32), (i32, i32))>) -> Result<(), Refusal> {
     super::picture::note_drawing(m, port);
     if m.mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(Refusal::mem("pnVis"))? < 0 { return Ok(()); }
-    let (pt, brush) = (pattern(pat), brush_for(mode));
+    let pt = pattern(pat);
     target::with(m, port, |m, t| {
+        let (fg, bg) = target::pens(m, port, t)?;
+        let op = PenOp::new(mode, fg, bg);
         let (mut g, ph) = (region.clone(), t.local0);
         g.translate(-t.local0.0, -t.local0.1);
         let clip = clip_region(m, t)?;
         let c = clip_of(&clip, t);
         let mut touched = Rect::default();
-        for r in g.rects() { touched = touched.union(&stencil(&mut t.bm, *r, &brush, &c, |x, y| pt.bit(x + ph.0, y + ph.1))); }
+        for r in g.rects() { touched = touched.union(&stencil_with(&mut t.bm, *r, &c, |x, y, old| Some(op.apply(pt.bit(x + ph.0, y + ph.1), old)))); }
         let mut seen = g.clone();
         seen.and_region(&clip);
         let l0 = t.local0;
@@ -69,7 +88,7 @@ fn shape_op<U: GuestUi>(m: &mut Mac<U>, shape: Shape, r: Rect, op: Op, fill: Opt
     let (region, mode, pat) = match op {
         Op::Frame => (shape.frame(r, i32::from(pen.width), i32::from(pen.height)), pen.mode, pen.pat),
         Op::Paint => (shape.region(r), pen.mode, pen.pat),
-        Op::Erase => (shape.region(r), PAT_COPY, read_pat(&m.mem, port.wrapping_add(P_BK_PAT))?),
+        Op::Erase => (shape.region(r), PAT_COPY, read_port_pat(&m.mem, port, PatSlot::Bk)?),
         Op::Invert => (shape.region(r), 10, BLACK),
         Op::Fill => (shape.region(r), PAT_COPY, read_pat(&m.mem, fill.unwrap_or(0))?),
     };
@@ -122,7 +141,7 @@ fn rgn_op<U: GuestUi>(m: &mut Mac<U>, c: &Call, op: Op, name: &str) -> Result<Do
             if g.rects().len() <= 1 { (Shape::Rect.frame(g.bounds(), pw, ph), pen.mode, pen.pat) } else { (super::inset::frame_region(&g, pw, ph), pen.mode, pen.pat) }
         }
         Op::Paint => (g, pen.mode, pen.pat),
-        Op::Erase => (g, PAT_COPY, read_pat(&m.mem, port.wrapping_add(P_BK_PAT))?),
+        Op::Erase => (g, PAT_COPY, read_port_pat(&m.mem, port, PatSlot::Bk)?),
         Op::Invert => (g, 10, BLACK),
         Op::Fill => (g, PAT_COPY, read_pat(&m.mem, c.args.get(1))?),
     };
@@ -143,7 +162,7 @@ fn w16(m: &mut Mac<impl GuestUi>, a: u32, v: i16) -> Result<(), Refusal> { m.mem
 fn pen_normal<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
     let p = current_port(m)?;
     w16(m, p.wrapping_add(P_PN_SIZE), 1)?; w16(m, p.wrapping_add(P_PN_SIZE + 2), 1)?; w16(m, p.wrapping_add(P_PN_MODE), PAT_COPY as i16)?;
-    write_pat(&mut m.mem, p.wrapping_add(P_PN_PAT), &BLACK)?;
+    write_port_pat(&mut m.mem, p, PatSlot::Pn, &BLACK)?;
     done("PenNormal")
 }
 fn pen_size<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
@@ -158,12 +177,12 @@ fn pen_mode<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, R
 }
 fn pen_pat<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (p, pat) = (current_port(m)?, read_pat(&m.mem, c.args.get(0))?);
-    write_pat(&mut m.mem, p.wrapping_add(P_PN_PAT), &pat)?;
+    write_port_pat(&mut m.mem, p, PatSlot::Pn, &pat)?;
     done("PenPat")
 }
 fn back_pat<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (p, pat) = (current_port(m)?, read_pat(&m.mem, c.args.get(0))?);
-    write_pat(&mut m.mem, p.wrapping_add(P_BK_PAT), &pat)?;
+    write_port_pat(&mut m.mem, p, PatSlot::Bk, &pat)?;
     done("BackPat")
 }
 fn hide_show<U: GuestUi>(m: &mut Mac<U>, delta: i16, name: &str) -> Result<Done, Refusal> {
@@ -178,14 +197,18 @@ fn show_pen<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, R
 /// PenState: pnLoc (4), pnSize (4), pnMode (2), pnPat (8) = the port's bytes 48..66.
 fn get_pen_state<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let p = current_port(m)?;
-    let b = m.mem.bytes(m.mem.span(p.wrapping_add(P_PN_LOC), 18).map_err(Refusal::mem("pnState"))?).map_err(Refusal::mem("pnState"))?.to_vec();
+    let mut b = m.mem.bytes(m.mem.span(p.wrapping_add(P_PN_LOC), 18).map_err(Refusal::mem("pnState"))?).map_err(Refusal::mem("pnState"))?.to_vec();
+    if is_cport(&m.mem, p) { b[10..].copy_from_slice(&read_port_pat(&m.mem, p, PatSlot::Pn)?); } // a CGrafPort holds a PixPat handle there: the state carries the pattern itself
     m.mem.write_bytes(c.args.get(0), &b).map_err(Refusal::mem("PenState"))?;
     done("GetPenState")
 }
 fn set_pen_state<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let p = current_port(m)?;
     let b = m.mem.bytes(m.mem.span(c.args.get(0), 18).map_err(Refusal::mem("PenState"))?).map_err(Refusal::mem("PenState"))?.to_vec();
-    m.mem.write_bytes(p.wrapping_add(P_PN_LOC), &b).map_err(Refusal::mem("pnState"))?;
+    if is_cport(&m.mem, p) {
+        m.mem.write_bytes(p.wrapping_add(P_PN_LOC), &b[..10]).map_err(Refusal::mem("pnState"))?;
+        write_port_pat(&mut m.mem, p, PatSlot::Pn, b[10..].try_into().expect("8 pattern bytes"))?;
+    } else { m.mem.write_bytes(p.wrapping_add(P_PN_LOC), &b).map_err(Refusal::mem("pnState"))?; }
     done("SetPenState")
 }
 fn get_pen<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

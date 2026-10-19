@@ -6,9 +6,9 @@
 //! * `SizeWindow`/`MoveWindow` change the content rectangle the guest sees (`portRect`, `portBits.bounds`, FindWindow); the
 //!   canvas is rebuilt and the program gets an `updateEvt` (`SizeWindow(.., fUpdate = TRUE)` and any growth). The seam has no
 //!   call to resize or move a native window, so the native window keeps the size the user gave it: a named limit, logged.
-//! * A colour window (`NewCWindow`/`GetNewCWindow`) takes the SAME native window path as `NewWindow`: the engine's QuickDraw is
-//!   1 bit deep, so the window's port is a plain `GrafPort` (`SysEnvirons` says `hasColorQD` FALSE); a `WIND` resource is read
-//!   exactly as `GetNewWindow` does. A program that treats the port as a `CGrafPort` is not served by this.
+//! * A colour window (`NewCWindow`/`GetNewCWindow`) takes the SAME native window path as `NewWindow` (the frame, title and
+//!   controls stay native), but its content is a `CGrafPort` over an 8-bit canvas ([`crate::cqd::cport`]); a `WIND` resource is
+//!   read exactly as `GetNewWindow` does. A machine without Color QuickDraw (the Plus, the SE) has no such trap: a named refusal.
 use crate::events::UPDATE_EVT;
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_pstring, read_rect, write_pstring, Arg, Rect};
@@ -143,15 +143,22 @@ fn size_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     Ok(Done { result: 0, log: format!("[toolbox] SizeWindow {win:#x} {w}x{h} (was {}x{}){} (the native window keeps the user's size)", old.right - old.left, old.bottom - old.top, if update || grew { ", update posted" } else { "" }) })
 }
 
+/// The Color Window Manager exists only where Color QuickDraw does.
+fn color_window_allowed<U: GuestUi>(m: &Mac<U>, what: &str) -> Result<(), Refusal> {
+    if m.profile.color_qd { Ok(()) } else { Err(Refusal(format!("{what}: Color QuickDraw is not present on machine profile {}", m.profile.name))) }
+}
+
 fn new_c_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let a = &c.args;
     let spec = WindowSpec {
         storage: a.get(0), rect: read_rect(&m.mem, a.get(1))?, title: read_pstring(&m.mem, a.get(2))?, visible: a.get(3) as u8 != 0,
         proc_id: a.get(4) as u16, behind: a.get(5), go_away: a.get(6) as u8 != 0, ref_con: a.get(7),
     };
-    crate::toolbox::created(m, "NewCWindow (a monochrome port)", spec)
+    color_window_allowed(m, "NewCWindow")?;
+    crate::toolbox::created_as(m, "NewCWindow", spec, true)
 }
 
 fn get_new_c_window<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    crate::toolbox::get_new_window_named(m, cpu, c, "GetNewCWindow (a monochrome port)")
+    color_window_allowed(m, "GetNewCWindow")?;
+    crate::toolbox::get_new_window_named(m, cpu, c, "GetNewCWindow", true)
 }

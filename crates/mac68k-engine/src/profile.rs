@@ -21,11 +21,17 @@ pub struct MachineProfile {
     pub gestalt_cpu: u32,
     pub env_machine: u16,
     pub env_processor: u16,
+    /// Color QuickDraw (8-bit, the Macintosh II's) is in the ROM: SysEnvirons `hasColorQD`, Gestalt `'qd  '` / `'qdrw'`, and the
+    /// `ROM85` global agree on it. The Plus and the SE have the original 1-bit QuickDraw only.
+    pub color_qd: bool,
+    /// The low-memory word `ROM85` ($28E): $7FFF on a Plus, $3FFF on the color-era ROMs (executor docs/globals.cpp:98-102 and
+    /// src/init.cpp:466; Inside Macintosh V-328).
+    pub rom85: u16,
 }
 
-const MAC_II: MachineProfile = MachineProfile { name: "mac-ii", cpu: CpuModel::M68020, addr: AddrMode::Bit24, gestalt_machine: 6, gestalt_cpu: 2, env_machine: 4, env_processor: 3 };
-const MAC_PLUS: MachineProfile = MachineProfile { name: "mac-plus", cpu: CpuModel::M68000, addr: AddrMode::Bit24, gestalt_machine: 4, gestalt_cpu: 0, env_machine: 2, env_processor: 1 };
-const MAC_SE: MachineProfile = MachineProfile { name: "mac-se", cpu: CpuModel::M68000, addr: AddrMode::Bit24, gestalt_machine: 5, gestalt_cpu: 0, env_machine: 3, env_processor: 1 };
+const MAC_II: MachineProfile = MachineProfile { name: "mac-ii", cpu: CpuModel::M68020, addr: AddrMode::Bit24, gestalt_machine: 6, gestalt_cpu: 2, env_machine: 4, env_processor: 3, color_qd: true, rom85: 0x3FFF };
+const MAC_PLUS: MachineProfile = MachineProfile { name: "mac-plus", cpu: CpuModel::M68000, addr: AddrMode::Bit24, gestalt_machine: 4, gestalt_cpu: 0, env_machine: 2, env_processor: 1, color_qd: false, rom85: 0x7FFF };
+const MAC_SE: MachineProfile = MachineProfile { name: "mac-se", cpu: CpuModel::M68000, addr: AddrMode::Bit24, gestalt_machine: 5, gestalt_cpu: 0, env_machine: 3, env_processor: 1, color_qd: false, rom85: 0x3FFF };
 
 /// Every profile, by the name a bundle's `machine` entry uses.
 pub const PROFILES: &[MachineProfile] = &[MAC_II, MAC_PLUS, MAC_SE];

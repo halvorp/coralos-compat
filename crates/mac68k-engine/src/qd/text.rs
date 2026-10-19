@@ -5,7 +5,7 @@
 //! (`StringWidth`, `GetFontInfo`: ascent 7, descent 1, widMax 8, leading 0) are those of what is actually drawn, so the
 //! program's own layout stays self-consistent. The font id/size/face the program set are stored in the port as written.
 //! `txFace` bold/italic/underline map to the raster font styles; outline, shadow, condense and extend are not drawn.
-//! `txMode` selects the stencil like a pen mode ([`super::draw::brush_for`]); the pen is the BASELINE origin and advances.
+//! `txMode` selects the stencil like a pen mode ([`super::draw::brush_for`], with the port's pen numbers); the pen is the BASELINE origin and advances.
 //! The baseline is a LINE between pixel rows (QuickDraw coordinates are grid points): the last row of a glyph without
 //! descender is row `v - 1` (systemless, run as an oracle, and Inside Macintosh agree), unlike the Amiga's baseline ROW,
 //! so the shared raster font is drawn at `v - 1` and `GetFontInfo` counts that row into the ascent.
@@ -45,15 +45,17 @@ pub(crate) fn draw_on<U: GuestUi>(m: &mut Mac<U>, port: u32, bytes: &[u8], name:
     let width = m.qd.font.text_length(bytes);
     super::picture::note_drawing(m, port);
     if pen.vis >= 0 && !bytes.is_empty() {
-        let (brush, style) = (brush_for(tmode), style_of(face));
+        let style = style_of(face);
         target::with(m, port, |m, t| {
+            let (fg, bg) = target::pens(m, port, t)?;
+            let brush = brush_for(tmode, fg, bg);
             let clip = clip_region(m, t)?;
             let c = clip_of(&clip, t);
             let touched = draw_text(&mut t.bm, &m.qd.font, bytes, i32::from(pen.h) - t.local0.0, i32::from(pen.v) - t.local0.1 - 1, &brush, style, &c).1;
             // the glyph box the bitmap used: `width` wide, `y_size` tall, its baseline `baseline` rows down from the top
             let (x0, y0) = (i32::from(pen.h) - t.local0.0, i32::from(pen.v) - t.local0.1 - 1 - m.qd.font.baseline as i32);
             let rd = |off: u32| m.mem.read_u16(port.wrapping_add(off)).unwrap_or(0);
-            let back = read_pat(&m.mem, port.wrapping_add(P_BK_PAT))?;
+            let back = read_port_pat(&m.mem, port, PatSlot::Bk)?;
             let run = super::plane::Run { text: bytes, box_px: retro_raster::Rect::new(x0, y0, x0 + width as i32, y0 + m.qd.font.y_size as i32), font: rd(P_TX_FONT), face, size: rd(P_TX_SIZE), mode: tmode, back: &back };
             super::plane::record_text(&mut m.qd.plane, t, &run, &clip);
             Ok(touched)

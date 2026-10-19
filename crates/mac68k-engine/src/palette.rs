@@ -1,7 +1,7 @@
-//! The Palette Manager (Inside Macintosh: Advanced Color Imaging, "Palette Manager"), the part that does not need a colour
-//! display. This machine's QuickDraw is one bit deep, so there is no colour lookup table to load: a palette is an honest,
-//! real data structure the program can build, read and change, it is associated with a window, and activating it changes
-//! nothing on the screen (a 1-bit port renders every colour as black or white anyway).
+//! The Palette Manager (Inside Macintosh: Advanced Color Imaging, "Palette Manager"), the part that does not load hardware. A
+//! palette is an honest, real data structure the program can build, read and change, and it is associated with a window; but
+//! activating one does not reprogram the screen's colour table: the main device keeps its standard 8-bit table ([`crate::cqd`]),
+//! so a window's colours are the table's nearest entries (and a 1-bit port renders every colour as black or white).
 //!
 //! **The record** is the documented one, in guest memory: `pmEntries` (2), 14 bytes of private fields, then per entry a
 //! `ColorInfo` of 16 bytes: `ciRGB` (6), `ciUsage` (2), `ciTolerance` (2), 6 private bytes (the size is read off a corpus
@@ -29,15 +29,15 @@ pub struct Palettes { pub by_window: BTreeMap<u32, u32> }
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     use Arg::{L, W};
-    m.register(0xAA90, &[], None, |_, _, c| ok(c, "colour tables are not loaded: this display is 1 bit deep"))?;
+    m.register(0xAA90, &[], None, |_, _, c| ok(c, "the device keeps its standard colour table"))?;
     m.register(0xAA91, &[W, L, W, W], Some(L), new_palette::<U>)?;
     m.register(0xAA92, &[W], Some(L), get_new_palette::<U>)?;
     m.register(0xAA93, &[L], None, dispose_palette::<U>)?;
-    m.register(0xAA94, &[L], None, |_, _, c| ok(c, "nothing to install: a 1-bit port has no colour table"))?;
+    m.register(0xAA94, &[L], None, |_, _, c| ok(c, "the device keeps its standard colour table: nothing to install"))?;
     m.register(0xAA95, &[L, L, W], None, set_palette::<U>)?;
     m.register(0xAA96, &[L], Some(L), get_palette::<U>)?;
-    m.register(0xAA97, &[W], None, |_, _, c| ok(c, "a 1-bit port draws the nearest of black and white"))?;
-    m.register(0xAA98, &[W], None, |_, _, c| ok(c, "a 1-bit port draws the nearest of black and white"))?;
+    m.register(0xAA97, &[W], None, |_, _, c| ok(c, "the pen takes the nearest entry of the device table (black or white in a 1-bit port)"))?;
+    m.register(0xAA98, &[W], None, |_, _, c| ok(c, "the pen takes the nearest entry of the device table (black or white in a 1-bit port)"))?;
     m.register(0xAA9B, &[L, W, L], None, get_entry_color::<U>)?;
     m.register(0xAA9C, &[L, W, L], None, set_entry_color::<U>)?;
     m.register(0xAA9D, &[L, W, L, L], None, get_entry_usage::<U>)?;
@@ -113,7 +113,7 @@ fn set_palette<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     let (win, h, updates) = (c.args.get(0), c.args.get(1), c.args.get(2));
     if !m.windows.contains_key(&win) { return Err(Refusal(format!("NSetPalette: {win:#x} is not an open window"))); }
     if h == 0 { m.pal.by_window.remove(&win); } else { m.palette_at(h, "NSetPalette")?; m.pal.by_window.insert(win, h); }
-    Ok(Done { result: 0, log: format!("[palette] NSetPalette window {win:#x} palette {h:#x} (updates {updates:#06x}; nothing to install on a 1-bit display)") })
+    Ok(Done { result: 0, log: format!("[palette] NSetPalette window {win:#x} palette {h:#x} (updates {updates:#06x}; the device keeps its standard colour table)") })
 }
 
 fn get_palette<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

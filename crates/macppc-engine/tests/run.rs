@@ -322,3 +322,31 @@ fn stdclib_data_has_the_real_layout_and_bindings_are_per_library() {
     assert!(matches!(m.bindings.get("exit"), None | Some(Binding::Unbound(_))), "the by-name entry never holds StdCLib's");
     assert!(matches!(m.bindings.get("StdCLib::exit"), Some(Binding::Native(_))));
 }
+
+#[test]
+fn color_quickdraw_imports_bind_onto_the_shared_68k_core() {
+    use macppc_engine::symbols::Binding;
+    use macppc_engine::{GlueOutcome, PpcHost};
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    // the colour routines are ordinary Pascal traps of the shared core, bound by their names
+    for name in ["GetMainDevice", "GetGDevice", "SetGDevice", "RGBForeColor", "RGBBackColor", "GetForeColor", "Color2Index", "Index2Color", "GetCTable", "OpenCPort", "GetCCursor"] {
+        assert!(matches!(m.bind_from("InterfaceLib", name), Binding::Pascal(_)), "{name}");
+    }
+    // `SetPalette` is the NSetPalette word under its Universal Interfaces name (it was an unbound import)
+    assert!(matches!(m.bind_from("InterfaceLib", "SetPalette"), Binding::Pascal(0xAA95)));
+    // HasDepth / SetDepth are PaletteDispatch selectors on 68k, so the adapter serves them from the shared routines
+    assert!(matches!(m.bind_from("InterfaceLib", "HasDepth"), Binding::Native(_)) && matches!(m.bind_from("InterfaceLib", "SetDepth"), Binding::Native(_)));
+    m.mac.pascal_call(0xA86E, &[0x3F00]).unwrap(); // InitGraf: the main screen device exists from here
+    let gd = m.mac.pascal_call(0xAA2A, &[]).unwrap().value;
+    let ask = |m: &mut MacPpc<RecordingGuestUi>, sym: &str, depth: u32| { let mut r = [0u32; 32]; r[3] = gd; r[4] = depth; assert!(matches!(m.glue_call(sym, &mut r), GlueOutcome::Return)); r[3] };
+    assert_eq!((ask(&mut m, "HasDepth", 8), ask(&mut m, "HasDepth", 4), ask(&mut m, "HasDepth", 32)), (1, 1, 0), "the screen can show 8 and 4 bits, not 32");
+    assert_eq!(ask(&mut m, "SetDepth", 8), 0, "already 8 bits deep");
+    assert_eq!(ask(&mut m, "SetDepth", 4) as i32, -50, "switching depth is refused (paramErr)");
+    assert!(m.mac.refused.iter().any(|r| r.contains("SetDepth")), "{:?}", m.mac.refused);
+    // NEGATIVE CONTROL: another handle is not a device
+    let mut r = [0u32; 32];
+    r[3] = gd + 4;
+    r[4] = 8;
+    assert!(matches!(m.glue_call("HasDepth", &mut r), GlueOutcome::Return));
+    assert_eq!(r[3], 0);
+}

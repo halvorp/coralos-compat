@@ -63,6 +63,8 @@ pub struct MacWindow {
     pub go_away: bool,
     pub visible: bool,
     pub proc_id: u16,
+    /// A colour window (`NewCWindow` on a machine with Color QuickDraw): a CGrafPort over an 8-bit canvas.
+    pub color: bool,
 }
 
 pub struct Mac<U: GuestUi> {
@@ -83,6 +85,8 @@ pub struct Mac<U: GuestUi> {
     pub qd_globals: u32,
     /// QuickDraw's host-side state: window canvases, update regions, the font (qd/).
     pub qd: qd::Qd,
+    /// Color QuickDraw's state: graphics devices, colour-table seeds, colour windows' pixel maps (cqd/).
+    pub cqd: crate::cqd::Cqd,
     pub(crate) table: BTreeMap<u16, TrapEntry<U>>,
     /// One line per successful bridged call, in order.
     pub log: Vec<String>,
@@ -131,12 +135,13 @@ impl<U: GuestUi> Mac<U> {
     pub fn new(ui: U) -> Result<Self, Refusal> {
         let mut m = Mac {
             mem: GuestMem::new(DEFAULT_SIZE), ui, windows: BTreeMap::new(), z: vec![], mm: MemMgr::default(), rm: ResMgr::default(),
-            seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(),
+            seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
             fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), profile: crate::profile::DEFAULT,
         };
         lowmem::init(&mut m.mem)?;
+        lowmem::set_rom85(&mut m.mem, m.profile.rom85)?;
         m.set_address_mode(crate::addrmode::AddrMode::Bit24)?; // a classic 68k Mac boots in 24-bit mode
         crate::addrmode::register(&mut m)?;
         m.install_trampoline()?;
@@ -144,6 +149,7 @@ impl<U: GuestUi> Mac<U> {
         quickdraw::register(&mut m)?;
         rects::register(&mut m)?;
         qd::register(&mut m)?;
+        crate::cqd::register(&mut m)?;
         memtraps::register(&mut m)?;
         resmgr::register(&mut m)?;
         segment::register(&mut m)?;
@@ -185,6 +191,7 @@ impl<U: GuestUi> Mac<U> {
     pub fn set_machine(&mut self, name: &str) -> Result<(), Refusal> {
         let p = crate::profile::lookup(name).ok_or_else(|| Refusal(format!("unknown machine profile \"{name}\" (known: {})", crate::profile::PROFILES.iter().map(|p| p.name).collect::<Vec<_>>().join(", "))))?;
         self.set_address_mode(p.addr)?;
+        lowmem::set_rom85(&mut self.mem, p.rom85)?;
         self.profile = p;
         Ok(())
     }
