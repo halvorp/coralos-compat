@@ -23,3 +23,9 @@ COLD int memcmp(const void *a, const void *b, unsigned long n) { const u8 *p = a
 COLD unsigned long strlen(const char *s) { unsigned long n = 0; while (s[n]) n++; return n; }
 COLD int strcmp(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return (u8)*a - (u8)*b; }
 COLD static inline u32 rd32(const void *p) { return *(const u32 *)p; }
+/* A library call with every argument register: d0-d3, a0-a3 (a2/a3 and d2/d3 are inputs; d0, d1, a0, a1 may be trashed). */
+#define LVOX(base, off, d0, d1, d2, d3, a0, a1, a2, a3) ({ \
+  register u32 _d0 asm("d0") = (u32)(d0); register u32 _d1 asm("d1") = (u32)(d1); register u32 _d2 asm("d2") = (u32)(d2); register u32 _d3 asm("d3") = (u32)(d3); \
+  register u32 _a0 asm("a0") = (u32)(a0); register u32 _a1 asm("a1") = (u32)(a1); register u32 _a2 asm("a2") = (u32)(a2); register u32 _a3 asm("a3") = (u32)(a3); \
+  asm volatile("move.l %%a6,-(%%sp)\n\tmove.l %[b],%%a6\n\tjsr %c[o](%%a6)\n\tmove.l (%%sp)+,%%a6" : "+r"(_d0), "+r"(_d1), "+r"(_a0), "+r"(_a1) \
+               : "r"(_d2), "r"(_d3), "r"(_a2), "r"(_a3), [b] "r"((u32)(base)), [o] "i"(off) : "cc", "memory"); _d0; })
