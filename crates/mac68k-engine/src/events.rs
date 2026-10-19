@@ -73,6 +73,7 @@ impl<U: GuestUi> Mac<U> {
         self.ev.ticks = self.ev.ticks.wrapping_add(n);
         let _ = self.mem.write_u32(TICKS, self.ev.ticks);
         let _ = self.update_time();
+        for _ in 0..n.min(600) { self.vbl_tick(); } // at most ten seconds of retraces per call: a host that sleeps does not owe them all
     }
 
     /// Take events the host UI has for this guest into the queue.
@@ -156,7 +157,11 @@ impl<U: GuestUi> Mac<U> {
 }
 
 /// Does an event mask accept event code `what`?
-fn mask_accepts(mask: u16, what: u16) -> bool { what < 16 && mask & (1u16 << what) != 0 }
+fn mask_accepts(mask: u16, what: u16) -> bool {
+    // A high-level (Apple) event has `what` 23, which no 16-bit mask can name: `highLevelEventMask` (0x0400) is its bit.
+    if what == crate::appleevents::HIGH_LEVEL_EVENT { return mask & 0x0400 != 0; }
+    what < 16 && mask & (1u16 << what) != 0
+}
 
 /// What [`Mac::deliver`] did with an event.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -47,7 +47,8 @@ const B: Arg = Arg::B;
 fn layout(selector: u16) -> Option<&'static [Arg]> {
     Some(match selector {
         sel::FIND_FOLDER => &[W, L, B, L, L],
-        sel::NEW_ALIAS | sel::GET_ALIAS_INFO => &[L, L, L],
+        sel::NEW_ALIAS => &[L, L, L],
+        sel::GET_ALIAS_INFO => &[L, W, L],
         sel::RESOLVE_ALIAS | sel::UPDATE_ALIAS => &[L, L, L, L],
         sel::NEW_ALIAS_MINIMAL => &[L, L],
         sel::NEW_ALIAS_MINIMAL_FROM_FULL_PATH => &[W, L, L, L, L],

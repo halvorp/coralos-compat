@@ -507,6 +507,14 @@ fn draw_controls<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
     for &ctl in all.iter().rev() { m.draw_fallback(ctl)?; }
     done(format!("[control] DrawControls {:#x}: {} control(s), kit parts by the host, the rest in the content plane", c.args.get(0), all.len()))
 }
+/// `UpdtControl(theWindow, updateRgn)`: draw the window's controls that intersect the region. The kit parts are the host's and
+/// are not clipped by a region; the plane-drawn controls are drawn whole (QuickDraw's own clip, which the update region
+/// set, trims them). The region is therefore read but not used to skip controls.
+fn updt_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let all = m.window_controls(c.args.get(0))?;
+    for &ctl in all.iter().rev() { m.draw_fallback(ctl)?; }
+    done(format!("[control] UpdtControl {:#x}: {} control(s) (the region {:#x} only clips)", c.args.get(0), all.len(), c.args.get(1)))
+}
 fn draw_one<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     m.control_rec(c.args.get(0), "Draw1Control")?;
     m.draw_fallback(c.args.get(0))?;
@@ -568,5 +576,23 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA968, &[L, L, L], Some(W), track_control::<U>)?;
     m.register(0xA969, &[L], None, draw_controls::<U>)?;
     m.register(0xA96C, &[L, L, L], Some(W), find_control::<U>)?;
-    m.register(0xA96D, &[L], None, draw_one::<U>)
+    m.register(0xA96D, &[L], None, draw_one::<U>)?;
+    m.register(0xA953, &[L, L], None, updt_control::<U>)?;
+    m.register(0xA95A, &[L], Some(L), get_ref::<U>)?;
+    m.register(0xA95B, &[L, L], None, set_ref::<U>)
+}
+
+/// `GetCRefCon` / `SetCRefCon` (the traps are named `GetControlReference` / `SetControlReference`): the program's own longword
+/// in `contrlRfCon`. Nothing else reads it, so it is a plain field of the real record.
+fn get_ref<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let ctl = c.args.get(0);
+    let p = m.control_rec(ctl, "GetCRefCon")?;
+    let v = m.mem.read_u32(p + C_REF_CON).map_err(Refusal::mem("ControlRecord"))?;
+    Ok(Done { result: v, log: format!("[control] GetCRefCon {ctl:#x} -> {v:#x}") })
+}
+fn set_ref<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (ctl, v) = (c.args.get(0), c.args.get(1));
+    let p = m.control_rec(ctl, "SetCRefCon")?;
+    m.mem.write_u32(p + C_REF_CON, v).map_err(Refusal::mem("ControlRecord"))?;
+    done(format!("[control] SetCRefCon {ctl:#x} = {v:#x}"))
 }

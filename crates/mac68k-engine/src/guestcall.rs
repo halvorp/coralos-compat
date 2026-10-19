@@ -35,6 +35,10 @@ pub(crate) enum Frame {
     D0A0(u32, u32),
     /// A resource decompressor ([`crate::compressed`]): every register and the SR, then free the scratch.
     Decomp(crate::compressed::DecompDone),
+    /// A vertical-retrace task ([`crate::vbl`]): every register and the SR.
+    Vbl(crate::vbl::VblDone),
+    /// An Apple Event handler ([`crate::appleevents`]): the program's frame is rebuilt around its result.
+    Ae(crate::appleevents::AeDone),
 }
 
 impl<U: GuestUi> Mac<U> {
@@ -62,6 +66,8 @@ impl<U: GuestUi> Mac<U> {
             None => false,
             Some(Frame::D0A0(d0, a0)) => { cpu.set_d0(d0); cpu.set_areg(0, a0); true }
             Some(Frame::Decomp(done)) => { self.finish_decompress(cpu, done); true }
+            Some(Frame::Vbl(done)) => { self.finish_vbl(cpu, done); true }
+            Some(Frame::Ae(done)) => { self.finish_ae(cpu, done); true }
         }
     }
 }

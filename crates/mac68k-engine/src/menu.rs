@@ -239,6 +239,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA93A, &[Arg::L, Arg::W], None, disable_item::<U>)?;
     m.register(0xA946, &[Arg::L, Arg::W, Arg::L], None, get_item::<U>)?; // GetItem(menu, item, VAR itemString)
     m.register(0xA947, &[Arg::L, Arg::W, Arg::L], None, set_item::<U>)?;
+    m.register(0xA826, &[Arg::L, Arg::L, Arg::W], None, insert_menu_item::<U>)?; // InsertMenuItem(menu, itemString, afterItem)
     m.register(0xA93D, &[Arg::L], Some(Arg::L), menu_select::<U>)?;
     m.register(0xA938, &[Arg::W], None, crate::quickdraw::accept::<U>) // HiliteMenu(menuID)
 }
@@ -298,6 +299,30 @@ fn append_menu<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     }
     m.menu_store(h, &p)?;
     done(format!("[menu] AppendMenu menu {} +{} items (now {})", p.id, added.len(), p.items.len()))
+}
+
+/// `InsertMenuItem(theMenu, itemString, afterItem)`: like `AppendMenu` (the same metacharacters) but after item `afterItem`
+/// (0 = first; at or past the last item = appended). The enable bits of the items after the insertion shift up with them.
+fn insert_menu_item<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (h, after) = (c.args.get(0), c.args.get(2) as u16 as i16);
+    h_of(m, "InsertMenuItem", h)?;
+    let data = read_pstring_bytes(&m.mem, c.args.get(1))?;
+    let mut p = m.menu_view(h)?;
+    let added = parse_append(&data);
+    let at = (after.max(0) as usize).min(p.items.len());
+    let old = p.flags;
+    // bit n (1..=31) is item n: the bits above the insertion move up by the number of items added
+    let k = added.len() as u32;
+    let low_mask = if at >= 31 { 0xFFFF_FFFF } else { (1u32 << (at + 1)) - 1 };
+    let mut flags = (old & low_mask) | if k < 32 { (old & !low_mask) << k } else { 0 };
+    for (j, (it, dis)) in added.iter().enumerate() {
+        p.items.insert(at + j, it.clone());
+        let n = (at + j + 1) as u32;
+        if n <= 31 { if *dis { flags &= !(1 << n); } else { flags |= 1 << n; } }
+    }
+    p.flags = flags;
+    m.menu_store(h, &p)?;
+    done(format!("[menu] InsertMenuItem menu {} +{} after {after} (now {})", p.id, added.len(), p.items.len()))
 }
 
 fn add_res_menu<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

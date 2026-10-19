@@ -282,6 +282,14 @@ fn run_selector<U: GuestUi>(m: &mut Mac<U>, sel: u16, sp: u32) -> Result<(u32, S
             let h = m.make_list(&a)?;
             (h, format!("[list] LNew LDEF {} -> {h:#x}", a.proc))
         }
+        0x00 => {
+            // LActivate(act, lHandle): the record's `lActive`; the projected control follows (an inactive list takes no clicks)
+            let (h, act) = (long(m, sp + 2)?, boolean(m, sp + 6)?);
+            let p = m.list_rec(h, "LActivate")?;
+            m.mem.write_u8(p + L_ACTIVE, u8::from(act)).map_err(Refusal::mem("ListRec"))?;
+            m.sync_list(h)?;
+            (0, format!("[list] LActivate {h:#x} {act}"))
+        }
         0x28 => { let h = lh(m)?; m.dispose_list(h)?; (0, format!("[list] LDispose {h:#x}")) }
         0x08 => {
             let (h, row, count) = (lh(m)?, word(m, sp + 6)?, word(m, sp + 8)?);

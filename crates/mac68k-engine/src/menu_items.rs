@@ -1,6 +1,7 @@
 //! The Menu Manager's per-item attribute accessors: the command-key character (`GetItemCmd` / `SetItemCmd`), the mark
 //! (`GetItmMark` / `SetItmMark`), the character style (`GetItmStyle` / `SetItmStyle`) and the icon number (`GetItmIcon` /
-//! `SetItmIcon`). Each reads or writes ONE byte of the item's four attribute bytes in the menu's own block (icon, key, mark,
+//! `SetItmIcon`). A CHAR / Style / Byte argument is a 16-bit stack slot with the value in its LOW byte (Pascal widens it; the
+//! engine's tests use the same convention for TextFace). Each reads or writes ONE byte of the item's four attribute bytes in the menu's own block (icon, key, mark,
 //! style: Inside Macintosh I-"Menu Manager", the menu record), through the same store `CheckItem` uses, so the menu strip the
 //! host shows follows. An item past the end is a named refusal (the book says the result is undefined).
 use crate::machine::{Call, Done, Mac};
@@ -23,7 +24,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     macro_rules! pair { ($($idx:expr),*) => {$(
         m.register(FIELDS[$idx].2, &[Arg::L, Arg::W, Arg::L], None, {
             fn get<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { read(m, c, $idx) } get::<U> })?;
-        m.register(FIELDS[$idx].3, &[Arg::L, Arg::W, Arg::B], None, {
+        m.register(FIELDS[$idx].3, &[Arg::L, Arg::W, Arg::W], None, {
             fn set<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { write(m, c, $idx) } set::<U> })?;
     )*} }
     pair!(0, 1, 2, 3);

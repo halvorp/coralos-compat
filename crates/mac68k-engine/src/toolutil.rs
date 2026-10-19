@@ -126,3 +126,43 @@ fn unpack_bits<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     m.mem.write_u32(dp, dst + want as u32).map_err(&e)?;
     Ok(Done { result: 0, log: format!("[toolbox] UnpackBits {used} -> {want} bytes") })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn munger_finds_replaces_inserts_and_deletes_and_says_minus_one_for_no_match() {
+        let d = b"hello world, hello";
+        // find only (ptr2 NIL): the offset of the first match at or after `offset`, the data untouched
+        assert_eq!(munger_bytes(d, 0, Some(b"hello"), 5, None, 0), Some((d.to_vec(), 0)));
+        assert_eq!(munger_bytes(d, 1, Some(b"hello"), 5, None, 0), Some((d.to_vec(), 13)));
+        // replace: the result is the offset after the replacement
+        assert_eq!(munger_bytes(d, 0, Some(b"world"), 5, Some(b"there!"), 6), Some((b"hello there!, hello".to_vec(), 12)));
+        // insert (len1 0, NIL pattern) and delete (NIL ptr2): by offset
+        assert_eq!(munger_bytes(b"abcd", 2, None, 0, Some(b"XY"), 2), Some((b"abXYcd".to_vec(), 4)));
+        assert_eq!(munger_bytes(b"abcd", 1, None, 2, None, 0), Some((b"ad".to_vec(), 1)));
+        // a negative len1 with a NIL pattern replaces everything from offset on
+        assert_eq!(munger_bytes(b"abcd", 1, None, -1, Some(b"Z"), 1), Some((b"aZ".to_vec(), 2)));
+        // NEGATIVE CONTROLS: no match is None (-1), an offset outside the data is None, a pattern is not matched across the end
+        assert_eq!(munger_bytes(d, 0, Some(b"xyz"), 3, None, 0), None);
+        assert_eq!(munger_bytes(b"abc", 9, None, 0, Some(b"x"), 1), None);
+        assert_eq!(munger_bytes(b"abc", 0, Some(b"cd"), 2, None, 0), None);
+    }
+
+    #[test]
+    fn packbits_round_trips_runs_and_literals_and_rejects_a_damaged_row() {
+        let rows: [&[u8]; 5] = [b"", b"a", b"aaa", b"aabbbcdeeee", &[0u8; 300]];
+        for row in rows {
+            let packed = pack_bits_bytes(row);
+            assert_eq!(unpack_bits_bytes(&packed, row.len()), Some((row.to_vec(), packed.len())), "{row:?}");
+        }
+        assert_eq!(pack_bits_bytes(&[7; 5]), vec![(1 - 5i32) as u8, 7], "a run of five is [1-5, byte]");
+        assert_eq!(pack_bits_bytes(b"ab"), vec![1, b'a', b'b'], "literals are [n-1, bytes]");
+        // the no-op flag byte -128 is skipped
+        assert_eq!(unpack_bits_bytes(&[0x80, 0, 9], 1), Some((vec![9], 3)));
+        // NEGATIVE CONTROLS: a row that ends early, and a run that would overrun the row
+        assert_eq!(unpack_bits_bytes(&[3, 1, 2], 4), None);
+        assert_eq!(unpack_bits_bytes(&[(1 - 9i32) as u8, 5], 4), None);
+    }
+}

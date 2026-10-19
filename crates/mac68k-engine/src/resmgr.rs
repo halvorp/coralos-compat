@@ -117,16 +117,26 @@ impl<U: GuestUi> Mac<U> {
 
     /// GetResource / Get1Resource.
     pub fn get_resource(&mut self, ty: OsType, id: i16, only_cur: bool) -> Result<u32, i16> {
-        for rn in self.rm.chain(only_cur) {
-            if let Some(e) = self.rm.file(rn).and_then(|f| f.fork.find(ty, id)) { return self.load_entry(rn, e); }
-        }
-        Err(RES_NOT_FOUND)
+        let r = (|| {
+            for rn in self.rm.chain(only_cur) {
+                if let Some(e) = self.rm.file(rn).and_then(|f| f.fork.find(ty, id)) { return self.load_entry(rn, e); }
+            }
+            Err(RES_NOT_FOUND)
+        })();
+        self.track_res_err(r)
+    }
+    /// Every load the engine makes for the program (a menu bar, a dialog, a segment) is a Resource Manager call: it leaves its
+    /// result in `ResErr` exactly as the program's own `GetResource` does, success included (a stale error from an earlier probe
+    /// must not survive a call that worked). The deferred-decompression answer is not a result and leaves it alone.
+    fn track_res_err(&mut self, r: Result<u32, i16>) -> Result<u32, i16> {
+        match r { Err(e) if e == crate::compressed::PENDING => {} Ok(_) => self.set_res_err(0), Err(e) => self.set_res_err(e) }
+        r
     }
     /// `ty id` from ONE named resource file, whatever the current file is (the Segment Loader reads the APPLICATION's
     /// fork, not `CurMap`: a program that opened a preferences file and left it current still loads its code).
     pub fn get_resource_from(&mut self, rn: i16, ty: OsType, id: i16) -> Result<u32, i16> {
-        let e = self.rm.file(rn).and_then(|f| f.fork.find(ty, id)).ok_or(RES_NOT_FOUND)?;
-        self.load_entry(rn, e)
+        let r = self.rm.file(rn).and_then(|f| f.fork.find(ty, id)).ok_or(RES_NOT_FOUND).and_then(|e| self.load_entry(rn, e));
+        self.track_res_err(r)
     }
     pub fn get_named_resource(&mut self, ty: OsType, name: &[u8], only_cur: bool) -> Result<u32, i16> {
         for rn in self.rm.chain(only_cur) {
@@ -183,6 +193,9 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9A8, &[Arg::L, Arg::L, Arg::L, Arg::L], None, get_info::<U>)?;
     m.register(0xA9B9, &[Arg::W], Some(Arg::L), get_cursor::<U>)?;
     m.register(0xA9BA, &[Arg::W], Some(Arg::L), get_string::<U>)?;
+    m.register(0xA9BB, &[Arg::W], Some(Arg::L), get_icon::<U>)?;
+    m.register(0xA9BC, &[Arg::W], Some(Arg::L), get_picture::<U>)?;
+    m.register(0xA9B8, &[Arg::W], Some(Arg::L), get_pattern::<U>)?;
     m.register(0xA99E, &[], Some(Arg::W), count_types::<U>)?;
     m.register(0xA81C, &[], Some(Arg::W), count1_types::<U>)?;
     m.register(0xA99F, &[Arg::P, Arg::W], None, get_ind_type::<U>)?;
@@ -297,6 +310,15 @@ fn get_cursor<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
     let id = c.args.get(0) as u16 as i16;
     let r = m.get_resource(*b"CURS", id, false);
     finish(m, &format!("GetCursor {id}"), r)
+}
+/// `GetIcon(id)` / `GetPicture(id)` / `GetPattern(id)`: the `ICON` / `PICT` / `PAT ` resource as a handle (NIL, with ResErr, when none).
+fn get_icon<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { typed_get(m, c, *b"ICON", "GetIcon") }
+fn get_picture<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { typed_get(m, c, *b"PICT", "GetPicture") }
+fn get_pattern<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { typed_get(m, c, *b"PAT ", "GetPattern") }
+fn typed_get<U: GuestUi>(m: &mut Mac<U>, c: &Call, ty: OsType, name: &str) -> Result<Done, Refusal> {
+    let id = c.args.get(0) as u16 as i16;
+    let r = m.get_resource(ty, id, false);
+    finish(m, &format!("{name} {id}"), r)
 }
 /// `GetString(stringID)`: the `STR ` resource as a `StringHandle` (NIL, with ResErr, when there is none).
 fn get_string<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

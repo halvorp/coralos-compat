@@ -20,10 +20,14 @@ fn census_in(rel: &str, mode: mac68k_engine::addrmode::AddrMode) -> Option<Mac<R
 fn retro68_68k_samples_get_through_their_startup_and_the_trap_patch_and_stop_at_the_next_missing_trap() {
     // The Retro68 runtime asks GetToolTrapAddress/GetOSTrapAddress what exists (traptable.rs) and then PATCHES a Toolbox trap
     // (_SetToolBoxTrapAddress, now modelled: the patch routine runs and chains to the original). HelloWorld then runs to its
-    // event loop and OPENS ITS WINDOW; Raytracer stops at _Button; Dialog at _SelectDialogItemText.
-    for (app, stop) in [("Raytracer", "_Button ($A974)"), ("Dialog", "_SelectDialogItemText ($A97E)")] {
+    // event loop and OPENS ITS WINDOW; Raytracer polls `Button` and renders until the budget is spent (Button/GetMouse are modelled
+    // now: it used to stop at _Button); Dialog stops at _SetDialogItem (its user-item draw procedure is a guest callback).
+    for (app, stop) in [("Raytracer", None), ("Dialog", Some("_SetDialogItem ($A98E)"))] {
         let Some(m) = census(&format!("mac-retro68/68k/{app}.bin")) else { return };
-        assert_eq!(m.refused, vec![format!("unimplemented trap {stop}")], "{app}: {:#?}", m.log);
+        match stop {
+            Some(s) => assert_eq!(m.refused, vec![format!("unimplemented trap {s}")], "{app}: {:#?}", m.log),
+            None => assert!(m.refused.is_empty(), "{app}: {:?}", m.refused),
+        }
         if app != "Dialog" { assert!(m.log.iter().any(|l| l.contains("GetTrapAddress")), "{app}: the startup probe was answered: {:#?}", m.log); }
     }
     let Some(m) = census("mac-retro68/68k/HelloWorld.bin") else { return };
@@ -37,9 +41,10 @@ fn retro68_68k_samples_get_through_their_startup_and_the_trap_patch_and_stop_at_
 #[test]
 fn the_toolbox_showcase_fat_app_runs_past_the_file_manager_to_the_colour_window_manager() {
     // systemless's Toolbox Showcase (68k CODE in the resource fork, cut out by tools/corpus-extract-showcase.py): it used to stop at
-    // the HFS dispatcher (_HFSDispatch $A260); the File Manager exists now and _GetNewCWindow is modelled now (winmgr.rs) and the next wall is _GetPalette (the Palette Manager).
+    // the HFS dispatcher (_HFSDispatch $A260); the File Manager exists now and _GetNewCWindow is modelled now (winmgr.rs); the Palette Manager
+    // answers (palette.rs) and the next wall is TextEdit (_TENew).
     let Some(m) = census("systemless-showcase/showcase.rsrc") else { return };
-    assert_eq!(m.refused, vec!["unimplemented trap _GetPalette ($AA96)".to_string()], "{:#?}", m.log);
+    assert_eq!(m.refused, vec!["unimplemented trap _TENew ($A9D2)".to_string()], "{:#?}", m.log);
 }
 
 #[test]
@@ -47,14 +52,18 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // Real shipped classic Mac applications (Macintosh Garden, owner-authorised local test use; docs/CORPUS.md, tools/corpus-apps-mac-garden.tsv).
     // Each pins how far the app gets TODAY; when a trap lands the stop moves on and the row is updated deliberately.
     for (app, stop) in [
-        ("mac/writenow/fx40_1/Install WriteNow 4.0.bin", "unimplemented trap _DrawDialog ($A981)"),
-        ("mac/writenow/fx/z20_0/WriteNow 2.0.bin", "unimplemented trap _FixRatio ($A869)"), // no longer the stray jump: Pack7 is a register package
-        ("mac/writenow/fx/z22_1/WriteNow 2.2.bin", "unimplemented trap _VInstall ($A033)"),
-        ("mac/glider-pro/fx/Utilities_Moving Van.bin", "unimplemented trap _SetControlReference ($A95B)"),
-        ("mac/simpletext/ux/SimpleText.rsrc", "unimplemented trap _DialogDispatch ($AA68)"), // 1.4: past its Pack7 StringToNum prefs (a register package) it shows its "serious error" alert
+        ("mac/writenow/fx/z20_0/WriteNow 2.0.bin", "unimplemented trap _FontMetrics ($A835)"), // past the stray jump (Pack7), FixRatio, DrawGrowIcon, InsertMenuItem
+        ("mac/writenow/fx/z22_1/WriteNow 2.2.bin", "unimplemented trap _FontMetrics ($A835)"), // past VInstall (a vertical-retrace task), SendBehind
+        ("mac/glider-pro/fx/Utilities_Moving Van.bin", "DrawPicture 0x"), // past SetControlReference: its PICT is a version-2 picture
+        ("mac/simpletext/ux/SimpleText.rsrc", "unimplemented trap _TEStyleNew ($A83E)"), // 1.4: past Pack7 (register package), ResErr after GetNewMBar, Pack8 and the Finder's oapp event: its Untitled window wants styled TextEdit
     ] {
         let Some(m) = census(app) else { continue };
-        assert_eq!(m.refused.last(), Some(&stop.to_string()), "{app}: {:#?}", m.log);
+        assert!(m.refused.last().is_some_and(|r| r.contains(stop)), "{app}: {:?}\n{:#?}", m.refused.last(), m.log);
+    }
+    // The WriteNow 4.0 installer now gets through GetAppParms and DrawDialog to its event loop: no missing trap at all.
+    if let Some(m) = census("mac/writenow/fx40_1/Install WriteNow 4.0.bin") {
+        assert!(m.refused.iter().all(|r| !r.contains("unimplemented")), "{:?}", m.refused);
+        assert!(m.log.iter().any(|l| l.contains("[segment] GetAppParms")), "{:#?}", m.log);
     }
     // "Walls" that are not a missing Toolbox routine: past everything modelled the program JUMPS TO ADDRESS 0 and the first A-line word it
     // meets there is the "trap" the census reports. Findings (docs/CORPUS.md): MacWrite 4.5 returns through a 68000-style TRAP #4
@@ -79,7 +88,7 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.
-    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", "ModalDialog: filterProc"), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "unimplemented trap _Pack8 ($A816)")] {
+    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", "ModalDialog: filterProc"), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "unimplemented trap _Unimplemented ($A89F)")] {
         let Some(m) = census(app) else { continue };
         assert!(m.refused.last().is_some_and(|r| r.contains(stop)), "{app}: {:?}", m.refused);
         assert!(!m.refused.iter().any(|r| r.contains("LoadSeg") || r.contains("cannot decompress")), "{app}: {:?}", m.refused);
