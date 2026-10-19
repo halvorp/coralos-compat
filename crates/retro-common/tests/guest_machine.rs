@@ -82,7 +82,7 @@ fn the_mac_68k_fixture_reaches_its_window_from_every_container_and_closes_on_the
     m.start_file(&mac68k_engine::fixture::test_app_fork(), "Raw Fork").unwrap();
     assert_eq!(rest(&mut m), Step::Blocked);
     assert_eq!(windows(&m), ["Test Window"]);
-    assert_eq!(m.fm.tree.children(m.fm.def_dir).iter().map(|&n| m.fm.tree.name(n)).collect::<Vec<_>>(), ["Raw Fork"], "the application's own file");
+    assert_eq!(m.fm.tree.children(m.fm.def_dir).iter().map(|&n| m.fm.tree.name(n)).collect::<Vec<_>>(), ["System Folder", "Raw Fork"], "the boot volume's System Folder, and the application's own file");
 }
 
 #[test]

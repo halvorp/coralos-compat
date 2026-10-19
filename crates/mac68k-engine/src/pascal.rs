@@ -71,7 +71,7 @@ pub fn complete(mem: &mut GuestMem, sp: u32, layout: &[Arg], result: Option<(Arg
     let new_sp = sp.checked_add(frame_size(layout)).ok_or_else(|| Refusal("Pascal frame: sp overflows".into()))?;
     if let Some((kind, v)) = result {
         match kind {
-            Arg::B => mem.write_u8(new_sp, v as u8),
+            Arg::B => mem.write_u16(new_sp, u16::from(v as u8) << 8), // the byte rides in the high half; the low half is cleared, not left as the caller's garbage
             Arg::W => mem.write_u16(new_sp, v as u16),
             Arg::L | Arg::P => mem.write_u32(new_sp, v),
         }.map_err(Refusal::mem("Pascal result"))?;
@@ -150,6 +150,18 @@ mod tests {
         assert_eq!(m.read_u16(sp).unwrap(), 0x0100);
         assert!(read_args(&m, 0xFFFF_FFF0, &LAYOUT).is_err(), "sp overflow / outside RAM is a refusal, not a panic");
         assert!(complete(&mut m, 0x0FFC, &[Arg::L], Some((Arg::L, 1))).is_err());
+    }
+
+    #[test]
+    fn boolean_result_clears_the_unused_low_byte_of_a_slot_the_caller_did_not_clear() {
+        // `subq.w #2,sp` reserves the slot without clearing it, and a caller may then `tst.w (sp)+` it: the low byte is not garbage
+        // (MacWrite 4.5's IsDialogEvent test read a FALSE as TRUE through it)
+        let mut m = GuestMem::new(0x1000);
+        for (v, want) in [(0u32, 0x0000u16), (1, 0x0100)] {
+            m.write_u16(0x200, 0xFFFF).unwrap();
+            let sp = complete(&mut m, 0x1FE, &[Arg::W], Some((Arg::B, v))).unwrap();
+            assert_eq!(m.read_u16(sp).unwrap(), want);
+        }
     }
 
     #[test]

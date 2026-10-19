@@ -28,7 +28,7 @@ fn alert<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Re
     let b = m.handle_bytes(h).unwrap_or_default();
     if b.len() < 12 { return Err(Refusal(format!("{} {id}: ALRT resource is {} bytes, too short for its fields", c.name, b.len()))); }
     let be = |i: usize| i16::from_be_bytes([b[i], b[i + 1]]);
-    let def = Def { what: format!("{} {id}", c.name), rect: Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) }, title: String::new(), proc_id: 1, go_away: false, ref_con: 0, ditl: be(8), show: true };
+    let def = Def { what: format!("{} {id}", c.name), rect: Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) }, title: String::new(), proc_id: 1, go_away: false, ref_con: 0, ditl: be(8), show: true, items: None };
     let win = m.build_dialog(def, 0, 0xFFFF_FFFF)?;
     // The modal call blocks; the item number is written into the result slot when the hit arrives.
     m.tr.dlg.alert = Some(win);

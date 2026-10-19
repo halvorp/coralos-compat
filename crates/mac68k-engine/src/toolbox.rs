@@ -12,7 +12,7 @@
 //! (`inGoAway`). A native close request arrives as a click on the *centre* of that box ([`go_away_point`]); that exact
 //! point answers `inGoAway` even where the geometry would say menu bar (a window high on the screen).
 use crate::events::{go_away_point, ACTIVATE_EVT, UPDATE_EVT};
-use crate::lowmem::{MBAR_HEIGHT, SCRN_BASE, SCREEN_ROW, WINDOW_LIST};
+use crate::lowmem::{DESK_PORT, GRAY_RGN, MBAR_HEIGHT, SCRN_BASE, SCREEN_ROW, WINDOW_LIST, WMGR_PORT};
 use crate::machine::{Call, Done, Mac, MacWindow};
 use crate::pascal::{read_pstring, read_rect, Arg, Rect};
 use crate::quickdraw::set_the_port;
@@ -29,7 +29,7 @@ const WR_PORT_RECT: u32 = 16;
 const WR_PN_SIZE: u32 = 52;
 const WR_PN_MODE: u32 = 56;
 const WR_TX_SIZE: u32 = 74;
-const WR_KIND: u32 = 108;
+pub(crate) const WR_KIND: u32 = 108;
 const WR_VISIBLE: u32 = 110;
 pub(crate) const WR_HILITED: u32 = 111;
 const WR_GO_AWAY: u32 = 112;
@@ -37,6 +37,8 @@ const WR_NEXT: u32 = 144;
 pub(crate) const WR_REF_CON: u32 = 152;
 /// userKind: a window the application owns (system windows have a negative kind).
 const USER_KIND: u16 = 8;
+/// dialogKind: a window a DialogRecord is (Inside Macintosh I, "The Dialog Manager": windowKind of a dialog or alert).
+pub(crate) const DIALOG_KIND: u16 = 2;
 const PAT_COPY: u16 = 8;
 
 // FindWindow results.
@@ -180,10 +182,32 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9F4, &[], None, exit_to_shell::<U>)
 }
 
+/// The corner radius of the main screen's desktop (Inside Macintosh I: the desktop has rounded corners; `ROMlib_InitGrayRgn` and
+/// the System's `InitWindows` both frame the screen with a 16 x 16 round rectangle).
+const DESKTOP_CORNER: i32 = 16;
+
+/// `InitWindows`: the Window Manager port (`WMgrPort`, `DeskPort`: a port over the screen) and the desktop region (`GrayRgn`: the
+/// screen with its rounded corners minus the menu bar), which a program reads from low memory to hit-test the desktop (`PtInRgn`),
+/// to drag within it (`DragWindow`'s bounds) or to draw on it. The Window Manager port is `thePort` afterwards (`InitGraf` left it
+/// NIL; the program's own `GetPort`/`SetPort` pairs around its first window must save and restore a real port). The host draws
+/// the desktop itself, so what a program paints into the Window Manager port is not shown.
 fn init_windows<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
+    if m.qd_globals == 0 { return Err(Refusal("InitWindows: InitGraf has not run (the Window Manager port needs screenBits)".into())); }
     m.z.clear();
     m.mem.write_u32(WINDOW_LIST, 0).map_err(Refusal::mem("WindowList"))?;
-    done("[toolbox] InitWindows".into())
+    let e = Refusal::mem("Window Manager globals");
+    let mut port = m.mem.read_u32(WMGR_PORT).map_err(&e)?;
+    if port == 0 { port = m.mm.new_ptr(&mut m.mem, &mut m.heap, crate::qd::port::PORT_SIZE, true).map_err(|x| Refusal(format!("InitWindows: no memory for the Window Manager port (memFullErr {x})")))?; }
+    let screen = crate::qd::lifecycle::open_screen_port(m, port)?;
+    let mut desktop = crate::qd::shapes::round_rect(screen, DESKTOP_CORNER, DESKTOP_CORNER);
+    let mbar = i32::from(m.mem.read_u16(MBAR_HEIGHT).map_err(&e)? as i16);
+    desktop.clear_rect(retro_raster::Rect::new(screen.x0, screen.y0, screen.x1, screen.y0 + mbar));
+    let gray = match m.mem.read_u32(GRAY_RGN).map_err(&e)? { 0 => m.new_region(&desktop)?, h => { m.write_region(h, &desktop)?; h } };
+    let clip = m.mem.read_u32(port + crate::qd::port::P_CLIP).map_err(&e)?;
+    m.write_region(clip, &desktop)?;
+    for (at, v) in [(WMGR_PORT, port), (DESK_PORT, port), (GRAY_RGN, gray)] { m.mem.write_u32(at, v).map_err(&e)?; }
+    crate::quickdraw::set_the_port(m, port)?; // as `OpenPort` does: the Window Manager port is current until the program makes a window current
+    done(format!("[toolbox] InitWindows: Window Manager port {port:#x}, GrayRgn {gray:#x}"))
 }
 
 fn exit_to_shell<U: GuestUi>(_: &mut Mac<U>, cpu: &mut Cpu, _: &Call) -> Result<Done, Refusal> {

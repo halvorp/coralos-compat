@@ -6,7 +6,7 @@
 //! Macintosh II: 8-bit Color QuickDraw, [`crate::cqd`]; FALSE on the Plus and the SE). Nothing is claimed that the engine does not do.
 //!
 //! SysEnvRec (16 bytes): environsVersion 0, machineType 2, systemVersion 4, processor 6, hasFPU 8 (Boolean), hasColorQD 9,
-//! keyBoardType 10, atDrvrVersNum 12, sysVRefNum 14.
+//! keyBoardType 10, atDrvrVersNum 12, sysVRefNum 14 (the WORKING DIRECTORY reference number of the System Folder, not the volume's).
 use crate::machine::Mac;
 use crate::osconv::Regs;
 use crate::Refusal;
@@ -30,7 +30,7 @@ fn sys_environs<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> Result
     if want < 1 { r.err(ENV_BAD_VERS); return Ok(format!("[toolbox] SysEnvirons version {want}: envBadVers")); }
     let p = r.a0;
     let e = Refusal::mem("SysEnvRec");
-    let sys_vref = m.fm.vref_of(m.fm.def_vol) as u16;
+    let sys_vref = m.fm.system_folder_wd().map_err(|e| Refusal(format!("SysEnvirons: the System Folder has no working directory (OSErr {e})")))? as u16;
     m.mem.write_u16(p, VERSION.min(want) as u16).map_err(&e)?;
     m.mem.write_u16(p + 2, m.profile.env_machine).map_err(&e)?;
     m.mem.write_u16(p + 4, SYSTEM_VERSION).map_err(&e)?;

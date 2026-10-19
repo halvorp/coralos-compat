@@ -1,8 +1,8 @@
 //! Resource files on the File Manager: `OpenResFile`, `CreateResFile`, `CloseResFile` (and `FSpOpenResFile` /
 //! `FSpCreateResFile`, [`super::fsspec`]) over a file's RESOURCE FORK in the shared volume tree. An opened file joins
 //! the Resource Manager's chain with the SAME refnum the File Manager gave its fork, so `CloseResFile(ref)` and the File
-//! Manager's `Close` agree. The fork is read once, at open; changing a resource file (AddResource, WriteResource) is not
-//! modelled and those traps stay named refusals.
+//! Manager's `Close` agree. The fork is read once, at open; changes made through the Resource Manager (`AddResource`,
+//! `WriteResource`, [`crate::resmgr`]) reach the file when it is updated or closed (`CloseResFile` updates it first).
 use super::names::Located;
 use super::err;
 use crate::machine::{Call, Done, Mac};
@@ -107,7 +107,9 @@ fn create_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<
 
 fn close_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let r = c.args.get(0) as u16 as i16;
-    let e = if m.rm.close(r) { let _ = m.fm.close(r); 0 } else { crate::resmgr::RES_F_NOT_FOUND };
+    // CloseResFile updates the file first (`UpdateResFile`), then lets go of it
+    let updated = m.update_res_file(r);
+    let e = if m.rm.close(r) { let _ = m.fm.close(r); updated.err().unwrap_or(0) } else { crate::resmgr::RES_F_NOT_FOUND };
     set_err(m, e);
     Ok(Done { result: 0, log: format!("[res] CloseResFile {r} (ResErr {e})") })
 }

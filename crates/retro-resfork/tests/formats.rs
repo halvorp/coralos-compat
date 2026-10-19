@@ -59,7 +59,8 @@ fn malformed_forks_are_named_refusals() {
     assert!(ResFork::parse(bad).is_err());
     // a resource whose length claims more than the data area holds
     let mut bad = good.clone();
-    bad[16..20].copy_from_slice(&0x00FF_FFFFu32.to_be_bytes());
+    let data_off = u32::from_be_bytes(bad[0..4].try_into().unwrap()) as usize;
+    bad[data_off..data_off + 4].copy_from_slice(&0x00FF_FFFFu32.to_be_bytes());
     assert_eq!(ResFork::parse(bad).unwrap_err(), ForkError::BadOffset("resource data past the data area"));
     // a name offset past the map
     let mut bad = good;
@@ -127,4 +128,47 @@ fn a_raw_fork_is_taken_as_is_and_garbage_is_refused_by_the_fork_parser() {
     let o = open(&junk).unwrap();
     assert_eq!(o.kind, Kind::Raw);
     assert!(ResFork::parse(junk).is_err());
+}
+
+#[test]
+fn a_changed_fork_keeps_its_indices_and_writes_back_in_the_resource_manager_format() {
+    let mut f = ResFork::parse(fork()).unwrap();
+    let (code1, hello) = (f.find(*b"CODE", 1).unwrap(), f.find(*b"STR ", 128).unwrap());
+    // add: the next index, ids need not be new, the other indices do not move
+    let menu = f.add(*b"MENU", 5, Some(b"File"), 0x02, b"menu".to_vec());
+    assert_eq!((menu, f.len(), f.find(*b"CODE", 1), f.find(*b"STR ", 128)), (4, 5, Some(code1), Some(hello)));
+    assert_eq!((f.data(menu).unwrap(), f.name(menu).unwrap(), f.entry(menu).unwrap().attrs), (&b"menu"[..], &b"File"[..], 0x02));
+    // rewrite bytes (the name and attributes survive), change id and name, set attributes
+    assert!(f.set_data(hello, b"\x02hi".to_vec()) && f.set_attrs(hello, 0x22));
+    assert_eq!((f.data(hello).unwrap(), f.name(hello).unwrap(), f.entry(hello).unwrap().attrs), (&b"\x02hi"[..], &b"Hello"[..], 0x22));
+    assert!(f.set_info(code1, 7, Some(b"seven")) && f.set_info(hello, 129, None));
+    assert_eq!((f.find(*b"CODE", 7), f.find(*b"CODE", 1), f.name(code1).unwrap(), f.name(hello).unwrap()), (Some(code1), None, &b"seven"[..], &b"Hello"[..]));
+    // remove: the index stays and answers nothing; counts and lookups skip it
+    assert!(f.remove(f.find(*b"STR ", -3).unwrap()));
+    assert_eq!((f.len(), f.count(*b"STR "), f.entry(3).is_none(), f.data(3)), (5, 1, true, None));
+    assert!(!f.remove(3) && !f.set_data(3, vec![1]), "a removed index cannot be changed or removed again");
+    // the file image parses back to the same resources, each type's ids sorted
+    let back = ResFork::parse(f.to_bytes()).unwrap();
+    assert_eq!(back.types(), vec![*b"CODE", *b"STR ", *b"MENU"]);
+    assert_eq!((back.count(*b"CODE"), back.count(*b"STR "), back.count(*b"MENU")), (2, 1, 1));
+    assert_eq!(back.data(back.find(*b"STR ", 129).unwrap()).unwrap(), b"\x02hi");
+    assert_eq!(back.entry(back.find(*b"STR ", 129).unwrap()).unwrap().attrs, 0x22);
+    assert_eq!(back.name(back.find(*b"MENU", 5).unwrap()).unwrap(), b"File");
+    assert_eq!(back.find(*b"CODE", 7).map(|i| back.name(i).unwrap().to_vec()), Some(b"seven".to_vec()));
+    let ids: Vec<i16> = (1..=2).map(|n| back.entry(back.nth(*b"CODE", n).unwrap()).unwrap().id).collect();
+    assert_eq!(ids, vec![0, 7], "sorted by id inside a type");
+}
+
+#[test]
+fn a_fork_is_laid_out_as_createresfile_lays_it_out() {
+    // header (16) + 240 reserved bytes, data at 256; a new empty file is 256 + a 30-byte map = 286 bytes (Inside Macintosh: More
+    // Macintosh Toolbox, "Resource File Format"): a program that checks a fresh preferences file's length is checking exactly this
+    let empty = ForkBuilder::new().build();
+    assert_eq!(empty.len(), 286);
+    assert_eq!(&empty[..16], [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 30], "dataOff 256, mapOff 256, dataLen 0, mapLen 30");
+    assert!(empty[16..256].iter().all(|&b| b == 0), "the reserved area is zero");
+    let one = ForkBuilder::new().add(b"TEXT", 1, None, b"abc").build();
+    assert_eq!(u32::from_be_bytes(one[..4].try_into().unwrap()), 256);
+    assert_eq!(&one[256..263], [0, 0, 0, 3, b'a', b'b', b'c'], "length-prefixed data starts at 256");
+    assert_eq!(ResFork::parse(one).unwrap().data(0).unwrap(), b"abc");
 }

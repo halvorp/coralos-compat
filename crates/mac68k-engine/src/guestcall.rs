@@ -39,6 +39,8 @@ pub(crate) enum Frame {
     Vbl(crate::vbl::VblDone),
     /// An Apple Event handler ([`crate::appleevents`]): the program's frame is rebuilt around its result.
     Ae(crate::appleevents::AeDone),
+    /// A dialog's user-item draw procedure ([`crate::translate::useritems`]): the next one, or the program's state back.
+    UserItems(crate::translate::useritems::Run),
 }
 
 impl<U: GuestUi> Mac<U> {
@@ -68,6 +70,7 @@ impl<U: GuestUi> Mac<U> {
             Some(Frame::Decomp(done)) => { self.finish_decompress(cpu, done); true }
             Some(Frame::Vbl(done)) => { self.finish_vbl(cpu, done); true }
             Some(Frame::Ae(done)) => { self.finish_ae(cpu, done); true }
+            Some(Frame::UserItems(run)) => { self.next_user_item(cpu, run); true }
         }
     }
 }

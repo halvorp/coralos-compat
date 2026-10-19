@@ -312,6 +312,30 @@ fn menu_item_accessors_and_insert_menu_item_edit_the_menus_own_block() {
 }
 
 #[test]
+fn delete_menu_item_removes_the_item_moves_the_later_ones_up_and_their_enable_bits_with_them() {
+    let mut g = Rig::new();
+    put(&mut g.m, RES + 0x40, &pstr("One;Two;Three;Four"));
+    put(&mut g.m, RES + 0x70, &pstr("File"));
+    let mut p = Prog::new();
+    p.clr_l().w(300).l(RES + 0x70).trap(0xA931).pop_l(RES); // NewMenu(300, "File")
+    p.rgn_arg(RES).l(RES + 0x40).trap(0xA933); // AppendMenu(menu, "One;Two;Three;Four")
+    p.rgn_arg(RES).w(3).trap(0xA93A); // DisableItem(menu, 3): "Three" is off
+    p.rgn_arg(RES).w(2).trap(0xA952); // DeleteMenuItem(menu, 2): "Two" goes
+    p.rgn_arg(RES).w(2).l(RES + 0x80).trap(0xA946); // GetItem(menu, 2): the old item 3
+    p.rgn_arg(RES).w(9).trap(0xA952); // NEGATIVE CONTROL: item 9 of 3 is not an item
+    p.rgn_arg(RES).w(0).trap(0xA952); // and neither is item 0
+    p.rgn_arg(RES).w(3).l(RES + 0x100).trap(0xA946); // GetItem(menu, 3): "Four"
+    g.run(p.exit());
+    g.no_refusals();
+    assert_eq!(text(&g, RES + 0x80), "Three");
+    assert_eq!(text(&g, RES + 0x100), "Four");
+    let h = g.m.mem.read_u32(RES).unwrap();
+    let view = g.m.menu_view(h).unwrap();
+    assert_eq!(view.items.len(), 3, "one item deleted; the two out-of-range calls deleted nothing");
+    assert_eq!(view.flags & 0b1110, 0b1010, "Three (now item 2) is still disabled; One and Four (items 1 and 3) are enabled");
+}
+
+#[test]
 fn get_app_parms_names_the_application_and_hands_over_an_empty_finder_startup_list() {
     let fixture = mac68k_engine::fixture::test_app_macbinary();
     let mut m = mac68k_engine::Mac::new(guestui_abi::RecordingGuestUi::new()).unwrap();

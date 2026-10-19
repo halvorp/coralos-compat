@@ -127,13 +127,21 @@ fn screen_bits_into<U: GuestUi>(m: &mut Mac<U>, port: u32) -> Result<(), Refusal
     write_rect(&mut m.mem, port.wrapping_add(P_RECT), bounds)
 }
 
-fn open_port<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    let port = super::target::checked_port(c.args.get(0))?;
+/// `OpenPort`'s work without making the port current: the record at `port` becomes a fresh port over the screen's bitmap (Inside
+/// Macintosh I: `portBits` = `screenBits`, `portRect` = its bounds, `visRgn` that rectangle, `clipRgn` wide open). Returns the
+/// port's rectangle.
+pub(crate) fn open_screen_port<U: GuestUi>(m: &mut Mac<U>, port: u32) -> Result<Rect, Refusal> {
     m.mem.zero(port, PORT_SIZE).map_err(Refusal::mem("GrafPort"))?;
     screen_bits_into(m, port)?;
     let b = raster(read_rect(&m.mem, port.wrapping_add(P_RECT))?);
     let (vis, clip) = (m.new_region(&Region::from_rect(b))?, m.new_region(&Region::from_rect(WIDE_OPEN))?);
     init_fields(m, port, vis, clip)?;
+    Ok(b)
+}
+
+fn open_port<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let port = super::target::checked_port(c.args.get(0))?;
+    open_screen_port(m, port)?;
     set_the_port(m, port)?;
     Ok(Done { result: 0, log: format!("[quickdraw] OpenPort {port:#x}") })
 }
@@ -162,7 +170,6 @@ fn close_port<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
 }
 fn set_port_bits<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let port = current_port(m)?;
-    if m.qd.canvases.contains_key(&port) { return Err(Refusal(format!("SetPortBits: {port:#x} is a window's port; its bitmap is the window"))); }
     if is_cport(&m.mem, port) { return Err(Refusal(format!("SetPortBits: {port:#x} is a CGrafPort: its pixels are set with SetPortPix (SetPortBits would overwrite its portPixMap and portVersion)"))); }
     let e = Refusal::mem("BitMap");
     let b = m.mem.bytes(m.mem.span(c.args.get(0), 14).map_err(&e)?).map_err(&e)?.to_vec();

@@ -36,12 +36,16 @@ pub const CUR_STACK_BASE: u32 = 0x908; // Ptr: top of the application's stack
 pub const CUR_AP_NAME: u32 = 0x910; // Str31 (the table gives 32 bytes)
 pub const CUR_JT_OFFSET: u32 = 0x934; // short: the jump table's offset from A5
 pub const WINDOW_LIST: u32 = 0x9D6; // WindowPeek: front window
+pub const WMGR_PORT: u32 = 0x9DE; // GrafPtr: the Window Manager port (the desktop; toolbox.rs InitWindows)
+pub const DESK_PORT: u32 = 0x9E2; // GrafPtr: the port desk accessories draw the desktop with (the Window Manager port)
+pub const GRAY_RGN: u32 = 0x9EE; // RgnHandle: the desktop (the screen minus the menu bar and the rounded corners)
 pub const MENU_LIST: u32 = 0xA1C; // Handle: the menu bar's list
 pub const RES_LOAD: u32 = 0xA5E; // short: SetResLoad flag (the high byte is the Boolean)
 pub const RES_ERR: u32 = 0xA60; // short: the last Resource Manager result
 pub const APP_PARM_HANDLE: u32 = 0xAEC; // Handle: the Finder's startup information (message, count, files)
 pub const WIDTH_PTR: u32 = 0xB10; // Ptr: the Font Manager's global width table (fontmetrics.rs)
 pub const WIDTH_TAB_HANDLE: u32 = 0xB2A; // Handle: the same table
+pub const DLG_FONT: u32 = 0xAFA; // short: the font number the Dialog Manager sets in every dialog (0, the system font, until SetDAFont)
 pub const MBAR_HEIGHT: u32 = 0xBAA; // short
 pub const THE_GDEVICE: u32 = 0xCC8; // GDHandle: the current graphics device (SetGDevice)
 pub const MMU_32_BIT: u32 = 0xCB2; // byte: the Memory Manager's mode, true (1) = 32-bit addressing (Inside Macintosh: Memory)
@@ -55,8 +59,8 @@ pub static MAP: &[Global] = &[
     (THE_ZONE, 4, "TheZone"), (APPL_LIMIT, 4, "ApplLimit"), (TICKS, 4, "Ticks"), (MB_STATE, 1, "MBState"), (TIME, 4, "Time"), (MEM_ERR, 2, "MemErr"), (ROM85, 2, "ROM85"),
     (SYS_ZONE, 4, "SysZone"), (APPL_ZONE, 4, "ApplZone"), (LO_3_BYTES, 4, "Lo3Bytes"), (SCRN_BASE, 4, "ScrnBase"), (RAW_MOUSE, 4, "RawMouse"), (MOUSE, 4, "Mouse"), (CRSR_PIN, 8, "CrsrPin"), (MAIN_DEVICE, 4, "MainDevice"), (DEVICE_LIST, 4, "DeviceList"),
     (CUR_AP_REF_NUM, 2, "CurApRefNum"), (CURRENT_A5, 4, "CurrentA5"), (CUR_STACK_BASE, 4, "CurStackBase"),
-    (CUR_AP_NAME, 32, "CurApName"), (CUR_JT_OFFSET, 2, "CurJTOffset"), (WINDOW_LIST, 4, "WindowList"),
-    (MENU_LIST, 4, "MenuList"), (RES_LOAD, 2, "ResLoad"), (RES_ERR, 2, "ResErr"), (APP_PARM_HANDLE, 4, "AppParmHandle"), (WIDTH_PTR, 4, "WidthPtr"), (WIDTH_TAB_HANDLE, 4, "WidthTabHandle"), (MBAR_HEIGHT, 2, "MBarHeight"), (MMU_32_BIT, 1, "MMU32Bit"), (THE_GDEVICE, 4, "TheGDevice"),
+    (CUR_AP_NAME, 32, "CurApName"), (CUR_JT_OFFSET, 2, "CurJTOffset"), (WINDOW_LIST, 4, "WindowList"), (WMGR_PORT, 4, "WMgrPort"), (DESK_PORT, 4, "DeskPort"), (GRAY_RGN, 4, "GrayRgn"),
+    (MENU_LIST, 4, "MenuList"), (RES_LOAD, 2, "ResLoad"), (RES_ERR, 2, "ResErr"), (APP_PARM_HANDLE, 4, "AppParmHandle"), (DLG_FONT, 2, "DlgFont"), (WIDTH_PTR, 4, "WidthPtr"), (WIDTH_TAB_HANDLE, 4, "WidthTabHandle"), (MBAR_HEIGHT, 2, "MBarHeight"), (MMU_32_BIT, 1, "MMU32Bit"), (THE_GDEVICE, 4, "TheGDevice"),
 ];
 
 /// The emulated screen (a 1-bit Mac Plus-sized display: what a 1984-era application expects to find), until a real

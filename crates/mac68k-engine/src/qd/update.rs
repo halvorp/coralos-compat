@@ -42,8 +42,8 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     reg(m, 0xA929, "ValidRgn", &[Arg::L], None, valid_rgn::<U>)
 }
 
-fn begin_update<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    let win = super::target::checked_port(c.args.get(0))?;
+/// `BeginUpdate(win)`: `visRgn` narrows to `visRgn AND updateRgn` and the update region is emptied. Returns the narrowed region.
+pub(crate) fn begin_update_of<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<Region, Refusal> {
     m.require_window(win, "BeginUpdate")?;
     if m.qd.saved_vis.contains_key(&win) { return Err(Refusal(format!("BeginUpdate {win:#x}: already between BeginUpdate and EndUpdate"))); }
     let h = m.mem.read_u32(win.wrapping_add(P_VIS)).map_err(Refusal::mem("visRgn"))?;
@@ -52,14 +52,24 @@ fn begin_update<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
     narrowed.and_region(&m.qd.update.remove(&win).unwrap_or_default());
     m.write_region(h, &narrowed)?;
     m.qd.saved_vis.insert(win, vis);
+    Ok(narrowed)
+}
+/// `EndUpdate(win)`: the `visRgn` `BeginUpdate` narrowed comes back.
+pub(crate) fn end_update_of<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(), Refusal> {
+    m.require_window(win, "EndUpdate")?;
+    let vis = m.qd.saved_vis.remove(&win).ok_or_else(|| Refusal(format!("EndUpdate {win:#x}: no matching BeginUpdate")))?;
+    let h = m.mem.read_u32(win.wrapping_add(P_VIS)).map_err(Refusal::mem("visRgn"))?;
+    m.write_region(h, &vis)
+}
+
+fn begin_update<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = super::target::checked_port(c.args.get(0))?;
+    let narrowed = begin_update_of(m, win)?;
     Ok(Done { result: 0, log: format!("[quickdraw] BeginUpdate {win:#x}: visRgn narrowed to {} rect(s)", narrowed.rects().len()) })
 }
 fn end_update<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let win = super::target::checked_port(c.args.get(0))?;
-    m.require_window(win, "EndUpdate")?;
-    let vis = m.qd.saved_vis.remove(&win).ok_or_else(|| Refusal(format!("EndUpdate {win:#x}: no matching BeginUpdate")))?;
-    let h = m.mem.read_u32(win.wrapping_add(P_VIS)).map_err(Refusal::mem("visRgn"))?;
-    m.write_region(h, &vis)?;
+    end_update_of(m, win)?;
     Ok(Done { result: 0, log: format!("[quickdraw] EndUpdate {win:#x}") })
 }
 

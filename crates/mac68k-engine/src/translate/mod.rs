@@ -19,10 +19,12 @@
 //! generation, so the old ref is refused by name).
 pub mod alerts;
 pub mod controls;
+pub mod dialog_items;
 pub mod dialogs;
 pub mod fallback;
 pub mod input;
 pub mod lists;
+pub mod useritems;
 
 use crate::events::Delivered;
 use crate::machine::Mac;
@@ -130,6 +132,8 @@ impl<U: GuestUi> Mac<U> {
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     controls::register(m)?;
     dialogs::register(m)?;
+    dialog_items::register(m)?;
+    useritems::register(m)?;
     alerts::register(m)?;
     lists::register(m)
 }

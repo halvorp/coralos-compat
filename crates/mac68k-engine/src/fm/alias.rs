@@ -82,6 +82,19 @@ const SYSTEM_SUB: [(&[u8; 4], &str); 8] = [
 ];
 
 impl FileMgr {
+    /// The boot volume's System Folder with every standard subfolder: a real Mac has them from the start.
+    pub fn install_system_folder(&mut self) {
+        for (ty, _) in SYSTEM_SUB { let _ = self.find_folder(0, *ty); }
+    }
+
+    /// The working-directory reference number of the boot volume's System Folder: `SysEnvirons`' `sysVRefNum`.
+    pub fn system_folder_wd(&mut self) -> Result<i16, i16> {
+        let (vref, dir_id) = self.find_folder(0, *b"macs")?;
+        let vol = self.volume_of_vref(vref)?;
+        let dir = self.dir_node(vol, dir_id)?;
+        Ok(self.wd_for(vol, dir))
+    }
+
     /// `FindFolder`: the (vRefNum, dirID) of a standard folder, made on first use. `vref` 0 / -32768 (kOnSystemDisk) is the boot volume.
     pub fn find_folder(&mut self, vref: i16, folder_type: [u8; 4]) -> Result<(i16, u32), i16> {
         let vol = if vref == 0 || vref == i16::MIN { self.tree.volume(BOOT_VOLUME).unwrap_or(self.def_vol) } else { self.volume_of_vref(vref)? };

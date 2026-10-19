@@ -33,13 +33,11 @@ fn retro68_68k_samples_get_through_their_startup_and_the_trap_patch_and_stop_at_
     // The Retro68 runtime asks GetToolTrapAddress/GetOSTrapAddress what exists (traptable.rs) and then PATCHES a Toolbox trap
     // (_SetToolBoxTrapAddress, now modelled: the patch routine runs and chains to the original). HelloWorld then runs to its
     // event loop and OPENS ITS WINDOW; Raytracer polls `Button` and renders until the budget is spent (Button/GetMouse are modelled
-    // now: it used to stop at _Button); Dialog stops at _SetDialogItem (its user-item draw procedure is a guest callback).
-    for (app, stop) in [("Raytracer", None), ("Dialog", Some("_SetDialogItem ($A98E)"))] {
+    // now: it used to stop at _Button); Dialog sets its user item's draw procedure with SetDialogItem, which `ModalDialog` now calls (the
+    // Dialog Manager's user items, translate/useritems.rs), and waits in ModalDialog with nothing refused.
+    for app in ["Raytracer", "Dialog"] {
         let Some(m) = census(&format!("mac-retro68/68k/{app}.bin")) else { return };
-        match stop {
-            Some(s) => assert_eq!(m.refused, vec![format!("unimplemented trap {s}")], "{app}: {:#?}", m.log),
-            None => assert!(m.refused.is_empty(), "{app}: {:?}", m.refused),
-        }
+        assert!(m.refused.is_empty(), "{app}: {:?}", m.refused);
         if app != "Dialog" { assert!(m.log.iter().any(|l| l.contains("GetTrapAddress")), "{app}: the startup probe was answered: {:#?}", m.log); }
     }
     let Some(m) = census("mac-retro68/68k/HelloWorld.bin") else { return };
@@ -64,13 +62,23 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // Real shipped classic Mac applications (Macintosh Garden, owner-authorised local test use; docs/CORPUS.md, tools/corpus-apps-mac-garden.tsv).
     // Each pins how far the app gets TODAY; when a trap lands the stop moves on and the row is updated deliberately.
     for (app, stop) in [
-        ("mac/writenow/fx/z20_0/WriteNow 2.0.bin", "unimplemented trap _SetDialogItem ($A98E)"), // past the stray jump (Pack7), FixRatio, DrawGrowIcon, InsertMenuItem, FontMetrics
-        ("mac/writenow/fx/z22_1/WriteNow 2.2.bin", "unimplemented trap _SetDialogItem ($A98E)"), // past VInstall (a vertical-retrace task), SendBehind, FontMetrics
         ("mac/glider-pro/fx/Utilities_Moving Van.bin", "DrawPicture 0x"), // past SetControlReference: its PICT is a version-2 picture
         ("mac/simpletext/ux/SimpleText.rsrc", "unimplemented trap _TEStyleNew ($A83E)"), // 1.4: past Pack7 (register package), ResErr after GetNewMBar, Pack8 and the Finder's oapp event: its Untitled window wants styled TextEdit
     ] {
         let Some(m) = census(app) else { continue };
         assert!(m.refused.last().is_some_and(|r| r.contains(stop)), "{app}: {:?}\n{:#?}", m.refused.last(), m.log);
+    }
+    // WriteNow 2.0 sets its ruler dialog's twelve user items (SetDialogItem), has DrawDialog call the draw procedure (which composes its picture
+    // offscreen through SetPortBits on the dialog's own port, CopyBits it back, and returns through a flagged address), and runs on into its
+    // event loop: no missing trap at all. 2.2 gets as far as 2.0 and then jumps into low memory (the next wall, not a Toolbox routine).
+    if let Some(m) = census("mac/writenow/fx/z20_0/WriteNow 2.0.bin") {
+        assert!(m.refused.iter().all(|r| !r.contains("unimplemented")), "{:?}", m.refused);
+        for needle in ["[dialog] DrawDialog", "user item 1 of", "SetPortBits", "[quickdraw] CopyBits"] { assert!(m.log.iter().any(|l| l.contains(needle)), "{needle}: {:#?}", m.log.len()); }
+        assert!(!m.refused.iter().any(|r| r.contains("SetPBits")), "SetPortBits on a window's port is honoured now: {:?}", m.refused);
+    }
+    if let Some(m) = census("mac/writenow/fx/z22_1/WriteNow 2.2.bin") {
+        assert!(m.refused.iter().all(|r| !r.contains("unimplemented")), "no Toolbox routine is missing for 2.2 either: {:?}", m.refused);
+        assert!(m.refused.iter().any(|r| r.starts_with("DrawString: port") && r.contains("bounds (0,0,0,")), "the next wall: the offscreen BitMap it measures font names into has no rows: {:?}", m.refused.last());
     }
     // The WriteNow 4.0 installer now gets through GetAppParms and DrawDialog to its event loop: no missing trap at all.
     if let Some(m) = census("mac/writenow/fx40_1/Install WriteNow 4.0.bin") {
@@ -98,17 +106,23 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     let Some(m) = census_on("mac/glider-pro/fx/Glider PRO\u{2122}.bin", "mac-plus") else { return };
     assert!(m.log.iter().any(|l| l.contains("[dialog] ParamText [\"Need Color Quickdraw\"")), "{:#?}", m.log);
     let Some(m) = census("mac/glider-pro/fx/Glider PRO\u{2122}.bin") else { return };
-    assert!(m.refused.iter().all(|r| !r.contains("unimplemented")), "{:?}", m.refused);
     assert!(!m.log.iter().any(|l| l.contains("Need Color Quickdraw")), "the Macintosh II has Color QuickDraw: {:#?}", m.log);
     assert!(m.log.iter().any(|l| l.contains("[quickdraw] GetMainDevice")) && m.log.iter().any(|l| l.contains("[palette] HasDepth")), "it asked for the main device and its depths");
     assert!(m.log.iter().any(|l| l.contains("[toolbox] SetCCursor")), "its animated cursor ran");
-    assert!(m.log.iter().any(|l| l.contains("[file] OpenDF (HFS) -> -120")), "the next wall is the Preferences file: {:#?}", m.log);
+    // The Preferences file: SysEnvirons' sysVRefNum is the System Folder's working directory, Glider finds the Preferences folder in it
+    // (GetCatInfo), opens a working directory on it, and asks for "Glider Prefs" with PBOpenDF through FSDispatch ($A060: an IOParam block with
+    // NO ioDirID: it used to read the stack garbage after the block as a dirID and get dirNFErr -120). A first run has no such file: fnfErr.
+    assert!(m.log.iter().any(|l| l.contains("[file] open data fork \"Glider Prefs\"") && l.ends_with("-> -43")), "{:#?}", m.log);
+    assert!(!m.log.iter().any(|l| l.contains("-> -120")), "no dirNFErr: {:#?}", m.log);
+    assert!(m.refused.last().is_some_and(|r| r.contains("_SoundDispatch ($A800)")), "the next wall is the Sound Manager: {:?}", m.refused);
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.
-    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", "ModalDialog: filterProc"), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "unimplemented trap _Unimplemented ($A89F)")] {
+    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", ""), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "unimplemented trap _Unimplemented ($A89F)")] {
         let Some(m) = census(app) else { continue };
-        assert!(m.refused.last().is_some_and(|r| r.contains(stop)), "{app}: {:?}", m.refused);
+        // ResEdit finds itself (SetVol with GetVol's bare volume name restores the default directory) and accepts its fresh preferences file (a
+        // new resource fork is the 286 bytes CreateResFile writes), so it no longer declares itself or its preferences damaged: nothing refused.
+        if stop.is_empty() { assert!(m.refused.is_empty(), "{app}: {:?}", m.refused); } else { assert!(m.refused.last().is_some_and(|r| r.contains(stop)), "{app}: {:?}", m.refused); }
         assert!(!m.refused.iter().any(|r| r.contains("LoadSeg") || r.contains("cannot decompress")), "{app}: {:?}", m.refused);
         let expanded = m.log.iter().filter(|l| l.contains("[res] decompress")).count();
         assert!(expanded >= 3, "{app}: {expanded} decompressions ran in the guest");
@@ -126,6 +140,14 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     let Some(m) = census("mac/macwrite/u45/MacWrite.rsrc") else { return };
     assert!(!m.refused.iter().any(|r| r.starts_with("OpenPort")), "{:?}", m.refused);
     assert!(m.log.iter().any(|l| l.strip_prefix("[quickdraw] OpenPort 0x").is_some_and(|h| h.len() == 6 && h.starts_with("20"))), "OpenPort was called with the stripped pointer (no flag byte): {:#?}", m.log);
+    // MacWrite 4.5 under the Plus: ~130 `GetDialogItem(NIL, ...)` calls (and as many HiliteControl / GetDialogItemText on a garbage handle) after the
+    // activate event for its Clipboard window. THE CAUSE: its event loop calls `IsDialogEvent` with `subq.w #2,sp` (the result slot is NOT cleared) and
+    // tests the WORD it gets back with `tst.w (sp)+`; the engine wrote only the Boolean's high byte, so the stack garbage in the low byte made a FALSE
+    // answer look TRUE and the program went on to its dialog handler with no dialog. A Boolean result now clears the slot's low byte (pascal.rs).
+    if let Some(m) = census_on("mac/macwrite/u45/MacWrite.rsrc", "mac-plus") {
+        assert!(m.log.iter().any(|l| l.contains("[dialog] IsDialogEvent what 8 -> false")), "the activate event for the Clipboard window is not a dialog event: {:#?}", m.log.len());
+        assert!(!m.refused.iter().any(|r| r.contains("GetDialogItem") || r.contains("HiliteControl") || r.contains("GetDialogItemText")), "{:?}", &m.refused[..m.refused.len().min(5)]);
+    }
     // NEGATIVE CONTROL: on a 32-bit machine the same pointer is outside RAM, as before the 24-bit work.
     let Some(m) = census_in("mac/macwrite/u45/MacWrite.rsrc", mac68k_engine::addrmode::AddrMode::Bit32) else { return };
     assert!(m.refused.iter().any(|r| r.starts_with("OpenPort: GrafPort: pointer")), "{:?}", m.refused);
@@ -140,8 +162,8 @@ fn writenow_2_x_ran_into_a_bus_fault_loop_because_it_jumps_through_a_flagged_ret
     for app in ["mac/writenow/fx/z20_0/WriteNow 2.0.bin", "mac/writenow/fx/z22_1/WriteNow 2.2.bin"] {
         let Some(m) = census(app) else { continue };
         assert!(m.log.iter().any(|l| l.contains("GetResource 'CODE' 2")), "{app}: {:#?}", m.log);
-        let (stats, last) = (m.unimplemented_at.last().copied(), m.refused.last().cloned());
-        assert!(stats.is_some() && last.as_deref().is_some_and(|l| l.starts_with("unimplemented trap")), "{app}: it runs on past the International Utilities package (modelled in intl.rs): {last:?}");
+        // past the International Utilities package (modelled in intl.rs) with no Toolbox routine missing
+        assert!(m.unimplemented_at.is_empty(), "{app}: {:?}", m.refused.last());
         assert!(m.log.iter().any(|l| l.contains("[pack6]") || l.contains("[font] SetFScaleDisable") || l.contains("[font]")), "{app}: it reached Pack6 / the Font Manager: {:#?}", m.log);
         // NEGATIVE CONTROL: the 32-bit machine reproduces the old symptom (no trap reached; the budget spent on bus faults).
         let Some(c) = census_in(app, mac68k_engine::addrmode::AddrMode::Bit32) else { continue };

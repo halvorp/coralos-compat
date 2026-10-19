@@ -53,6 +53,7 @@ const C_HILITE: u32 = 17;
 const C_VALUE: u32 = 18;
 const C_MIN: u32 = 20;
 const C_MAX: u32 = 22;
+const C_ACTION: u32 = 32;
 const C_REF_CON: u32 = 36;
 const C_TITLE: u32 = 40;
 /// `controlList` in a WindowRecord.
@@ -579,7 +580,9 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA96D, &[L], None, draw_one::<U>)?;
     m.register(0xA953, &[L, L], None, updt_control::<U>)?;
     m.register(0xA95A, &[L], Some(L), get_ref::<U>)?;
-    m.register(0xA95B, &[L, L], None, set_ref::<U>)
+    m.register(0xA95B, &[L, L], None, set_ref::<U>)?;
+    m.register(0xA96A, &[L], Some(L), get_action::<U>)?;
+    m.register(0xA96B, &[L, L], None, set_action::<U>)
 }
 
 /// `GetCRefCon` / `SetCRefCon` (the traps are named `GetControlReference` / `SetControlReference`): the program's own longword
@@ -589,6 +592,21 @@ fn get_ref<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Re
     let p = m.control_rec(ctl, "GetCRefCon")?;
     let v = m.mem.read_u32(p + C_REF_CON).map_err(Refusal::mem("ControlRecord"))?;
     Ok(Done { result: v, log: format!("[control] GetCRefCon {ctl:#x} -> {v:#x}") })
+}
+/// `GetControlAction(theControl): ProcPtr` / `SetControlAction(theControl, actionProc)`: `contrlAction`, the program's action procedure
+/// `TrackControl` calls while the user holds a part (the default for a `TrackControl` given -1). The field is the real one; the host
+/// tracks the native control itself, so the procedure is stored and handed back exactly but is not called by the gesture.
+fn get_action<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let ctl = c.args.get(0);
+    let p = m.control_rec(ctl, "GetControlAction")?;
+    let v = m.mem.read_u32(p + C_ACTION).map_err(Refusal::mem("ControlRecord"))?;
+    Ok(Done { result: v, log: format!("[control] GetControlAction {ctl:#x} -> {v:#x}") })
+}
+fn set_action<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (ctl, v) = (c.args.get(0), c.args.get(1));
+    let p = m.control_rec(ctl, "SetControlAction")?;
+    m.mem.write_u32(p + C_ACTION, v).map_err(Refusal::mem("ControlRecord"))?;
+    done(format!("[control] SetControlAction {ctl:#x} = {v:#x} (stored in contrlAction; the host tracks the native control, so the procedure is not called)"))
 }
 fn set_ref<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (ctl, v) = (c.args.get(0), c.args.get(1));

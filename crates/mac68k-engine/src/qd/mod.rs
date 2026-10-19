@@ -8,7 +8,8 @@
 //!   pen 1 = black, the palette `[white, black]`; a colour window's (`NewCWindow`) is 8 bits deep and its pen numbers are the
 //!   entries of its PixMap's colour table ([`crate::cqd`]). The window's `portBits` (or `portPixMap`) still names the screen (a
 //!   program that reads it is not lied to), but drawing goes to the canvas, in local coordinates (`pixel = local - portRect.topleft`).
-//! * any other port (an `OpenPort`ed offscreen one with `SetPortBits`, an `OpenCPort`ed one over a PixMap) draws into a REAL
+//! * any other port (an `OpenPort`ed offscreen one with `SetPortBits`, an `OpenCPort`ed one over a PixMap), and a window's port whose
+//!   `portBits` the program redirected with `SetPortBits` to a BitMap of its own, draws into a REAL
 //!   packed BitMap / PixMap in guest memory (1, 2, 4 or 8 bits): it is unpacked to a chunky bitmap, drawn into, and packed back
 //!   ([`target`]).
 //!
@@ -26,6 +27,7 @@ pub mod lifecycle;
 pub mod plane;
 pub mod port;
 pub mod regions;
+pub mod scroll;
 pub mod shapes;
 pub mod stretch;
 pub mod target;
@@ -85,6 +87,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     draw::register(m)?;
     regions::register(m)?;
     copybits::register(m)?;
+    scroll::register(m)?;
     origin::register(m)?;
     picture::register(m)?;
     colorpen::register(m)?;

@@ -25,7 +25,7 @@
 //! (the standard filtering applies), never ignored silently.
 use super::{guest_rect, Obj};
 use crate::machine::{Call, Done, Mac};
-use crate::pascal::{read_pstring, Arg, Rect};
+use crate::pascal::{read_pstring, read_rect, Arg, Rect};
 use crate::toolbox::WindowSpec;
 use crate::Refusal;
 use alloc::collections::{BTreeMap, VecDeque};
@@ -43,7 +43,7 @@ const DR_DEF_ITEM: u32 = 168;
 
 /// What a DITL item type is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Item { Control { proc_id: u16 }, ResControl, StaticText, EditText, NoContract(&'static str) }
+pub enum Item { Control { proc_id: u16 }, ResControl, StaticText, EditText, /** the program's own drawing: its handle is a draw PROCEDURE ([`super::useritems`]) */ User, NoContract(&'static str) }
 
 /// THE dialog item table: type (disabled bit masked off) -> item.
 pub const ITEM_TABLE: &[(u8, Item)] = &[
@@ -55,7 +55,7 @@ pub const ITEM_TABLE: &[(u8, Item)] = &[
     (16, Item::EditText),
     (32, Item::NoContract("iconItem: an ICON is drawn by the program or not at all")),
     (64, Item::NoContract("picItem: a PICT is drawn by the program or not at all")),
-    (0, Item::NoContract("userItem: the program's own drawing (a content plane)")),
+    (0, Item::User),
 ];
 
 impl Item {
@@ -77,7 +77,7 @@ pub type Row = retro_translate::Row<Effect, Post>;
 /// items use that one).
 pub const TABLE: &[Row] = &[row(Role::Field, On::CommitText, Effect::SetText, Some(Post::ItemHit))];
 
-fn item_of(ty: u8) -> Option<Item> { ITEM_TABLE.iter().find(|(t, _)| *t == ty & 0x7F).map(|(_, i)| *i) }
+pub(super) fn item_of(ty: u8) -> Option<Item> { ITEM_TABLE.iter().find(|(t, _)| *t == ty & 0x7F).map(|(_, i)| *i) }
 
 /// A dialog item as the engine keeps it. Item `n` (1-based) is `list[n - 1]`.
 #[derive(Debug, Clone)]
@@ -99,12 +99,12 @@ pub struct State {
 }
 
 /// What a dialog or alert window is built from.
-pub(crate) struct Def { pub what: String, pub rect: Rect, pub title: String, pub proc_id: u16, pub go_away: bool, pub ref_con: u32, pub ditl: i16, pub show: bool }
+pub(crate) struct Def { pub what: String, pub rect: Rect, pub title: String, pub proc_id: u16, pub go_away: bool, pub ref_con: u32, pub ditl: i16, pub show: bool, /** `NewDialog`'s item list: the dialog uses the program's own handle, as the Dialog Manager does (`GetNewDialog` and alerts copy a `DITL` resource) */ pub items: Option<u32> }
 
-struct Raw { rect: Rect, ty: u8, data: Vec<u8>, at: usize }
+pub(super) struct Raw { pub rect: Rect, pub ty: u8, pub data: Vec<u8>, pub at: usize }
 
 /// `DITL`: count - 1 (2), then per item: placeholder (4), rect (8), type (1), length (1), data (padded to even).
-fn parse_ditl(b: &[u8]) -> Result<Vec<Raw>, Refusal> {
+pub(super) fn parse_ditl(b: &[u8]) -> Result<Vec<Raw>, Refusal> {
     let bad = |what: &str| Refusal(format!("DITL: {what} ({} bytes)", b.len()));
     if b.len() < 2 { return Err(bad("shorter than its count")); }
     let n = i32::from(i16::from_be_bytes([b[0], b[1]])) + 1;
@@ -141,11 +141,11 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// The (dialog, 0-based slot) a text handle belongs to.
-    fn text_slot(&self, h: u32) -> Option<(u32, usize)> {
+    pub(super) fn text_slot(&self, h: u32) -> Option<(u32, usize)> {
         self.tr.dlg.dialogs.iter().find_map(|(&w, d)| d.list.iter().position(|s| s.handle == h && matches!(s.item, Item::StaticText | Item::EditText)).map(|i| (w, i)))
     }
 
-    fn sync_text(&mut self, win: u32, idx: usize) -> Result<(), Refusal> {
+    pub(super) fn sync_text(&mut self, win: u32, idx: usize) -> Result<(), Refusal> {
         let slot = self.tr.dlg.dialogs[&win].list[idx].clone();
         let text = self.handle_text(slot.handle)?;
         self.sync_projection(win, Obj::Text(slot.handle), Some(text_model(&slot, text)))
@@ -244,26 +244,41 @@ impl<U: GuestUi> Mac<U> {
         let be = |i: usize| i16::from_be_bytes([b[i], b[i + 1]]);
         let title: String = b[21..21 + b[20] as usize].iter().map(|&x| char::from(x)).collect();
         let def = Def { what: format!("GetNewDialog {id}"), rect: Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) }, title, proc_id: be(8) as u16, go_away: b[12] != 0,
-            ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]), ditl: be(18), show: b[10] != 0 };
+            ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]), ditl: be(18), show: b[10] != 0, items: None };
         self.build_dialog(def, storage, behind).map(Some)
     }
 
     /// Build a dialog window from its definition (a `DLOG`, or an `ALRT` for [`super::alerts`]) and its `DITL`.
     pub(crate) fn build_dialog(&mut self, d: Def, storage: u32, behind: u32) -> Result<u32, Refusal> {
         let id = &d.what;
-        let ditl = self.get_resource(*b"DITL", d.ditl, false).map_err(|e| Refusal(format!("{id}: DITL {} is missing (resError {e})", d.ditl)))?;
-        let src = self.handle_bytes(ditl).unwrap_or_default();
+        let (src, own_items) = match d.items {
+            Some(h) => (self.handle_bytes(h).ok_or_else(|| Refusal(format!("{id}: the item list {h:#x} is not a live handle")))?, Some(h)),
+            None => {
+                let ditl = self.get_resource(*b"DITL", d.ditl, false).map_err(|e| Refusal(format!("{id}: DITL {} is missing (resError {e})", d.ditl)))?;
+                (self.handle_bytes(ditl).unwrap_or_default(), None)
+            }
+        };
         let raw = parse_ditl(&src)?;
-        let own = if storage == 0 { Some(self.mm.new_ptr(&mut self.mem, &mut self.heap, RECORD_SIZE, true).map_err(|e| Refusal(format!("GetNewDialog: no memory for a DialogRecord (memFullErr {e})")))?) } else { None };
+        let own = if storage == 0 { Some(self.mm.new_ptr(&mut self.mem, &mut self.heap, RECORD_SIZE, true).map_err(|e| Refusal(format!("{id}: no memory for a DialogRecord (memFullErr {e})")))?) } else { None };
         let record = own.unwrap_or(storage);
         self.mem.zero(record, RECORD_SIZE).map_err(Refusal::mem("DialogRecord"))?;
-        let items = self.mm.new_handle(&mut self.mem, &mut self.heap, src.len() as u32, false).map_err(|e| Refusal(format!("GetNewDialog: no memory for the item list (memFullErr {e})")))?;
-        let ip = self.mm.block(items).map(|b| b.ptr).ok_or_else(|| Refusal("GetNewDialog: the item list has no block".into()))?;
-        self.mem.write_bytes(ip, &src).map_err(Refusal::mem("DITL"))?;
+        let items = match own_items {
+            Some(h) => h,
+            None => {
+                let h = self.mm.new_handle(&mut self.mem, &mut self.heap, src.len() as u32, false).map_err(|e| Refusal(format!("{id}: no memory for the item list (memFullErr {e})")))?;
+                let at = self.mm.block(h).map(|b| b.ptr).ok_or_else(|| Refusal(format!("{id}: the item list has no block")))?;
+                self.mem.write_bytes(at, &src).map_err(Refusal::mem("DITL"))?;
+                h
+            }
+        };
+        let ip = self.mm.block(items).map(|b| b.ptr).ok_or_else(|| Refusal(format!("{id}: the item list has no block")))?;
         let spec = WindowSpec { storage: record, rect: d.rect, title: d.title, visible: false, proc_id: d.proc_id, behind, go_away: d.go_away, ref_con: d.ref_con };
         let win = self.make_window(spec)?;
         let e = Refusal::mem("DialogRecord");
         self.mem.write_u32(win + DR_ITEMS, items).map_err(&e)?;
+        self.mem.write_u16(win + crate::toolbox::WR_KIND, crate::toolbox::DIALOG_KIND).map_err(&e)?; // windowKind: dialogKind, not userKind
+        let dlg_font = self.mem.read_u16(crate::lowmem::DLG_FONT).map_err(&e)?; // the Dialog Manager sets the dialog's font (SetDAFont changes it)
+        self.mem.write_u16(win + crate::qd::port::P_TX_FONT, dlg_font).map_err(&e)?;
         self.mem.write_u16(win + DR_EDIT_FIELD, 0xFFFF).map_err(&e)?;
         self.mem.write_u16(win + DR_DEF_ITEM, 1).map_err(&e)?;
         self.tr.dlg.dialogs.insert(win, Dialog { items, list: Vec::new(), storage: own });
@@ -295,6 +310,7 @@ impl<U: GuestUi> Mac<U> {
                 self.set_handle_text(h, &text)?;
                 h
             }
+            Item::User => { self.log.push(format!("[dialog] item {n} of {win:#x}: userItem (the program sets its draw procedure with SetDialogItem)")); 0 }
             Item::NoContract(why) => { self.log.push(format!("[dialog] item {n} of {win:#x}: {why}; not shown")); 0 }
         };
         Ok(Slot { raw_type: r.ty, rect: r.rect, handle, item })
@@ -321,6 +337,19 @@ fn get_new_dialog<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<D
     }
 }
 
+/// `NewDialog(dStorage, boundsRect, title, visible, procID, behind, goAwayFlag, refCon, items): DialogPtr` (Inside Macintosh I, "The
+/// Dialog Manager"): a dialog from a program-built item list. `dStorage` NIL has the Dialog Manager allocate the `DialogRecord`; `behind`
+/// -1 puts the window in front and NIL behind all. The item list is the program's own handle (it is not copied), and every item's
+/// placeholder long is replaced with its handle as in `GetNewDialog`; `DisposeDialog` disposes the list.
+fn new_dialog<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (storage, rect, title, visible, proc_id, behind) = (c.args.get(0), read_rect(&m.mem, c.args.get(1))?, read_pstring(&m.mem, c.args.get(2))?, c.args.get(3) as u8 != 0, c.args.get(4) as u16, c.args.get(5));
+    let (go_away, ref_con, items) = (c.args.get(6) as u8 != 0, c.args.get(7), c.args.get(8));
+    if items == 0 { return Err(Refusal("NewDialog: the item list is NIL".into())); }
+    let def = Def { what: "NewDialog".into(), rect, title, proc_id, go_away, ref_con, ditl: 0, show: visible, items: Some(items) };
+    let win = m.build_dialog(def, storage, behind)?;
+    Ok(Done { result: win, log: format!("[dialog] NewDialog -> {win:#x} ({} items)", m.tr.dlg.dialogs[&win].list.len()) })
+}
+
 fn dispose_dialog<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let win = c.args.get(0);
     if !m.tr.dlg.dialogs.contains_key(&win) { return Err(Refusal(format!("DisposeDialog: {win:#x} is not a dialog"))); }
@@ -328,7 +357,7 @@ fn dispose_dialog<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<D
     done(format!("[dialog] DisposeDialog {win:#x}"))
 }
 
-fn slot_of<U: GuestUi>(m: &Mac<U>, dlg: u32, n: i16, what: &str) -> Result<Slot, Refusal> {
+pub(super) fn slot_of<U: GuestUi>(m: &Mac<U>, dlg: u32, n: i16, what: &str) -> Result<Slot, Refusal> {
     let d = m.tr.dlg.dialogs.get(&dlg).ok_or_else(|| Refusal(format!("{what}: {dlg:#x} is not a dialog")))?;
     d.list.get((n as isize - 1).max(-1) as usize).filter(|_| n >= 1).cloned().ok_or_else(|| Refusal(format!("{what}: dialog {dlg:#x} has no item {n} (it has {})", d.list.len())))
 }
@@ -367,8 +396,9 @@ fn get_dialog_item_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Re
 /// `ModalDialog(filterProc, VAR itemHit)`: return a queued hit of the frontmost dialog, else block until one arrives.
 fn modal_dialog<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (filter, at) = (c.args.get(0), c.args.get(1));
-    if filter != 0 { m.note_refusal("ModalDialog", format!("filterProc {filter:#x} is a guest callback and is not called; the standard filtering applies")); }
     let win = m.front_dialog().ok_or_else(|| Refusal("ModalDialog: no dialog is open".into()))?;
+    if m.update_modal_dialog(cpu, win)? { return done(format!("[dialog] ModalDialog {win:#x}: the dialog's user items are drawn first, then the call runs again")); }
+    if filter != 0 { m.note_refusal("ModalDialog", format!("filterProc {filter:#x} is a guest callback and is not called; the standard filtering applies")); }
     if let Some(item) = m.take_hit(win) {
         m.mem.write_u16(at, item as u16).map_err(Refusal::mem("itemHit"))?;
         m.tr.dlg.modal = None;
@@ -418,7 +448,13 @@ fn is_dialog_event<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<
 /// hit is returned: TRUE, with `theDialog` and `itemHit` set. Otherwise FALSE and both are left alone. What a real
 /// `DialogSelect` also does with an event (drawing the items on an update, the text-edit field's key handling) the host's native
 /// controls already did, so an update or activate event for a dialog window is simply FALSE here.
-fn dialog_select<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+fn dialog_select<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let e = Refusal::mem("EventRecord");
+    let (what, message) = (m.mem.read_u16(c.args.get(0)).map_err(&e)?, m.mem.read_u32(c.args.get(0) + 2).map_err(&e)?);
+    if what == crate::events::UPDATE_EVT && m.tr.dlg.dialogs.contains_key(&message) {
+        m.update_dialog_event(cpu, message)?;
+        return Ok(Done { result: 0, log: format!("[dialog] DialogSelect -> FALSE (update event: {message:#x} is drawn)") });
+    }
     let (dlg_out, item_out) = (c.args.get(1), c.args.get(2));
     let Some((dlg, item)) = m.tr.dlg.hits.pop_front() else { return Ok(Done { result: 0, log: "[dialog] DialogSelect -> FALSE (no item hit pending)".into() }) };
     m.mem.write_u32(dlg_out, dlg).map_err(Refusal::mem("DialogSelect theDialog"))?;
@@ -442,24 +478,14 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA97F, &[Arg::P], Some(Arg::B), is_dialog_event::<U>)?;
     m.register(0xA980, &[Arg::P, Arg::P, Arg::P], Some(Arg::B), dialog_select::<U>)?;
     m.register(0xA97C, &[W, L, L], Some(L), get_new_dialog::<U>)?;
+    m.register(0xA97D, &[Arg::P, Arg::P, Arg::P, Arg::B, W, L, Arg::B, L, L], Some(L), new_dialog::<U>)?;
     m.register(0xA983, &[L], None, dispose_dialog::<U>)?;
     m.register(0xA98D, &[L, W, L, L, L], None, get_dialog_item::<U>)?;
     m.register(0xA98F, &[L, L], None, set_dialog_item_text::<U>)?;
     m.register(0xA990, &[L, L], None, get_dialog_item_text::<U>)?;
-    m.register(0xA981, &[L], None, draw_dialog::<U>)?;
-    m.register(0xA978, &[L, L], None, draw_dialog::<U>)?;
     m.register(0xA982, &[L], None, close_dialog::<U>)?;
     m.register(0xA97E, &[L, W, W, W], None, select_dialog_item_text::<U>)?;
     m.register(0xA991, &[L, L], None, modal_dialog::<U>)
-}
-
-/// `DrawDialog(theDialog)` / `UpdtDialog(theDialog, updateRgn)`: draw the items. Controls and text items are the host's native
-/// parts, already shown and kept current as the program changes them, so there is nothing to redraw; the call only checks the
-/// argument is a dialog (the update region would only clip).
-fn draw_dialog<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    let win = c.args.get(0);
-    if !m.tr.dlg.dialogs.contains_key(&win) { return Err(Refusal(format!("{}: {win:#x} is not a dialog", c.name))); }
-    done(format!("[dialog] {} {win:#x} (items are native parts, already current)", c.name))
 }
 
 /// `CloseDialog(theDialog)`: take the dialog's items and window away. (The real call leaves the DialogRecord the program supplied

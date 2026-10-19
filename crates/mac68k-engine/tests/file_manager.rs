@@ -254,3 +254,66 @@ fn open_rf_perm_opens_a_resource_file_with_the_asked_permission_and_the_first_re
     let l = m.fm.locate(0, 0, Some(b"Prefs")).unwrap();
     assert_ne!(m.fm.open(&l, false, 1).unwrap(), mac68k_engine::resmgr::APP_REF_NUM);
 }
+
+#[test]
+fn open_df_through_fs_dispatch_has_no_dir_id_and_through_hfs_dispatch_has_one() {
+    // `FSDispatch` ($A060) selector $1A is PBOpenDF on a 50-byte IOParam block: there is no ioDirID in it (what sits at offset 48 is the
+    // caller's stack garbage), and the directory is the working directory in ioVRefNum. `HFSDispatch` ($A260) is PBHOpenDF, whose
+    // ioDirID is read. Glider PRO opens "Glider Prefs" through the first form and got dirNFErr from reading the garbage as a dirID.
+    let mut m = machine();
+    let root = m.fm.def_vol;
+    let prefs = m.fm.tree.create_dir(root, "Preferences").unwrap();
+    m.fm.tree.put_file(prefs, "Glider Prefs", b"data".to_vec()).unwrap();
+    let wd = m.fm.wd_for(root, prefs);
+    set(&mut m, NAME, &pstr("Glider Prefs"));
+    setl(&mut m, PB + 18, NAME);
+    setw(&mut m, PB + 22, wd as u16);
+    m.mem.write_u8(PB + 27, 1).unwrap(); // fsRdPerm
+    setl(&mut m, PB + 48, 0x1f); // garbage past the 50-byte block
+    let mut a = Asm::default();
+    a.moveq_d0(0x1A).lea_a0(PB).trap(0xA060).d0_to_w(OUT);
+    run(&mut m, &a);
+    assert_eq!(w(&m, OUT), 0, "{:?}", m.log);
+    assert!(w(&m, PB + 24) > 0 && m.fm.open_fork(w(&m, PB + 24)).is_some_and(|f| !f.rsrc), "a data fork is open");
+    // NEGATIVE CONTROL: the same block through HFSDispatch reads that 0x1f as the dirID: directory 0x1f does not exist (dirNFErr)
+    let mut b = Asm::default();
+    b.moveq_d0(0x1A).lea_a0(PB).trap(0xA260).d0_to_w(OUT + 2);
+    run(&mut m, &b);
+    assert_eq!(w(&m, OUT + 2), -120);
+    // ... and with the real dirID of the directory it opens
+    let prefs_id = m.fm.dir_id(prefs);
+    setl(&mut m, PB + 48, prefs_id);
+    let mut c = Asm::default();
+    c.moveq_d0(0x1A).lea_a0(PB).trap(0xA260).d0_to_w(OUT + 4);
+    run(&mut m, &c);
+    assert_eq!(w(&m, OUT + 4), 0);
+}
+
+#[test]
+fn set_vol_takes_the_bare_volume_name_get_vol_returned_and_restores_the_volume_root() {
+    // GetVol answers "Macintosh HD" (no colon) and programs hand exactly that, with the vRefNum, to SetVol to put the default back:
+    // that is the volume's root directory, not a folder called "Macintosh HD" in the current directory (ResEdit 2.1.3 failed this).
+    let mut m = machine();
+    let root = m.fm.def_vol;
+    let docs = m.fm.tree.create_dir(root, "Docs").unwrap();
+    m.fm.def_dir = docs;
+    set(&mut m, NAME, &pstr("Macintosh HD"));
+    setl(&mut m, PB + 18, NAME);
+    setw(&mut m, PB + 22, 0xFFFF);
+    let mut a = Asm::default();
+    a.lea_a0(PB).trap(0xA015).d0_to_w(OUT); // _SetVol
+    run(&mut m, &a);
+    assert_eq!((w(&m, OUT), m.fm.def_dir), (0, root), "the default directory is the volume's root again");
+    // NEGATIVE CONTROLS: a bare name that is no volume is an ordinary relative name (Docs, here), and a missing one is dirNFErr
+    set(&mut m, NAME, &pstr("Docs"));
+    let mut b = Asm::default();
+    b.lea_a0(PB).trap(0xA015).d0_to_w(OUT + 2);
+    run(&mut m, &b);
+    assert_eq!((w(&m, OUT + 2), m.fm.def_dir), (0, docs));
+    set(&mut m, NAME, &pstr("Nowhere"));
+    let mut c = Asm::default();
+    c.lea_a0(PB).trap(0xA015).d0_to_w(OUT + 4);
+    run(&mut m, &c);
+    assert_eq!(w(&m, OUT + 4), -120);
+    assert_eq!(m.fm.def_dir, docs, "a refused SetVol leaves the default alone");
+}

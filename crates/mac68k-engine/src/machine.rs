@@ -106,6 +106,8 @@ pub struct Mac<U: GuestUi> {
     pub(crate) call_stack: Vec<crate::guestcall::Frame>,
     /// A resource decompression a handler queued; the A-line bridge runs it and retries the trap (compressed.rs).
     pub(crate) dcmp_pending: Option<crate::compressed::Decomp>,
+    /// A dialog draw that has user-item procedures to run once the trap that asked has finished ([`crate::translate::useritems`]).
+    pub(crate) pending_user_items: Option<crate::translate::useritems::Run>,
     /// True while a registered handler runs on the real CPU (a decompression can only be deferred then).
     pub(crate) in_trap: bool,
     /// Trap patches (`_SetTrapAddress`): trap key -> the guest routine that replaces it.
@@ -138,8 +140,9 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), profile: crate::profile::DEFAULT,
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), profile: crate::profile::DEFAULT,
         };
+        m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start
         lowmem::init(&mut m.mem)?;
         lowmem::set_rom85(&mut m.mem, m.profile.rom85)?;
         m.set_address_mode(crate::addrmode::AddrMode::Bit24)?; // a classic 68k Mac boots in 24-bit mode
@@ -254,7 +257,7 @@ impl<U: GuestUi> Host for Mac<U> {
     fn mem(&mut self) -> &mut GuestMem { &mut self.mem }
 
     /// The only `$4AFC` is the completion trampoline ([`crate::guestcall::TRAMPOLINE`]); any other ILLEGAL stays the 68k exception.
-    fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool { pc == crate::guestcall::TRAMPOLINE && self.leave_guest(cpu) }
+    fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool { self.mem.strip(pc) == crate::guestcall::TRAMPOLINE && self.leave_guest(cpu) } // a 24-bit program returns through addresses it has flagged in the high byte (WriteNow's segment glue): the bus ignores it, so must this
 
     fn aline(&mut self, cpu: &mut Cpu, opcode: u16, pc: u32) -> bool {
         let pc = self.mem.strip(pc);
@@ -306,6 +309,7 @@ impl<U: GuestUi> Host for Mac<U> {
                     }
                     Err(Refusal(e)) => { self.note_refusal(name, e); cpu.halt(); }
                 }
+                if let Some(run) = self.pending_user_items.take() { self.enter_user_items(cpu, run); }
             }
             Conv::Os(handler) => {
                 let mut regs = Regs::read(cpu, opcode);

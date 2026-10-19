@@ -134,3 +134,28 @@ fn radio_and_popup_parts_come_from_the_cdef_geometry() {
     assert_eq!(part_at(row_of(1008).unwrap(), &f(1008), 10, 10), 10);
     assert_eq!(part_at(row_of(1008).unwrap(), &f(1008), 30, 10), 0, "outside the rect no part is hit");
 }
+
+#[test]
+fn control_action_is_the_real_contrl_action_field_read_and_written_by_get_and_set_control_action() {
+    let mut rig = Rig::new();
+    let win = rig.win;
+    set_rect(&mut rig.m, RECT, 10, 20, 34, 140);
+    put(&mut rig.m, TITLE, &pstr("Go"));
+    let mut p = Prog::new();
+    common::ctl::new_control(&mut p, win, RECT, TITLE, 0, 1, 0, OUT);
+    p.clr_l().rgn_arg(OUT).trap(0xA96A).pop_l(OUT + 4); // GetControlAction: NIL until set
+    p.rgn_arg(OUT).l(0x4000).trap(0xA96B); // SetControlAction(ctl, 0x4000)
+    p.clr_l().rgn_arg(OUT).trap(0xA96A).pop_l(OUT + 8);
+    rig.run(p.exit());
+    rig.no_refusals();
+    let ctl = rig.m.mem.read_u32(OUT).unwrap();
+    assert_eq!((rig.m.mem.read_u32(OUT + 4).unwrap(), rig.m.mem.read_u32(OUT + 8).unwrap()), (0, 0x4000));
+    let rec = rig.m.mem.read_u32(ctl).unwrap();
+    assert_eq!(rig.m.mem.read_u32(rec + 32).unwrap(), 0x4000, "contrlAction is at offset 32 of the ControlRecord");
+    // NEGATIVE CONTROL: a handle that is not a control is refused by name and nothing is written
+    let mut q = Prog::new();
+    q.l(0x1234).l(0x5000).trap(0xA96B);
+    rig.m.start(&q.exit().0, 0).unwrap();
+    rig.m.run_loop(100_000).unwrap();
+    assert!(rig.m.refused.iter().any(|r| r.contains("SetControlAction")), "{:?}", rig.m.refused);
+}

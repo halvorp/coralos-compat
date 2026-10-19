@@ -27,7 +27,7 @@ fn hello_mac_opens_then_closes_a_window_on_guestui() {
         UiCall::CloseWindow(win),
     ]);
     // The Pascal frames balanced: NewWindow's result reached the program's A3 and DisposeWindow found that very window.
-    assert_eq!(m.mm.live_ptrs(), 0, "DisposeWindow gave the WindowRecord back");
+    assert_eq!(m.mm.live_ptrs(), 1, "DisposeWindow gave the WindowRecord back (what is left is the Window Manager port InitWindows made)");
     assert!(m.windows.is_empty());
     assert_eq!(m.log.len(), 10, "{:#?}", m.log);
     assert!(m.log[0].contains("InitGraf") && m.log[8].starts_with("[toolbox] DisposeWindow"), "{:#?}", m.log);

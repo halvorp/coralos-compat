@@ -38,7 +38,12 @@ fn sys_environs_describes_the_machine_the_engine_is() {
     assert_eq!(rec[3], 3, "processor: env68020");
     assert_eq!(m.mem.read_u8(0x3108).unwrap(), 0, "hasFPU: FALSE (not modelled)");
     assert_eq!(m.mem.read_u8(0x3109).unwrap(), 1, "hasColorQD: TRUE (the default machine is the Macintosh II: 8-bit Color QuickDraw, src/cqd)");
-    assert_eq!(rec[7], -1, "sysVRefNum: the boot volume");
+    // sysVRefNum is the WORKING DIRECTORY reference number of the System Folder (Inside Macintosh V, "Compatibility Guidelines"), not the
+    // volume's: an application finds the System Folder's contents (its Preferences folder) through it
+    let (vol, dir) = m.fm.wd(rec[7]).expect("sysVRefNum is a working directory");
+    assert_eq!((m.fm.tree.name(dir), vol == m.fm.def_vol), ("System Folder", true));
+    let prefs = m.fm.tree.find_child(dir, "Preferences").expect("a System 7 System Folder has its Preferences folder from the start");
+    assert!(m.fm.tree.is_dir(prefs));
 }
 
 #[test]

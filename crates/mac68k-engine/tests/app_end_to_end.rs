@@ -94,7 +94,7 @@ fn file_quit_ends_the_program_and_closes_its_window() {
     let (step, _) = m.step(100_000);
     assert_eq!(step, Step::Exited, "{:#?}", m.log);
     assert_eq!(m.ui.calls.last(), Some(&UiCall::CloseWindow(WIN)));
-    assert!(m.windows.is_empty() && m.mm.live_ptrs() == 1, "the WindowRecord went back (only the A5 world is left)");
+    assert!(m.windows.is_empty() && m.mm.live_ptrs() == 2, "the WindowRecord went back (what is left: the A5 world and the Window Manager port InitWindows made)");
     assert!(m.refused.is_empty(), "{:?}", m.refused);
 }
 

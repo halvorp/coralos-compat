@@ -17,21 +17,30 @@ use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 use retro_resfork::{OsType, ResFork};
 
+mod write;
+
 /// The application's resource file reference number (an arbitrary small positive number; 0 is the System file).
 pub const APP_REF_NUM: i16 = 2;
 /// The System file's reference number.
 pub const SYSTEM_REF_NUM: i16 = 0;
 pub const RES_NOT_FOUND: i16 = -192;
 pub const RES_F_NOT_FOUND: i16 = -193;
-/// resPurgeable and resLocked in a resource's attribute byte.
+pub const ADD_RES_FAILED: i16 = -194;
+pub const RMV_RES_FAILED: i16 = -196;
+pub const RES_ATTR_ERR: i16 = -198;
+/// resPurgeable, resLocked, resProtected and resChanged in a resource's attribute byte.
 const ATTR_PURGEABLE: u8 = 0x20;
 const ATTR_LOCKED: u8 = 0x10;
+const ATTR_PROTECTED: u8 = 0x08;
+const ATTR_CHANGED: u8 = 0x02;
 
 pub struct ResFile {
     pub ref_num: i16,
     pub fork: ResFork,
     /// entry index -> the Handle it was loaded into (while that handle lives).
     loaded: BTreeMap<usize, u32>,
+    /// The resource map has changes the file does not hold yet (`mapChanged`): `UpdateResFile` / `CloseResFile` write the file.
+    dirty: bool,
 }
 
 #[derive(Default)]
@@ -54,18 +63,18 @@ impl ResMgr {
         true
     }
     pub fn open_fork(&mut self, ref_num: i16, fork: ResFork) {
-        self.files.push(ResFile { ref_num, fork, loaded: BTreeMap::new() });
+        self.files.push(ResFile { ref_num, fork, loaded: BTreeMap::new(), dirty: false });
         self.cur = ref_num;
     }
     /// The System file's resources (reference number 0): searched AFTER every other open file, so an application's own
     /// resource of the same type and ID wins. This is where the shared `'dcmp'` set comes from.
     pub fn add_system(&mut self, fork: ResFork) {
         self.files.retain(|f| f.ref_num != SYSTEM_REF_NUM);
-        self.files.insert(0, ResFile { ref_num: SYSTEM_REF_NUM, fork, loaded: BTreeMap::new() });
+        self.files.insert(0, ResFile { ref_num: SYSTEM_REF_NUM, fork, loaded: BTreeMap::new(), dirty: false });
     }
-    fn file(&self, ref_num: i16) -> Option<&ResFile> { self.files.iter().find(|f| f.ref_num == ref_num) }
+    pub(crate) fn file(&self, ref_num: i16) -> Option<&ResFile> { self.files.iter().find(|f| f.ref_num == ref_num) }
     /// The files a plain `Get*` searches: the current one, then the older ones. `only_cur` limits it to the current one.
-    fn chain(&self, only_cur: bool) -> Vec<i16> {
+    pub(crate) fn chain(&self, only_cur: bool) -> Vec<i16> {
         let Some(pos) = self.files.iter().position(|f| f.ref_num == self.cur) else { return Vec::new() };
         if only_cur { return alloc::vec![self.cur]; }
         self.files[..=pos].iter().rev().map(|f| f.ref_num).collect()
@@ -202,7 +211,8 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA80F, &[Arg::P, Arg::W], None, get1_ind_type::<U>)?;
     m.register(0xA9AF, &[], Some(Arg::W), res_error::<U>)?;
     m.register(0xA994, &[], Some(Arg::W), cur_res_file::<U>)?;
-    m.register(0xA998, &[Arg::W], None, use_res_file::<U>)
+    m.register(0xA998, &[Arg::W], None, use_res_file::<U>)?;
+    write::register(m)
 }
 
 fn finish<U: GuestUi>(m: &mut Mac<U>, what: &str, r: Result<u32, i16>) -> Result<Done, Refusal> {

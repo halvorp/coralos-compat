@@ -3,6 +3,9 @@ use crate::container::{crc16, AD_MAGIC, AD_VERSION};
 use crate::OsType;
 use alloc::vec::Vec;
 
+/// Where the resource data starts in a fork the Resource Manager writes: header (16) + reserved area (240).
+const DATA_OFFSET: u32 = 256;
+
 struct Res { ty: OsType, id: i16, name: Option<Vec<u8>>, attrs: u8, data: Vec<u8> }
 
 /// Accumulates resources and serialises them in the Resource Manager format.
@@ -13,6 +16,11 @@ impl ForkBuilder {
     pub fn new() -> Self { Self::default() }
     pub fn add(mut self, ty: &[u8; 4], id: i16, name: Option<&str>, data: &[u8]) -> Self {
         self.res.push(Res { ty: *ty, id, name: name.map(|n| n.bytes().collect()), attrs: 0, data: data.to_vec() });
+        self
+    }
+    /// [`ForkBuilder::add`] with a name as raw bytes (MacRoman) and an attribute byte.
+    pub fn add_raw(mut self, ty: &[u8; 4], id: i16, name: Option<&[u8]>, attrs: u8, data: &[u8]) -> Self {
+        self.res.push(Res { ty: *ty, id, name: name.map(<[u8]>::to_vec), attrs, data: data.to_vec() });
         self
     }
     /// Set the attribute byte of the resource added last.
@@ -66,8 +74,11 @@ impl ForkBuilder {
         map.extend_from_slice(&tl);
         map.extend_from_slice(&refs);
         map.extend_from_slice(&names);
+        // The data starts at 256: the 16-byte header, then the 240 bytes the Resource Manager reserves for the System (112) and for
+        // the application (128), as `CreateResFile` lays out every file (a new empty one is 256 + 30 = 286 bytes long).
         let mut out = Vec::new();
-        for v in [16u32, 16 + data.len() as u32, data.len() as u32, map.len() as u32] { out.extend_from_slice(&v.to_be_bytes()); }
+        for v in [DATA_OFFSET, DATA_OFFSET + data.len() as u32, data.len() as u32, map.len() as u32] { out.extend_from_slice(&v.to_be_bytes()); }
+        out.resize(DATA_OFFSET as usize, 0);
         out.extend_from_slice(&data);
         map[..16].copy_from_slice(&out[..16]);
         out.extend_from_slice(&map);

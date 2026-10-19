@@ -96,10 +96,31 @@ impl<U: GuestUi> Mac<U> {
     }
 }
 
+/// The screen's base address as a window's `portBits` carry it, stripped of any flag byte.
+fn screen_base<U: GuestUi>(m: &Mac<U>) -> u32 { m.mem.strip(m.mem.read_u32(crate::lowmem::SCRN_BASE).unwrap_or(0)) }
+
+/// A window's port whose `portBits` were redirected with `SetPortBits` to a BitMap of the program's own (an offscreen one): its
+/// drawing goes there, not to the window's canvas, until the program points `portBits` back at the screen.
+fn redirected<U: GuestUi>(m: &Mac<U>, port: u32, bm_addr: u32) -> bool {
+    bm_addr == port.wrapping_add(P_BITS) && m.qd.canvases.contains_key(&port) && !m.cqd.window_pix.contains_key(&bm_addr)
+        && m.mem.read_u32(bm_addr.wrapping_add(BM_BASE)).is_ok_and(|b| m.mem.strip(b) != screen_base(m))
+}
+
+/// A copy of the screen's `BitMap` (a program saves `thePort^.portBits` and passes the copy later): it names the window `thePort`
+/// shows when it has the same base address and top-left as that port's own `portBits` (the test `CopyBits` clips by).
+fn screen_bits_port<U: GuestUi>(m: &Mac<U>, bm_addr: u32) -> Option<u32> {
+    let port = current_port(m).ok().filter(|p| m.qd.canvases.contains_key(p))?;
+    let own = bits_addr(&m.mem, port).ok()?;
+    let key = |bm: u32| Some((m.mem.strip(m.mem.read_u32(bm.wrapping_add(BM_BASE)).ok()?), m.mem.read_u32(bm.wrapping_add(BM_BOUNDS)).ok()?));
+    (key(bm_addr)? == key(own)? && key(own)?.0 == screen_base(m)).then_some(port)
+}
+
 /// Open the BitMap struct at `bm`: the window canvas whose embedded `portBits` it is (`bm == port + 2`), else the real
 /// 1-bit BitMap in guest memory. `port` is the window's port for a canvas, 0 for a plain BitMap.
 pub fn open_bits<U: GuestUi>(m: &mut Mac<U>, bm_addr: u32) -> Result<Target, Refusal> {
-    let port = m.cqd.window_pix.get(&bm_addr).copied().unwrap_or_else(|| bm_addr.wrapping_sub(P_BITS));
+    let mut port = m.cqd.window_pix.get(&bm_addr).copied().unwrap_or_else(|| bm_addr.wrapping_sub(P_BITS));
+    if !m.qd.canvases.contains_key(&port) { port = screen_bits_port(m, bm_addr).unwrap_or(port); }
+    if redirected(m, port, bm_addr) { port = 0; }
     if let Some(bm) = m.qd.canvases.remove(&port) {
         let (r, g, deep) = (port_rect(&m.mem, port), m.windows.get(&port).map(|w| w.rect), bm.depth() > 1);
         let clut = if deep { m.pixmap_clut(bm_addr, bm.depth()).map_err(|e| { Refusal(format!("window {port:#x}: {}", e.0)) }) } else { Ok(alloc::vec::Vec::new()) };

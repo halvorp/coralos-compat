@@ -240,6 +240,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA946, &[Arg::L, Arg::W, Arg::L], None, get_item::<U>)?; // GetItem(menu, item, VAR itemString)
     m.register(0xA947, &[Arg::L, Arg::W, Arg::L], None, set_item::<U>)?;
     m.register(0xA826, &[Arg::L, Arg::L, Arg::W], None, insert_menu_item::<U>)?; // InsertMenuItem(menu, itemString, afterItem)
+    m.register(0xA952, &[Arg::L, Arg::W], None, delete_menu_item::<U>)?; // DeleteMenuItem(menu, item)
     m.register(0xA93D, &[Arg::L], Some(Arg::L), menu_select::<U>)?;
     m.register(0xA938, &[Arg::W], None, crate::quickdraw::accept::<U>) // HiliteMenu(menuID)
 }
@@ -323,6 +324,23 @@ fn insert_menu_item<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result
     p.flags = flags;
     m.menu_store(h, &p)?;
     done(format!("[menu] InsertMenuItem menu {} +{} after {after} (now {})", p.id, added.len(), p.items.len()))
+}
+
+/// `DeleteMenuItem(theMenu, item)`: item `item` (1-based) leaves the menu and the items after it move up; so do their enable bits
+/// (bit n of the flags is item n). An item that is not in the menu is left alone, as the book says ("if item is out of range, nothing happens").
+fn delete_menu_item<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (h, item) = (c.args.get(0), c.args.get(1) as u16 as i16);
+    h_of(m, "DeleteMenuItem", h)?;
+    let mut p = m.menu_view(h)?;
+    if item < 1 || item as usize > p.items.len() { return done(format!("[menu] DeleteMenuItem menu {} #{item}: not an item, nothing deleted (menu has {})", p.id, p.items.len())); }
+    let at = item as u32;
+    p.items.remove(at as usize - 1);
+    // bits 0..at-1 stay (the menu's own bit and the items before), the bits above `at` move down one
+    let low = if at >= 32 { 0xFFFF_FFFF } else { (1u32 << at) - 1 };
+    let high = if at >= 31 { 0 } else { (p.flags >> (at + 1)) << at };
+    p.flags = (p.flags & low) | high;
+    m.menu_store(h, &p)?;
+    done(format!("[menu] DeleteMenuItem menu {} #{item} (now {})", p.id, p.items.len()))
 }
 
 fn add_res_menu<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

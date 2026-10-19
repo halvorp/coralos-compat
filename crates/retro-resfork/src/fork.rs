@@ -42,10 +42,18 @@ pub struct ResEntry {
     pub attrs: u8,
     name: Option<Range<usize>>,
     data: Range<usize>,
+    /// The bytes and name of a resource added or rewritten since the fork was parsed (they replace the ranges above).
+    own: Option<Own>,
+    removed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Own { data: Vec<u8>, name: Option<Vec<u8>> }
+
 /// A validated resource fork. Resources are numbered `0..len()` in file order (type list order, then reference list
-/// order); that index is the stable identity the engines key their handles on.
+/// order); that index is the stable identity the engines key their handles on. Changing the fork never renumbers: a
+/// resource added later takes the next index, a removed one keeps its index (and answers nothing), so a handle keyed on
+/// an index stays right. [`ResFork::to_bytes`] writes the Resource Manager file format back out.
 #[derive(Debug, Clone)]
 pub struct ResFork { bytes: Vec<u8>, entries: Vec<ResEntry> }
 
@@ -54,37 +62,85 @@ impl ResFork {
         let entries = index(&bytes)?;
         Ok(ResFork { bytes, entries })
     }
+    /// The number of indices, removed resources included (an index never moves).
     pub fn len(&self) -> usize { self.entries.len() }
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
-    pub fn entry(&self, i: usize) -> Option<&ResEntry> { self.entries.get(i) }
+    pub fn is_empty(&self) -> bool { self.entries.iter().all(|e| e.removed) }
+    pub fn entry(&self, i: usize) -> Option<&ResEntry> { self.entries.get(i).filter(|e| !e.removed) }
+    /// Every index's entry, removed ones included (see [`ResFork::entry`] for one that is live).
     pub fn entries(&self) -> &[ResEntry] { &self.entries }
     /// The resource's bytes (without the 4-byte length prefix).
-    pub fn data(&self, i: usize) -> Option<&[u8]> { self.entries.get(i).map(|e| &self.bytes[e.data.clone()]) }
+    pub fn data(&self, i: usize) -> Option<&[u8]> {
+        let e = self.entry(i)?;
+        Some(e.own.as_ref().map_or(&self.bytes[e.data.clone()], |o| &o.data))
+    }
     /// The resource's name, if it has one.
     pub fn name(&self, i: usize) -> Option<&[u8]> {
-        self.entries.get(i)?.name.clone().map(|r| &self.bytes[r])
+        let e = self.entry(i)?;
+        match &e.own { Some(o) => o.name.as_deref(), None => e.name.clone().map(|r| &self.bytes[r]) }
     }
+    fn live(&self) -> impl Iterator<Item = usize> + '_ { (0..self.entries.len()).filter(|&i| !self.entries[i].removed) }
     /// Index of resource (`ty`, `id`).
     pub fn find(&self, ty: OsType, id: i16) -> Option<usize> {
-        self.entries.iter().position(|e| e.ty == ty && e.id == id)
+        self.live().find(|&i| self.entries[i].ty == ty && self.entries[i].id == id)
     }
     /// Index of the first resource of `ty` whose name equals `name` byte for byte (GetNamedResource is
     /// case-insensitive on a real Mac: [`Self::find_named`] folds ASCII case).
     pub fn find_named(&self, ty: OsType, name: &[u8]) -> Option<usize> {
-        (0..self.entries.len()).find(|&i| self.entries[i].ty == ty && self.name(i).is_some_and(|n| n.eq_ignore_ascii_case(name)))
+        self.live().find(|&i| self.entries[i].ty == ty && self.name(i).is_some_and(|n| n.eq_ignore_ascii_case(name)))
     }
     /// Number of resources of `ty`.
-    pub fn count(&self, ty: OsType) -> usize { self.entries.iter().filter(|e| e.ty == ty).count() }
+    pub fn count(&self, ty: OsType) -> usize { self.live().filter(|&i| self.entries[i].ty == ty).count() }
     /// The `n`th (1-based, like GetIndResource) resource of `ty`.
     pub fn nth(&self, ty: OsType, n: usize) -> Option<usize> {
         if n == 0 { return None; }
-        (0..self.entries.len()).filter(|&i| self.entries[i].ty == ty).nth(n - 1)
+        self.live().filter(|&i| self.entries[i].ty == ty).nth(n - 1)
     }
     /// Distinct resource types, in first-appearance order.
     pub fn types(&self) -> Vec<OsType> {
         let mut t: Vec<OsType> = Vec::new();
-        for e in &self.entries { if !t.contains(&e.ty) { t.push(e.ty); } }
+        for i in self.live() { let ty = self.entries[i].ty; if !t.contains(&ty) { t.push(ty); } }
         t
+    }
+
+    /// Add a resource; its index is the next one. Nothing is checked about `(ty, id)` being new (the Resource Manager does not).
+    pub fn add(&mut self, ty: OsType, id: i16, name: Option<&[u8]>, attrs: u8, data: Vec<u8>) -> usize {
+        self.entries.push(ResEntry { ty, id, attrs, name: None, data: 0..0, own: Some(Own { data, name: name.map(<[u8]>::to_vec) }), removed: false });
+        self.entries.len() - 1
+    }
+    /// Replace a resource's bytes. False when `i` is not a live resource.
+    pub fn set_data(&mut self, i: usize, data: Vec<u8>) -> bool { self.own_mut(i).map(|o| o.data = data).is_some() }
+    /// Set a resource's attribute byte.
+    pub fn set_attrs(&mut self, i: usize, attrs: u8) -> bool { match self.entries.get_mut(i).filter(|e| !e.removed) { Some(e) => { e.attrs = attrs; true } None => false } }
+    /// Change a resource's ID and, when `name` is given, its name (`Some(&[])` clears it).
+    pub fn set_info(&mut self, i: usize, id: i16, name: Option<&[u8]>) -> bool {
+        let Some(o) = self.own_mut(i) else { return false };
+        if let Some(n) = name { o.name = if n.is_empty() { None } else { Some(n.to_vec()) }; }
+        self.entries[i].id = id;
+        true
+    }
+    /// Remove a resource (its index stays, empty). False when it was not live.
+    pub fn remove(&mut self, i: usize) -> bool { match self.entries.get_mut(i).filter(|e| !e.removed) { Some(e) => { e.removed = true; true } None => false } }
+
+    /// The entry's owned copy, made from the parsed bytes the first time it is needed.
+    fn own_mut(&mut self, i: usize) -> Option<&mut Own> {
+        if self.entries.get(i)?.removed { return None; }
+        if self.entries[i].own.is_none() {
+            let (data, name) = (self.data(i)?.to_vec(), self.name(i).map(<[u8]>::to_vec));
+            self.entries[i].own = Some(Own { data, name });
+        }
+        self.entries[i].own.as_mut()
+    }
+
+    /// The fork in the Resource Manager file format: one type list in first-appearance order, each type's references sorted by ID
+    /// (the order the Resource Manager keeps them in), the data area in that order.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = crate::writer::ForkBuilder::new();
+        for ty in self.types() {
+            let mut of_type: Vec<usize> = self.live().filter(|&i| self.entries[i].ty == ty).collect();
+            of_type.sort_by_key(|&i| self.entries[i].id);
+            for i in of_type { b = b.add_raw(&ty, self.entries[i].id, self.name(i), self.entries[i].attrs, self.data(i).unwrap_or(&[])); }
+        }
+        b.build()
     }
 }
 
@@ -128,7 +184,7 @@ fn index(b: &[u8]) -> Result<Vec<ResEntry>, ForkError> {
                 if n + 1 + l > map_len { return Err(o("name runs past the map")); }
                 Some(map_off + n + 1..map_off + n + 1 + l)
             };
-            out.push(ResEntry { ty, id, attrs, name, data: start..start + len });
+            out.push(ResEntry { ty, id, attrs, name, data: start..start + len, own: None, removed: false });
         }
     }
     Ok(out)

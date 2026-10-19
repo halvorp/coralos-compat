@@ -334,10 +334,22 @@ fn get_vol<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool) -> Result<(), i16> {
     }
     Ok(())
 }
-fn set_vol<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool) -> Result<(), i16> { let l = loc(m, pb, hfs)?; m.fm.set_default(&l) }
+/// The volume-parameter calls (`SetVol`, `FlushVol`) take a VOLUME NAME: GetVol hands back "Macintosh HD" with no colon and programs
+/// give exactly that to SetVol to restore the default, so a colon-less name that is a volume's own name is that volume's root
+/// directory (a name with a colon, or one that is not a volume, is a path as everywhere else).
+fn vol_target<U: GuestUi>(m: &Mac<U>, pb: Pb, dir_id: Option<u32>) -> Result<Located, i16> {
+    let g = mem_err("block");
+    let np = pb.u32(&m.mem, IO_NAME_PTR).map_err(&g)?;
+    if np != 0 {
+        let name = read_name(m, np)?;
+        if !name.contains(&b':') { if let Some(vol) = m.fm.tree.volume(&super::name_of(&name)) { return Ok(Located { vol, parent: vol, leaf: None, node: Some(vol) }); } }
+    }
+    target(m, pb, dir_id)
+}
+fn set_vol<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool) -> Result<(), i16> { let l = vol_target(m, pb, dir_of(m, pb, hfs)?)?; m.fm.set_default(&l) }
 fn flush_vol<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
     // Volumes live in memory: a flush has nothing to write, but it still validates the volume it names.
-    let l = target(m, pb, None)?;
+    let l = vol_target(m, pb, None)?;
     l.node.ok_or(err::NSV_ERR).map(|_| ())
 }
 
@@ -415,7 +427,9 @@ fn dispatch<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> R {
         _ => None,
     };
     match body {
-        Some((name, f)) => { r.opcode |= HFS; run(m, r, name, f) }
+        // Every selector but OpenDF exists only in its HFS form. OpenDF is also PBOpenDF through `FSDispatch` ($A060, bit 9 clear): a
+        // 50-byte IOParam block with no ioDirID, the directory being the working directory in ioVRefNum.
+        Some((name, f)) => { if selector != sel::OPEN_DF { r.opcode |= HFS; } run(m, r, name, f) }
         None => Err(Refusal(format!("HFSDispatch selector {selector:#x} is not modelled"))),
     }
 }
