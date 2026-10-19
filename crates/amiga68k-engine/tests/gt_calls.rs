@@ -323,7 +323,7 @@ fn set_window_titles_reaches_the_native_window_and_minus_one_keeps_the_title() {
 }
 
 #[test]
-fn window_manager_calls_are_accepted_and_easy_request_is_a_named_census_stop() {
+fn window_manager_calls_are_accepted_and_a_null_easystruct_requests_nothing() {
     let mut m = M::new();
     let w = m.tags(&[(WA + 3, 100), (WA + 4, 60)]);
     m.run(&[
@@ -336,10 +336,8 @@ fn window_manager_calls_are_accepted_and_easy_request_is_a_named_census_stop() {
         intu(-450, &[a(0, 0x1234)]),                // not a window: refused
         intu(LVO_EASY_REQUEST, &[a_res(0, 0), a(1, 0), a(2, 0), a(3, 0)]),
     ]);
-    assert_eq!(m.a.refused, [
-        "intuition.library/ActivateWindow: ActivateWindow: 0x1234 is not an open window",
-        "intuition.library/EasyRequestArgs: unimplemented",
-    ]);
+    assert_eq!(m.a.refused, ["intuition.library/ActivateWindow: ActivateWindow: 0x1234 is not an open window"], "EasyRequestArgs is bridged (requester.rs)");
+    assert!(m.a.ui.calls.iter().all(|c| !matches!(c, UiCall::Request(..))), "a NULL EasyStruct asks the host nothing (the original answers 0)");
     assert_eq!(m.a.log.iter().filter(|l| l.contains("native window manager's")).count(), 3);
 }
 
