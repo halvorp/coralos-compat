@@ -105,6 +105,15 @@ const POPASL: &[(u32, Ty)] = &[(MUIA_Popasl_Type, Num), (MUIA_Popasl_StartHook, 
 const POPOBJECT: &[(u32, Ty)] = &[(MUIA_Popobject_Object, Adopt), (MUIA_Popobject_ObjStrHook, Num), (MUIA_Popobject_StrObjHook, Num),
     (MUIA_Popobject_Follow, Num), (MUIA_Popobject_Light, Num), (MUIA_Popobject_Volatile, Num), (MUIA_Popobject_WindowHook, Num)];
 
+// Zune's image classes (bitmap.h, chunkyimage.h, bodychunk.h, imagedisplay.h). The data they hold is the program's (pixel and palette pointers are
+// never dereferenced here); their pixels are NOT drawn (docs/MUI-NATIVE.md "Not done"), they take their place in the layout as Areas.
+const BITMAP: &[(u32, Ty)] = &[(MUIA_Bitmap_Alpha, Num), (MUIA_Bitmap_Bitmap, Num), (MUIA_Bitmap_Height, Num), (MUIA_Bitmap_MappingTable, Num),
+    (MUIA_Bitmap_Precision, Num), (MUIA_Bitmap_RemappedBitmap, Num), (MUIA_Bitmap_SourceColors, Num), (MUIA_Bitmap_Transparent, Num),
+    (MUIA_Bitmap_UseFriend, Num), (MUIA_Bitmap_Width, Num)];
+const CHUNKYIMAGE: &[(u32, Ty)] = &[(MUIA_ChunkyImage_Pixels, Num), (MUIA_ChunkyImage_Palette, Num), (MUIA_ChunkyImage_NumColors, Num), (MUIA_ChunkyImage_Modulo, Num)];
+const BODYCHUNK: &[(u32, Ty)] = &[(MUIA_Bodychunk_Body, Num), (MUIA_Bodychunk_Compression, Num), (MUIA_Bodychunk_Depth, Num), (MUIA_Bodychunk_Masking, Num)];
+const IMAGEDISPLAY: &[(u32, Ty)] = &[(MUIA_Imagedisplay_Spec, Num), (MUIA_Imagedisplay_UseDefSize, Num), (MUIA_Imagedisplay_FreeHoriz, Num), (MUIA_Imagedisplay_FreeVert, Num)];
+
 /// The attributes `kind` itself defines (ancestors' are looked up separately).
 fn own(kind: Kind) -> &'static [(u32, Ty)] {
     match kind {
@@ -114,6 +123,7 @@ fn own(kind: Kind) -> &'static [(u32, Ty)] {
         Kind::Register => REGISTER, Kind::Text => TEXT, Kind::String => STRING, Kind::Cycle => CYCLE, Kind::Radio => RADIO,
         Kind::Numeric => NUMERIC, Kind::Slider => SLIDER, Kind::Gauge => GAUGE, Kind::Prop => PROP, Kind::Scrollbar => SCROLLBAR,
         Kind::List => LIST, Kind::Listview => LISTVIEW, Kind::Popstring => POPSTRING, Kind::Popasl => POPASL, Kind::Popobject => POPOBJECT,
+        Kind::Bitmap => BITMAP, Kind::ChunkyImage => CHUNKYIMAGE, Kind::Bodychunk => BODYCHUNK, Kind::Imagedisplay => IMAGEDISPLAY,
     }
 }
 
@@ -138,6 +148,9 @@ pub fn name(attr: u32) -> alloc::string::String {
         Err(_) => alloc::format!("{attr:#010x}"),
     }
 }
+
+/// Is `attr` an attribute some MUI class defines (it has a name in MUI's headers)?
+pub fn is_mui_attribute(attr: u32) -> bool { super::names::ATTR_NAMES.binary_search_by_key(&attr, |e| e.0).is_ok() }
 
 /// `id`'s MUIM_ name for a refusal message (the number when the header has none).
 pub fn method_name(id: u32) -> alloc::string::String {

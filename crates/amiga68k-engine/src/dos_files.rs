@@ -47,7 +47,7 @@ fn put_cstr<U: GuestUi>(a: &mut Amiga<U>, at: u32, s: &str, max: usize, what: &s
 }
 
 pub(crate) fn fill_fib<U: GuestUi>(a: &mut Amiga<U>, fib: u32, node: NodeId) -> Result<(), Refusal> {
-    if fib & 3 != 0 { return Err(Refusal(format!("FileInfoBlock {fib:#x} is not longword aligned"))); }
+    // dos.h wants a longword-aligned FileInfoBlock (68000 rule); AROS checks nothing and AROS-built programs keep it on a 2-aligned stack.
     let m = Refusal::mem;
     a.mem.zero(fib, FIB_SIZE).map_err(m("FileInfoBlock"))?;
     let v = &a.fs.vol;
