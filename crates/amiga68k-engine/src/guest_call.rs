@@ -51,6 +51,15 @@ pub enum Next<U: GuestUi> {
     Call { target: u32, d0: u32, aregs: Vec<(u32, u32)>, then: Cont<U> },
 }
 
+/// Continue `next` with `f`, which receives the D0 `next` ends with: at once when `next` returns, otherwise appended to the last
+/// continuation of the chain (so "open the library, then query it, then make the object" is one chain of guest calls).
+pub fn then<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, next: Next<U>, f: Cont<U>) -> Result<Next<U>, Refusal> {
+    match next {
+        Next::Return(d) => f(a, cpu, d),
+        Next::Call { target, d0, aregs, then: k } => Ok(Next::Call { target, d0, aregs, then: Box::new(move |a, cpu, d| { let n = k(a, cpu, d)?; then(a, cpu, n, f) }) }),
+    }
+}
+
 pub struct Frame<U: GuestUi> { sp: u32, caller_a6: u32, then: Cont<U> }
 
 /// Write the return trap and the restore stub into guest RAM.

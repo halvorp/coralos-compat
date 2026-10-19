@@ -5,12 +5,14 @@
 //! Facts: Zune's mui_createcustomclass.c (`MakeClass(id, NULL, super, datasize, 0)`, the dispatcher into `cl_Dispatcher`, the
 //! `struct MUI_CustomClass` of mui.h: mcc_UserData 0, four library bases, mcc_Super 20, mcc_Class 24), mui_deletecustomclass.c.
 //! NOT bridged: the drawing pipeline (`MUIM_Setup/AskMinMax/Show/Draw`) is never sent, so a subclass that DRAWS itself shows nothing.
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use super::classes::Kind;
 use super::object;
 use crate::boopsi_ids::*;
 use crate::boopsi_native;
+use crate::guest_call::{self, Next};
 use crate::iclass::Native;
 use crate::{machine::Amiga, tags, Refusal};
 use guestui_abi::GuestUi;
@@ -24,20 +26,38 @@ const H_SUB_ENTRY: u32 = 12;
 const H_DATA: u32 = 16;
 
 /// MUI_CreateCustomClass(a0 = base, a1 = supername, a2 = supermcc, d0 = datasize, a3 = dispatcher) -> a `struct MUI_CustomClass *`.
+/// A superclass that is not built in is a disk class ([`super::disk`]): it is opened first, by guest calls, and the class is made when
+/// they are done (the registers of this call are read before any of them runs).
 pub fn create_custom_class<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (base, name_p, supermcc, size, dispatcher) = (cpu.areg(0), cpu.areg(1), cpu.areg(2), cpu.dreg(0), cpu.areg(3));
     if name_p == 0 && supermcc == 0 { cpu.set_d0(0); return Ok("[muimaster] MUI_CreateCustomClass: no superclass given -> NULL".into()); }
-    let sup = if supermcc != 0 { a.mem.read_u32(supermcc + MCC_CLASS).map_err(Refusal::mem("MUI_CustomClass.mcc_Class"))? } else {
-        let name = a.mem.read_cstr(name_p).map_err(Refusal::mem("MUI_CreateCustomClass supername"))?;
-        a.classes.find(&name).ok_or_else(|| Refusal(format!("MUI_CreateCustomClass: the superclass \"{name}\" is not implemented")))?
+    if supermcc != 0 {
+        let sup = a.mem.read_u32(supermcc + MCC_CLASS).map_err(Refusal::mem("MUI_CustomClass.mcc_Class"))?;
+        return make_custom(a, cpu, base, size, dispatcher, sup);
+    }
+    let name = a.mem.read_cstr(name_p).map_err(Refusal::mem("MUI_CreateCustomClass supername"))?;
+    if let Some(sup) = a.classes.find(&name) { return make_custom(a, cpu, base, size, dispatcher, sup); }
+    let Some(found) = super::disk::resolve(a, cpu, &name)? else {
+        return Err(Refusal(format!("MUI_CreateCustomClass: the superclass \"{name}\" is not implemented")));
     };
+    let next = guest_call::then(a, cpu, found, Box::new(move |a: &mut Amiga<U>, cpu: &mut Cpu, sup: u32| {
+        let line = make_custom(a, cpu, base, size, dispatcher, sup)?;
+        a.log.push(line);
+        Ok(Next::Return(cpu.dreg(0)))
+    }))?;
+    guest_call::start(a, cpu, next)?;
+    Ok(format!("[muimaster] MUI_CreateCustomClass over the disk class \"{name}\""))
+}
+
+/// The class over superclass `sup`; D0 = the `struct MUI_CustomClass` (or NULL).
+fn make_custom<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, base: u32, size: u32, dispatcher: u32, sup: u32) -> Result<String, Refusal> {
     let mcc = a.heap.alloc(MCC_SIZE).ok_or_else(|| Refusal("MUI_CreateCustomClass: no memory (NOMEM)".into()))?;
     a.mem.zero(mcc, MCC_SIZE).map_err(Refusal::mem("MUI_CustomClass"))?;
     // MakeClass(NULL, NULL, super, datasize, 0): the same code the program's own MakeClass runs.
-    (cpu.set_areg(0, 0), cpu.set_areg(1, 0), cpu.set_areg(2, sup), cpu.set_dreg(1, 0));
+    (cpu.set_areg(0, 0), cpu.set_areg(1, 0), cpu.set_areg(2, sup), cpu.set_dreg(0, size), cpu.set_dreg(1, 0));
     crate::iclass::make_class(a, cpu)?;
     let cl = cpu.dreg(0);
-    if cl == 0 { let _ = a.heap.free(mcc, MCC_SIZE); return Ok("[muimaster] MUI_CreateCustomClass -> NULL (MakeClass failed)".into()); }
+    if cl == 0 { let _ = a.heap.free(mcc, MCC_SIZE); super::disk::release(a, sup); return Ok("[muimaster] MUI_CreateCustomClass -> NULL (MakeClass failed)".into()); }
     let w = |a: &mut Amiga<U>, at: u32, v: u32| a.mem.write_u32(at, v).map_err(Refusal::mem("MUI_CustomClass"));
     w(a, mcc + MCC_SUPER, sup)?;
     w(a, mcc + MCC_CLASS, cl)?;
@@ -51,9 +71,11 @@ pub fn delete_custom_class<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Resul
     let mcc = cpu.areg(0);
     if mcc == 0 { cpu.set_d0(0); return Ok("[muimaster] MUI_DeleteCustomClass NULL -> FALSE".into()); } // mui_deletecustomclass.c: a NULL class is FALSE
     let cl = a.mem.read_u32(mcc + MCC_CLASS).map_err(Refusal::mem("MUI_CustomClass.mcc_Class"))?;
+    let sup = a.mem.read_u32(mcc + MCC_SUPER).map_err(Refusal::mem("MUI_CustomClass.mcc_Super"))?;
     cpu.set_areg(0, cl);
     crate::iclass::free_class(a, cpu)?;
     let freed = cpu.dreg(0) != 0;
+    if freed { super::disk::release(a, sup); } // mui_deletecustomclass.c: MUI_FreeClass(mcc_Super)
     if freed { a.heap.free(mcc, MCC_SIZE).map_err(|e| Refusal(format!("MUI_DeleteCustomClass: {e}")))?; }
     Ok(format!("[muimaster] MUI_DeleteCustomClass {mcc:#x} -> {}", if freed { "TRUE" } else { "FALSE" }))
 }
@@ -83,7 +105,6 @@ pub fn om_method<U: GuestUi>(a: &mut Amiga<U>, native_cl: u32, obj: u32, id: u32
             }
             o
         }
-        OM_DISPOSE => { object::dispose_adopted(a, obj)?; 0 }
         OM_SET | OM_UPDATE => {
             let attrs = a.mem.read_u32(msg + 4).map_err(Refusal::mem("ops_AttrList"))?;
             for (tag, v) in muis(&tags::walk(&a.mem, attrs)?) { object::set_attr(a, obj, tag, v)?; }

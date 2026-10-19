@@ -54,6 +54,10 @@ pub struct Objects {
     pub hooks: VecDeque<crate::mui::hooks::HookCall>,
     /// The host's control metrics for MUI's layout (mui/layout.rs `Metrics`); default = Zune's own sizes.
     pub mui_metrics: crate::mui::layout::Metrics,
+    /// MUI classes opened from disk (`.mcc`/`.mcp`), by the name they were asked for (mui/disk.rs).
+    pub disk_classes: BTreeMap<String, crate::mui::disk::DiskClass>,
+    /// Application -> its guest `struct MUI_GlobalInfo` (mui/mirror.rs).
+    pub global_info: BTreeMap<u32, u32>,
 }
 
 fn class_addr(k: Kind) -> u32 { crate::iclass::native_addr(crate::iclass::Native::Mui(k)) }
@@ -126,7 +130,7 @@ pub fn new_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
 /// intuition DisposeObject(a0 = object).
 pub fn dispose_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let obj = cpu.areg(0);
-    crate::mui::dispose(a, obj)?;
+    crate::mui::dispose_start(a, cpu, obj)?;
     Ok(format!("[intuition] DisposeObject {obj:#x}"))
 }
 

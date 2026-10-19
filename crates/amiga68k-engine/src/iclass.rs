@@ -35,7 +35,7 @@ pub const NATIVE: [(&str, &str, Native, u16); 8] = [
 ];
 /// Every native class in table order: the system classes, then the MUI tree. A MUI root class sits on `rootclass`.
 fn all_native() -> impl Iterator<Item = (&'static str, &'static str, Native, u16)> {
-    NATIVE.into_iter().chain(crate::mui::classes::CLASSES.iter().map(|c| (c.name, c.sup.map_or("rootclass", |s| s.name()), Native::Mui(c.kind), 0)))
+    NATIVE.into_iter().chain(crate::mui::classes::CLASSES.iter().map(|c| (c.name, c.sup.map_or("rootclass", |s| s.name()), Native::Mui(c.kind), crate::mui::mirror::instance_size(c.kind))))
 }
 const CLASS_TABLE: u32 = BOOPSI_BASE + 0x100;
 const CLASS_SLOT: u32 = 64;

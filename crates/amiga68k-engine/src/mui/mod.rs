@@ -13,6 +13,8 @@ pub mod app;
 pub mod attrs;
 pub mod classes;
 mod custom;
+pub mod disk;
+mod dispose;
 pub mod hooks;
 mod ids_gen;
 mod input;
@@ -21,14 +23,17 @@ pub mod list;
 mod make;
 mod menu;
 mod methods;
+pub mod mirror;
 mod names;
 mod notify;
 mod object;
 pub mod roles;
 pub mod win;
 
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
+use crate::guest_call;
 use crate::libtable::LibraryBuilder;
 use crate::{machine::Amiga, run::Delivered, tags, Refusal};
 use guestui_abi::{GuestUi, GuestUiEvent};
@@ -40,6 +45,8 @@ pub use object::{dispose, get_attr, set_attr, set_attr_quiet};
 pub use win::native_controls;
 
 const LVO_MUI_NEW_OBJECT_A: i32 = -30;
+const LVO_MUI_ALLOC_ASL_REQUEST: i32 = -48;
+const LVO_MUI_FREE_ASL_REQUEST: i32 = -60;
 const LVO_MUI_DISPOSE_OBJECT: i32 = -36;
 const LVO_MUI_MAKE_OBJECT_A: i32 = -120;
 const LVO_MUI_CREATE_CUSTOM_CLASS: i32 = -108;
@@ -51,6 +58,9 @@ pub fn library<U: GuestUi>(base: u32) -> LibraryBuilder<U> {
         .func(LVO_MUI_NEW_OBJECT_A, "MUI_NewObjectA", mui_new_object_a::<U>)
         .func(LVO_MUI_DISPOSE_OBJECT, "MUI_DisposeObject", mui_dispose_object::<U>)
         .func(LVO_MUI_MAKE_OBJECT_A, "MUI_MakeObjectA", mui_make_object_a::<U>)
+        // muimaster.library/MUI_AllocAslRequest(type, tags) is asl.library's AllocAslRequest with the same registers (Zune: mui_allocaslrequest.c).
+        .func(LVO_MUI_ALLOC_ASL_REQUEST, "MUI_AllocAslRequest", crate::asl::alloc_request::<U>)
+        .func(LVO_MUI_FREE_ASL_REQUEST, "MUI_FreeAslRequest", crate::asl::free_request::<U>)
         .func(LVO_MUI_CREATE_CUSTOM_CLASS, "MUI_CreateCustomClass", custom::create_custom_class::<U>)
         .func(LVO_MUI_DELETE_CUSTOM_CLASS, "MUI_DeleteCustomClass", custom::delete_custom_class::<U>)
 }
@@ -65,6 +75,15 @@ pub fn new_by_name<U: GuestUi>(a: &mut Amiga<U>, name: &str, tags_at: u32) -> Re
 /// MUI_NewObjectA(a0 = class name, a1 = tags): NULL (with the reason) when it cannot be built.
 fn mui_new_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let name = a.mem.read_cstr(cpu.areg(0)).map_err(Refusal::mem("MUI_NewObjectA class name"))?;
+    if !classes::is_builtin(&name) {
+        // Not built in: a disk class (Zune's ZUNE_GetExternalClass), made by a guest call chain that ends with the object.
+        if let Some(found) = disk::resolve(a, cpu, &name)? {
+            let tags_at = cpu.areg(1);
+            let next = guest_call::then(a, cpu, found, Box::new(move |a: &mut Amiga<U>, _cpu: &mut Cpu, cl: u32| disk::new_instance(a, cl, tags_at)))?;
+            guest_call::start(a, cpu, next)?;
+            return Ok(format!("[muimaster] MUI_NewObjectA \"{name}\" (disk class)"));
+        }
+    }
     let obj = new_by_name(a, &name, cpu.areg(1))?;
     hooks::after_call(a, cpu, obj)?; // a List asks its display hook for the column titles
     Ok(format!("[muimaster] MUI_NewObjectA \"{name}\" -> {obj:#x}"))
@@ -73,8 +92,20 @@ fn mui_new_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
 /// MUI_DisposeObject(a0 = object): the whole tree below it goes too.
 fn mui_dispose_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let obj = cpu.areg(0);
-    dispose(a, obj)?;
+    if obj == 0 { return Ok("[muimaster] MUI_DisposeObject NULL".into()); } // "May be NULL, in which case this function has no effect"
+    dispose_start(a, cpu, obj)?;
     Ok(format!("[muimaster] MUI_DisposeObject {obj:#x}"))
+}
+
+/// DisposeObject on a MUI root: its own dispatcher, then every child's (Zune's family dispose order, [`dispose`]), as guest calls.
+pub fn dispose_start<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, obj: u32) -> Result<(), Refusal> {
+    match a.objects.map.get(&obj) {
+        None => return Err(Refusal(format!("DisposeObject: {obj:#x} is not a MUI object (or already disposed)"))),
+        Some(o) if o.parent.is_some() => return Err(Refusal(format!("DisposeObject: {obj:#x} is owned by a parent; dispose the root"))),
+        Some(_) => {}
+    }
+    let next = dispose::dispose_object(a, cpu, obj)?;
+    guest_call::start(a, cpu, next)
 }
 
 /// MUI_MakeObjectA(d0 = type, a0 = parameter array): NULL (with the reason) when it cannot be built.
@@ -88,6 +119,12 @@ fn mui_make_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
 /// The shared class dispatcher's MUI branch: a guest `DoMethod(obj, ...)` with the message at `msg`.
 pub fn dispatch<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, cl: u32, obj: u32, msg: u32) -> Result<String, Refusal> {
     let id = a.mem.read_u32(msg).map_err(Refusal::mem("DoMethod message"))?;
+    if id == crate::boopsi_ids::OM_DISPOSE && a.objects.map.contains_key(&obj) {
+        // The native half of a destructor (a subclass's DoSuperMethod, or a DoMethod on a native object): children first, then the object.
+        let next = dispose::native(a, cpu, obj)?;
+        guest_call::start(a, cpu, next)?;
+        return Ok(format!("[boopsi] {} OM_DISPOSE on {obj:#x}", a.classes.name_of(cl)));
+    }
     if let Some(r) = custom::om_method(a, cl, obj, id, msg)? { hooks::after_call(a, cpu, r)?; return Ok(format!("[boopsi] {} method {id:#x} on {obj:#x} -> {r:#x}", a.classes.name_of(cl))); }
     if id == MUIM_Application_Execute && a.objects.kind(obj) == Some(classes::Kind::Application) {
         let next = app::execute(a, obj)?;

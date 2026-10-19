@@ -67,6 +67,9 @@ impl Kind {
     pub fn is_container(self) -> bool { matches!(self, Kind::Group | Kind::Virtgroup | Kind::Scrollgroup | Kind::Register) }
 }
 
+/// Is `name` one of the classes this engine implements (abstract ones included)? Anything else may be a disk class.
+pub fn is_builtin(name: &str) -> bool { CLASSES.iter().any(|c| c.name == name) }
+
 /// The kind of public class `name`, or the named refusal (an unknown class, or an abstract one).
 pub fn by_name(name: &str) -> Result<Kind, String> {
     match CLASSES.iter().find(|c| c.name == name) {

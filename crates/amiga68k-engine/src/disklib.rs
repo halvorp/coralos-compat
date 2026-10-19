@@ -129,14 +129,14 @@ fn load_new<U: GuestUi>(a: &mut Amiga<U>, name: &str, key: String, path: String,
     }) })
 }
 
-/// OpenLibrary's disk path. Ok(None): no such library on disk (the caller carries on with its own table). Ok(Some):
-/// handled; D0 is set now (Return) or by the guest call chain this starts.
-pub fn try_open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, name: &str, want: u32) -> Result<Option<String>, Refusal> {
+/// The guest-call chain that opens disk library `name`, and the line the log shows. `Ok(None)`: no such library on disk (the caller
+/// carries on with its own table). The chain ends with the Open vector's D0 (the base, or NULL), so a caller can continue it with
+/// [`guest_call::then`] (MUI's class loader calls `MCC_Query` right after).
+pub fn open_chain<U: GuestUi>(a: &mut Amiga<U>, name: &str, want: u32) -> Result<Option<(Next<U>, String)>, Refusal> {
     let key = name[file_part(name)..].to_ascii_lowercase();
     if let Some(i) = a.fs.disk_libs.iter().position(|l| l.key == key) {
         let next = open_next(a, i, want)?;
-        guest_call::start(a, cpu, next)?;
-        return Ok(Some(format!("[exec] OpenLibrary name=\"{name}\" ver={want} -> disk library {} (Open vector in the guest)", a.fs.disk_libs[i].path)));
+        return Ok(Some((next, format!("[exec] OpenLibrary name=\"{name}\" ver={want} -> disk library {} (Open vector in the guest)", a.fs.disk_libs[i].path))));
     }
     let cwd = crate::fs::cur_dir(a);
     let found = search_paths(name).into_iter().find_map(|p| {
@@ -145,8 +145,15 @@ pub fn try_open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, name: &str, want: u
     });
     let Some((path, bytes)) = found else { return Ok(None) };
     let next = load_new(a, name, key, path.clone(), &bytes, want)?;
+    Ok(Some((next, format!("[exec] OpenLibrary name=\"{name}\" ver={want} -> loading {path} from disk"))))
+}
+
+/// OpenLibrary's disk path. Ok(None): no such library on disk (the caller carries on with its own table). Ok(Some):
+/// handled; D0 is set now (Return) or by the guest call chain this starts.
+pub fn try_open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, name: &str, want: u32) -> Result<Option<String>, Refusal> {
+    let Some((next, line)) = open_chain(a, name, want)? else { return Ok(None) };
     guest_call::start(a, cpu, next)?;
-    Ok(Some(format!("[exec] OpenLibrary name=\"{name}\" ver={want} -> loading {path} from disk")))
+    Ok(Some(line))
 }
 
 /// CloseLibrary of a disk library: its Close vector runs in the guest; a segment list it returns is unloaded.

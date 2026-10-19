@@ -50,8 +50,21 @@ A real BOOPSI class over the native MUI class (`MakeClass` + the dispatcher in `
 `OM_NEW` reaches the native class through `DoSuperMethod`: rootclass allocates the instance (the program's instance data lives in it),
 then the MUI half is made from the tags that are MUI's (`0x8042xxxx`, `0x9042xxxx`; the program's own attributes pass through unseen,
 as in BOOPSI). The subclass's role is its nearest standard ancestor's, because it uses that ancestor's state. NOT bridged: the drawing
-pipeline (`MUIM_Setup/AskMinMax/Show/Draw`) is never sent, so a subclass that DRAWS itself (the "plane" case) shows nothing yet; disk
-classes (`LIBS:Zune/*.mcc`, `MCC_Query`) are not loaded; children of a disposed tree get no `OM_DISPOSE` from their own dispatcher.
+pipeline (`MUIM_Setup/AskMinMax/Show/Draw`) is never sent, so a subclass that DRAWS itself (the "plane" case) shows nothing yet.
+
+## Classes on disk (`.mcc` / `.mcp`, `mui/disk.rs`)
+A class that is not built in is a real disk library: `MUI_NewObjectA("Foo.mcc")` and `MUI_CreateCustomClass(.., "Foo.mcc", ..)` open it
+through the disklib (its init and Open run in the guest), call `MCC_Query(0)` (then `(1)`, the preferences class) as a guest call and take
+`mcc_Class` of the `MUI_CustomClass` it returns, exactly as Zune's `ZUNE_GetExternalClass`. Search order: `Zune/X`, `Classes/Zune/X`,
+`MUI/X`, `mui/X` as OpenLibrary names (LIBS:, PROGDIR:), then `MUI:Libs/mui/X` and `SYS:Classes/Zune/X`. A class stays loaded (no Expunge);
+`DiskClass.users` counts the objects and subclasses holding it. The class is then an ordinary guest `IClass`: its dispatcher is guest code,
+its superclass chain reaches the native classes through the one dispatch path, its role is its nearest standard ancestor's.
+What a guest subclass reads straight out of its object (`mui/mirror.rs`): Notify.mui's instance data is a `MUI_NotifyData` (28 bytes) and
+Area.mui reserves room for `MUI_AreaData`, so a class's `_app(obj)` / `muiUserData(obj)` macros (plain offsets) read the application
+and user data the host writes there (state stays host-side; a guest write is never read back). Without that, a class that calls
+`DoMethod(_app(obj), ...)` jumps through a NULL object.
+`OM_DISPOSE` follows Zune's family order (`mui/dispose.rs`): an object's own dispatcher first, then each child through ITS dispatcher
+(`MUI_DisposeObject(child)`), then the free; a disk class's use count goes down with each object.
 
 ## Not done (named)
 `MUI_RequestA`, `MUIM_Application_OpenConfigWindow`, the Popasl/Popobject requester (a press is a named refusal), input handlers and timers
