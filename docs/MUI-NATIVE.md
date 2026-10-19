@@ -135,6 +135,17 @@ and user data the host writes there (state stays host-side; a guest write is nev
 * The AROS volume's `LIBS:` also reaches `SYS:Classes` (S/Startup-Sequence: `Assign LIBS: SYS:Classes ADD`), where the BOOPSI gadgets
   (`colorwheel.gadget`, ...) live; the census tool and the AROS test helper assign it.
 
+* `MUI_RequestA` (`mui/request.rs`): ONE native alert on the requester seam. Gadget string `*_OK|_Cancel` -> labels `OK`, `Cancel`, `*` = the default
+  button, the first `_` (hotkey) removed; the body is formatted with RawDoFmt and its MUI text codes (`ESC b/i/u/n/c/l/r`, pens, `ESC P[..]`/`ESC I[..]`)
+  stripped to plain text; a NULL title is `MUIA_Application_Title`; `win` (a MUI Window object) is the alert's parent. Returns as Zune's ReturnID arithmetic:
+  1..n-1 left to right, the rightmost 0, a LONE button 1; with no Application it is EasyRequestArgs' numbering (Zune's own fallback). No Escape in Zune: the
+  host's cancel is the last button. Only the calling task parks. `MUI_Request` (varargs) is glue in the guest.
+* The Application's commodity (`mui/broker.rs`, application.c): a port and a CxBroker named after `MUIA_Application_Title` for every Application unless
+  `MUIA_Application_UseCommodities` is FALSE; `Broker`, `BrokerPort`, `BrokerPri` (a BYTE), `BrokerHook`; `MUIA_Application_Active` drives ActivateCxObj;
+  inside `NewInput` CXCMD_DISABLE/ENABLE set Active, CXCMD_KILL is `SetSignal(CTRL_C)`, APPEAR/DISAPPEAR reach only the hook (Zune leaves them to the
+  application), then the hook runs as a guest call and the message is replied. `CopyBrokerList`/`FreeBrokerList` hand Exchange name, title, description.
+* A List with no `MUIA_List_Pool` makes its own pool (list.c), the A2 of its construct/destruct hooks.
+
 ## Not done (named)
-`MUI_RequestA`, `MUIM_Application_OpenConfigWindow`, the Popasl/Popobject requester (a press is a named refusal), NList / TextEditor / BetterString / TheBar and every other MCC's own behaviour (the classes LOAD from disk; what they need next is named in the census),
+`MUIM_Application_OpenConfigWindow`, the Popasl/Popobject requester (a press is a named refusal), NList / TextEditor / BetterString / TheBar and every other MCC's own behaviour (the classes LOAD from disk; what they need next is named in the census),
 multi-selection, list sorting with a compare hook, drag and drop, scrollbars on a Scrollgroup (its contents show at their natural size).
