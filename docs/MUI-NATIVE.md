@@ -85,10 +85,20 @@ and drop. `OM_SET` / `MUIM_Set` on an object of a program's own class go through
 subclass's `DoSuperMethod` reaches the native half, which acts on the attributes of its own chain and ignores (with a log line) a MUI-range tag no
 class of the chain defines, as BOOPSI does.
 
-## Image classes
-`Bitmap.mui`, `ChunkyImage.mui`, `Bodychunk.mui`, `Imagedisplay.mui` exist as classes (their attributes are held, they can be subclassed and take
-their place in the layout as Areas). Their PIXELS ARE NOT DRAWN yet (a ChunkyImage's pixel data would need pen allocation per palette entry and a
-native Draw; the self-drawing pipeline is built around guest classes).
+## Image classes (`mui/images.rs`)
+`Bitmap.mui`, `ChunkyImage.mui`, `Bodychunk.mui` and `Imagedisplay.mui` DRAW: each image object in a window's layout gets a content plane
+(`present_plane`, id = the object) in its rectangle. Sizes are Zune's `MUIM_AskMinMax` (Bitmap family min = default 1x1, Imagedisplay min 3, default 16;
+all stretch; `MUIA_FixWidth/Height` apply). A Bitmap draws the program's `struct BitMap` (`MUIA_Bitmap_Bitmap`, `Width`, `Height`) from the object's
+top-left, clipped to its box (bitmap.c), with `MUIA_Bitmap_SourceColors` (ULONG R,G,B per pen) or the screen palette (through `MappingTable`), and
+`MUIA_Bitmap_Transparent` leaves that pen's pixels out. A ChunkyImage holds `width * height` pen bytes (row stride `MUIA_ChunkyImage_Modulo`) and a
+3-byte RGB palette of `NumColors` <= 256. A Bodychunk decodes an ILBM BODY (planar rows padded to 16 bits, `depth` planes, an optional mask plane
+skipped, optional ByteRun1). All are `Pixels` ops (one op, or one per opaque run when a pen is transparent). An Imagedisplay's `MUIA_Imagedisplay_Spec`
+(`<type>:<data>`, imspec.c) becomes theme data where the spec is a NAMED thing: type 0 standard backgrounds -> `Fill` roles (the two-tone patterns
+in their first pen), type 1 standard images -> arrows and the check mark as `Line` ops in the text pen, disk / hard disk / volume / drawer / chip /
+network as host `Icon` roles, type 2 pens -> MUI pens as `Fill` roles and colormap pens as pixels. NOT drawn, each a named refusal: types 3..7 (an image
+file through a picture datatype, gradients, vectors), system and RGB pen specs, the standard images with no glyph (cycle, popup, tape, knob, radio
+button). A ChunkyImage / Bodychunk whose parameters make Zune's `make_bitmap` fail (no pixels, no size, 0 or > 256 colours, depth > 8) refuses by name:
+Zune's `MUIM_Setup` would return FALSE and the window would not open.
 
 ## Classes on disk (`.mcc` / `.mcp`, `mui/disk.rs`)
 A class that is not built in is a real disk library: `MUI_NewObjectA("Foo.mcc")` and `MUI_CreateCustomClass(.., "Foo.mcc", ..)` open it
@@ -104,6 +114,27 @@ and user data the host writes there (state stays host-side; a guest write is nev
 `OM_DISPOSE` follows Zune's family order (`mui/dispose.rs`): an object's own dispatcher first, then each child through ITS dispatcher
 (`MUI_DisposeObject(child)`), then the free; a disk class's use count goes down with each object.
 
+## Pens, display modes, settings (mui4 lane)
+* `MUI_ObtainPen` / `MUI_ReleasePen` (`mui/pens.rs`): a `struct MUI_PenSpec` string (`m<n>` MUI pen, `p<n>` colormap entry, `s<n>` DrawInfo pen, `r<R>,<G>,<B>` 32-bit
+  hex) becomes a pen of the screen's Gute Form palette through the existing `ObtainBestPenA` allocator; an allocated pen carries bit 16 so
+  `MUI_ReleasePen` gives it back; out-of-range or unparsable specs are -1. The window's `MUI_RenderInfo` now holds `mri_DrawInfo`, `mri_Colormap`
+  (offsets from m68k gcc) and `mad_RenderInfo` is set BEFORE the object's own `MUIM_Setup` (window.c `DoSetupMethod`). `MUIM_GetConfigItem` finds nothing:
+  Zune's configuration dataspace holds only what the user saved, the defaults live in the asking class.
+* `BestModeIDA`, `GetDisplayInfoData` `DTAG_DIMS` / `DTAG_NAME` over the one CoralOS mode (0x29000): 640x256x8, no overscan, 8-bit guns, a 256-pen
+  palette; `BestModeIDA` applies bestmodeida.c's filters (monitor ID passes, DIPF must/must-not, depth, size) to it. `DTAG_MNTR` stays a named refusal.
+* `MUIA_NoNotify` TRUE anywhere in one `SetAttrs` list silences the notifications of the whole call (Notify.mui `OM_SET`; `nnset`). Before this the
+  engine notified anyway, and a Prefs editor's own widget updates recursed through their notifications until the stack ran into the program's data.
+* `OM_ADDMEMBER` / `OM_REMMEMBER` on an Application add and remove windows after creation (a leaving window closes first).
+* `Semaphore.mui` and `Dataspace.mui` (`mui/store.rs`; Dataspace over Semaphore): obtain/release with nesting, an Obtain that would block is a named
+  refusal (cooperative scheduler, no wait queue), Attempt answers FALSE; Dataspace Add/Find/Remove/Clear/Merge with the node bytes in guest memory.
+  `MUIM_Application_Load` / `Save` read and write `ENV:Zune/<MUIA_Application_Base>.cfg` (or `ENVARC:`, or a name), an IFF `FORM PREF` with a `MUIO`
+  chunk, and export/import the NATIVE classes as Zune does (Group -> children, Window -> root, Cycle/Radio LONG, Numeric value, String contents, other
+  Areas the selected byte, Text nothing; only objects with a `MUIA_ObjectID`). Objects of a program's own class are NOT sent `MUIM_Export` /
+  `MUIM_Import` (the log line counts them); a program's own `IFFHandle` (`MUIM_Dataspace_ReadIFF/WriteIFF`) is a named refusal until iffparse exists.
+* utility.library `AllocateTagItems`, `CloneTagItems`, `FreeTagItems`, `RefreshTagItemClones`, `TagInArray`, `FilterTagItems`, `MapTags`.
+* The AROS volume's `LIBS:` also reaches `SYS:Classes` (S/Startup-Sequence: `Assign LIBS: SYS:Classes ADD`), where the BOOPSI gadgets
+  (`colorwheel.gadget`, ...) live; the census tool and the AROS test helper assign it.
+
 ## Not done (named)
-`MUI_RequestA`, `MUIM_Application_OpenConfigWindow`, `MUIM_Application_Load/Save`, the Popasl/Popobject requester (a press is a named refusal), NList / TextEditor / BetterString / TheBar and every other MCC's own behaviour (the classes LOAD from disk; what they need next is named in the census),
+`MUI_RequestA`, `MUIM_Application_OpenConfigWindow`, the Popasl/Popobject requester (a press is a named refusal), NList / TextEditor / BetterString / TheBar and every other MCC's own behaviour (the classes LOAD from disk; what they need next is named in the census),
 multi-selection, list sorting with a compare hook, drag and drop, scrollbars on a Scrollgroup (its contents show at their natural size).
