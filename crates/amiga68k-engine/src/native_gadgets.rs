@@ -51,7 +51,6 @@ pub(crate) const FREEHORIZ: u32 = 2;
 pub(crate) const FREEVERT: u32 = 4;
 const MAXPOT: u32 = 0xFFFF;
 // struct StringInfo: Buffer 0, MaxChars 10.
-const SI_MAX_CHARS: u32 = 10;
 // struct IntuiText: IText 12.
 const IT_TEXT: u32 = 12;
 // struct Window: Width 8, Height 10, BorderLeft 54 (then Top, Right, Bottom as bytes).
@@ -133,7 +132,7 @@ fn plan<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32) -> Result<Option<(Contro
     let classic = !boopsi && ty & GTYP_SYSGADGET == 0 && ty & GTYP_SYSTYPEMASK == 0;
     let (Some(rect), enabled) = (rect_of(a, win, g)?, fl & GFLG_DISABLED == 0) else { return Ok(None) };
     let special = r32(a, g + GAD_SPECIAL, "Gadget.SpecialInfo")?;
-    let kind = if matches!(sys, Some(Native::Prop)) || (classic && ty & GTYP_GTYPEMASK == 3) {
+    let kind = if matches!(sys, Some(Native::Prop)) || (classic && ty & GTYP_GTYPEMASK == GTYP_PROPGADGET) {
         if special == 0 { return Ok(None); }
         let f = r16(a, special + PI_FLAGS, "PropInfo.Flags")?;
         let vert = match (f & FREEHORIZ != 0, f & FREEVERT != 0) {
@@ -146,12 +145,12 @@ fn plan<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32) -> Result<Option<(Contro
         };
         let (total, visible, top) = scroll_of(a, special, sys == Some(Native::Prop), vert)?;
         ControlKind::ScrollBar { vertical: vert, total, visible, top }
-    } else if matches!(sys, Some(Native::Strg)) || (classic && ty & GTYP_GTYPEMASK == 4) {
+    } else if matches!(sys, Some(Native::Strg)) || (classic && ty & GTYP_GTYPEMASK == GTYP_STRGADGET) {
         if special == 0 { return Ok(None); }
         let buf = r32(a, special, "StringInfo.Buffer")?;
         let max = r16(a, special + SI_MAX_CHARS, "StringInfo.MaxChars")?;
         ControlKind::Field { text: opt_str(a, buf, "StringInfo.Buffer")?, max_len: max.saturating_sub(1), editable: true, integer: act & GACT_LONGINT != 0 }
-    } else if matches!(sys, Some(Native::Button)) || (classic && ty & GTYP_GTYPEMASK == 1) {
+    } else if matches!(sys, Some(Native::Button)) || (classic && ty & GTYP_GTYPEMASK == GTYP_BOOLGADGET) {
         let render = if fl & GFLG_GADGIMAGE != 0 { r32(a, g + GAD_RENDER, "Gadget.GadgetRender")? } else { 0 };
         let label = label_of(a, g, fl)?;
         let arrow = sysi_which(a, render).and_then(|w| match w { LEFTIMAGE => Some(ArrowDir::Left), UPIMAGE => Some(ArrowDir::Up), RIGHTIMAGE => Some(ArrowDir::Right), DOWNIMAGE => Some(ArrowDir::Down), _ => None });

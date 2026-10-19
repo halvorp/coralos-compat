@@ -108,18 +108,13 @@ fn drop_gadget<U: GuestUi>(a: &mut Amiga<U>, g: u32) -> Result<(), Refusal> {
 
 /// Attach the chain starting at `first` to native window `native` of guest window `win` (OpenWindow's WA_Gadgets).
 pub fn attach<U: GuestUi>(a: &mut Amiga<U>, win: u32, native: UiObjectRef, first: u32) -> Result<(), Refusal> {
-    let mut g = first;
-    let mut n = 0;
-    while g != 0 {
-        n += 1;
-        if n > 4096 { return Err(Refusal("gadget list longer than 4096 (cyclic NextGadget?)".into())); }
+    for g in crate::boopsi_glist::chain(a, first, -1)? {
         if let Some(info) = a.gadgets.get(&g).cloned() {
             if info.kind != CONTEXT {
                 let model = gt_kinds::control_model(&info, g);
                 a.gt_ctls.sync(&mut a.ui, Some(native), u64::from(g), win, Some(model)).map_err(Refusal::ui)?;
             }
         }
-        g = a.mem.read_u32(g).map_err(Refusal::mem("Gadget.NextGadget"))?;
     }
     Ok(())
 }

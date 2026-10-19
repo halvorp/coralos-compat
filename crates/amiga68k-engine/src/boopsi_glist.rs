@@ -5,6 +5,7 @@
 //! GadTools gadgets draw natively, so the refresh skips them. Facts: AROS rom/intuition addgadget.c, addglist.c,
 //! removeglist.c, refreshglist.c; position -1 (0xFFFF as a UWORD) = the end of the list.
 use alloc::boxed::Box;
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
@@ -16,18 +17,18 @@ use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
 pub const WD_FIRST_GADGET: u32 = 62;
-const MAX_LIST: usize = 4096;
 
 fn rd<U: GuestUi>(a: &Amiga<U>, at: u32, what: &'static str) -> Result<u32, Refusal> { a.mem.read_u32(at).map_err(Refusal::mem(what)) }
 fn open<U: GuestUi>(a: &Amiga<U>, win: u32, what: &str) -> Result<(), Refusal> {
     if a.windows.contains_key(&win) { Ok(()) } else { Err(Refusal(format!("{what}: {win:#x} is not an open window"))) }
 }
 
-/// The chain starting at `g`, at most `num` long (-1 = to the end).
+/// The chain starting at `g`, at most `num` long (-1 = to the end). A gadget met twice is a cyclic NextGadget chain, refused by
+/// name; the list itself has no length limit.
 pub fn chain<U: GuestUi>(a: &Amiga<U>, mut g: u32, num: i32) -> Result<Vec<u32>, Refusal> {
-    let mut v = Vec::new();
+    let (mut v, mut seen) = (Vec::new(), BTreeSet::new());
     while g != 0 && (num < 0 || (v.len() as i32) < num) {
-        if v.len() >= MAX_LIST { return Err(Refusal(format!("gadget list longer than 4096 (cyclic NextGadget?): starts {:#x?}", &v[..v.len().min(12)]))); }
+        if !seen.insert(g) { return Err(Refusal(format!("cyclic NextGadget chain: gadget {g:#x} comes back after {} gadgets", v.len()))); }
         v.push(g);
         g = rd(a, g + GAD_NEXT, "Gadget.NextGadget")?;
     }
@@ -159,4 +160,23 @@ pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::lib
     b.named("AddGList", add_glist::<U>).named("AddGadget", add_gadget::<U>).named("RemoveGList", remove_glist::<U>)
         .named("RemoveGadget", remove_gadget::<U>).named("RefreshGList", refresh_glist::<U>).named("RefreshGadgets", refresh_gadgets::<U>)
         .named("NewModifyProp", crate::modify_prop::new_modify_prop::<U>).named("ModifyProp", crate::modify_prop::modify_prop::<U>)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use guestui_abi::RecordingGuestUi;
+
+    #[test]
+    fn a_long_chain_is_walked_whole_and_a_cyclic_one_is_refused() {
+        let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+        let n = 5000u32;
+        let base = a.heap.alloc(n * 4).unwrap();
+        for i in 0..n { a.mem.write_u32(base + 4 * i + GAD_NEXT, if i + 1 < n { base + 4 * (i + 1) } else { 0 }).unwrap(); }
+        assert_eq!(chain(&a, base, -1).unwrap().len(), n as usize, "no length limit");
+        assert_eq!(chain(&a, base, 3).unwrap(), alloc::vec![base, base + 4, base + 8]);
+        a.mem.write_u32(base + 4 * (n - 1) + GAD_NEXT, base + 4 * 10).unwrap();
+        let e = chain(&a, base, -1).unwrap_err();
+        assert!(e.0.contains("cyclic NextGadget"), "{e:?}");
+    }
 }

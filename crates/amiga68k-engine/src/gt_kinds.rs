@@ -22,6 +22,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
 use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, gt_kinds_rows::{self as rows, RowState}, idcmp, machine::Amiga, memory, run::Delivered, tags, translate::{self, gadtools}, Refusal};
+use crate::boopsi_ids::SI_MAX_CHARS;
 use guestui_abi::{CallbackToken, ControlKind, ControlModel, ControlValue, GuestUi, Intent};
 use retro_m68k::Cpu;
 
@@ -56,7 +57,6 @@ const GFLG_SELECTED: u16 = 0x0080;
 const GD_FLAGS: u32 = 12;
 const GD_SPECIAL_INFO: u32 = 34;
 const SI_SIZE: u32 = 36;
-const SI_MAX_CHARS: u32 = 10;
 
 /// What the host holds for a gadget beyond the generic record (the "native side's" copy of its value).
 #[derive(Debug, Clone, Default)]

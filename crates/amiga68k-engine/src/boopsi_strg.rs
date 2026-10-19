@@ -14,7 +14,6 @@ use guestui_abi::GuestUi;
 const SI_BUFFER: u32 = 0;
 const SI_UNDO: u32 = 4;
 const SI_BUFFER_POS: u32 = 8;
-const SI_MAX_CHARS: u32 = 10;
 const SI_DISP_POS: u32 = 12;
 const SI_NUM_CHARS: u32 = 16;
 const SI_EXTENSION: u32 = 24;

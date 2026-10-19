@@ -14,8 +14,6 @@ use crate::{boopsi_glist, machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
-const GTYP_PROPGADGET: u32 = 3;
-
 /// Store the five PropInfo words, then bring the native controls of the first `num` gadgets from the prop gadget up to date and
 /// refresh the BOOPSI ones among them (RefreshGList's job).
 fn modify<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, num: i32, what: &'static str, [flags, hpot, vpot, hbody, vbody]: [u32; 5]) -> Result<String, Refusal> {

@@ -14,11 +14,10 @@ use crate::{machine::Amiga, Refusal};
 use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
-const MAX_ITEMS: u32 = 4096;
-
 /// The next real item at or after `*state`: (address, tag, data); `*state` moves past it. None at TAG_DONE / NULL.
 pub(crate) fn next_item<U: GuestUi>(a: &Amiga<U>, state: &mut u32) -> Result<Option<(u32, u32, u32)>, Refusal> {
-    for _ in 0..MAX_ITEMS {
+    let mut seen = alloc::collections::BTreeSet::new();
+    loop {
         if *state == 0 { return Ok(None); }
         let at = *state;
         let (tag, data) = (a.mem.read_u32(at).map_err(Refusal::mem("ti_Tag"))?, a.mem.read_u32(at + 4).map_err(Refusal::mem("ti_Data"))?);
@@ -29,8 +28,8 @@ pub(crate) fn next_item<U: GuestUi>(a: &Amiga<U>, state: &mut u32) -> Result<Opt
             TAG_SKIP => *state = at + 8 * (data + 1),
             _ => { *state = at + 8; return Ok(Some((at, tag, data))); }
         }
+        if !seen.insert(*state) { return Err(Refusal(format!("cyclic TagItem list: item {:#x} comes back (TAG_MORE / TAG_SKIP loop)", *state))); }
     }
-    Err(Refusal("TagItem list longer than 4096 items (cyclic TAG_MORE?)".into()))
 }
 
 pub(crate) fn find<U: GuestUi>(a: &Amiga<U>, tag: u32, list: u32) -> Result<Option<(u32, u32)>, Refusal> {
@@ -71,7 +70,7 @@ fn pack_bool_tags<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     let mut st = list;
     while let Some((_, t, d)) = next_item(a, &mut st)? {
         let mut m = map;
-        for _ in 0..MAX_ITEMS {
+        loop { // forward only: ends at TAG_DONE or at the end of guest memory (a named refusal)
             let (mt, mf) = (a.mem.read_u32(m).map_err(Refusal::mem("boolmap"))?, a.mem.read_u32(m + 4).map_err(Refusal::mem("boolmap"))?);
             if mt == TAG_DONE { break; }
             if mt == t { if d != 0 { flags |= mf } else { flags &= !mf } break; }

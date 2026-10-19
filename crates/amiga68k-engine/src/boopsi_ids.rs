@@ -135,6 +135,9 @@ pub const GACT_TOGGLESELECT: u32 = 0x100;
 pub const GTYP_SYSTYPEMASK: u32 = 0xF0;
 pub const GTYP_GZZGADGET: u32 = 1 << 13;
 pub const GTYP_SYSGADGET: u32 = 1 << 15;
+pub const GTYP_BOOLGADGET: u32 = 1;
+pub const GTYP_PROPGADGET: u32 = 3;
+pub const GTYP_STRGADGET: u32 = 4;
 pub const GTYP_CUSTOMGADGET: u32 = 5;
 pub const GTYP_GTYPEMASK: u32 = 7;
 pub const GMORE_BOUNDS: u32 = 1;
@@ -197,3 +200,5 @@ pub const ICA_MAP: u32 = TAG_USER + 0x40000 + 2;
 pub const FRAME_DATA: u32 = 10; // type, HOffset, VOffset, Recessed, EdgesOnly (UWORDs)
 pub const PROP_DATA: u32 = 36; // PropInfo 22 + pad 2 + Total, Visible, Top (u32 each)
 pub const STRG_DATA: u32 = 76; // StringInfo 36 + StringExtend 36 + flags 4
+/// `struct StringInfo` MaxChars (intuition/intuition.h), the one home every StringInfo reader uses.
+pub const SI_MAX_CHARS: u32 = 10;
