@@ -55,7 +55,7 @@ pub fn search_paths(name: &str) -> Vec<String> {
     alloc::vec![format!("LIBS:{name}"), format!("PROGDIR:Libs/{name}"), format!("PROGDIR:{name}")]
 }
 
-/// Scan the first segment's contents for a RomTag (the matchword followed by a pointer back to itself).
+/// Scan one hunk's contents for a RomTag (the matchword followed by a pointer back to itself).
 fn find_rom_tag<U: GuestUi>(a: &Amiga<U>, base: u32, size: u32) -> Option<u32> {
     (0..size.saturating_sub(26)).step_by(2).map(|o| base + o)
         .find(|&p| a.mem.read_u16(p) == Ok(RTC_MATCHWORD) && a.mem.read_u32(p + 2) == Ok(p))
@@ -92,7 +92,8 @@ fn discard<U: GuestUi>(a: &mut Amiga<U>, made: &makelib::Made, seg: u32) {
 
 fn load_new<U: GuestUi>(a: &mut Amiga<U>, name: &str, key: String, path: String, bytes: &[u8], want: u32) -> Result<Next<U>, Refusal> {
     let seg: SegList = loadseg::load_bytes(a, bytes).map_err(|(e, why)| Refusal(format!("OpenLibrary \"{name}\": LoadSeg {path} failed ({why}), IoErr {}", e.0)))?;
-    let tag = find_rom_tag(a, seg.bases[0], seg.sizes[0]).ok_or_else(|| { let _ = loadseg::unload(a, seg.bptr); Refusal(format!("OpenLibrary \"{name}\": {path} has no RomTag in its first hunk")) })?;
+    let tag = seg.bases.iter().zip(&seg.sizes).find_map(|(&b, &sz)| find_rom_tag(a, b, sz))
+        .ok_or_else(|| { let _ = loadseg::unload(a, seg.bptr); Refusal(format!("OpenLibrary \"{name}\": {path} has no RomTag in any hunk")) })?;
     let flags = a.mem.read_u8(tag + RT_FLAGS).map_err(Refusal::mem("rt_Flags"))?;
     let ty = a.mem.read_u8(tag + RT_TYPE).map_err(Refusal::mem("rt_Type"))?;
     if ty != NT_LIBRARY {

@@ -155,6 +155,8 @@ impl<U: GuestUi> Amiga<U> {
             .func(memory::LVO_DELETE_POOL, "DeletePool", memory::delete_pool::<U>)
             .func(memory::LVO_ALLOC_POOLED, "AllocPooled", memory::alloc_pooled::<U>)
             .func(memory::LVO_FREE_POOLED, "FreePooled", memory::free_pooled::<U>)
+            .func(-1014, "AllocVecPooled", memory::alloc_vec_pooled::<U>)
+            .func(-1020, "FreeVecPooled", memory::free_vec_pooled::<U>)
             .func(ports::LVO_ALLOC_SIGNAL, "AllocSignal", ports::alloc_signal::<U>)
             .func(ports::LVO_FREE_SIGNAL, "FreeSignal", ports::free_signal::<U>)
             .func(ports::LVO_CREATE_MSG_PORT, "CreateMsgPort", ports::create_msg_port::<U>)
