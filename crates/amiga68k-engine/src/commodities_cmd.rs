@@ -18,11 +18,14 @@ use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
 const CXMSG_SIZE: u32 = 162;
-const CXM_ID: u32 = 24;
-const CXM_TYPE: u32 = 28;
+pub(crate) const CXM_ID: u32 = 24;
+pub(crate) const CXM_TYPE: u32 = 28;
 const CXM_DATA: u32 = 158;
-const CXM_COMMAND: u8 = 64;
-const CXCMD_KILL: u32 = 23;
+pub(crate) const CXM_COMMAND: u8 = 64;
+// libraries/commodities.h (AROS): the commands a broker's port receives.
+pub(crate) const CXCMD_DISABLE: u32 = 15;
+pub(crate) const CXCMD_ENABLE: u32 = 17;
+pub(crate) const CXCMD_KILL: u32 = 23;
 const SIGBREAKF_CTRL_E: u32 = 1 << 12;
 const MN_REPLY_PORT: u32 = 14;
 const MN_LENGTH: u32 = 18;

@@ -35,7 +35,7 @@ pub use crate::mui::classes::Kind;
 pub struct Notify { pub attr: u32, pub val: u32, pub dest: u32, pub params: Vec<u32> }
 
 /// Per-kind extra state.
-pub enum Ext { None, App { bit: u32, pending: VecDeque<u32>, inbox: VecDeque<crate::mui::app::Inbound> }, Win { native: Option<UiObjectRef>, content: (i32, i32) }, Text { label: bool }, List(crate::mui::list::ListData), Sem(crate::mui::store::Sem), Space(Vec<crate::mui::store::Entry>) }
+pub enum Ext { None, App { bit: u32, broker: Option<crate::mui::broker::Broker>, pending: VecDeque<u32>, inbox: VecDeque<crate::mui::app::Inbound> }, Win { native: Option<UiObjectRef>, content: (i32, i32) }, Text { label: bool }, List(crate::mui::list::ListData), Sem(crate::mui::store::Sem), Space(Vec<crate::mui::store::Entry>) }
 
 pub struct Obj {
     pub kind: Kind, pub block: u32,

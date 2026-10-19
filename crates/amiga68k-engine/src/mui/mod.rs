@@ -10,6 +10,7 @@
 // MUI's identifiers keep their own spelling (MUIA_Window_Open): they are interface names from mui.h, not Rust names.
 #![allow(non_upper_case_globals)]
 pub mod app;
+pub mod broker;
 pub mod attrs;
 pub mod classes;
 pub(crate) mod custom;

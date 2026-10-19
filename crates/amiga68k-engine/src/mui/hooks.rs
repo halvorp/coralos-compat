@@ -21,6 +21,8 @@ pub struct HookCall { pub hook: u32, pub obj: u32, pub msg: Msg, pub after: Afte
 #[derive(Debug, Clone)]
 pub enum After {
     Nothing,
+    /// A commodity message handed to the Application's broker hook: Zune replies it once the hook has returned (mui/broker.rs).
+    ReplyCx(u32),
     /// A List's construct hook returned the new entry for row `id` (NULL = the entry is not added).
     Constructed { list: u32, id: u32 },
     /// A List's display hook filled the `cols` cell pointers at `block + 4` for row `id` (`None` = the column titles).
@@ -65,6 +67,7 @@ pub fn run<U: GuestUi>(a: &mut Amiga<U>, d0: u32) -> Result<Next<U>, Refusal> {
     let after = h.after.clone();
     Ok(Next::Call { target: entry, d0: 0, aregs: alloc::vec![(0, h.hook), (1, msg), (2, h.obj)], then: Box::new(move |a: &mut Amiga<U>, _cpu: &mut Cpu, r: u32| {
         if let Some(size) = owned { a.heap.free(msg, size).map_err(|e| Refusal(format!("MUIM_CallHook: {e}")))?; }
+        if let After::ReplyCx(m) = after { crate::exec_wait::reply_to_port(a, m)?; }
         super::list::hook_returned(a, &after, r)?;
         run(a, d0)
     }) })

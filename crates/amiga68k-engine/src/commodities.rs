@@ -81,6 +81,18 @@ fn create<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal
     Ok(format!("[commodities] CreateCxObj type {ty} -> {co:#x}"))
 }
 
+/// A broker in the object graph (inactive), enqueued by priority, FIFO among equals: the part of CxBroker that needs no NewBroker struct, so
+/// a MUI Application can make its own. `(object, error)`: a unique name that is taken is CBERR_DUP and no object.
+pub(crate) fn add_broker<U: GuestUi>(a: &mut Amiga<U>, name: &str, unique: bool, pri: i8, port: u32) -> Result<(u32, u32), Refusal> {
+    if unique && a.cx.brokers.iter().any(|b| a.cx.objs.get(b).map_or(false, |o| o.name == name)) { return Ok((0, CBERR_DUP)); }
+    let co = new_obj(a, CX_BROKER, false, pri, name.into())?;
+    let task = a.sched.cur;
+    if let Some(o) = a.cx.objs.get_mut(&co) { o.port = port; o.task = task; }
+    let at = a.cx.brokers.iter().position(|b| a.cx.objs.get(b).map_or(false, |o| o.pri < pri)).unwrap_or(a.cx.brokers.len());
+    a.cx.brokers.insert(at, co);
+    Ok((co, CBERR_OK))
+}
+
 /// CxBroker(a0 = NewBroker, d0 = &error or NULL) -> the broker object (inactive), or NULL with *error.
 fn broker<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (nb, errp) = (cpu.areg(0), cpu.dreg(0));
@@ -89,22 +101,20 @@ fn broker<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal
     let name_p = a.mem.read_u32(nb + 2).map_err(&m)?;
     let name = if name_p == 0 { String::new() } else { a.mem.read_cstr(name_p).map_err(&m)? };
     let (unique, pri) = (a.mem.read_u16(nb + 14).map_err(&m)?, a.mem.read_u8(nb + 18).map_err(&m)? as i8);
-    let (co, err) = if version != NB_VERSION { (0, CBERR_VERSION) }
-        else if unique & NBU_UNIQUE != 0 && a.cx.brokers.iter().any(|b| a.cx.objs.get(b).map_or(false, |o| o.name == name)) { (0, CBERR_DUP) }
-        else {
-            let co = new_obj(a, CX_BROKER, false, pri, name.clone())?;
-            let port = a.mem.read_u32(nb + 20).map_err(&m)?;
-            let task = a.sched.cur;
-            if let Some(o) = a.cx.objs.get_mut(&co) { o.port = port; o.task = task; }
-            // Enqueue by priority, FIFO among equals.
-            let at = a.cx.brokers.iter().position(|b| a.cx.objs.get(b).map_or(false, |o| o.pri < pri)).unwrap_or(a.cx.brokers.len());
-            a.cx.brokers.insert(at, co);
-            (co, CBERR_OK)
-        };
+    let (co, err) = if version != NB_VERSION { (0, CBERR_VERSION) } else {
+        let port = a.mem.read_u32(nb + 20).map_err(&m)?;
+        add_broker(a, &name, unique & NBU_UNIQUE != 0, pri, port)?
+    };
     if errp != 0 { a.mem.write_u32(errp, err).map_err(Refusal::mem("CxBroker error"))?; }
     cpu.set_d0(co);
     Ok(format!("[commodities] CxBroker \"{name}\" -> {co:#x} (error {err})"))
 }
+
+/// ActivateCxObj on a known object without the register convention.
+pub(crate) fn set_active<U: GuestUi>(a: &mut Amiga<U>, co: u32, on: bool) { if let Some(o) = a.cx.objs.get_mut(&co) { o.active = on; } }
+
+/// DeleteCxObjAll without the register convention.
+pub(crate) fn delete_tree<U: GuestUi>(a: &mut Amiga<U>, co: u32) -> Result<(), Refusal> { if a.cx.objs.contains_key(&co) { free_tree(a, co) } else { Ok(()) } }
 
 /// ActivateCxObj(a0 = object, d0 = on/off) -> whether it was active.
 fn activate<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {

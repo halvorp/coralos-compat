@@ -36,6 +36,7 @@ fn defaults(kind: Kind) -> &'static [(u32, u32)] {
         k if k.is_a(Kind::Numeric) => &[(MUIA_Numeric_Min, 0), (MUIA_Numeric_Max, 100), (MUIA_Numeric_Value, 0)],
         Kind::Gauge => &[(MUIA_Gauge_Max, 100)],
         Kind::String => &[(MUIA_String_MaxLen, 80)],
+        Kind::Application => &[(MUIA_Application_Active, 1)], // application.c OM_NEW: app_Active = 1
         _ => &[],
     }
 }
@@ -59,7 +60,7 @@ pub fn create<U: GuestUi>(a: &mut Amiga<U>, kind: Kind, tags: &[(u32, u32)]) -> 
 fn init<U: GuestUi>(a: &mut Amiga<U>, obj: u32, kind: Kind, tags: &[(u32, u32)]) -> Result<(), Refusal> {
     if kind == Kind::Application {
         let bit = ports::alloc_signal_bit(a, -1)?.ok_or_else(|| Refusal("MUI Application: no free signal bit".into()))?;
-        if let Some(o) = a.objects.map.get_mut(&obj) { o.ext = Ext::App { bit, pending: Default::default(), inbox: Default::default() }; }
+        if let Some(o) = a.objects.map.get_mut(&obj) { o.ext = Ext::App { bit, broker: None, pending: Default::default(), inbox: Default::default() }; }
         a.sched.app_task.insert(obj, a.sched.cur); // the task a ReturnID signals: the one that created the Application
     }
     for &(tag, v) in defaults(kind) { store_num(a, obj, tag, v); }
@@ -73,6 +74,7 @@ fn init<U: GuestUi>(a: &mut Amiga<U>, obj: u32, kind: Kind, tags: &[(u32, u32)])
         }
     }
     clamp_numeric(a, obj);
+    if kind == Kind::Application { super::broker::create(a, obj, tags)?; }
     if kind == Kind::List { super::list::ask_titles(a, obj)?; }
     if kind == Kind::Listview && a.objects.children(obj).is_empty() {
         // Listview.mui builds its own List when none is given (Zune listview.c OM_NEW).
@@ -238,6 +240,7 @@ fn set_attr_with<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, val: u32, no
         Ty::Num => {
             shown = resolve_value(a, obj, kind, attr, val);
             if (kind, attr) == (Kind::List, MUIA_List_Active) { shown = super::list::set_active(a, obj, val)?; }
+            if (kind, attr) == (Kind::Application, MUIA_Application_Active) { shown = (val != 0) as u32; super::broker::sync_active(a, obj, val != 0); }
             if (kind, attr) == (Kind::Window, MUIA_Window_Open) {
                 shown = (val != 0) as u32;
                 win::set_open(a, obj, val != 0)?;
@@ -280,6 +283,7 @@ pub fn get_attr<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32) -> Result<u32
     match attr {
         MUIA_ApplicationObject => return Ok(ancestor(&a.objects, obj, Kind::Application).unwrap_or(0)),
         MUIA_WindowObject => return Ok(ancestor(&a.objects, obj, Kind::Window).unwrap_or(0)),
+        MUIA_Application_Broker | MUIA_Application_BrokerPort if kind == Kind::Application => return Ok(super::broker::get(a, obj, attr)),
         MUIA_Parent => return Ok(a.objects.map.get(&obj).and_then(|o| o.parent).unwrap_or(0)),
         MUIA_Window if kind.is_area() => return Ok(0), // no Intuition Window behind a native window: see docs/AMIGA-TRANSLATION.md
         MUIA_Group_ChildList => return Err(Refusal("MUI Group class: MUIA_Group_ChildList (a struct List of the children) is not implemented".into())),
@@ -310,7 +314,7 @@ fn dispose_tree<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> {
     let Some(o) = a.objects.map.get(&obj) else { return Ok(()) };
     let (kind, children): (Kind, Vec<u32>) = (o.kind, o.children.clone());
     let bit = if let Ext::App { bit, .. } = o.ext { Some(bit) } else { None };
-    if kind == Kind::Application { super::mirror::forget_application(a, obj); }
+    if kind == Kind::Application { super::broker::destroy(a, obj)?; super::mirror::forget_application(a, obj); }
     let mut first: Result<(), Refusal> = Ok(());
     if kind == Kind::Window { first = win::close_if_open(a, obj); }
     for c in children { let r = dispose_tree(a, c); if first.is_ok() { first = r; } }

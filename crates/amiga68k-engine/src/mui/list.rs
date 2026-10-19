@@ -106,7 +106,7 @@ pub(crate) fn ask_titles<U: GuestUi>(a: &mut Amiga<U>, list: u32) -> Result<(), 
 /// A hook the List queued has returned `d0`: store what it produced.
 pub fn hook_returned<U: GuestUi>(a: &mut Amiga<U>, after: &After, d0: u32) -> Result<(), Refusal> {
     match *after {
-        After::Nothing => Ok(()),
+        After::Nothing | After::ReplyCx(_) => Ok(()),
         After::Constructed { list, id } => {
             let Some(d) = a.objects.map.get_mut(&list).and_then(|o| if let Ext::List(d) = &mut o.ext { Some(d) } else { None }) else { return Ok(()) };
             let Some(i) = d.entries.iter().position(|e| e.id == id) else { return Ok(()) };

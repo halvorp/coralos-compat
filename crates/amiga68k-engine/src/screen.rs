@@ -37,6 +37,10 @@ pub fn setup(mem: &mut GuestMem) -> Result<(), Refusal> {
     mem.write_u32(SCREEN + 22, TITLE).map_err(m("Screen.Title"))?;
     mem.write_u32(SCREEN + 26, TITLE).map_err(m("Screen.DefaultTitle"))?;
     mem.write_u32(SCREEN + 40, TEXT_ATTR).map_err(m("Screen.Font"))?;
+    // IntuitionBase.ActiveScreen / FirstScreen (readable between LockIBase and UnlockIBase): the one screen. Offsets: Library 34 + View 18 +
+    // ActiveWindow = 52 (m68k, -mno-align-int, intuition/intuitionbase.h). Programs seed their preferences from ActiveScreen (Jano's Editor).
+    mem.write_u32(crate::machine::INTUITION_BASE + 56, SCREEN).map_err(m("IntuitionBase.ActiveScreen"))?;
+    mem.write_u32(crate::machine::INTUITION_BASE + 60, SCREEN).map_err(m("IntuitionBase.FirstScreen"))?;
     Ok(())
 }
 

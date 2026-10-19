@@ -99,12 +99,13 @@ pub fn new_input<U: GuestUi>(a: &mut Amiga<U>, app: u32, sigs_ptr: u32) -> Resul
     let handler_mask = super::handlers::signal_mask(a, app);
     let woken = if sigs_ptr != 0 { a.mem.read_u32(sigs_ptr).map_err(Refusal::mem("NewInput signal"))? } else { 0 };
     pump(a, app)?;
+    super::broker::service(a, app)?;
     super::handlers::signalled(a, app, if woken == 0 { u32::MAX } else { woken })?;
     let (id, more) = match a.objects.map.get_mut(&app).map(|o| &mut o.ext) {
         Some(Ext::App { pending, .. }) => (pending.pop_front().unwrap_or(0), !pending.is_empty()),
         _ => (0, false),
     };
-    if sigs_ptr != 0 { a.mem.write_u32(sigs_ptr, if more { 0 } else { (1 << bit) | handler_mask }).map_err(Refusal::mem("NewInput signal"))?; }
+    if sigs_ptr != 0 { a.mem.write_u32(sigs_ptr, if more { 0 } else { (1 << bit) | handler_mask | super::broker::signal_mask(a, app) }).map_err(Refusal::mem("NewInput signal"))?; }
     Ok(id)
 }
 
