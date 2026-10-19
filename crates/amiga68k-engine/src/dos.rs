@@ -45,7 +45,7 @@ pub fn setup(mem: &mut GuestMem) -> Result<(), Refusal> {
 
 /// Everything the program wrote to its console, in order.
 #[derive(Default)]
-pub struct Console { pub stdout: Vec<u8> }
+pub struct Console { pub stdout: Vec<u8>, /** exec RawPutChar's bytes of the line being written (the debug/serial port; complete lines go to the engine log). */ pub serial: Vec<u8> }
 
 pub(crate) fn emit<U: GuestUi>(a: &mut Amiga<U>, bytes: &[u8]) -> String {
     a.console.stdout.extend_from_slice(bytes);

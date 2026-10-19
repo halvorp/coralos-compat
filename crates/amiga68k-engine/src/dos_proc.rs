@@ -101,6 +101,7 @@ fn check_signal<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
 /// ParentOfFH(d1 = file) -> a lock on the directory the file is in.
 fn parent_of_fh<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let b = cpu.dreg(1);
+    if let Some(r) = crate::dos_io::console_refuses_lock(a, cpu, b, "ParentOfFH") { return r; }
     let node = crate::dos_io::handle(a, b, "ParentOfFH")?.node;
     let what = format!("[dos] ParentOfFH {:#x}", b << 2);
     match a.fs.vol.parent_of(node) {

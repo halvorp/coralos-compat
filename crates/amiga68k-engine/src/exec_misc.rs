@@ -21,7 +21,20 @@ use retro_m68k::Cpu;
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
     b.named("AddPort", add_port::<U>).named("RemPort", rem_port::<U>).named("FindPort", find_port::<U>)
-        .named("AddMemHandler", add_mem_handler::<U>).named("RemMemHandler", rem_mem_handler::<U>)
+        .named("AddMemHandler", add_mem_handler::<U>).named("RemMemHandler", rem_mem_handler::<U>).named("RawPutChar", raw_put_char::<U>)
+}
+
+/// RawPutChar(d0 = character): one byte to the low-level debug port, which is the ENGINE LOG here (never the program's stdout):
+/// bytes collect until a newline, then the line is logged as `[serial] ...`. A zero byte is ignored (AROS rom/exec/rawputchar.c:
+/// "Don't write 0 bytes"). An unfinished line is logged when the program ends is not modelled: it stays in `Console::serial`.
+fn raw_put_char<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let c = cpu.dreg(0) as u8;
+    if c == 0 { return Ok("[exec] RawPutChar 0 (ignored)".into()); }
+    if c == b'\n' {
+        let line: String = a.console.serial.drain(..).map(|b| b as char).collect();
+        a.log.push(format!("[serial] {line}"));
+    } else { a.console.serial.push(c); }
+    Ok(format!("[exec] RawPutChar {:?}", c as char))
 }
 
 fn add_mem_handler<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
