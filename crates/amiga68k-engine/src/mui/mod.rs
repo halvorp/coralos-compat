@@ -29,6 +29,7 @@ pub mod mirror;
 mod names;
 mod notify;
 mod object;
+pub mod pens;
 pub mod roles;
 pub mod surface;
 pub mod win;
@@ -57,6 +58,8 @@ const LVO_MUI_DISPOSE_OBJECT: i32 = -36;
 const LVO_MUI_MAKE_OBJECT_A: i32 = -120;
 const LVO_MUI_CREATE_CUSTOM_CLASS: i32 = -108;
 const LVO_MUI_DELETE_CUSTOM_CLASS: i32 = -114;
+const LVO_MUI_OBTAIN_PEN: i32 = -156;
+const LVO_MUI_RELEASE_PEN: i32 = -162;
 
 /// muimaster.library with the functions the engine bridges; every other vector stays a named refusal.
 pub fn library<U: GuestUi>(base: u32) -> LibraryBuilder<U> {
@@ -72,6 +75,8 @@ pub fn library<U: GuestUi>(base: u32) -> LibraryBuilder<U> {
         .func(LVO_MUI_REDRAW, "MUI_Redraw", mui_redraw::<U>)
         .func(LVO_MUI_CREATE_CUSTOM_CLASS, "MUI_CreateCustomClass", custom::create_custom_class::<U>)
         .func(LVO_MUI_DELETE_CUSTOM_CLASS, "MUI_DeleteCustomClass", custom::delete_custom_class::<U>)
+        .func(LVO_MUI_OBTAIN_PEN, "MUI_ObtainPen", pens::obtain_pen::<U>)
+        .func(LVO_MUI_RELEASE_PEN, "MUI_ReleasePen", pens::release_pen::<U>)
 }
 
 /// Create the object of public class `name` from the tag list at `tags_at`.

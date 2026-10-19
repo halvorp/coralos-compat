@@ -18,7 +18,7 @@ mod modes;
 mod draw;
 mod drawinfo;
 pub mod fonts;
-mod palette;
+pub(crate) mod palette;
 mod pixelarrays;
 pub mod rastport;
 pub mod record;

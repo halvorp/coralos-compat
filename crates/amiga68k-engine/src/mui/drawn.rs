@@ -31,7 +31,8 @@ const MADF_SETUP: u32 = 1 << 28;
 const MADF_CANDRAW: u32 = 1 << 14;
 const MADF_SHOWME: u32 = 1 << 9;
 const MUI_MAXMAX: i32 = 10000;
-/// `struct MUI_RenderInfo` offsets (window.h): mri_WindowObject 0, mri_Screen 4, mri_DrawInfo 8, mri_Pens 12, mri_Window 16, mri_RastPort 20.
+/// `struct MUI_RenderInfo` offsets (window.h; m68k gcc -mno-align-int): mri_WindowObject 0, mri_Screen 4, mri_DrawInfo 8, mri_Pens 12, mri_Window 16, mri_RastPort 20,
+/// mri_Flags 24, mri_Colormap 28, mri_PensStorage 36 (after two reserved UWORDs).
 const MRI_WINDOW_OBJECT: u32 = 0;
 const MRI_SCREEN: u32 = 4;
 const MRI_PENS: u32 = 12;
@@ -40,7 +41,7 @@ const MRI_RASTPORT: u32 = 20;
 /// Room for the whole structure (its private tail holds fonts, clip regions and a buffer RastPort; none is used here).
 const MRI_SIZE: u32 = 512;
 /// mri_PensStorage lives inside the structure; the pens are `MPEN_COUNT` UWORDs.
-const MRI_PENS_STORAGE: u32 = 40;
+const MRI_PENS_STORAGE: u32 = 36;
 /// `struct MUI_AreaData` offsets used here (mirror.rs has the rest): MinMax 12, Flags 36.
 const MAD_RENDER_INFO: u32 = 0;
 const MAD_MINMAX: u32 = 12;
@@ -171,6 +172,9 @@ pub(super) fn can_draw<U: GuestUi>(a: &Amiga<U>, obj: u32) -> bool {
 /// The mirror before a method is sent.
 fn before<U: GuestUi>(a: &mut Amiga<U>, obj: u32, step: Step) -> Result<(), Refusal> {
     match step {
+        // window.c's DoSetupMethod: muiRenderInfo(obj) is set BEFORE the object's own MUIM_Setup runs (a class reads `_screen(obj)` and
+        // `muiRenderInfo(obj)` in its Setup before passing the method up to Area, whose Setup only repeats the store).
+        Step::Setup(_) => { let ri = ri_of(a, obj)?; mirror::set_area(a, obj, MAD_RENDER_INFO, ri) }
         Step::Show(_) | Step::Draw(..) => mirror::area_geometry(a, obj),
         _ => Ok(()),
     }

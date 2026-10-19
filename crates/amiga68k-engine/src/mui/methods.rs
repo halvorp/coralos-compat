@@ -21,7 +21,7 @@ pub fn arity<U: GuestUi>(a: &Amiga<U>, id: u32, msg: u32) -> Result<u32, Refusal
     let until_null = |from: u32| -> Result<u32, Refusal> { let mut n = from; while n < from + 4096 && word(n + 1)? != 0 { n += 1; } Ok(n) };
     Ok(match id {
         MUIM_Notify => 4 + word(4)?.min(64),
-        MUIM_Set | MUIM_NoNotifySet | OM_GET | MUIM_KillNotifyObj | MUIM_WriteLong | MUIM_WriteString | MUIM_Family_Insert
+        MUIM_Set | MUIM_NoNotifySet | OM_GET | MUIM_GetConfigItem | MUIM_KillNotifyObj | MUIM_WriteLong | MUIM_WriteString | MUIM_Family_Insert
         | MUIM_List_InsertSingle | MUIM_List_GetEntry | MUIM_List_Exchange | MUIM_List_Move | MUIM_Window_SetMenuCheck | MUIM_Window_SetMenuState => 2,
         MUIM_SetUData | MUIM_SetUDataOnce | MUIM_GetUData | MUIM_List_Insert | MUIM_List_Select => 3,
         MUIM_MultiSet => until_null(2)?,
@@ -58,6 +58,10 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
             a.objects.hooks.push_back(HookCall { hook: arg(0)?, obj, msg: Msg::Params(args[1..].to_vec()), after: After::Nothing });
             Ok(0)
         }
+        // Notify.mui: MUIM_Dataspace_Find on the application's configuration dataspace, which holds only what the user SAVED (the defaults are
+        // applied by the class that asks, not stored: configdata.c GetConfigString/GetConfigULong). Nothing is saved here, so no item is found
+        // and the caller (an MCC reading its pen specs, a window its spacing) uses its own default.
+        MUIM_GetConfigItem => Ok(0),
         MUIM_KillNotify => { let t = arg(0)?; if let Some(o) = a.objects.map.get_mut(&obj) { o.notifies.retain(|n| n.attr != t); } Ok(0) }
         MUIM_KillNotifyObj => { let (t, d) = (arg(0)?, arg(1)?); if let Some(o) = a.objects.map.get_mut(&obj) { o.notifies.retain(|n| !(n.attr == t && n.dest == d)); } Ok(0) }
         MUIM_SetUData | MUIM_SetUDataOnce => { let (u, at, v) = (arg(0)?, arg(1)?, arg(2)?); set_udata(a, obj, u, at, v, id == MUIM_SetUData)?; Ok(0) }

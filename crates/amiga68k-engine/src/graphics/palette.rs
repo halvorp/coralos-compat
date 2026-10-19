@@ -118,12 +118,17 @@ pub fn obtain_pen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
 
 pub fn release_pen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let n = cpu.dreg(0) as usize;
+    release(a, n);
+    Ok(format!("[graphics] ReleasePen {n}"))
+}
+
+/// Give one reference on pen `n` back (the host half of ReleasePen; pens outside the palette are ignored, as ReleasePen does).
+pub fn release<U: GuestUi>(a: &mut Amiga<U>, n: usize) {
     if n < 256 {
         let p = a.gfx.palette();
         p.refs[n] = p.refs[n].saturating_sub(1);
         if p.refs[n] == 0 { p.exclusive[n] = false; }
     }
-    Ok(format!("[graphics] ReleasePen {n}"))
 }
 
 /// ObtainBestPenA(a0 = cm, d1..d3 = r g b, a1 = tags): an exact shared match, else a free pen set to the colour, else
@@ -131,25 +136,35 @@ pub fn release_pen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
 pub fn obtain_best_pen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (r, g, b) = (cpu.dreg(1) >> 24, cpu.dreg(2) >> 24, cpu.dreg(3) >> 24);
     let fail_if_bad = tags::get(&tags::walk(&a.mem, cpu.areg(1))?, OBP_FAIL_IF_BAD).unwrap_or(0) != 0;
+    let res = obtain_best(a, r, g, b, fail_if_bad)?;
+    cpu.set_d0(res as u32);
+    Ok(format!("[graphics] ObtainBestPenA {r:02x}{g:02x}{b:02x} -> {res}"))
+}
+
+/// The pen allocator behind ObtainBestPenA (8-bit components); -1 when none can be had.
+pub fn obtain_best<U: GuestUi>(a: &mut Amiga<U>, r: u32, g: u32, b: u32, fail_if_bad: bool) -> Result<i32, Refusal> {
     let p = a.gfx.palette();
     let exact = (0..256).find(|&i| p.refs[i] > 0 && !p.exclusive[i] && dist(p.rgb[i], r, g, b) == 0);
-    let res = if let Some(i) = exact { p.refs[i] += 1; i as i32 }
+    Ok(if let Some(i) = exact { p.refs[i] += 1; i as i32 }
         else if let Some(i) = (8..256usize).find(|&i| p.refs[i] == 0) { p.refs[i] = 1; set(a, i, rgb8(r, g, b))?; i as i32 }
         else if fail_if_bad { -1 }
         else {
             let near = (0..256).filter(|&i| p.refs[i] > 0 && !p.exclusive[i]).min_by_key(|&i| dist(p.rgb[i], r, g, b));
             match near { Some(i) => { p.refs[i] += 1; i as i32 } None => -1 }
-        };
-    cpu.set_d0(res as u32);
-    Ok(format!("[graphics] ObtainBestPenA {r:02x}{g:02x}{b:02x} -> {res}"))
+        })
 }
 
 /// FindColor(a3 = cm, d1..d3 = r g b, d4 = maxpen): the closest pen in 0..=maxpen.
 pub fn find_color<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (r, g, b, max) = (cpu.dreg(1) >> 24, cpu.dreg(2) >> 24, cpu.dreg(3) >> 24, cpu.dreg(4) as i32);
-    let hi = if max < 0 || max > 255 { 255 } else { max as usize };
-    let p = a.gfx.palette();
-    let best = (0..=hi).min_by_key(|&i| dist(p.rgb[i], r, g, b)).unwrap_or(0);
+    let best = closest(a, r, g, b, max);
     cpu.set_d0(best as u32);
     Ok(format!("[graphics] FindColor {r:02x}{g:02x}{b:02x} max {max} -> {best}"))
+}
+
+/// The closest pen (8-bit components) in 0..=max (max outside 0..=255 means all).
+pub fn closest<U: GuestUi>(a: &mut Amiga<U>, r: u32, g: u32, b: u32, max: i32) -> usize {
+    let hi = if !(0..=255).contains(&max) { 255 } else { max as usize };
+    let p = a.gfx.palette();
+    (0..=hi).min_by_key(|&i| dist(p.rgb[i], r, g, b)).unwrap_or(0)
 }
