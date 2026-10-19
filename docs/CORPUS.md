@@ -820,3 +820,16 @@ The all-64 census counts programs whose run reaches no unimplemented function: 6
 
 The Editor's exit was not silent: the line is `Main interface failed to open!` (the census tool prints the log only from the first unimplemented call, and none was reached).
 Jano's `setup()` takes its screen from `prefs.parent`, which `set_default_prefs` copies from `IntuitionBase->ActiveScreen`; the engine's `IntuitionBase` had no ActiveScreen/FirstScreen, so `setup()` returned 1 before any library call.
+
+## NewModifyProp, DrawBevelBoxA, the Listview's List, SetAsString, Application_Input (mui6 lane), 2026-10-19
+`tools/corpus-mui.py` (47 MUI programs) and `tools/corpus-census.py` (all 64), before (merged-macfm e1965da) and after. Columns: windows / native controls / planes / distinct named refusals.
+
+| program | before | after | what changed |
+|---|---|---|---|
+| aros-VMM | 1 / 21 / 0 / 6 | 1 / 21 / 0 / 0, next none | the six refusals are gone: `MUIM_Window_SetCycleChain` (recorded), a Listview's `MUIM_List_Clear` / `InsertSingle` / `MUIA_List_Active` (passed to its List), `MUIM_SetAsString`, `MUIM_Application_Input` |
+| aros-prefs-Editor | 1 / 0 / 0 / 2, next `gadtools.library/DrawBevelBoxA` | 1 / 0 / 1 / 1, next none | `DrawBevelBoxA` is a native `Bevel` op (one plane); the remaining refusal is GadTools `PALETTE_KIND` (no swatch role) |
+| aros-Editor (GadTools) | next `intuition.library/NewModifyProp` | next none | `NewModifyProp` moves the native ScrollBar |
+| **all 47** | 28 / 521 / 17 / 12 | 28 / 521 / 18 / 5 | |
+
+All-64 census: 62 programs reach no unimplemented function (60 after mui5); the two others (`dopus-viewfont` `QueryOverscan`, `aros-MultiView` `WindowAction`) are unchanged.
+Findings. (1) Zune's window.c has no `MUIM_Window_SetCycleChain` (it falls to rootclass and answers 0); the engine records the program's order and the seam cannot carry it (no focus order in guestui-abi). (2) Listview.mui passes the List methods, the List attributes and the notifications on them to its List (listview.c:126-266), which is what VMM's refusals were. (3) `MUIM_Application_Input` has no `MUIA_` counterpart; it is `NewInput` with all signals taken as fired.

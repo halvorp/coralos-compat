@@ -61,6 +61,25 @@ pub fn paint_as<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, prim: Option<
     }
 }
 
+/// A call that is SYSTEM UI and so puts no pixels in the canvas (`prim`, in RastPort coordinates: a bevel box): only the display-list
+/// op is recorded, for the host's kit to draw. Refused by name where that cannot be done exactly: a destination that is not a window
+/// canvas, an installed clip region, or a host without the plane route (it would show nothing, and the guest's drawing is not faked).
+pub fn note_native<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, prim: Prim, rect: Rect) -> Result<(), Refusal> {
+    match resolve(a, rp)? {
+        Dest::Dropped(why) => { a.log.push(format!("[graphics] {what} on {rp:#x} dropped: {why}")); Ok(()) }
+        Dest::Bitmap { window: None, .. } => Err(Refusal(format!("{what}: RastPort {rp:#x} draws into an off-screen bitmap: system UI has no display list there"))),
+        Dest::Bitmap { region: Some(_), .. } => Err(Refusal(format!("{what}: a clip region is installed on the layer: a native op cannot be clipped to it"))),
+        Dest::Bitmap { bm, origin, window: Some(w), .. } => {
+            if !a.gfx.present.plane_route() { return Err(Refusal(format!("{what}: the host has no plane route, so a native op would show nothing"))); }
+            super::bitmaps::ensure_source(a, bm)?;
+            let hit = rect.translate(-origin.0, -origin.1).intersect(&a.gfx.bitmaps[&bm].bm.rect());
+            a.gfx.add_damage(w, hit);
+            super::record::note(a, w, Some(prim), hit, origin);
+            Ok(())
+        }
+    }
+}
+
 /// Read access to the destination bitmap (ReadPixel, ClipBlit sources): the pixel at RastPort coordinates, honouring
 /// the layer clip. `None` = outside.
 pub fn read_pixel<U: GuestUi>(a: &mut Amiga<U>, rp: u32, x: i32, y: i32) -> Result<Option<u8>, Refusal> {

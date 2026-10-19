@@ -119,7 +119,7 @@ pub fn remove_gadget<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
 pub fn refresh_glist<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { refresh(a, cpu, cpu.dreg(0) as i16 as i32, "RefreshGList") }
 pub fn refresh_gadgets<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { refresh(a, cpu, -1, "RefreshGadgets") }
 
-fn refresh<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, num: i32, what: &'static str) -> Result<String, Refusal> {
+pub(crate) fn refresh<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, num: i32, what: &'static str) -> Result<String, Refusal> {
     let (g, win) = (cpu.areg(0), cpu.areg(1));
     open(a, win, what)?;
     let all = chain(a, g, num)?;
@@ -158,4 +158,5 @@ fn step<U: GuestUi>(a: &mut Amiga<U>, job: Job) -> Result<Next<U>, Refusal> {
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
     b.named("AddGList", add_glist::<U>).named("AddGadget", add_gadget::<U>).named("RemoveGList", remove_glist::<U>)
         .named("RemoveGadget", remove_gadget::<U>).named("RefreshGList", refresh_glist::<U>).named("RefreshGadgets", refresh_gadgets::<U>)
+        .named("NewModifyProp", crate::modify_prop::new_modify_prop::<U>).named("ModifyProp", crate::modify_prop::modify_prop::<U>)
 }

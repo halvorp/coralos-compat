@@ -13,6 +13,8 @@ fn tags(a: &mut Amiga<RecordingGuestUi>, items: &[(u32, u32)]) -> u32 {
     p
 }
 fn cstr(a: &mut Amiga<RecordingGuestUi>, s: &str) -> u32 { let p = a.heap.alloc(s.len() as u32 + 1).unwrap(); a.mem.write_bytes(p, s.as_bytes()).unwrap(); p }
+/// A guest C string with its NUL written (the heap hands back recycled blocks, so the NUL cannot be assumed).
+fn zstr(a: &mut Amiga<RecordingGuestUi>, s: &str) -> u32 { let p = a.heap.alloc(s.len() as u32 + 1).unwrap(); a.mem.write_bytes(p, s.as_bytes()).unwrap(); a.mem.write_u8(p + s.len() as u32, 0).unwrap(); p }
 fn make(a: &mut Amiga<RecordingGuestUi>, class: &str, items: &[(u32, u32)]) -> Result<u32, crate::Refusal> { let t = tags(a, items); new_by_name(a, class, t) }
 
 #[test]
@@ -581,4 +583,86 @@ fn a_list_without_a_pool_makes_its_own_and_gives_it_back() {
     assert_eq!(a.pools.len(), 1);
     dispose(&mut a, list).unwrap();
     assert!(a.pools.is_empty(), "disposing the list deleted its own pool");
+}
+
+#[test]
+fn set_cycle_chain_records_the_programs_focus_order_and_refuses_what_is_not_an_object() {
+    let mut a = machine();
+    let (l1, l2) = (cstr(&mut a, "One"), cstr(&mut a, "Two"));
+    let (b1, b2) = (made(&mut a, MUIO_Button, &[l1]), made(&mut a, MUIO_Button, &[l2]));
+    let (_app, win) = open_ui(&mut a, &[b1, b2]);
+    assert!(a.objects.cycle_chain(win).is_empty(), "control: nothing is recorded until the program sets a chain");
+    assert_eq!(method(&mut a, win, MUIM_Window_SetCycleChain, &[b2, b1]).unwrap(), 0);
+    assert_eq!(a.objects.cycle_chain(win), [b2, b1], "the program's order, not creation order");
+    method(&mut a, win, MUIM_Window_SetCycleChain, &[b1]).unwrap();
+    assert_eq!(a.objects.cycle_chain(win), [b1], "a new chain replaces the old one");
+    // NEGATIVE CONTROL: a longword that is no MUI object is refused by name and the chain is untouched.
+    let e = method(&mut a, win, MUIM_Window_SetCycleChain, &[b2, 0x1234]).unwrap_err().0;
+    assert!(e.contains("MUIM_Window_SetCycleChain") && e.contains("0x1234"), "{e}");
+    assert_eq!(a.objects.cycle_chain(win), [b1]);
+}
+
+#[test]
+fn a_listview_passes_the_list_methods_attributes_and_notifications_to_its_list() {
+    let mut a = machine();
+    let list = make(&mut a, "List.mui", &[]).unwrap();
+    let lv = make(&mut a, "Listview.mui", &[(MUIA_Listview_List, list)]).unwrap();
+    let (app, _) = open_ui(&mut a, &[lv]);
+    let rows: Vec<u32> = ["alpha", "beta", "gamma"].iter().map(|s| cstr(&mut a, s)).collect();
+    for &r in &rows { method(&mut a, lv, MUIM_List_InsertSingle, &[r, MUIV_List_Insert_Bottom]).unwrap(); }
+    assert!(matches!(kind_of_obj(&a, list), ControlKind::List { ref rows, .. } if rows.len() == 3), "InsertSingle sent to the Listview filled the native list");
+    // MUIA_List_Active set on the Listview selects the native row (and a notification asked of the Listview fires on the List's change).
+    method(&mut a, lv, MUIM_Notify, &[MUIA_List_Active, MUIV_EveryTime, app, 2, MUIM_Application_ReturnID, 77]).unwrap();
+    set_attr(&mut a, lv, MUIA_List_Active, 2).unwrap();
+    assert!(matches!(kind_of_obj(&a, list), ControlKind::List { selected: Some(2), .. }));
+    assert_eq!((get_attr(&mut a, lv, MUIA_List_Active).unwrap(), get_attr(&mut a, list, MUIA_List_Active).unwrap()), (2, 2));
+    assert_eq!(next_id(&mut a, app), 77, "the redirected notification ran");
+    method(&mut a, lv, MUIM_List_Clear, &[]).unwrap();
+    assert!(matches!(kind_of_obj(&a, list), ControlKind::List { ref rows, selected: None, .. } if rows.is_empty()), "Clear sent to the Listview emptied the List and its selection");
+    assert_eq!(get_attr(&mut a, lv, MUIA_List_Entries).unwrap(), 0);
+    // NEGATIVE CONTROL: an attribute that is neither the Listview's nor the List's is still refused by name.
+    assert!(set_attr(&mut a, lv, MUIA_Slider_Quiet, 1).unwrap_err().0.contains("not implemented"));
+}
+
+#[test]
+fn set_as_string_formats_the_values_and_sets_the_attribute_to_the_text() {
+    let mut a = machine();
+    let txt = make(&mut a, "Text.mui", &[]).unwrap();
+    let (app, _) = open_ui(&mut a, &[txt]);
+    let fmt = zstr(&mut a, "%ld00 KByte");
+    assert_eq!(method(&mut a, txt, MUIM_SetAsString, &[MUIA_Text_Contents, fmt, 42]).unwrap(), 1, "TRUE");
+    assert_eq!(a.objects.text(txt, MUIA_Text_Contents), "4200 KByte");
+    assert!(matches!(kind_of_obj(&a, txt), ControlKind::Label { ref text, .. } if text == "4200 KByte"), "and the native label follows: {:?}", kind_of_obj(&a, txt));
+    // A word conversion reads the HIGH word of the long the C varargs pushed (RawDoFmt's data stream), a string conversion a pointer.
+    let (f2, name) = (zstr(&mut a, "%s: %d"), zstr(&mut a, "load"));
+    method(&mut a, txt, MUIM_SetAsString, &[MUIA_Text_Contents, f2, name, 7 << 16]).unwrap();
+    assert_eq!(a.objects.text(txt, MUIA_Text_Contents), "load: 7");
+    // Notified like any set.
+    method(&mut a, txt, MUIM_Notify, &[MUIA_Text_Contents, MUIV_EveryTime, app, 2, MUIM_Application_ReturnID, 5]).unwrap();
+    method(&mut a, txt, MUIM_SetAsString, &[MUIA_Text_Contents, fmt, 1]).unwrap();
+    assert_eq!(next_id(&mut a, app), 5);
+    // The guest message's length follows the format: attr, format, and one long per 32-bit or padded 16-bit value.
+    let msg = a.heap.alloc(32).unwrap();
+    a.mem.write_u32(msg + 8, f2).unwrap();
+    assert_eq!(methods::arity(&a, MUIM_SetAsString, msg).unwrap(), 2 + 2, "%s (4 bytes) + %d (2 bytes) = 6 bytes = 2 longs");
+    a.mem.write_u32(msg + 8, fmt).unwrap();
+    assert_eq!(methods::arity(&a, MUIM_SetAsString, msg).unwrap(), 2 + 1);
+    let plain = zstr(&mut a, "no values");
+    a.mem.write_u32(msg + 8, plain).unwrap();
+    assert_eq!(methods::arity(&a, MUIM_SetAsString, msg).unwrap(), 2);
+}
+
+#[test]
+fn application_input_reports_the_signals_to_wait_on_and_returns_the_next_id() {
+    let mut a = machine();
+    let l = cstr(&mut a, "Go");
+    let button = made(&mut a, MUIO_Button, &[l]);
+    let (app, _) = open_ui(&mut a, &[button]);
+    let sigs = a.heap.alloc(4).unwrap();
+    assert_eq!(method(&mut a, app, MUIM_Application_Input, &[sigs]).unwrap(), 0, "nothing pending");
+    let wait = a.mem.read_u32(sigs).unwrap();
+    assert_ne!(wait, 0, "the signals the loop must Wait on");
+    method(&mut a, app, MUIM_Application_ReturnID, &[9]).unwrap();
+    a.mem.write_u32(sigs, 0).unwrap();
+    assert_eq!(method(&mut a, app, MUIM_Application_Input, &[sigs]).unwrap(), 9, "the queued ReturnID comes back from Input as from NewInput");
 }

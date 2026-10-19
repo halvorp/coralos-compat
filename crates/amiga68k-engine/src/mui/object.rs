@@ -20,6 +20,8 @@ impl Objects {
     pub fn flag(&self, o: u32, attr: u32) -> bool { self.num(o, attr).unwrap_or(0) != 0 }
     pub fn text(&self, o: u32, attr: u32) -> &str { self.map.get(&o).and_then(|x| x.strs.get(&attr)).map_or("", |s| s.as_str()) }
     pub fn entries(&self, o: u32, attr: u32) -> &[String] { self.map.get(&o).and_then(|x| x.arrs.get(&attr)).map_or(&[], |v| v.as_slice()) }
+    /// The window's focus chain as the program set it, the objects that still exist (MUIM_Window_SetCycleChain).
+    pub fn cycle_chain(&self, win: u32) -> Vec<u32> { self.map.get(&win).map_or_else(Vec::new, |x| x.cycle_chain.iter().copied().filter(|c| self.map.contains_key(c)).collect()) }
     pub fn children(&self, o: u32) -> &[u32] { self.map.get(&o).map_or(&[], |x| x.children.as_slice()) }
 }
 
@@ -224,6 +226,12 @@ pub fn set_attr_quiet<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, val: u3
 
 fn set_attr_with<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, val: u32, notify_too: bool) -> Result<(), Refusal> {
     let kind = kind_of(a, obj)?;
+    // Group.mui's OM_SET hands every tag to its children (group.c:567-612) and Listview.mui keeps no List attribute itself (listview.c:253):
+    // a List attribute set on the Listview is set on its List.
+    if kind == Kind::Listview && super::list::forwarded(attr) {
+        let l = super::list::list_of(&a.objects, obj).ok_or_else(|| Refusal("MUI Listview has no List".into()))?;
+        return set_attr_with(a, l, attr, val, notify_too);
+    }
     let ty = attrs::lookup(kind, attr).ok_or_else(|| unknown(kind, attr))?;
     let mut shown = val;
     match ty {
@@ -279,6 +287,11 @@ pub fn ancestor(objs: &Objects, mut obj: u32, want: Kind) -> Option<u32> {
 /// GetAttr: the stored value (the class default, or 0, when never set); attributes the object computes are answered here.
 pub fn get_attr<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32) -> Result<u32, Refusal> {
     let kind = kind_of(a, obj)?;
+    // Listview.mui answers the List attributes from its List (listview.c:126-157).
+    if kind == Kind::Listview && super::list::forwarded(attr) {
+        let l = super::list::list_of(&a.objects, obj).ok_or_else(|| Refusal("MUI Listview has no List".into()))?;
+        return get_attr(a, l, attr);
+    }
     let ty = attrs::lookup(kind, attr).ok_or_else(|| unknown(kind, attr))?;
     match attr {
         MUIA_ApplicationObject => return Ok(ancestor(&a.objects, obj, Kind::Application).unwrap_or(0)),
