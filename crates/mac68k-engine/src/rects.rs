@@ -5,10 +5,10 @@
 //! wraps at 16 bits like the 68k word instructions did.
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_rect, Arg, Rect};
+use crate::qd::port::write_rect;
 use crate::Refusal;
 use alloc::format;
 use guestui_abi::GuestUi;
-use retro_guest_mem::GuestMem;
 use retro_m68k::Cpu;
 
 impl Rect {
@@ -32,11 +32,6 @@ impl Rect {
     }
 }
 
-fn write_rect(mem: &mut GuestMem, at: u32, r: Rect) -> Result<(), Refusal> {
-    let e = Refusal::mem("Rect");
-    for (i, v) in [r.top, r.left, r.bottom, r.right].into_iter().enumerate() { mem.write_u16(at + 2 * i as u32, v as u16).map_err(&e)?; }
-    Ok(())
-}
 fn pt(v: u32) -> (i16, i16) { ((v >> 16) as i16, v as i16) }
 fn done(log: &str) -> Result<Done, Refusal> { Ok(Done { result: 0, log: format!("[quickdraw] {log}") }) }
 fn flag(name: &str, b: bool) -> Result<Done, Refusal> { Ok(Done { result: u32::from(b), log: format!("[quickdraw] {name} -> {b}") }) }

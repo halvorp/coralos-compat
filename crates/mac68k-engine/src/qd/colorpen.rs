@@ -13,8 +13,6 @@ use guestui_abi::GuestUi;
 use retro_m68k::Cpu;
 
 const COLR_BIT: u32 = 88;
-/// blackColor 33, whiteColor 30, redColor 205, greenColor 341, blueColor 409, cyanColor 273, magentaColor 137, yellowColor 69.
-const NAMES: [(u32, &str); 8] = [(33, "black"), (30, "white"), (205, "red"), (341, "green"), (409, "blue"), (273, "cyan"), (137, "magenta"), (69, "yellow")];
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     super::reg(m, 0xA862, "ForeColor", &[Arg::L], None, fore_color::<U>)?;
@@ -24,7 +22,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
 
 fn set<U: GuestUi>(m: &mut Mac<U>, c: &Call, off: u32) -> Result<Done, Refusal> {
     let (port, color) = (current_port(m)?, c.args.get(0));
-    let name = NAMES.iter().find(|(v, _)| *v == color).map(|(_, n)| *n).ok_or_else(|| Refusal(format!("{}: {color} is not one of the eight standard colours", c.name)))?;
+    let name = crate::cqd::color::STANDARD_COLORS.iter().find(|(v, ..)| *v == color).map(|&(_, n, _)| n).ok_or_else(|| Refusal(format!("{}: {color} is not one of the eight standard colours", c.name)))?;
     m.mem.write_u32(port.wrapping_add(off), color).map_err(Refusal::mem("GrafPort colour"))?;
     if is_cport(&m.mem, port) {
         let rgb = crate::cqd::pens::constant_rgb(color).ok_or_else(|| Refusal(format!("{}: {color} is not one of the eight standard colours", c.name)))?;

@@ -75,18 +75,18 @@ pub fn gray(depth: u8) -> Vec<Rgb> {
     (0..n).map(|i| { let v = (0xFFFF * (n - 1 - i) / (n - 1)) as u16; Rgb { r: v, g: v, b: v } }).collect()
 }
 
-/// The eight QuickDraw colour constants of `ForeColor`/`BackColor` as RGB: the matching entries of the standard 4-bit table
-/// (blackColor 33, whiteColor 30, redColor 205, greenColor 341, blueColor 409, cyanColor 273, magentaColor 137,
-/// yellowColor 69; the codes are Inside Macintosh I-168).
+/// The eight QuickDraw colour constants of `ForeColor`/`BackColor` (Inside Macintosh I-168): the code, its name, and the
+/// entry of the standard 4-bit table it shows as (white is entry 0, black entry 15). The one home of these codes.
+pub const STANDARD_COLORS: [(u32, &str, usize); 8] = [(33, "black", 15), (30, "white", 0), (205, "red", 3), (341, "green", 9), (409, "blue", 6), (273, "cyan", 7), (137, "magenta", 4), (69, "yellow", 1)];
+
+/// A standard colour constant as RGB, or None for any other code.
 pub fn standard_color(code: u32) -> Option<Rgb> {
-    let c4 = clut4();
-    Some(match code { 33 => Rgb::BLACK, 30 => Rgb::WHITE, 205 => c4[3], 341 => c4[9], 409 => c4[6], 273 => c4[7], 137 => c4[4], 69 => c4[1], _ => return None })
+    STANDARD_COLORS.iter().find(|(k, ..)| *k == code).map(|&(.., i)| clut4()[i])
 }
 
 /// The standard colour constant nearest `c` (what a plain, non-color `GrafPort` stores for an `RGBForeColor`).
 pub fn nearest_standard_code(c: Rgb) -> u32 {
-    const CODES: [u32; 8] = [33, 30, 205, 341, 409, 273, 137, 69];
-    *CODES.iter().min_by_key(|&&k| standard_color(k).map_or(u64::MAX, |s| s.distance(c))).unwrap_or(&33)
+    STANDARD_COLORS.iter().map(|&(k, ..)| k).min_by_key(|&k| standard_color(k).map_or(u64::MAX, |s| s.distance(c))).unwrap_or(33)
 }
 
 /// The index of the entry of `table` that best matches `c`: an exact match (the lowest such index), else the nearest in
