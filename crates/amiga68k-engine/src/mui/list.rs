@@ -38,6 +38,9 @@ pub fn list_of(o: &Objects, obj: u32) -> Option<u32> {
     match o.kind(obj)? { Kind::List => Some(obj), Kind::Listview => o.children(obj).first().copied(), _ => None }
 }
 
+/// The List attributes a Listview redirects notifications for (listview.c:166-185). The `MUIA_Listview_*` ones are the Listview's own here.
+pub fn forwarded(attr: u32) -> bool { super::attrs::lookup(Kind::List, attr).is_some() && super::attrs::lookup(Kind::Listview, attr).is_none() }
+
 /// The list control for List `obj`.
 pub fn control(o: &Objects, obj: u32) -> Option<ControlKind> {
     let d = data(o, obj)?;

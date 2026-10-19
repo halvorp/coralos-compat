@@ -146,6 +146,25 @@ and user data the host writes there (state stays host-side; a guest write is nev
   application), then the hook runs as a guest call and the message is replied. `CopyBrokerList`/`FreeBrokerList` hand Exchange name, title, description.
 * A List with no `MUIA_List_Pool` makes its own pool (list.c), the A2 of its construct/destruct hooks.
 
+## Listview, SetAsString, Input, the cycle chain (mui6 lane)
+* A **Listview** passes to its List what Zune's `listview.c` passes: the List methods (`Clear`, `Exchange`, `GetEntry`, `Insert`, `InsertSingle`, `Jump`,
+  `NextSelected`, `Redraw`, `Remove`, `Select`; `CreateImage`/`DeleteImage`/`Sort`/`TestPos` reach the List and are its named refusals), every `MUIA_List_*`
+  attribute set or got on it (Group's `OM_SET` hands tags to the children, `OM_GET` is forwarded), and a `MUIM_Notify` / `KillNotify` / `KillNotifyObj` on a
+  `MUIA_List_*` attribute (`RedirectNotify`, `MUIV_Notify_Self` becomes the Listview). The `MUIA_Listview_*` attributes stay the Listview's own.
+* `MUIM_SetAsString(attr, format, values...)` (`mui/set_string.rs`, notify.c:697): `RawDoFmt` over the value stream, then `set(obj, attr, text)`; TRUE, or FALSE
+  when the block cannot be allocated. On an object of a program's own class it is a named refusal (its `OM_SET` would run after the text block is freed).
+* `MUIM_Application_Input(&sigs)` (application.c:1861): stores the Application's signals in `*sigs` and runs `NewInput`, which then treats all of them as fired.
+  There is no `MUIA_Application_Input` attribute in MUI or Zune.
+* `MUIM_Window_SetCycleChain(obj..., NULL)` is MUI's own method; Zune's window.c has no case for it (it falls to rootclass, answers 0, and the chain is the
+  `MUIA_CycleChain` objects in setup order). The engine records the program's order (`Objects::cycle_chain`) and refuses an entry that is no MUI object. **Gap:**
+  guestui-abi has no focus order, so the host keeps its own; carrying the order needs a seam change (the lead's call).
+
+## intuition.library ModifyProp / NewModifyProp, gadtools DrawBevelBoxA (mui6 lane)
+* `NewModifyProp` / `ModifyProp` (`modify_prop.rs`) store the PropInfo of a classic GTYP_PROPGADGET and bring the gadget's native ScrollBar to the new
+  value through the registration's own pots-and-bodies conversion; `numGad` 0 refreshes nothing, -1 all (newmodifyprop.c:85-123, modifyprop.c:68-89).
+* `DrawBevelBoxA` (`gt_bevel.rs`) is a display-list `Bevel` op, never canvas pixels (raised, or recessed with `GTBB_Recessed`). `BBFT_RIDGE`,
+  `BBFT_ICONDROPBOX`, any other frame type, a write mask, an off-screen bitmap, an installed clip region and a host without the plane route are named refusals.
+
 ## Not done (named)
 `MUIM_Application_OpenConfigWindow`, the Popasl/Popobject requester (a press is a named refusal), NList / TextEditor / BetterString / TheBar and every other MCC's own behaviour (the classes LOAD from disk; what they need next is named in the census),
 multi-selection, list sorting with a compare hook, drag and drop, scrollbars on a Scrollgroup (its contents show at their natural size).

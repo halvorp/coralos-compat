@@ -28,6 +28,7 @@ mod make;
 mod menu;
 mod methods;
 mod request;
+mod set_string;
 pub mod mirror;
 mod names;
 mod notify;

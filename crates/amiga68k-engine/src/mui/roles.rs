@@ -147,7 +147,7 @@ mod tests {
     fn display_text_drops_formatting_escapes_and_the_hotkey_marker_only_when_declared() {
         let mut o = Objects::default();
         o.map.insert(1, crate::boopsi::Obj { kind: Kind::Text, block: 0, attrs: Default::default(), strs: Default::default(), arrs: Default::default(), bufs: Default::default(),
-            children: Vec::new(), parent: None, notifies: Vec::new(), ext: Ext::None });
+            children: Vec::new(), parent: None, notifies: Vec::new(), ext: Ext::None, cycle_chain: Vec::new() });
         o.map.get_mut(&1).unwrap().strs.insert(MUIA_Text_Contents, "\u{1b}c_Play \u{1b}P[3]now".into());
         assert_eq!(display_text(&o, 1, MUIA_Text_Contents), "_Play now", "no HiCharIdx: the underscore is the program's text");
         o.map.get_mut(&1).unwrap().attrs.insert(MUIA_Text_HiCharIdx, '_' as u32);

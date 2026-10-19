@@ -85,6 +85,8 @@ pub enum Prim {
     /// A text run; `top` is the top of the cell, `w` the advance. `bg` Some = the run paints its cell first (JAM2).
     Text { x: i32, top: i32, w: i32, h: i32, text: String, fg: u8, bg: Option<u8>, font: FontRole },
     Icon { rect: Rect, role: IconRole },
+    /// A bevel box the kit draws (a native system-UI op: the call puts no pixels in the canvas), in RASTPORT coordinates.
+    Bevel { rect: Rect, raised: bool },
     /// Solid rectangles of one pen (the runs of a mask), in RASTPORT coordinates: each is a fill, clipped to what the call touched.
     Fills { rects: Vec<Rect>, pen: u8 },
 }
@@ -115,6 +117,7 @@ impl Prim {
                     .map(|r| (DrawOp::Fill { rect: GuestRect { left: r.x0, top: r.y0, width: r.width(), height: r.height() }, pen_role: role }, r)).collect()
             }
             Prim::Icon { rect, role } => alloc::vec![(DrawOp::Icon { rect: g(rect), role: *role }, rect.translate(-ox, -oy))],
+            Prim::Bevel { rect, raised } => alloc::vec![(DrawOp::Bevel { rect: g(rect), raised: *raised }, rect.translate(-ox, -oy))],
         })
     }
 }

@@ -269,6 +269,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(gadtools::LVO_CREATE_CONTEXT, "CreateContext", gadtools::create_context::<U>)
             .func(gadtools::LVO_GET_VISUAL_INFO_A, "GetVisualInfoA", gadtools::get_visual_info::<U>)
             .func(gadtools::LVO_FREE_VISUAL_INFO, "FreeVisualInfo", gadtools::free_visual_info::<U>)
+            .func(crate::gt_bevel::LVO_DRAW_BEVEL_BOX_A, "DrawBevelBoxA", crate::gt_bevel::draw_bevel_box::<U>)
             .install(&mut a.mem, &mut a.dispatch)?;
         crate::boopsi::install(&mut a.mem, &mut a.dispatch)?;
         crate::iclass::init(&mut a)?;

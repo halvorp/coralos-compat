@@ -43,6 +43,8 @@ pub struct Obj {
     /// Guest copies of strings the guest reads back (GetAttr of a string attribute): attribute -> (address, size).
     pub bufs: BTreeMap<u32, (u32, u32)>,
     pub children: Vec<u32>, pub parent: Option<u32>, pub notifies: Vec<Notify>, pub ext: Ext,
+    /// A Window's focus chain as the program ordered it (`MUIM_Window_SetCycleChain`), first to last. The seam has no focus order to carry it to the host yet.
+    pub cycle_chain: Vec<u32>,
 }
 
 #[derive(Default)]
@@ -101,7 +103,7 @@ pub fn adopt_object<U: GuestUi>(a: &mut Amiga<U>, kind: Kind, obj: u32) { track_
 
 fn track_object<U: GuestUi>(a: &mut Amiga<U>, kind: Kind, obj: u32, block: u32) {
     let ext = match kind { Kind::Window => Ext::Win { native: None, content: (0, 0) }, Kind::Text => Ext::Text { label: false }, Kind::List => Ext::List(Default::default()), Kind::Semaphore => Ext::Sem(Default::default()), Kind::Dataspace => Ext::Space(Vec::new()), _ => Ext::None };
-    a.objects.map.insert(obj, Obj { kind, block, attrs: BTreeMap::new(), strs: BTreeMap::new(), arrs: BTreeMap::new(), bufs: BTreeMap::new(), children: Vec::new(), parent: None, notifies: Vec::new(), ext });
+    a.objects.map.insert(obj, Obj { kind, block, attrs: BTreeMap::new(), strs: BTreeMap::new(), arrs: BTreeMap::new(), bufs: BTreeMap::new(), children: Vec::new(), parent: None, notifies: Vec::new(), ext, cycle_chain: Vec::new() });
 }
 
 /// Forget `obj` (already unlinked and torn down) and give its block back.

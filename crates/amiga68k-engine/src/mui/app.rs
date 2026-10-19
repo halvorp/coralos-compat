@@ -109,6 +109,16 @@ pub fn new_input<U: GuestUi>(a: &mut Amiga<U>, app: u32, sigs_ptr: u32) -> Resul
     Ok(id)
 }
 
+/// `MUIM_Application_Input(&sigs)` (application.c:1861-1890, obsolete but still called): the program asks for the signals to wait on
+/// and the next return id in one call. It stores the signals the Application listens on (its windows' and timer's, and every input
+/// handler's) in `*sigs` and then runs `NewInput` on them, so that call treats all of them as having fired (a program that polls
+/// has not learned which one did).
+pub fn input<U: GuestUi>(a: &mut Amiga<U>, app: u32, sigs_ptr: u32) -> Result<u32, Refusal> {
+    let mask = (1 << bit_of(a, app)?) | super::handlers::signal_mask(a, app);
+    a.mem.write_u32(sigs_ptr, mask).map_err(Refusal::mem("Input signal"))?;
+    new_input(a, app, sigs_ptr)
+}
+
 /// Every Application object (for tests and the census).
 pub fn applications<U: GuestUi>(a: &Amiga<U>) -> Vec<u32> { a.objects.map.iter().filter(|(_, o)| o.kind == Kind::Application).map(|(&k, _)| k).collect() }
 

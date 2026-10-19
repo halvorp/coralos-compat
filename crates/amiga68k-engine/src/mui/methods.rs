@@ -26,12 +26,13 @@ pub fn arity<U: GuestUi>(a: &Amiga<U>, id: u32, msg: u32) -> Result<u32, Refusal
         MUIM_SetUData | MUIM_SetUDataOnce | MUIM_GetUData | MUIM_List_Insert | MUIM_List_Select | MUIM_Dataspace_Add | MUIM_Dataspace_ReadIFF | MUIM_Dataspace_WriteIFF => 3,
         MUIM_MultiSet => until_null(2)?,
         MUIM_Application_PushMethod => 2 + word(2)?.min(64),
-        MUIM_Application_NewInput | MUIM_Application_ReturnID | MUIM_Application_OpenConfigWindow | MUIM_Application_AddInputHandler
+        MUIM_Application_NewInput | MUIM_Application_Input | MUIM_Application_ReturnID | MUIM_Application_OpenConfigWindow | MUIM_Application_AddInputHandler
         | MUIM_Application_RemInputHandler | MUIM_FindUData | MUIM_KillNotify | MUIM_Family_AddHead | MUIM_Family_AddTail | MUIM_Family_Remove
         | OM_ADDMEMBER | OM_REMMEMBER | MUIM_Numeric_Increase | MUIM_Numeric_Decrease | MUIM_List_Remove | MUIM_List_Redraw | MUIM_List_Jump
         | MUIM_Window_AddEventHandler | MUIM_Window_RemEventHandler | MUIM_Window_Snapshot | MUIM_Window_GetMenuCheck | MUIM_Window_GetMenuState
         | MUIM_List_NextSelected | MUIM_Popstring_Close | MUIM_Dataspace_Remove | MUIM_Dataspace_Merge | MUIM_Application_Load | MUIM_Application_Save => 1,
         MUIM_Window_SetCycleChain | MUIM_Group_Sort => until_null(0)?,
+        MUIM_SetAsString => super::set_string::arity(a, msg)?,
         _ => 0,
     })
 }
@@ -43,6 +44,14 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
     let kind = a.objects.kind(obj).ok_or_else(|| Refusal(format!("DoMethod: {obj:#x} is not a MUI object")))?;
     let arg = |i: usize| args.get(i).copied().ok_or_else(|| Refusal(format!("{}: missing argument {i}", attrs::method_name(id))));
     match id {
+        // Listview.mui (listview.c:196-232) redirects a notification on a List attribute to its List.
+        MUIM_Notify | MUIM_KillNotify | MUIM_KillNotifyObj if kind == Kind::Listview && args.first().is_some_and(|&t| list::forwarded(t)) => {
+            let l = list::list_of(&a.objects, obj).ok_or_else(|| Refusal("MUI Listview has no List".into()))?;
+            let mut redirected = args.to_vec();
+            let dest = if id == MUIM_Notify { 2 } else { 1 };
+            if id != MUIM_KillNotify && redirected.get(dest) == Some(&MUIV_Notify_Self) { redirected[dest] = obj; }
+            method(a, l, id, &redirected)
+        }
         MUIM_Notify => notify::add(a, obj, args),
         // Notify.mui's MUIM_Set is `SetAttrs(obj, attr, value, TAG_DONE)`: for an object of the program's own class that is OM_SET through its dispatcher.
         MUIM_Set => {
@@ -52,6 +61,7 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
             }
             Ok(0)
         }
+        MUIM_SetAsString => super::set_string::set_as_string(a, obj, args),
         MUIM_NoNotifySet => { object::set_attr_quiet(a, obj, arg(0)?, arg(1)?)?; Ok(0) }
         OM_GET => { let v = object::get_attr(a, obj, arg(0)?)?; a.mem.write_u32(arg(1)?, v).map_err(Refusal::mem("MUIM_Get storage"))?; Ok(1) }
         MUIM_CallHook => {
@@ -73,6 +83,7 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_Application_Load if kind == Kind::Application => { let r = store::load(a, obj, arg(0)?)?; a.log.push(format!("[muimaster] MUIM_Application_Load: {r}")); Ok(0) }
         MUIM_Application_Save if kind == Kind::Application => { let r = store::save(a, obj, arg(0)?)?; a.log.push(format!("[muimaster] MUIM_Application_Save: {r}")); Ok(0) }
         MUIM_Application_NewInput if kind == Kind::Application => app::new_input(a, obj, arg(0)?),
+        MUIM_Application_Input if kind == Kind::Application => app::input(a, obj, arg(0)?),
         MUIM_Application_ReturnID if kind == Kind::Application => { app::return_id(a, obj, arg(0)?)?; Ok(0) }
         MUIM_Application_PushMethod if kind == Kind::Application => {
             let (dest, n) = (arg(0)?, arg(1)? as usize);
@@ -84,6 +95,14 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_Application_RemInputHandler if kind == Kind::Application => { handlers::rem_input(a, arg(0)?)?; Ok(1) }
         MUIM_Window_AddEventHandler if kind == Kind::Window => { handlers::add_event(a, obj, arg(0)?)?; Ok(1) }
         MUIM_Window_RemEventHandler if kind == Kind::Window => { handlers::rem_event(a, arg(0)?)?; Ok(1) }
+        // MUI's own method (Zune's window.c has no case for it: an unknown method falls through to rootclass and answers 0, so the chain stays
+        // the MUIA_CycleChain objects in setup order). The program's explicit order is recorded; guestui-abi has no focus order to hand it to.
+        MUIM_Window_SetCycleChain if kind == Kind::Window => {
+            if let Some(&bad) = args.iter().find(|c| !a.objects.map.contains_key(c)) { return Err(Refusal(format!("MUIM_Window_SetCycleChain: {bad:#x} is not a MUI object"))); }
+            if let Some(o) = a.objects.map.get_mut(&obj) { o.cycle_chain = args.to_vec(); }
+            a.log.push(format!("[muimaster] MUIM_Window_SetCycleChain: {} objects recorded; the seam has no focus order, so the host keeps its own", args.len()));
+            Ok(0)
+        }
         MUIM_Application_CheckRefresh if kind == Kind::Application => Ok(0),
         MUIM_Application_InputBuffered if kind == Kind::Application => { app::pump(a, obj)?; Ok(0) }
         MUIM_Group_InitChange if kind.is_container() => Ok(1),
@@ -116,6 +135,12 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_List_GetEntry if kind == Kind::List => { list::get_entry(a, obj, arg(0)?, arg(1)?)?; Ok(0) }
         MUIM_List_Redraw if kind == Kind::List => { list::redraw(a, obj, arg(0)?)?; super::win::refresh(a, obj)?; Ok(0) }
         MUIM_List_Jump if kind == Kind::List => { super::win::refresh(a, obj)?; Ok(0) }
+        // Listview.mui passes the List methods to its List (listview.c:247-266).
+        MUIM_List_Clear | MUIM_List_Exchange | MUIM_List_GetEntry | MUIM_List_Insert | MUIM_List_InsertSingle | MUIM_List_Jump | MUIM_List_NextSelected
+        | MUIM_List_Redraw | MUIM_List_Remove | MUIM_List_Select if kind == Kind::Listview => {
+            let l = list::list_of(&a.objects, obj).ok_or_else(|| Refusal("MUI Listview has no List".into()))?;
+            method(a, l, id, args)
+        }
         _ if kind.is_a(Kind::Semaphore) => {
             if let Some(r) = store::semaphore_method(a, obj, id)? { return Ok(r); }
             if kind == Kind::Dataspace { if let Some(r) = store::dataspace_method(a, obj, id, args)? { return Ok(r); } }
