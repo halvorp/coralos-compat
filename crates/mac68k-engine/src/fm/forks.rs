@@ -61,7 +61,8 @@ impl FileMgr {
         for _ in 0..0x4000 {
             self.next_ref = if self.next_ref >= 0x3FFE { 2 } else { self.next_ref + 2 };
             let r = self.next_ref.max(2);
-            if !self.forks.contains_key(&r) { return Ok(r); }
+            // the running application's own resource fork already holds an FCB under its refnum: never hand that number out
+            if r != crate::resmgr::APP_REF_NUM && !self.forks.contains_key(&r) { return Ok(r); }
         }
         Err(err::TMFO_ERR)
     }

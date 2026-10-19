@@ -48,9 +48,10 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // Each pins how far the app gets TODAY; when a trap lands the stop moves on and the row is updated deliberately.
     for (app, stop) in [
         ("mac/writenow/fx40_1/Install WriteNow 4.0.bin", "unimplemented trap _GetAppParms ($A9F5)"),
+        ("mac/writenow/fx/z20_0/WriteNow 2.0.bin", "unimplemented trap _FixRatio ($A869)"), // no longer the stray jump: Pack7 is a register package
         ("mac/writenow/fx/z22_1/WriteNow 2.2.bin", "unimplemented trap _VInstall ($A033)"),
         ("mac/glider-pro/fx/Utilities_Moving Van.bin", "unimplemented trap _SetControlReference ($A95B)"),
-        ("mac/simpletext/ux/SimpleText.rsrc", "unimplemented trap _Unimplemented ($A89F)"), // 1.4: _Unimplemented is its probe of a missing trap (compressed too: it now expands)
+        ("mac/simpletext/ux/SimpleText.rsrc", "unimplemented trap _DialogDispatch ($AA68)"), // 1.4: past its Pack7 StringToNum prefs (a register package) it shows its "serious error" alert
     ] {
         let Some(m) = census(app) else { continue };
         assert_eq!(m.refused.last(), Some(&stop.to_string()), "{app}: {:#?}", m.log);
@@ -59,7 +60,7 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // meets there is the "trap" the census reports. Findings (docs/CORPUS.md): MacWrite 4.5 returns through a 68000-style TRAP #4
     // handler frame (`addq.w #2,sp; rts` after a TRAP: a 68020 frame is two bytes longer); WriteNow 2.0 and Glider PRO walk heap blocks.
     // What is pinned is the fact that matters, that the stop is in low memory and not at a Toolbox routine.
-    for app in ["mac/macwrite/u45/MacWrite.rsrc", "mac/writenow/fx/z20_0/WriteNow 2.0.bin", "mac/glider-pro/fx/Glider PRO\u{2122}.bin"] {
+    for app in ["mac/macwrite/u45/MacWrite.rsrc"] {
         let Some(m) = census(app) else { continue };
         let (op, pc) = m.unimplemented_at.last().copied().expect("a stop");
         // Where the stray stop lands depends on what the garbage after the bad return happens to contain (address 0 or the middle of an
@@ -69,10 +70,16 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
         if app.contains("Glider") { continue; } // fat app: its 68k half stops in its own code before any of those
         assert!(m.log.iter().any(|l| l.contains("[menu] DrawMenuBar") || l.contains("GetNewWindow") || l.contains("[pack6]") || l.contains("[font]") || l.contains("[clock]")), "{app}: it got past the trap walls this lane cleared");
     }
+    // Glider PRO needs Color QuickDraw and SAYS SO in its own alert: this machine is monochrome (honest absence), so the alert is the
+    // program's real, documented answer. It used to die first: the File Manager's first refnum (2) was the application's own resource
+    // fork, so closing the first file the program opened (`Close(2)`) unloaded the app's resources.
+    let Some(m) = census("mac/glider-pro/fx/Glider PRO\u{2122}.bin") else { return };
+    assert!(m.refused.iter().all(|r| !r.contains("unimplemented")), "{:?}", m.refused);
+    assert!(m.log.iter().any(|l| l.contains("[dialog] ParamText [\"Need Color Quickdraw\"")), "{:#?}", m.log);
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.
-    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", "unimplemented trap _OpenRFPerm ($A9C4)"), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "unimplemented trap _AliasDispatch ($A823)")] {
+    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", "unimplemented trap _Munger ($A9E0)"), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "unimplemented trap _AliasDispatch ($A823)")] {
         let Some(m) = census(app) else { continue };
         assert_eq!(m.refused.last(), Some(&stop.to_string()), "{app}: {:?}", m.refused);
         assert!(!m.refused.iter().any(|r| r.contains("LoadSeg") || r.contains("cannot decompress")), "{app}: {:?}", m.refused);

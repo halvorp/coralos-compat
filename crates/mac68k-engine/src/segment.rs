@@ -95,7 +95,7 @@ impl<U: GuestUi> Mac<U> {
 
     /// Load `CODE seg`: patch every jump-table entry the segment owns to `jmp abs.l`. Returns the log line.
     fn load_segment(&mut self, seg: u16) -> Result<String, String> {
-        let h = self.get_resource(*b"CODE", seg as i16, true).map_err(|e| format!("no 'CODE' {seg} resource (ResErr {e})"))?;
+        let h = self.get_resource_from(APP_REF_NUM, *b"CODE", seg as i16).map_err(|e| format!("no 'CODE' {seg} resource (ResErr {e})"))?;
         if let Some(b) = self.mm.block_mut(h) { b.locked = true; } // the code must not move once entries point into it
         let _ = self.mm.sync_master(&mut self.mem, h);
         let (base, size) = { let b = self.mm.block(h).ok_or("CODE handle vanished")?; (b.ptr, b.size) };
@@ -128,7 +128,7 @@ impl<U: GuestUi> Mac<U> {
         let word = self.mem.read_u16(entry + 2).map_err(|e| e.to_string())?;
         if word != 0x4EF9 { return Ok(format!("[segment] UnloadSeg {routine:#x}: entry already unloaded (no-op)")); }
         let seg = self.mem.read_u16(entry).map_err(|e| e.to_string())?;
-        let h = self.get_resource(*b"CODE", seg as i16, true).map_err(|e| format!("no 'CODE' {seg} resource (ResErr {e})"))?;
+        let h = self.get_resource_from(APP_REF_NUM, *b"CODE", seg as i16).map_err(|e| format!("no 'CODE' {seg} resource (ResErr {e})"))?;
         let (base, size) = { let b = self.mm.block(h).ok_or("CODE handle vanished")?; (b.ptr, b.size) };
         if size < 4 { return Err(format!("CODE {seg} is shorter than its 4-byte header")); }
         let (first, count) = (self.mem.read_u16(base).map_err(|e| e.to_string())?, self.mem.read_u16(base + 2).map_err(|e| e.to_string())?);

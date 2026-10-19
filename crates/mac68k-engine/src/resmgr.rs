@@ -122,6 +122,12 @@ impl<U: GuestUi> Mac<U> {
         }
         Err(RES_NOT_FOUND)
     }
+    /// `ty id` from ONE named resource file, whatever the current file is (the Segment Loader reads the APPLICATION's
+    /// fork, not `CurMap`: a program that opened a preferences file and left it current still loads its code).
+    pub fn get_resource_from(&mut self, rn: i16, ty: OsType, id: i16) -> Result<u32, i16> {
+        let e = self.rm.file(rn).and_then(|f| f.fork.find(ty, id)).ok_or(RES_NOT_FOUND)?;
+        self.load_entry(rn, e)
+    }
     pub fn get_named_resource(&mut self, ty: OsType, name: &[u8], only_cur: bool) -> Result<u32, i16> {
         for rn in self.rm.chain(only_cur) {
             if let Some(e) = self.rm.file(rn).and_then(|f| f.fork.find_named(ty, name)) { return self.load_entry(rn, e); }
