@@ -35,7 +35,7 @@ pub use crate::mui::classes::Kind;
 pub struct Notify { pub attr: u32, pub val: u32, pub dest: u32, pub params: Vec<u32> }
 
 /// Per-kind extra state.
-pub enum Ext { None, App { bit: u32, pending: VecDeque<u32>, inbox: VecDeque<crate::mui::app::Inbound> }, Win { native: Option<UiObjectRef>, content: (i32, i32) }, Text { label: bool }, List(crate::mui::list::ListData) }
+pub enum Ext { None, App { bit: u32, pending: VecDeque<u32>, inbox: VecDeque<crate::mui::app::Inbound> }, Win { native: Option<UiObjectRef>, content: (i32, i32) }, Text { label: bool }, List(crate::mui::list::ListData), Sem(crate::mui::store::Sem), Space(Vec<crate::mui::store::Entry>) }
 
 pub struct Obj {
     pub kind: Kind, pub block: u32,
@@ -95,7 +95,7 @@ pub fn alloc_object<U: GuestUi>(a: &mut Amiga<U>, kind: Kind) -> Result<u32, Ref
 pub fn adopt_object<U: GuestUi>(a: &mut Amiga<U>, kind: Kind, obj: u32) { track_object(a, kind, obj, 0); }
 
 fn track_object<U: GuestUi>(a: &mut Amiga<U>, kind: Kind, obj: u32, block: u32) {
-    let ext = match kind { Kind::Window => Ext::Win { native: None, content: (0, 0) }, Kind::Text => Ext::Text { label: false }, Kind::List => Ext::List(Default::default()), _ => Ext::None };
+    let ext = match kind { Kind::Window => Ext::Win { native: None, content: (0, 0) }, Kind::Text => Ext::Text { label: false }, Kind::List => Ext::List(Default::default()), Kind::Semaphore => Ext::Sem(Default::default()), Kind::Dataspace => Ext::Space(Vec::new()), _ => Ext::None };
     a.objects.map.insert(obj, Obj { kind, block, attrs: BTreeMap::new(), strs: BTreeMap::new(), arrs: BTreeMap::new(), bufs: BTreeMap::new(), children: Vec::new(), parent: None, notifies: Vec::new(), ext });
 }
 
@@ -104,6 +104,7 @@ pub fn free_object<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal
     crate::mui::handlers::forget(a, obj);
     let o = a.objects.map.remove(&obj).ok_or_else(|| Refusal(format!("free object {obj:#x}: not an object")))?;
     for (addr, size) in o.bufs.into_values() { let _ = a.heap.free(addr, size); }
+    if let Ext::Space(entries) = o.ext { for e in entries { let _ = a.heap.free(e.addr, e.len); } }
     if o.block == 0 {
         // An instance of a program's subclass: the memory is rootclass's (OM_DISPOSE of the root class does exactly this).
         if let Some(rec) = a.classes.objs.remove(&obj) {

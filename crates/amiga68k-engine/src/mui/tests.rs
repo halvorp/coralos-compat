@@ -103,6 +103,97 @@ fn windows_join_and_leave_a_live_application_with_om_addmember_and_remmember() {
 }
 
 #[test]
+fn semaphore_nests_for_its_owner_refuses_to_block_and_release_needs_a_hold() {
+    let mut a = machine();
+    let sem = make(&mut a, "Semaphore.mui", &[]).unwrap();
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Obtain, &[]).unwrap(), 1);
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Obtain, &[]).unwrap(), 1, "the owner nests");
+    a.sched.cur = 0x1234; // another task
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Attempt, &[]).unwrap(), 0, "Attempt answers FALSE while another task holds it");
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_AttemptShared, &[]).unwrap(), 0);
+    assert!(method(&mut a, sem, MUIM_Semaphore_Obtain, &[]).unwrap_err().0.contains("would block"), "an Obtain that would wait is a named refusal");
+    assert!(method(&mut a, sem, MUIM_Semaphore_Release, &[]).unwrap_err().0.contains("does not hold"), "only the holder releases");
+    a.sched.cur = crate::process::PROCESS;
+    method(&mut a, sem, MUIM_Semaphore_Release, &[]).unwrap();
+    a.sched.cur = 0x1234;
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Attempt, &[]).unwrap(), 0, "still held: the nesting count was 2");
+    a.sched.cur = crate::process::PROCESS;
+    method(&mut a, sem, MUIM_Semaphore_Release, &[]).unwrap();
+    a.sched.cur = 0x1234;
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_ObtainShared, &[]).unwrap(), 1, "free now");
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_AttemptShared, &[]).unwrap(), 1, "shared holders add up");
+    assert_eq!(method(&mut a, sem, MUIM_Semaphore_Attempt, &[]).unwrap(), 0, "but exclude an exclusive request");
+    a.sched.cur = crate::process::PROCESS;
+    assert!(method(&mut a, sem, MUIM_Semaphore_Obtain, &[]).unwrap_err().0.contains("would block"));
+    // A Semaphore.mui subclass is a class of the tree: Dataspace.mui is one.
+    assert!(classes::Kind::Dataspace.is_a(classes::Kind::Semaphore) && !classes::Kind::Semaphore.is_a(classes::Kind::Notify));
+}
+
+#[test]
+fn dataspace_adds_replaces_finds_removes_and_clears() {
+    let mut a = machine();
+    let ds = make(&mut a, "Dataspace.mui", &[]).unwrap();
+    let put = |a: &mut Amiga<RecordingGuestUi>, bytes: &[u8]| { let p = a.heap.alloc(bytes.len() as u32).unwrap(); a.mem.write_bytes(p, bytes).unwrap(); p };
+    let d1 = put(&mut a, &[1, 2, 3, 4]);
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Add, &[d1, 4, 7]).unwrap(), 1);
+    let at = method(&mut a, ds, MUIM_Dataspace_Find, &[7]).unwrap();
+    assert_eq!(a.mem.read_u32(at).unwrap(), 0x0102_0304, "Find returns the address of the stored bytes");
+    let d2 = put(&mut a, &[9, 9]);
+    method(&mut a, ds, MUIM_Dataspace_Add, &[d2, 2, 7]).unwrap();
+    let at2 = method(&mut a, ds, MUIM_Dataspace_Find, &[7]).unwrap();
+    assert_eq!(a.mem.read_u16(at2).unwrap(), 0x0909, "the same id is replaced");
+    // NEGATIVE CONTROLS (dataspace.c Add): no data, len < 1 and id < 1 add nothing; an unknown id finds nothing.
+    assert_eq!((method(&mut a, ds, MUIM_Dataspace_Add, &[0, 4, 8]).unwrap(), method(&mut a, ds, MUIM_Dataspace_Add, &[d1, 0, 8]).unwrap(), method(&mut a, ds, MUIM_Dataspace_Add, &[d1, 4, 0]).unwrap()), (0, 0, 0));
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Find, &[8]).unwrap(), 0);
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Remove, &[8]).unwrap(), 0);
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Remove, &[7]).unwrap(), 1);
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Find, &[7]).unwrap(), 0);
+    method(&mut a, ds, MUIM_Dataspace_Add, &[d1, 4, 3]).unwrap();
+    method(&mut a, ds, MUIM_Dataspace_Clear, &[]).unwrap();
+    assert_eq!(method(&mut a, ds, MUIM_Dataspace_Find, &[3]).unwrap(), 0);
+    assert!(method(&mut a, ds, MUIM_Dataspace_WriteIFF, &[0, 0, 0]).unwrap_err().0.contains("iffparse.library"));
+    dispose(&mut a, ds).unwrap();
+}
+
+#[test]
+fn application_save_and_load_keep_the_objects_that_have_an_object_id() {
+    let mut a = machine();
+    let (base, one, two) = (cstr(&mut a, "TestApp"), cstr(&mut a, "one"), cstr(&mut a, "two"));
+    let arr = a.heap.alloc(12).unwrap();
+    for (i, p) in [one, two, 0].into_iter().enumerate() { a.mem.write_u32(arr + 4 * i as u32, p).unwrap(); }
+    let hello = cstr(&mut a, "hello");
+    let s = make(&mut a, "String.mui", &[(MUIA_ObjectID, 5), (MUIA_String_Contents, hello)]).unwrap();
+    let cy = make(&mut a, "Cycle.mui", &[(MUIA_ObjectID, 6), (MUIA_Cycle_Entries, arr), (MUIA_Cycle_Active, 1)]).unwrap();
+    let sl = make(&mut a, "Slider.mui", &[(MUIA_ObjectID, 7), (MUIA_Numeric_Value, 40)]).unwrap();
+    let anon = make(&mut a, "Slider.mui", &[(MUIA_Numeric_Value, 11)]).unwrap(); // no ObjectID: not saved
+    let grp = make(&mut a, "Group.mui", &[(MUIA_Group_Child, s), (MUIA_Group_Child, cy), (MUIA_Group_Child, sl), (MUIA_Group_Child, anon)]).unwrap();
+    let win = make(&mut a, "Window.mui", &[(MUIA_Window_RootObject, grp)]).unwrap();
+    let app = make(&mut a, "Application.mui", &[(MUIA_Application_Base, base), (MUIA_Application_Window, win)]).unwrap();
+    method(&mut a, app, MUIM_Application_Save, &[0]).unwrap();
+    let file = { let n = a.fs.vol.resolve(crate::fs::cur_dir(&a), "ENV:Zune/TestApp.cfg").unwrap(); a.fs.vol.file_data(n).unwrap().to_vec() };
+    assert_eq!(store::decode(&file), alloc::vec![(5, b"hello\0".to_vec()), (6, 1u32.to_be_bytes().to_vec()), (7, 40u32.to_be_bytes().to_vec())], "the three identified objects, in tree order");
+    // Change everything, load, and see the saved state back.
+    let bye = cstr(&mut a, "bye");
+    set_attr(&mut a, s, MUIA_String_Contents, bye).unwrap();
+    set_attr(&mut a, cy, MUIA_Cycle_Active, 0).unwrap();
+    set_attr(&mut a, sl, MUIA_Numeric_Value, 90).unwrap();
+    set_attr(&mut a, anon, MUIA_Numeric_Value, 12).unwrap();
+    method(&mut a, app, MUIM_Application_Load, &[0]).unwrap();
+    assert_eq!((get_attr(&mut a, cy, MUIA_Cycle_Active).unwrap(), get_attr(&mut a, sl, MUIA_Numeric_Value).unwrap()), (1, 40));
+    let sp = get_attr(&mut a, s, MUIA_String_Contents).unwrap();
+    assert_eq!(a.mem.read_cstr(sp).unwrap(), "hello");
+    assert_eq!(get_attr(&mut a, anon, MUIA_Numeric_Value).unwrap(), 12, "NEGATIVE CONTROL: an object without an ObjectID is untouched");
+    // NEGATIVE CONTROLS: a missing file imports nothing; an application without MUIA_Application_Base saves and loads nothing.
+    set_attr(&mut a, sl, MUIA_Numeric_Value, 90).unwrap();
+    method(&mut a, app, MUIM_Application_Load, &[u32::MAX]).unwrap(); // ENVARC:Zune/TestApp.cfg was never saved
+    assert_eq!(get_attr(&mut a, sl, MUIA_Numeric_Value).unwrap(), 90);
+    let app2 = make(&mut a, "Application.mui", &[]).unwrap();
+    method(&mut a, app2, MUIM_Application_Save, &[0]).unwrap();
+    method(&mut a, app2, MUIM_Application_Load, &[0]).unwrap();
+    assert_eq!(get_attr(&mut a, sl, MUIA_Numeric_Value).unwrap(), 90);
+}
+
+#[test]
 fn a_label_before_a_text_is_that_texts_label_and_the_window_is_sized_by_the_screen_fonts_metrics() {
     let mut a = machine();
     let hello = cstr(&mut a, "hello");

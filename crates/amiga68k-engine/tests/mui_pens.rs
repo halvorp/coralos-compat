@@ -98,3 +98,20 @@ fn a_real_class_obtains_its_default_pens_in_setup() {
     let Some((b, _)) = aros::start("Prefs/Input", &["SYS:Classes/Zune/BetterString"]) else { return };
     assert!(b.log.iter().all(|l| !l.starts_with("[muimaster] MUI_ObtainPen")), "no BetterString, no pen request");
 }
+
+/// Find's search process is a disk class (Process.mui) over Semaphore.mui; the NList demo loads its saved settings at start. Both used to stop on
+/// a class / method the engine lacked.
+#[test]
+fn a_disk_class_over_semaphore_mui_and_a_program_that_loads_its_settings_run() {
+    let Some((a, s)) = aros::start("System/Find", &[]) else { return };
+    assert_eq!(s, Step::Blocked, "{:?}", a.refused);
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+    assert!(a.ui.controls.len() >= 10, "Find's window: {}", a.ui.controls.len());
+    // NEGATIVE CONTROL: without Process.mui the class chain is incomplete and the refusal names it.
+    let Some((b, _)) = aros::start("System/Find", &["SYS:Classes/Zune/Process.mui"]) else { return };
+    assert!(b.ui.controls.is_empty() || !b.refused.is_empty(), "without its class Find cannot be whole");
+    let Some((n, s)) = aros::start("Demos/Zune/MCC_NList/NList-Demo", &[]) else { return };
+    assert_eq!(s, Step::Blocked, "{:?}", n.refused);
+    assert!(n.refused.is_empty(), "{:?}", n.refused);
+    assert!(n.log.iter().any(|l| l.starts_with("[muimaster] MUIM_Application_Load: ")), "the demo asked for its settings");
+}

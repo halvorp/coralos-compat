@@ -31,6 +31,7 @@ mod notify;
 mod object;
 pub mod pens;
 pub mod roles;
+pub mod store;
 pub mod surface;
 pub mod win;
 
