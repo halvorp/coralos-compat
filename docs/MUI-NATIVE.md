@@ -49,11 +49,40 @@ notifications, the guest hooks they queue, and the ReturnIDs happen. Tests that 
 A real BOOPSI class over the native MUI class (`MakeClass` + the dispatcher in `h_Entry`/`h_SubEntry`, a real `struct MUI_CustomClass`).
 `OM_NEW` reaches the native class through `DoSuperMethod`: rootclass allocates the instance (the program's instance data lives in it),
 then the MUI half is made from the tags that are MUI's (`0x8042xxxx`, `0x9042xxxx`; the program's own attributes pass through unseen,
-as in BOOPSI). The subclass's role is its nearest standard ancestor's, because it uses that ancestor's state. NOT bridged: the drawing
-pipeline (`MUIM_Setup/AskMinMax/Show/Draw`) is never sent, so a subclass that DRAWS itself (the "plane" case) shows nothing yet; disk
-classes (`LIBS:Zune/*.mcc`, `MCC_Query`) are not loaded; children of a disposed tree get no `OM_DISPOSE` from their own dispatcher.
+as in BOOPSI). The subclass's role is its nearest standard ancestor's, because it uses that ancestor's state. The drawing pipeline
+(`MUIM_Setup/AskMinMax/Show/Draw`) is sent to a subclass that draws itself: see "Objects that draw themselves".
+
+## Objects that draw themselves (`mui/drawn.rs`, `mui/surface.rs`)
+An instance of a guest class over Area.mui that has no role of its own (nothing else claims it: ruling 17 piece 4) is a content PLANE.
+MUI sends it, as guest calls to its own dispatcher and in Zune's order (window.c): `MUIM_Setup` for the tree, `MUIM_AskMinMax` (its answer
+sizes it in the layout: default size, and it stretches where Max > Def), the native window opens, `MUIM_Show`, then `MUIM_Draw` with
+`MADF_DRAWOBJECT`; a resize that moves or grows it, or `MUI_Redraw`, sends `MUIM_Draw` again; closing sends `MUIM_Hide`, `MUIM_Cleanup`.
+The steps are queued like a notification's hook, so the window is open and drawn before `SetAttrs(win, MUIA_Window_Open, TRUE)` returns,
+and a resize's draw runs in the program's loop (`NewInput`). The class reads its place straight out of its object (`_left(obj)`,
+`_mwidth(obj)`, `_rp(obj)`: `mad_Box`, `mad_MinMax`, `mad_RenderInfo` written by `mirror.rs`) and draws into the window's real RastPort
+(`window::make_surface_window`: a struct Window with a canvas and layer; `MUI_AddClipRegion` / `MUI_RemoveClipRegion` install real clip
+regions). The graphics layer records those RastPort calls as a replayed plane in the object's rectangle. The native Area half answers what
+Zune's `area.c` answers when the dispatcher passes a method up: no frame and no inner spacing (AskMinMax sums are 0), the host's own
+background (Draw and DrawBackground draw nothing).
+NOT done: frames and inner spacing of such objects, `MUIM_HandleEvent` / `MUIM_Window_AddEventHandler` and `MUIM_Application_AddInputHandler`
+nodes are RECORDED but nothing fires them (no pointer/key event is turned into IDCMP for them, no timer drives `ihn_Millis`: a Clock does
+not tick), `MADF_DRAWUPDATE` partial redraws, off-screen buffers a class draws through (`MUIM_DrawBackground` into its own bitmap).
+
+## Classes on disk (`.mcc` / `.mcp`, `mui/disk.rs`)
+A class that is not built in is a real disk library: `MUI_NewObjectA("Foo.mcc")` and `MUI_CreateCustomClass(.., "Foo.mcc", ..)` open it
+through the disklib (its init and Open run in the guest), call `MCC_Query(0)` (then `(1)`, the preferences class) as a guest call and take
+`mcc_Class` of the `MUI_CustomClass` it returns, exactly as Zune's `ZUNE_GetExternalClass`. Search order: `Zune/X`, `Classes/Zune/X`,
+`MUI/X`, `mui/X` as OpenLibrary names (LIBS:, PROGDIR:), then `MUI:Libs/mui/X` and `SYS:Classes/Zune/X`. A class stays loaded (no Expunge);
+`DiskClass.users` counts the objects and subclasses holding it. The class is then an ordinary guest `IClass`: its dispatcher is guest code,
+its superclass chain reaches the native classes through the one dispatch path, its role is its nearest standard ancestor's.
+What a guest subclass reads straight out of its object (`mui/mirror.rs`): Notify.mui's instance data is a `MUI_NotifyData` (28 bytes) and
+Area.mui reserves room for `MUI_AreaData`, so a class's `_app(obj)` / `muiUserData(obj)` macros (plain offsets) read the application
+and user data the host writes there (state stays host-side; a guest write is never read back). Without that, a class that calls
+`DoMethod(_app(obj), ...)` jumps through a NULL object.
+`OM_DISPOSE` follows Zune's family order (`mui/dispose.rs`): an object's own dispatcher first, then each child through ITS dispatcher
+(`MUI_DisposeObject(child)`), then the free; a disk class's use count goes down with each object.
 
 ## Not done (named)
 `MUI_RequestA`, `MUIM_Application_OpenConfigWindow`, the Popasl/Popobject requester (a press is a named refusal), input handlers and timers
-(`AddInputHandler`), event handlers (`MUIM_Window_AddEventHandler`), NList / TextEditor / BetterString / TheBar and every other MCC,
+(`AddInputHandler`) and event handlers (`MUIM_Window_AddEventHandler`) FIRING (they are recorded), NList / TextEditor / BetterString / TheBar and every other MCC's own behaviour (the classes LOAD from disk; what they need next is named in the census),
 multi-selection, list sorting with a compare hook, drag and drop, scrollbars on a Scrollgroup (its contents show at their natural size).

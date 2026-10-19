@@ -35,7 +35,8 @@ const AREA: &[(u32, Ty)] = &[(MUIA_Background, Num), (MUIA_BottomEdge, Num), (MU
     (MUIA_Pressed, Num), (MUIA_RightEdge, Num), (MUIA_Selected, Num), (MUIA_ShortHelp, Str), (MUIA_ShowMe, Num), (MUIA_ShowSelState, Num),
     (MUIA_Timer, Num), (MUIA_TopEdge, Num), (MUIA_VertDisappear, Num), (MUIA_VertWeight, Num), (MUIA_Weight, Num), (MUIA_Width, Num),
     (MUIA_Window, Num), (MUIA_WindowObject, Num)];
-const FAMILY: &[(u32, Ty)] = &[(MUIA_Family_Child, Adopt), (MUIA_Family_List, Num)];
+// family.c OM_NEW: MUIA_Group_Child is accepted as MUIA_Family_Child (the `Child` macro builds menus with it).
+const FAMILY: &[(u32, Ty)] = &[(MUIA_Family_Child, Adopt), (MUIA_Group_Child, Adopt), (MUIA_Family_List, Num)];
 const APPLICATION: &[(u32, Ty)] = &[(MUIA_Application_Title, Str), (MUIA_Application_Version, Str), (MUIA_Application_Author, Str),
     (MUIA_Application_Copyright, Str), (MUIA_Application_Description, Str), (MUIA_Application_Base, Str), (MUIA_Application_HelpFile, Str),
     (MUIA_Application_Menustrip, Adopt), (MUIA_Application_Window, Adopt), (MUIA_Application_MenuAction, Num), (MUIA_Application_SingleTask, Num),

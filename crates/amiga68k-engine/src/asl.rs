@@ -26,7 +26,7 @@ pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
     b.named("AllocAslRequest", alloc_request::<U>).named("FreeAslRequest", free_request::<U>).named("AslRequest", asl_request::<U>)
 }
 
-fn alloc_request<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+pub(crate) fn alloc_request<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (ty, list) = (cpu.dreg(0), cpu.areg(0));
     if ty != 0 { return Err(Refusal(format!("AllocAslRequest type {ty}: only ASL_FileRequest (0) is modelled (1 = font, 2 = screen mode requester)"))); }
     let t = tags::walk(&a.mem, list)?;
@@ -42,7 +42,7 @@ fn alloc_request<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     Ok(format!("[asl] AllocAslRequest ASL_FileRequest -> {p:#x}"))
 }
 
-fn free_request<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+pub(crate) fn free_request<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let p = cpu.areg(0);
     if p == 0 { return Ok("[asl] FreeAslRequest NULL".into()); }
     if !a.asl.requests.remove(&p) { return Err(Refusal(format!("FreeAslRequest: {p:#x} is not a request AllocAslRequest returned"))); }

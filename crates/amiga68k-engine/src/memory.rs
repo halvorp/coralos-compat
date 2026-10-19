@@ -169,6 +169,30 @@ pub fn alloc_pooled<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     Ok(format!("[exec] AllocPooled {pool:#x} size={size} -> {:#x}", at.unwrap_or(0)))
 }
 
+/// AllocVecPooled(a0 = pool, d0 = size) -> a block or NULL: AllocPooled with the size kept in a longword in front, so FreeVecPooled needs
+/// none (AROS rom/exec/allocvecpooled.c). The block the caller sees starts after that longword.
+pub fn alloc_vec_pooled<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (pool, size) = (cpu.areg(0), cpu.dreg(0));
+    if size == 0 || size > u32::MAX - 4 { cpu.set_d0(0); return Ok(format!("[exec] AllocVecPooled {pool:#x} size={size} -> NULL")); }
+    cpu.set_dreg(0, size + 4);
+    alloc_pooled(a, cpu)?;
+    let at = cpu.dreg(0);
+    if at != 0 {
+        a.mem.write_u32(at, size + 4).map_err(Refusal::mem("AllocVecPooled size"))?;
+        cpu.set_d0(at + 4);
+    }
+    Ok(format!("[exec] AllocVecPooled {pool:#x} size={size} -> {:#x}", cpu.dreg(0)))
+}
+
+/// FreeVecPooled(a0 = pool, a1 = block): NULL is ignored; otherwise FreePooled of the block and the longword before it.
+pub fn free_vec_pooled<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let at = cpu.areg(1);
+    if at == 0 { return Ok("[exec] FreeVecPooled NULL".into()); }
+    let size = a.mem.read_u32(at - 4).map_err(Refusal::mem("FreeVecPooled size"))?;
+    (cpu.set_areg(1, at - 4), cpu.set_dreg(0, size));
+    free_pooled(a, cpu)
+}
+
 /// FreePooled(a0 = pool, a1 = block, d0 = size). A block of another pool, or a wrong size, is refused by name.
 pub fn free_pooled<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (pool, at, size) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0));

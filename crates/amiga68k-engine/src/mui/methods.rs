@@ -67,6 +67,20 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
             app::post(a, obj, app::Inbound::Push { dest, id: follow[0], args: follow[1..].to_vec() })?;
             Ok(0)
         }
+        MUIM_Application_AddInputHandler if kind == Kind::Application => { a.objects.input_handlers.insert(arg(0)?, obj); Ok(0) }
+        MUIM_Application_RemInputHandler if kind == Kind::Application => {
+            let node = arg(0)?;
+            if a.objects.input_handlers.remove(&node).is_none() { return Err(Refusal(format!("MUIM_Application_RemInputHandler: {node:#x} was never added"))); }
+            Ok(0)
+        }
+        // Event handlers (MUIM_Window_AddEventHandler) are recorded like input handlers: no native pointer or key event is turned into an
+        // IDCMP message for them yet, so a class that listens (a preview, an editor) is drawn but not interactive.
+        MUIM_Window_AddEventHandler if kind == Kind::Window => { a.objects.input_handlers.insert(arg(0)?, obj); Ok(0) }
+        MUIM_Window_RemEventHandler if kind == Kind::Window => {
+            let node = arg(0)?;
+            if a.objects.input_handlers.remove(&node).is_none() { return Err(Refusal(format!("MUIM_Window_RemEventHandler: {node:#x} was never added"))); }
+            Ok(0)
+        }
         MUIM_Application_CheckRefresh if kind == Kind::Application => Ok(0),
         MUIM_Application_InputBuffered if kind == Kind::Application => { app::pump(a, obj)?; Ok(0) }
         MUIM_Group_InitChange if kind.is_container() => Ok(1),

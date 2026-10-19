@@ -118,6 +118,30 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal>
     Ok(win)
 }
 
+/// A `struct Window` for a window the MUI host opened itself (mui/surface.rs): the same 4/15/4/4 borders, geometry and screen as
+/// [`open`], no IDCMP port and no gadgets, registered under `native`, with the graphics layer's surface (canvas, layer, RPort). Its
+/// RPort draws in window coordinates, which is what a MUI object's `_left(obj)` / `_rp(obj)` mean.
+pub(crate) fn make_surface_window<U: GuestUi>(a: &mut Amiga<U>, native: guestui_abi::UiObjectRef, (iw, ih): (i32, i32)) -> Result<u32, Refusal> {
+    let m = Refusal::mem;
+    let (bl, bt, br, bb) = borders(0, true);
+    let win = a.heap.alloc(WINDOW_SIZE).ok_or_else(|| Refusal("MUI window surface: no memory for struct Window (NOMEM)".into()))?;
+    for i in 0..WINDOW_SIZE { a.mem.write_u8(win + i, 0).map_err(m("Window"))?; }
+    for (off, v) in [(WD_WIDTH, iw + bl + br), (WD_HEIGHT, ih + bt + bb)] { a.mem.write_u16(win + off, v as u16).map_err(m("Window geometry"))?; }
+    a.mem.write_u32(win + WD_WSCREEN, screen::SCREEN).map_err(m("Window.WScreen"))?;
+    for (i, b) in [bl, bt, br, bb].iter().enumerate() { a.mem.write_u8(win + WD_BORDER_LEFT + i as u32, *b as u8).map_err(m("Window borders"))?; }
+    for (off, v) in [(WD_GZZ_WIDTH, iw), (WD_GZZ_HEIGHT, ih)] { a.mem.write_u16(win + off, v as u16).map_err(m("Window GZZ size"))?; }
+    a.windows.insert(win, native);
+    crate::graphics::open_window_surface(a, win, (0, 0), (iw, ih), (bl, bt), false)?;
+    Ok(win)
+}
+
+/// Give back what [`make_surface_window`] made.
+pub(crate) fn drop_surface_window<U: GuestUi>(a: &mut Amiga<U>, win: u32) -> Result<(), Refusal> {
+    crate::graphics::close_window_surface(a, win)?;
+    a.windows.remove(&win);
+    a.heap.free(win, WINDOW_SIZE).map_err(|e| Refusal(format!("MUI window surface: {e}")))
+}
+
 /// OpenWindow(a0 = NewWindow).
 pub fn open_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let s = read_new_window(a, cpu.areg(0))?;

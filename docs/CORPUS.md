@@ -674,3 +674,29 @@ Census, `mac68k-run --census --insns 50000000`, NEXT-NEEDED before this lane (th
 
 (Re-ranked after the macfm lane over the 24 68k applications of `corpus-apps-mac*.tsv`, with `mac68k-run --implemented` as the table; the File Manager traps, `_DragWindow`, `_SysEnvirons` and `_SetTrapAddress` that headed the previous ranking are all implemented now, so the first ten above are what comes next. The previous ranking counted 32 files, so the counts are not comparable one to one.)
 
+
+
+## MCC lane census (classes on disk, instance data, family dispose, self-drawing objects), 2026-10-19
+`tools/corpus-mui.py` over the 47 MUI programs, before (merge base d10413b) and after. Columns: windows / native controls / planes / named refusals.
+
+| program | before | after | next missing function | first named refusal left |
+|---|---|---|---|---|
+| aros-Clock | 0 / 0 / 0 / 3 | 1 / 0 / 1 / 1 | graphics.library/InitArea | unimplemented |
+| aros-Find | 0 / 0 / 0 / 6 | 0 / 0 / 0 / 5 | intuition.library/EasyRequestArgs | AllocDosObject type 5 not modelled |
+| aros-WBRename | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 0 | none |  |
+| aros-prefs-Appearance | 0 / 0 / 0 / 1 | 1 / 31 / 1 / 0 | none |  |
+| aros-prefs-Font | 0 / 0 / 0 / 1 | 1 / 14 / 0 / 0 | none |  |
+| aros-prefs-Palette | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 3 | none | MUI Group class: attribute MUIA_Palette_Entries is not implemented |
+| aros-prefs-Input | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 2 | none | MatchFirst: AnchorPath 0x1ffdbe is not longword aligned |
+| aros-prefs-ScreenMode | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 1 | graphics.library/NextDisplayInfo | unimplemented |
+| aros-prefs-Locale | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 0 | none |  |
+| aros-prefs-Pointer | 0 / 0 / 0 / 1 | 1 / 12 / 1 / 0 | none |  |
+| aros-prefs-IControl | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 4 | none | MUI class "ChunkyImage.mui" is not implemented |
+| aros-prefs-Wanderer | 0 / 0 / 0 / 1 | 1 / 12 / 0 / 3 | none | MUI_CreateCustomClass: the superclass "Imagedisplay.mui" is not implem |
+| aros-prefs-ReqTools | 0 / 0 / 0 / 1 | 1 / 32 / 0 / 1 | none | MUI Group class: attribute 0x90470501 is not implemented |
+| aros-prefs-OpenURL | 0 / 0 / 0 / 2 | 0 / 0 / 0 / 1 | iffparse.library/AllocIFF | unimplemented |
+| aros-NList-Demo | 0 / 0 / 0 / 7 | 0 / 0 / 0 / 5 | none | AllocDosObject type 5 not modelled |
+| aros-NListtree-Demo | 0 / 0 / 0 / 5 | 0 / 0 / 0 / 4 | none | AllocDosObject type 5 not modelled |
+| **all 47** | 9 / 115 / 0 / 47 | 15 / 216 / 3 / 43 | | |
+
+Programs not listed did not change. The Prefs editors open because `PrefsEditor.mcc` / `PrefsWindow.mcc` / `SystemPrefsWindow.mcc` load from `SYS:Classes/Zune` (docs/MUI-NATIVE.md); the planes are the Appearance and Pointer previews and the Clock face (its hands need `graphics.library/InitArea`: AreaDraw polygons). The NList demos now load `NList.mcc` and stop on `dos/AllocDosObject` type 5 and `Bodychunk.mui`.

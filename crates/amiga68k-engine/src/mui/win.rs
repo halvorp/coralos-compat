@@ -7,7 +7,7 @@ use alloc::format;
 use super::classes::Kind;
 use super::ids_gen::*;
 use super::layout::{self, Elem};
-use super::{menu, object};
+use super::{drawn, menu, object, surface};
 use crate::boopsi::Ext;
 use crate::graphics::fonts;
 use crate::{machine::Amiga, Refusal};
@@ -33,8 +33,9 @@ pub fn find_by_native<U: GuestUi>(a: &Amiga<U>, n: UiObjectRef) -> Option<u32> {
 
 pub fn set_open<U: GuestUi>(a: &mut Amiga<U>, w: u32, open: bool) -> Result<(), Refusal> {
     match (open, is_open(a, w)) {
-        (true, false) => open_window(a, w),
-        (false, true) => close_if_open(a, w),
+        // A window holding self-drawing objects opens when the methods Zune sends them first have run (drawn.rs).
+        (true, false) => if drawn::begin_open(a, w) { Ok(()) } else { open_window(a, w) },
+        (false, true) => if drawn::begin_close(a, w) { Ok(()) } else { close_if_open(a, w) },
         _ => Ok(()),
     }
 }
@@ -62,7 +63,7 @@ fn shown_title<U: GuestUi>(a: &Amiga<U>, w: u32) -> alloc::string::String {
     if t.is_empty() { a.gfx.program_name.clone() } else { alloc::string::String::from(t) }
 }
 
-fn open_window<U: GuestUi>(a: &mut Amiga<U>, w: u32) -> Result<(), Refusal> {
+pub(super) fn open_window<U: GuestUi>(a: &mut Amiga<U>, w: u32) -> Result<(), Refusal> {
     let l = lay_out(a, w, (0, 0))?;
     let title = shown_title(a, w);
     // Placement is the native window manager's job: the engine asks for 0,0.
@@ -84,13 +85,29 @@ fn menu_strip<U: GuestUi>(a: &mut Amiga<U>, w: u32, native: UiObjectRef) -> Resu
 }
 
 /// Make the host's controls match the layout: new and changed ones are synced, ones no longer wanted are retired.
-fn project<U: GuestUi>(a: &mut Amiga<U>, _w: u32, native: UiObjectRef, l: &layout::Layout) -> Result<(), Refusal> {
+fn project<U: GuestUi>(a: &mut Amiga<U>, w: u32, native: UiObjectRef, l: &layout::Layout) -> Result<(), Refusal> {
+    place_drawn(a, w, native, l)?;
     let wanted: Vec<u64> = l.elems.iter().map(|e| e.obj as u64).collect();
     let stale: Vec<u64> = a.objects.proj.iter().filter(|(t, p)| p.window == native && !wanted.contains(t)).map(|(t, _)| t).collect();
     for t in stale { a.objects.proj.retire(&mut a.ui, t).map_err(Refusal::ui)?; }
     for e in &l.elems {
         let token = e.obj as u64;
         a.objects.proj.sync(&mut a.ui, Some(native), token, e.obj, Some(model_of(e))).map_err(Refusal::ui)?;
+    }
+    Ok(())
+}
+
+/// Self-drawing objects ([`drawn`]) get the rectangle layout chose, in the window's own coordinates (borders included, what `_left(obj)`
+/// means), on a surface of the window's inner size; one that moved or grew is drawn again.
+fn place_drawn<U: GuestUi>(a: &mut Amiga<U>, w: u32, native: UiObjectRef, l: &layout::Layout) -> Result<(), Refusal> {
+    if l.drawn.is_empty() { return Ok(()); }
+    surface::attach(a, w, native, (l.width, l.height))?;
+    for &(o, r) in &l.drawn {
+        let now = GuestRect { left: r.left + BORDER_LEFT, top: r.top + BORDER_TOP, ..r };
+        let Some(d) = a.objects.drawn.get_mut(&o) else { continue };
+        let moved = d.rect.is_some() && d.rect != Some(now);
+        d.rect = Some(now);
+        if moved { drawn::redraw(a, o, drawn::MADF_DRAWOBJECT); }
     }
     Ok(())
 }
@@ -117,6 +134,8 @@ pub fn resized<U: GuestUi>(a: &mut Amiga<U>, w: u32, width: i32, height: i32) ->
 /// Close the native window (its controls go with it) if it is open.
 pub fn close_if_open<U: GuestUi>(a: &mut Amiga<U>, w: u32) -> Result<(), Refusal> {
     let Some(native) = native_of(a, w) else { return Ok(()) };
+    for o in drawn::candidates(a, w) { a.objects.drawn.remove(&o); } // asked again when the window opens again
+    surface::detach(a, w)?;
     if let Some(o) = a.objects.map.get_mut(&w) { o.ext = Ext::Win { native: None, content: (0, 0) }; }
     a.objects.proj.forget_where(|p| p.window == native); // the host retires a closed window's controls itself
     a.ui.close_window(native).map_err(Refusal::ui)

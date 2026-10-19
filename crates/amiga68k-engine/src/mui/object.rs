@@ -82,10 +82,15 @@ fn init<U: GuestUi>(a: &mut Amiga<U>, obj: u32, kind: Kind, tags: &[(u32, u32)])
     Ok(())
 }
 
-pub(crate) fn store_num<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, v: u32) { if let Some(o) = a.objects.map.get_mut(&obj) { o.attrs.insert(attr, v); } }
+pub(crate) fn store_num<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, v: u32) {
+    if let Some(o) = a.objects.map.get_mut(&obj) { o.attrs.insert(attr, v); }
+    if attr == MUIA_UserData { super::mirror::user_data(a, obj, v); }
+}
 
 fn store_str<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, ptr: u32) -> Result<(), Refusal> {
-    let s = if ptr == 0 { String::new() } else { a.mem.read_cstr(ptr).map_err(Refusal::mem("MUI string attribute"))? };
+    // NM_BARLABEL (-1) as a menu item's title is the separator bar (the same "-" MUI_MakeObjectA's NewMenu path stores).
+    let bar = ptr == u32::MAX && matches!(attr, MUIA_Menuitem_Title | MUIA_Menu_Title);
+    let s = if bar { "-".into() } else if ptr == 0 { String::new() } else { a.mem.read_cstr(ptr).map_err(Refusal::mem("MUI string attribute"))? };
     set_text(a, obj, attr, s);
     Ok(())
 }
@@ -118,17 +123,17 @@ pub(crate) fn adopt<U: GuestUi>(a: &mut Amiga<U>, parent: u32, tag: u32, child: 
         .ok_or_else(|| Refusal(format!("{name}: {child:#x} is not a MUI object")))?;
     if owned { return Err(Refusal(format!("{name}: {child:#x} already has a parent"))); }
     let ok = match tag {
+        MUIA_Family_Child | MUIA_Group_Child if pk.is_a(Kind::Family) => match pk { Kind::Menustrip => ck == Kind::Menu, _ => ck == Kind::Menuitem },
         MUIA_Application_Window => ck == Kind::Window,
         MUIA_Application_Menustrip | MUIA_Window_Menustrip => ck == Kind::Menustrip,
         MUIA_Window_RootObject | MUIA_Group_Child | MUIA_Scrollgroup_Contents | MUIA_Popstring_String | MUIA_Popstring_Button | MUIA_Popobject_Object => ck.is_area(),
         MUIA_Listview_List => ck == Kind::List,
-        MUIA_Family_Child => match pk { Kind::Menustrip => ck == Kind::Menu, _ => ck == Kind::Menuitem },
         _ => false,
     };
     if !ok { return Err(Refusal(format!("{name}: a {ck:?} object cannot be a child of a {pk:?}"))); }
     if let Some(c) = a.objects.map.get_mut(&child) { c.parent = Some(parent); }
     if let Some(p) = a.objects.map.get_mut(&parent) { p.children.push(child); if matches!(tag, MUIA_Popstring_String | MUIA_Popstring_Button | MUIA_Window_Menustrip) { p.attrs.insert(tag, child); } }
-    Ok(())
+    super::mirror::connected(a, child)
 }
 
 /// Value ranges MUI keeps: a Numeric's value stays within its min..max, a Gauge's current within 0..max.
@@ -212,6 +217,9 @@ fn set_attr_with<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, val: u32, no
     let ty = attrs::lookup(kind, attr).ok_or_else(|| unknown(kind, attr))?;
     let mut shown = val;
     match ty {
+        // A subclass hands its OM_NEW tag list to OM_SET again after DoSuperMethod made the object (Zune's PrefsEditor does): the child is
+        // already adopted, and Zune's OM_SET has no case for it (group.c), so the repeat is a no-op, not a second adoption.
+        Ty::Adopt if a.objects.children(obj).contains(&val) => return Ok(()),
         Ty::Adopt => return Err(Refusal(format!("{}: can be given only when the object is created", attrs::name(attr)))),
         Ty::Str => {
             store_str(a, obj, attr, val)?;
@@ -287,22 +295,27 @@ pub fn dispose<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> {
     }
 }
 
+/// The rest of a disposal once the children's destructors have run ([`super::dispose`]): window, signal bit, list data, the record.
+pub(crate) fn dispose_remaining<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> { dispose_tree(a, obj) }
+
 fn dispose_tree<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<(), Refusal> {
     let Some(o) = a.objects.map.get(&obj) else { return Ok(()) };
     let (kind, children): (Kind, Vec<u32>) = (o.kind, o.children.clone());
     let bit = if let Ext::App { bit, .. } = o.ext { Some(bit) } else { None };
+    if kind == Kind::Application { super::mirror::forget_application(a, obj); }
     let mut first: Result<(), Refusal> = Ok(());
     if kind == Kind::Window { first = win::close_if_open(a, obj); }
     for c in children { let r = dispose_tree(a, c); if first.is_ok() { first = r; } }
     if let Some(b) = bit { let r = ports::release_signal_bit(a, b as i32); if first.is_ok() { first = r; } }
     if kind == Kind::List { super::list::release(a, obj); }
+    a.objects.drawn.remove(&obj);
     let r = boopsi::free_object(a, obj);
     if first.is_ok() { r } else { first }
 }
 
 /// The MUI half of an object the BOOPSI core made for a program's own subclass: its tags are applied like `MUI_NewObjectA`'s.
 pub(crate) fn init_adopted<U: GuestUi>(a: &mut Amiga<U>, obj: u32, kind: Kind, tags: &[(u32, u32)]) -> Result<(), Refusal> {
-    let r = init(a, obj, kind, tags);
+    let r = init(a, obj, kind, tags).and_then(|()| super::mirror::notify_data(a, obj));
     if r.is_err() { for &(tag, data) in tags { if attrs::adopts(kind, tag) && a.objects.map.get(&data).is_some_and(|c| c.parent.is_none()) { let _ = dispose_tree(a, data); } } }
     r
 }

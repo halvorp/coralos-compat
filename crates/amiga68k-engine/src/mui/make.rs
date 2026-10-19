@@ -14,6 +14,8 @@ use guestui_abi::GuestUi;
 
 /// intuition/intuition.h menu flags and gadtools.h NewMenu (20 bytes: type 0, label 2, comm key 6, flags 10, mutual exclude 12, user data 16;
 /// the layout gt_menus.rs reads).
+/// mui.h: `MUIO_CoolButton = 111` is followed by `MUIO_ImageButton` (the generated ids stop at MUIO_NumericButton).
+const MUIO_ImageButton: u32 = 112;
 const NM_END: u8 = 0;
 const NM_TITLE: u8 = 1;
 const NM_ITEM: u8 = 2;
@@ -67,6 +69,14 @@ pub fn make<U: GuestUi>(a: &mut Amiga<U>, ty: u32, params: u32) -> Result<u32, R
                 (MUIA_InputMode, MUIV_InputMode_RelVerify), (MUIA_Background, MUII_ButtonBack)], true)?;
             set_text(a, obj, MUIA_Text_PreParse, "\u{1b}c".into());
             Ok(obj)
+        }
+        MUIO_ImageButton => {
+            // INTERNAL_ImageButton: a button with a picture when the image file exists, otherwise SimpleButton(label).
+            let image = p(a, 1)?;
+            let path = label_text(a, image)?;
+            let cwd = crate::fs::cur_dir(a);
+            if a.fs.vol.resolve(cwd, &path).is_ok() { return Err(Refusal(format!("MUIO_ImageButton: \"{path}\" exists, and a picture button (a RelVerify HGroup) has no native role yet"))); }
+            make(a, MUIO_Button, params)
         }
         MUIO_Checkmark => { let label = p(a, 0)?; control(a, Kind::Image, label, alloc::vec![(MUIA_Frame, MUIV_Frame_ImageButton), (MUIA_Background, MUII_ButtonBack),
             (MUIA_Image_Spec, MUII_CheckMark), (MUIA_InputMode, MUIV_InputMode_Toggle), (MUIA_Image_FreeVert, 1), (MUIA_ShowSelState, 0)], true) }

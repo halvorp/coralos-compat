@@ -45,7 +45,7 @@ pub enum IconRole {
 }
 
 /// What the engines call. One implementation per host (real CoralOS, recording, headless).
-pub trait GuestUi {
+pub trait GuestUi: 'static {
     fn open_window(&mut self, model: WindowModel) -> Result<UiObjectRef, UiRefusal>;
     fn close_window(&mut self, win: UiObjectRef) -> Result<(), UiRefusal>;
     /// The guest retitled the window (Intuition SetWindowTitles).

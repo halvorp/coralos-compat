@@ -65,15 +65,18 @@ fn run_app(rel: &str, sys: Option<&str>, mounts: &[(&str, &str)], progdir: Optio
 fn logged(r: &Run, needle: &str) -> bool { r.log.iter().any(|l| l.contains(needle)) }
 
 #[test]
-fn an_aros_built_binary_gets_through_task_resource_and_stdc_library_and_stops_at_the_next_missing_function() {
+fn an_aros_built_binary_gets_through_task_resource_and_stdc_library_and_loads_its_mui_class_from_disk() {
     // aros-m68k "mini" = the nightly's Libs/Classes/Devs trimmed to what the engine does not bridge itself (CORPUS.md). Before
     // task.resource existed all 60 AROS binaries stopped inside stdc.library's init ("its init routine returned NULL").
     let Some(r) = run_app("aros-m68k/sys/Utilities/Clock", Some("aros-m68k/mini"), &[], None, 20_000_000) else { return };
     assert!(logged(&r, "OpenResource \"task.resource\" ->") && !logged(&r, "OpenResource \"task.resource\" -> NULL"), "{:#?}", r.log);
     assert!(logged(&r, "AllocTaskStorageSlot") && logged(&r, "SetTaskStorageSlot"), "stdc.library's init took a storage slot: {:#?}", r.log);
-    // stdc.library's init needs timer.device/GetSysTime (implemented in this lane); Clock then builds its MUI application and meets
-    // its first gap: the custom class Clock.mcc, a disk class the engine's MUI host cannot load yet (named, not silent).
-    assert!(r.refused.iter().any(|x| x.starts_with("muimaster.library/MUI_NewObjectA: MUI class \"Clock.mcc\" is not implemented")), "{:?}", r.refused);
+    // stdc.library's init needs timer.device/GetSysTime (implemented in this lane); Clock then builds its MUI application, loads its custom
+    // class Clock.mcc from disk (docs/MUI-NATIVE.md: MCC_Query in the guest) and opens its window (drawn as a plane); utility.library's date
+    // functions are written, and the next missing function is graphics.library/InitArea, named.
+    assert!(logged(&r, "disk class \"Clock.mcc\" ="), "{:#?}", r.log);
+    assert!(r.ui.iter().any(|c| c.starts_with("OpenWindow") && c.contains("title: \"Clock\"")), "{:?}", r.ui);
+    assert!(r.refused.iter().all(|x| x == "graphics.library/InitArea: unimplemented"), "{:?}", r.refused);
     assert!(!r.refused.iter().any(|x| x.contains("GetSysTime")), "{:?}", r.refused);
     assert!(!r.refused.iter().any(|x| x.contains("init routine returned NULL")), "stdc.library initialised: {:?}", r.refused);
     // NEGATIVE CONTROL: without the AROS Libs the same binary cannot open stdc.library at all and says so.

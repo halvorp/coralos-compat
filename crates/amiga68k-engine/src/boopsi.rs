@@ -54,6 +54,21 @@ pub struct Objects {
     pub hooks: VecDeque<crate::mui::hooks::HookCall>,
     /// The host's control metrics for MUI's layout (mui/layout.rs `Metrics`); default = Zune's own sizes.
     pub mui_metrics: crate::mui::layout::Metrics,
+    /// MUI classes opened from disk (`.mcc`/`.mcp`), by the name they were asked for (mui/disk.rs).
+    pub disk_classes: BTreeMap<String, crate::mui::disk::DiskClass>,
+    /// Application -> its guest `struct MUI_GlobalInfo` (mui/mirror.rs).
+    pub global_info: BTreeMap<u32, u32>,
+    /// Self-drawing objects (mui/drawn.rs), the queue of methods still to send them, and each open window's drawing surface.
+    pub drawn: BTreeMap<u32, crate::mui::drawn::Drawn>,
+    pub draw_steps: VecDeque<crate::mui::drawn::Step>,
+    /// A queued method is running as a guest call: a handler it reaches (its DoSuperMethod) must not start the next step inside it.
+    pub draw_busy: bool,
+    pub surfaces: BTreeMap<u32, crate::mui::drawn::Surface>,
+    /// `struct MUI_InputHandlerNode`s a class registered with `MUIM_Application_AddInputHandler`: node -> its application. They are
+    /// recorded and given back on RemInputHandler; the host does not fire them (no timer or signal source drives them yet).
+    pub input_handlers: BTreeMap<u32, u32>,
+    /// `MUI_AddClipRegion` stacks (mri_rArray): RenderInfo -> the regions installed, innermost last.
+    pub clip_stack: BTreeMap<u32, Vec<u32>>,
 }
 
 fn class_addr(k: Kind) -> u32 { crate::iclass::native_addr(crate::iclass::Native::Mui(k)) }
@@ -126,7 +141,7 @@ pub fn new_object_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
 /// intuition DisposeObject(a0 = object).
 pub fn dispose_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let obj = cpu.areg(0);
-    crate::mui::dispose(a, obj)?;
+    crate::mui::dispose_start(a, cpu, obj)?;
     Ok(format!("[intuition] DisposeObject {obj:#x}"))
 }
 

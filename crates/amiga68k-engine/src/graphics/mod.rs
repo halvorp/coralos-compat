@@ -19,7 +19,7 @@ mod palette;
 mod pixelarrays;
 pub mod rastport;
 pub mod record;
-mod regions;
+pub(crate) mod regions;
 mod setup;
 pub mod state;
 pub mod target;
