@@ -216,3 +216,41 @@ fn resource_forks_open_as_resource_files_and_close_with_the_file_manager() {
     assert_eq!(w(&m, OUT + 8), -1);
     assert_eq!(m.mem.read_u16(mac68k_engine::lowmem::RES_ERR).unwrap() as i16, -39);
 }
+
+#[test]
+fn open_rf_perm_opens_a_resource_file_with_the_asked_permission_and_the_first_refnum_is_not_the_applications() {
+    let mut m = machine();
+    let fork = ForkBuilder::new().add(b"STR ", 128, None, b"\x01x").build();
+    let root = m.fm.def_vol;
+    let f = m.fm.tree.put_file(root, "Prefs", vec![]).unwrap();
+    m.fm.tree.get_mut(f).rsrc = fork.clone();
+    let ro = m.fm.add_volume("Disc", false);
+    let g = m.fm.tree.put_file(ro, "Locked", vec![]).unwrap();
+    m.fm.tree.get_mut(g).rsrc = fork;
+    // OpenRFPerm(name, vRefNum 0, denyModes) -> refnum
+    let open = |m: &mut Mac<RecordingGuestUi>, name: &str, perm: u8, at: u32| {
+        set(m, NAME, &pstr(name));
+        let mut a = Asm::default();
+        a.w(&[0x4267, 0x2F3C, (NAME >> 16) as u16, NAME as u16, 0x3F3C, 0, 0x3F3C, u16::from(perm) << 8]).trap(0xA9C4).w(&[0x33DF, 0, at as u16]).exit();
+        run(m, &a);
+    };
+    open(&mut m, "Prefs", 3, OUT); // fsRdWrPerm
+    let rn = w(&m, OUT);
+    assert!(rn > 0 && rn != mac68k_engine::resmgr::APP_REF_NUM, "refnum {rn}: the application's own fork already holds refnum 2");
+    assert!(m.fm.open_fork(rn).is_some_and(|f| f.perm.write), "opened for writing as asked");
+    assert_eq!(m.mem.read_u16(mac68k_engine::lowmem::RES_ERR).unwrap(), 0);
+    // NEGATIVE CONTROLS: read/write on a read-only volume is wPrErr (-44) with refnum -1 and no fork left open; read-only works there;
+    // a missing file is fnfErr (-43).
+    let before = m.fm.open_forks().count();
+    open(&mut m, "Disc:Locked", 3, OUT + 2);
+    assert_eq!(w(&m, OUT + 2), -1);
+    assert_eq!(m.mem.read_u16(mac68k_engine::lowmem::RES_ERR).unwrap() as i16, -44);
+    assert_eq!(m.fm.open_forks().count(), before);
+    open(&mut m, "Disc:Locked", 1, OUT + 4);
+    assert!(w(&m, OUT + 4) > 0 && m.fm.open_fork(w(&m, OUT + 4)).is_some_and(|f| !f.perm.write));
+    open(&mut m, "Nothing", 1, OUT + 6);
+    assert_eq!((w(&m, OUT + 6), m.mem.read_u16(mac68k_engine::lowmem::RES_ERR).unwrap() as i16), (-1, -43));
+    // The File Manager never hands out the application's refnum, whatever it opens first.
+    let l = m.fm.locate(0, 0, Some(b"Prefs")).unwrap();
+    assert_ne!(m.fm.open(&l, false, 1).unwrap(), mac68k_engine::resmgr::APP_REF_NUM);
+}

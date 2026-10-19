@@ -31,7 +31,7 @@ const WR_PN_MODE: u32 = 56;
 const WR_TX_SIZE: u32 = 74;
 const WR_KIND: u32 = 108;
 const WR_VISIBLE: u32 = 110;
-const WR_HILITED: u32 = 111;
+pub(crate) const WR_HILITED: u32 = 111;
 const WR_GO_AWAY: u32 = 112;
 const WR_NEXT: u32 = 144;
 pub(crate) const WR_REF_CON: u32 = 152;
@@ -237,6 +237,7 @@ impl<U: GuestUi> Mac<U> {
         if !self.windows.contains_key(&win) { return Err(Refusal(format!("DisposeWindow: {win:#x} is not an open window"))); }
         self.kill_controls(win, false)?;
         self.forget_window_projections(win);
+        self.pal.by_window.remove(&win);
         let dialog_storage = self.release_dialog(win);
         let w = self.windows.remove(&win).ok_or_else(|| Refusal(format!("DisposeWindow: {win:#x} is not an open window")))?;
         crate::qd::lifecycle::window_disposed(self, win);

@@ -67,6 +67,10 @@ impl<U: GuestUi> Mac<U> {
         let opened = retro_resfork::open(file).map_err(|e| e.to_string())?;
         let fork = ResFork::parse(file[opened.rsrc.clone()].to_vec()).map_err(|e| e.to_string())?;
         self.rm.open_fork(APP_REF_NUM, fork);
+        let app_name = opened.name.clone().unwrap_or_else(|| "Application".into());
+        let (ft, cr) = (opened.file_type.unwrap_or(*b"APPL"), opened.creator.unwrap_or(*b"????"));
+        let data = opened.data.clone().map_or(&[][..], |r| &file[r]);
+        self.fm.install_app(&app_name, data, &file[opened.rsrc.clone()], ft, cr, APP_REF_NUM).map_err(|e| format!("the application's own file could not be installed on the boot volume (OSErr {e})"))?;
         let code0 = {
             let f = &self.rm.files.last().ok_or("no resource file open")?.fork;
             let i = f.find(*b"CODE", 0).ok_or("no 'CODE' 0 resource: not a 68k application")?;
@@ -85,7 +89,10 @@ impl<U: GuestUi> Mac<U> {
         if world != STACK_TOP { return Err(format!("the A5 world landed at {world:#x}, not at STACK_TOP: launch needs a fresh machine")); }
         let a5 = world + c.below;
         self.mem.write_bytes(a5 + c.jt_offset, jt).map_err(|e| e.to_string())?;
-        lowmem::set_app(&mut self.mem, &opened.name.unwrap_or_else(|| "Application".into()), a5, c.jt_offset as u16, APP_REF_NUM).map_err(|e| e.0)?;
+        lowmem::set_app(&mut self.mem, &app_name, a5, c.jt_offset as u16, APP_REF_NUM).map_err(|e| e.0)?;
+        let parms = self.mm.new_handle(&mut self.mem, &mut self.heap, 4, true).map_err(|e| format!("no memory for AppParmHandle (memFullErr {e})"))?;
+        let _ = self.mm.sync_master(&mut self.mem, parms);
+        self.mem.write_u32(lowmem::APP_PARM_HANDLE, parms).map_err(|e| e.to_string())?;
         self.seg = SegLoader { a5, jt_offset: c.jt_offset, jt_size: c.jt_size, loaded: BTreeSet::new() };
         self.mem.write_u32(STACK_TOP - 4, EXIT_STUB).map_err(|e| e.to_string())?;
         self.ctx = Some(retro_m68k::start_model(self, a5 + c.jt_offset + 2, STACK_TOP - 4, &[(REG_A0 + 5, a5)], self.profile.cpu));
@@ -95,7 +102,7 @@ impl<U: GuestUi> Mac<U> {
 
     /// Load `CODE seg`: patch every jump-table entry the segment owns to `jmp abs.l`. Returns the log line.
     fn load_segment(&mut self, seg: u16) -> Result<String, String> {
-        let h = self.get_resource(*b"CODE", seg as i16, true).map_err(|e| format!("no 'CODE' {seg} resource (ResErr {e})"))?;
+        let h = self.get_resource_from(APP_REF_NUM, *b"CODE", seg as i16).map_err(|e| format!("no 'CODE' {seg} resource (ResErr {e})"))?;
         if let Some(b) = self.mm.block_mut(h) { b.locked = true; } // the code must not move once entries point into it
         let _ = self.mm.sync_master(&mut self.mem, h);
         let (base, size) = { let b = self.mm.block(h).ok_or("CODE handle vanished")?; (b.ptr, b.size) };
@@ -128,7 +135,7 @@ impl<U: GuestUi> Mac<U> {
         let word = self.mem.read_u16(entry + 2).map_err(|e| e.to_string())?;
         if word != 0x4EF9 { return Ok(format!("[segment] UnloadSeg {routine:#x}: entry already unloaded (no-op)")); }
         let seg = self.mem.read_u16(entry).map_err(|e| e.to_string())?;
-        let h = self.get_resource(*b"CODE", seg as i16, true).map_err(|e| format!("no 'CODE' {seg} resource (ResErr {e})"))?;
+        let h = self.get_resource_from(APP_REF_NUM, *b"CODE", seg as i16).map_err(|e| format!("no 'CODE' {seg} resource (ResErr {e})"))?;
         let (base, size) = { let b = self.mm.block(h).ok_or("CODE handle vanished")?; (b.ptr, b.size) };
         if size < 4 { return Err(format!("CODE {seg} is shorter than its 4-byte header")); }
         let (first, count) = (self.mem.read_u16(base).map_err(|e| e.to_string())?, self.mem.read_u16(base + 2).map_err(|e| e.to_string())?);
@@ -150,7 +157,23 @@ impl<U: GuestUi> Mac<U> {
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9F0, &[Arg::W], None, load_seg::<U>)?;
-    m.register(0xA9F1, &[Arg::L], None, unload_seg::<U>)
+    m.register(0xA9F1, &[Arg::L], None, unload_seg::<U>)?;
+    m.register(0xA9F5, &[Arg::P, Arg::P, Arg::P], None, get_app_parms::<U>)
+}
+
+/// `GetAppParms(VAR apName: Str255; VAR apRefNum: INTEGER; VAR apParam: Handle)`: the running application's name (`CurApName`), the
+/// reference number of its resource file (`CurApRefNum`) and the Finder's startup information (`AppParmHandle`: a word `message`
+/// (0 open, 1 print), a word `count` of documents, then the documents; `launch` builds it with no documents, as a double click on
+/// the application itself does).
+fn get_app_parms<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let e = Refusal::mem("GetAppParms");
+    let name_len = m.mem.read_u8(lowmem::CUR_AP_NAME).map_err(&e)?;
+    let name = m.mem.span(lowmem::CUR_AP_NAME, 1 + u32::from(name_len)).and_then(|s| m.mem.bytes(s).map(<[u8]>::to_vec)).map_err(&e)?;
+    let (refnum, handle) = (m.mem.read_u16(lowmem::CUR_AP_REF_NUM).map_err(&e)?, m.mem.read_u32(lowmem::APP_PARM_HANDLE).map_err(&e)?);
+    if c.args.get(0) != 0 { m.mem.write_bytes(c.args.get(0), &name).map_err(&e)?; }
+    if c.args.get(1) != 0 { m.mem.write_u16(c.args.get(1), refnum).map_err(&e)?; }
+    if c.args.get(2) != 0 { m.mem.write_u32(c.args.get(2), handle).map_err(&e)?; }
+    Ok(Done { result: 0, log: format!("[segment] GetAppParms -> \"{}\" refnum {} AppParmHandle {handle:#x}", name[1..].iter().map(|&b| char::from(b)).collect::<String>(), refnum as i16) })
 }
 
 /// `_LoadSeg`: stack is `[segNum][return address of the jsr to the jump-table entry]`. The trap word sits at entry+6,

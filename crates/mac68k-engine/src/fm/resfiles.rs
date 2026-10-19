@@ -15,6 +15,9 @@ use retro_resfork::{writer::ForkBuilder, ResFork};
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA997, &[Arg::P], Some(Arg::W), open_res_file::<U>)?;
+    m.register(0xA9C4, &[Arg::P, Arg::W, Arg::B], Some(Arg::W), open_rf_perm::<U>)?;
+    m.register(0xA81A, &[Arg::W, Arg::L, Arg::P, Arg::B], Some(Arg::W), hopen_res_file::<U>)?;
+    m.register(0xA81B, &[Arg::W, Arg::L, Arg::P], None, hcreate_res_file::<U>)?;
     m.register(0xA9B1, &[Arg::P], None, create_res_file::<U>)?;
     m.register(0xA99A, &[Arg::W], None, close_res_file::<U>)?;
     m.register(0xA99B, &[Arg::B], None, set_res_load::<U>)
@@ -50,6 +53,44 @@ fn open_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
     let (v, e) = match res { Ok(r) => (r as u16 as u32, 0), Err(e) => (0xFFFF, e) };
     set_err(m, e);
     Ok(Done { result: v, log: format!("[res] OpenResFile \"{}\" -> {} (ResErr {e})", name.iter().map(|&b| char::from(b)).collect::<alloc::string::String>(), v as u16 as i16) })
+}
+
+/// `OpenRFPerm(fileName, vRefNum, denyModes)`: `OpenResFile` with a vRefNum and the File Manager's permission byte
+/// (0 fsCurPerm, 1 fsRdPerm, 2 fsWrPerm, 3 fsRdWrPerm, 4 fsRdWrShPerm; Inside Macintosh: More Macintosh Toolbox). The
+/// fork is opened by the same path as `OpenResFile`, so a denied permission (a write on a locked file or read-only
+/// volume) is the File Manager's own error in `ResErr` and the call answers -1.
+fn open_rf_perm<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let name = read_pstring_bytes(&m.mem, c.args.get(0))?;
+    let (vref, perm) = (c.args.get(1) as u16 as i16, c.args.get(2) as u8);
+    let res = m.fm.locate(vref, 0, Some(&name)).and_then(|l| m.open_res_file(&l, perm));
+    let (v, e) = match res { Ok(r) => (r as u16 as u32, 0), Err(e) => (0xFFFF, e) };
+    set_err(m, e);
+    Ok(Done { result: v, log: format!("[res] OpenRFPerm \"{}\" vRef {vref} perm {perm} -> {} (ResErr {e})", name.iter().map(|&b| char::from(b)).collect::<alloc::string::String>(), v as u16 as i16) })
+}
+
+/// `HOpenResFile(vRefNum, dirID, fileName, permission)`: `OpenResFile` in an explicit directory, with the File Manager's
+/// permission byte (0 = the current permission). The answer is the refnum, or -1 with the error in `ResErr`.
+fn hopen_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (vref, dir, perm) = (c.args.get(0) as u16 as i16, c.args.get(1), c.args.get(3) as u8);
+    let name = read_pstring_bytes(&m.mem, c.args.get(2))?;
+    let res = m.fm.locate(vref, dir, Some(&name)).and_then(|l| m.open_res_file(&l, perm));
+    let (v, e) = match res { Ok(r) => (r as u16 as u32, 0), Err(e) => (0xFFFF, e) };
+    set_err(m, e);
+    Ok(Done { result: v, log: format!("[res] HOpenResFile \"{}\" vRef {vref} dirID {dir} perm {perm} -> {} (ResErr {e})", name.iter().map(|&b| char::from(b)).collect::<alloc::string::String>(), v as u16 as i16) })
+}
+
+/// `HCreateResFile(vRefNum, dirID, fileName)`: `CreateResFile` in an explicit directory.
+fn hcreate_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (vref, dir) = (c.args.get(0) as u16 as i16, c.args.get(1));
+    let name = read_pstring_bytes(&m.mem, c.args.get(2))?;
+    m.fm.now_secs = m.clock();
+    let res = m.fm.locate(vref, dir, Some(&name)).and_then(|l| {
+        let l = if l.node.is_none() { let id = m.fm.create_file(&l)?; Located { node: Some(id), ..l } } else { l };
+        m.new_res_fork(&l)
+    });
+    let e = res.err().unwrap_or(0);
+    set_err(m, e);
+    Ok(Done { result: 0, log: format!("[res] HCreateResFile \"{}\" vRef {vref} dirID {dir} (ResErr {e})", name.iter().map(|&b| char::from(b)).collect::<alloc::string::String>()) })
 }
 
 fn create_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

@@ -27,10 +27,23 @@ const SECS_2026_10_19: u32 = 3_875_212_800; // Monday 19 October 2026 00:00:00
 fn num_to_string_and_string_to_num_round_trip_and_an_unknown_selector_stops_by_name() {
     let mut g = Rig::new();
     put(&mut g.m, STR, &pstr("-1234xyz"));
-    g.run(Prog::new().l((-4096i32) as u32).l(OUT).w(0).trap(0xA9EE).l(STR).l(SCRATCH).w(1).trap(0xA9EE).exit());
+    // Pack7 is a REGISTER package (the corpus applications' own glue: D0 / A0 loaded, the selector the only thing pushed):
+    // NumToString D0 -> Str255 at A0; StringToNum Str255 at A0 -> D0. A marker pushed under the selector must come back on
+    // top of the stack (the package pops the selector and nothing else).
+    let mut p = Prog::new();
+    p.l(0xCAFE_F00D);
+    set_d0(&mut p, (-4096i32) as u32); set_a0(&mut p, OUT); p.w(0).trap(0xA9EE);
+    words(&mut p, &[0x23DF, 0, (SCRATCH + 8) as u16]); // move.l (sp)+,SCRATCH+8
+    set_a0(&mut p, STR); p.w(1).trap(0xA9EE); save_d0(&mut p, SCRATCH);
+    p.l(0x1111_1111).w(0); // NEGATIVE CONTROL: arguments pushed Pascal-style on the stack are NOT read; D0 / A0 are
+    set_d0(&mut p, 77); set_a0(&mut p, OUT + 0x40); p.trap(0xA9EE);
+    words(&mut p, &[0x588F]); // addq.l #4,sp
+    g.run(p.exit());
     g.no_refusals();
     assert_eq!(text(&g, OUT), "-4096");
-    assert_eq!(l(&g, SCRATCH) as i32, -1234, "StringToNum stops at the first non-digit");
+    assert_eq!(l(&g, SCRATCH + 8), 0xCAFE_F00D, "only the selector word was popped");
+    assert_eq!(l(&g, SCRATCH) as i32, -1234, "StringToNum answers in D0 and stops at the first non-digit");
+    assert_eq!(text(&g, OUT + 0x40), "77", "NumToString read D0, not the stack");
     // NEGATIVE CONTROL: a selector the package lacks halts the guest with a refusal that names it (its frame size is unknown).
     let mut g = Rig::new();
     g.m.start(&Prog::new().w(9).trap(0xA9EE).exit().0, 0).unwrap();

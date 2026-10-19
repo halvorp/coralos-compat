@@ -44,7 +44,7 @@ pub struct MacEvent { pub what: u16, pub message: u32, pub when: u32, pub v: i16
 
 /// A blocked event call: what it is waiting for and where to deliver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Wait { pub mask: u16, pub ev_ptr: u32, pub result_at: u32 }
+pub struct Wait { pub mask: u16, pub ev_ptr: u32, pub result_at: u32, pub deadline: Option<u32> }
 
 #[derive(Default)]
 pub struct EventMgr {
@@ -73,6 +73,7 @@ impl<U: GuestUi> Mac<U> {
         self.ev.ticks = self.ev.ticks.wrapping_add(n);
         let _ = self.mem.write_u32(TICKS, self.ev.ticks);
         let _ = self.update_time();
+        for _ in 0..n.min(600) { self.vbl_tick(); } // at most ten seconds of retraces per call: a host that sleeps does not owe them all
     }
 
     /// Take events the host UI has for this guest into the queue.
@@ -139,7 +140,16 @@ impl<U: GuestUi> Mac<U> {
         if self.tr.dlg.modal.is_some() { return self.complete_modal(); }
         let Some(w) = self.ev.waiting else { return true };
         self.pump_ui();
-        let Some(e) = self.take_event(w.mask, true) else { return false };
+        let Some(e) = self.take_event(w.mask, true) else {
+            // Nothing queued. A real Mac would have handed the program a NULL event by now (GetNextEvent returns at once; WaitNextEvent
+            // returns when its sleep has run out): once the host's clock reaches the deadline the call completes with `what = 0`.
+            if !w.deadline.is_some_and(|d| self.ev.ticks.wrapping_sub(d) < 0x8000_0000) { return false; }
+            let null = MacEvent { what: 0, message: 0, when: self.ev.ticks, v: 0, h: 0, modifiers: 0 };
+            let done = self.write_event(w.ev_ptr, &null).and_then(|_| self.mem.write_u8(w.result_at, 0).map_err(Refusal::mem("event result")));
+            if let Err(Refusal(why)) = done { self.note_refusal("WaitNextEvent", why); }
+            self.ev.waiting = None;
+            return true;
+        };
         let done = self.write_event(w.ev_ptr, &e).and_then(|_| self.mem.write_u8(w.result_at, 1).map_err(Refusal::mem("event result")));
         if let Err(Refusal(why)) = done { self.note_refusal("WaitNextEvent", why); }
         self.ev.waiting = None;
@@ -148,7 +158,11 @@ impl<U: GuestUi> Mac<U> {
 }
 
 /// Does an event mask accept event code `what`?
-fn mask_accepts(mask: u16, what: u16) -> bool { what < 16 && mask & (1u16 << what) != 0 }
+fn mask_accepts(mask: u16, what: u16) -> bool {
+    // A high-level (Apple) event has `what` 23, which no 16-bit mask can name: `highLevelEventMask` (0x0400) is its bit.
+    if what == crate::appleevents::HIGH_LEVEL_EVENT { return mask & 0x0400 != 0; }
+    what < 16 && mask & (1u16 << what) != 0
+}
 
 /// What [`Mac::deliver`] did with an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,14 +178,23 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA971, &[Arg::W, Arg::L], Some(Arg::B), event_avail::<U>)?;
     m.register(0xA860, &[Arg::W, Arg::L, Arg::L, Arg::L], Some(Arg::B), wait_next_event::<U>)?;
     m.register(0xA975, &[], Some(Arg::L), tick_count::<U>)?;
+    m.register(0xA976, &[Arg::L], None, get_keys::<U>)?;
     m.register_os(0xA032, flush_events::<U>)
+}
+
+/// `GetKeys(VAR theKeys: KeyMap)`: the 128 key-down bits (16 bytes, Inside Macintosh: Toolbox Event Manager). This engine
+/// does not follow key RELEASES (a key press arrives as `keyDown`/`autoKey`; the release is `Ignored`), so it cannot claim
+/// any key is held: the map is all zero, and the log says that is the answer rather than a measurement.
+fn get_keys<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    m.mem.zero(c.args.get(0), 16).map_err(Refusal::mem("KeyMap"))?;
+    Ok(Done { result: 0, log: String::from("[event] GetKeys -> no key held (key releases are not tracked)") })
 }
 
 const GET_LAYOUT: [Arg; 2] = [Arg::W, Arg::L];
 const WAIT_LAYOUT: [Arg; 4] = [Arg::W, Arg::L, Arg::L, Arg::L];
 
 /// The shared body: return a queued event, or the null event / block.
-fn next<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call, layout: &[Arg], remove: bool, block: bool) -> Result<Done, Refusal> {
+fn next<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call, layout: &[Arg], remove: bool, block: Option<u32>) -> Result<Done, Refusal> {
     let (mask, ev_ptr) = (c.args.get(0) as u16, c.args.get(1));
     m.pump_ui();
     if let Some(e) = m.take_event(mask, remove) {
@@ -180,20 +203,23 @@ fn next<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call, layout: &[Arg], rem
     }
     let null = MacEvent { what: 0, message: 0, when: m.ev.ticks, v: 0, h: 0, modifiers: 0 };
     m.write_event(ev_ptr, &null)?;
-    if block {
+    if let Some(sleep) = block {
         let result_at = cpu.areg(7) + frame_size(layout);
-        m.ev.waiting = Some(Wait { mask, ev_ptr, result_at });
+        // GetNextEvent has no sleep: its null event is due on the next tick. WaitNextEvent's is due when `sleep` ticks are up
+        // (a sleep of 0xFFFFFFFF, or anything past a day, is "until an event comes").
+        let deadline = if sleep >= 0x0005_0000 { None } else { Some(m.ev.ticks.wrapping_add(sleep.max(1))) };
+        m.ev.waiting = Some(Wait { mask, ev_ptr, result_at, deadline });
         cpu.block();
         return Ok(Done { result: 0, log: format!("[event] {} blocks (mask {mask:#06x})", c.name) });
     }
     Ok(Done { result: 0, log: format!("[event] {} -> null event", c.name) })
 }
 
-fn get_next_event<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> { next(m, cpu, c, &GET_LAYOUT, true, true) }
-fn event_avail<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> { next(m, cpu, c, &GET_LAYOUT, false, false) }
+fn get_next_event<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> { next(m, cpu, c, &GET_LAYOUT, true, Some(1)) }
+fn event_avail<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> { next(m, cpu, c, &GET_LAYOUT, false, None) }
 fn wait_next_event<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let sleep = c.args.get(2);
-    next(m, cpu, c, &WAIT_LAYOUT, true, sleep != 0)
+    next(m, cpu, c, &WAIT_LAYOUT, true, (sleep != 0).then_some(sleep))
 }
 
 fn tick_count<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {

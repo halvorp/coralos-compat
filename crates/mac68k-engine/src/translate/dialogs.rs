@@ -446,5 +446,37 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA98D, &[L, W, L, L, L], None, get_dialog_item::<U>)?;
     m.register(0xA98F, &[L, L], None, set_dialog_item_text::<U>)?;
     m.register(0xA990, &[L, L], None, get_dialog_item_text::<U>)?;
+    m.register(0xA981, &[L], None, draw_dialog::<U>)?;
+    m.register(0xA978, &[L, L], None, draw_dialog::<U>)?;
+    m.register(0xA982, &[L], None, close_dialog::<U>)?;
+    m.register(0xA97E, &[L, W, W, W], None, select_dialog_item_text::<U>)?;
     m.register(0xA991, &[L, L], None, modal_dialog::<U>)
+}
+
+/// `DrawDialog(theDialog)` / `UpdtDialog(theDialog, updateRgn)`: draw the items. Controls and text items are the host's native
+/// parts, already shown and kept current as the program changes them, so there is nothing to redraw; the call only checks the
+/// argument is a dialog (the update region would only clip).
+fn draw_dialog<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = c.args.get(0);
+    if !m.tr.dlg.dialogs.contains_key(&win) { return Err(Refusal(format!("{}: {win:#x} is not a dialog", c.name))); }
+    done(format!("[dialog] {} {win:#x} (items are native parts, already current)", c.name))
+}
+
+/// `CloseDialog(theDialog)`: take the dialog's items and window away. (The real call leaves the DialogRecord the program supplied
+/// for the program to free; the engine frees only a record it allocated itself.)
+fn close_dialog<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = c.args.get(0);
+    if !m.tr.dlg.dialogs.contains_key(&win) { return Err(Refusal(format!("CloseDialog: {win:#x} is not a dialog"))); }
+    m.dispose_window(win)?;
+    done(format!("[dialog] CloseDialog {win:#x}"))
+}
+
+/// `SelectDialogItemText(theDialog, itemNo, strtSel, endSel)`: make `itemNo` the edit field (the insertion point goes there).
+/// The selection range itself is the host field's: it is recorded in the log, not applied.
+fn select_dialog_item_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (win, item, start, end) = (c.args.get(0), c.args.get(1) as u16 as i16, c.args.get(2) as u16 as i16, c.args.get(3) as u16 as i16);
+    let idx = usize::try_from(i32::from(item) - 1).ok().filter(|&i| m.tr.dlg.dialogs.get(&win).is_some_and(|d| d.list.get(i).is_some_and(|s| s.item == Item::EditText)));
+    let Some(idx) = idx else { return Err(Refusal(format!("SelectDialogItemText: item {item} of {win:#x} is not an editText item"))) };
+    m.mem.write_u16(win + DR_EDIT_FIELD, idx as u16).map_err(Refusal::mem("editField"))?;
+    done(format!("[dialog] SelectDialogItemText {win:#x} item {item} [{start},{end}) (the host field keeps its own selection)"))
 }

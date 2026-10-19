@@ -27,7 +27,56 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA91B, &[Arg::P, Arg::W, Arg::W, Arg::B], None, move_window::<U>)?;
     m.register(0xA91D, &[Arg::P, Arg::W, Arg::W, Arg::B], None, size_window::<U>)?;
     m.register(0xAA45, &[Arg::L, Arg::L, Arg::L, Arg::B, Arg::W, Arg::L, Arg::B, Arg::L], Some(Arg::L), new_c_window::<U>)?;
-    m.register(0xAA46, &[Arg::W, Arg::L, Arg::L], Some(Arg::L), get_new_c_window::<U>)
+    m.register(0xAA46, &[Arg::W, Arg::L, Arg::L], Some(Arg::L), get_new_c_window::<U>)?;
+    m.register(0xA920, &[Arg::P], None, bring_to_front::<U>)?;
+    m.register(0xA921, &[Arg::P, Arg::P], None, send_behind::<U>)?;
+    m.register(0xA904, &[Arg::P], None, draw_grow_icon::<U>)?;
+    m.register(0xA91C, &[Arg::P, Arg::B], None, hilite_window::<U>)?;
+    m.register(0xA92D, &[Arg::P], None, close_window::<U>)
+}
+
+/// `BringToFront(window)`: front of the stacking order, with no activate events (that is `SelectWindow`'s job).
+fn bring_to_front<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = c.args.get(0);
+    m.open_win("BringToFront", win)?;
+    m.z.retain(|&z| z != win);
+    m.z.insert(0, win);
+    m.relink_windows()?;
+    Ok(Done { result: 0, log: format!("[toolbox] BringToFront {win:#x}") })
+}
+
+/// `SendBehind(window, behindWindow)`: `window` goes just behind `behindWindow` (NIL = the very back). The host's own stacking is
+/// the user's, so only the program's view (`WindowList`, `FrontWindow`) changes.
+fn send_behind<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (win, behind) = (c.args.get(0), c.args.get(1));
+    m.open_win("SendBehind", win)?;
+    m.z.retain(|&z| z != win);
+    let at = if behind == 0 { m.z.len() } else { m.z.iter().position(|&z| z == behind).map(|i| i + 1).ok_or_else(|| Refusal(format!("SendBehind: {behind:#x} is not an open window")))? };
+    m.z.insert(at, win);
+    m.relink_windows()?;
+    Ok(Done { result: 0, log: format!("[toolbox] SendBehind {win:#x} behind {behind:#x}") })
+}
+
+/// `DrawGrowIcon(window)`: the grow box and scroll-bar corner lines are the host window's own chrome, not drawn into the port.
+fn draw_grow_icon<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = c.args.get(0);
+    m.open_win("DrawGrowIcon", win)?;
+    Ok(Done { result: 0, log: format!("[toolbox] DrawGrowIcon {win:#x} (the host window draws its own grow affordance)") })
+}
+
+/// `HiliteWindow(window, fHilite)`: records `hilited` in the WindowRecord; the host shows the active window itself.
+fn hilite_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (win, on) = (c.args.get(0), c.args.get(1) as u8 != 0);
+    m.open_win("HiliteWindow", win)?;
+    m.mem.write_u8(win + crate::toolbox::WR_HILITED, u8::from(on)).map_err(Refusal::mem("WindowRecord.hilited"))?;
+    Ok(Done { result: 0, log: format!("[toolbox] HiliteWindow {win:#x} {on}") })
+}
+
+/// `CloseWindow(window)`: take the window away; the record stays the program's unless the engine allocated it.
+fn close_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = c.args.get(0);
+    m.dispose_window(win)?;
+    Ok(Done { result: 0, log: format!("[toolbox] CloseWindow {win:#x}") })
 }
 
 impl<U: GuestUi> Mac<U> {

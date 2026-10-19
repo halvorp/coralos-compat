@@ -110,6 +110,14 @@ pub struct Mac<U: GuestUi> {
     /// The cursor the program set and its hide level (cursor.rs).
     pub cursor: crate::cursor::CursorState,
     pub clock: crate::clock::Clock,
+    /// The Vertical Retrace Manager's queue (vbl.rs).
+    pub vbl: crate::vbl::Vbl,
+    /// The Apple Event Manager's handler tables (appleevents.rs).
+    pub ae: crate::appleevents::AppleEvents,
+    /// The address of the trap word the A-line bridge is handling (a handler that must resume AFTER its trap needs it).
+    pub(crate) trap_pc: u32,
+    /// Palettes associated with windows (palette.rs).
+    pub pal: crate::palette::Palettes,
     /// The engine's own International Resource handles (intl.rs).
     pub intl: crate::intl::IntlHandles,
     /// Which classic Mac this is (profile.rs): the CPU model, the boot address mode, what Gestalt / SysEnvirons answer.
@@ -126,7 +134,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), intl: Default::default(), profile: crate::profile::DEFAULT,
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), profile: crate::profile::DEFAULT,
         };
         lowmem::init(&mut m.mem)?;
         m.set_address_mode(crate::addrmode::AddrMode::Bit24)?; // a classic 68k Mac boots in 24-bit mode
@@ -141,12 +149,19 @@ impl<U: GuestUi> Mac<U> {
         segment::register(&mut m)?;
         crate::fm::traps::register(&mut m)?;
         crate::fm::fsspec::register(&mut m)?;
+        crate::fm::alias::register(&mut m)?;
         crate::fm::resfiles::register(&mut m)?;
         crate::scrap::register(&mut m)?;
         crate::sysenv::register(&mut m)?;
         crate::gestalt::register(&mut m)?;
         crate::pack2::register(&mut m)?;
         crate::pack7::register(&mut m)?;
+        crate::vbl::register(&mut m)?;
+        crate::palette::register(&mut m)?;
+        crate::appleevents::register(&mut m)?;
+        crate::fixmath::register(&mut m)?;
+        crate::mouse::register(&mut m)?;
+        crate::toolutil::register(&mut m)?;
         crate::package::register(&mut m)?;
         crate::intl::register(&mut m)?;
         crate::strcmp::register(&mut m)?;
@@ -156,6 +171,7 @@ impl<U: GuestUi> Mac<U> {
         crate::winmgr::register(&mut m)?;
         crate::fontnames::register(&mut m)?;
         menu::register(&mut m)?;
+        crate::menu_items::register(&mut m)?;
         events::register(&mut m)?;
         crate::traptable::register(&mut m)?;
         crate::translate::register(&mut m)?;
@@ -228,6 +244,9 @@ impl<U: GuestUi> Host for Mac<U> {
     fn aline(&mut self, cpu: &mut Cpu, opcode: u16, pc: u32) -> bool {
         let pc = self.mem.strip(pc);
         let via_stub = crate::traptable::in_stub(pc);
+        self.trap_pc = pc;
+        // A vertical-retrace task that came due runs first; this very trap word then runs again (vbl.rs).
+        if !via_stub && self.enter_vbl(cpu, pc) { return true; }
         // A patched trap (`_SetTrapAddress`) runs the guest routine first; the routine chains to the original through the
         // stub `GetTrapAddress` gave it, and that stub's own trap word (`via_stub`) is not patched again.
         if !via_stub {

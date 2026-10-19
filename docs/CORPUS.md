@@ -773,3 +773,32 @@ recursed until `MUIA_NoNotify` silenced a whole call; Palette needed the `CloneT
 loads its settings (`MUIM_Application_Load`) and shows two Bodychunk pictures (the two planes). IControl's ChunkyImages sit on a register page that is not
 the open one, so its planes appear when the page is shown. What still stops programs is not MUI (the refusals left are `EasyRequestArgs`, `AskKeyMapDefault`,
 `BrokerCommand`, `RawPutChar`, `ArosInquireA`, `AllocIFF`, and two `DupLockFromFH` in Wanderer).
+
+### macnext lane (2026-10-19): census walls taken one by one
+
+`MAC_INSNS=50000000`, mac-plus profile; "after" runs with `MAC_IDLE=300` (300 virtual 60 Hz ticks passed while the app waits for an event;
+without ticks the stops below the line are the same except that MacPaint / Moving Van stay blocked in their first event call). "Window" =
+a native window opened through GuestUi.
+
+| app | stop before | stop after | window |
+|---|---|---|---|
+| ResEdit 2.1.3 | `_OpenRFPerm` | event loop, modal alert (ModalDialog filterProc named) | yes (alert; its prefs file is empty, see below) |
+| SimpleText 1.3 | `_AliasDispatch` (FindFolder) | `oapp` handler runs, Untitled window created, then `_TEStyleNew` | no (TextEdit) |
+| SimpleText 1.4 | `_Unimplemented` (false "serious error": stale ResErr) | `oapp` handler runs, then `_TEStyleNew` | no (TextEdit) |
+| Toolbox Showcase (68k, PPC) | `_GetPalette` | `_TENew` (PPC: `SetPalette` import) | window created |
+| WriteNow 2.2 | `_VInstall` | `_FontMetrics` (VBL task installed and run) | yes |
+| WriteNow 2.0 | `_AVLTreeDispatch` (stray jump: Pack7 stack bug) | `_FontMetrics` | yes |
+| WriteNow installer 4.0 | `_GetAppParms` | event loop | yes |
+| Moving Van | `_SetControlReference` | event loop (PICT v2 and `SetCRefCon(NIL)` list scroll bars refused by name) | yes |
+| MacPaint 2.1F | event loop, windows hidden (no null event) | personalization dialog (its first-run) | yes (dialog) |
+| Glider PRO / Glider Edit | `_AVLTreeDispatch` / alert | "Need Color QuickDraw" alert: honest absence kept | yes |
+| MacWrite 4.5 / 4.6 | event loop | event loop (4.5 under mac-ii still takes the 68000 TRAP #4 frame) | yes |
+
+Findings. (1) File Manager refnum 2 was the application's own resource-fork refnum: the first `Close` of a program's file unloaded its
+code (ResEdit LoadSeg 22, Glider PRO). (2) `_Pack7` is a register package. (3) A real Mac returns null events forever; here the host clock
+drives them. (4) The stale `ResErr` after a successful `GetNewMBar` made SimpleText 1.4 raise its own "serious error". (5) ResEdit opens its
+own file by `CurApName` (now on the volume) and then declares its (empty, just created) preferences file damaged: AddResource /
+WriteResource are not modelled yet, so it does not write the defaults a first run would. (6) MacWrite 4.5 under mac-plus: its ~132
+non-fatal refusals are `GetDialogItem(NIL, ...)` after an activate event for the "Clipboard" window (segment 5): the program holds a NIL
+DialogPtr; the cause (a GetNewDialog/NewDialog it should have made earlier, `NewDialog` is not implemented and is not reached by the
+census) was NOT found in the time.

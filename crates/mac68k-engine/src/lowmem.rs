@@ -36,6 +36,7 @@ pub const WINDOW_LIST: u32 = 0x9D6; // WindowPeek: front window
 pub const MENU_LIST: u32 = 0xA1C; // Handle: the menu bar's list
 pub const RES_LOAD: u32 = 0xA5E; // short: SetResLoad flag (the high byte is the Boolean)
 pub const RES_ERR: u32 = 0xA60; // short: the last Resource Manager result
+pub const APP_PARM_HANDLE: u32 = 0xAEC; // Handle: the Finder's startup information (message, count, files)
 pub const MBAR_HEIGHT: u32 = 0xBAA; // short
 pub const MMU_32_BIT: u32 = 0xCB2; // byte: the Memory Manager's mode, true (1) = 32-bit addressing (Inside Macintosh: Memory)
 
@@ -49,7 +50,7 @@ pub static MAP: &[Global] = &[
     (SYS_ZONE, 4, "SysZone"), (APPL_ZONE, 4, "ApplZone"), (LO_3_BYTES, 4, "Lo3Bytes"), (SCRN_BASE, 4, "ScrnBase"), (RAW_MOUSE, 4, "RawMouse"), (MOUSE, 4, "Mouse"), (CRSR_PIN, 8, "CrsrPin"),
     (CUR_AP_REF_NUM, 2, "CurApRefNum"), (CURRENT_A5, 4, "CurrentA5"), (CUR_STACK_BASE, 4, "CurStackBase"),
     (CUR_AP_NAME, 32, "CurApName"), (CUR_JT_OFFSET, 2, "CurJTOffset"), (WINDOW_LIST, 4, "WindowList"),
-    (MENU_LIST, 4, "MenuList"), (RES_LOAD, 2, "ResLoad"), (RES_ERR, 2, "ResErr"), (MBAR_HEIGHT, 2, "MBarHeight"), (MMU_32_BIT, 1, "MMU32Bit"),
+    (MENU_LIST, 4, "MenuList"), (RES_LOAD, 2, "ResLoad"), (RES_ERR, 2, "ResErr"), (APP_PARM_HANDLE, 4, "AppParmHandle"), (MBAR_HEIGHT, 2, "MBarHeight"), (MMU_32_BIT, 1, "MMU32Bit"),
 ];
 
 /// The emulated screen (a 1-bit Mac Plus-sized display: what a 1984-era application expects to find), until a real

@@ -12,6 +12,7 @@
 //!   `_FSDispatch` selectors, ioResult / ioCompletion handling.
 //! * [`fsspec`]: the high-level FSSpec calls (`_HighLevelFSDispatch`).
 //! * [`resfiles`]: OpenResFile / CreateResFile / CloseResFile on files' resource forks.
+pub mod alias;
 pub mod catalog;
 pub mod forks;
 pub mod fsspec;
