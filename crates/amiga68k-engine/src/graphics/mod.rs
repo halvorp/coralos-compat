@@ -8,7 +8,7 @@
 pub mod layout;
 mod areafill;
 mod areas;
-mod bitmaps;
+pub(crate) mod bitmaps;
 mod bltpattern;
 mod blits;
 pub mod content;

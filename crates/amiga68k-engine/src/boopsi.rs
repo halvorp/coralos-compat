@@ -68,6 +68,8 @@ pub struct Objects {
     pub handlers: crate::mui::handlers::Handlers,
     /// `MUI_AddClipRegion` stacks (mri_rArray): RenderInfo -> the regions installed, innermost last.
     pub clip_stack: BTreeMap<u32, Vec<u32>>,
+    /// What the host shows for each image object (mui/images.rs): its rectangle and display list, so an unchanged one is not sent again.
+    pub images: BTreeMap<u32, (guestui_abi::GuestRect, Vec<guestui_abi::DrawOp>)>,
 }
 
 fn class_addr(k: Kind) -> u32 { crate::iclass::native_addr(crate::iclass::Native::Mui(k)) }

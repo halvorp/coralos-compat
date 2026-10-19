@@ -7,7 +7,7 @@ use alloc::format;
 use super::classes::Kind;
 use super::ids_gen::*;
 use super::layout::{self, Elem};
-use super::{drawn, menu, object, surface};
+use super::{drawn, images, menu, object, surface};
 use crate::boopsi::Ext;
 use crate::graphics::fonts;
 use crate::{machine::Amiga, Refusal};
@@ -87,6 +87,7 @@ fn menu_strip<U: GuestUi>(a: &mut Amiga<U>, w: u32, native: UiObjectRef) -> Resu
 /// Make the host's controls match the layout: new and changed ones are synced, ones no longer wanted are retired.
 fn project<U: GuestUi>(a: &mut Amiga<U>, w: u32, native: UiObjectRef, l: &layout::Layout) -> Result<(), Refusal> {
     place_drawn(a, w, native, l)?;
+    for &(o, r) in &l.images { images::present(a, native, o, GuestRect { left: r.left + BORDER_LEFT, top: r.top + BORDER_TOP, ..r })?; }
     let wanted: Vec<u64> = l.elems.iter().map(|e| e.obj as u64).collect();
     let stale: Vec<u64> = a.objects.proj.iter().filter(|(t, p)| p.window == native && !wanted.contains(t)).map(|(t, _)| t).collect();
     for t in stale { a.objects.proj.retire(&mut a.ui, t).map_err(Refusal::ui)?; }
@@ -136,6 +137,7 @@ pub fn close_if_open<U: GuestUi>(a: &mut Amiga<U>, w: u32) -> Result<(), Refusal
     let Some(native) = native_of(a, w) else { return Ok(()) };
     for o in drawn::candidates(a, w) { a.objects.drawn.remove(&o); } // asked again when the window opens again
     surface::detach(a, w)?;
+    images::forget_window(a, w);
     if let Some(o) = a.objects.map.get_mut(&w) { o.ext = Ext::Win { native: None, content: (0, 0) }; }
     a.objects.proj.forget_where(|p| p.window == native); // the host retires a closed window's controls itself
     a.ui.close_window(native).map_err(Refusal::ui)

@@ -19,6 +19,7 @@ pub mod drawn;
 pub mod handlers;
 pub mod hooks;
 mod ids_gen;
+pub mod images;
 mod input;
 pub mod layout;
 pub mod list;
