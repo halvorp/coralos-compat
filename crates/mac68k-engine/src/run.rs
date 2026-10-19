@@ -23,7 +23,7 @@ impl<U: GuestUi> Mac<U> {
         self.mem.write_u32(STACK_TOP - 4, EXIT_STUB).map_err(|e| e.to_string())?; // return address for the program's final rts
         self.ev.waiting = None; // a new program replaces the old one, including its blocked event call
         self.tr.dlg.modal = None; // ... and its blocked ModalDialog
-        self.ctx = Some(retro_m68k::start_with(self, CODE_BASE + entry, STACK_TOP - 4, &[]));
+        self.ctx = Some(retro_m68k::start_model(self, CODE_BASE + entry, STACK_TOP - 4, &[], self.profile.cpu));
         Ok(())
     }
 

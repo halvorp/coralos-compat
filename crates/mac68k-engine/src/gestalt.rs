@@ -2,8 +2,9 @@
 //! selector (a four-character code), the answer comes back in `A0` and the result code in `D0`. Programs of the System 7
 //! era call it first to decide whether they may run at all.
 //!
-//! The answers describe the machine the engine IS (the same facts as `_SysEnvirons`, [`crate::sysenv`]): a 68020 Macintosh
-//! II class machine, System 7.0.0, 16 MiB of RAM, no FPU, 1-bit original QuickDraw, an ADB keyboard. A selector the engine
+//! The answers describe the machine the engine IS (the same facts as `_SysEnvirons`, [`crate::sysenv`]; the machine
+//! type and processor come from the [`crate::profile`], by default a 68020 Macintosh
+//! II class machine), System 7.0.0, 16 MiB of RAM, no FPU, 1-bit original QuickDraw, an ADB keyboard. A selector the engine
 //! has no honest answer for is `gestaltUndefSelectorErr` (-5551) with the selector named in the log, never an invented value.
 use crate::addrmode::AddrMode;
 use crate::machine::Mac;
@@ -17,17 +18,14 @@ use retro_m68k::Cpu;
 
 pub const UNDEF_SELECTOR_ERR: i16 = -5551;
 
-/// gestaltMacII: the `'mach'` code of a Macintosh II. gestaltCPU68020: the `'cput'` code (the 68k family, 68020 = 2).
-const MACHINE_MAC_II: u32 = 6;
-const CPU_68020: u32 = 2;
 
 fn answer<U: GuestUi>(m: &Mac<U>, sel: [u8; 4]) -> Option<u32> {
     Some(match &sel {
         b"sysv" => u32::from(crate::sysenv::SYSTEM_VERSION),
         b"vers" => 1, // the Gestalt Manager itself: version 1
-        b"mach" => MACHINE_MAC_II,
-        b"cput" => CPU_68020,
-        b"proc" => 3, // the 68k processor family member (3 = 68020), as SysEnvirons' env68020
+        b"mach" => m.profile.gestalt_machine,
+        b"cput" => m.profile.gestalt_cpu,
+        b"proc" => u32::from(m.profile.env_processor), // the 68k processor family member (1 = 68000, 3 = 68020), as SysEnvirons' processor
         b"fpu " => 0, // no FPU
         b"qd  " => 0, // gestaltOriginalQD: 1-bit QuickDraw only
         b"kbd " => 3, // gestaltStandADBKbd

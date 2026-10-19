@@ -19,8 +19,6 @@ use retro_m68k::Cpu;
 pub const VERSION: i16 = 2;
 pub const ENV_BAD_VERS: i16 = -5501;
 pub const ENV_VERS_TOO_BIG: i16 = -5502;
-const ENV_MAC_II: u16 = 4;
-const ENV_68020: u16 = 3;
 const ENV_STAND_ADB_KBD: u16 = 3;
 /// System 7.0.0, as BCD in `systemVersion`.
 pub const SYSTEM_VERSION: u16 = 0x0700;
@@ -34,13 +32,13 @@ fn sys_environs<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> Result
     let e = Refusal::mem("SysEnvRec");
     let sys_vref = m.fm.vref_of(m.fm.def_vol) as u16;
     m.mem.write_u16(p, VERSION.min(want) as u16).map_err(&e)?;
-    m.mem.write_u16(p + 2, ENV_MAC_II).map_err(&e)?;
+    m.mem.write_u16(p + 2, m.profile.env_machine).map_err(&e)?;
     m.mem.write_u16(p + 4, SYSTEM_VERSION).map_err(&e)?;
-    m.mem.write_u16(p + 6, ENV_68020).map_err(&e)?;
+    m.mem.write_u16(p + 6, m.profile.env_processor).map_err(&e)?;
     m.mem.write_u16(p + 8, 0).map_err(&e)?; // hasFPU = FALSE, hasColorQD = FALSE
     m.mem.write_u16(p + 10, ENV_STAND_ADB_KBD).map_err(&e)?;
     m.mem.write_u16(p + 12, 0).map_err(&e)?;
     m.mem.write_u16(p + 14, sys_vref).map_err(&e)?;
     r.err(if want > VERSION { ENV_VERS_TOO_BIG } else { 0 });
-    Ok(format!("[toolbox] SysEnvirons {want} -> machine {ENV_MAC_II}, System {SYSTEM_VERSION:#06x}, 68020, no FPU, no colour QD"))
+    Ok(format!("[toolbox] SysEnvirons {want} -> machine {}, System {SYSTEM_VERSION:#06x}, processor {}, no FPU, no colour QD", m.profile.env_machine, m.profile.env_processor))
 }

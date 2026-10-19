@@ -56,3 +56,15 @@ front; `DialogSelect` returns the oldest pending item hit (the same queue `Modal
 `native`, a QuickDraw window is one `replayed` plane, a window whose list holds any `Pixels` op (a `CopyBits`) is `raw`.
 `tests/translate_planes.rs` replays the oracle application's list and requires it to agree with the bitmap on every pixel the
 list names (and to name at least 60 % of them).
+
+## Compressed resources and machine profiles (engine, not UI)
+
+* `compressed.rs`: a resource with attribute bit 0 and the `$A89F6572` header is expanded by the `'dcmp'` resource its header names
+  (the application's own fork first, then the System file set `ResMgr::add_system`), whose 68k code RUNS IN THE GUEST: the handler
+  that needed the resource queues the call, the A-line bridge enters the decompressor through the completion trampoline and then
+  executes the same trap word again (registers, SR and stack as they were; the abandoned run's halt/block request is cancelled).
+  Version 8 headers use the classic `dcmp(src, dst, working, len)` entry at byte 0; version 9 the dispatch-table `FUNCTION
+  dcmp(src, dst, header): OSErr`. No dcmp = `CantDecompress` (-186) with a named refusal; there is no host-side Apple algorithm.
+* `profile.rs`: `Mac::set_machine("mac-plus")` (a bundle's `(guest (machine "mac-plus"))`) picks the CPU model (68000 / 68020), the
+  boot address mode and the Gestalt / SysEnvirons answers. The default is `mac-ii` (68020, 24-bit). The 68000 pushes a 6-byte
+  exception frame, the 68020 an 8-byte one, which is why a handler written for one corrupts the stack on the other.

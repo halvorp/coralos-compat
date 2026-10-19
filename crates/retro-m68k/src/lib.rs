@@ -45,7 +45,21 @@ pub const REG_D0: u32 = 0;
 pub const REG_A0: u32 = 8;
 pub const REG_PC: u32 = 16;
 const REG_SR: u32 = 17;
-const CPU_68020: u32 = 4;
+
+/// Which 68k the core emulates. The model decides the instruction set AND the exception stack frame: a 68000 / 68010
+/// pushes a 6- / 8-byte frame (68010: with a format word), a 68020 pushes the 8-byte frame with a format / vector word, so a
+/// handler that adjusts the stack by the frame size (`addq.w #2,sp ; rts` after a TRAP) only works on the model it was
+/// written for. The values are Musashi's `M68K_CPU_TYPE_*`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CpuModel {
+    /// Original 68000 (Mac 128K / 512K / Plus / SE, Amiga 1000..2000): 6-byte exception frame, no 68020 instructions.
+    M68000 = 1,
+    /// 68010: 8-byte frame with the format/vector word, VBR.
+    M68010 = 2,
+    /// 68020 (the default of every engine here).
+    #[default]
+    M68020 = 4,
+}
 
 /// The guest side the CPU runs against.
 pub trait Host {
@@ -93,6 +107,9 @@ impl Cpu {
     pub fn set_sr(&mut self, v: u32) { if self.detached { self.touched.set(true); return; } unsafe { m68k_set_reg(REG_SR, v) } }
     /// Stop after the current instruction.
     pub fn halt(&mut self) { self.halted = true; if !self.detached { unsafe { m68k_end_timeslice() } } }
+    /// Forget a [`Cpu::halt`] / [`Cpu::block`] requested during this callback: the host is abandoning the trap it was handling
+    /// (to run it again later), so what the abandoned run asked for must not stop the guest.
+    pub fn cancel_stop(&mut self) { self.halted = false; self.blocked = false; }
     /// Stop after the current instruction WITHOUT ending the program: the trapped call is left unfinished, and the next
     /// [`resume`] continues at the instruction after the trap (the library slot's RTS), so the call returns then with
     /// whatever D0 the host set before resuming. This is how a guest `Wait` with nothing pending suspends.
@@ -146,13 +163,18 @@ impl CpuContext {
 /// Read a Cpu field the callbacks may have written during the last m68k_execute (see `activate`).
 macro_rules! live { ($p:expr, $f:ident) => { unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*$p).$f)) } }; }
 
-/// Reset a CPU (a 68020) to start at `entry` with stack `sp`, executing nothing, and return its context. Address 4
+/// Reset a CPU (a 68020 unless [`start_model`] says otherwise) to start at `entry` with stack `sp`, executing nothing, and return its context. Address 4
 /// doubles as the reset PC vector and AbsExecBase, so it is saved and restored around the reset.
 pub fn start<H: Host>(host: &mut H, entry: u32, sp: u32) -> CpuContext { start_with(host, entry, sp, &[]) }
 
 /// [`start`], then set the given registers (`(REG_*, value)`, D0..D7 = 0..7, A0..A7 = 8..15) in the new context:
 /// an AmigaDOS CLI program is entered with A0 = its argument string and D0 = that string's length.
 pub fn start_with<H: Host>(host: &mut H, entry: u32, sp: u32, regs: &[(u32, u32)]) -> CpuContext {
+    start_model(host, entry, sp, regs, CpuModel::M68020)
+}
+
+/// [`start_with`] on the given CPU model (the model is part of the saved context, so [`resume`] needs no argument).
+pub fn start_model<H: Host>(host: &mut H, entry: u32, sp: u32, regs: &[(u32, u32)], model: CpuModel) -> CpuContext {
     let _g = Guard::take();
     let saved4 = host.mem().read_u32(4).unwrap_or(0);
     let _ = host.mem().write_u32(0, sp);
@@ -161,7 +183,7 @@ pub fn start_with<H: Host>(host: &mut H, entry: u32, sp: u32, regs: &[(u32, u32)
     // The reset reads the vectors through the memory callbacks, so ACTIVE must be set for it too.
     activate(host, &mut cpu, |_| unsafe {
         m68k_init();
-        m68k_set_cpu_type(CPU_68020);
+        m68k_set_cpu_type(model as u32);
         m68k_pulse_reset();
     });
     let _ = host.mem().write_u32(4, saved4);

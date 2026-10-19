@@ -1,4 +1,4 @@
-//! Host runner: `mac68k-run [--census] [--32bit] [--pcs N] [--insns N] [--dump ADDR N] [--event EV]... (--fixture | <application file>)`.
+//! Host runner: `mac68k-run [--census] [--32bit] [--machine NAME] [--pcs N] [--insns N] [--dump ADDR N] [--event EV]... (--fixture | <application file>)`.
 //! Launches a classic Mac application (MacBinary, AppleDouble header file or raw resource fork) against a
 //! RecordingGuestUi, runs it until it exits, blocks in an event call or spends its instruction budget, then prints the
 //! bridged-call log and the recorded UI calls. `--census` stops at the first unimplemented trap and prints it as
@@ -11,6 +11,7 @@ use mac68k_engine::Mac;
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut machine = None::<String>;
     let (mut census, mut events, mut bit32, mut pcs, mut insns, mut dump) = (false, Vec::new(), false, 0usize, 5_000_000u64, None::<(u32, u32)>);
     while let Some(a) = args.first().cloned() {
         match a.as_str() {
@@ -20,6 +21,7 @@ fn main() {
             "--insns" => { args.remove(0); if args.is_empty() { usage() } insns = args.remove(0).parse().unwrap_or_else(|_| usage()); } // instruction budget (default 5,000,000)
             "--dump" => { args.remove(0); if args.len() < 2 { usage() } let a = u32::from_str_radix(args.remove(0).trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()); let n = args.remove(0).parse().unwrap_or_else(|_| usage()); dump = Some((a, n)); } // hex-dump N bytes at ADDR after the run
             "--pcs" => { args.remove(0); if args.is_empty() { usage() } pcs = args.remove(0).parse().unwrap_or_else(|_| usage()); } // print the last N instruction addresses
+            "--machine" => { args.remove(0); if args.is_empty() { usage() } machine = Some(args.remove(0)); } // profile name: mac-ii (default), mac-plus, mac-se
             "--event" => { args.remove(0); if args.is_empty() { usage() } events.push(args.remove(0)); }
             _ => break,
         }
@@ -30,6 +32,7 @@ fn main() {
     };
     let mut m = Mac::new(RecordingGuestUi::new()).expect("machine");
     m.stop_on_unimplemented = census;
+    if let Some(name) = &machine { if let Err(e) = m.set_machine(name) { eprintln!("{}", e.0); std::process::exit(2) } }
     if bit32 { m.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).expect("mode"); }
     if let Err(e) = m.launch(&file) { eprintln!("launch failed: {e}"); std::process::exit(1) }
     let win = UiObjectRef { id: 1, generation: 1 };
@@ -61,4 +64,4 @@ fn main() {
     if !m.refused.is_empty() { std::process::exit(3) }
 }
 
-fn usage() -> ! { eprintln!("usage: mac68k-run [--census] [--32bit] [--pcs N] [--insns N] [--dump ADDR N] [--event close|menu:ID:ITEM]... --fixture | <application file>"); std::process::exit(2) }
+fn usage() -> ! { eprintln!("usage: mac68k-run [--census] [--32bit] [--machine NAME] [--pcs N] [--insns N] [--dump ADDR N] [--event close|menu:ID:ITEM]... --fixture | <application file>"); std::process::exit(2) }

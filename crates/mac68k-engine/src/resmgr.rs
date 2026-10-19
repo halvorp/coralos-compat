@@ -19,6 +19,8 @@ use retro_resfork::{OsType, ResFork};
 
 /// The application's resource file reference number (an arbitrary small positive number; 0 is the System file).
 pub const APP_REF_NUM: i16 = 2;
+/// The System file's reference number.
+pub const SYSTEM_REF_NUM: i16 = 0;
 pub const RES_NOT_FOUND: i16 = -192;
 pub const RES_F_NOT_FOUND: i16 = -193;
 /// resPurgeable and resLocked in a resource's attribute byte.
@@ -55,6 +57,12 @@ impl ResMgr {
         self.files.push(ResFile { ref_num, fork, loaded: BTreeMap::new() });
         self.cur = ref_num;
     }
+    /// The System file's resources (reference number 0): searched AFTER every other open file, so an application's own
+    /// resource of the same type and ID wins. This is where the shared `'dcmp'` set comes from.
+    pub fn add_system(&mut self, fork: ResFork) {
+        self.files.retain(|f| f.ref_num != SYSTEM_REF_NUM);
+        self.files.insert(0, ResFile { ref_num: SYSTEM_REF_NUM, fork, loaded: BTreeMap::new() });
+    }
     fn file(&self, ref_num: i16) -> Option<&ResFile> { self.files.iter().find(|f| f.ref_num == ref_num) }
     /// The files a plain `Get*` searches: the current one, then the older ones. `only_cur` limits it to the current one.
     fn chain(&self, only_cur: bool) -> Vec<i16> {
@@ -79,14 +87,31 @@ impl<U: GuestUi> Mac<U> {
         let file = self.rm.file(rn).ok_or(RES_F_NOT_FOUND)?;
         if let Some(&h) = file.loaded.get(&entry) { if self.mm.block(h).is_some() { return Ok(h); } }
         let data = file.fork.data(entry).ok_or(RES_NOT_FOUND)?.to_vec();
-        let attrs = file.fork.entry(entry).map(|e| e.attrs).unwrap_or(0);
-        let h = self.mm.new_handle(&mut self.mem, &mut self.heap, data.len() as u32, false)?;
+        let (attrs, ty, id) = file.fork.entry(entry).map(|e| (e.attrs, e.ty, e.id)).unwrap_or((0, [0; 4], 0));
+        // resCompressed: the handle gets the DEcompressed size; the bytes arrive when the guest's 'dcmp' has run.
+        let compressed = if attrs & crate::compressed::RES_COMPRESSED == 0 { None } else {
+            match crate::compressed::parse(&data) {
+                Ok(h) => h,
+                Err(why) => { self.note_refusal("Resource Manager", format!("cannot decompress '{}' {id}: {why}", ty_str(ty))); return Err(crate::compressed::CANT_DECOMPRESS); }
+            }
+        };
+        if compressed.is_some() && (ty == *b"dcmp" || !self.in_trap) {
+            let why = if ty == *b"dcmp" { "a 'dcmp' resource cannot itself be compressed" } else { "decompression runs guest code and needs the 68k CPU of a trap (not available from this caller)" };
+            self.note_refusal("Resource Manager", format!("cannot decompress '{}': {why}", ty_str(ty)));
+            return Err(crate::compressed::CANT_DECOMPRESS);
+        }
+        let size = compressed.map_or(data.len() as u32, |c| c.size);
+        let h = self.mm.new_handle(&mut self.mem, &mut self.heap, size, false)?;
         let p = self.mm.block(h).map(|b| b.ptr).ok_or(RES_NOT_FOUND)?;
-        self.mem.write_bytes(p, &data).map_err(|_| RES_NOT_FOUND)?;
+        if compressed.is_none() { self.mem.write_bytes(p, &data).map_err(|_| RES_NOT_FOUND)?; }
         if let Some(b) = self.mm.block_mut(h) { b.resource = true; b.purgeable = attrs & ATTR_PURGEABLE != 0; b.locked = attrs & ATTR_LOCKED != 0; }
         let _ = self.mm.sync_master(&mut self.mem, h);
         self.rm.by_handle.insert(h, (rn, entry));
         if let Some(f) = self.rm.files.iter_mut().find(|f| f.ref_num == rn) { f.loaded.insert(entry, h); }
+        if let Some(c) = compressed {
+            if let Err(e) = self.schedule_decompress(&data, &c, h) { self.rm.forget(h); let _ = self.dispose_handle(h); return Err(e); }
+            return Err(crate::compressed::PENDING);
+        }
         Ok(h)
     }
 
