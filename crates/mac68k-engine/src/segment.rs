@@ -15,7 +15,11 @@
 //! * The program starts by running the first entry (entry 0), which is the main routine in `CODE 1`.
 //!
 //! `_LoadSeg` here resumes the guest at the patched `jmp` (Cpu::set_pc), where a real one rewinds its return address.
-//! Segments are never unloaded: `_UnloadSeg` is accepted and does nothing, so every patched entry stays valid.
+//! `_UnloadSeg(routine)` takes the address a caller `jsr`s to (the entry's `+2` word): the entry names its segment, every
+//! entry of that segment goes back to `offset, move.w #seg,-(sp), _LoadSeg` (the offset is recovered from the `jmp` target)
+//! and the segment's handle is unlocked and made purgeable (Inside Macintosh: Processes, "Segment Loader"). The code is
+//! not freed here (this Memory Manager never purges): the program may `ReleaseResource` it, and the next `_LoadSeg`
+//! reloads it. An entry that is already unloaded is a no-op, as on a real Mac.
 //! A `CODE` segment whose first word is `$FFFF` is the 32-bit "far model" header; it is refused by name.
 use crate::lowmem;
 use crate::machine::{Call, Done, Mac, EXIT_STUB, STACK_TOP};
@@ -109,6 +113,37 @@ impl<U: GuestUi> Mac<U> {
     }
 }
 
+impl<U: GuestUi> Mac<U> {
+    /// Unload the segment owning the jump-table entry that `routine` (entry + 2) points into. Returns the log line.
+    fn unload_segment(&mut self, routine: u32) -> Result<String, String> {
+        let table = self.seg.a5 + self.seg.jt_offset;
+        let entry = self.mem.strip(routine).wrapping_sub(2);
+        if entry < table || entry >= table + self.seg.jt_size || (entry - table) % 8 != 0 {
+            return Err(format!("{routine:#x} is not a jump-table entry (table {table:#x}..{:#x})", table + self.seg.jt_size));
+        }
+        let word = self.mem.read_u16(entry + 2).map_err(|e| e.to_string())?;
+        if word != 0x4EF9 { return Ok(format!("[segment] UnloadSeg {routine:#x}: entry already unloaded (no-op)")); }
+        let seg = self.mem.read_u16(entry).map_err(|e| e.to_string())?;
+        let h = self.get_resource(*b"CODE", seg as i16, true).map_err(|e| format!("no 'CODE' {seg} resource (ResErr {e})"))?;
+        let (base, size) = { let b = self.mm.block(h).ok_or("CODE handle vanished")?; (b.ptr, b.size) };
+        if size < 4 { return Err(format!("CODE {seg} is shorter than its 4-byte header")); }
+        let (first, count) = (self.mem.read_u16(base).map_err(|e| e.to_string())?, self.mem.read_u16(base + 2).map_err(|e| e.to_string())?);
+        for k in 0..u32::from(count) {
+            let e = table + u32::from(first) + 8 * k;
+            let target = self.mem.read_u32(e + 4).map_err(|e| e.to_string())?;
+            let offset = target.wrapping_sub(base + 4) as u16;
+            self.mem.write_u16(e, offset).map_err(|e| e.to_string())?;
+            self.mem.write_u16(e + 2, 0x3F3C).map_err(|e| e.to_string())?;
+            self.mem.write_u16(e + 4, seg).map_err(|e| e.to_string())?;
+            self.mem.write_u16(e + 6, 0xA9F0).map_err(|e| e.to_string())?;
+        }
+        if let Some(b) = self.mm.block_mut(h) { b.locked = false; b.purgeable = true; }
+        let _ = self.mm.sync_master(&mut self.mem, h);
+        self.seg.loaded.remove(&seg);
+        Ok(format!("[segment] UnloadSeg {seg}: {count} entries back to their LoadSeg stubs, handle unlocked and purgeable"))
+    }
+}
+
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9F0, &[Arg::W], None, load_seg::<U>)?;
     m.register(0xA9F1, &[Arg::L], None, unload_seg::<U>)
@@ -125,6 +160,7 @@ fn load_seg<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<Done,
     }
 }
 
-fn unload_seg<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    Ok(Done { result: 0, log: format!("[segment] UnloadSeg {:#x} (accepted: segments stay resident)", c.args.get(0)) })
+fn unload_seg<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let routine = c.args.get(0);
+    m.unload_segment(routine).map(|log| Done { result: 0, log }).map_err(|why| Refusal(format!("UnloadSeg: {why}")))
 }
