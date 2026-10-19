@@ -901,3 +901,72 @@ Real applications reaching their window through the trait. Census: `macppc-run -
 
 One behaviour change underneath: a PowerPC `WaitNextEvent` with a sleep was parked until an event and never woke on time (the sleep was not
 honoured); it now times out when the host's clock reaches the sleep's deadline, as the 68k engine's call does, so a PowerPC app's idle work runs.
+
+## Dialog Manager, File Manager and Resource Manager walls (macdlg lane), 2026-10-19
+
+Census: `mac68k-run --census --insns 50000000 --idle 300`, mac-ii and mac-plus, every 68k app of `tools/corpus-apps-mac.tsv` and `corpus-apps-mac-garden.tsv`,
+before (2080cc1) and after. The apps not named below are unchanged (`none` before and after, or the same stop). The mac-ii and mac-plus columns agree except where shown.
+
+| app | stop before | stop after | what changed |
+|---|---|---|---|
+| WriteNow 2.0 | `_SetDialogItem` | none: runs to its event loop (50M instructions of `WaitNextEvent` polling) | `SetDialogItem`, the user items' draw procedures, `RealFont`, `ScrollRect`, `SetPortBits` on a window's port, a flagged return through the guest-call trampoline |
+| WriteNow 2.2 | `_SetDialogItem` | `_AVLTreeDispatch` (a jump into low memory, not a Toolbox routine); no missing trap | the same, plus the Window Manager port and `GrayRgn`; next wall below |
+| MacWrite 4.5 (mac-plus) | none, 132 `GetDialogItem(NIL, ...)` calls (3648 refusals in the run) | none, no dialog refusal | a Pascal BOOLEAN result now clears the unused low byte of its stack slot |
+| MacWrite 4.5 (mac-ii) | `_AVLTreeDispatch` (68000 `TRAP #4` frame) | the same | unchanged: the 68020 exception frame is 2 bytes longer than the 68000's, which its own trap handler assumes |
+| Glider PRO (mac-ii) | none, alert "A File Error Loading/Saving Preferences" (-120) | `_SoundDispatch` ($A800), the Sound Manager | `PBOpenDF` through `FSDispatch` has no `ioDirID`; the System Folder is the working directory `SysEnvirons` names |
+| ResEdit 2.1.3 (mac-ii) | none, alert "ResEdit appears to be damaged" | `_NewPixMap` ($AA03), Color QuickDraw | `SetVol` takes `GetVol`'s bare volume name; a new resource fork is the 286 bytes `CreateResFile` writes |
+| ResEdit 2.1.3 (mac-plus) | none, alert "damaged" | none (blocks in `ModalDialog`: a `filterProc` is named, and a PICT v2 `DrawPicture`) | the same |
+| Executor `go` | `_SetDialogItem` | none (25 `HandToHand(NIL)` answers memWZErr for the `icl4` it does not have) | `SetDialogItem`, `SetControlAction` / `GetControlAction` |
+| Retro68 Dialog | `_SetDialogItem` | none, waits in `ModalDialog` | the user item's draw procedure runs before the wait |
+| Retro68 FixedBenchmark | `_ScrollRect` | none | `ScrollRect` |
+
+**1. `_SetDialogItem` ($A98E), exact.** `SetDialogItem(theDialog, itemNo, itemType, item, box)` replaces an item's type, handle and rectangle in the item list and does
+nothing else (Inside Macintosh I, "The Dialog Manager"; Executor `dial/dialManip.cpp` as facts): no control is created, disposed or moved, no text is drawn.
+The engine keeps the dialog's private `DITL` copy (placeholder long, rect, type, as `GetDialogItem` reads them back), its slot table, and the native part of a TEXT item
+in step with it: a changed rect, handle or type (static <-> editable, or no longer text) is pushed to the host and the label or field that no longer stands for the item
+is retired. A control item's handle must be a live `ControlHandle` (the control keeps its own rectangle in its record, as on a real Mac, so the native control is already
+right), a text item's a live `Handle` or NIL; a user item's is a PROCEDURE. Refused by name, changing nothing: an item number outside the list, a type that is not a
+Dialog Manager type, a control item whose handle is not a control, a text item whose handle is not live, a type that does not fit the type byte.
+The draw procedures are guest code: `DrawDialog` and `UpdtDialog` call each `UserItem(theWindow, itemNo)` with `thePort` set to the dialog and give the program's registers,
+status register and `thePort` back; `DialogSelect` on an update event does `BeginUpdate` / the items / `EndUpdate`; `ModalDialog` draws a dialog whose update region is not
+empty before it waits and then runs the trap again (`translate/useritems.rs`). The PowerPC glue cannot enter 68k code from a Rust handler: a draw with user items is refused
+by name there. **Not done:** a mouse click in a user item is not a hit (the native model has no widget for it), `ModalDialog`'s `filterProc` is still a named refusal,
+`DialogRecord.textH` is 0 (no `TENew`).
+Next walls, found on the way and taken, each with a test that failed first: `_RealFont` (true only where a `FONT`/`NFNT` resource backs the size, directly or through a `FOND`
+association; the stock families are the one stand-in face), `_ScrollRect` (Apple's `Bitmaps.a` arithmetic: `srcRgn` = rect ∩ visRgn ∩ clipRgn, `dstRgn` = `srcRgn` offset, the
+vacated `srcRgn − dstRgn` is erased with `bkPat` and returned in `updateRgn`; a hidden pen or a zero offset only empties `updateRgn`), `SetPortBits` on a WINDOW's port (the
+port draws into the BitMap until `portBits` points at the screen again; a saved copy of the screen's BitMap is the window as a `CopyBits` destination), `InitWindows`
+(`WMgrPort`, `DeskPort`, `GrayRgn` = the rounded screen minus the menu bar, and the Window Manager port is `thePort` afterwards: `InitGraf` leaves it NIL and WriteNow
+saves and restores it around its first window), and the 24-bit flag byte on the guest-call trampoline's return address (WriteNow's segment glue returns through `$60000510`).
+WriteNow 2.2's next wall is not a missing routine: it measures every font-menu name into an offscreen BitMap whose bounds have no rows (`bounds (0,0,0,48)`), draws into it
+(refused: "no drawable bitmap") and a little later jumps into low memory; it also asks for a "T/Maker Preferences" file that does not exist.
+
+**2. MacWrite 4.5, the NIL `DialogPtr`: the cause.** Its event loop calls `IsDialogEvent(event)` with `subq.w #2,sp` (the result slot is not cleared) and tests the WORD it gets back
+with `tst.w (sp)+`. The engine wrote only the Boolean's high byte, so the low byte kept the stack's old contents and a FALSE answer read as TRUE; the activate event for the
+Clipboard window (a plain `GetNewWindow`) then went to the dialog handler, which holds the NIL `DialogPtr` of a dialog it never made. The trace: the recent-PC ring
+(`--pcs 4000`) walked back from the first refused `GetDialogItem` through the jump-table stub into segment 5 (`0x216194`), then to the event loop at `0x208480`
+(`tstw %sp@+` right after the `IsDialogEvent` trap). Fixed in `pascal::complete` for every Boolean-returning Toolbox routine. `NewDialog` ($A97D) is implemented
+(the item list is the program's own handle, placeholders replaced by item handles, `DisposeDialog` disposes it) and `GetNewDialog` / `NewDialog` / `Alert` windows now carry
+`windowKind` = `dialogKind` (2) and the font in `DlgFont` ($AFA). **Not done:** `GetNewDialog` ignores the `dctb` / `ictb` colour tables and the System 7 DLOG position word.
+
+**3. Glider PRO's Preferences file.** The call is not `PBHOpenDF`: Glider's glue builds a 50-byte `IOParam` block and calls `_FSDispatch` ($A060, bit 9 clear) selector $1A. That form has
+no `ioDirID`; the engine read the 4 bytes after the block (the glue's stack garbage, `0x1f`) as a directory ID and answered `dirNFErr`. Selectors other than OpenDF exist only as HFS
+calls and still read `ioDirID`. The volume model now also matches Inside Macintosh where Glider depends on it: `SysEnvirons`' `sysVRefNum` is the WORKING DIRECTORY of the System Folder
+(Inside Macintosh V, "Compatibility Guidelines"), the System Folder and its standard subfolders (Preferences, Extensions, Control Panels, Apple Menu Items, Startup Items, Fonts,
+Temporary Items, PrintMonitor Documents) exist from the start, and `SetVol` / `FlushVol` take a colon-less volume name as that volume's root (ResEdit restores its default directory with
+`GetVol`'s own answer). Glider finds "Preferences" in the System Folder, opens a working directory on it and asks for "Glider Prefs": `fnfErr` on a first run, which it handles. Its
+next wall is the Sound Manager (`_SoundDispatch`, no seam yet). **Standard File (`_Pack3`)** is not reached by any census app today; when an app needs it the native file chooser
+needs a seam call the engine can make and wait on: `request_file(kind: open|save, types, default name) -> (volume, directory, name) | cancelled`, answered through `GuestUiEvent`.
+
+**4. Resource Manager writes.** `AddResource`, `ChangedResource`, `WriteResource`, `UpdateResFile`, `RmveResource`, `SetResInfo`, `SetResAttrs`, `SetResPurge`, `UniqueID` and
+`Unique1ID`, with `CloseResFile` updating the file first (`resmgr/write.rs`, Executor `res/resMod.cpp` as facts). The map lives in memory (`retro_resfork::ResFork` gained
+`add` / `set_data` / `set_attrs` / `set_info` / `remove` / `to_bytes`; indices never move), a resource's data in the guest handle until it is written, the file (a tree node's
+resource fork) holds what the last update wrote. `AddResource` makes the handle a resource handle and the entry `resChanged`; a NIL or already-resource handle is `addResFailed`
+(-194). `ChangedResource` on a `resProtected` resource is `resAttrErr` (-198), `RmveResource` `rmvResFailed` (-196). `WriteResource` on a fork not open for writing is `wrPermErr`;
+`UpdateResFile` on one is a silent no-op, as the real call is. The application's own file is not on a volume: changes to it stay in memory and an update logs that nothing was written.
+`SetResInfo` / `SetResAttrs` change the map only until `ChangedResource`, as the book says. Forks are written the way `CreateResFile` lays them out (data at 256, a new empty file is
+286 bytes), which ResEdit's own "is this preferences file damaged" test depends on. Also taken for ResEdit: `_DeleteMenuItem` ($A952).
+**Not done:** `UniqueID` is the first free ID from 128 (the real one is random); `ReadPartialResource` / `WritePartialResource`, `SetResFileAttrs` and the compaction behaviour are not modelled.
+
+Next walls: Glider PRO `_SoundDispatch`; ResEdit mac-ii `_NewPixMap` ($AA03; mac-plus: `filterProc` and a PICT v2); WriteNow 2.2's offscreen font-name BitMap; SimpleText `_TEStyleNew`;
+MacWrite 4.5 under mac-ii (the 68000 `TRAP #4` frame); WriteNow 2.0/2.2 on a missing "T/Maker Preferences" file.
