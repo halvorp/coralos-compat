@@ -70,3 +70,21 @@ fn best_mode_id_applies_the_database_filters_to_the_one_mode() {
     assert_eq!(best(&mut g, &[(BID_MUST_NOT_HAVE, 1 << 8)]), u32::MAX, "the mode IS the Workbench screen's");
     assert!(g.a.refused.is_empty(), "{:?}", g.a.refused);
 }
+
+mod aros;
+use amiga68k_engine::Step;
+
+/// The REAL ScreenMode prefs editor: it lists the database (NextDisplayInfo), reads NameInfo/DisplayInfo/DimensionInfo, asks BestModeID when its
+/// saved mode is not in the database, and sets its own widgets with `nnset` (MUIA_NoNotify): before NoNotify silenced the whole call this
+/// recursed through its own notifications until its stack ran into its data.
+#[test]
+fn the_screen_mode_prefs_editor_opens_over_the_one_mode() {
+    let Some((a, s)) = aros::start("Prefs/ScreenMode", &[]) else { return };
+    assert_eq!(s, Step::Blocked, "{:?}", a.refused);
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+    assert!(a.ui.controls.len() > 20, "its window has its controls: {}", a.ui.controls.len());
+    let has = |p: &str| a.log.iter().any(|l| l.starts_with(p));
+    assert!(has("[graphics] BestModeIDA") && has("[graphics] GetDisplayInfoData 0x80001000") && has("[graphics] GetDisplayInfoData 0x80003000"));
+    // NEGATIVE CONTROL: the stack never reached the program's image (the recursion this guards against).
+    assert!(a.log.len() < 20_000, "{} log lines: a notification loop?", a.log.len());
+}

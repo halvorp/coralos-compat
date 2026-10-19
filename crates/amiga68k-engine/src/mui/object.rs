@@ -184,6 +184,14 @@ fn resolve_value<U: GuestUi>(a: &Amiga<U>, obj: u32, kind: Kind, attr: u32, val:
 /// SetAttrs on a live object: store, apply the side effect on the native UI, then fire the notifications.
 pub fn set_attr<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, val: u32) -> Result<(), Refusal> { set_attr_with(a, obj, attr, val, true) }
 
+/// The tags of ONE SetAttrs / OM_SET call applied to `obj`, in order. Notify.mui's OM_SET looks through the whole list first: a `MUIA_NoNotify, TRUE`
+/// anywhere in it suppresses the notifications of every tag of that call (`nnset` is exactly that), not only of the tags after it.
+pub fn set_list<U: GuestUi>(a: &mut Amiga<U>, obj: u32, tags: &[(u32, u32)]) -> Result<(), Refusal> {
+    let quiet = tags.iter().any(|&(t, v)| t == MUIA_NoNotify && v == 1);
+    for &(tag, v) in tags { if quiet { set_attr_quiet(a, obj, tag, v)? } else { set_attr(a, obj, tag, v)? } }
+    Ok(())
+}
+
 /// One value for [`set_many`].
 pub enum Setting { Num(u32), Text(String) }
 

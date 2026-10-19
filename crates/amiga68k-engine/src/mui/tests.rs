@@ -65,6 +65,25 @@ fn set_and_get_store_values_notify_fires_and_dispose_needs_the_root() {
 }
 
 #[test]
+fn a_no_notify_true_anywhere_in_a_set_list_silences_the_whole_call() {
+    // Notify.mui's OM_SET checks the list for MUIA_NoNotify first: `nnset(obj, attr, v)` is SetAttrs(obj, MUIA_NoNotify, TRUE, attr, v, TAG_DONE).
+    let mut a = machine();
+    let win = make(&mut a, "Window.mui", &[]).unwrap();
+    let app = make(&mut a, "Application.mui", &[(MUIA_Application_Window, win)]).unwrap();
+    method(&mut a, win, MUIM_Notify, &[MUIA_Window_CloseRequest, 1, app, 2, MUIM_Application_ReturnID, MUIV_Application_ReturnID_Quit]).unwrap();
+    set_list(&mut a, win, &[(MUIA_Window_CloseRequest, 1), (MUIA_NoNotify, 1)]).unwrap(); // the NoNotify AFTER the tag still silences it
+    assert_eq!(get_attr(&mut a, win, MUIA_Window_CloseRequest).unwrap(), 1, "the value is stored");
+    assert_eq!(method(&mut a, app, MUIM_Application_NewInput, &[0]).unwrap(), 0, "no notification ran");
+    // NEGATIVE CONTROLS: without the tag, or with it FALSE, the same set notifies.
+    set_attr(&mut a, win, MUIA_Window_CloseRequest, 0).unwrap();
+    set_list(&mut a, win, &[(MUIA_Window_CloseRequest, 1)]).unwrap();
+    assert_eq!(method(&mut a, app, MUIM_Application_NewInput, &[0]).unwrap(), MUIV_Application_ReturnID_Quit);
+    set_list(&mut a, win, &[(MUIA_Window_CloseRequest, 0)]).unwrap();
+    set_list(&mut a, win, &[(MUIA_NoNotify, 0), (MUIA_Window_CloseRequest, 1)]).unwrap();
+    assert_eq!(method(&mut a, app, MUIM_Application_NewInput, &[0]).unwrap(), MUIV_Application_ReturnID_Quit);
+}
+
+#[test]
 fn a_label_before_a_text_is_that_texts_label_and_the_window_is_sized_by_the_screen_fonts_metrics() {
     let mut a = machine();
     let hello = cstr(&mut a, "hello");

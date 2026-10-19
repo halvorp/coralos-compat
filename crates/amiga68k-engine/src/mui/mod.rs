@@ -46,6 +46,7 @@ use retro_m68k::Cpu;
 pub use ids_gen::*;
 pub use methods::{method, OM_ADDMEMBER, OM_REMMEMBER};
 pub use object::{dispose, get_attr, set_attr, set_attr_quiet};
+pub use object::set_list;
 pub use win::native_controls;
 
 const LVO_MUI_NEW_OBJECT_A: i32 = -30;

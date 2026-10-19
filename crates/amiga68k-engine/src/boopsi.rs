@@ -152,7 +152,7 @@ pub fn set_attrs_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     match crate::mui::custom::own_class(a, obj) {
         // An object of the program's own class: OM_SET goes to ITS dispatcher, which hands the MUI attributes down with DoSuperMethod.
         Some(cl) => crate::mui::custom::queue_om_set(a, cl, obj, crate::mui::hooks::Msg::Params(alloc::vec![crate::boopsi_ids::OM_SET, cpu.areg(1), 0])),
-        None => for &(tag, data) in &t { crate::mui::set_attr(a, obj, tag, data)?; },
+        None => crate::mui::set_list(a, obj, &t)?,
     }
     crate::mui::after_set(a, cpu)?;
     Ok(format!("[intuition] SetAttrsA {obj:#x} ({} tags)", t.len()))
