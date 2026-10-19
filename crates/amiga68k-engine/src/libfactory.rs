@@ -15,9 +15,11 @@ pub fn library<U: GuestUi>(name: &'static str, base: u32) -> LibraryBuilder<U> {
         "mathieeedoubbas.library" => crate::mathieee::register_double(b),
         "workbench.library" => crate::workbench::register(b),
         "asl.library" => crate::asl::register(b),
+        "keymap.library" => crate::keymap::register(b),
+        "iffparse.library" => crate::iff::register(b),
         "commodities.library" => crate::commodities::register(b),
         "timer.device" => crate::timer::register(b),
-        "aros.library" => b.version(41), // posixc.library asks for 41; ArosInquireA stays a named refusal until a program needs it
+        "aros.library" => crate::aros::register(b), // version 41: posixc.library asks for it
         _ => b,
     }
 }

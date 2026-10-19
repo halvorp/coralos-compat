@@ -9,8 +9,8 @@
 //! sets COERR_NULLATTACH on the head, and attaching to a NULL head deletes the object.
 //!
 //! What is NOT modelled: there is no input.device stream, so no InputEvent ever reaches a filter and a hot key never
-//! fires; the CxMsg calls (CxMsgType/ID/Data, DivertCxMsg ...), MatchIX and the
-//! broker list calls (CopyBrokerList, BrokerCommand) stay named refusals. SetFilter stores the description text unparsed (ParseIX itself is commodities_parse.rs).
+//! fires; DivertCxMsg / RouteCxMsg / DisposeCxMsg, MatchIX and the broker list calls (CopyBrokerList ...) stay named refusals.
+//! BrokerCommand and the three CxMsg readers a broker's own command messages need are commodities_cmd.rs. SetFilter stores the description text unparsed (ParseIX itself is commodities_parse.rs).
 //! Offsets (m68k-linux-gnu-gcc -m68020 -mno-align-int over AROS libraries/commodities.h, 2026-10-18): struct NewBroker is 26
 //! bytes: nb_Version 0, nb_Name 2, nb_Title 6, nb_Descr 10, nb_Unique 14, nb_Flags 16, nb_Pri 18, nb_Port 20; struct IX 12.
 use alloc::collections::BTreeMap;
@@ -40,10 +40,12 @@ const COERR_NULLATTACH: u8 = 1;
 const OBJ_SIZE: u32 = 32;
 const IX_SIZE: usize = 12;
 
-struct Obj { ty: u32, parent: u32, kids: Vec<u32>, active: bool, pri: i8, err: u8, name: String, ix: Option<[u8; IX_SIZE]>, filter_text: Option<String> }
+pub(crate) struct Obj { pub(crate) ty: u32, parent: u32, kids: Vec<u32>, active: bool, pri: i8, err: u8, pub(crate) name: String, ix: Option<[u8; IX_SIZE]>, filter_text: Option<String>,
+    /// A broker's nb_Port and the task that created it (CxBroker's `FindTask(NULL)`), for BrokerCommand.
+    pub(crate) port: u32, pub(crate) task: u32 }
 
 #[derive(Default)]
-pub struct State { objs: BTreeMap<u32, Obj>, brokers: Vec<u32> }
+pub struct State { pub(crate) objs: BTreeMap<u32, Obj>, pub(crate) brokers: Vec<u32>, /** The port CxMsg replies go to (commodities_cmd.rs); 0 until the first BrokerCommand. */ pub(crate) reply_port: u32 }
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
     b.named("CreateCxObj", create::<U>).named("CxBroker", broker::<U>).named("ActivateCxObj", activate::<U>)
@@ -51,14 +53,14 @@ pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
         .named("CxObjError", obj_error::<U>).named("ClearCxObjError", clear_error::<U>).named("SetCxObjPri", set_pri::<U>)
         .named("AttachCxObj", attach::<U>).named("EnqueueCxObj", enqueue::<U>).named("InsertCxObj", insert::<U>)
         .named("RemoveCxObj", remove::<U>).named("SetTranslate", set_translate::<U>).named("SetFilter", set_filter::<U>)
-        .named("SetFilterIX", set_filter_ix::<U>).with(crate::commodities_parse::register::<U>)
+        .named("SetFilterIX", set_filter_ix::<U>).with(crate::commodities_parse::register::<U>).with(crate::commodities_cmd::register::<U>)
 }
 
 fn new_obj<U: GuestUi>(a: &mut Amiga<U>, ty: u32, active: bool, pri: i8, name: String) -> Result<u32, Refusal> {
     let Some(p) = crate::fs::alloc_zeroed_sys(a, OBJ_SIZE)? else { return Err(Refusal("commodities: no memory for a CxObj (NOMEM)".into())) };
     a.mem.write_u8(p + 8, ty as u8).map_err(Refusal::mem("CxObj.ln_Type"))?;
     a.mem.write_u8(p + 9, pri as u8).map_err(Refusal::mem("CxObj.ln_Pri"))?;
-    a.cx.objs.insert(p, Obj { ty, parent: 0, kids: Vec::new(), active, pri, err: 0, name, ix: None, filter_text: None });
+    a.cx.objs.insert(p, Obj { ty, parent: 0, kids: Vec::new(), active, pri, err: 0, name, ix: None, filter_text: None, port: 0, task: 0 });
     Ok(p)
 }
 
@@ -91,6 +93,9 @@ fn broker<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal
         else if unique & NBU_UNIQUE != 0 && a.cx.brokers.iter().any(|b| a.cx.objs.get(b).map_or(false, |o| o.name == name)) { (0, CBERR_DUP) }
         else {
             let co = new_obj(a, CX_BROKER, false, pri, name.clone())?;
+            let port = a.mem.read_u32(nb + 20).map_err(&m)?;
+            let task = a.sched.cur;
+            if let Some(o) = a.cx.objs.get_mut(&co) { o.port = port; o.task = task; }
             // Enqueue by priority, FIFO among equals.
             let at = a.cx.brokers.iter().position(|b| a.cx.objs.get(b).map_or(false, |o| o.pri < pri)).unwrap_or(a.cx.brokers.len());
             a.cx.brokers.insert(at, co);

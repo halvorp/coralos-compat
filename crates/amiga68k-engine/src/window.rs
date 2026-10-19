@@ -15,7 +15,7 @@ pub const LVO_OPEN_WINDOW: i32 = -204;
 pub const LVO_CLOSE_WINDOW: i32 = -72;
 pub const LVO_OPEN_WINDOW_TAG_LIST: i32 = -606;
 
-const WINDOW_SIZE: u32 = 136;
+pub(crate) const WINDOW_SIZE: u32 = 136;
 // struct Window offsets.
 const WD_LEFT: u32 = 4;
 const WD_TOP: u32 = 6;

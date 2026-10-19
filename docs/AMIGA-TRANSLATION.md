@@ -16,6 +16,17 @@ One seam (`guestui-abi`), per-TOOLKIT tables, no application names (`tools/check
   MUI windows are projected through the same `Projections<u32>` (`Objects::proj`), with MUI's own layout over the real screen-font metrics.
 * A role / intent pair without a row is a named refusal. Adding a gadget kind is adding rows, not a new code path.
 
+## Requesters: one generic `request` (`requester.rs`)
+
+* `EasyRequestArgs` / `AutoRequest` / `BuildEasyRequestArgs` / `BuildSysRequest` become `GuestUi::request(win, RequestModel { title, text,
+  buttons, default, cancel })`; the answer is `GuestUiEvent::RequestAnswered { req, button }` (the index asked, so the seam carries no
+  Amiga number). The ENGINE maps the index to Intuition's return: buttons 1..n-1 left to right, the rightmost 0, AutoRequest TRUE/FALSE,
+  -1 + the stored class when an IDCMP class the caller listed closes it early (`Amiga::notify_requesters`).
+* A synchronous call parks only the asking TASK (`Waiting::Request`); the async pair returns a real `struct Window` whose UserPort
+  signals the answer and `SysReqHandler` consumes it. `FreeSysRequest` of an open one calls `GuestUi::close_request`.
+* A host without alerts refuses by name and the guest gets 0, as for a requester that could not open. A headless run
+  (`amiga68k-run`, `RecordingGuestUi::auto_cancel_requests`) dismisses every request with its Escape button.
+
 ## Content out: planes (`graphics/record.rs`, `retro-present/src/plane.rs`)
 
 * The guest bitmap stays authoritative (ReadPixel / blits keep working). Next to it each window records a display list.

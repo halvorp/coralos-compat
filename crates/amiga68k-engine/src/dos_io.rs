@@ -168,9 +168,18 @@ pub fn examine_fh<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     ok(a, cpu, DOSTRUE, format!("[dos] ExamineFH {:#x}", b << 2))
 }
 
+/// The console streams (Input() / Output()) are interactive handles of the console handler, which knows no ACTION_COPY_DIR_FH or
+/// ACTION_PARENT_FH: dos.library's DupLockFromFH / ParentOfFH send the packet and get DOSFALSE with ERROR_ACTION_NOT_KNOWN (AROS
+/// rom/dos/duplockfromfh.c passes the packet to fh_Type; 26 corpus programs duplicate their Output() lock).
+pub(crate) fn console_refuses_lock<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, b: u32, call: &str) -> Option<Result<String, Refusal>> {
+    if b != dos::STDIN_FH >> 2 && b != dos::STDOUT_FH >> 2 { return None; }
+    Some(fail(a, cpu, ERROR_ACTION_NOT_KNOWN, 0, format!("[dos] {call} {:#x} (the console handler has no directory)", b << 2)))
+}
+
 /// DupLockFromFH(d1 = file) -> a shared lock on the file.
 pub fn dup_lock_from_fh<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let b = cpu.dreg(1);
+    if let Some(r) = console_refuses_lock(a, cpu, b, "DupLockFromFH") { return r; }
     let node = handle(a, b, "DupLockFromFH")?.node;
     let what = format!("[dos] DupLockFromFH {:#x}", b << 2);
     match new_lock(a, node, false)? { Some(p) => ok(a, cpu, p >> 2, what), None => fail(a, cpu, ERROR_NO_FREE_STORE, 0, what) }

@@ -4,6 +4,7 @@
 //! it becomes: the engine maps it to the exact guest input the original OS would have produced (ruling 17, piece 3).
 use alloc::string::String;
 use crate::model::{CallbackToken, ControlValue, GuestRect, UiObjectRef};
+use crate::request::RequestRef;
 
 /// What the user meant toward a control, by role. The engine reads it against the control's kind; an intent the kind does
 /// not have (a `SelectRow` on a button) is a named refusal.
@@ -62,6 +63,9 @@ pub enum GuestUiEvent {
     Pointer { win: UiObjectRef, x: i32, y: i32, button: PointerButton, phase: PointerPhase, clicks: u8 },
     /// A key press or release for the window: `code` is the host's key code, `text` what it types (empty for a non-character key).
     Key { win: UiObjectRef, code: u32, text: String, modifiers: Modifiers, down: bool },
+    /// The user answered a request: `button` is the index into the `RequestModel::buttons` that was asked (Return = its `default`,
+    /// Escape / closing = its `cancel`). One answer per request; a later one for the same `req` is stale.
+    RequestAnswered { req: RequestRef, button: u32 },
 }
 
 impl GuestUiEvent {

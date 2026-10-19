@@ -110,6 +110,7 @@ impl<U: GuestUi> Mac<U> {
             GuestUiEvent::Intent { win, control, token, generation, intent } => self.deliver_intent(win, control, token, generation, intent),
             GuestUiEvent::Pointer { win, x, y, button, phase, clicks } => self.deliver_pointer(win, x, y, button, phase, clicks),
             GuestUiEvent::Key { win, text, modifiers, down, code } => self.deliver_key(win, code, &text, modifiers, down),
+            ev @ GuestUiEvent::RequestAnswered { .. } => Err(Refusal(format!("deliver: {ev:?}: the Mac engine asks no requests (Alert is a later lane)"))),
         }
     }
 

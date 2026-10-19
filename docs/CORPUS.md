@@ -104,8 +104,37 @@ AROS-built code at all; it is the only source of MUI/Zune programs, and AROS-bui
 | MUI custom classes: ~~`muimaster/MUI_CreateCustomClass`~~ DONE (mui2 lane); disk classes `Clock.mcc`, `SystemPrefsWindow.mcc`, `PrefsEditor.mcc`, MCCs from `LIBS:mui/` remain | 16 + 8 | mui |
 | ~~MUI attributes~~ DONE (mui2 lane): `MUIA_Application_SingleTask` 0x8042a2c8 (10 apps), `_DiskObject` 0x804235cb, `_BrokerPri` 0x8042c8d0, `_UseCommodities` 0x80425ee5, `_UsedClasses` 0x8042e9a7, `MUIA_Window_Activate` 0x80428d2f, `_Window_AppWindow` 0x804280cf, `MUIA_Group_PageMode` 0x80421a5f (the Register/page layouts), `MUIA_Frame` | 3-10 each | mui |
 | ~~`MUI_MakeObjectA` types other than `MUIO_Label`~~ DONE (mui2 lane): 2 `Button` (6 apps), 13 `MenustripNM` (4), 3 `Checkmark`, 4 `Cycle`, 8 `PopButton` (2 each) | 6+4+2+2+2 | mui |
-| `intuition/EasyRequestArgs` (3), `DupLockFromFH` on the console handles (3), `WindowAction` (1), `iffparse/AllocIFF` (2), `MUI_RequestA` (2), `exec/RawPutChar` (2, AROS debug output) | 1-3 each | intuition / dos |
+| ~~`intuition/EasyRequestArgs` (3), `DupLockFromFH` on the console handles (3), `iffparse/AllocIFF` (2), `exec/RawPutChar` (2)~~ DONE (amilibs lane, see below); `WindowAction` (1), `MUI_RequestA` (2, MUI's own requester class) remain | 1-3 each | intuition / dos |
 | YAM: `AllocDosObject type 5` (DOS_CLI), `locale/ParseDate` with a hook | 1 | dos / locale |
+
+### The `amilibs` lane (2026-10-19): requesters, iffparse, keymap, commodities commands, aros.library
+
+Landed (`docs/AMIGA-TRANSLATION.md` has the requester seam): `intuition` EasyRequestArgs / BuildEasyRequestArgs / SysReqHandler /
+FreeSysRequest / AutoRequest / BuildSysRequest as native alerts; `iffparse.library` in full over dos file handles (AllocIFF ...
+ParseIFF SCAN/STEP/RAWSTEP, PushChunk/PopChunk, Prop/Collection/Stop, guest entry/exit/purge hooks; clipboard and guest stream hooks
+are named refusals); `keymap.library` with a real US KeyMap; `commodities` BrokerCommand + CxMsgType/ID/Data; `exec` RawPutChar (engine
+log); `aros` ArosInquireA (facts only); `dos` DupLockFromFH / ParentOfFH on the console handle (ERROR_ACTION_NOT_KNOWN).
+
+One-pass census (`amiga68k-run --census`, 64 apps, same inputs, the binary of the base commit e814e29 against this branch):
+
+| | before | after |
+|---|---|---|
+| apps whose run reaches no unimplemented function | 50 | 61 |
+| windows opened (apps that opened one) | 29 (25) | 31 (27) |
+
+| app | NEXT-NEEDED before | after | what the run does now |
+|---|---|---|---|
+| YAM | intuition/EasyRequestArgs | none | asks its requester (dismissed with Escape by the headless runner), then exits |
+| AWebCfg | intuition/EasyRequestArgs | none | the same |
+| aros-AHIRecord | intuition/EasyRequestArgs | none | the same |
+| aros-Wanderer | intuition/EasyRequestArgs (+3 refusals) | none (0 refusals) | asks, then exits |
+| aros-KeyShow | keymap/AskKeyMapDefault | none | **opens its window** (the first from this lane) |
+| aros-prefs-OpenURL | iffparse/AllocIFF | none | **opens its window** |
+| aros-prefs-Editor, aros-Editor | iffparse/AllocIFF | none | iffparse answers (no prefs file: OpenIFF fails); Editor then ends without a log line before its window (cause not in the log), prefs-Editor stops at `OpenWindow: size 0x0` |
+| aros-Exchange | commodities/BrokerCommand | none | BrokerCommand answers -1 (no Exchange); it then prints "Can't create CxBroker object!": **`MUIA_Application_Broker` (a MUI Application that makes its CxBroker, BrokerPort, BrokerHook) is the next gap** |
+| aros-About | aros/ArosInquireA | none | ArosInquireA answers; the About window needs MUI string attributes it reads past 256 bytes (`string at 0x12447 unterminated`) |
+| aros-gtdemo | exec/RawPutChar | none | RawPutChar to the log; gtdemo stops at GadTools `PALETTE_KIND` (named refusal) |
+| aros-VMM | exec/RawPutChar | muimaster/MUI_RequestA | past RawPutChar, now at MUI's requester class (`MUI_RequestA`, MUI lane) |
 
 And three things about the *classic* binaries:
 
