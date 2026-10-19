@@ -84,10 +84,13 @@ fn text_width<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
     width(m, &s, "TextWidth")
 }
 
+/// The `FontInfo` record of the font that is drawn: ascent, descent, widMax, leading. The baseline row is the last row
+/// above the pen's baseline line. `GetFontInfo` and `FontMetrics` both read this, so the two cannot disagree.
+pub(super) fn font_info(f: &retro_raster::font::Font) -> [i16; 4] { [f.baseline as i16 + 1, (f.y_size - f.baseline) as i16 - 1, f.x_size as i16, 0] }
+
 /// FontInfo: ascent, descent, widMax, leading (INTEGERs) of the font that is drawn.
 fn get_font_info<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    let f = &m.qd.font;
-    let v = [f.baseline as i16 + 1, (f.y_size - f.baseline) as i16 - 1, f.x_size as i16, 0]; // the baseline row is the last row above the pen's baseline line
+    let v = font_info(&m.qd.font);
     for (i, x) in v.into_iter().enumerate() { m.mem.write_u16(c.args.get(0) + 2 * i as u32, x as u16).map_err(Refusal::mem("FontInfo"))?; }
     Ok(Done { result: 0, log: format!("[quickdraw] GetFontInfo -> ascent {} descent {} widMax {} leading 0", v[0], v[1], v[2]) })
 }
@@ -119,6 +122,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     reg(m, 0xA88C, "StringWidth", &[Arg::L], Some(Arg::W), string_width::<U>)?;
     reg(m, 0xA886, "TextWidth", &[Arg::L, Arg::W, Arg::W], Some(Arg::W), text_width::<U>)?;
     reg(m, 0xA88B, "GetFontInfo", &[Arg::L], None, get_font_info::<U>)?;
+    reg(m, 0xA835, "FontMetrics", &[Arg::L], None, super::fontmetrics::font_metrics::<U>)?;
     reg(m, 0xA88E, "SpaceExtra", &[Arg::L], None, space_extra::<U>)
 }
 

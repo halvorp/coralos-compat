@@ -40,4 +40,41 @@ mod tests {
         assert!(w(b' ') > 0);
         assert_eq!(w(b'0') as u16, X_SIZE);
     }
+
+    /// Ink rows of glyph `c` as a bitmask per strip row (bit x = column x of the glyph).
+    fn ink_rows(c: u8) -> [u32; Y_SIZE as usize] {
+        let loc = CHAR_LOC[(c - LO_CHAR) as usize];
+        let (off, w) = ((loc >> 16) as usize, (loc & 0xFFFF) as usize);
+        core::array::from_fn(|y| (0..w).filter(|x| CHAR_DATA[y * MODULO as usize + (off + x) / 8] >> (7 - (off + x) % 8) & 1 != 0).fold(0, |m, x| m | 1 << x))
+    }
+    fn top_bottom(c: u8) -> (usize, usize) {
+        let r = ink_rows(c);
+        (r.iter().position(|&m| m != 0).unwrap(), r.iter().rposition(|&m| m != 0).unwrap())
+    }
+
+    /// `tf_Baseline` is the row of the last ink row above the baseline, so every glyph with no descender ends exactly on it
+    /// and the plain ascenders (which define the strip's height above the baseline) start on row 0. Before 2026-10-19 the
+    /// generator mapped strip rows one scratch row too low, which dropped the top ink row of every ascender and capital.
+    #[test]
+    fn ascenders_and_capitals_span_row_0_or_cap_height_to_the_baseline_row() {
+        for c in *b"bdhkl" {
+            assert_eq!(top_bottom(c), (0, BASELINE as usize), "{}", c as char);
+        }
+        for c in b'A'..=b'Z' {
+            let (top, bottom) = top_bottom(c);
+            if !b"JQ".contains(&c) { assert_eq!(bottom, BASELINE as usize, "{} sits on the baseline row", c as char); }
+            // Nunito Sans cap height is 705/1000 em: 8.5 px at 12 px, so 8 or 9 rows, never the 7 a clipped bar leaves.
+            let height = BASELINE as usize + 1 - top;
+            assert!((8..=9).contains(&height), "{} is {height} rows tall", c as char);
+        }
+    }
+
+    #[test]
+    fn the_bars_of_t_f_e_and_z_are_drawn() {
+        for c in *b"TFEZ" {
+            let rows = ink_rows(c);
+            let top = rows.iter().find(|&&m| m != 0).unwrap();
+            assert!(top.count_ones() >= 4, "{} has a bar in its top ink row, got {top:#b}", c as char);
+        }
+    }
 }

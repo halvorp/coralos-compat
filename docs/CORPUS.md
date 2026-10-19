@@ -786,8 +786,8 @@ a native window opened through GuestUi.
 | SimpleText 1.3 | `_AliasDispatch` (FindFolder) | `oapp` handler runs, Untitled window created, then `_TEStyleNew` | no (TextEdit) |
 | SimpleText 1.4 | `_Unimplemented` (false "serious error": stale ResErr) | `oapp` handler runs, then `_TEStyleNew` | no (TextEdit) |
 | Toolbox Showcase (68k, PPC) | `_GetPalette` | `_TENew` (PPC: `SetPalette` import) | window created |
-| WriteNow 2.2 | `_VInstall` | `_FontMetrics` (VBL task installed and run) | yes |
-| WriteNow 2.0 | `_AVLTreeDispatch` (stray jump: Pack7 stack bug) | `_FontMetrics` | yes |
+| WriteNow 2.2 | `_VInstall` | `_SetDialogItem` (past `_FontMetrics`) | yes |
+| WriteNow 2.0 | `_AVLTreeDispatch` (stray jump: Pack7 stack bug) | `_SetDialogItem` (past `_FontMetrics`) | yes |
 | WriteNow installer 4.0 | `_GetAppParms` | event loop | yes |
 | Moving Van | `_SetControlReference` | event loop (PICT v2 and `SetCRefCon(NIL)` list scroll bars refused by name) | yes |
 | MacPaint 2.1F | event loop, windows hidden (no null event) | personalization dialog (its first-run) | yes (dialog) |
@@ -820,3 +820,24 @@ The all-64 census counts programs whose run reaches no unimplemented function: 6
 
 The Editor's exit was not silent: the line is `Main interface failed to open!` (the census tool prints the log only from the first unimplemented call, and none was reached).
 Jano's `setup()` takes its screen from `prefs.parent`, which `set_default_prefs` copies from `IntuitionBase->ActiveScreen`; the engine's `IntuitionBase` had no ActiveScreen/FirstScreen, so `setup()` returned 1 before any library call.
+
+## 2026-10-19: Gute Form font un-clipped; Mac `_FontMetrics`
+
+* `tools/gen-gute-form-font.py` mapped strip row `yy` from scratch row `BASE - baseline + yy`, one row too low, so every ascender and capital
+  lost its top ink row ('T' and 'F' had no bar). It now maps from `BASE - asc + yy` (row `tf_Baseline` = the last ink row above the baseline) and asserts
+  that no capital A-Z or plain ascender (b d f h k l t) loses an ink row against the rasteriser's own output. `retro-theme` tests decode the strip
+  (ascenders span row 0 to the baseline row, capitals are 8-9 rows, T/F/E/Z have a bar). Only one pinned hash moved
+  (`amiga68k-engine/tests/gfx_window.rs`, the "AB" frame; its glyph-ink assertions, computed from the font itself, held).
+  Still clipped, by design (Y_SIZE stays 11 = 9 above the baseline + 2 below): the accented capitals 192..=221 lose 2-4 top rows (their accents), and `$ % / \ ¾ Ø å ì í î ù ú û` by one row, `ç ý` lose a row of descender.
+* `_FontMetrics` ($A835): `FMetricRec` (ascent, descent, leading, widMax as Fixed from the same record `GetFontInfo` uses; `wTabHandle`) and the
+  Font Manager's 1072-byte global width table (`qd/fontmetrics.rs`; `tabData` is the Fixed `CharWidth` of each character; `WidthPtr` $B10 and
+  `WidthTabHandle` $B2A name it). The stand-in font means `aFID` = the requested id, scale factors 256, `usedFam` false, `tabFont`/`fHand` NIL.
+  `CharWidth`/`StringWidth` ignore `spExtra` and soft-style extra (an existing stand-in limit), so `sExtra` is stored and added to the space entry as the real table
+  does, but the two agree only while `spExtra` = 0.
+
+Census (68k, mac-plus and mac-ii, `--idle 300`, identical on both machines):
+
+| app | before | after |
+|---|---|---|
+| WriteNow 2.0 | `_FontMetrics` | `_SetDialogItem` ($A98E) at pc=0x21307c, 32354 instructions |
+| WriteNow 2.2 | `_FontMetrics` | `_SetDialogItem` ($A98E) at pc=0x21569c, 3313444 instructions |
