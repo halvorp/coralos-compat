@@ -105,7 +105,7 @@ void _start(void) {
     V(25) = CALL(gfx, LVO_graphics_GetDisplayInfoData, 56, 0x80000000, 0x29000, 0, 0, (u32)di, 0, 0);   /* 56 bytes */
     V(26) = *(u32 *)di;                                                                          /* DTAG_DISP */
     V(27) = CALL(gfx, LVO_graphics_GetDisplayInfoData, 56, 0x80000000, 0x11111, 0, 0, (u32)di, 0, 0);   /* unknown mode: 0 */
-    CALL(gfx, LVO_graphics_GetDisplayInfoData, 56, 0x80001000, 0x29000, 0, 0, (u32)di, 0, 0);    /* DTAG_DIMS: refused */
+    CALL(gfx, LVO_graphics_GetDisplayInfoData, 56, 0x80002000, 0x29000, 0, 0, (u32)di, 0, 0);    /* DTAG_MNTR: refused (DIMS and NAME are modelled now) */
     /* A bitmap-backed RastPort: an outlined box, Flood inside it, ReadPixelLine8/WritePixelLine8. */
     u32 bm = CALL(gfx, LVO_graphics_AllocBitMap, 16, 16, 8, 0, 0, 0, 0, 0);
     u32 rp[25]; memset(rp, 0, sizeof rp);

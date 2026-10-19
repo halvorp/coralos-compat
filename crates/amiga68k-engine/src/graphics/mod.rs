@@ -15,6 +15,7 @@ pub mod content;
 mod diskfont;
 mod flood;
 mod modes;
+mod modes_best;
 mod draw;
 mod drawinfo;
 pub mod fonts;

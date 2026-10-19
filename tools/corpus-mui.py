@@ -10,7 +10,7 @@ RUN = os.environ.get("AMIGA68K_RUN", "target/release/amiga68k-run")
 
 def run(app):
     cmd = [RUN, "--census", "--max-insns", "50_000_000"]
-    if app["sys"] != "-": cmd += ["--sys", os.path.join(ROOT, app["sys"]), "--assign", "LIBS=SYS:Libs"]
+    if app["sys"] != "-": cmd += ["--sys", os.path.join(ROOT, app["sys"]), "--assign", "LIBS=SYS:Libs", "--assign-add", "LIBS=SYS:Classes"]  # AROS S/Startup-Sequence: Assign LIBS: SYS:Classes ADD
     if app["progdir"] != "-": cmd += ["--mount", "PD=" + os.path.join(ROOT, app["progdir"]), "--progdir", "PD:", "--assign-add", "LIBS=PD:Libs"]
     if app["sys"] == "-" and os.path.isdir(os.path.join(ROOT, "mccs")): cmd += ["--mount", "MCC=" + os.path.join(ROOT, "mccs"), "--assign-add", "LIBS=MCC:Libs"]
     cmd.append(os.path.join(ROOT, app["path"]))
