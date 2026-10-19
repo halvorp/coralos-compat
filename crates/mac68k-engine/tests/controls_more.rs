@@ -1,13 +1,13 @@
 //! Radio buttons and pop-up menus on the Control Manager table, end to end like translate_controls.rs: a hand-assembled program
 //! creates the control, waits for an event and answers it with FindControl / TrackControl; the native intent arrives through
 //! `RecordingGuestUi::push_intent` and the guest must see what a Mac would have shown it. Facts: Macintosh Toolbox Essentials,
-//! Control Manager (radio = `inCheckBox`, value left to the program; pop-up CDEF: `minValue` is the MENU ID, `contrlMin`/`contrlMax`
+//! Control Manager (radio = `inCheckBox`, value left to the program; shown as a one-label radio Choice; pop-up CDEF: `minValue` is the MENU ID, `contrlMin`/`contrlMax`
 //! become 1 and the item count, the chosen item is `contrlValue`); the part code of a pop-up choice (`inButton`, 10) is what
 //! systemless' pop-up CDEF returns, which the panel's first draft had wrong as `inMenu`.
 mod common;
 use common::ctl::{find_and_track, new_control_ranged, wait_and_localise, OUT, WHICH};
 use common::{put, pstr, set_rect, Prog, Rig};
-use guestui_abi::{ChoiceStyle, ControlKind, ControlModel, ControlValue, Intent, UiCall, UiObjectRef};
+use guestui_abi::{ChoiceStyle, ControlKind, ControlModel, ControlValue, Intent, UiCall, UiObjectRef, CHOICE_NONE};
 use mac68k_engine::menu::{encode_block, Item, Parsed};
 use mac68k_engine::translate::controls::{part_at, row_of, Cdef, Facts};
 use mac68k_engine::translate::Obj;
@@ -52,16 +52,16 @@ fn word(w: &World, off: u32) -> u16 { w.rig.m.mem.read_u16(OUT + off).unwrap() }
 fn field(w: &World, off: u32) -> i16 { let p = w.rig.m.mm.block(w.ctl).unwrap().ptr; w.rig.m.mem.read_u16(p + off).unwrap() as i16 }
 
 #[test]
-fn a_radio_button_is_a_native_boolean_part_and_a_click_is_in_check_box_with_the_value_left_to_the_program() {
+fn a_radio_button_is_a_one_label_radio_choice_and_a_click_is_in_check_box_with_the_value_left_to_the_program() {
     let mut w = world(2, "Fast", 0, 1, 1, &[]);
-    assert_eq!(model(&w).kind, ControlKind::Checkbox { checked: false }, "a lone radio is a boolean part: Choice cannot say 'none selected'");
+    assert_eq!(model(&w).kind, ControlKind::Choice { style: ChoiceStyle::Radio, labels: vec!["Fast".into()], selected: CHOICE_NONE }, "an off radio says 'none chosen'");
     assert_eq!(model(&w).label, "Fast");
     let (win, ctl) = (win_ref(&w), native(&w));
-    w.rig.m.ui.push_intent(win, ctl, Intent::SetValue(ControlValue::Checked(true))).unwrap();
+    w.rig.m.ui.push_intent(win, ctl, Intent::SetValue(ControlValue::Choice(0))).unwrap();
     finish(&mut w);
     assert_eq!((word(&w, 6), word(&w, 8)), (11, 11), "FindControl and TrackControl both answer inCheckBox");
     assert_eq!(field(&w, 18), 0, "the app keeps its radio group: the Control Manager never flips the value");
-    assert!(w.rig.m.ui.calls.iter().any(|c| matches!(c, UiCall::SetControl(_, r, ControlValue::Checked(false)) if *r == ctl)), "the optimistic host state is put back");
+    assert!(w.rig.m.ui.calls.iter().any(|c| matches!(c, UiCall::SetControl(_, r, ControlValue::Choice(CHOICE_NONE)) if *r == ctl)), "the optimistic host state is put back");
     assert!(w.rig.m.refused.is_empty(), "{:?}", w.rig.m.refused);
 }
 
@@ -73,13 +73,21 @@ fn a_radio_button_refuses_what_a_radio_cannot_do_and_the_program_sets_the_value_
     w.rig.m.pump_ui();
     assert!(w.rig.m.refused.iter().any(|r| r.contains("SelectRow") && r.contains("radioButProc")), "{:?}", w.rig.m.refused);
     assert!(w.rig.m.ev.queue.iter().all(|e| e.what != 1), "a refused intent produced no guest input");
+    // NEGATIVE CONTROLS: a radio is not a check box (Checked is the wrong value), and it has exactly one label (item 1 does not exist)
+    for bad in [Intent::SetValue(ControlValue::Checked(true)), Intent::SetValue(ControlValue::Choice(1))] {
+        w.rig.m.refused.clear();
+        w.rig.m.ui.push_intent(win, ctl, bad).unwrap();
+        w.rig.m.pump_ui();
+        assert_eq!(w.rig.m.refused.len(), 1, "named: {:?}", w.rig.m.refused);
+        assert!(w.rig.m.ev.queue.iter().all(|e| e.what != 1), "a refused intent produced no guest input");
+    }
     // positive control: SetControlValue(ctl, 1) from the program is what turns the native part on
     let mut p = Prog::new();
     p.l(w.ctl).w(1).trap(0xA963).exit();
     w.rig.m.refused.clear();
     w.rig.m.start(&p.0, 0).unwrap();
     w.rig.m.run_loop(100_000).unwrap();
-    assert_eq!(model(&w).kind, ControlKind::Checkbox { checked: true });
+    assert_eq!(model(&w).kind, ControlKind::Choice { style: ChoiceStyle::Radio, labels: vec!["Fast".into()], selected: 0 });
 }
 
 #[test]
