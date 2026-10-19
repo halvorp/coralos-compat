@@ -86,6 +86,16 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_Application_InputBuffered if kind == Kind::Application => { app::pump(a, obj)?; Ok(0) }
         MUIM_Group_InitChange if kind.is_container() => Ok(1),
         MUIM_Group_ExitChange if kind.is_container() => { super::win::refresh(a, obj)?; Ok(1) }
+        // Application.mui: the windows are the members of its window family; a window added after creation joins it and learns the application
+        // (MUIM_ConnectParent), exactly what MUIA_Application_Window does at creation.
+        OM_ADDMEMBER if kind == Kind::Application => { object::adopt(a, obj, MUIA_Application_Window, arg(0)?)?; Ok(1) }
+        OM_REMMEMBER if kind == Kind::Application => {
+            // Window__MUIM_DisconnectParent: a window leaving the application closes first.
+            let w = arg(0)?;
+            if a.objects.flag(w, MUIA_Window_Open) { object::set_attr(a, w, MUIA_Window_Open, 0)?; }
+            remove_child(a, obj, w)?;
+            Ok(1)
+        }
         OM_ADDMEMBER if kind.is_container() => { add_child(a, obj, arg(0)?, false)?; Ok(0) }
         OM_REMMEMBER if kind.is_container() => { remove_child(a, obj, arg(0)?)?; Ok(0) }
         MUIM_Family_AddTail | MUIM_Family_AddHead if kind.is_a(Kind::Family) => { add_child(a, obj, arg(0)?, id == MUIM_Family_AddHead)?; Ok(0) }

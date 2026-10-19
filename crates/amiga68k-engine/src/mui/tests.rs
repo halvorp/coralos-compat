@@ -84,6 +84,25 @@ fn a_no_notify_true_anywhere_in_a_set_list_silences_the_whole_call() {
 }
 
 #[test]
+fn windows_join_and_leave_a_live_application_with_om_addmember_and_remmember() {
+    let mut a = machine();
+    let app = make(&mut a, "Application.mui", &[]).unwrap();
+    let txt = make(&mut a, "Text.mui", &[]).unwrap();
+    let win = make(&mut a, "Window.mui", &[(MUIA_Window_RootObject, txt)]).unwrap();
+    assert_eq!(method(&mut a, app, OM_ADDMEMBER, &[win]).unwrap(), 1);
+    assert_eq!(a.objects.children(app), &[win], "the application owns the window now");
+    set_attr(&mut a, win, MUIA_Window_Open, 1).unwrap();
+    assert_eq!(a.ui.calls.iter().filter(|c| matches!(c, UiCall::OpenWindow(_))).count(), 1);
+    method(&mut a, app, OM_REMMEMBER, &[win]).unwrap();
+    assert_eq!(get_attr(&mut a, win, MUIA_Window_Open).unwrap(), 0, "a window leaving the application closes first");
+    assert!(a.objects.children(app).is_empty() && a.objects.map[&win].parent.is_none(), "the program owns it again");
+    // NEGATIVE CONTROLS: a second removal, and a child that is no window.
+    assert!(method(&mut a, app, OM_REMMEMBER, &[win]).unwrap_err().0.contains("is not a child"));
+    let t2 = make(&mut a, "Text.mui", &[]).unwrap();
+    assert!(method(&mut a, app, OM_ADDMEMBER, &[t2]).unwrap_err().0.contains("cannot be a child of a Application"));
+}
+
+#[test]
 fn a_label_before_a_text_is_that_texts_label_and_the_window_is_sized_by_the_screen_fonts_metrics() {
     let mut a = machine();
     let hello = cstr(&mut a, "hello");
