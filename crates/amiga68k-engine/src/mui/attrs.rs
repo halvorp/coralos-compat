@@ -84,7 +84,9 @@ const RADIO: &[(u32, Ty)] = &[(MUIA_Radio_Active, Num), (MUIA_Radio_Entries, Str
 const NUMERIC: &[(u32, Ty)] = &[(MUIA_Numeric_Value, Num), (MUIA_Numeric_Min, Num), (MUIA_Numeric_Max, Num), (MUIA_Numeric_Default, Num),
     (MUIA_Numeric_Format, Str), (MUIA_Numeric_Reverse, Num), (MUIA_Numeric_RevLeftRight, Num), (MUIA_Numeric_RevUpDown, Num),
     (MUIA_Numeric_CheckAllSizes, Num)];
-const SLIDER: &[(u32, Ty)] = &[(MUIA_Slider_Horiz, Num), (MUIA_Slider_Quiet, Num)];
+// MUIA_Group_Horiz: Zune's coloradjust.c passes it to SliderObject (a Slider is no Group, so its dispatcher never looks at it and
+// rootclass drops it; a slider's orientation is MUIA_Slider_Horiz, default horizontal). Held and ignored here too.
+const SLIDER: &[(u32, Ty)] = &[(MUIA_Slider_Horiz, Num), (MUIA_Slider_Quiet, Num), (MUIA_Group_Horiz, Num)];
 const GAUGE: &[(u32, Ty)] = &[(MUIA_Gauge_Current, Num), (MUIA_Gauge_Max, Num), (MUIA_Gauge_Horiz, Num), (MUIA_Gauge_Divide, Num),
     (MUIA_Gauge_InfoText, Str), (MUIA_Gauge_InfoRate, Num), (MUIA_Gauge_FullFrame, Num), (MUIA_Gauge_EmptyImage, Num), (MUIA_Gauge_FullImage, Num)];
 const PROP: &[(u32, Ty)] = &[(MUIA_Prop_First, Num), (MUIA_Prop_Entries, Num), (MUIA_Prop_Visible, Num), (MUIA_Prop_Horiz, Num),
