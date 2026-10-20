@@ -6,6 +6,8 @@ use macppc_engine::source::fragment_bytes;
 use macppc_engine::MacPpc;
 use retro_pef::Pef;
 
+fn alloc_fault(f: &str) -> String { format!("FAULT {f}") }
+
 fn run(name: &str) -> Option<(Census, Vec<String>, Vec<String>)> {
     let path = format!("/data/build/corpus-bin/mac-retro68/ppc/{name}.bin");
     let file = std::fs::read(&path).ok().or_else(|| { eprintln!("SKIPPED: corpus binary {path} not present (docs/CORPUS.md)"); None })?;
@@ -17,22 +19,30 @@ fn run(name: &str) -> Option<(Census, Vec<String>, Vec<String>)> {
     m.start(&frag).unwrap();
     let c = Census::of(&frag);
     let _ = m.run_loop(20_000_000);
-    Some((c, m.mac.log.clone(), m.mac.refused.clone()))
+    // a run that ends in a FAULT (a handler that cannot serve a PowerPC caller) is a stop too: it is counted with the
+    // refusals, so "nothing refused" can never hide a halted program
+    let mut refused = m.mac.refused.clone();
+    if let Some(f) = m.fault() { refused.push(alloc_fault(f)); }
+    Some((c, m.mac.log.clone(), refused))
 }
 
 #[test]
 fn retro68_ppc_samples_bind_their_interfacelib_imports_and_stop_at_the_first_routine_without_a_handler() {
     // 2026-10-20, Mixed Mode slices 1-2: NGetTrapAddress answers from the shared trap registry (tests/trap_address.rs),
     // InvertRect binds to `_InverRect`, and NewRoutineDescriptor builds a real descriptor (mac68k-engine
-    // tests/routine_descriptors.rs). The three samples that stopped at them now run with nothing refused. Calling a UPP (a
-    // user item, a WDEF) is slice 3: until then nothing here claims the callbacks drew.
+    // tests/routine_descriptors.rs). HelloWorld and WDEFShell now run to their event loops; Dialog gets as far as ModalDialog.
+    // Calling a UPP (a user item, a WDEF) is slice 3: until then nothing here claims the callbacks drew.
     for (app, bound, needed) in [("HelloWorld", "NGetTrapAddress", "GetFPos"), ("Dialog", "NewRoutineDescriptor", "FlushEvents"), ("WDEFShell", "NewRoutineDescriptor", "OpenDeskAcc")] {
         let Some((c, log, refused)) = run(app) else { return };
-        assert!(refused.is_empty(), "{app}: {refused:?}");
+        if app == "Dialog" {
+            // Dialog makes its user item's UPP, then STOPS in ModalDialog: drawing the user item means calling that UPP,
+            // which is Mixed Mode slice 3 (the callback machine)
+            assert!(refused.len() == 1 && refused[0].starts_with("FAULT ModalDialog"), "{refused:?}");
+        } else {
+            assert!(refused.is_empty(), "{app}: {refused:?}");
+        }
         assert!(!c.next_needed.iter().any(|n| n.ends_with(&format!("/{bound}"))), "{app}: {bound} is bound: {:?}", c.next_needed);
         assert!(c.next_needed.iter().any(|n| n.ends_with(&format!("/{needed}"))), "{app}: {needed} is unbound (named, not silent): {:?}", c.next_needed);
-        // HelloWorld and WDEFShell reach their WaitNextEvent loop; Dialog builds its items and sets its controls but does not
-        // reach ModalDialog inside this budget (not yet explained: named here, not claimed)
         if app != "Dialog" { assert!(log.iter().any(|l| l.contains("WaitNextEvent")), "{app} reached its event loop: {log:#?}"); }
     }
     let Some((_, log, _)) = run("HelloWorld") else { return };

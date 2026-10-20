@@ -150,9 +150,10 @@ the last index, 20-byte records with flags `kUseNativeISA`); `DisposeRoutineDesc
 resolves too). `ppc_record` picks the PowerPC record of a one-record or fat descriptor and refuses by name a 68k-only
 descriptor (NEXT-NEEDED: cross-ISA calls), a relative or unprepared record, a NIL procedure and a selector-dispatched
 descriptor. The three are `Native` PowerPC imports. Retro68's PowerPC Dialog and WDEFShell no longer stop at
-NewRoutineDescriptor: all three samples (with HelloWorld) run with nothing refused. CALLING a UPP is slice 3; until then
-nothing claims a user item or a custom WDEF drew. Dialog builds its items and sets its controls but does not reach
-ModalDialog inside the census budget: not yet explained, named in tests/census_corpus.rs.
+NewRoutineDescriptor: HelloWorld and WDEFShell run to their WaitNextEvent loops; Dialog makes its user item's UPP and
+then STOPS with a fault in ModalDialog, which must call that UPP to draw the item (slice 3). CALLING a UPP is slice 3; until
+then nothing claims a user item or a custom WDEF drew. (Correction, same day: the first slice-2 note said all three ran with
+nothing refused; the census helper counted refusals but not a run's fault. It now counts both.)
 Tests: mac68k-engine `tests/routine_descriptors.rs` (5: the documented bytes and not the TVector; a fat descriptor and the
 68k-only refusal; a static descriptor resolves but is not disposable; version / count / relative / NIL mutations refused and
 the restored block resolves; dispose once, NIL no-op, reuse). RED by mutation: the version check removed.
