@@ -204,7 +204,9 @@ fn a_real_mac_powerpc_application_reaches_its_window_through_the_trait() {
     let mut m = ppc();
     m.set_stop_on_unimplemented(true);
     m.start_file(&file, "HelloWorld").unwrap();
-    // It opens its console window, then stops at the first routine without a handler, by name (docs/CORPUS.md).
-    assert!(matches!(rest(&mut m), Step::Fault(f) if f.contains("NGetTrapAddress")));
+    // It opens its console window and waits in its event loop: NGetTrapAddress, where it used to stop, answers from the trap
+    // registry since Mixed Mode slice 1 (docs/MACPPC-PLUMBING.md), and the answer is in the log.
+    assert_eq!(rest(&mut m), Step::Blocked, "{:#?}", m.drain_log());
     assert_eq!(windows(&m), ["Retro68 Console"]);
+    assert!(m.drain_log().iter().any(|l| l.contains("GetTrapAddress")), "the availability query ran");
 }
