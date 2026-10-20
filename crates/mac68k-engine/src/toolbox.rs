@@ -53,10 +53,18 @@ pub struct WindowSpec { pub storage: u32, pub rect: Rect, pub title: String, pub
 
 fn done(log: String) -> Result<Done, Refusal> { Ok(Done { result: 0, log }) }
 
-/// documentProc (0) and zoomDocProc (8) have a grow box; noGrowDocProc (4) / zoomNoGrow (12) are documents without
-/// one; every other proc id (dBoxProc 1, plainDBox 2, altDBoxProc 3, movableDBoxProc 5, ...) is a dialog frame.
-fn role_of(proc_id: u16) -> (WindowRole, bool) {
-    match proc_id & 7 { 0 => (WindowRole::Document, true), 4 => (WindowRole::Document, false), _ => (WindowRole::Dialog, false) }
+/// The Window Manager's procID table (Inside Macintosh I): `procID = 16 * WDEF id + variation`. Only the system WDEFs have a
+/// native role: WDEF 0 (documentProc 0 and zoomDocProc 8 have a grow box; noGrowDocProc 4 / zoomNoGrow 12 are documents
+/// without one; dBoxProc 1, plainDBox 2, altDBoxProc 3, movableDBoxProc 5 and the rest are dialog frames) and WDEF 1
+/// (rDocProc 16: a rounded document window, no grow box, its variation is the corner size). Any other WDEF is the program's
+/// own window definition: no native presentation contract exists for it (RETRO-ROLES-REQUIRE-A-CONTRACT), so it is a named
+/// refusal (docs/consults/2026-10-20-wdef.md), never a document window by its low bits.
+pub(crate) fn role_of(proc_id: u16) -> Result<(WindowRole, bool), Refusal> {
+    match (proc_id >> 4, proc_id & 15) {
+        (0, v) => Ok(match v & 7 { 0 => (WindowRole::Document, true), 4 => (WindowRole::Document, false), _ => (WindowRole::Dialog, false) }),
+        (1, _) => Ok((WindowRole::Document, false)),
+        (id, v) => Err(Refusal(format!("procID {proc_id} selects WDEF {id} variation {v}, the program's own window definition: no native presentation contract [WDEF-UNSUPPORTED]"))),
+    }
 }
 
 impl<U: GuestUi> Mac<U> {
@@ -84,7 +92,7 @@ impl<U: GuestUi> Mac<U> {
 
     pub(crate) fn open_native(&mut self, win: u32) -> Result<(), Refusal> {
         let w = self.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?;
-        let (r, role) = (w.rect, role_of(w.proc_id));
+        let (r, role) = (w.rect, role_of(w.proc_id)?);
         let model = WindowModel {
             title: w.title.clone(),
             rect: GuestRect { left: i32::from(r.left), top: i32::from(r.top), width: i32::from(r.right - r.left), height: i32::from(r.bottom - r.top) },
@@ -106,6 +114,7 @@ impl<U: GuestUi> Mac<U> {
 
     /// [`Mac::make_window`], with a colour window's CGrafPort (8-bit canvas) when `color` and the machine has Color QuickDraw.
     pub fn make_window_as(&mut self, s: WindowSpec, color: bool) -> Result<u32, Refusal> {
+        role_of(s.proc_id)?; // before anything is allocated or shown
         let color = color && self.profile.color_qd;
         let r = s.rect;
         let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
@@ -348,4 +357,3 @@ fn track_go_away<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
     let hit = m.find_window(v, h) == (IN_GO_AWAY, win);
     Ok(Done { result: u32::from(hit), log: format!("[toolbox] TrackGoAway {win:#x} ({v},{h}) -> {hit}") })
 }
-

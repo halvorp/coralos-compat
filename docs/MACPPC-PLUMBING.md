@@ -174,4 +174,12 @@ draws from PowerPC, filterProcs, other callback-bearing managers, and 68k record
 Tests: `callback.rs` unit tests (4: TOC/r12/argument/LR/frame placement; a 68k-only descriptor and a raw pointer refused with
 the CPU untouched; a frameless return refused; every register put back and the call re-entered); `census_corpus.rs` pins the
 order NewRoutineDescriptor -> the user item runs -> FrameRoundRect -> ModalDialog blocks. RED by mutation: CR not restored.
-Next: slice 4 (the WDEF path, WDEFShell), then the remaining negative controls of the ruling (nesting, dispose-from-callback).
+WDEF slice 1 (2026-10-20, Astra's ruling in docs/consults/2026-10-20-wdef.md): the procID is decoded whole (`16 * WDEF id +
+variation`, `toolbox::role_of`). The system WDEFs 0 and 1 keep their native roles, each by its own row (procID 16, the rounded
+window, no longer aliases procID 0 by its low bits). Any other WDEF is the program's own window definition with no native
+presentation contract (RETRO-ROLES-REQUIRE-A-CONTRACT): `NewWindow` refuses it by name (`[WDEF-UNSUPPORTED]`) before anything is
+allocated or shown and returns NIL. WDEFShell's custom windows (WDEF 128, a 68k stub; WDEF 129, an embedded PEF) and MacPaint
+2.1F's palettes (its own WDEF 34) are refused this way; until slice 1 they were silently document windows. The ruling's order
+after this: real WindowRecord regions and windowDefProc, WindowDefinition continuations (NewWindow/wNew/wCalcRgns, FindWindow/wHit,
+wDraw), in-memory PEF preparation through the one CFM loader (WDEF 129), and native presentation only through an explicit binding;
+68k code reached from PowerPC (WDEF 128) waits for general cross-ISA execution.

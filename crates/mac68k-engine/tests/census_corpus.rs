@@ -200,13 +200,21 @@ fn macwrite_4_6_opens_its_window_with_menus_and_parks_in_its_event_loop() {
 }
 
 #[test]
-fn macpaint_2_1f_reaches_its_event_loop_with_its_tool_windows_created_hidden() {
-    // MacPaint 2.1F builds its Tool / Pattern / Spot / FatBits palettes (NewWindow, visible = FALSE) and a "Diagnostic" window, then waits
-    // in GetNextEvent. The engine opens a native window only on ShowWindow, so none is open: the app waits for an event it expects (a
-    // click) before it shows anything. Parked is the honest state; a native window appears once the program asks for one.
-    let Some(m) = census("mac/macpaint/u21/MacPaint 2.1F.rsrc") else { return };
+fn macpaint_2_1f_reaches_its_event_loop_and_its_palettes_own_wdef_is_refused_by_name() {
+    // MacPaint 2.1F builds a "Diagnostic" window (procID 16, the system rounded WDEF, visible = FALSE) and four Tool / Pattern /
+    // Spot / FatBits palettes with procID 544 = WDEF 34, a 724-byte 68k window definition MacPaint ships in its own resource fork.
+    // WDEF slice 1 (docs/consults/2026-10-20-wdef.md): a program's own WDEF has no native presentation contract, so each palette
+    // is refused by name and NewWindow returns NIL; before the slice they were silently created as document windows. The app
+    // still reaches GetNextEvent; the only other refusals are what a NIL window leads to (MoveWindow of it, text calls on a NIL port).
+    let Some(mut m) = census("mac/macpaint/u21/MacPaint 2.1F.rsrc") else { return };
     assert!(m.unimplemented_at.is_empty(), "{:?}", m.refused);
     assert!(m.ev.waiting.is_some(), "blocked in GetNextEvent");
-    assert!(m.windows.len() >= 5 && m.windows.values().all(|w| w.native.is_none()), "five windows, none shown yet");
-    assert!(m.log.iter().any(|l| l.contains("SetWRefCon")) && m.log.iter().any(|l| l.contains("MoveWindow")));
+    assert_eq!(m.get_resource(*b"WDEF", 34, false).ok().and_then(|h| m.handle_bytes(h)).map(|b| b.len()), Some(724), "WDEF 34 is MacPaint's own");
+    let wdef = m.refused.iter().filter(|r| r.contains("procID 544 selects WDEF 34") && r.contains("[WDEF-UNSUPPORTED]")).count();
+    assert_eq!(wdef, 4, "the four palettes, each refused by name: {:?}", m.refused);
+    assert!(m.refused.iter().all(|r| r.contains("[WDEF-UNSUPPORTED]") || r.contains("0x0 is not an open window") || r.contains("thePort is NIL")), "{:?}", m.refused);
+    // the system rounded window is not refused, and nothing was silently opened in a palette's place
+    assert_eq!(m.windows.len(), 1, "only the Diagnostic window exists");
+    assert!(m.windows.values().all(|w| w.proc_id == 16 && w.native.is_none()), "Diagnostic, created hidden");
+    assert!(m.log.iter().any(|l| l.contains("NewWindow \"Diagnostic\"") && l.contains("proc=16")));
 }

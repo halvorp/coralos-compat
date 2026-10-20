@@ -1,0 +1,42 @@
+DESIGN RULING NEEDED: custom window definitions (WDEF) in a native-window Mac compatibility layer. Be harsh and specific; I will take your recommendation as the ruling. Answer in plain numbered prose (no tables).
+
+CONTEXT (all facts verified by reading code today, 2026-10-20)
+
+1. CoralOS RetroCompat runs unmodified classic Mac programs (68k on an interpreter; PowerPC on a ppc interpreter with a CFM/PEF loader) with every window presented as a NATIVE CoralOS window: the frame, title bar, close box and controls are drawn by the host toolkit (gadget.library, "Gute Form"), and guest drawing reaches the host as content planes (a retained QuickDraw display list replayed with the kit's typography, with a named raw-pixels fallback counted by a per-window route census). Owner rule: an average user must not be able to tell a retro app from a native one.
+
+2. Doctrine in force (each is an enforced rule):
+   a. RETRO-UI-HAS-ONE-SEAM: engines reach the host only through guestui-abi; the host never reads guest memory.
+   b. RETRO-ROLES-REQUIRE-A-CONTRACT: a native role comes only from a guest toolkit contract or an explicit declarative binding, never from what pixels or drawing calls look like.
+   c. RETRO-BEHAVIOUR-STAYS-IN-THE-ENGINE: translation changes presentation only; guest-visible state and event sequences equal the original OS's.
+   d. RETRO-NATIVE-IS-A-MEASURED-CLAIM: per-window route census (native / replayed / raw).
+   e. RETRO-TRANSLATION-BY-TOOLKIT-NOT-APP: no code path keys on an application.
+   f. RETRO-MIXED-MODE-ONE-CALLBACK-MACHINE (your ruling this morning): a UPP is a real RoutineDescriptor parsed by one parser; guest callbacks run through ONE non-recursive frame-stack machine with typed continuations (today: UserItems; your list also named ModalDialog, WindowDefinition, UniversalProcReturn); refuse before touching, by name; 68k-only records refused until cross-ISA calls exist; relative/unprepared records refused today.
+   g. FALLBACK-IS-THE-DESIGN / REAL-OS-NO-PRETENCE: a fallback is named and counted, never silent.
+
+3. Engine state today:
+   a. NewWindow/GetNewWindow/NewCWindow take procID; role_of(procID) uses only procID & 7 (0 -> Document with close box, 4 -> Document without, else Dialog). The WDEF resource id (procID >> 4) is IGNORED: procID 2048 silently opens a native document window. The WindowRecord's strucRgn (114), contRgn (118), updateRgn (122) and windowDefProc (126) are NOT written; FindWindow answers from the engine's own rectangle.
+   b. The seam (guestui-abi) has window roles Document and Dialog, no "frameless/custom-shaped" window, and no call to move or resize a native window.
+   c. Mixed Mode slices 1-3 landed: trap registry for GetTrapAddress; NewRoutineDescriptor/NewFat/Dispose writing real $AAFE v7 descriptors; one PowerPC callback machine (Frame saves all registers, fresh aligned stack frame, r2=TOC, r12=TVector, LR=$CallbackReturn glue, typed Continuation). ModalDialog user items run through it.
+   d. The 68k interpreter exists (separate engine, same Toolbox core crate), but there is no cross-ISA call from the PowerPC engine into 68k code.
+
+4. The test program, Retro68 sample WDEFShell (GPL; read for facts only), PowerPC build:
+   a. At start it calls InitCustomWDEF: GetResource('WDEF',128), HLock, then writes NewWindowDefUPP(&MyWindowDefProc) into bytes 6..9 of that resource. WDEF 128 is the 10-byte 68k stub 2F3A 0004 4E75 0000 0000 = move.l L1(pc),-(sp); rts; L1: dc.l <patched>. On a real PowerPC Mac the Window Manager calls the WDEF handle's code under the 68k emulator; the stub pushes the UPP and rts "returns" into the routine descriptor, whose $AAFE mixed-mode trap switches to PowerPC.
+   b. WDEF 129 is an 'rdes' resource: a RoutineDescriptor (procInfo 0x00003BB0) whose record is RELATIVE and points at a whole PEF container embedded in the resource (Mixed Mode must prepare that fragment on first call).
+   c. Custom windows open only from menu commands: item 3 -> NewWindow(procID 128*16) via the stub; item 4 -> NewWindow(procID 129*16) via the rdes. Items 1/2 use procID 0 and 16 (rounded; a system WDEF variation). At launch no window opens; the program reaches WaitNextEvent (verified).
+   d. MyWindowDefProc handles: wDraw (DiffRgn(strucRgn, contRgn) then fills/frames the frame region; draws a title), wHit (PtInRgn on strucRgn/contRgn -> wInContent / wInDrag / wNoHit), wCalcRgns (RectRgn contRgn = port rect in global coords; strucRgn = content inset by a border, UnionRgn with a title area), wNew/wDispose (nothing), wGrow/wDrawGIcon (nothing).
+
+5. Owner's acceptance bar (your morning ruling, verbatim): "WDEF behavior actually observed", not import markers; 10x callback churn and nesting reported (peak frames, guest-stack use, descriptor allocations, leaks, latency, refusal volume).
+
+QUESTIONS
+
+Q1. Presentation: when a program supplies its own WDEF, what does the user see? Options I see: (A) native frame anyway; the WDEF is CALLED for wCalcRgns/wHit so guest-visible regions and hit results are the program's, while its wDraw output is discarded (or recorded but not presented); (B) a frameless native window whose whole structure region is a content plane: the WDEF's wDraw is replayed/raw, census says so; (C) refuse the window by name. Which one, and why under the doctrine above? If (A), is discarding wDraw a violation of 2c or 2g, and how is it named/counted?
+
+Q2. Which WDEF messages must the engine send and when (wNew, wCalcRgns, wDraw with which param, wHit from FindWindow, wDispose; wGrow/wDrawGIcon) for WDEFShell's behaviour to be "actually observed", and what guest-visible state must be real (the four WindowRecord fields; regions as real region handles)?
+
+Q3. The 68k stub (WDEF 128): real hardware runs 68k code. Options: (i) a general cross-ISA path (the PowerPC engine runs the 68k stub on the 68k interpreter, which hits $AAFE and comes back) - big; (ii) recognise exactly this 10-byte "push address; rts" shape as a documented Mixed Mode idiom - is that pattern-matching guest code that 2b forbids, or a toolkit contract (the stub is in Apple's own docs)? (iii) refuse item 3 by name now, do item 4 only. Pick one.
+
+Q4. The 'rdes' (WDEF 129): relative record + embedded PEF needing preparation. Is preparing an in-memory PEF fragment through the existing CFM loader (one loader, no second) the right shape, and what are the refusals (unprepared + no loader; PEF with imports the engine lacks; relocations outside the container)?
+
+Q5. Continuation shape: WindowDefinition{window, message, phase}. A WDEF call happens INSIDE a trap (NewWindow -> wNew + wCalcRgns; FindWindow -> wHit; DrawGrowIcon; update handling -> wDraw). Your rule says a trap body is never replayed after side effects. Give the concrete trap-splitting for NewWindow and FindWindow (which part runs before the callback, what the continuation finishes, what the trap returns), and the negative controls (a WDEF that returns an unknown hit code; one that never sets contRgn; nesting: a WDEF that calls a Toolbox routine that calls back).
+
+Q6. Slicing: the work will be written by cheap code models from my spec, verified by me. Give the smallest ordered slices (each independently testable with negative controls) and say which slice first.
