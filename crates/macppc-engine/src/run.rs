@@ -48,6 +48,8 @@ pub struct Runtime {
     main_tvector: u32,
     /// A refusal or CPU trap; once set, every step reports it again (the program cannot continue).
     fault: Option<String>,
+    /// Callbacks into the program in progress, innermost last (`crate::callback`).
+    pub(crate) callbacks: alloc::vec::Vec<crate::callback::Frame>,
 }
 
 fn idle() -> RunStats { RunStats { insns: 0, halted: false, blocked: true, trap: None } }
@@ -81,7 +83,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn fault(&self) -> Option<&str> { self.rt.fault.as_deref() }
 
     /// Bind every glue stub created since the last call (a `FindSymbol` interns cells while the program runs).
-    fn sync_natives(&mut self, cpu: &mut Cpu) {
+    pub(crate) fn sync_natives(&mut self, cpu: &mut Cpu) {
         while let Some(e) = self.glue.entry(self.rt.bound) { cpu.bind_native(e.stub); self.rt.bound += 1; }
     }
 
@@ -177,6 +179,19 @@ impl<U: GuestUi> Host for MacPpc<U> {
             return true;
         }
         if let Some(Binding::Native(n @ (Native::SetJmp | Native::CExit | Native::BreakPoint))) = self.bindings.get(&symbol).cloned() { self.cpu_native(n, cpu); return true; }
+        if symbol == crate::callback::CALLBACK_RETURN {
+            if let Err(why) = self.callback_returned(cpu) { self.rt.fault = Some(why); cpu.halt(); }
+            self.sync_natives(cpu);
+            return true;
+        }
+        // ModalDialog with user items to draw first: the program's procedures run as callbacks, then the call is entered again
+        if matches!(self.bindings.get(&symbol), Some(Binding::Native(Native::ModalDialog))) {
+            match self.begin_user_items(cpu, addr) {
+                Ok(true) => { self.sync_natives(cpu); return true; }
+                Ok(false) => {}
+                Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
+            }
+        }
         let mut regs = cpu.gpr;
         let outcome = self.glue_call(&symbol, &mut regs);
         // a host call changes the result registers only; anything else it touched would be a bug in the adapter

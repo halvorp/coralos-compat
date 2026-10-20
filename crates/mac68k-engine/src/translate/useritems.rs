@@ -14,7 +14,9 @@
 //!   it already still gets the update the window system would send). The run happens BEFORE the wait, and the trap word then
 //!   runs again with its arguments still on the stack, so the wait itself is unchanged.
 //!
-//! The PowerPC glue cannot enter 68k code from a Rust handler: a draw that has user items there is refused by name.
+//! From PowerPC code, `ModalDialog`'s draw runs through macppc-engine's callback machine ([`Mac::begin_modal_user_items`] /
+//! [`Mac::end_user_items`]: each procedure is a UPP called as PowerPC code). `DrawDialog`, `UpdtDialog` and `DialogSelect`'s update
+//! draw from PowerPC code are still refused by name (owner: macppc-engine; delete-when each has a PowerPC witness).
 use super::dialogs::Item;
 use crate::guestcall::{Frame, TRAMPOLINE};
 use crate::machine::{Call, Done, Mac};
@@ -120,6 +122,41 @@ impl<U: GuestUi> Mac<U> {
         self.schedule_user_items(cpu, "ModalDialog", Run { win, todo, end_update: true, retry: Some((trap_pc, cpu.areg(7))), saved: None })
             .inspect_err(|_| { let _ = end_update_of(self, win); })?;
         Ok(true)
+    }
+}
+
+/// A user-item draw a PowerPC caller runs itself: there is no 68k CPU for the A-line bridge to schedule on, so the PowerPC
+/// adapter (macppc-engine `callback`) calls each procedure through Mixed Mode and hands the draw back to [`Mac::end_user_items`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserItemDraw {
+    pub win: u32,
+    /// (the item's procedure: a UPP for a PowerPC program, item number), in item order.
+    pub todo: VecDeque<(u32, i16)>,
+    /// `thePort` before the draw, put back by [`Mac::end_user_items`].
+    pub port: u32,
+}
+
+impl<U: GuestUi> Mac<U> {
+    /// `ModalDialog`'s first step for a PowerPC caller (the 68k form is [`Mac::update_modal_dialog`]): when the front dialog has
+    /// user items and a non-empty update region, `BeginUpdate` it, make it the port and return the procedures to call; `None`
+    /// when there is nothing to draw. The caller then runs `ModalDialog` again: the update region is empty by then, so the
+    /// second call goes straight to the wait (nothing the first call did is repeated).
+    pub fn begin_modal_user_items(&mut self) -> Result<Option<UserItemDraw>, Refusal> {
+        let Some(win) = self.front_dialog() else { return Ok(None) };
+        if self.user_items(win, None).is_empty() || self.qd.update.get(&win).is_none_or(|g| g.is_empty()) { return Ok(None); }
+        let region = begin_update_of(self, win)?;
+        let todo = self.user_items(win, Some(&region));
+        if todo.is_empty() { end_update_of(self, win)?; return Ok(None); }
+        let port = if self.qd_globals != 0 { self.mem.read_u32(self.qd_globals).unwrap_or(0) } else { 0 };
+        if let Err(Refusal(e)) = crate::quickdraw::set_the_port(self, win) { self.note_refusal("ModalDialog", e); }
+        self.log.push(format!("[dialog] ModalDialog {win:#x}: {} user item(s) drawn by the program's procedures first", todo.len()));
+        Ok(Some(UserItemDraw { win, todo, port }))
+    }
+
+    /// The last procedure of a [`UserItemDraw`] returned: `EndUpdate` and put `thePort` back.
+    pub fn end_user_items(&mut self, d: &UserItemDraw) {
+        if let Err(Refusal(e)) = end_update_of(self, d.win) { self.note_refusal("EndUpdate", e); }
+        if self.qd_globals != 0 { let _ = self.mem.write_u32(self.qd_globals, d.port); }
     }
 }
 

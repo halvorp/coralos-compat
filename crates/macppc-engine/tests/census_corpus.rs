@@ -30,25 +30,23 @@ fn run(name: &str) -> Option<(Census, Vec<String>, Vec<String>)> {
 fn retro68_ppc_samples_bind_their_interfacelib_imports_and_stop_at_the_first_routine_without_a_handler() {
     // 2026-10-20, Mixed Mode slices 1-2: NGetTrapAddress answers from the shared trap registry (tests/trap_address.rs),
     // InvertRect binds to `_InverRect`, and NewRoutineDescriptor builds a real descriptor (mac68k-engine
-    // tests/routine_descriptors.rs). HelloWorld and WDEFShell now run to their event loops; Dialog gets as far as ModalDialog.
-    // Calling a UPP (a user item, a WDEF) is slice 3: until then nothing here claims the callbacks drew.
+    // tests/routine_descriptors.rs). The three now run to their event loops (Dialog: slice 3 calls its user item through the UPP).
     for (app, bound, needed) in [("HelloWorld", "NGetTrapAddress", "GetFPos"), ("Dialog", "NewRoutineDescriptor", "FlushEvents"), ("WDEFShell", "NewRoutineDescriptor", "OpenDeskAcc")] {
         let Some((c, log, refused)) = run(app) else { return };
-        if app == "Dialog" {
-            // Dialog makes its user item's UPP, then STOPS in ModalDialog: drawing the user item means calling that UPP,
-            // which is Mixed Mode slice 3 (the callback machine)
-            assert!(refused.len() == 1 && refused[0].starts_with("FAULT ModalDialog"), "{refused:?}");
-        } else {
-            assert!(refused.is_empty(), "{app}: {refused:?}");
-        }
+        assert!(refused.is_empty(), "{app}: {refused:?}");
         assert!(!c.next_needed.iter().any(|n| n.ends_with(&format!("/{bound}"))), "{app}: {bound} is bound: {:?}", c.next_needed);
         assert!(c.next_needed.iter().any(|n| n.ends_with(&format!("/{needed}"))), "{app}: {needed} is unbound (named, not silent): {:?}", c.next_needed);
-        if app != "Dialog" { assert!(log.iter().any(|l| l.contains("WaitNextEvent")), "{app} reached its event loop: {log:#?}"); }
+        let waits = if app == "Dialog" { "ModalDialog 0x245210 blocks" } else { "WaitNextEvent" };
+        assert!(log.iter().any(|l| l.contains(waits)), "{app} reached its event loop: {log:#?}");
     }
     let Some((_, log, _)) = run("HelloWorld") else { return };
     assert!(log.iter().any(|l| l.contains("GetTrapAddress Toolbox 0xa860 -> 0x4180 (the trap's stub)")), "{log:#?}");
+    // Dialog (slice 3): ModalDialog first calls the user item's procedure through its UPP, as PowerPC code; the procedure
+    // draws the default button's outline (PenSize 3x3, FrameRoundRect) and returns; ModalDialog then waits for a hit
     let Some((_, log, _)) = run("Dialog") else { return };
-    assert!(log.iter().any(|l| l.contains("[mixedmode] NewRoutineDescriptor")), "{log:#?}");
+    let at = |needle: &str| log.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}: {log:#?}"));
+    assert!(at("[mixedmode] NewRoutineDescriptor") < at("[mixedmode] user item 2 of 0x245210"));
+    assert!(at("[mixedmode] user item 2 of 0x245210") < at("[quickdraw] FrameRoundRect") && at("[quickdraw] FrameRoundRect") < at("ModalDialog 0x245210 blocks"));
     // Raytracer polls Button / GetMouse: both are bound now (mouse.rs) and it no longer stops at an unbound import.
     let Some((c, _, refused)) = run("Raytracer") else { return };
     assert!(!c.next_needed.iter().any(|n| n.ends_with("/Button") || n.ends_with("/GetMouse")), "{:?}", c.next_needed);

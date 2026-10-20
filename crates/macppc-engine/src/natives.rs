@@ -86,7 +86,7 @@ impl<U: GuestUi> MacPpc<U> {
                 GlueOutcome::Return
             }
             Native::SetDepth => { regs[3] = mac68k_engine::cqd::depth::set_depth(&mut self.mac, a(0), a(1) as u16) as i32 as u32; GlueOutcome::Return }
-            Native::SetJmp | Native::CExit | Native::BreakPoint => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
+            Native::SetJmp | Native::CExit | Native::BreakPoint | Native::CallbackReturn => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
             Native::WaitNextEvent | Native::GetNextEvent => {
                 // eventMask, EventRecord*, [sleep, mouseRgn]. The handler is polled with sleep 0 (it pumps the GuestUi and
                 // returns a queued event or the null event). A null event for a caller that asked to sleep (WaitNextEvent

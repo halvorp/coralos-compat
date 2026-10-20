@@ -34,7 +34,9 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     /// Mixed Mode's constructors and destructor (`mac68k_engine::mixed_mode`): a real RoutineDescriptor in guest memory, never
     /// the procedure's own TVector. `NewRoutineDescriptor(proc, procInfo, ISA)`, `NewFatRoutineDescriptor(m68kProc, ppcProc,
     /// procInfo)`, `DisposeRoutineDescriptor(upp)`. CALLING a UPP is the callback machine's (Mixed Mode slice 3).
-    NewRoutineDescriptor, NewFatRoutineDescriptor, DisposeRoutineDescriptor }
+    NewRoutineDescriptor, NewFatRoutineDescriptor, DisposeRoutineDescriptor,
+    /// The address a PowerPC callback returns to (`crate::callback`): a pseudo-call the run loop answers from the frame stack.
+    CallbackReturn }
 
 /// Which trap table a [`Native::TrapAddress`] import names, as the calling 68k trap word's type bits would.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

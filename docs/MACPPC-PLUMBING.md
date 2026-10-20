@@ -157,3 +157,21 @@ nothing refused; the census helper counted refusals but not a run's fault. It no
 Tests: mac68k-engine `tests/routine_descriptors.rs` (5: the documented bytes and not the TVector; a fat descriptor and the
 68k-only refusal; a static descriptor resolves but is not disposable; version / count / relative / NIL mutations refused and
 the restored block resolves; dispose once, NIL no-op, reuse). RED by mutation: the version check removed.
+
+## Slice 3 DONE (2026-10-20): PowerPC callbacks, and the first continuation (a dialog's user items)
+
+`macppc_engine::callback`: no handler re-enters the interpreter. When `ModalDialog` is reached and the front dialog has user
+items over a non-empty update region, the shared Dialog Manager begins the update and hands back the procedures
+(`Mac::begin_modal_user_items`); the adapter saves every register of the interrupted call in a `Frame` (GPRs, FPRs, CR, LR,
+CTR, XER, FPSCR, pc), resolves the item's UPP through the one parser (a descriptor it cannot run is refused BEFORE any
+register changes), and enters the PowerPC routine: r1 a fresh 16-byte-aligned frame past the 224-byte red zone with its back
+chain, r2 = the TVector's TOC, r12 = the TVector, r3 = the dialog, r4 = the item, LR = the `$CallbackReturn` pseudo-glue. At
+that glue the frame's typed `Continuation::UserItems` calls the next item or finishes (`EndUpdate`, `thePort` back), restores
+the saved registers and enters `ModalDialog` again, whose update region is empty by then, so it goes straight to its wait.
+A return with no frame is a fault. Retro68's PowerPC Dialog now draws its user item (the default button's outline:
+PenSize 3x3, FrameRoundRect) and waits in ModalDialog. Still refused by name: DrawDialog/UpdtDialog/DialogSelect update
+draws from PowerPC, filterProcs, other callback-bearing managers, and 68k records (cross-ISA).
+Tests: `callback.rs` unit tests (4: TOC/r12/argument/LR/frame placement; a 68k-only descriptor and a raw pointer refused with
+the CPU untouched; a frameless return refused; every register put back and the call re-entered); `census_corpus.rs` pins the
+order NewRoutineDescriptor -> the user item runs -> FrameRoundRect -> ModalDialog blocks. RED by mutation: CR not restored.
+Next: slice 4 (the WDEF path, WDEFShell), then the remaining negative controls of the ruling (nesting, dispose-from-callback).
