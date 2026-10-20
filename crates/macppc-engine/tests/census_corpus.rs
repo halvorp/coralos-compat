@@ -22,19 +22,23 @@ fn run(name: &str) -> Option<(Census, Vec<String>, Vec<String>)> {
 
 #[test]
 fn retro68_ppc_samples_bind_their_interfacelib_imports_and_stop_at_the_first_routine_without_a_handler() {
-    // (sample, an import that IS bound, an import that is NEXT-NEEDED, the routine the run stops at)
-    for (app, bound, needed, stop) in [("Dialog", "ModalDialog", "NewRoutineDescriptor", "NewRoutineDescriptor"), ("WDEFShell", "InitWindows", "OpenDeskAcc", "NewRoutineDescriptor")] {
+    // 2026-10-20, Mixed Mode slices 1-2: NGetTrapAddress answers from the shared trap registry (tests/trap_address.rs),
+    // InvertRect binds to `_InverRect`, and NewRoutineDescriptor builds a real descriptor (mac68k-engine
+    // tests/routine_descriptors.rs). The three samples that stopped at them now run with nothing refused. Calling a UPP (a
+    // user item, a WDEF) is slice 3: until then nothing here claims the callbacks drew.
+    for (app, bound, needed) in [("HelloWorld", "NGetTrapAddress", "GetFPos"), ("Dialog", "NewRoutineDescriptor", "FlushEvents"), ("WDEFShell", "NewRoutineDescriptor", "OpenDeskAcc")] {
         let Some((c, log, refused)) = run(app) else { return };
+        assert!(refused.is_empty(), "{app}: {refused:?}");
         assert!(!c.next_needed.iter().any(|n| n.ends_with(&format!("/{bound}"))), "{app}: {bound} is bound: {:?}", c.next_needed);
         assert!(c.next_needed.iter().any(|n| n.ends_with(&format!("/{needed}"))), "{app}: {needed} is unbound (named, not silent): {:?}", c.next_needed);
-        assert!(refused.iter().any(|r| r.contains(stop)) || log.iter().any(|l| l.contains(stop)), "{app} stops at {stop}: {refused:?}\n{log:#?}");
+        // HelloWorld and WDEFShell reach their WaitNextEvent loop; Dialog builds its items and sets its controls but does not
+        // reach ModalDialog inside this budget (not yet explained: named here, not claimed)
+        if app != "Dialog" { assert!(log.iter().any(|l| l.contains("WaitNextEvent")), "{app} reached its event loop: {log:#?}"); }
     }
-    // HelloWorld (2026-10-20): NGetTrapAddress is answered by the shared trap registry (tests/trap_address.rs) and InvertRect
-    // binds to `_InverRect`, so it draws its console and waits in its event loop with nothing refused.
-    let Some((c, log, refused)) = run("HelloWorld") else { return };
-    assert!(refused.is_empty(), "{refused:?}");
-    assert!(!c.next_needed.iter().any(|n| n.ends_with("/NGetTrapAddress") || n.ends_with("/InvertRect")), "{:?}", c.next_needed);
-    assert!(log.iter().any(|l| l.contains("GetTrapAddress Toolbox 0xa860 -> 0x4180 (the trap's stub)")) && log.iter().any(|l| l.contains("WaitNextEvent")), "{log:#?}");
+    let Some((_, log, _)) = run("HelloWorld") else { return };
+    assert!(log.iter().any(|l| l.contains("GetTrapAddress Toolbox 0xa860 -> 0x4180 (the trap's stub)")), "{log:#?}");
+    let Some((_, log, _)) = run("Dialog") else { return };
+    assert!(log.iter().any(|l| l.contains("[mixedmode] NewRoutineDescriptor")), "{log:#?}");
     // Raytracer polls Button / GetMouse: both are bound now (mouse.rs) and it no longer stops at an unbound import.
     let Some((c, _, refused)) = run("Raytracer") else { return };
     assert!(!c.next_needed.iter().any(|n| n.ends_with("/Button") || n.ends_with("/GetMouse")), "{:?}", c.next_needed);

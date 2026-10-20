@@ -60,6 +60,7 @@ pub mod toolbox;
 pub mod toolutil;
 pub mod winmgr;
 pub mod traptable;
+pub mod mixed_mode;
 pub mod vbl;
 pub mod translate;
 pub mod trap_names;

@@ -108,6 +108,9 @@ pub struct Mac<U: GuestUi> {
     pub(crate) dcmp_pending: Option<crate::compressed::Decomp>,
     /// A dialog draw that has user-item procedures to run once the trap that asked has finished ([`crate::translate::useritems`]).
     pub(crate) pending_user_items: Option<crate::translate::useritems::Run>,
+    /// Routine descriptors `NewRoutineDescriptor` / `NewFatRoutineDescriptor` allocated (`mixed_mode`): the blocks
+    /// `DisposeRoutineDescriptor` may free, once. Ownership only: a descriptor the program built itself is callable too.
+    pub routine_descriptors: alloc::collections::BTreeSet<u32>,
     /// True while a registered handler runs on the real CPU (a decompression can only be deferred then).
     pub(crate) in_trap: bool,
     /// Trap patches (`_SetTrapAddress`): trap key -> the guest routine that replaces it.
@@ -140,7 +143,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), profile: crate::profile::DEFAULT,
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), profile: crate::profile::DEFAULT,
         };
         m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start
         lowmem::init(&mut m.mem)?;

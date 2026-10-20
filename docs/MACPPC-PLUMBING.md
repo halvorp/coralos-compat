@@ -140,3 +140,19 @@ HelloWorld now draws its console and waits in its event loop with nothing refuse
 InvertRect). Tests: `tests/trap_address.rs` (binding; implemented vs `_Unimplemented`; table chosen by `tTyp` and entry point,
 with a negative control; the PowerPC answer equals the 68k one), `tests/census_corpus.rs` (HelloWorld runs). RED by mutation:
 `NGetTrapAddress` ignoring `tTyp`.
+
+## Slice 2 DONE (2026-10-20): real routine descriptors, one parser
+
+`mac68k_engine::mixed_mode` is the one parser and the constructors: `NewRoutineDescriptor(proc, procInfo, ISA)` and
+`NewFatRoutineDescriptor(m68kProc, ppcProc, procInfo)` allocate and fill a descriptor (`$AAFE`, version 7, routineCount =
+the last index, 20-byte records with flags `kUseNativeISA`); `DisposeRoutineDescriptor` frees only a block they made, once
+(`Mac::routine_descriptors` is the ownership ledger, not a whitelist: a static descriptor the program built itself parses and
+resolves too). `ppc_record` picks the PowerPC record of a one-record or fat descriptor and refuses by name a 68k-only
+descriptor (NEXT-NEEDED: cross-ISA calls), a relative or unprepared record, a NIL procedure and a selector-dispatched
+descriptor. The three are `Native` PowerPC imports. Retro68's PowerPC Dialog and WDEFShell no longer stop at
+NewRoutineDescriptor: all three samples (with HelloWorld) run with nothing refused. CALLING a UPP is slice 3; until then
+nothing claims a user item or a custom WDEF drew. Dialog builds its items and sets its controls but does not reach
+ModalDialog inside the census budget: not yet explained, named in tests/census_corpus.rs.
+Tests: mac68k-engine `tests/routine_descriptors.rs` (5: the documented bytes and not the TVector; a fat descriptor and the
+68k-only refusal; a static descriptor resolves but is not disposable; version / count / relative / NIL mutations refused and
+the restored block resolves; dispose once, NIL no-op, reuse). RED by mutation: the version check removed.

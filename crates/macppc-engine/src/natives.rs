@@ -61,6 +61,21 @@ impl<U: GuestUi> MacPpc<U> {
                 GlueOutcome::Return
             }
             Native::InitDone => GlueOutcome::Return,
+            Native::NewRoutineDescriptor | Native::NewFatRoutineDescriptor => {
+                use mac68k_engine::mixed_mode::{new_fat_routine_descriptor, new_routine_descriptor};
+                // NewRoutineDescriptor(theProc, theProcInfo, theISA) / NewFatRoutineDescriptor(theM68kProc, thePowerPCProc, theProcInfo).
+                // The ISA argument is an ISAType (a byte); NIL is the documented answer when there is no memory.
+                let made = if n == Native::NewRoutineDescriptor { new_routine_descriptor(&mut self.mac, a(0), a(1), a(2) as u8) } else { new_fat_routine_descriptor(&mut self.mac, a(0), a(1), a(2)) };
+                regs[3] = match made {
+                    Ok(upp) => { self.mac.log.push(format!("[mixedmode] {n:?} proc={:#x} procInfo={:#x} -> {upp:#x}", a(0), a(1))); upp }
+                    Err(e) => { self.mac.log.push(format!("[mixedmode] {n:?}: {e} -> NIL")); 0 }
+                };
+                GlueOutcome::Return
+            }
+            Native::DisposeRoutineDescriptor => match mac68k_engine::mixed_mode::dispose_routine_descriptor(&mut self.mac, a(0)) {
+                Ok(()) => { self.mac.log.push(format!("[mixedmode] DisposeRoutineDescriptor {:#x}", a(0))); GlueOutcome::Return }
+                Err(e) => GlueOutcome::Refused(format!("{e}")),
+            },
             Native::TrapAddress(q) => match mac68k_engine::traptable::trap_address(&mut self.mac, q.opcode(a(1)), a(0)) {
                 Ok((at, line)) => { self.mac.log.push(line); regs[3] = at; GlueOutcome::Return }
                 Err(e) => GlueOutcome::Refused(format!("{n:?}: {}", e.0)),
