@@ -45,7 +45,7 @@ An application file is MacBinary, or an AppleDouble header file (`%name`/`._name
 1. DONE: the CPU lane (retro-ppc) calls `glue_symbol_at` per native hook and `glue_call` on a hit.
 2. Float arguments (MathLib, `Fixed`/`Fract` helpers) need f1..f13 in the glue contract.
 3. Imports from other fragments (an app's own shared libraries) via `instantiate` of a second PEF and export lookup.
-4. UPP/routine descriptors (68k <-> PPC callbacks both ways) once a CPU exists to hand control between the two.
+4. UPP/routine descriptors: designed 2026-10-20, see "Mixed Mode" below; slice 1 (trap-address queries) DONE.
 5. DONE (see "macppc RUNS"): `WaitNextEvent` with a sleep parks the CPU (`GlueOutcome::Idle`).
 6. DONE: bindings are keyed `Library::name` for every provided library but InterfaceLib (`glue::binding_key`), so two libraries exporting one name stay separate.
 
@@ -98,3 +98,45 @@ Init calls, `GetNewMBar 128` (menus 128..131 from its REAL resource fork), four 
 `NEXT-NEEDED GetNewCWindow` (Color QuickDraw windows). Without the resource fork it stops earlier: no MBAR 128, the app quits.
 
 `asm.rs` and `fixture.rs` are behind the `fixtures` cargo feature (off for the product library; the tests and `macppc-run` enable it).
+
+
+---
+
+# Mixed Mode (2026-10-20): the design ruling and its slices
+
+A PowerPC program makes callbacks through Universal Procedure Pointers (Dialog user items, ModalDialog filters, TrackControl
+action procs, LDEF/WDEF/CDEF code, AppleEvent handlers, completion routines). The ruling came from one consult (seats
+openai/gpt-6-astra and google/gemini-2.5-pro; Gemini did not answer, so this is Astra's; brief and answer in
+`docs/consults/2026-10-20-mixed-mode.{brief.txt,md}`):
+
+1. **Real RoutineDescriptors in guest memory.** `NewRoutineDescriptor` returns a pointer to a big-endian RoutineDescriptor
+   (goMixedModeTrap $AAFE, version 7, flags, selectorInfo, routineCount, then 20-byte RoutineRecords: procInfo, ISA,
+   routineFlags, procDescriptor, selector), NOT the procedure's TVector: programs read and build descriptors themselves.
+   ONE parser (`mixed_mode`) with checked arithmetic decodes them; a guest-authored static descriptor is as valid as an
+   allocated one; `DisposeRoutineDescriptor` frees only allocator-owned blocks, once. Layouts are verified against Inside
+   Macintosh: PowerPC System Software (Mixed Mode Manager) before they are pinned.
+2. **One non-recursive callback machine.** A Toolbox handler that must run guest code returns a step
+   (`Complete | Invoke(CallbackRequest, Continuation) | Wait | Refused`); the CPU adapter enters the callback (PPC: r1 a new
+   ABI frame, r2 = TOC, r12 = TVector, pc = code, LR = a callback-return glue) and, at that glue, restores the saved context
+   and feeds r3 to the typed Continuation (`UserItems`, `ModalDialog`, `WindowDefinition`, `UniversalProcReturn`, each added
+   only with a caller). Frames live in a per-machine stack; nothing re-enters the interpreter; a trap body is never replayed
+   after a callback's side effects.
+3. **PowerPC records only, first.** 68k records are parsed and represented, and selecting one is NEXT-NEEDED by name
+   (API, UPP, target, procInfo) before any register changes. Owner: macppc-engine. Delete-when: cross-ISA argument/result,
+   nested-call and A5-world witnesses pass for the first 68k resource that needs it.
+4. **Trap addresses are the shared registry's.** DONE (slice 1, below).
+5. **Slices:** (1) trap-address queries; (2) the descriptor constructors/disposal + the resolver; (3) PPC callback
+   entry/return + the UserItems continuation (Retro68 Dialog); (4) the WDEF path (WDEFShell). Twelve negative controls are in
+   the ruling (identity-UPP, truncated/mutated descriptors, static descriptors, TOC/r12 placement, context restore, nesting
+   and order, frameless return, 68k refusal, unimplemented identity, patched traps, double dispose, dispose-from-callback).
+
+## Slice 1 DONE (2026-10-20): "where is trap N?" from PowerPC code
+
+`NGetTrapAddress(trapNum, tTyp)`, `GetOSTrapAddress`, `GetToolTrapAddress` and `GetTrapAddress` are `Native::TrapAddress`
+imports answered by `mac68k_engine::traptable::trap_address`, the one query the 68k `_GetTrapAddress` family also uses: a
+guest 68k stub address (or the patch routine of a patched trap), the `_Unimplemented` stub for a trap with no handler.
+InterfaceLib's `InvertRect` / `InvertRoundRect` / `InvertRgn` alias the `_Inver*` trap spellings. Retro68's PowerPC
+HelloWorld now draws its console and waits in its event loop with nothing refused (it stopped at NGetTrapAddress, then at
+InvertRect). Tests: `tests/trap_address.rs` (binding; implemented vs `_Unimplemented`; table chosen by `tTyp` and entry point,
+with a negative control; the PowerPC answer equals the 68k one), `tests/census_corpus.rs` (HelloWorld runs). RED by mutation:
+`NGetTrapAddress` ignoring `tTyp`.

@@ -51,20 +51,29 @@ fn stub_address(word: u16) -> u32 { if word & 0x0800 != 0 { TOOL_STUBS + 4 * (wo
 fn kind(tool: bool) -> &'static str { if tool { "Toolbox" } else { "OS" } }
 
 fn get_trap_address<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> Result<String, Refusal> {
-    let (word, tool) = trap_word(r.opcode, r.d0);
-    let n = (r.d0 & 0xFFFF) as u16;
+    let (at, line) = trap_address(m, r.opcode, r.d0)?;
+    r.a0 = at;
+    r.d0 = 0;
+    Ok(line)
+}
+
+/// THE answer to "where is trap N?", for every caller: the 68k `_GetTrapAddress` family above and the PowerPC imports of
+/// `NGetTrapAddress` / `GetOSTrapAddress` / `GetToolTrapAddress` / `GetTrapAddress` (macppc-engine natives). `opcode` is the
+/// calling trap word whose type bits pick the table ($A146 old, $A346 OS, $A746 Toolbox) and `number` the trap number or whole
+/// trap word. The address is the guest 68k stub (or the patch routine of a patched trap); a trap with no handler answers
+/// with the `_Unimplemented` stub, so `TrapAvailable`-style comparisons are truthful. Returns the address and the log line.
+pub fn trap_address<U: GuestUi>(m: &mut Mac<U>, opcode: u16, number: u32) -> Result<(u32, String), Refusal> {
+    let (word, tool) = trap_word(opcode, number);
+    let n = (number & 0xFFFF) as u16;
     let implemented = m.table.contains_key(&trap_key(word));
     let served = if implemented { word } else { UNIMPLEMENTED_TRAP };
     let at = stub_address(served);
     m.mem.write_u16(at, served).map_err(Refusal::mem("trap stub"))?;
     m.mem.write_u16(at + 2, RTS).map_err(Refusal::mem("trap stub"))?;
-    r.a0 = at;
-    r.d0 = 0;
     if let Some(&patch) = m.patches.get(&trap_key(word)) { // a patched trap's address is the patch routine itself
-        r.a0 = patch;
-        return Ok(format!("[toolbox] GetTrapAddress {} {n:#x} -> {patch:#x} (patched)", kind(tool)));
+        return Ok((patch, format!("[toolbox] GetTrapAddress {} {n:#x} -> {patch:#x} (patched)", kind(tool))));
     }
-    Ok(format!("[toolbox] GetTrapAddress {} {n:#x} -> {at:#x} ({})", kind(tool), if implemented { "the trap's stub" } else { "absent: the _Unimplemented stub" }))
+    Ok((at, format!("[toolbox] GetTrapAddress {} {n:#x} -> {at:#x} ({})", kind(tool), if implemented { "the trap's stub" } else { "absent: the _Unimplemented stub" })))
 }
 
 /// `_SetTrapAddress` / `_SetOSTrapAddress` / `_SetToolTrapAddress`: D0 = the trap number, A0 = the new routine. From now on

@@ -1,0 +1,45 @@
+DESIGN RULING NEEDED: Mixed Mode (UPPs / routine descriptors) for a high-level-emulated classic Mac OS PowerPC engine.
+
+Context. coralos-compat (Rust, no_std + alloc) runs unmodified classic Mac applications as native CoralOS windows. Two engines
+share ONE Toolbox: mac68k-engine (a Musashi-class 68k interpreter; the Toolbox/OS traps are Rust handlers registered by trap word)
+and macppc-engine (a PowerPC interpreter `retro_ppc`, a PEF/CFM loader). A PPC application imports `NewWindow`, `ModalDialog`... from
+InterfaceLib by NAME; macppc-engine binds each import to a 16-byte glue cell (a TVector {code=stub, toc=0}); when the PPC CPU's pc
+lands on a stub, the interpreter calls `PpcHost::glue_call(regs r0..r31)`, which runs the SAME Rust Toolbox handler the 68k engine
+uses (Pascal-convention traps called with r3.. as declared args; OS traps through a C prototype table OS_SIGS), and returns a
+`GlueOutcome`: Return (behave as blr, result in r3), Exit, Idle (park the CPU ON the call and retry it later: how WaitNextEvent and
+ModalDialog wait without a host thread), Refused(reason) (the guest stops with a named NEXT-NEEDED).
+
+How the 68k side calls GUEST code from a handler today (mac68k-engine/src/guestcall.rs): a handler never re-enters the CPU. It sets
+`pending_call: Option<GuestCall{target, d0, a0, d1, restore}>` (or a richer run, e.g. `pending_user_items` for Dialog Manager user
+items: the procedures UserItem(theWindow, itemNo) are run one after another), and the A-line bridge, after the handler returns,
+enters the guest as a JSR would: pushes the return address, redirects pc. A call that must keep the trap's own D0/A0 returns through
+a low-memory trampoline `ILLEGAL; RTS` at 0x510; the host handles that ILLEGAL by popping a `Frame` from `call_stack` (D0A0 restore,
+decompressor done, VBL task done, Apple Event handler done...) and restoring state. Patched traps (SetTrapAddress) chain by JMP to
+the stub address GetTrapAddress gave. Today the PowerPC glue CANNOT enter guest code from a Rust handler: a PPC dialog with user items
+is refused by name.
+
+What fails now (real Retro68 PPC test programs): Dialog.bin imports NewRoutineDescriptor (to make the user-item UPP) -> NEXT-NEEDED;
+WDEFShell.bin the same; HelloWorld.bin imports NGetTrapAddress (Retro68's console runtime checks whether WaitNextEvent is implemented).
+Real apps will pass UPPs for: Dialog user items, ModalDialog filterProc, TrackControl actionProc, List Manager LDEF, TextEdit
+click loops, AppleEvent handlers (AEInstallEventHandler), File Manager completion routines, custom WDEF/CDEF/MDEF code resources
+(PPC code inside a 'fat' resource or a 68k resource), qsort-style C callbacks into StdCLib.
+
+The question. Design Mixed Mode for macppc-engine within this architecture:
+1. What does NewRoutineDescriptor / NewRoutineDescriptorTrap / DisposeRoutineDescriptor / CallUniversalProc / NewFatRoutineDescriptor
+   return and accept? A real RoutineDescriptor block in guest memory (goMixedModeTrap 0xAAFE, version, selectors, RoutineRecord with
+   procInfo, ISA, procDescriptor) vs returning the TVector itself as the UPP. Which do real PPC apps and the Toolbox rely on (e.g.
+   apps that read the RD, or pass 68k code pointers that must be callable from PPC)?
+2. How does a Rust Toolbox handler running under the PPC CPU call a PPC callback (a TVector with r2=TOC, r12=TVector, args in
+   r3..r10 per procInfo, result in r3) and get control back, WITHOUT re-entering the interpreter recursively? Give the frame/
+   trampoline shape analogous to the 68k pending_call + ILLEGAL trampoline (e.g. LR = a pseudo-glue "return-from-callback" stub that
+   the host turns into handler resumption), how multi-step runs (several user items in order) are expressed, and how a handler's
+   suspended state is kept (continuation enum vs re-running the trap with its arguments still in registers, as the 68k ModalDialog does).
+3. 68k code reached from PPC (a 68k WDEF/LDEF/CDEF resource in a PPC app, or a UPP whose ISA is kM68kISA): run it on the 68k engine
+   inside the same process (the Mac struct is shared) or refuse by name for now? The minimal correct first slice.
+4. NGetTrapAddress / GetToolTrapAddress / GetOSTrapAddress from PPC: what value to return so `TrapAvailable(WaitNextEvent)`-style
+   checks (compare against _Unimplemented's address) answer correctly, and whether a PPC app ever calls the returned 68k address.
+5. The first slice to build (smallest set that makes Retro68 PPC Dialog, WDEFShell and HelloWorld run), its negative controls, and
+   what must be refused by name until later.
+Constraints: no host threads, no recursion into the interpreter from a handler, every refusal named, behaviour from Inside
+Macintosh / the Mixed Mode Manager chapter (facts; SheepShaver/Executor/classix/systemless are GPL and may be consulted for facts
+only). Answer as numbered sections 1-5, concrete types and register conventions, no prose padding.

@@ -25,13 +25,45 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     /// StdCLib `__setjmp`, `exit`, `_BreakPoint`: they need the CPU's registers, so [`crate::run`] serves them, not `glue_call`.
     SetJmp, CExit, BreakPoint,
     /// The return address of a fragment's init routine: a pseudo-call the run loop answers by starting `main`.
-    InitDone }
+    InitDone,
+    /// "Where is trap N?": `NGetTrapAddress(trapNum, TrapType)`, `GetOSTrapAddress(trapNum)`, `GetToolTrapAddress(trapNum)`,
+    /// `GetTrapAddress(trapNum)`. C routines in InterfaceLib with no trap word of their own spelling; the answer is the shared
+    /// trap registry's (`mac68k_engine::traptable::trap_address`), so a PowerPC program's availability check agrees with a
+    /// 68k program's. The value is a guest 68k address: calling it is Mixed Mode's business, not a branch.
+    TrapAddress(TrapQuery) }
+
+/// Which trap table a [`Native::TrapAddress`] import names, as the calling 68k trap word's type bits would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrapQuery {
+    /// `NGetTrapAddress(trapNum, tTyp)`: `tTyp` = `OSTrap` (0) or `ToolTrap` (1), the second argument.
+    ByType,
+    /// `GetOSTrapAddress`: `_GetOSTrapAddress` ($A346).
+    Os,
+    /// `GetToolTrapAddress`: `_GetToolTrapAddress` ($A746).
+    Tool,
+    /// `GetTrapAddress`: the old `_GetTrapAddress` ($A146), the table inferred from the number.
+    Old,
+}
+
+impl TrapQuery {
+    /// The calling trap word whose type bits pick the table (`tool_arg` = `NGetTrapAddress`'s `tTyp`).
+    pub fn opcode(self, tool_arg: u32) -> u16 {
+        match self {
+            TrapQuery::ByType => if tool_arg & 0xFF == 1 { 0xA746 } else { 0xA346 },
+            TrapQuery::Os => 0xA346,
+            TrapQuery::Tool => 0xA746,
+            TrapQuery::Old => 0xA146,
+        }
+    }
+}
 
 impl Native {
     pub fn by_name(name: &str) -> Option<Native> {
         Some(match name {
             "GetSharedLibrary" => Native::GetSharedLibrary, "FindSymbol" => Native::FindSymbol, "CloseConnection" => Native::CloseConnection,
             "MemError" => Native::MemError, "WaitNextEvent" => Native::WaitNextEvent, "GetNextEvent" => Native::GetNextEvent, "ModalDialog" => Native::ModalDialog, "BlockZero" => Native::BlockZero, "SysBeep" => Native::SysBeep, "ExitToShell" => Native::Exit, "HasDepth" => Native::HasDepth, "SetDepth" => Native::SetDepth,
+            "NGetTrapAddress" => Native::TrapAddress(TrapQuery::ByType), "GetOSTrapAddress" => Native::TrapAddress(TrapQuery::Os),
+            "GetToolTrapAddress" => Native::TrapAddress(TrapQuery::Tool), "GetTrapAddress" => Native::TrapAddress(TrapQuery::Old),
             _ => return None,
         })
     }
@@ -77,8 +109,10 @@ const NEEDS_68K_RUN_LOOP: &[(&str, &str)] = &[
 
 /// InterfaceLib exports whose C name differs from the name the 68k trap table gives the same trap (the table keeps the
 /// trap-era spelling). Found by importing the real Systemless toolbox-showcase PEF and matching the unnamed imports to
-/// trap words case-insensitively; `GetMenu` is the Menu Manager's `_GetRMenu` (menu.rs registers it under that word); `SetPalette` is `_NSetPalette`'s word ($AA95, which the 68k table names after the newer INTEGER form; the older Boolean `cUpdates` fits the same slot); `SetPortBits` is `_SetPBits`.
-pub const INTERFACELIB_ALIASES: &[(&str, &str)] = &[("GetMenu", "GetRMenu"), ("BeginUpdate", "BeginUpDate"), ("EndUpdate", "EndUpDate"), ("XorRgn", "XOrRgn"), ("SetPalette", "NSetPalette"), ("SetPortBits", "SetPBits")];
+/// trap words case-insensitively; `GetMenu` is the Menu Manager's `_GetRMenu` (menu.rs registers it under that word); `SetPalette` is `_NSetPalette`'s word ($AA95, which the 68k table names after the newer INTEGER form; the older Boolean `cUpdates` fits the same slot); `SetPortBits` is `_SetPBits`. The three `Invert*` C names whose traps keep the short `_Inver*` spelling (Retro68's PowerPC
+/// HelloWorld stopped at InvertRect, 2026-10-20); InvertOval/InvertArc/InvertPoly already match.
+pub const INTERFACELIB_ALIASES: &[(&str, &str)] = &[("GetMenu", "GetRMenu"), ("BeginUpdate", "BeginUpDate"), ("EndUpdate", "EndUpDate"), ("XorRgn", "XOrRgn"), ("SetPalette", "NSetPalette"), ("SetPortBits", "SetPBits"),
+    ("InvertRect", "InverRect"), ("InvertRoundRect", "InverRoundRect"), ("InvertRgn", "InverRgn")];
 
 /// How `name` would be served, given the handlers `mac` has registered.
 pub fn lookup<U: GuestUi>(mac: &Mac<U>, name: &str) -> Binding {

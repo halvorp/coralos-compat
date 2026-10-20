@@ -61,6 +61,10 @@ impl<U: GuestUi> MacPpc<U> {
                 GlueOutcome::Return
             }
             Native::InitDone => GlueOutcome::Return,
+            Native::TrapAddress(q) => match mac68k_engine::traptable::trap_address(&mut self.mac, q.opcode(a(1)), a(0)) {
+                Ok((at, line)) => { self.mac.log.push(line); regs[3] = at; GlueOutcome::Return }
+                Err(e) => GlueOutcome::Refused(format!("{n:?}: {}", e.0)),
+            },
             Native::HasDepth => {
                 // HasDepth(gd, depth, whichFlags, flags): INTEGER; only the device and depth matter to the screen
                 regs[3] = u32::from(mac68k_engine::cqd::depth::has_depth(&self.mac, a(0), a(1) as u16)) as u16 as i16 as i32 as u32;
