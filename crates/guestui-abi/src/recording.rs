@@ -376,7 +376,7 @@ mod tests {
     }
 
     fn ask(buttons: &[&str]) -> RequestModel {
-        RequestModel { title: "T".into(), text: "Q?".into(), buttons: buttons.iter().map(|b| (*b).into()).collect(), default: Some(0), cancel: Some(buttons.len() as u32 - 1) }
+        RequestModel { title: "T".into(), text: "Q?".into(), buttons: buttons.iter().map(|b| (*b).into()).collect(), default: Some(0), cancel: Some(buttons.len() as u32 - 1), kind: RequestKind::default() }
     }
 
     #[test]

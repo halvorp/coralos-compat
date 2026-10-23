@@ -58,7 +58,7 @@ pub(super) fn mui_request_a<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Resu
     let text = strip_format(&latin1(&body.bytes), false);
     let title = if title_p != 0 { latin1(&rd(a, title_p, "MUI_RequestA title")?) } else if app != 0 { a.objects.text(app, MUIA_Application_Title).into() } else { "System Request".into() }; // EasyRequestArgs' own fallback title
     let n = buttons.len() as u32;
-    let m = guestui_abi::RequestModel { title, text, buttons, default, cancel: Some(n - 1) };
+    let m = guestui_abi::RequestModel { title, text, buttons, default, cancel: Some(n - 1), kind: guestui_abi::RequestKind::Unspecified };
     let what = format!("[muimaster] MUI_RequestA {:?} {:?} {:?}", m.title, m.text, m.buttons);
     // Without an Application the answer is Intuition's (EasyRequestArgs); with one, Zune's own ReturnID arithmetic.
     let kind = if app == 0 { requester::Kind::Easy } else { requester::Kind::Mui };

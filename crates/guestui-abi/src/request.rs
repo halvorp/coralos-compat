@@ -6,6 +6,21 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use crate::model::{UiObjectRef, UiRefusal};
 
+/// What kind of question a request is (the icon a host shows). An Intuition requester names none; a Mac Stop / Note / Caution alert does.
+/// Generic: a host maps each to its own artwork and ink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RequestKind {
+    /// The guest named none: the host derives one from the buttons.
+    #[default]
+    Unspecified,
+    /// Information (a Note alert).
+    Note,
+    /// A warning the user can act on (a Caution alert).
+    Caution,
+    /// A failure (a Stop alert).
+    Stop,
+}
+
 /// What to ask. `buttons` is left to right as the guest listed them (at least one).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestModel {
@@ -17,6 +32,8 @@ pub struct RequestModel {
     pub default: Option<u32>,
     /// The button Escape / closing the alert chooses (index into `buttons`), if any.
     pub cancel: Option<u32>,
+    /// The kind of question; [`RequestKind::Unspecified`] when the guest named none.
+    pub kind: RequestKind,
 }
 
 impl RequestModel {

@@ -158,20 +158,23 @@ fn get_trap_address_after_a_patch_answers_the_patch() {
 
 // ---- alerts ---------------------------------------------------------------------------------------------------------------
 
-fn alert_fork() -> Vec<u8> {
-    let item = |top: i16, ty: u8, text: &str| {
+fn alert_fork() -> Vec<u8> { alert_fork_with(&[("OK", 10), ("Cancel", 10)], "Disk is full", &[]) }
+
+/// An ALRT 200 / DITL 300: the buttons `(title, left)` as items 1.., then a static text, then `extra` `(type, text)` items.
+fn alert_fork_with(buttons: &[(&str, i16)], message: &str, extra: &[(u8, &str)]) -> Vec<u8> {
+    let item = |top: i16, left: i16, ty: u8, text: &str| {
         let mut v = vec![0, 0, 0, 0];
-        for x in [top, 10, top + 20, 80] { v.extend(x.to_be_bytes()); }
+        for x in [top, left, top + 20, left + 70] { v.extend(x.to_be_bytes()); }
         v.push(ty);
         v.push(text.len() as u8);
         v.extend(text.as_bytes());
         if text.len() % 2 == 1 { v.push(0); }
         v
     };
-    let mut ditl = vec![0, 2]; // three items
-    ditl.extend(item(60, 4, "OK"));
-    ditl.extend(item(60, 4, "Cancel"));
-    ditl.extend(item(10, 8, "Disk is full"));
+    let mut ditl = ((buttons.len() + 1 + extra.len() - 1) as u16).to_be_bytes().to_vec();
+    for (title, left) in buttons { ditl.extend(item(60, *left, 4, title)); }
+    ditl.extend(item(10, 10, 8, message));
+    for (ty, text) in extra { ditl.extend(item(30, 10, *ty, text)); }
     let mut alrt = vec![];
     for x in [60i16, 80, 180, 360] { alrt.extend(x.to_be_bytes()); }
     alrt.extend(300i16.to_be_bytes()); // DITL id
@@ -187,8 +190,10 @@ fn alert_call(trap: u16, id: i16) -> Prog {
 
 #[test]
 fn an_alert_blocks_shows_a_native_dialog_returns_the_item_hit_and_disposes_itself() {
+    // a host that REFUSES requests (no alert part): the DITL is shown as a native dialog, as before alerts were asked
     for trap in [0xA985u16, 0xA986, 0xA987, 0xA988] {
         let mut m = machine();
+        m.ui.refuse_requests = true;
         m.rm.open_fork(mac68k_engine::resmgr::APP_REF_NUM, retro_resfork::ResFork::parse(alert_fork()).unwrap());
         m.start(&alert_call(trap, 200).0, 0).unwrap();
         assert_eq!(m.step(1_000_000).0, Step::Blocked, "{trap:#x}: the alert waits for the user: {:#?}", m.log);
@@ -201,6 +206,60 @@ fn an_alert_blocks_shows_a_native_dialog_returns_the_item_hit_and_disposes_itsel
         assert!(m.tr.dlg.alert.is_none() && !m.windows.contains_key(&win), "the alert window is gone");
         assert!(m.refused.is_empty(), "{:?}", m.refused);
     }
+}
+
+/// Asked, not drawn: a message-and-buttons alert is a REQUEST to the host (the kit's alert), the buttons left to right as the alert lays them
+/// out, Return the item-1 button and Escape the one titled Cancel, the kind the trap names; the user's button is the item number the call returns.
+#[test]
+fn an_alert_is_asked_of_the_host_with_its_kind_and_roles_and_returns_the_chosen_items_number() {
+    use guestui_abi::{RequestKind, UiCall};
+    for (trap, kind) in [(0xA985u16, RequestKind::Unspecified), (0xA986, RequestKind::Stop), (0xA987, RequestKind::Note), (0xA988, RequestKind::Caution)] {
+        let mut m = machine();
+        // item 1 OK sits on the RIGHT (the Mac's default button), item 2 Cancel on its left, item 3 Save in between
+        m.rm.open_fork(mac68k_engine::resmgr::APP_REF_NUM, retro_resfork::ResFork::parse(alert_fork_with(&[("OK", 200), ("Cancel", 10), ("Save", 100)], "^0 is full", &[(32, "")])).unwrap());
+        m.tr.dlg.params[0] = b"Work".to_vec();
+        m.start(&alert_call(trap, 200).0, 0).unwrap();
+        assert_eq!(m.step(1_000_000).0, Step::Blocked, "{trap:#x}: the call waits for the user: {:#?}", m.log);
+        let asked: Vec<_> = m.ui.calls.iter().filter_map(|c| if let UiCall::Request(w, q) = c { Some((*w, q.clone())) } else { None }).collect();
+        assert_eq!(asked.len(), 1, "{trap:#x}: one question asked");
+        let q = &asked[0].1;
+        assert_eq!((q.text.as_str(), q.kind), ("Work is full", kind), "ParamText applied; the kind is the trap's");
+        // RED if the buttons were listed in item order (OK first) or the roles lost
+        assert_eq!(q.buttons, ["Cancel", "Save", "OK"], "left to right, as the alert lays them out");
+        assert_eq!((q.default, q.cancel), (Some(2), Some(0)), "Return = item 1 (OK, now the third), Escape = Cancel");
+        assert!(m.tr.dlg.alert.is_none() && m.windows.is_empty(), "nothing was drawn: the host shows it");
+        // a bogus answer changes nothing; the right one wakes the call with the ITEM number of the chosen button
+        let req = m.ui.open_requests()[0];
+        assert!(m.deliver(guestui_abi::GuestUiEvent::RequestAnswered { req, button: 9 }).is_err());
+        assert_eq!(m.step(1_000_000).0, Step::Blocked, "a refused answer leaves the alert open");
+        m.ui.answer_request(req, 1).unwrap(); // the user chose "Save": DITL item 3
+        assert_eq!(m.step(1_000_000).0, Step::Exited, "{:#?}", m.log);
+        assert_eq!(w(&m, 0x3000), 3, "the Pascal result is the item number of the chosen button");
+        assert!(m.tr.dlg.asked.is_none() && m.refused.is_empty(), "{:?}", m.refused);
+    }
+}
+
+/// An alert the request cannot carry (an edit field, a check box, a user item) stays a dialog: asking would drop its controls.
+#[test]
+fn an_alert_with_controls_a_request_cannot_carry_is_still_a_dialog() {
+    let mut m = machine();
+    m.rm.open_fork(mac68k_engine::resmgr::APP_REF_NUM, retro_resfork::ResFork::parse(alert_fork_with(&[("OK", 10)], "Name it", &[(16, "untitled")])).unwrap());
+    m.start(&alert_call(0xA985, 200).0, 0).unwrap();
+    assert_eq!(m.step(1_000_000).0, Step::Blocked);
+    assert!(m.tr.dlg.alert.is_some() && m.tr.dlg.asked.is_none(), "an edit field makes it a dialog");
+    assert!(!m.ui.calls.iter().any(|c| matches!(c, guestui_abi::UiCall::Request(..))), "nothing was asked");
+}
+
+/// A program that quits with an alert asked and unanswered withdraws it from the host (no answer is ever sent for it).
+#[test]
+fn restarting_a_program_withdraws_an_unanswered_alert() {
+    let mut m = machine();
+    m.rm.open_fork(mac68k_engine::resmgr::APP_REF_NUM, retro_resfork::ResFork::parse(alert_fork()).unwrap());
+    m.start(&alert_call(0xA986, 200).0, 0).unwrap();
+    assert_eq!(m.step(1_000_000).0, Step::Blocked);
+    assert_eq!(m.ui.open_requests().len(), 1);
+    m.start(&alert_call(0xA986, 999).0, 0).unwrap(); // another program replaces it
+    assert!(m.ui.open_requests().is_empty() && m.tr.dlg.asked.is_none(), "the open alert was closed");
 }
 
 #[test]

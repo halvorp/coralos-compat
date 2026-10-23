@@ -114,7 +114,7 @@ impl<U: GuestUi> Mac<U> {
             GuestUiEvent::Intent { win, control, token, generation, intent } => self.deliver_intent(win, control, token, generation, intent),
             GuestUiEvent::Pointer { win, x, y, button, phase, clicks } => self.deliver_pointer(win, x, y, button, phase, clicks),
             GuestUiEvent::Key { win, text, modifiers, down, code } => self.deliver_key(win, code, &text, modifiers, down),
-            ev @ GuestUiEvent::RequestAnswered { .. } => Err(Refusal(format!("deliver: {ev:?}: the Mac engine asks no requests (Alert is a later lane)"))),
+            GuestUiEvent::RequestAnswered { req, button } => { self.alert_answered(req, button)?; Ok(Delivered::Queued) }
         }
     }
 
@@ -140,6 +140,7 @@ impl<U: GuestUi> Mac<U> {
     /// Called by [`Mac::step`] before resuming: finish a blocked event call if a matching event has arrived.
     /// Returns false while the guest must stay blocked.
     pub(crate) fn complete_wait(&mut self) -> bool {
+        if self.tr.dlg.asked.is_some() { return self.complete_alert(); }
         if self.tr.dlg.modal.is_some() { return self.complete_modal(); }
         let Some(w) = self.ev.waiting else { return true };
         self.pump_ui();

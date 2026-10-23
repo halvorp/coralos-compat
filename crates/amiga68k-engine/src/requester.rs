@@ -123,7 +123,7 @@ fn easy_model<U: GuestUi>(a: &Amiga<U>, win_title: Option<String>, es: u32, args
 pub(crate) fn model(title: String, text: String, buttons: Vec<String>) -> RequestModel {
     let n = buttons.len() as u32;
     // Return = the first button (LCommand-V is ic_ReqTrue: gadget id 1 when there are two or more); Escape = the last (ic_ReqFalse: 0).
-    RequestModel { title, text, buttons, default: Some(0), cancel: Some(n - 1) }
+    RequestModel { title, text, buttons, default: Some(0), cancel: Some(n - 1), kind: guestui_abi::RequestKind::Unspecified }
 }
 
 /// The text of an IntuiText chain: items on one row (same TopEdge) join, a lower TopEdge starts a new line.

@@ -94,6 +94,8 @@ pub struct State {
     pub modal: Option<u32>,
     /// The alert a blocked `Alert` call is showing: disposed when its hit arrives (alerts are not the program's to dispose).
     pub alert: Option<u32>,
+    /// The alert a blocked `Alert` call ASKED of the host (`GuestUi::request`), not drawn: see [`super::alerts`].
+    pub asked: Option<super::alerts::Asked>,
     /// `ParamText`'s four strings (`^0`..`^3`), as raw bytes; a NIL argument leaves its string as it was.
     pub params: [Vec<u8>; 4],
 }
@@ -222,6 +224,7 @@ impl<U: GuestUi> Mac<U> {
     /// Is a blocked `ModalDialog` ready to return? (Pumps the host first.) The PowerPC adapter's wake condition.
     pub fn modal_ready(&mut self) -> bool {
         self.pump_ui();
+        if let Some(a) = &self.tr.dlg.asked { return a.answer.is_some(); }
         self.front_dialog().is_some_and(|w| self.tr.dlg.hits.iter().any(|&(h, _)| h == w))
     }
 
