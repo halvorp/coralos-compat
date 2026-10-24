@@ -11,8 +11,8 @@ use mac68k_engine::mixed::trap_opcode;
 use mac68k_engine::osconv::Regs;
 
 /// `gestaltSysArchitecture`: 1 = 68k, 2 = PowerPC (Gestalt.h; executor src/gestalt.cpp:146 answers `gestaltPowerPC` for it).
-pub const GESTALT_SYS_ARCHITECTURE: u32 = u32::from_be_bytes(*b"sysa");
-pub const GESTALT_POWERPC: u32 = 2;
+/// gestaltUndefSelectorErr.
+pub const GESTALT_UNDEF_SELECTOR_ERR: i32 = -5551;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OsRoutine { FlushEvents, Delay, PurgeSpace, MaxMem, MoveHHi, HandToHand, PtrToHand, PtrAndHand, HandAndHand, Gestalt }
@@ -39,11 +39,18 @@ impl<U: GuestUi> MacPpc<U> {
         use OsRoutine::*;
         let name = format!("{c:?}");
         let store = |m: &mut MacPpc<U>, at: u32, v: u32| m.mac.mem.write_u32(at, v).map_err(|_| format!("{name}: result pointer {at:#x} is outside guest RAM"));
-        if c == Gestalt && a[0] == GESTALT_SYS_ARCHITECTURE {
-            // The shared Gestalt answers for the 68k machine profile; the PowerPC personality is the one fact that differs.
-            store(self, a[1], GESTALT_POWERPC)?;
-            self.mac.log.push(format!("[toolbox] Gestalt 'sysa' -> {GESTALT_POWERPC:#x} (PowerPC)"));
-            return Ok(0);
+        if c == Gestalt {
+            let sel = a[0].to_be_bytes();
+            let shown: String = sel.iter().map(|&b| char::from(b)).collect();
+            if let Some(v) = crate::gestalt_ppc::answer(sel) {
+                store(self, a[1], v)?;
+                self.mac.log.push(format!("[toolbox] Gestalt '{shown}' -> {v:#x} (PowerPC profile)"));
+                return Ok(0);
+            }
+            if let Some(why) = crate::gestalt_ppc::unanswered(sel) {
+                self.mac.log.push(format!("[toolbox] Gestalt '{shown}': gestaltUndefSelectorErr, unanswered for a PowerPC program: {why}"));
+                return Ok(GESTALT_UNDEF_SELECTOR_ERR as u32);
+            }
         }
         let opcode = trap_opcode(&name).ok_or_else(|| format!("{name}: no trap word"))?;
         let mut regs = Regs { opcode, d0: 0, a0: 0, d1: 0, a1: 0 };
