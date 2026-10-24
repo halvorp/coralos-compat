@@ -45,7 +45,7 @@ fn the_real_application_starts_up_loads_its_menus_and_stops_at_tenew() {
     for lib in ["StdCLib/exit", "StdCLib/__setjmp", "StdCLib/_IntEnv", "StdCLib/__target_for_exit", "InterfaceLib/GetMenu", "InterfaceLib/BeginUpdate"] {
         assert!(!c.next_needed.contains(&lib.to_string()), "{lib} should be bound");
     }
-    assert!(c.next_needed.iter().any(|n| n == "QuickDrawª 3D/Q3Exit") && c.next_needed.iter().any(|n| n == "InterfaceLib/NewGWorld"), "genuinely unserved imports stay named");
+    assert!(c.next_needed.iter().any(|n| n == "QuickDrawª 3D/Q3Exit") && c.next_needed.iter().any(|n| n == "InterfaceLib/LNew"), "genuinely unserved imports stay named");
     let (step, insns) = m.run_loop(1_000_000);
     let log = m.mac.log.join("\n");
     // startup ran for real: the Init calls, then the application's own MBAR 128 and the MENU resources it names
@@ -54,7 +54,7 @@ fn the_real_application_starts_up_loads_its_menus_and_stops_at_tenew() {
     assert!(log.contains("GetMenu 142 -> menu 142 \"Renderer\" 3 items") && log.contains("DrawMenuBar: 4 menus"), "{log}");
     // ...and stops at TENew (TextEdit), by name, with the interpreter's instruction count. It used to stop earlier, at SetPalette:
     // the PowerPC import name of NSetPalette (symbols.rs INTERFACELIB_ALIASES); the colour window and its palette now go through.
-    // 2026-10-24: mac68k-engine's TextEdit (textedit/) answers TENew, so the run goes on to the next import with no handler: the PowerPC
+    // 2026-10-24: NewGWorld is served now (gworld.rs), so the named unserved import above is LNew. mac68k-engine's TextEdit (textedit/) answers TENew, so the run goes on to the next import with no handler: the PowerPC
     // List Manager's LNew (a PowerPC name of the _Pack0 selector; macppc's concern).
     assert!(matches!(&step, Step::Fault(f) if f.starts_with("NEXT-NEEDED LNew")), "{step:?}");
     assert!(m.mac.log.iter().any(|l| l.starts_with("[textedit] TENew")), "TENew ran: {:#?}", m.mac.log);

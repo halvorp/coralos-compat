@@ -189,3 +189,13 @@ Gestalt profile (`gestalt_ppc.rs`), the scheduler (`sched.rs`), the cooperative 
 3. Timers and the event-loop services games use: `InstallEventLoopTimer`, `InstallApplicationEventHandler` variants are macros over what exists; `ReceiveNextEvent` ignores the type filter and refuses peek (`pullEvent` false).
 4. HIToolbox views (`HIViewRef`, `HIObject`), Appearance Manager, Navigation Services, Control Manager Carbon accessors (`GetControlBounds`...), `Gestalt 'cbon'`/`'appr'`/`'nav '`/`'sysv'` once the above are true.
 5. Preemption for MP Services (see `mp.rs`'s header), Sound Manager (the mac68k worker), DrawSprocket/InputSprocket shims, OpenGL/AGL.
+
+## Status after round 5 (2026-10-24)
+
+Done: offscreen GWorlds (bodies once in `mac68k-engine/src/cqd/gworld.rs`, C names in `macppc-engine/src/gworld.rs`; indexed 1/2/4/8 bits, direct 16/32 refused by name; the 68k
+`_QDExtensions` selectors are NOT registered, no verified selector table exists); QuickDraw initialised for a Carbon program on its first CarbonLib import; Appearance registration and
+the Control/Dialog/Window accessors (`carbon_ctl.rs`); the Carbon menu command path (`SetMenuItemCommandID`, `kEventCommandProcess` + `HICommand`).
+Measured stops (50M-instruction budget, idle 6): Warcraft III RoC and the World Editors now stop at `ResolveAliasFileWithMountFlags` after 767,770 / 642,272 instructions (was
+`DeactivateTSMDocument` at 176,611); TFT at the same call after 736,184; BNUpdate at `GetScriptManagerVariable` (95,575; was `RegisterAppearanceClient`); the Installer at
+`SndDoImmediate` (the 68k worker's Sound Manager). Next, in order: the alias/File Manager names (`ResolveAliasFileWithMountFlags`, `NewAlias`), Script Manager variables, the
+TSM document calls, CFString/CFArray/CFDictionary breadth, `KeyTranslate`/`TestControl`, `HideWindow` (needs a GuestUi hide call), then OpenGL (waits for the CoralOS-side design).
