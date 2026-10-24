@@ -23,7 +23,7 @@ pub const SYMBOL_CLASS_TVECTOR: u8 = 2;
 /// The libraries `GetSharedLibrary` can hand out: the ones whose symbols the binding table resolves.
 /// Whether the engine provides library `l`: the Toolbox libraries (one list, [`crate::glue::TOOLBOX_LIBRARIES`]) and StdCLib.
 pub fn provided(l: &str) -> bool {
-    crate::glue::TOOLBOX_LIBRARIES.contains(&l) || l == crate::stdclib::NAME || l == crate::stdclib::MATH_NAME || l == crate::threads::NAME || l == crate::mp::NAME || l == crate::dsp_c::NAME
+    crate::glue::TOOLBOX_LIBRARIES.contains(&l) || l == crate::stdclib::NAME || l == crate::stdclib::MATH_NAME || l == crate::threads::NAME || l == crate::mp::NAME || l == crate::dsp_c::NAME || l == crate::isp_c::NAME
 }
 
 fn err(e: i16) -> u32 { e as i32 as u32 }
@@ -192,6 +192,11 @@ impl<U: GuestUi> MacPpc<U> {
                 let mut cpu = retro_ppc::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.qa_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
+            Native::Isp(f) => {
+                let mut cpu = retro_ppc::Cpu::new(0, regs[1]);
+                cpu.gpr = *regs;
+                match self.isp_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Tsm(f) => {
                 let mut cpu = retro_ppc::Cpu::new(0, regs[1]);

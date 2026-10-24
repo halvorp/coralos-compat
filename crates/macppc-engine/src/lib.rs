@@ -51,6 +51,7 @@ pub mod sysmisc_c;
 pub mod tm_c;
 pub mod tsm_c;
 pub mod gworld;
+pub mod isp_c;
 pub mod keys_c;
 pub mod menu_c;
 pub mod toolbox_c;

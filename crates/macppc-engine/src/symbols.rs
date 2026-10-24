@@ -76,6 +76,8 @@ pub enum Native { StandardAlert, GetSharedLibrary, FindSymbol, CloseConnection, 
     Tm(crate::tm_c::TmFn),
     /// Carbon QuickDraw accessors and small QuickDraw/OS routines ([`crate::qdacc_c`]).
     Qa(crate::qdacc_c::QaFn),
+    /// InputSprocket over the host's keyboard and mouse ([`crate::isp_c`]).
+    Isp(crate::isp_c::IspFn),
     /// A Text Services Manager document call, no input method ([`crate::tsm_c`]).
     Tsm(crate::tsm_c::TsmFn),
     /// A Script Manager call, Roman only ([`crate::script_c`]).
