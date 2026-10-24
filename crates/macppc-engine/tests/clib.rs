@@ -226,6 +226,25 @@ fn doubles_come_from_the_fprs_and_reserve_two_word_slots_so_later_integers_are_f
 }
 
 #[test]
+fn a_string_after_a_double_is_read_from_the_slot_past_the_doubles_shadow_not_from_the_doubles_words() {
+    // The convention (Mac OS Runtime Architectures): a double argument is in an FPR AND occupies two word slots, so the pointer for a `%s` that FOLLOWS it is the word after the
+    // shadow. A reader that gave the double one slot would take the double's low word as the pointer. Differential check of the three readings against the one convention:
+    let mut r = rig();
+    r.s(B, "v=%f s=%s n=%d");
+    r.s(0x3600, "1.2");
+    // r3 buf, r4 fmt, f1 = 1.2 (r5, r6 are its shadow words), r7 = the string, r8 = 5
+    r.cpu.gpr[3..9].copy_from_slice(&[OUT, B, (1.2f64.to_bits() >> 32) as u32, 1.2f64.to_bits() as u32, 0x3600, 5]);
+    r.cpu.fpr[1] = 1.2f64.to_bits();
+    r.call("StdCLib", "sprintf").unwrap();
+    assert_eq!(r.read(OUT), "v=1.200000 s=1.2 n=5");
+    // the failure the Warcraft III TFT error path shows when the CALLER passes a double where the format says %s: the pointer read is the double's high word, 0x3ff33333, by
+    // construction of the caller's arguments -- this engine reads the slot it is told to, so the bad read is refused by name instead of faulting somewhere else
+    r.s(B, "OpenGL %s");
+    r.cpu.gpr[3..6].copy_from_slice(&[OUT, B, 0x3ff3_3333]);
+    r.call("StdCLib", "sprintf").unwrap_err();
+}
+
+#[test]
 fn printf_puts_putchar_write_the_console_and_percent_n_is_refused() {
     let mut r = rig();
     r.s(B, "n=%d\n");
