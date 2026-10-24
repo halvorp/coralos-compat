@@ -24,6 +24,9 @@ pub const PIXELS_LOCKED: u32 = 1 << 7;
 pub const GW_FLAG_ERR: u32 = 1 << 31;
 pub const MEM_FULL_ERR: i16 = -108;
 pub const PARAM_ERR: i16 = -50;
+pub const CDEPTH_ERR: i16 = -157;
+/// `noNewDevice`: the world gets no GDevice of its own (the ROM tests flag bit 1).
+pub const NO_NEW_DEVICE: u32 = 0x02;
 
 /// One live graphics world.
 #[derive(Debug, Clone)]
@@ -35,7 +38,10 @@ impl<U: GuestUi> Mac<U> {
     /// `NewGWorld(&gw, depth, &bounds, cTable, aGDevice, flags)`: the new world's port, or the QDErr. `depth` 0 = the main device's depth.
     pub fn gw_new(&mut self, depth: u16, bounds: Rect, ctab: u32, flags: u32) -> Result<Result<u32, i16>, Refusal> {
         self.init_devices()?;
-        let depth = if depth == 0 { self.device_pixmap(self.cqd.main_device)?.0 as u16 } else { depth };
+        // NQDNewGWorld (the Mac OS 9.2.1 ROM, read from the CD by the oracle worker): depth 24 is treated as 32, depth > 32 is cDepthErr (-157), depth 0 is NOT an error --
+        // the world takes the depth AND colour table of the main device.
+        let (main_depth, main_table) = self.device_pixmap(self.cqd.main_device)?;
+        let (depth, ctab) = match depth { 0 => (main_depth as u16, if ctab != 0 { ctab } else { main_table }), 24 => (32, ctab), d if d > 32 => return Ok(Err(CDEPTH_ERR)), d => (d, ctab) };
         if !super::pixmap::supported_depth(depth) {
             return Err(Refusal(format!("NewGWorld: {depth}-bit pixels are not implemented (indexed 1, 2, 4 and 8 bits only; direct 16/32-bit offscreen worlds need direct-colour QuickDraw)")));
         }
@@ -56,7 +62,7 @@ impl<U: GuestUi> Mac<U> {
         let r = raster(bounds);
         let (vis, clip) = (self.new_region(&Region::from_rect(r))?, self.new_region(&Region::from_rect(crate::qd::regions::WIDE_OPEN))?);
         crate::qd::lifecycle::init_common_fields(self, port, vis, clip)?;
-        let device = self.new_device_record(pm, bounds, 0)?;
+        let device = if flags & NO_NEW_DEVICE != 0 { 0 } else { self.new_device_record(pm, bounds, 0)? };
         self.cqd.gworlds.insert(port, Gw { pixmap: pm, device, base, row, bounds, depth, state: flags & PIXELS_PURGEABLE });
         self.log.push(format!("[quickdraw] NewGWorld {w}x{h} {depth}-bit -> port {port:#x}, {size} bytes of pixels at {base:#x}"));
         Ok(Ok(port))
@@ -67,7 +73,7 @@ impl<U: GuestUi> Mac<U> {
         let gw = self.cqd.gworlds.remove(&port).ok_or_else(|| Refusal(format!("DisposeGWorld: {port:#x} is not a graphics world this engine made")))?;
         for off in [P_VIS, P_CLIP] { let h = self.mem.read_u32(port.wrapping_add(off)).unwrap_or(0); if h != 0 { let _ = self.dispose_handle(h); } }
         self.release_cport(port); // pattern handles, the PixMap and its colour table
-        let _ = self.dispose_handle(gw.device);
+        if gw.device != 0 { let _ = self.dispose_handle(gw.device); }
         let _ = self.mm.dispose_ptr(&mut self.heap, gw.base);
         let _ = self.mm.dispose_ptr(&mut self.heap, port);
         if self.mem.read_u32(self.qd_globals).unwrap_or(0) == port { let _ = self.mem.write_u32(self.qd_globals, 0); }
@@ -131,7 +137,7 @@ impl<U: GuestUi> Mac<U> {
     /// `SetGWorld(port, gdh)`: make `port` thePort and `gdh` (or, with NULL, the world's own device / the main device) TheGDevice.
     pub fn gw_set(&mut self, port: u32, gdh: u32) -> Result<(), Refusal> {
         crate::quickdraw::set_the_port(self, port)?;
-        let dev = if gdh != 0 { gdh } else { self.cqd.gworlds.get(&port).map_or(self.cqd.main_device, |g| g.device) };
+        let dev = if gdh != 0 { gdh } else { self.cqd.gworlds.get(&port).map(|g| g.device).filter(|&d| d != 0).unwrap_or(self.cqd.main_device) };
         if dev != 0 { self.mem.write_u32(crate::lowmem::THE_GDEVICE, dev).map_err(Refusal::mem("TheGDevice"))?; }
         Ok(())
     }

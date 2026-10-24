@@ -157,3 +157,34 @@ fn a_carbon_program_has_quickdraw_initialised_without_calling_initgraf() {
     call(&mut m, "SetGWorld", &[w, 0]);
     assert_eq!(m.mac.gw_get().unwrap().0, w);
 }
+
+#[test]
+fn the_roms_depth_and_flag_rules_for_newgworld() {
+    // facts from NQDNewGWorld in the Mac OS 9.2.1 ROM (docs/consults/2026-10-24-macos921-oracle.md)
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    call(&mut m, "InitGraf", &[0x1000]);
+    rect(&mut m, R1, 0, 0, 8, 8);
+    // depth 24 is treated as 32 (which this engine then refuses by name); NEGATIVE control: it is not "24-bit pixels"
+    let why = refused(&mut m, "NewGWorld", &[OUT, 24, R1, 0, 0, 0]);
+    assert!(why.contains("32-bit pixels are not implemented"), "{why}");
+    // depth > 32 is cDepthErr (-157), a QDErr result, not a refusal; the out pointer is zeroed
+    m.mac.mem.write_u32(OUT, 0xDEAD).unwrap();
+    assert_eq!(call(&mut m, "NewGWorld", &[OUT, 33, R1, 0, 0, 0]) as i32, -157);
+    assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 0);
+    // a NIL result pointer is paramErr
+    assert_eq!(call(&mut m, "NewGWorld", &[0, 8, R1, 0, 0, 0]) as i32, -50);
+    // depth 0 takes the main device's depth and colour table
+    assert_eq!(call(&mut m, "NewGWorld", &[OUT, 0, R1, 0, 0, 0]), 0);
+    let w = m.mac.mem.read_u32(OUT).unwrap();
+    let pm = call(&mut m, "GetGWorldPixMap", &[w]);
+    let (dd, dt) = m.mac.device_pixmap(m.mac.cqd.main_device).unwrap();
+    assert_eq!(call(&mut m, "GetPixRowBytes", &[pm]), (8 * dd + 31) / 32 * 4);
+    assert_eq!(m.mac.read_ctab(m.mac.pix_table(pm).unwrap()).unwrap().len(), m.mac.read_ctab(dt).unwrap().len());
+    // noNewDevice (0x02): the world has no GDevice of its own; NEGATIVE control: without the flag it has one
+    assert_ne!(call(&mut m, "GetGWorldDevice", &[w]), 0);
+    assert_eq!(call(&mut m, "NewGWorld", &[OUT, 8, R1, 0, 0, 2]), 0);
+    let w2 = m.mac.mem.read_u32(OUT).unwrap();
+    assert_eq!(call(&mut m, "GetGWorldDevice", &[w2]), 0);
+    call(&mut m, "SetGWorld", &[w2, 0]);
+    assert_eq!(m.mac.gw_get().unwrap().1, m.mac.cqd.main_device, "SetGWorld with a NIL device and no world device keeps the main device");
+}

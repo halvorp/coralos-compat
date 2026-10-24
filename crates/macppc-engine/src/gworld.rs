@@ -51,6 +51,7 @@ impl<U: GuestUi> MacPpc<U> {
         let r: u32 = match f {
             // NewGWorld(GWorldPtr *offscreenGWorld, short pixelDepth, const Rect *boundsRect, CTabHandle cTable, GDHandle aGDevice, GWorldFlags flags) : QDErr
             NewGWorld => {
+                if a0 == 0 { cpu.gpr[3] = (-50i32) as u32; return Ok(()); } // a NIL result pointer is paramErr in the ROM
                 let bounds = self.rect_at(a2, &name)?;
                 let flags = arg(self, cpu, 5)?;
                 let _ = a3; // aGDevice: the world makes its own device record

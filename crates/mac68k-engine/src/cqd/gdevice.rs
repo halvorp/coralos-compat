@@ -84,7 +84,7 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// The depth and color table handle of a device's pixel map.
-    pub(crate) fn device_pixmap(&self, gd: u32) -> Result<(u32, u32), Refusal> {
+    pub fn device_pixmap(&self, gd: u32) -> Result<(u32, u32), Refusal> {
         let e = Refusal::mem("GDevice");
         let pm = self.mem.read_u32(self.deref_handle(gd, "GDHandle")? + GD_PMAP).map_err(&e)?;
         let p = self.deref_handle(pm, "gdPMap")?;
