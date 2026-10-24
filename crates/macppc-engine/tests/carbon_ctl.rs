@@ -142,3 +142,18 @@ fn window_and_dialog_accessors_read_the_records() {
     assert_eq!(call(&mut m, "SetDialogDefaultItem", &[dlg, 2]), 0);
     assert_eq!(m.mac.mem.read_u16(dlg + 168).unwrap(), 2);
 }
+
+#[test]
+fn testcontrol_reports_the_part_under_a_local_point_and_nothing_for_hidden_inactive_or_outside() {
+    let (mut m, win) = machine();
+    let ctl = new_button(&mut m, win);
+    let at = |v: i16, h: i16| ((v as u16 as u32) << 16) | h as u16 as u32;
+    assert_eq!(call(&mut m, "TestControl", &[ctl, at(20, 30)]), 10, "inButton");
+    // NEGATIVE controls
+    assert_eq!(call(&mut m, "TestControl", &[ctl, at(200, 30)]), 0, "outside the rectangle");
+    call(&mut m, "DeactivateControl", &[ctl]);
+    assert_eq!(call(&mut m, "TestControl", &[ctl, at(20, 30)]), 0, "an inactive control takes no hit");
+    call(&mut m, "ActivateControl", &[ctl]);
+    call(&mut m, "SetControlVisibility", &[ctl, 0, 0]);
+    assert_eq!(call(&mut m, "TestControl", &[ctl, at(20, 30)]), 0, "a hidden control takes no hit");
+}

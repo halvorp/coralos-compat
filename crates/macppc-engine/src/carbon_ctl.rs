@@ -64,6 +64,7 @@ pub enum CxFn {
     GetKeyboardFocus, SetKeyboardFocus, ClearKeyboardFocus, CreateRootControl, GetRootControl, EmbedControl, FindControlUnderMouse,
     GetDialogPort, GetDialogWindow, SetPortDialogPort, CountDITL, GetDialogKeyboardFocusItem, GetDialogTextEditHandle, SetDialogDefaultItem, SetDialogCancelItem,
     SetMenuItemCommandID, GetMenuItemCommandID,
+    TestControl, KeyTranslate,
     IsWindowVisible, IsWindowHilited, GetWindowFromPort, GetNextWindow, GetWindowList, GetWindowBounds, InvalWindowRect, GetRegionBounds,
 }
 
@@ -81,6 +82,7 @@ impl CxFn {
             "GetDialogKeyboardFocusItem" => GetDialogKeyboardFocusItem, "GetDialogTextEditHandle" => GetDialogTextEditHandle,
             "SetDialogDefaultItem" => SetDialogDefaultItem, "SetDialogCancelItem" => SetDialogCancelItem,
             "SetMenuItemCommandID" => SetMenuItemCommandID, "GetMenuItemCommandID" => GetMenuItemCommandID,
+            "TestControl" => TestControl, "KeyTranslate" => KeyTranslate,
             "IsWindowVisible" => IsWindowVisible, "IsWindowHilited" => IsWindowHilited, "GetWindowFromPort" => GetWindowFromPort, "GetNextWindow" => GetNextWindow,
             "GetWindowList" => GetWindowList, "GetWindowBounds" => GetWindowBounds, "InvalWindowRect" => InvalWindowRect, "GetRegionBounds" => GetRegionBounds,
             _ => return None,
@@ -204,6 +206,25 @@ impl<U: GuestUi> MacPpc<U> {
                 if item == 0 || item > count { cpu.gpr[3] = (-50i32) as u32; return Ok(()); }
                 if f == SetMenuItemCommandID { if a2 == 0 { self.cx.cmds.remove(&(a0, item)); } else { self.cx.cmds.insert((a0, item), a2); } } else { let v = self.cx.command_id(a0, item); self.cx_put32(a2, v, n)?; }
                 0
+            }
+            KeyTranslate => return self.key_translate(cpu),
+            // TestControl(ctl, Point local): the part under the point, 0 if the control is hidden, inactive (hilite 255) or the point is outside; the part comes from the SAME geometry
+            // FindControl uses. A control covered by a sibling at that point is refused by name (its part would need the CDEF).
+            TestControl => {
+                let p = self.cx_rec(a0, n)?;
+                let (vis, hilite) = (self.mac.mem.read_u8(p + C_VIS).unwrap_or(0), self.mac.mem.read_u8(p + 17).unwrap_or(0));
+                let r = self.cx_rect(p + C_RECT, n)?;
+                let (v, h) = ((a1 >> 16) as i16, a1 as i16);
+                if vis == 0 || hilite == 255 || v < r.top || v >= r.bottom || h < r.left || h >= r.right { 0 } else {
+                    let owner = self.cx_u32(p + C_OWNER, n)?;
+                    let tmp = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, 4, true).map_err(|_| format!("{n}: out of memory"))?;
+                    let part = self.cx_trap("FindControl", &[a1, owner, tmp]);
+                    let found = self.mac.mem.read_u32(tmp).unwrap_or(0);
+                    let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, tmp);
+                    let part = part?;
+                    if found != a0 { return Err(format!("TestControl: control {a0:#x} is covered by {found:#x} at ({v},{h}); the part of a covered control is not computed")); }
+                    part
+                }
             }
             // ---- windows
             IsWindowVisible => { self.cx_window(a0, n)?; u32::from(self.mac.mem.read_u8(a0 + WR_VISIBLE).unwrap_or(0) != 0) }
