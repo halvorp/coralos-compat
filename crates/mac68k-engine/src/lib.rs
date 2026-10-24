@@ -27,6 +27,7 @@ pub mod fm;
 pub mod fontnames;
 pub mod gestalt;
 pub mod guestcall;
+pub mod helpmgr;
 pub mod intl;
 #[cfg(feature = "fixtures")]
 pub mod fixture;

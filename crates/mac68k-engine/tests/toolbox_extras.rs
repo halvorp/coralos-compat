@@ -365,3 +365,24 @@ fn shield_cursor_reads_its_rectangle_and_a_wild_pointer_is_refused_by_name() {
     let m = run(0x7FFF_FFF0); // a rectangle that is not in RAM
     assert!(m.refused.iter().any(|r| r.contains("ShieldCursor")), "{:?}", m.refused);
 }
+
+#[test]
+fn the_help_manager_says_balloon_help_is_off_and_names_what_it_does_not_do() {
+    // `subq #2,sp; moveq #3,d0; _Pack14; move.b (sp)+,d0` as SimpleText asks HMGetBalloons
+    let run = |d0: u32| {
+        let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+        let mut p = Prog::new();
+        p.w(0x7777); // the result slot, pre-filled so FALSE is a write, not a leftover
+        p.0.extend([0x20, 0x3C]);
+        p.0.extend(d0.to_be_bytes());
+        p.trap(0xA830).pop_w(0x3000).exit();
+        m.run_program(&p.0, 0, 100_000).unwrap();
+        m
+    };
+    let m = run(3);
+    assert_eq!(m.mem.read_u16(0x3000).unwrap(), 0, "HMGetBalloons -> FALSE");
+    assert!(m.refused.is_empty(), "{:?}", m.refused);
+    let m = run(0x0200);
+    assert!(m.refused.iter().any(|r| r.contains("Help Manager") && r.contains("0x0200")), "{:?}", m.refused);
+    assert_eq!(m.mem.read_u16(0x3000).unwrap(), 0x7777, "the slot is untouched by a selector that is refused");
+}
