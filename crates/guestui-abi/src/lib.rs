@@ -13,17 +13,19 @@
 //! Records are pointer-free: no guest address ever crosses this boundary.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+mod audio;
 mod event;
 mod model;
 mod plane;
 mod recording;
 mod request;
 
+pub use audio::*;
 pub use event::*;
 pub use model::*;
 pub use plane::*;
 pub use request::*;
-pub use recording::{pixel_hash, RecordingGuestUi, UiCall};
+pub use recording::{pixel_hash, RecordedAudio, RecordingGuestUi, UiCall};
 
 /// What an icon depicts, in generic terms (a host maps each to its own artwork).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -108,6 +110,35 @@ pub trait GuestUi: 'static {
     /// will send no answer for it. An answered request needs no close.
     fn close_request(&mut self, _req: RequestRef) -> Result<(), UiRefusal> {
         Err(UiRefusal::Unsupported("closing a request (no alert part in this host)"))
+    }
+    /// AUDIO OUT (see `audio.rs`): open one PCM output stream. Hosts without an audio part refuse by name; the engine then
+    /// answers its guest as its OS does with no sound hardware.
+    fn open_audio_stream(&mut self, _model: AudioStreamModel) -> Result<AudioStreamRef, UiRefusal> {
+        Err(UiRefusal::Unsupported("audio out (no audio service in this host)"))
+    }
+    /// Append `pcm` (a whole number of frames, in the stream's format) after what is already queued.
+    fn queue_audio(&mut self, _stream: AudioStreamRef, _pcm: &[u8]) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("audio out (no audio service in this host)"))
+    }
+    /// Bytes accepted by `queue_audio` that the host has not played yet (0 = the stream is idle).
+    fn audio_queued_bytes(&mut self, _stream: AudioStreamRef) -> Result<u32, UiRefusal> {
+        Err(UiRefusal::Unsupported("audio out (no audio service in this host)"))
+    }
+    /// Drop everything queued and not yet played (a guest's quiet / flush).
+    fn flush_audio(&mut self, _stream: AudioStreamRef) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("audio out (no audio service in this host)"))
+    }
+    /// Pause or resume playing the queue without dropping it.
+    fn pause_audio(&mut self, _stream: AudioStreamRef, _paused: bool) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("audio out (no audio service in this host)"))
+    }
+    /// Per-channel gain (`left`, `right`), 8.8 fixed point, at most [`AUDIO_UNITY`]; a mono stream uses `left` only.
+    fn set_audio_volume(&mut self, _stream: AudioStreamRef, _left: u16, _right: u16) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("audio out (no audio service in this host)"))
+    }
+    /// The guest is done with the stream; whatever is queued is dropped.
+    fn close_audio_stream(&mut self, _stream: AudioStreamRef) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("audio out (no audio service in this host)"))
     }
     /// Next native event for the guest, if any.
     fn poll_event(&mut self) -> Option<GuestUiEvent>;

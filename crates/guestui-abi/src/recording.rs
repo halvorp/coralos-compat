@@ -27,6 +27,26 @@ pub enum UiCall {
     Request(Option<UiObjectRef>, RequestModel),
     /// `close_request`: an unanswered request the guest withdrew.
     CloseRequest(RequestRef),
+    /// `open_audio_stream`: the stream as asked.
+    OpenAudio(AudioStreamModel),
+    /// `queue_audio`: the stream and the number of bytes (the bytes themselves are in [`RecordingGuestUi::audio`]).
+    QueueAudio(AudioStreamRef, usize),
+    FlushAudio(AudioStreamRef),
+    PauseAudio(AudioStreamRef, bool),
+    SetAudioVolume(AudioStreamRef, u16, u16),
+    CloseAudio(AudioStreamRef),
+}
+
+/// What the recording host holds of one audio stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedAudio {
+    pub model: AudioStreamModel,
+    /// Every byte ever queued and not flushed, in order.
+    pub queued: Vec<u8>,
+    /// How many of `queued` the pretend device has played (see [`RecordingGuestUi::play_audio`]).
+    pub played: usize,
+    pub paused: bool,
+    pub volume: (u16, u16),
 }
 
 /// FNV-1a 64 over pixels as big-endian bytes: the stable fingerprint tests pin.
@@ -60,6 +80,10 @@ pub struct RecordingGuestUi {
     /// Test answers (button indexes) handed out to the next requests in order: a request made while this has an entry is answered
     /// at once (the event is queued for `poll_event`); with none, the request stays in `requests` until `answer_request`.
     pub request_answers: VecDeque<u32>,
+    /// The live audio streams: stream id -> what was queued and played.
+    pub audio: BTreeMap<u32, RecordedAudio>,
+    /// Make every audio call refuse by name (a host with no audio service).
+    pub refuse_audio: bool,
     /// Make `request` refuse by name (a host with no alert part).
     pub refuse_requests: bool,
     /// A headless run with nobody to answer: every request not covered by `request_answers` is answered at once with its Escape
@@ -98,6 +122,15 @@ impl RecordingGuestUi {
         self.live.remove(&id);
         self.controls.remove(&id);
         self.retired.insert(id);
+    }
+    /// The pretend device plays up to `bytes` of the stream's queue (it is a test clock: nothing plays by itself). Returns how many played.
+    pub fn play_audio(&mut self, stream: AudioStreamRef, bytes: usize) -> Result<usize, UiRefusal> {
+        self.check(stream)?;
+        let a = self.audio.get_mut(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?;
+        if a.paused { return Ok(0); }
+        let n = bytes.min(a.queued.len() - a.played);
+        a.played += n;
+        Ok(n)
     }
     /// Queue the intent a user's gesture on `control` means, the way a host would: the control must be live (a removed or
     /// stale ref is refused by name) and the event carries its token and generation as `add_control` recorded them.
@@ -269,6 +302,60 @@ impl GuestUi for RecordingGuestUi {
         self.calls.push(UiCall::CloseRequest(req));
         Ok(())
     }
+    fn open_audio_stream(&mut self, model: AudioStreamModel) -> Result<AudioStreamRef, UiRefusal> {
+        if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
+        model.validate()?;
+        self.calls.push(UiCall::OpenAudio(model.clone()));
+        let s = self.alloc(0, CallbackToken(0));
+        self.audio.insert(s.id, RecordedAudio { model, queued: Vec::new(), played: 0, paused: false, volume: (AUDIO_UNITY, AUDIO_UNITY) });
+        Ok(s)
+    }
+    fn queue_audio(&mut self, stream: AudioStreamRef, pcm: &[u8]) -> Result<(), UiRefusal> {
+        if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
+        self.check(stream)?;
+        let a = self.audio.get_mut(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?;
+        if pcm.len() as u32 % a.model.frame_bytes() != 0 { return Err(UiRefusal::InvalidGeometry("queued audio is not a whole number of frames")); }
+        a.queued.extend_from_slice(pcm);
+        self.calls.push(UiCall::QueueAudio(stream, pcm.len()));
+        Ok(())
+    }
+    fn audio_queued_bytes(&mut self, stream: AudioStreamRef) -> Result<u32, UiRefusal> {
+        if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
+        self.check(stream)?;
+        let a = self.audio.get(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?;
+        Ok((a.queued.len() - a.played) as u32)
+    }
+    fn flush_audio(&mut self, stream: AudioStreamRef) -> Result<(), UiRefusal> {
+        if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
+        self.check(stream)?;
+        let a = self.audio.get_mut(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?;
+        a.queued.truncate(a.played);
+        self.calls.push(UiCall::FlushAudio(stream));
+        Ok(())
+    }
+    fn pause_audio(&mut self, stream: AudioStreamRef, paused: bool) -> Result<(), UiRefusal> {
+        if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
+        self.check(stream)?;
+        self.audio.get_mut(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?.paused = paused;
+        self.calls.push(UiCall::PauseAudio(stream, paused));
+        Ok(())
+    }
+    fn set_audio_volume(&mut self, stream: AudioStreamRef, left: u16, right: u16) -> Result<(), UiRefusal> {
+        if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
+        self.check(stream)?;
+        if left > AUDIO_UNITY || right > AUDIO_UNITY { return Err(UiRefusal::InvalidGeometry("audio gain above unity")); }
+        self.audio.get_mut(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?.volume = (left, right);
+        self.calls.push(UiCall::SetAudioVolume(stream, left, right));
+        Ok(())
+    }
+    fn close_audio_stream(&mut self, stream: AudioStreamRef) -> Result<(), UiRefusal> {
+        if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
+        self.check(stream)?;
+        self.audio.remove(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?;
+        self.retire(stream.id);
+        self.calls.push(UiCall::CloseAudio(stream));
+        Ok(())
+    }
     fn poll_event(&mut self) -> Option<GuestUiEvent> { self.events.pop_front() }
 }
 
@@ -429,5 +516,53 @@ mod tests {
         assert!(ui.request(None, RequestModel { cancel: Some(5), ..ask(&["x"]) }).is_err(), "cancel past the buttons");
         let ghost = UiObjectRef { id: 99, generation: 1 };
         assert_eq!(ui.request(Some(ghost), ask(&["x"])), Err(UiRefusal::UnknownObject(ghost)), "a window that is not open");
+    }
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use super::*;
+    fn model() -> AudioStreamModel { AudioStreamModel { rate_hz: 22_254, channels: 1, format: AudioFormat::U8, label: "t".into() } }
+
+    #[test]
+    fn a_stream_queues_plays_flushes_and_closes_and_a_stale_ref_is_refused() {
+        let mut ui = RecordingGuestUi::new();
+        let s = ui.open_audio_stream(model()).unwrap();
+        ui.queue_audio(s, &[1, 2, 3, 4]).unwrap();
+        assert_eq!(ui.audio_queued_bytes(s).unwrap(), 4);
+        assert_eq!(ui.play_audio(s, 3).unwrap(), 3);
+        assert_eq!(ui.audio_queued_bytes(s).unwrap(), 1, "the host clock decides how much is left");
+        ui.pause_audio(s, true).unwrap();
+        assert_eq!(ui.play_audio(s, 9).unwrap(), 0, "a paused stream plays nothing");
+        ui.flush_audio(s).unwrap();
+        assert_eq!(ui.audio_queued_bytes(s).unwrap(), 0);
+        ui.close_audio_stream(s).unwrap();
+        assert!(matches!(ui.queue_audio(s, &[0]), Err(UiRefusal::StaleGeneration(_))), "a closed stream is refused by name");
+    }
+
+    #[test]
+    fn the_defaults_and_bad_models_refuse_by_name() {
+        struct Mute;
+        impl GuestUi for Mute {
+            fn open_window(&mut self, _: WindowModel) -> Result<UiObjectRef, UiRefusal> { unreachable!() }
+            fn close_window(&mut self, _: UiObjectRef) -> Result<(), UiRefusal> { unreachable!() }
+            fn set_window_title(&mut self, _: UiObjectRef, _: alloc::string::String) -> Result<(), UiRefusal> { unreachable!() }
+            fn set_menu_strip(&mut self, _: UiObjectRef, _: MenuModel) -> Result<(), UiRefusal> { unreachable!() }
+            fn clear_menu_strip(&mut self, _: UiObjectRef) -> Result<(), UiRefusal> { unreachable!() }
+            fn add_control(&mut self, _: UiObjectRef, _: ControlModel) -> Result<UiObjectRef, UiRefusal> { unreachable!() }
+            fn remove_control(&mut self, _: UiObjectRef, _: UiObjectRef) -> Result<(), UiRefusal> { unreachable!() }
+            fn set_control(&mut self, _: UiObjectRef, _: UiObjectRef, _: ControlValue) -> Result<(), UiRefusal> { unreachable!() }
+            fn poll_event(&mut self) -> Option<GuestUiEvent> { None }
+        }
+        assert!(matches!(Mute.open_audio_stream(model()), Err(UiRefusal::Unsupported(_))), "a host without an audio part says so");
+        let mut ui = RecordingGuestUi::new();
+        for bad in [AudioStreamModel { rate_hz: 0, ..model() }, AudioStreamModel { channels: 3, ..model() }, AudioStreamModel { channels: 0, ..model() }] {
+            assert!(matches!(ui.open_audio_stream(bad), Err(UiRefusal::InvalidGeometry(_))));
+        }
+        let s = ui.open_audio_stream(AudioStreamModel { channels: 2, format: AudioFormat::S16Le, ..model() }).unwrap();
+        assert!(matches!(ui.queue_audio(s, &[0; 6]), Err(UiRefusal::InvalidGeometry(_))), "6 bytes is not whole 4-byte frames");
+        assert!(matches!(ui.set_audio_volume(s, AUDIO_UNITY + 1, 0), Err(UiRefusal::InvalidGeometry(_))));
+        ui.refuse_audio = true;
+        assert!(matches!(ui.queue_audio(s, &[0; 4]), Err(UiRefusal::Unsupported(_))));
     }
 }
