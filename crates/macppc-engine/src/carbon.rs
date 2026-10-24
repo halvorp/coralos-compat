@@ -12,7 +12,7 @@
 //!   window, `kEventWindowUpdate` is `BeginUpdate`/`EndUpdate`. Nothing else has a default.
 //! * **Conversions** (classic -> Carbon): mouseDown in content -> `mous`/1 (window = the one hit), in the close box -> `wind`/72 `kEventWindowClose`; mouseUp -> `mous`/2;
 //!   keyDown/autoKey/keyUp -> `keyb`/1,2,3 for the front window; updateEvt -> `wind`/1; activateEvt -> `wind`/5 or 6; suspend/resume -> `appl`/2 or 1.
-//!   NOT converted (dropped, logged): menu choices (`kEventCommandProcess` needs `SetMenuItemCommandID`, which is not provided), drags and grows (the native window manager
+//!   a menu choice -> `cmds`/1 `kEventCommandProcess` with an `HICommand` ([`MacPpc::command_event`]); NOT converted (dropped, logged): drags and grows (the native window manager
 //!   does them), high-level Apple events.
 //! * `ReceiveNextEvent` pulls from the same queue; `pullEvent` = false (peek) and a type filter are NOT honoured and refuse/are ignored by name (see the function).
 //! * The class/kind/parameter four-character codes and numbers are CarbonEvents.h's as I know them (mous 1/2, keyb 1/2/3, wind 1/5/6/72/73, appl 1/2; '----' 'mloc' 'mbtn' 'kmod'
@@ -48,6 +48,7 @@ const STANDARD_HANDLER_ATTR: u32 = 1 << 25;
 const fn fc(b: &[u8; 4]) -> u32 { u32::from_be_bytes(*b) }
 const C_MOUSE: u32 = fc(b"mous"); const C_KEY: u32 = fc(b"keyb"); const C_WINDOW: u32 = fc(b"wind"); const C_APP: u32 = fc(b"appl");
 const K_WINDOW_UPDATE: u32 = 1; const K_WINDOW_ACTIVATED: u32 = 5; const K_WINDOW_DEACTIVATED: u32 = 6; const K_WINDOW_CLOSE: u32 = 72; const K_WINDOW_CLOSED: u32 = 73;
+const C_COMMAND: u32 = fc(b"cmds"); const K_COMMAND_PROCESS: u32 = 1; const T_HICOMMAND: u32 = fc(b"hcmd");
 const P_DIRECT: u32 = fc(b"----"); const P_MLOC: u32 = fc(b"mloc"); const P_MBTN: u32 = fc(b"mbtn"); const P_KMOD: u32 = fc(b"kmod"); const P_KCOD: u32 = fc(b"kcod");
 const P_KCHR: u32 = fc(b"kchr"); const P_CCNT: u32 = fc(b"ccnt");
 const T_WINDOW: u32 = fc(b"wind"); const T_QDPOINT: u32 = fc(b"QDpt"); const T_MBTN: u32 = fc(b"mbtn"); const T_UINT32: u32 = fc(b"magn"); const T_CHAR: u32 = fc(b"TEXT");
@@ -136,6 +137,10 @@ impl<U: GuestUi> MacPpc<U> {
                         self.put_param(e, P_DIRECT, T_WINDOW, window.to_be_bytes().to_vec());
                         return Ok(Some(e));
                     }
+                    if part == 1 { // inMenuBar: the user's menu choice (queued with the mouseDown) is a kEventCommandProcess
+                        let choice = self.mac.ev.choices.pop_front().unwrap_or(0);
+                        return Ok(self.command_event(choice));
+                    }
                     if part != 3 { self.mac.log.push(format!("[carbon] mouseDown in part {part} dropped (the native window manager handles it)")); return Ok(None); }
                 }
                 let e = self.new_event(C_MOUSE, what as u32, window);
@@ -166,6 +171,21 @@ impl<U: GuestUi> MacPpc<U> {
             other => { self.mac.log.push(format!("[carbon] classic event {other} has no Carbon conversion: dropped")); return Ok(None); }
         };
         Ok(Some(ev))
+    }
+
+    /// A menu choice (`menuID << 16 | item`, 0 = nothing chosen) as `kEventClassCommand`/`kEventCommandProcess` (CarbonEvents.h) with its `HICommand` direct object:
+    /// { attributes u32 (`kHICommandFromMenu` = 1), commandID u32, menu { MenuRef u32, MenuItemIndex u16 } } = 16 bytes with 2 pad. An item without a command ID is
+    /// delivered with `commandID` 0 (the program tells it apart by menu and item), as the Menu Manager does.
+    fn command_event(&mut self, choice: u32) -> Option<u32> {
+        if choice == 0 { return None; }
+        let (menu_id, item) = ((choice >> 16) as u16, (choice & 0xFFFF) as u16);
+        let menu = self.toolbox_call("GetMenuHandle", &[u32::from(menu_id)]);
+        let command = self.cx.command_id(menu, item);
+        let mut hc = Vec::new();
+        hc.extend(1u32.to_be_bytes()); hc.extend(command.to_be_bytes()); hc.extend(menu.to_be_bytes()); hc.extend(item.to_be_bytes()); hc.extend([0, 0]);
+        let e = self.new_event(C_COMMAND, K_COMMAND_PROCESS, 0);
+        self.put_param(e, P_DIRECT, T_HICOMMAND, hc);
+        Some(e)
     }
 
     /// Call a Pascal Toolbox trap by name with value arguments; its result (0 when the call cannot be made).

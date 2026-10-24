@@ -3,7 +3,7 @@
 //! queue (what the GuestUi pump fills), so the conversion path is the real one.
 use guestui_abi::RecordingGuestUi;
 use macppc_engine::asm::Asm;
-use macppc_engine::{MacPpc, Step};
+use macppc_engine::{GlueOutcome, MacPpc, PpcHost, Step};
 use mac68k_engine::events::MacEvent;
 use retro_pef::loader::SymbolClass;
 use retro_pef::writer::PefBuilder;
@@ -60,7 +60,7 @@ fn data(spec: (u32, u32), attrs: u32) -> Vec<u8> {
     v.extend(t);
     v.extend(words(&[attrs]));
     v.resize((K - D) as usize, 0);
-    v.extend(words(&[fc(b"mloc"), fc(b"QDpt"), fc(b"zzzz"), fc(b"magn")]));
+    v.extend(words(&[fc(b"mloc"), fc(b"QDpt"), fc(b"zzzz"), fc(b"magn"), fc(b"----"), fc(b"hcmd")]));
     v
 }
 fn boot(bytes: &[u8]) -> M {
@@ -243,4 +243,72 @@ fn receivenextevent_and_sendeventtoeventtarget_walk_the_handler_chain_and_callne
     m.mac.ev.queue.push_back(ev(1, 100, 100, 0));
     assert_eq!(run(&mut m), Step::Exited, "{:?}", m.fault());
     assert_eq!((rd(&m, b, R + 20), rd(&m, b, R + 24)), (0x11, 0));
+}
+
+/// A handler for `cmds`/1: records class and kind, fetches the `HICommand` direct object (16 bytes) to R+40 and asks the loop to end.
+fn command_handler() -> Asm {
+    let mut h = Asm::new();
+    prologue(&mut h);
+    h.stw(4, EVSAVE, 2);
+    h.lwz(3, EVSAVE, 2).call_toc(toc(GCLASS)).stw(3, R + 12, 2);
+    h.lwz(3, EVSAVE, 2).call_toc(toc(GKIND)).stw(3, R + 16, 2);
+    h.lwz(3, EVSAVE, 2).lwz(4, K + 16, 2).lwz(5, K + 20, 2).li(6, 0).li(7, 16).li(8, 0).addi(9, 2, R + 40).call_toc(toc(GPARAM)).stw(3, R + 36, 2);
+    h.call_toc(toc(QUIT));
+    h.li(3, 0);
+    epilogue(&mut h);
+    h
+}
+fn glue(m: &mut M, name: &str, args: &[u32]) -> u32 {
+    m.bind(name);
+    let mut regs = [0u32; 32];
+    regs[3..3 + args.len()].copy_from_slice(args);
+    assert_eq!(m.glue_call(name, &mut regs), GlueOutcome::Return, "{name}: {:?}", m.mac.refused);
+    regs[3]
+}
+fn menu_machine(spec: (u32, u32)) -> (M, u32, u32) {
+    let attrs = 1 | 3 | (1 << 4);
+    let mut m = boot(&build(&window_main(8), &command_handler(), &Asm::new(), &data(spec, attrs)));
+    let b = m.cpu().unwrap().gpr[2];
+    let menu = mac68k_engine::menu::Parsed { id: 200, flags: 0xFFFF_FFFF, title: b"File".to_vec(), items: ["New", "Open", "Close"].iter().map(|t| mac68k_engine::menu::Item { text: t.as_bytes().to_vec(), icon: 0, key: 0, mark: 0, style: 0 }).collect() };
+    let fork = retro_resfork::writer::ForkBuilder::new().add(b"MENU", 200, None, &mac68k_engine::menu::encode_block(&menu, 0, 0, 0)).build();
+    m.mac.rm.open_fork(mac68k_engine::resmgr::APP_REF_NUM, retro_resfork::ResFork::parse(fork).unwrap());
+    let h = glue(&mut m, "GetMenu", &[200]);
+    assert_ne!(h, 0, "{:?}", m.mac.refused);
+    glue(&mut m, "InsertMenu", &[h, 0]);
+    (m, b, h)
+}
+
+#[test]
+fn a_menu_choice_is_a_command_process_event_carrying_the_items_command_id() {
+    let (mut m, b, menu) = menu_machine((fc(b"cmds"), 1));
+    assert_eq!(glue(&mut m, "SetMenuItemCommandID", &[menu, 2, fc(b"open")]), 0);
+    glue(&mut m, "GetMenuItemCommandID", &[menu, 2, 0x3200]);
+    assert_eq!(m.mac.mem.read_u32(0x3200).unwrap(), fc(b"open"), "the ID reads back");
+    // the user chose File > Open: the host queues the mouseDown in the menu bar and the choice
+    m.mac.ev.choices.push_back((200 << 16) | 2);
+    m.mac.ev.queue.push_back(ev(1, 5, 10, 0));
+    assert_eq!(run(&mut m), Step::Exited, "{:?} {:#?}", m.fault(), m.mac.log);
+    assert_eq!((rd(&m, b, R + 12) as u32, rd(&m, b, R + 16)), (fc(b"cmds"), 1), "kEventClassCommand / kEventCommandProcess");
+    assert_eq!(rd(&m, b, R + 36), 0, "the HICommand direct object is present");
+    let hc: Vec<u32> = (0..4).map(|i| rd(&m, b, R + 40 + 4 * i) as u32).collect();
+    assert_eq!(hc[0], 1, "kHICommandFromMenu");
+    assert_eq!(hc[1], fc(b"open"), "commandID");
+    assert_eq!(hc[2], menu, "menu.menuRef");
+    assert_eq!(hc[3] >> 16, 2, "menu.menuItemIndex");
+}
+
+#[test]
+fn an_item_without_an_id_arrives_with_command_zero_and_bad_items_and_empty_choices_are_not_invented() {
+    let (mut m, b, menu) = menu_machine((fc(b"cmds"), 1));
+    m.mac.ev.choices.push_back((200 << 16) | 3);
+    m.mac.ev.queue.push_back(ev(1, 5, 10, 0));
+    assert_eq!(run(&mut m), Step::Exited, "{:?}", m.fault());
+    assert_eq!((rd(&m, b, R + 40), rd(&m, b, R + 44), rd(&m, b, R + 52) >> 16), (1, 0, 3), "delivered with commandID 0, the item index says which");
+    // NEGATIVE controls: an item that does not exist is paramErr; a menu-bar click with no choice delivers nothing
+    assert_eq!(glue(&mut m, "SetMenuItemCommandID", &[menu, 9, 1]) as i32, -50);
+    assert_eq!(glue(&mut m, "SetMenuItemCommandID", &[0x1234, 1, 1]) as i32, -50);
+    let (mut m, b, _) = menu_machine((fc(b"cmds"), 1));
+    m.mac.ev.queue.push_back(ev(1, 5, 10, 0));
+    assert_eq!(run(&mut m), Step::Blocked, "{:?}", m.fault());
+    assert_eq!(rd(&m, b, R + 12), 0);
 }

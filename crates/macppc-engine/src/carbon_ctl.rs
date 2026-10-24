@@ -30,6 +30,13 @@ pub struct CxState {
     parent: BTreeMap<u32, u32>,
     /// dialog -> its cancel item.
     cancel: BTreeMap<u32, i16>,
+    /// (menu handle, item) -> command ID (`SetMenuItemCommandID`). Keyed by item NUMBER: a program that inserts or deletes items before setting IDs sets them again, as on Mac OS.
+    cmds: BTreeMap<(u32, u16), u32>,
+}
+
+impl CxState {
+    /// The command ID of a menu item (0 = none).
+    pub(crate) fn command_id(&self, menu: u32, item: u16) -> u32 { self.cmds.get(&(menu, item)).copied().unwrap_or(0) }
 }
 
 const CONTROL_PROPERTY_INVALID: i32 = -5603;
@@ -56,6 +63,7 @@ pub enum CxFn {
     GetControlProperty, SetControlProperty, GetWindowProperty, SetWindowProperty,
     GetKeyboardFocus, SetKeyboardFocus, ClearKeyboardFocus, CreateRootControl, GetRootControl, EmbedControl, FindControlUnderMouse,
     GetDialogPort, GetDialogWindow, SetPortDialogPort, CountDITL, GetDialogKeyboardFocusItem, GetDialogTextEditHandle, SetDialogDefaultItem, SetDialogCancelItem,
+    SetMenuItemCommandID, GetMenuItemCommandID,
     IsWindowVisible, IsWindowHilited, GetWindowFromPort, GetNextWindow, GetWindowList, GetWindowBounds, InvalWindowRect, GetRegionBounds,
 }
 
@@ -72,6 +80,7 @@ impl CxFn {
             "GetDialogPort" => GetDialogPort, "GetDialogWindow" => GetDialogWindow, "SetPortDialogPort" => SetPortDialogPort, "CountDITL" => CountDITL,
             "GetDialogKeyboardFocusItem" => GetDialogKeyboardFocusItem, "GetDialogTextEditHandle" => GetDialogTextEditHandle,
             "SetDialogDefaultItem" => SetDialogDefaultItem, "SetDialogCancelItem" => SetDialogCancelItem,
+            "SetMenuItemCommandID" => SetMenuItemCommandID, "GetMenuItemCommandID" => GetMenuItemCommandID,
             "IsWindowVisible" => IsWindowVisible, "IsWindowHilited" => IsWindowHilited, "GetWindowFromPort" => GetWindowFromPort, "GetNextWindow" => GetNextWindow,
             "GetWindowList" => GetWindowList, "GetWindowBounds" => GetWindowBounds, "InvalWindowRect" => InvalWindowRect, "GetRegionBounds" => GetRegionBounds,
             _ => return None,
@@ -188,6 +197,14 @@ impl<U: GuestUi> MacPpc<U> {
             GetDialogTextEditHandle => self.cx_u32(a0 + DR_TEXT_H, n)?,
             SetDialogDefaultItem => { self.mac.mem.write_u16(a0 + DR_DEF_ITEM, a1 as u16).map_err(|_| format!("{n}: dialog record leaves guest RAM"))?; 0 }
             SetDialogCancelItem => { self.cx.cancel.insert(a0, a1 as u16 as i16); 0 }
+            // ---- menus: the command ID a chosen item carries in kEventCommandProcess; paramErr (-50) for a menu or item that does not exist
+            SetMenuItemCommandID | GetMenuItemCommandID => {
+                let item = a1 as u16;
+                let count = if self.mac.mm.block(a0).is_some() { self.cx_trap("CountMItems", &[a0])? as u16 } else { 0 };
+                if item == 0 || item > count { cpu.gpr[3] = (-50i32) as u32; return Ok(()); }
+                if f == SetMenuItemCommandID { if a2 == 0 { self.cx.cmds.remove(&(a0, item)); } else { self.cx.cmds.insert((a0, item), a2); } } else { let v = self.cx.command_id(a0, item); self.cx_put32(a2, v, n)?; }
+                0
+            }
             // ---- windows
             IsWindowVisible => { self.cx_window(a0, n)?; u32::from(self.mac.mem.read_u8(a0 + WR_VISIBLE).unwrap_or(0) != 0) }
             IsWindowHilited => { self.cx_window(a0, n)?; u32::from(self.mac.mem.read_u8(a0 + WR_HILITED).unwrap_or(0) != 0) }

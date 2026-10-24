@@ -26,7 +26,7 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
 /// Selectors the shared (68k) profile would answer WRONGLY for a PowerPC program, or that wait for a feature, with the reason each has no answer.
 pub const UNANSWERED: &[(&[u8; 4], &str)] = &[
     (b"sysv", "reports the Mac OS version the engine implements; a Carbon game requires 9.1 and this engine does not yet provide CarbonLib's event model, Appearance, Navigation Services, Thread Manager or Multiprocessing Services, so no version above the shared profile's System 7.0 is claimed"),
-    (b"cbon", "CarbonLib has the Carbon Event Manager core and CreateNewWindow (carbon.rs) but not menu commands (kEventCommandProcess), HIToolbox views, Appearance or Navigation Services: a version number would promise them"),
+    (b"cbon", "CarbonLib has the Carbon Event Manager core and CreateNewWindow (carbon.rs), menu commands (kEventCommandProcess) and some Control Manager accessors, but not HIToolbox views, Appearance drawing or Navigation Services: a version number would promise them"),
     (b"appr", "the Appearance Manager is not provided"),
     (b"nav ", "Navigation Services is not provided"),
     (b"mpsv", "Multiprocessing Services runs cooperatively (no preemption, one processor, see mp.rs); the selector's value carries the MP Services version and attribute bits, which are not claimed"),
