@@ -199,3 +199,12 @@ Measured stops (50M-instruction budget, idle 6): Warcraft III RoC and the World 
 `DeactivateTSMDocument` at 176,611); TFT at the same call after 736,184; BNUpdate at `GetScriptManagerVariable` (95,575; was `RegisterAppearanceClient`); the Installer at
 `SndDoImmediate` (the 68k worker's Sound Manager). Next, in order: the alias/File Manager names (`ResolveAliasFileWithMountFlags`, `NewAlias`), Script Manager variables, the
 TSM document calls, CFString/CFArray/CFDictionary breadth, `KeyTranslate`/`TestControl`, `HideWindow` (needs a GuestUi hide call), then OpenGL (waits for the CoralOS-side design).
+
+## Status after round 6 (2026-10-24)
+
+Done: Alias Manager by C name (`alias_c.rs`, over the 68k bodies), Script Manager names (`script_c.rs`, the 68k Roman table), TSM documents without an input method (`tsm_c.rs`), CoreFoundation breadth
+(`cf_more.rs`: strings, arrays, dictionaries, numbers, path URLs), `KeyTranslate` through a program's own KCHR (`keys_c.rs`), `TestControl`, `HideWindow`/`ShowWindow` with additive
+`GuestUi::hide_window`/`show_window`, and the ROM's NewGWorld depth/flag rules. Measured stops (50M budget): RoC 950,168 and TFT 948,038 instructions to `GetMenuTitle`; the World
+Editors 847,417 / 810,164 to `StandardAlert`; BNUpdate 95,575 to `GetScriptManagerVariable(40)` (no verified Roman answer); the Installer 92,970 to `SndDoImmediate` (68k worker).
+Next: Menu Manager Carbon accessors (`GetMenuTitle`, `SetMenuTitle`, `GetMenuID`, `IsMenuItemEnabled`, `SetMenuItemProperty`, `MenuKey`, `PopUpMenuSelect`, Show/HideMenuBar), `StandardAlert`,
+then the CarbonLib export list (5715 names on the 9.2.1 CD, /data/build/corpus-bin/mac/macos921/exports/) to rank the remaining gap; OpenGL waits for the CoralOS-side design.
