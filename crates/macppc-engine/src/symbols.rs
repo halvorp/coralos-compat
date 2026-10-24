@@ -62,6 +62,8 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Tb(crate::toolbox_c::TbFn),
     /// A File Manager parameter-block call (`PBReadSync` ...): [`crate::pb`].
     Pb(crate::pb::PbCall),
+    /// An Apple Event Manager call for PowerPC programs: the handler registry, `AEProcessAppleEvent` ([`crate::ae_c`]).
+    Ae(crate::ae_c::AeFn),
     /// An FSSpec call (`FSMakeFSSpec`, `FSpOpenDF` ...): [`crate::fsspec`].
     Spec(crate::fsspec::SpecCall),
     /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.
@@ -101,6 +103,7 @@ impl Native {
             "GetToolTrapAddress" => Native::TrapAddress(TrapQuery::Tool), "GetTrapAddress" => Native::TrapAddress(TrapQuery::Old),
             "NewRoutineDescriptor" => Native::NewRoutineDescriptor, "NewFatRoutineDescriptor" => Native::NewFatRoutineDescriptor,
             "DisposeRoutineDescriptor" => Native::DisposeRoutineDescriptor,
+            n if crate::ae_c::AeFn::by_name(n).is_some() => Native::Ae(crate::ae_c::AeFn::by_name(n).expect("checked")),
             n if crate::pb::PbCall::by_name(n).is_some() => Native::Pb(crate::pb::PbCall::by_name(n).expect("checked")),
             n if crate::toolbox_c::TbFn::by_name(n).is_some() => Native::Tb(crate::toolbox_c::TbFn::by_name(n).expect("checked")),
             n if n.len() > 6 && n.starts_with("New") && n.ends_with("UPP") => Native::NewUpp,

@@ -1,6 +1,6 @@
 #name	arch	path	note
 # Warcraft III for Mac OS 9, owner-supplied retail discs and patchers (TEST INPUT ONLY, never committed). Extraction: docs/consults/2026-10-24-macppc-full-app-gap-map.md.
-# corpus-census-mac.py SKIPS a row whose file is absent, so this list is safe on any machine.
+# Run with MAC_LIBDIR=/data/build/corpus-bin/mac/warcraft3/libs so the Miles files beside the game load as fragments. corpus-census-mac.py SKIPS a row whose file is absent, so this list is safe on any machine.
 warcraft3-roc-game	ppc	mac/warcraft3/apps/roc-Warcraft_III.bin	Warcraft III (RoC), from the Installer Tome: app + StormCarbon + CursorDeviceLib fragments
 warcraft3-roc-worldeditor	ppc	mac/warcraft3/apps/roc-Warcraft_III_World_Editor.bin	World Editor (RoC)
 warcraft3-roc-bnupdate	ppc	mac/warcraft3/apps/roc-BNUpdate.bin	Battle.net updater (RoC)

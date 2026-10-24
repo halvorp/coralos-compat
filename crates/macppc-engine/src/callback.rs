@@ -56,6 +56,8 @@ pub(crate) enum Continuation {
     SwitchOut { to: u32, state: Option<crate::sched::TState>, pc: u32 },
     /// The new thread's in-switcher ran: its registers come back and it continues.
     SwitchIn,
+    /// An Apple Event handler ran for `AEProcessAppleEvent`: its OSErr is the call's result.
+    AeHandler,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +135,7 @@ impl<U: GuestUi> MacPpc<U> {
             Continuation::Carbon(_) => self.dispatch_returned(cpu, frame),
             Continuation::ThreadEnd(to) => self.switch_to(cpu, to, None, 0),
             Continuation::SwitchOut { to, state, pc } => { frame.saved.restore(cpu); self.finish_switch(cpu, to, state, pc) }
+            Continuation::AeHandler => self.ae_handler_returned(cpu, frame),
             Continuation::SwitchIn => { frame.saved.restore(cpu); Ok(()) }
         }
     }

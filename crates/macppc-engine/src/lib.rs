@@ -42,6 +42,7 @@ pub mod threads;
 pub mod toolbox_c;
 pub mod stdio;
 pub mod symbols;
+pub mod ae_c;
 pub mod callback;
 pub mod carbon;
 pub mod cf;

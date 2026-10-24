@@ -12,7 +12,9 @@ def run(arch, path):
         cmd += ["--insns", os.environ.get("MAC_INSNS", "50000000")]   # compressed resources run a guest decompressor: 5M is not enough
         if os.environ.get("MAC_MACHINE"): cmd += ["--machine", os.environ["MAC_MACHINE"]]
         if os.environ.get("MAC_IDLE", "0") != "0": cmd += ["--idle", os.environ["MAC_IDLE"]]   # virtual 60 Hz ticks passed while the app waits for an event (null events)   # a machine profile (mac-ii default, mac-plus, mac-se)
-    if arch == "ppc": cmd += ["--run", "--insns", "50000000"]
+    if arch == "ppc":
+        cmd += ["--run", "--insns", "50000000", "--idle", os.environ.get("MAC_IDLE", "6")]
+        if os.environ.get("MAC_LIBDIR"): cmd += ["--libdir", os.environ["MAC_LIBDIR"]]   # PEF libraries that sit beside the program (Warcraft III: Miles Carbon Library ...)
     p = subprocess.run(cmd + [path], capture_output=True, text=True, timeout=600)
     return p.stdout.splitlines(), p.stderr.strip().splitlines()
 def load_groups():
