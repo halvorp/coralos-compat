@@ -92,7 +92,9 @@ impl<U: GuestUi> Mac<U> {
 
     pub(crate) fn open_native(&mut self, win: u32) -> Result<(), Refusal> {
         let w = self.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?;
-        let (r, role) = (w.rect, role_of(w.proc_id)?);
+        let (r, proc_id) = (w.rect, w.proc_id);
+        let role = self.window_role(proc_id)?;
+        let w = self.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?;
         let model = WindowModel {
             title: w.title.clone(),
             rect: GuestRect { left: i32::from(r.left), top: i32::from(r.top), width: i32::from(r.right - r.left), height: i32::from(r.bottom - r.top) },
@@ -114,7 +116,7 @@ impl<U: GuestUi> Mac<U> {
 
     /// [`Mac::make_window`], with a colour window's CGrafPort (8-bit canvas) when `color` and the machine has Color QuickDraw.
     pub fn make_window_as(&mut self, s: WindowSpec, color: bool) -> Result<u32, Refusal> {
-        role_of(s.proc_id)?; // before anything is allocated or shown
+        self.window_role(s.proc_id)?; // before anything is allocated or shown
         let color = color && self.profile.color_qd;
         let r = s.rect;
         let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
