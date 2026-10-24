@@ -309,3 +309,14 @@ impl<U: GuestUi> Mac<U> {
         self.mem.write_bytes(p, bytes).map_err(|_| err::PARAM_ERR)
     }
 }
+
+/// Run `_AliasDispatch` routine `selector` with its Pascal arguments as VALUES (declaration order), as the PowerPC adapter does: the SAME body the 68k trap runs, no stack frame.
+/// The OSErr it answers (0 = noErr); a selector this engine does not model is a refusal.
+pub fn alias_value_call<U: GuestUi>(m: &mut Mac<U>, selector: u16, values: &[u32]) -> Result<i16, Refusal> {
+    let lay = layout(selector).ok_or_else(|| Refusal(format!("AliasDispatch selector {selector} is not modelled")))?;
+    if lay.len() != values.len() { return Err(Refusal(format!("AliasDispatch selector {selector} takes {} arguments, {} given", lay.len(), values.len()))); }
+    m.fm.now_secs = m.clock();
+    let (e, log) = match alias_call(m, selector, &|i| values[i]) { Ok(log) => (0, log), Err((e, log)) => (e, log) };
+    m.log.push(format!("[alias] {log} -> {e}"));
+    Ok(e)
+}

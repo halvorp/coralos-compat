@@ -64,6 +64,8 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Pb(crate::pb::PbCall),
     /// An Apple Event Manager call for PowerPC programs: the handler registry, `AEProcessAppleEvent` ([`crate::ae_c`]).
     Ae(crate::ae_c::AeFn),
+    /// An Alias Manager call ([`crate::alias_c`]).
+    Alias(crate::alias_c::AliasCall),
     /// An FSSpec call (`FSMakeFSSpec`, `FSpOpenDF` ...): [`crate::fsspec`].
     Spec(crate::fsspec::SpecCall),
     /// An Appearance Manager entry point or a Control / Dialog / Window Manager Carbon accessor ([`crate::carbon_ctl`]).
@@ -114,7 +116,7 @@ impl Native {
             n if crate::toolbox_c::TbFn::by_name(n).is_some() => Native::Tb(crate::toolbox_c::TbFn::by_name(n).expect("checked")),
             n if n.len() > 6 && n.starts_with("New") && n.ends_with("UPP") => Native::NewUpp,
             n if n.len() > 9 && n.starts_with("Dispose") && n.ends_with("UPP") => Native::DisposeUpp,
-            _ => return crate::files::FileCall::by_name(name).map(Native::File).or_else(|| crate::osroutines::OsRoutine::by_name(name).map(Native::Os)).or_else(|| crate::fsspec::SpecCall::by_name(name).map(Native::Spec)),
+            _ => return crate::files::FileCall::by_name(name).map(Native::File).or_else(|| crate::osroutines::OsRoutine::by_name(name).map(Native::Os)).or_else(|| crate::fsspec::SpecCall::by_name(name).map(Native::Spec)).or_else(|| crate::alias_c::AliasCall::by_name(name).map(Native::Alias)),
         })
     }
 }

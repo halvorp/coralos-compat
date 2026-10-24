@@ -39,6 +39,7 @@ pub mod mp;
 pub mod sched;
 pub mod stdclib;
 pub mod threads;
+pub mod alias_c;
 pub mod carbon_ctl;
 pub mod gworld;
 pub mod toolbox_c;
