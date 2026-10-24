@@ -57,6 +57,7 @@ pub mod script;
 pub mod segment;
 pub mod strcmp;
 pub mod sound;
+pub mod system_res;
 pub mod sysenv;
 pub mod textedit;
 pub mod toolbox;

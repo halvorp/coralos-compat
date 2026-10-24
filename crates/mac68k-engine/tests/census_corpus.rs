@@ -119,7 +119,11 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     assert!(!m.log.iter().any(|l| l.contains("-> -120")), "no dirNFErr: {:#?}", m.log);
     // the Sound Manager answers (sound/): GetDefaultOutputVolume is its first call; the next wall is the Resource Manager's MaxSizeRsrc
     assert!(m.log.iter().any(|l| l.starts_with("[sound] GetDefaultOutputVolume")), "its volume question is answered: {:#?}", m.log);
-    assert!(m.refused.last().is_some_and(|r| r.contains("_MaxSizeRsrc ($A821)")), "the next wall: {:?}", m.refused);
+    // MaxSizeRsrc answers, the System file's I-beam cursor exists (GetCursor 1: its absence was Glider's "Couldn't Load a Resource"), the
+    // sounds load, the game gets as far as its title pictures (PICT v2: refused by name) and the palette (_SetEntries)
+    assert!(m.log.iter().any(|l| l.starts_with("[res] MaxSizeRsrc")) && m.log.iter().any(|l| l.starts_with("[res] GetCursor 1 -> 0x") && !l.contains("-> 0x0 ")), "{:#?}", m.log);
+    assert!(!m.log.iter().any(|l| l.contains("Couldn't Load a Resource")), "the load-failure alert is gone");
+    assert!(m.refused.last().is_some_and(|r| r.contains("_SetEntries ($AA3F)")), "the next wall: {:?}", m.refused.last());
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.

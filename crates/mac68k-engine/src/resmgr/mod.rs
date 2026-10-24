@@ -198,6 +198,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9A2, &[Arg::P], None, load::<U>)?;
     m.register(0xA992, &[Arg::P], None, detach::<U>)?;
     m.register(0xA9A5, &[Arg::P], Some(Arg::L), size_rsrc::<U>)?;
+    m.register(0xA821, &[Arg::P], Some(Arg::L), max_size_rsrc::<U>)?;
     m.register(0xA9A6, &[Arg::P], Some(Arg::W), get_attrs::<U>)?;
     m.register(0xA9A8, &[Arg::L, Arg::L, Arg::L, Arg::L], None, get_info::<U>)?;
     m.register(0xA9B9, &[Arg::W], Some(Arg::L), get_cursor::<U>)?;
@@ -280,6 +281,14 @@ fn size_rsrc<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, 
     let h = c.args.get(0);
     let r = if m.rm.is_resource(h) { m.mm.handle_size(h).map_err(|_| RES_NOT_FOUND) } else { Err(RES_NOT_FOUND) };
     finish(m, &format!("SizeRsrc {h:#x}"), r)
+}
+/// `FUNCTION MaxSizeRsrc(theResource: Handle): LONGINT` ($A821): the size of the resource as stored, i.e. the most the handle can need.
+/// Every resource here is loaded whole (and a compressed one is expanded before the program sees it), so the answer is `SizeRsrc`'s;
+/// a handle that is not a resource is resNotFound (-192) with a result of 0, exactly as `SizeRsrc`.
+fn max_size_rsrc<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let h = c.args.get(0);
+    let r = if m.rm.is_resource(h) { m.mm.handle_size(h).map_err(|_| RES_NOT_FOUND) } else { Err(RES_NOT_FOUND) };
+    finish(m, &format!("MaxSizeRsrc {h:#x}"), r)
 }
 fn get_attrs<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let h = c.args.get(0);

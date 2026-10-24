@@ -147,6 +147,7 @@ impl<U: GuestUi> Mac<U> {
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
             fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT,
         };
+        m.rm.add_system(crate::system_res::system_fork());
         m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start
         lowmem::init(&mut m.mem)?;
         lowmem::set_rom85(&mut m.mem, m.profile.rom85)?;
