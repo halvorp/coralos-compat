@@ -22,10 +22,10 @@ ANCHORS = {("timer.device","GetSysTime"):-66,("timer.device","AddTime"):-42,("ti
            ("mathieeedoubbas","IEEEDPFix"):-30,
            ("locale","GetCatalogStr"):-72,("locale","GetLocaleStr"):-78,("locale","OpenCatalogA"):-150,("locale","OpenLocale"):-156,
            ("lowlevel","ReadJoyPort"):-30,("lowlevel","GetKey"):-48,("lowlevel","QueryKeys"):-54}
-# AROS's locale.conf lists its functions without the NDK's one extra reserved vector (locale_lib.fd is "##bias 36": CloseCatalog -36),
-# yet AmigaOS binaries call GetCatalogStr at -72 and OpenCatalogA at -150 (measured in the real AROS m68k Snoopy: `jsr -72(a6)`
-# then `jsr -150(a6)`). Extra reserved vectors per library, before the first listed function.
-EXTRA_RESERVED = {}  # was {"locale": 1}: that vector is the blank line at locale.conf:34, which the generator now counts as genmodule does
+# Extra reserved vectors per library, before the first listed function, for a .conf whose vector numbering differs from the
+# AmigaOS binaries' (check against a real `jsr -N(a6)`). Empty: a blank line in a function list IS a reserved vector (genmodule,
+# tools/genmodule/config.c:1695), which covers locale.conf:34 (GetCatalogStr -72, OpenCatalogA -150).
+EXTRA_RESERVED = {}
 def parse(path, extra=0):
     L = open(path).read().split("\n")
     s = next(i for i, l in enumerate(L) if l.strip() == "##begin functionlist")
