@@ -1,8 +1,7 @@
 //! Text Services Manager documents (`NewTSMDocument`, `ActivateTSMDocument`, `DeactivateTSMDocument`, `DeleteTSMDocument`, `FixTSMDocument`, `UseInputWindow`) for a machine with NO input
 //! method installed: the Roman keyboard types straight into the program's own key events, so there is never an inline input session to fix or an input window to show. A document is an ID
 //! the program can create, activate, deactivate and delete (the bookkeeping a caller checks); `FixTSMDocument` has nothing pending and succeeds; `UseInputWindow(doc, TRUE)` succeeds
-//! and logs, by name, that no input method will use it. A stale or unknown ID is `tsmInvalidDocIDErr`. The error number (-2505) is TextServices.h's as I remember it (the 9.2.1
-//! oracle export lists carry names, not constants): it is the only one used. Not provided, so left unbound: `TSMGetInlineObject`, `SetDefaultInputMethod`, text-service components.
+//! and logs, by name, that no input method will use it. A stale or unknown ID is `tsmInvalidDocIDErr`. The error number -2505 (tsmInvalidDocIDErr) is CONFIRMED by the Stage-A spec (spec: macos9-specs/TextServices/DeleteTSMDocument): it answers a NULL ID, -1, a disposed handle, an unregistered one and a record that is not 'TDOC'; deleting twice is -2505 the second time; activating twice is 0 both times. Not provided, so left unbound: `TSMGetInlineObject`, `SetDefaultInputMethod`, text-service components.
 use crate::clib::arg;
 use crate::machine::MacPpc;
 use alloc::collections::BTreeSet;

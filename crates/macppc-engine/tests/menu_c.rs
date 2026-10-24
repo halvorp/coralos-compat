@@ -35,10 +35,16 @@ fn titles_ids_enabled_state_and_command_keys() {
     let (mut m, h) = machine();
     assert_eq!(call(&mut m, "GetMenuID", &[h]), 200);
     assert_eq!(call(&mut m, "CountMenuItems", &[h]), 3, "the Carbon name of CountMItems");
-    assert_eq!(call(&mut m, "GetMenuTitle", &[h, OUT]), 0);
+    assert_eq!(call(&mut m, "GetMenuTitle", &[h, OUT]) as u32, OUT, "GetMenuTitle returns its buffer");
     assert_eq!(m.mac.mem.bytes(m.mac.mem.span(OUT, 5).unwrap()).unwrap(), b"\x04File");
     pstr(&mut m, BUF, "Datei");
     assert_eq!(call(&mut m, "SetMenuTitle", &[h, BUF]), 0);
+    assert_eq!((call(&mut m, "SetMenuTitle", &[0, BUF]), call(&mut m, "SetMenuTitle", &[h, 0])), (-5623, -50), "spec: NULL menu is menuInvalidErr, NULL title paramErr");
+    // spec: NULL menu leaves the buffer alone and returns it; NULL buffer returns NULL
+    m.mac.mem.write_bytes(OUT + 0x40, b"xyz").unwrap();
+    assert_eq!(call(&mut m, "GetMenuTitle", &[0, OUT + 0x40]) as u32, OUT + 0x40);
+    assert_eq!(m.mac.mem.bytes(m.mac.mem.span(OUT + 0x40, 3).unwrap()).unwrap(), b"xyz");
+    assert_eq!(call(&mut m, "GetMenuTitle", &[h, 0]), 0);
     call(&mut m, "GetMenuTitle", &[h, OUT]);
     assert_eq!(m.mac.mem.bytes(m.mac.mem.span(OUT, 6).unwrap()).unwrap(), b"\x05Datei");
     // Enable/Disable under their Carbon names; item 0 is the whole menu
@@ -54,9 +60,8 @@ fn titles_ids_enabled_state_and_command_keys() {
     call(&mut m, "DisableMenuItem", &[h, 2]);
     assert_eq!(call(&mut m, "MenuKey", &[u32::from(b'o')]), 0, "a disabled item is not a hit");
     assert_eq!(call(&mut m, "MenuKey", &[u32::from(b'z')]), 0);
-    // the bar is always shown; HideMenuBar and PopUpMenuSelect stop by name
-    assert_eq!((call(&mut m, "IsMenuBarVisible", &[]), call(&mut m, "ShowMenuBar", &[])), (1, 0));
-    assert!(matches!(m.bind("HideMenuBar"), Binding::Unbound(_)) && matches!(m.bind("PopUpMenuSelect"), Binding::Unbound(_)));
+    // PopUpMenuSelect stops by name
+    assert!(matches!(m.bind("PopUpMenuSelect"), Binding::Unbound(_)));
     // NEGATIVE control: a pointer that is no menu is refused by name
     m.bind("GetMenuID");
     let mut regs = [0u32; 32];
@@ -77,4 +82,29 @@ fn item_properties_round_trip_and_bad_items_are_param_err() {
     assert_eq!(call(&mut m, "GetMenuItemProperty", &[h, 2, creator, tag, 4, OUT, BUF]), -5604, "item 2 has none");
     assert_eq!(call(&mut m, "GetMenuItemProperty", &[h, 1, creator, tag, 2, OUT, BUF]), -5603, "buffer too small");
     assert_eq!(call(&mut m, "SetMenuItemProperty", &[h, 9, creator, tag, 4, BUF]), -50, "no item 9");
+}
+
+#[test]
+fn hide_and_show_menu_bar_follow_the_spec_vectors() {
+    // spec: macos9-specs/MenusLib/HideMenuBar: MBarHeight 20 visible: Hide -> 0 (saved 20), again nothing; Show -> 20, again nothing
+    let (mut m, h) = machine();
+    let height = |m: &M| m.mac.mem.read_u16(mac68k_engine::lowmem::MBAR_HEIGHT).unwrap();
+    assert_eq!((height(&m), call(&mut m, "IsMenuBarVisible", &[])), (20, 1));
+    call(&mut m, "DrawMenuBar", &[]);
+    call(&mut m, "HideMenuBar", &[]);
+    assert_eq!((height(&m), call(&mut m, "IsMenuBarVisible", &[])), (0, 0));
+    call(&mut m, "HideMenuBar", &[]);
+    assert_eq!(m.mac.menus.saved_bar_height, 20, "a second Hide does not overwrite the saved height with 0");
+    assert!(m.mac.menu_strip().unwrap().menus.is_empty(), "the host's strip is empty while hidden");
+    call(&mut m, "ShowMenuBar", &[]);
+    assert_eq!((height(&m), call(&mut m, "IsMenuBarVisible", &[])), (20, 1));
+    assert_eq!(m.mac.menu_strip().unwrap().menus.len(), 1);
+    // NEGATIVE control: Show without a Hide changes nothing; a program-set non-zero MBarHeight survives Show
+    call(&mut m, "ShowMenuBar", &[]);
+    assert_eq!(height(&m), 20);
+    call(&mut m, "HideMenuBar", &[]);
+    m.mac.mem.write_u16(mac68k_engine::lowmem::MBAR_HEIGHT, 33).unwrap();
+    call(&mut m, "ShowMenuBar", &[]);
+    assert_eq!(height(&m), 33, "an already non-zero height is kept");
+    let _ = h;
 }

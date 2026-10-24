@@ -39,6 +39,10 @@ pub struct MenuMgr {
     pub bar: Vec<i16>,
     /// DrawMenuBar has run: new windows get the strip.
     pub drawn: bool,
+    /// `HideMenuBar` is in effect: the host's strip is empty and `MBarHeight` is 0 until `ShowMenuBar` (spec: macos9-specs/MenusLib/HideMenuBar).
+    pub hidden: bool,
+    /// `MBarHeight` as it was when the bar was hidden.
+    pub saved_bar_height: u16,
 }
 
 impl MenuMgr {
@@ -203,7 +207,10 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// The bar as a GuestUi model.
-    pub fn menu_strip(&self) -> Result<MenuModel, Refusal> { Ok(MenuModel { menus: self.menu_model(&self.menus.bar.clone(), 0)? }) }
+    pub fn menu_strip(&self) -> Result<MenuModel, Refusal> {
+        if self.menus.hidden { return Ok(MenuModel { menus: Vec::new() }); }
+        Ok(MenuModel { menus: self.menu_model(&self.menus.bar.clone(), 0)? })
+    }
 
     /// Push the current bar to every open guest window.
     pub fn sync_menus(&mut self) -> Result<(), Refusal> {

@@ -9,7 +9,6 @@ const EXPL: u32 = 0x3300;
 const PARAM: u32 = 0x3400;
 const HIT: u32 = 0x3500;
 const T_SAVE: u32 = 0x3600;
-const T_DONT: u32 = 0x3640;
 
 fn pstr(m: &mut M, at: u32, s: &str) { m.mac.mem.write_u8(at, s.len() as u8).unwrap(); m.mac.mem.write_bytes(at + 1, s.as_bytes()).unwrap(); }
 fn sa(m: &mut M, kind: u32, param: u32) -> GlueOutcome {
@@ -62,11 +61,37 @@ fn null_param_is_one_ok_button_and_bad_input_is_refused_by_name() {
     assert!(m.mac.modal_ready(), "the run loop pumps the host before it retries");
     assert_eq!(sa(&mut m, 0, 0), GlueOutcome::Return);
     assert_eq!(m.mac.mem.read_u16(HIT).unwrap(), 1);
-    // NEGATIVE controls: a host with no alert part (no DITL to fall back to), a fifth alert type, and a parameter record with no button at all
+    // spec: an alert type outside 0..3 is a plain alert (no error); itemHit was set to -1 before the question
+    // NEGATIVE controls: a host with no alert part (no DITL to fall back to)
     m.mac.ui.refuse_requests = true;
     assert!(matches!(sa(&mut m, 0, 0), GlueOutcome::Refused(w) if w.contains("host cannot ask")));
     m.mac.ui.refuse_requests = false;
-    assert!(matches!(sa(&mut m, 9, 0), GlueOutcome::Refused(w) if w.contains("alert type 9")));
-    m.mac.mem.write_bytes(PARAM, &[0u8; 32]).unwrap();
-    assert!(matches!(sa(&mut m, 0, PARAM), GlueOutcome::Refused(w) if w.contains("no button")));
+    assert_eq!(sa(&mut m, 9, 0), GlueOutcome::Idle, "alert type 9 is a plain alert");
+    assert_eq!(request(&m).kind, RequestKind::Unspecified);
+    assert_eq!(m.mac.mem.read_u16(HIT).unwrap(), 0xFFFF, "*itemHit is -1 until the answer");
+}
+
+#[test]
+fn the_spec_validation_vectors_return_param_err_before_anything_is_asked() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    pstr(&mut m, ERR, "x");
+    let rec = |m: &mut M, dt: u32, ct: u32, ot: u32, db: u16, cb: u16| {
+        m.mac.mem.write_bytes(PARAM, &[0u8; 24]).unwrap();
+        for (o, v) in [(6u32, dt), (10, ct), (14, ot)] { m.mac.mem.write_u32(PARAM + o, v).unwrap(); }
+        m.mac.mem.write_u16(PARAM + 18, db).unwrap();
+        m.mac.mem.write_u16(PARAM + 20, cb).unwrap();
+    };
+    let n = |m: &M| m.mac.ui.calls.iter().filter(|c| matches!(c, UiCall::Request(..))).count();
+    // spec test vectors: {defaultButton=0}: -50; {4}: -50; {1,1}: -50; {2, cancelText NULL, cancelButton 0}: -50 (default collapses to 0 = cancel 0)
+    for (dt, ct, ot, db, cb) in [(u32::MAX, 0, 0, 0, 2), (u32::MAX, 0, 0, 4, 0), (u32::MAX, u32::MAX, 0, 1, 1), (u32::MAX, 0, 0, 2, 0)] {
+        rec(&mut m, dt, ct, ot, db, cb);
+        assert_eq!(sa(&mut m, 0, PARAM), GlueOutcome::Return);
+        assert_eq!(LAST.with(|l| l.get()) as i32, -50, "({dt:#x},{ct:#x},{ot:#x},{db},{cb})");
+        assert_eq!(m.mac.mem.read_u16(HIT).unwrap(), 0xFFFF);
+    }
+    assert_eq!(n(&m), 0, "nothing was asked");
+    // {defaultButton=1, cancelButton=3, otherText=NULL}: cancel collapses to 0, the alert is asked (NEGATIVE control of the above)
+    rec(&mut m, u32::MAX, 0, 0, 1, 3);
+    assert_eq!(sa(&mut m, 0, PARAM), GlueOutcome::Idle);
+    assert_eq!((request(&m).buttons, request(&m).cancel), (vec!["OK".to_string()], None));
 }
