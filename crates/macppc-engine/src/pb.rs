@@ -2,7 +2,7 @@
 //! selector) the Universal Interfaces' glue issues, with the block pointer where the trap wants A0 and the OSErr in r3 where it wants D0, run through the SAME handler:
 //! `Mac::os_call_regs` for the plain traps (HFS form = trap bit 9) and `mac68k_engine::fm::traps::call_selector` for the `HFSDispatch` family.
 //! `...Async` completes before it returns (the volume is memory): `ioResult` is already the final result when the program polls it. An asynchronous call with a completion routine
-//! (`ioCompletion` != 0) is refused BY NAME: running it needs the callback machine and no corpus program needs it yet. Not provided, so unbound by name: PBCatSearch, PBHGetVolParms,
+//! (`ioCompletion` != 0) is refused BY NAME: running it needs the callback machine and no corpus program needs it yet. Not provided, so unbound by name: PBCatSearch,
 //! PBXGetVolInfo, PBUnmountVol, the Desktop Database calls (PBDT*), PBHCopyFile.
 use crate::machine::MacPpc;
 use alloc::format;
@@ -27,7 +27,7 @@ const TRAPS: &[(&str, &str)] = &[
 ];
 /// The `_HFSDispatch` selectors by C name (all HFS-only, except `OpenDF`'s two forms).
 const SELECTORS: &[(&str, u16)] = &[("OpenWD", sel::OPEN_WD), ("CloseWD", sel::CLOSE_WD), ("CatMove", sel::CAT_MOVE), ("DirCreate", sel::DIR_CREATE), ("GetWDInfo", sel::GET_WD_INFO),
-    ("GetFCBInfo", sel::GET_FCB_INFO), ("GetCatInfo", sel::GET_CAT_INFO), ("SetCatInfo", sel::SET_CAT_INFO), ("OpenDF", sel::OPEN_DF)];
+    ("GetFCBInfo", sel::GET_FCB_INFO), ("GetCatInfo", sel::GET_CAT_INFO), ("GetVolParms", sel::GET_VOL_PARMS), ("SetCatInfo", sel::SET_CAT_INFO), ("OpenDF", sel::OPEN_DF)];
 
 impl PbCall {
     pub fn by_name(name: &str) -> Option<PbCall> {

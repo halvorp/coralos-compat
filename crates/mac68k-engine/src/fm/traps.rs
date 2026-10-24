@@ -397,6 +397,23 @@ fn get_fcb_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> 
     pb.put_u32(mm, IO_FCB_PAR_ID, info.parent_id).map_err(&g)
 }
 
+/// `PBHGetVolParms` (_HFSDispatch selector 0x30; spec: macos9-specs/InterfaceLib/PBHGetVolParmsSync): a `GetVolParmsInfoBuffer` version 2 (20 bytes: vMVersion 2 @0, vMAttrib @2,
+/// vMLocalHand @6, vMServerAdr @10, vMVolumeGrade @14, vMForeignPrivID @18) into `ioBuffer`, `min(ioReqCount, 20)` bytes, `ioActCount` = the bytes written. The attribute word is 0: the
+/// synthetic volume claims none of the optional features (no Desktop Manager, no CatSearch, no OpenDeny ...) because those calls are not provided. It is a local volume: no server,
+/// grade 0, no foreign file system. An unknown volume is nsvErr.
+fn get_vol_parms<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
+    let g = mem_err("block");
+    let vref = pb.i16(&m.mem, IO_VREF_NUM).map_err(&g)?;
+    let np = pb.u32(&m.mem, IO_NAME_PTR).map_err(&g)?;
+    if np == 0 || m.mem.read_u8(np).unwrap_or(0) == 0 { m.fm.volume_of_vref(vref).map_err(|_| err::NSV_ERR)?; }
+    let (buf, req) = (pb.u32(&m.mem, IO_BUFFER).map_err(&g)?, pb.u32(&m.mem, IO_REQ_COUNT).map_err(&g)?);
+    let mut rec = [0u8; 20];
+    rec[0..2].copy_from_slice(&2u16.to_be_bytes());
+    let n = req.min(rec.len() as u32);
+    if n > 0 { m.mem.write_bytes(buf, &rec[..n as usize]).map_err(|_| err::PARAM_ERR)?; }
+    pb.put_u32(&mut m.mem, IO_ACT_COUNT, n).map_err(&g)
+}
+
 // ---- _HFSDispatch / _FSDispatch -------------------------------------------------------------------------------------------
 
 /// Selectors (D0.W), from Files.h's `HFSDispatch` table.
@@ -410,6 +427,7 @@ pub mod sel {
     pub const GET_CAT_INFO: u16 = 9;
     pub const SET_CAT_INFO: u16 = 10;
     pub const OPEN_DF: u16 = 0x1A;
+    pub const GET_VOL_PARMS: u16 = 0x30;
 }
 
 fn selector_body<U: GuestUi>(selector: u16) -> Option<(&'static str, Body<U>)> {
@@ -423,6 +441,7 @@ fn selector_body<U: GuestUi>(selector: u16) -> Option<(&'static str, Body<U>)> {
         sel::GET_CAT_INFO => Some(("GetCatInfo", get_cat_info::<U>)),
         sel::SET_CAT_INFO => Some(("SetCatInfo", set_cat_info::<U>)),
         sel::OPEN_DF => Some(("OpenDF", open_data::<U>)),
+        sel::GET_VOL_PARMS => Some(("HGetVolParms", get_vol_parms::<U>)),
         _ => None,
     }
 }
