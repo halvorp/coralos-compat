@@ -30,6 +30,10 @@ pub struct CxState {
     parent: BTreeMap<u32, u32>,
     /// dialog -> its cancel item.
     cancel: BTreeMap<u32, i16>,
+    /// (control, part, tag) -> the bytes `SetControlData` stored.
+    cdata: BTreeMap<(u32, i16, u32), Vec<u8>>,
+    /// control -> its view size (`SetControlViewSize`).
+    view: BTreeMap<u32, i32>,
     /// (menu handle, item) -> command ID (`SetMenuItemCommandID`). Keyed by item NUMBER: a program that inserts or deletes items before setting IDs sets them again, as on Mac OS.
     cmds: BTreeMap<(u32, u16), u32>,
 }
@@ -64,6 +68,7 @@ pub enum CxFn {
     GetKeyboardFocus, SetKeyboardFocus, ClearKeyboardFocus, CreateRootControl, GetRootControl, EmbedControl, FindControlUnderMouse,
     GetDialogPort, GetDialogWindow, SetPortDialogPort, CountDITL, GetDialogKeyboardFocusItem, GetDialogTextEditHandle, SetDialogDefaultItem, SetDialogCancelItem,
     SetMenuItemCommandID, GetMenuItemCommandID,
+    GetControlData, SetControlData, SetControlFontStyle, SetControlViewSize, GetControlViewSize, GetDialogItemAsControl, SetThemeBackground,
     TestControl, KeyTranslate,
     IsWindowVisible, IsWindowHilited, GetWindowFromPort, GetNextWindow, GetWindowList, GetWindowBounds, InvalWindowRect, GetRegionBounds,
 }
@@ -81,6 +86,8 @@ impl CxFn {
             "GetDialogPort" => GetDialogPort, "GetDialogWindow" => GetDialogWindow, "SetPortDialogPort" => SetPortDialogPort, "CountDITL" => CountDITL,
             "GetDialogKeyboardFocusItem" => GetDialogKeyboardFocusItem, "GetDialogTextEditHandle" => GetDialogTextEditHandle,
             "SetDialogDefaultItem" => SetDialogDefaultItem, "SetDialogCancelItem" => SetDialogCancelItem,
+            "GetControlData" => GetControlData, "SetControlData" => SetControlData, "SetControlFontStyle" => SetControlFontStyle, "SetControlViewSize" => SetControlViewSize,
+            "GetControlViewSize" => GetControlViewSize, "GetDialogItemAsControl" => GetDialogItemAsControl, "SetThemeBackground" => SetThemeBackground,
             "SetMenuItemCommandID" => SetMenuItemCommandID, "GetMenuItemCommandID" => GetMenuItemCommandID,
             "TestControl" => TestControl, "KeyTranslate" => KeyTranslate,
             "IsWindowVisible" => IsWindowVisible, "IsWindowHilited" => IsWindowHilited, "GetWindowFromPort" => GetWindowFromPort, "GetNextWindow" => GetNextWindow,
@@ -226,6 +233,41 @@ impl<U: GuestUi> MacPpc<U> {
                     part
                 }
             }
+            // ---- control data (spec: macos9-specs/ControlsLib/GetControlData, SetControlData, SetControlFontStyle, SetControlViewSize)
+            SetControlData | GetControlData | SetControlFontStyle => return self.cx_control_data(f, cpu, [a0, a1, a2, a3]),
+            SetControlViewSize => { if self.mac.tr.procs.contains_key(&a0) { self.cx.view.insert(a0, a1 as i32); } 0 }
+            GetControlViewSize => self.cx.view.get(&a0).copied().unwrap_or(0) as u32,
+            // GetDialogItemAsControl(dialog, itemNo, &control): -50 for a NULL/unknown dialog or an item outside the list; the help item and (without a root control) a non-control item are
+            // errItemNotControl (-30596); the item's handle is the ControlRef (spec: macos9-specs/AppearanceLib/GetDialogItemAsControl)
+            GetDialogItemAsControl => {
+                let item = a1 as u16 as i16;
+                match (item >= 1).then(|| self.mac.dialog_item_slot(a0, item)).flatten() {
+                    None => (-50i32) as u32,
+                    Some((ty, handle)) => {
+                        let t = ty & 0x7F;
+                        if t == 1 || (t & 4 == 0 && !self.cx.root.contains_key(&a0)) { (-30596i32) as u32 } else { self.cx_put32(a2, handle, n)?; 0 }
+                    }
+                }
+            }
+            // SetThemeBackground(brush, depth, isColorDevice): black (-1) and white (-2) set the port's background colour and the library's solid background pattern; brushes 1..48 belong
+            // to the theme (below); anything else is themeInvalidBrushErr (-30560) with no port change
+            SetThemeBackground => {
+                let brush = a0 as u16 as i16;
+                match brush {
+                    -1 | -2 => {
+                        let c = if brush == -1 { 0u16 } else { 0xFFFF };
+                        let tmp = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, 16, true).map_err(|_| format!("{n}: out of memory"))?;
+                        for i in 0..3 { let _ = self.mac.mem.write_u16(tmp + 2 * i, c); }
+                        // the "solid" background pattern fills with the background colour: an all-zero (white) pattern
+                        let r = self.cx_trap("RGBBackColor", &[tmp]).and_then(|_| self.cx_trap("BackPat", &[tmp + 8]));
+                        let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, tmp);
+                        r?;
+                        0
+                    }
+                    1..=48 => { self.mac.log.push(format!("[theme] SetThemeBackground brush {brush}: the host theme paints window and dialog backgrounds; the port's background colour is unchanged")); 0 }
+                    _ => (-30560i32) as u32,
+                }
+            }
             // ---- windows
             IsWindowVisible => { self.cx_window(a0, n)?; u32::from(self.mac.mem.read_u8(a0 + WR_VISIBLE).unwrap_or(0) != 0) }
             IsWindowHilited => { self.cx_window(a0, n)?; u32::from(self.mac.mem.read_u8(a0 + WR_HILITED).unwrap_or(0) != 0) }
@@ -256,6 +298,73 @@ impl<U: GuestUi> MacPpc<U> {
             GetRegionBounds => { let p = self.cx_rec(a0, n)?; let r = self.cx_rect(p + 2, n)?; self.cx_put_rect(a1, r, n)?; a1 }
         };
         cpu.gpr[3] = r;
+        Ok(())
+    }
+}
+
+const ERR_MESSAGE_NOT_SUPPORTED: i32 = -30580;
+const ERR_DATA_NOT_SUPPORTED: i32 = -30581;
+const ERR_DATA_SIZE_MISMATCH: i32 = -30591;
+
+impl<U: GuestUi> MacPpc<U> {
+    /// Appearance controls (CDEF ids 3 and up, except the classic pop-up CDEF 63) advertise the data-access feature (bit 0x40); the classic CDEFs 0..2 and the classic pop-up do not.
+    fn cx_data_access(&self, ctl: u32) -> bool { self.mac.tr.procs.get(&ctl).is_some_and(|&p| { let id = p >> 4; id >= 3 && id != 63 }) }
+
+    /// The tags this engine keeps for a control: (fixed size or 0 = any, may the host see it). Anything else is errDataNotSupported (-30581), as the spec's native-port note says.
+    fn cx_tag_size(tag: u32) -> Option<u32> {
+        Some(match &tag.to_be_bytes() { b"font" => 24, b"dflt" | b"cncl" | b"inde" => 1, b"size" => 2, b"text" => 0, _ => return None })
+    }
+
+    pub(crate) fn cx_control_data(&mut self, f: CxFn, cpu: &mut Cpu, a: [u32; 4]) -> Result<(), String> {
+        let n = format!("{f:?}");
+        let r: i32 = (|| -> Result<i32, String> {
+            let ctl = a[0];
+            if ctl == 0 || !self.mac.tr.procs.contains_key(&ctl) { return Ok(-50); }
+            if f == CxFn::SetControlFontStyle {
+                if a[1] == 0 { return Ok(-50); }
+                if !self.cx_data_access(ctl) { return Ok(ERR_MESSAGE_NOT_SUPPORTED); }
+                let rec = self.get_bytes(a[1], 24, &n)?;
+                self.cx.cdata.insert((ctl, 0, u32::from_be_bytes(*b"font")), rec);
+                return Ok(0);
+            }
+            if !self.cx_data_access(ctl) { return Ok(ERR_MESSAGE_NOT_SUPPORTED); }
+            let part = a[1] as u16 as i16;
+            let tag = a[2];
+            let Some(fixed) = Self::cx_tag_size(tag) else {
+                self.mac.log.push(format!("[control] {n} tag '{}': not a tag this engine keeps (errDataNotSupported)", String::from_utf8_lossy(&tag.to_be_bytes())));
+                return Ok(ERR_DATA_NOT_SUPPORTED);
+            };
+            if f == CxFn::SetControlData {
+                let (size, data) = (a[3], arg(self, cpu, 4)?);
+                if fixed != 0 && size != fixed { return Ok(ERR_DATA_SIZE_MISMATCH); }
+                let bytes = self.get_bytes(data, size, &n)?;
+                if &tag.to_be_bytes() == b"text" {
+                    // a text control's title is its text: the same handler SetControlTitle runs, which updates the native control
+                    let t = &bytes[..bytes.len().min(255)];
+                    let tmp = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, 260, true).map_err(|_| format!("{n}: out of memory"))?;
+                    let mut b = alloc::vec![t.len() as u8]; b.extend_from_slice(t);
+                    let _ = self.mac.mem.write_bytes(tmp, &b);
+                    let r = self.cx_trap("SetControlTitle", &[ctl, tmp]);
+                    let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, tmp);
+                    r?;
+                }
+                self.cx.cdata.insert((ctl, part, tag), bytes);
+                return Ok(0);
+            }
+            // GetControlData(ctl, part, tag, size, buffer, &actual)
+            let (size, buf, actual) = (a[3], arg(self, cpu, 4)?, arg(self, cpu, 5)?);
+            let stored = match self.cx.cdata.get(&(ctl, part, tag)) {
+                Some(v) => v.clone(),
+                None if &tag.to_be_bytes() == b"text" => { let p = self.cx_rec(ctl, &n)?; let l = self.mac.mem.read_u8(p + 40).unwrap_or(0); self.get_bytes(p + 41, u32::from(l), &n)? }
+                None => return Ok(ERR_DATA_NOT_SUPPORTED),
+            };
+            if fixed != 0 && size < fixed { return Ok(ERR_DATA_SIZE_MISMATCH); }
+            let take = stored.len().min(size as usize);
+            if buf != 0 { self.put_bytes(buf, &stored[..take], &n)?; }
+            if actual != 0 { self.mac.mem.write_u32(actual, stored.len() as u32).map_err(|_| format!("{n}: outActualSize leaves guest RAM"))?; }
+            Ok(0)
+        })()?;
+        cpu.gpr[3] = r as u32;
         Ok(())
     }
 }

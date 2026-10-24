@@ -183,3 +183,75 @@ fn hidewindow_keeps_the_window_open_and_tells_the_host_and_showwindow_brings_it_
     let _ = m.glue_call("HideWindow", &mut regs);
     assert!(m.mac.refused.iter().chain(m.mac.log.iter()).any(|l| l.contains("HideWindow") && l.contains("not an open window")), "{:?} {:?}", m.mac.refused, m.mac.log.last());
 }
+
+fn calli(m: &mut M, name: &str, args: &[u32]) -> i32 { call(m, name, args) as i32 }
+
+fn dialog_machine() -> (M, u32) {
+    let (mut m, _) = machine();
+    m.mac.rm.open_fork(mac68k_engine::resmgr::APP_REF_NUM, retro_resfork::ResFork::parse(mac68k_engine::fixture::dialog_fork()).unwrap());
+    let dlg = call(&mut m, "GetNewDialog", &[128, 0, 0xFFFF_FFFF]);
+    assert_ne!(dlg, 0, "{:?}", m.mac.refused);
+    (m, dlg)
+}
+
+#[test]
+fn getdialogitemascontrol_follows_the_spec_vectors() {
+    // spec: macos9-specs/AppearanceLib/GetDialogItemAsControl
+    let (mut m, dlg) = dialog_machine();
+    assert_eq!(call(&mut m, "GetDialogItemAsControl", &[dlg, 1, OUT]), 0);
+    let ctl = m.mac.mem.read_u32(OUT).unwrap();
+    assert_eq!(ctl, m.mac.tr.dlg.dialogs[&dlg].list[0].handle, "the item handle is the ControlRef");
+    assert_eq!(call(&mut m, "GetDialogItemAsControl", &[dlg, 3, OUT]), 0, "a check box item is a control item");
+    // NEGATIVE controls: a static text item in a classic dialog, the user item, item 0, -1, count+1, a NULL dialog
+    m.mac.mem.write_u32(OUT, 0xDEAD).unwrap();
+    assert_eq!(calli(&mut m, "GetDialogItemAsControl", &[dlg, 4, OUT]), -30596);
+    assert_eq!(calli(&mut m, "GetDialogItemAsControl", &[dlg, 6, OUT]), -30596);
+    assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 0xDEAD, "outControl untouched on an error");
+    for bad in [0u32, 0xFFFF_FFFF, 7] { assert_eq!(calli(&mut m, "GetDialogItemAsControl", &[dlg, bad, OUT]), -50, "item {bad:#x}"); }
+    assert_eq!(calli(&mut m, "GetDialogItemAsControl", &[0, 1, OUT]), -50);
+    // with a root control every item is a control
+    call(&mut m, "CreateRootControl", &[dlg, OUT]);
+    assert_eq!(call(&mut m, "GetDialogItemAsControl", &[dlg, 4, OUT]), 0);
+}
+
+#[test]
+fn control_data_fontstyle_viewsize_and_theme_background() {
+    let (mut m, win) = machine();
+    let classic = new_button(&mut m, win);
+    // an Appearance push button (kControlPushButtonProc = 368)
+    let ctl = call(&mut m, "NewControl", &[win, RECT, TITLE, 1, 0, 0, 1, 368, 0]);
+    assert_ne!(ctl, 0, "{:?}", m.mac.refused);
+    let font = u32::from_be_bytes(*b"font");
+    let mut rec = [0u8; 24];
+    rec[0..2].copy_from_slice(&0x0002u16.to_be_bytes()); // flags: size
+    rec[4..6].copy_from_slice(&12u16.to_be_bytes());
+    m.mac.mem.write_bytes(BUF, &rec).unwrap();
+    // spec vectors: NULL control -50; a control without data access -30580 (the classic push button); the Appearance one accepts
+    assert_eq!(calli(&mut m, "SetControlData", &[0, 0, font, 24, BUF]), -50);
+    assert_eq!(calli(&mut m, "SetControlData", &[classic, 0, font, 24, BUF]), -30580);
+    assert_eq!(calli(&mut m, "SetControlFontStyle", &[classic, BUF]), -30580);
+    assert_eq!(calli(&mut m, "SetControlFontStyle", &[ctl, 0]), -50);
+    assert_eq!(call(&mut m, "SetControlFontStyle", &[ctl, BUF]), 0);
+    assert_eq!(call(&mut m, "GetControlData", &[ctl, 0, font, 24, OUT, OUT + 0x40]), 0);
+    assert_eq!(m.mac.mem.bytes(m.mac.mem.span(OUT, 24).unwrap()).unwrap(), &rec[..], "SetControlFontStyle = SetControlData('font')");
+    assert_eq!(m.mac.mem.read_u32(OUT + 0x40).unwrap(), 24);
+    // wrong size for a fixed-size tag -30591, unknown tag -30581 (errDataNotSupported)
+    assert_eq!(calli(&mut m, "SetControlData", &[ctl, 0, font, 8, BUF]), -30591);
+    assert_eq!(calli(&mut m, "SetControlData", &[ctl, 0, u32::from_be_bytes(*b"zzzz"), 1, BUF]), -30581);
+    assert_eq!(calli(&mut m, "GetControlData", &[ctl, 0, u32::from_be_bytes(*b"dflt"), 1, OUT, 0]), -30581, "nothing stored under dflt");
+    m.mac.mem.write_u8(BUF, 1).unwrap();
+    assert_eq!(call(&mut m, "SetControlData", &[ctl, 0, u32::from_be_bytes(*b"dflt"), 1, BUF]), 0);
+    // view size: stored; unknown control ignored
+    call(&mut m, "SetControlViewSize", &[ctl, 50]);
+    assert_eq!(call(&mut m, "GetControlViewSize", &[ctl]), 50);
+    call(&mut m, "SetControlViewSize", &[0x1234, 5]);
+    // SetThemeBackground: black and white set the port's background colour; brush 0, 49, -3 are themeInvalidBrushErr and change nothing
+    let bk = |m: &mut M| { call(m, "GetBackColor", &[OUT + 0x80]); (0..3).map(|i| m.mac.mem.read_u16(OUT + 0x80 + 2 * i).unwrap()).collect::<Vec<_>>() };
+    call(&mut m, "SetPort", &[win]);
+    assert_eq!(call(&mut m, "SetThemeBackground", &[(-1i32) as u32, 8, 1]), 0);
+    assert_eq!(bk(&mut m), vec![0, 0, 0], "kThemeBrushBlack: background colour black");
+    assert_eq!(call(&mut m, "SetThemeBackground", &[(-2i32) as u32, 32, 1]), 0);
+    assert_eq!(bk(&mut m), vec![0xFFFF; 3], "kThemeBrushWhite");
+    for bad in [0i32, 49, -3] { assert_eq!(calli(&mut m, "SetThemeBackground", &[bad as u32, 8, 1]), -30560, "brush {bad}"); assert_eq!(bk(&mut m), vec![0xFFFF; 3], "no port change on a bad brush"); }
+    assert_eq!(call(&mut m, "SetThemeBackground", &[1, 8, 1]), 0, "a theme brush is accepted (the host paints it)");
+}

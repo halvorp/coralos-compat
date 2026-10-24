@@ -509,3 +509,11 @@ fn select_dialog_item_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) ->
     m.mem.write_u16(win + DR_EDIT_FIELD, idx as u16).map_err(Refusal::mem("editField"))?;
     done(format!("[dialog] SelectDialogItemText {win:#x} item {item} [{start},{end}) (the host field keeps its own selection)"))
 }
+
+impl<U: GuestUi> Mac<U> {
+    /// Item `n` (1-based) of dialog `win`: (item type byte, item handle) as the dialog's private item list holds them, or None for an unknown dialog or an item outside the list.
+    pub fn dialog_item_slot(&self, win: u32, n: i16) -> Option<(u8, u32)> {
+        let d = self.tr.dlg.dialogs.get(&win)?;
+        d.list.get((n as usize).checked_sub(1)?).map(|s| (s.raw_type, s.handle))
+    }
+}
