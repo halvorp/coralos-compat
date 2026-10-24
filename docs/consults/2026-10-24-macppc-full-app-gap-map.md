@@ -86,3 +86,13 @@ Missing, in build order:
 8. Multiprocessing Services + Thread Manager (scheduler design).
 9. DrawSprocket / InputSprocket shims.
 10. OpenGL/AGL (command stream + a backend; the largest piece, and the one that makes WC3 visible).
+
+## Status after round 4 (2026-10-24)
+Landed since this map was written: StdCLib/MathLib natives, the FSSpec and File Manager C routines, the FILE stream layer (`stdio.rs`), qsort/bsearch/atexit callbacks (`callback_c.rs`), the PowerPC
+Gestalt profile (`gestalt_ppc.rs`), the scheduler (`sched.rs`), the cooperative Thread Manager (`threads.rs`, `'thds'` answered), cooperative Multiprocessing Services (`mp.rs`), CoreFoundation strings
+(`cf.rs`) and the Carbon Event Manager core with `CreateNewWindow`/`SetWindowTitleWithCFString` (`carbon.rs`). Still missing for a Carbon game, in the order I would take them:
+1. Menu commands: `kEventCommandProcess` needs `SetMenuItemCommandID`/`GetMenuItemCommandID` and the menu bar to deliver HICommands; today menu choices are dropped by the Carbon converter (logged).
+2. More window events and calls: `kEventWindowBoundsChanged`, `GetWindowBounds`/`SetWindowBounds`, `SetWindowProperty`, `InstallStandardEventHandler` defaults beyond close/update, floating windows (the seam has no floating role), `ShowWindow` ordering rules.
+3. Timers and the event-loop services games use: `InstallEventLoopTimer`, `InstallApplicationEventHandler` variants are macros over what exists; `ReceiveNextEvent` ignores the type filter and refuses peek (`pullEvent` false).
+4. HIToolbox views (`HIViewRef`, `HIObject`), Appearance Manager, Navigation Services, Control Manager Carbon accessors (`GetControlBounds`...), `Gestalt 'cbon'`/`'appr'`/`'nav '`/`'sysv'` once the above are true.
+5. Preemption for MP Services (see `mp.rs`'s header), Sound Manager (the mac68k worker), DrawSprocket/InputSprocket shims, OpenGL/AGL.

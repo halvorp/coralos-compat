@@ -45,6 +45,11 @@ pub fn lookup(name: &str) -> Option<Binding> {
 /// How `name` is served by ThreadsLib.
 pub fn threads_lookup(name: &str) -> Option<Binding> { crate::threads::ThreadFn::by_name(name).map(|f| Binding::Native(Native::Thread(f))) }
 
+/// How `name` is served by CarbonLib beyond the Toolbox table: CoreFoundation strings and the Carbon Event Manager.
+pub fn carbon_lookup(name: &str) -> Option<Binding> {
+    crate::cf::CfFn::by_name(name).map(|f| Binding::Native(Native::Cf(f))).or_else(|| crate::carbon::CarbonFn::by_name(name).map(|f| Binding::Native(Native::Carbon(f))))
+}
+
 /// How `name` is served by MPLibrary.
 pub fn mp_lookup(name: &str) -> Option<Binding> { crate::mp::MpFn::by_name(name).map(|f| Binding::Native(Native::Mp(f))) }
 

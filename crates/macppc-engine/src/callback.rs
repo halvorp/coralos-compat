@@ -48,6 +48,8 @@ pub(crate) enum Continuation {
     Bsearch(crate::callback_c::Search),
     /// `exit` running the `atexit` handlers, last registered first; the run ends after the last.
     AtExit,
+    /// A Carbon event being offered to the program's handlers ([`crate::carbon`]).
+    Carbon(crate::carbon::Dispatch),
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +124,7 @@ impl<U: GuestUi> MacPpc<U> {
             Continuation::Qsort(_) => self.sort_returned(cpu, frame),
             Continuation::Bsearch(_) => self.search_returned(cpu, frame),
             Continuation::AtExit => self.exit_handler_returned(cpu, frame),
+            Continuation::Carbon(_) => self.dispatch_returned(cpu, frame),
         }
     }
 

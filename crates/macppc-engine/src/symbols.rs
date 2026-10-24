@@ -49,6 +49,10 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Thread(crate::threads::ThreadFn),
     /// A Multiprocessing Services call ([`crate::mp`]).
     Mp(crate::mp::MpFn),
+    /// A CoreFoundation string call ([`crate::cf`]).
+    Cf(crate::cf::CfFn),
+    /// A Carbon Event Manager / Carbon window call ([`crate::carbon`]).
+    Carbon(crate::carbon::CarbonFn),
     /// An FSSpec call (`FSMakeFSSpec`, `FSpOpenDF` ...): [`crate::fsspec`].
     Spec(crate::fsspec::SpecCall),
     /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.

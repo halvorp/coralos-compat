@@ -71,7 +71,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
     }
 
-    fn put32(&mut self, at: u32, v: u32, who: &str) -> Result<(), String> {
+    pub(crate) fn put32(&mut self, at: u32, v: u32, who: &str) -> Result<(), String> {
         if at == 0 { return Ok(()); }
         self.mac.mem.write_u32(at, v).map_err(|_| format!("{who}: result pointer {at:#x} leaves guest RAM"))
     }

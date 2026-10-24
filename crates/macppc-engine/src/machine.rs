@@ -96,6 +96,12 @@ impl<U: GuestUi> MacPpc<U> {
                     b
                 }
             },
+            // CarbonLib exports the Toolbox AND the Carbon-only calls (CoreFoundation strings, the Carbon Event Manager, CreateNewWindow ...)
+            "CarbonLib" if crate::stdclib::carbon_lookup(name).is_some() => {
+                let b = crate::stdclib::carbon_lookup(name).expect("checked");
+                self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
+                b
+            }
             l if crate::natives::provided(l) => self.bind(name),
             l => {
                 // Recorded under the glue key like every other binding: a CALL of the symbol must refuse by NAME (`NEXT-NEEDED lib/sym: ...`),

@@ -41,6 +41,8 @@ pub mod threads;
 pub mod stdio;
 pub mod symbols;
 pub mod callback;
+pub mod carbon;
+pub mod cf;
 pub mod callback_c;
 pub mod clib;
 pub mod clib_fmt;
