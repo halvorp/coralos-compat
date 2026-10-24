@@ -56,7 +56,7 @@ fn the_toolbox_showcase_fat_app_runs_past_the_file_manager_to_the_colour_window_
     // STYLED one (_TEStyleNew).
     let Some(m) = census("systemless-showcase/showcase.rsrc") else { return };
     assert!(m.log.iter().any(|l| l.starts_with("[textedit] TENew")), "the showcase's TENew is answered: {:#?}", m.log);
-    assert_eq!(m.refused, vec!["unimplemented trap _MeasureText ($A837)".to_string()], "styled TextEdit exists now (textedit/styled.rs), so the showcase creates its styled record and the next wall is the Font Manager's MeasureText: {:#?}", m.log);
+    assert_eq!(m.refused, vec!["unimplemented trap _QDExtensions ($AB1D)".to_string()], "styled TextEdit (textedit/styled.rs) and MeasureText answer now; the next wall is the QuickDraw extensions dispatch: {:#?}", m.log);
     assert!(m.log.iter().any(|l| l.starts_with("[textedit] TEStyleNew")), "TEStyleNew is answered");
 }
 
@@ -66,7 +66,6 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // Each pins how far the app gets TODAY; when a trap lands the stop moves on and the row is updated deliberately.
     for (app, stop) in [
         ("mac/glider-pro/fx/Utilities_Moving Van.bin", "DrawPicture 0x"), // past SetControlReference: its PICT is a version-2 picture
-        ("mac/simpletext/ux/SimpleText.rsrc", "unimplemented trap _Pack14 ($A830)"), // 1.4: past Pack7 (register package), ResErr after GetNewMBar, Pack8, the Finder's oapp event, and styled TextEdit (TEStyleNew, TEAutoView, TEDispatch): the next wall is Pack14
     ] {
         let Some(m) = census(app) else { continue };
         assert!(m.refused.last().is_some_and(|r| r.contains(stop)), "{app}: {:?}\n{:#?}", m.refused.last(), m.log);
@@ -131,7 +130,7 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.
-    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", ""), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "unimplemented trap _Pack14 ($A830)")] {
+    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", ""), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "CopyRgn")] {
         let Some(m) = census(app) else { continue };
         // ResEdit finds itself (SetVol with GetVol's bare volume name restores the default directory) and accepts its fresh preferences file (a
         // new resource fork is the 286 bytes CreateResFile writes), so it no longer declares itself or its preferences damaged: nothing refused.
@@ -230,4 +229,23 @@ fn macpaint_2_1f_reaches_its_event_loop_and_its_palettes_own_wdef_is_refused_by_
     assert_eq!(m.windows.len(), 1, "only the Diagnostic window exists");
     assert!(m.windows.values().all(|w| w.proc_id == 16 && w.native.is_none()), "Diagnostic, created hidden");
     assert!(m.log.iter().any(|l| l.contains("NewWindow \"Diagnostic\"") && l.contains("proc=16")));
+}
+
+#[test]
+fn simpletext_opens_its_untitled_window_with_menus_and_a_scroll_bar_and_parks_in_its_event_loop() {
+    // 1.3 and 1.4 (Macintosh Garden): styled TextEdit (TEStyleNew, TEDispatch, TEAutoView), the Help Manager's HMGetBalloons, the Script
+    // Manager's GetScriptManagerVariable and the Font Manager's MeasureText all answer now; each opens "untitled" as a native document window
+    // with its menu strip and vertical scroll bar, draws its caret (TEIdle) and waits for an event with no unimplemented trap.
+    use guestui_abi::{UiCall, WindowRole};
+    for app in ["mac/simpletext/ux/SimpleText.rsrc", "mac/simpletext/u13/SimpleText 1.3.rsrc"] {
+        let Some(m) = census(app) else { continue };
+        assert!(m.unimplemented_at.is_empty(), "{app}: {:?}", m.unimplemented_at);
+        let opens: Vec<_> = m.ui.calls.iter().filter_map(|c| match c { UiCall::OpenWindow(w) => Some(w.clone()), _ => None }).collect();
+        assert_eq!(opens.len(), 1, "{app}: {:?}", m.ui.calls.len());
+        assert_eq!((opens[0].title.as_str(), opens[0].role), ("untitled", WindowRole::Document));
+        assert!(m.ui.calls.iter().any(|c| matches!(c, UiCall::SetMenuStrip(..))) && m.log.iter().any(|l| l.starts_with("[textedit] TEStyleNew")), "{app}: menus and a styled record");
+        assert!(m.log.iter().any(|l| l.starts_with("[script] GetScriptManagerVariable")) && m.log.iter().any(|l| l.starts_with("[help] HMGetBalloons")), "{app}");
+        // what is still refused is named: the outline-highlight feature flag, GetScriptVariable, the Apple Event selector (and, in 1.3, CopyRgn of NIL)
+        assert!(m.refused.iter().all(|r| r.contains("TEFeatureFlag") || r.contains("GetScriptVariable") || r.contains("Apple Event") || r.contains("CopyRgn")), "{app}: {:?}", m.refused);
+    }
 }

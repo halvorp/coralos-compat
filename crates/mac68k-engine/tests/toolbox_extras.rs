@@ -386,3 +386,35 @@ fn the_help_manager_says_balloon_help_is_off_and_names_what_it_does_not_do() {
     assert!(m.refused.iter().any(|r| r.contains("Help Manager") && r.contains("0x0200")), "{:?}", m.refused);
     assert_eq!(m.mem.read_u16(0x3000).unwrap(), 0x7777, "the slot is untouched by a selector that is refused");
 }
+
+#[test]
+fn script_util_answers_the_roman_script_and_pops_every_frame_it_decodes() {
+    // frames from the selector itself: byte 3 = $80 | result bytes, byte 2 = argument bytes, low word = routine number
+    let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+    let mut p = Prog::new();
+    // a marker under everything: if any frame were popped wrongly it would not come back
+    p.w(0x7777);
+    // GetScriptManagerVariable(smKeyScript = 22): LONGINT result, one word argument, $84020008 (SimpleText's own call)
+    p.clr_l().w(22).l(0x8402_0008).trap(0xA8B5).pop_l(0x3000);
+    // smEnabled = 4
+    p.clr_l().w(4).l(0x8402_0008).trap(0xA8B5).pop_l(0x3004);
+    // FontScript: INTEGER, no arguments, $82000000
+    p.w(0x5555).l(0x8200_0000).trap(0xA8B5).pop_w(0x3008);
+    // FontToScript(fontNum): $82020006
+    p.w(0x5555).w(3).l(0x8202_0006).trap(0xA8B5).pop_w(0x300A);
+    // VisibleLength(textPtr, textLen): LONGINT, 8 bytes of arguments, $84080028; "ab \t " -> 2
+    p.clr_l().l(0x3100).l(5).l(0x8408_0028).trap(0xA8B5).pop_l(0x300C);
+    // an unimplemented routine (Pixel2Char, $820E0014: INTEGER result, 14 bytes of arguments): the frame is popped, the result untouched
+    p.w(0x4444).l(0).l(0).l(0).w(0).l(0x820E_0014).trap(0xA8B5).pop_w(0x3010);
+    p.pop_w(0x3012); // the marker
+    m.start(&{ p.exit(); p.0.clone() }, 0).unwrap();
+    m.mem.write_bytes(0x3100, b"ab \t ").unwrap();
+    let _ = m.run_loop(100_000);
+    let r = |a: u32| m.mem.read_u32(a).unwrap();
+    assert_eq!((r(0x3000), r(0x3004)), (0, 1), "smKeyScript is Roman, smEnabled counts one script");
+    assert_eq!((m.mem.read_u16(0x3008).unwrap(), m.mem.read_u16(0x300A).unwrap()), (0, 0), "FontScript and FontToScript: smRoman");
+    assert_eq!(r(0x300C), 2, "VisibleLength drops the trailing blank and tab");
+    assert_eq!(m.mem.read_u16(0x3010).unwrap(), 0x4444, "a refused routine leaves its result slot alone");
+    assert_eq!(m.mem.read_u16(0x3012).unwrap(), 0x7777, "every frame was popped exactly: the marker is back");
+    assert!(m.refused.len() == 1 && m.refused[0].contains("Pixel2Char"), "only Pixel2Char is refused, by name: {:?}", m.refused);
+}
