@@ -556,3 +556,29 @@ fn newpixmap_on_a_machine_without_color_quickdraw_is_a_named_refusal() {
     let _ = m.run_loop(1_000_000);
     assert!(m.refused.iter().any(|r| r.contains("no current GDevice")), "{:?}", m.refused);
 }
+
+#[test]
+fn set_entries_writes_the_device_table_by_position_or_by_value_and_refuses_past_the_end() {
+    let mut m = machine("mac-ii");
+    let before = m.device_clut().unwrap();
+    // two ColorSpecs at 0x3600: { value 9, rgb }, { value 3, rgb }
+    for (i, (v, c)) in [(9u16, (0x1111u16, 0x2222u16, 0x3333u16)), (3, (0xAAAA, 0xBBBB, 0xCCCC))].into_iter().enumerate() {
+        m.mem.write_u16(0x3600 + 8 * i as u32, v).unwrap();
+        rgb(&mut m, 0x3602 + 8 * i as u32, c);
+    }
+    // by position: start 10, count 1 -> entries 10 and 11 (the value words are ignored)
+    script(&mut m, &[call("SetEntries", &[Lit(10), Lit(1), Lit(0x3600)], None)]);
+    let t = m.device_clut().unwrap();
+    assert_eq!((t[10].r, t[11].b), (0x1111, 0xCCCC), "written by position");
+    assert_eq!((t[9], t[3]), (before[9], before[3]), "the value words were not used as indexes");
+    // by value: start -1 -> entry 9 and entry 3
+    script(&mut m, &[call("SetEntries", &[Lit(0xFFFF), Lit(1), Lit(0x3600)], None)]);
+    let t = m.device_clut().unwrap();
+    assert_eq!((t[9].g, t[3].r), (0x2222, 0xAAAA), "written by value");
+    // past the end of the 256-entry table: a named refusal (and it does not touch the table's last entries)
+    let mut p = Prog::new();
+    p.w(255).w(1).l(0x3600).trap(0xAA3F).exit();
+    m.start(&p.0, 0).unwrap();
+    let _ = m.run_loop(1_000_000);
+    assert!(m.refused.iter().any(|r| r.contains("SetEntries") && r.contains("past the device's 256-entry table")), "{:?}", m.refused);
+}

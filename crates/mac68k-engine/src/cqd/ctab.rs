@@ -30,6 +30,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     use crate::qd::reg;
     reg(m, 0xAA18, "GetCTable", &[Arg::W], Some(Arg::L), get_ctable::<U>)?;
     reg(m, 0xAA24, "DisposeCTable", &[Arg::L], None, dispose_ctable::<U>)?;
+    reg(m, 0xAA3F, "SetEntries", &[Arg::W, Arg::W, Arg::P], None, set_entries::<U>)?;
     reg(m, 0xAA28, "GetCTSeed", &[], Some(Arg::L), get_ct_seed::<U>)?;
     reg(m, 0xAA33, "Color2Index", &[Arg::P], Some(Arg::L), color2index::<U>)?;
     reg(m, 0xAA34, "Index2Color", &[Arg::L, Arg::P], None, index2color::<U>)?;
@@ -71,7 +72,7 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// The table the current device (`TheGDevice`) uses.
-    pub(crate) fn device_clut(&self) -> Result<Vec<Rgb>, Refusal> {
+    pub fn device_clut(&self) -> Result<Vec<Rgb>, Refusal> {
         let gd = self.the_gdevice()?;
         let pm = self.deref_handle(self.mem.read_u32(self.deref_handle(gd, "GDHandle")? + super::gdevice::GD_PMAP).map_err(Refusal::mem("GDevice"))?, "gdPMap")?;
         self.read_ctab(self.mem.read_u32(pm + super::pixmap::PM_TABLE).map_err(Refusal::mem("PixMap"))?)
@@ -105,6 +106,32 @@ fn dispose_ctable<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<D
     m.deref_handle(h, "DisposeCTable")?;
     m.dispose_handle(h).map_err(|e| Refusal(format!("DisposeCTable {h:#x}: memory manager error {e}")))?;
     Ok(Done { result: 0, log: format!("[quickdraw] DisposeCTable {h:#x}") })
+}
+
+/// `PROCEDURE SetEntries(start, count: INTEGER; aTable: CSpecArray)` ($AA3F): write `count + 1` colour specs into the CURRENT DEVICE's
+/// table (Inside Macintosh: Imaging With QuickDraw, "Color Manager"). With `start` >= 0 the specs fill entries `start ..= start + count` in
+/// order and their `value` words are ignored; with `start` = -1 each spec's `value` is the entry it sets. The table gets a new seed, and
+/// every colour window sharing it is shown again with the new colours (qd `refresh_palettes`). An entry past the table is a named refusal
+/// (the Color Manager's reply is undocumented); the entries before it are written.
+fn set_entries<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (start, count, specs) = (c.args.get(0) as u16 as i16, c.args.get(1) as u16 as i16, c.args.get(2));
+    if count < 0 { return Err(Refusal(format!("SetEntries: count {count} is negative"))); }
+    let gd = m.the_gdevice()?;
+    let pm = m.deref_handle(m.mem.read_u32(m.deref_handle(gd, "GDHandle")? + super::gdevice::GD_PMAP).map_err(Refusal::mem("GDevice"))?, "gdPMap")?;
+    let ct = m.mem.read_u32(pm + super::pixmap::PM_TABLE).map_err(Refusal::mem("PixMap"))?;
+    let tp = m.deref_handle(ct, "the device's colour table")?;
+    let e = Refusal::mem("ColorSpec");
+    let entries = u32::from(m.mem.read_u16(tp + CT_SIZE).map_err(&e)?) + 1;
+    for i in 0..=count as u32 {
+        let spec = specs.wrapping_add(SPEC * i);
+        let index = if start < 0 { u32::from(m.mem.read_u16(spec).map_err(&e)?) } else { start as u32 + i };
+        if index >= entries { return Err(Refusal(format!("SetEntries: entry {index} is past the device's {entries}-entry table"))); }
+        let rgb = read_rgb(&m.mem, spec + 2)?;
+        write_rgb(&mut m.mem, tp + CT_TABLE + SPEC * index + 2, rgb)?;
+    }
+    let seed = m.unique_seed();
+    m.mem.write_u32(tp + CT_SEED, seed).map_err(&e)?;
+    Ok(Done { result: 0, log: format!("[quickdraw] SetEntries start {start} count {count}: {} colour(s) set in the device table", count + 1) })
 }
 
 fn get_ct_seed<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
