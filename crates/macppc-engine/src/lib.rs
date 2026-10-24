@@ -41,6 +41,7 @@ pub mod stdclib;
 pub mod threads;
 pub mod alias_c;
 pub mod carbon_ctl;
+pub mod cf_more;
 pub mod script_c;
 pub mod tsm_c;
 pub mod gworld;

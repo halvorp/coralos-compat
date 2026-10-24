@@ -32,12 +32,20 @@ impl CfFn {
 #[derive(Default)]
 pub(crate) struct CfState { strings: BTreeMap<u32, (Vec<u8>, u32, bool)>, constants: BTreeMap<Vec<u8>, u32>, next: u32 }
 
+impl CfState {
+    /// A fresh object id (shared by strings, arrays, dictionaries, numbers and URLs: one id space).
+    pub(crate) fn next_id(&mut self) -> u32 { self.next += 1; CF_BASE + 8 * self.next }
+    pub(crate) fn string(&self, r: u32) -> Option<&[u8]> { self.strings.get(&r).map(|s| s.0.as_slice()) }
+    pub(crate) fn string_mut(&mut self, r: u32) -> Option<&mut Vec<u8>> { self.strings.get_mut(&r).filter(|s| !s.2).map(|s| &mut s.0) }
+    pub(crate) fn retain_count(&self, r: u32) -> Option<u32> { self.strings.get(&r).map(|s| s.1) }
+}
+
 const CF_BASE: u32 = 0x00CF_0000;
 
 impl<U: GuestUi> MacPpc<U> {
+    pub(crate) fn cf_make(&mut self, bytes: Vec<u8>) -> u32 { self.cf_new(bytes, false) }
     fn cf_new(&mut self, bytes: Vec<u8>, constant: bool) -> u32 {
-        self.rt.cf.next += 1;
-        let id = CF_BASE + 8 * self.rt.cf.next;
+        let id = self.rt.cf.next_id();
         self.rt.cf.strings.insert(id, (bytes, 1, constant));
         id
     }
@@ -59,6 +67,8 @@ impl<U: GuestUi> MacPpc<U> {
                 let s = self.get_bytes(a1 + 1, u32::from(n), "CFStringCreateWithPascalString")?;
                 self.cf_new(s, false)
             }
+            Retain if self.cfx_adjust(a0, 1).is_some() => a0,
+            Release if self.cfx_adjust(a0, -1).is_some() => 0,
             Retain => { let e = self.rt.cf.strings.get_mut(&a0).ok_or_else(|| bad("CFRetain", a0))?; e.1 += 1; a0 }
             Release => {
                 let e = self.rt.cf.strings.get_mut(&a0).ok_or_else(|| bad("CFRelease", a0))?;

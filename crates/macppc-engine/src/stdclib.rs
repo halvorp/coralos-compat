@@ -47,7 +47,8 @@ pub fn threads_lookup(name: &str) -> Option<Binding> { crate::threads::ThreadFn:
 
 /// How `name` is served by CarbonLib beyond the Toolbox table: CoreFoundation strings and the Carbon Event Manager.
 pub fn carbon_lookup(name: &str) -> Option<Binding> {
-    crate::cf::CfFn::by_name(name).map(|f| Binding::Native(Native::Cf(f))).or_else(|| crate::carbon::CarbonFn::by_name(name).map(|f| Binding::Native(Native::Carbon(f))))
+    if crate::cf_more::is_allocator_constant(name) { return Some(Binding::CData(4)); }
+    crate::cf::CfFn::by_name(name).map(|f| Binding::Native(Native::Cf(f))).or_else(|| crate::cf_more::CfxFn::by_name(name).map(|f| Binding::Native(Native::Cfx(f)))).or_else(|| crate::carbon::CarbonFn::by_name(name).map(|f| Binding::Native(Native::Carbon(f))))
         // CarbonLib also exports the Thread Manager and Multiprocessing Services (as separate libraries on Mac OS 9 without Carbon)
         .or_else(|| threads_lookup(name)).or_else(|| mp_lookup(name)).or_else(|| math_lookup(name))
 }

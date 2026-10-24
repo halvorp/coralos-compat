@@ -64,6 +64,8 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Pb(crate::pb::PbCall),
     /// An Apple Event Manager call for PowerPC programs: the handler registry, `AEProcessAppleEvent` ([`crate::ae_c`]).
     Ae(crate::ae_c::AeFn),
+    /// CoreFoundation breadth: strings, arrays, dictionaries, numbers, URLs ([`crate::cf_more`]).
+    Cfx(crate::cf_more::CfxFn),
     /// A Text Services Manager document call, no input method ([`crate::tsm_c`]).
     Tsm(crate::tsm_c::TsmFn),
     /// A Script Manager call, Roman only ([`crate::script_c`]).

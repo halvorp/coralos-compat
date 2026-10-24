@@ -154,6 +154,16 @@ impl<U: GuestUi> MacPpc<U> {
                 cpu.gpr = *regs;
                 match self.tb_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::Cf(f) => {
+                let mut cpu = retro_ppc::Cpu::new(0, regs[1]);
+                cpu.gpr = *regs;
+                match self.cf_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
+            Native::Cfx(f) => {
+                let mut cpu = retro_ppc::Cpu::new(0, regs[1]);
+                cpu.gpr = *regs;
+                match self.cfx_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
             Native::Tsm(f) => {
                 let mut cpu = retro_ppc::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
@@ -186,7 +196,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let args = match self.arg_values(c.arg_count(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{}: {e}", c.name())) };
                 match self.spec_call(c, &args) { Ok(v) => { regs[3] = v; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
-            Native::C(_) | Native::Math(_) | Native::Stdio(_) | Native::Thread(_) | Native::Mp(_) | Native::Cf(_) | Native::Carbon(_) | Native::Ae(_) => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
+            Native::C(_) | Native::Math(_) | Native::Stdio(_) | Native::Thread(_) | Native::Mp(_) | Native::Carbon(_) | Native::Ae(_) => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
             Native::BlockZero => {
                 let (dest, n) = (a(0), a(1));

@@ -58,6 +58,7 @@ pub struct Runtime {
     pub(crate) sched: crate::sched::Sched,
     pub(crate) mp: crate::mp::MpState,
     pub(crate) cf: crate::cf::CfState,
+    pub(crate) cfx: crate::cf_more::CfxState,
     pub(crate) carbon: crate::carbon::CarbonState,
     pub(crate) ae: crate::ae_c::AeState,
     pub(crate) streams: alloc::collections::BTreeMap<u32, crate::stdio::Stream>,
