@@ -66,6 +66,8 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Ae(crate::ae_c::AeFn),
     /// An FSSpec call (`FSMakeFSSpec`, `FSpOpenDF` ...): [`crate::fsspec`].
     Spec(crate::fsspec::SpecCall),
+    /// An Appearance Manager entry point or a Control / Dialog / Window Manager Carbon accessor ([`crate::carbon_ctl`]).
+    Cx(crate::carbon_ctl::CxFn),
     /// An offscreen graphics world / port accessor call ([`crate::gworld`]).
     Gw(crate::gworld::GwFn),
     /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.
@@ -107,6 +109,7 @@ impl Native {
             "DisposeRoutineDescriptor" => Native::DisposeRoutineDescriptor,
             n if crate::ae_c::AeFn::by_name(n).is_some() => Native::Ae(crate::ae_c::AeFn::by_name(n).expect("checked")),
             n if crate::pb::PbCall::by_name(n).is_some() => Native::Pb(crate::pb::PbCall::by_name(n).expect("checked")),
+            n if crate::carbon_ctl::CxFn::by_name(n).is_some() => Native::Cx(crate::carbon_ctl::CxFn::by_name(n).expect("checked")),
             n if crate::gworld::GwFn::by_name(n).is_some() => Native::Gw(crate::gworld::GwFn::by_name(n).expect("checked")),
             n if crate::toolbox_c::TbFn::by_name(n).is_some() => Native::Tb(crate::toolbox_c::TbFn::by_name(n).expect("checked")),
             n if n.len() > 6 && n.starts_with("New") && n.ends_with("UPP") => Native::NewUpp,

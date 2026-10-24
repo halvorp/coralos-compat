@@ -142,3 +142,18 @@ fn copybits_from_a_world_to_a_window_reaches_the_window_canvas() {
     assert!((0..16).all(|x| canvas.get(x, 0) == Some(1)), "the world's black first row must be on the window canvas: {:?}", m.mac.log);
     assert!((0..16).all(|x| canvas.get(x, 1) == Some(0)), "the rest of the world is white");
 }
+
+#[test]
+fn a_carbon_program_has_quickdraw_initialised_without_calling_initgraf() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    assert_eq!(m.mac.qd_globals, 0);
+    // NEGATIVE control: an InterfaceLib (Classic) import does not initialise QuickDraw for the program
+    m.bind_from("InterfaceLib", "SetPort");
+    assert_eq!(m.mac.qd_globals, 0, "a Classic program must call InitGraf itself");
+    // the first CarbonLib import does what InitGraf(&qd.thePort) would
+    m.bind_from("CarbonLib", "SetPort");
+    assert_ne!(m.mac.qd_globals, 0);
+    let w = new_world(&mut m, 8, 8, 8);
+    call(&mut m, "SetGWorld", &[w, 0]);
+    assert_eq!(m.mac.gw_get().unwrap().0, w);
+}

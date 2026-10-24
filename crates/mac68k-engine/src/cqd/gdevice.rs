@@ -52,7 +52,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
 
 impl<U: GuestUi> Mac<U> {
     /// Make the main screen device (once) when this machine has Color QuickDraw, and publish it.
-    pub(crate) fn init_devices(&mut self) -> Result<(), Refusal> {
+    pub fn init_devices(&mut self) -> Result<(), Refusal> {
         if !self.profile.color_qd || self.cqd.main_device != 0 { return Ok(()); }
         let screen = Rect { top: 0, left: 0, bottom: SCREEN_H, right: SCREEN_W };
         let table = self.new_ctab(&color::clut8(), u32::from(SCREEN_DEPTH), super::ctab::DEVICE_TABLE)?;

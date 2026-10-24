@@ -41,6 +41,8 @@ pub struct MacPpc<U: GuestUi> {
     /// names this list.
     pub unbound_data: Vec<String>,
     pub(crate) cdata: BTreeMap<String, u32>,
+    /// Control / Window Manager bookkeeping with no home in the 68k records ([`crate::carbon_ctl`]).
+    pub(crate) cx: crate::carbon_ctl::CxState,
     /// Everything the program wrote with `printf`/`puts`/`putchar`: there is no console device, so the bytes are kept here (and logged).
     pub console: Vec<u8>,
     /// PEF libraries supplied by name (the application's own `cfrg` import-library members, files beside it): loaded on first import.
@@ -69,7 +71,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
     }
 
     /// Make a PEF library available under `name` (the fragment name an import table uses). Instantiated, with its own imports and init routine, the first time something imports from it.
@@ -117,6 +119,7 @@ impl<U: GuestUi> MacPpc<U> {
     /// The binding for `name` as library `lib` exports it: StdCLib only what [`crate::stdclib`] provides, the Toolbox libraries (`glue::TOOLBOX_LIBRARIES`: InterfaceLib, CarbonLib, ...) the
     /// Toolbox, anything else unbound.
     pub fn bind_from(&mut self, lib: &str, name: &str) -> Binding {
+        if lib == "CarbonLib" { self.carbon_implicit_graf(); }
         match lib {
             crate::stdclib::NAME => match crate::stdclib::lookup(name) {
                 Some(b) => { self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
@@ -188,6 +191,17 @@ impl<U: GuestUi> MacPpc<U> {
             }
             _ => Err(CfmError::Memory(alloc::format!("{name} is not a data symbol"))),
         }
+    }
+
+    /// A Carbon program never calls `InitGraf` (Carbon initialises QuickDraw for the process): the first CarbonLib import makes the `qd` block and runs what `InitGraf(&qd.thePort)` would,
+    /// so `SetPort`, `NewGWorld` and the drawing calls have a `thePort` slot. A failure here (no memory) leaves QuickDraw uninitialised and the first QuickDraw call refuses by name.
+    fn carbon_implicit_graf(&mut self) {
+        if self.mac.qd_globals != 0 { return; }
+        let Ok(q) = self.qd_block() else { return };
+        let p = q + QD_GLOBALS_SIZE - 4;
+        if mac68k_engine::quickdraw::fill_globals(&mut self.mac, p).is_err() { return; }
+        self.mac.qd_globals = p;
+        let _ = self.mac.init_devices();
     }
 
     /// The QuickDraw globals block `qd` imports resolve to (allocated on first use, zeroed).
