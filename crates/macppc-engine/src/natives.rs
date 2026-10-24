@@ -120,6 +120,11 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 self.finish("ModalDialog", r, None, regs)
             }
+            Native::File(c) => {
+                let nargs = match c { crate::files::FileCall::HOpen | crate::files::FileCall::HOpenDF | crate::files::FileCall::HOpenRF | crate::files::FileCall::HCreate => 5, _ => 4 };
+                let args = match self.arg_values(nargs, regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{c:?}: {e}")) };
+                match self.file_call(c, &args) { Ok(e) => { regs[3] = err(e); GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
             Native::BlockZero => {
                 let (dest, n) = (a(0), a(1));

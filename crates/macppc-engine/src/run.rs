@@ -45,6 +45,8 @@ pub struct Runtime {
     pub(crate) wait_dialog: bool,
     /// `main`'s entry state, held while the init routine runs.
     after_init: Option<StartState>,
+    /// The scratch File Manager parameter block (`crate::files`), allocated on first use.
+    pub(crate) fm_pb: Option<u32>,
     main_tvector: u32,
     /// A refusal or CPU trap; once set, every step reports it again (the program cannot continue).
     fault: Option<String>,

@@ -31,7 +31,7 @@ fn retro68_ppc_samples_bind_their_interfacelib_imports_and_stop_at_the_first_rou
     // 2026-10-20, Mixed Mode slices 1-2: NGetTrapAddress answers from the shared trap registry (tests/trap_address.rs),
     // InvertRect binds to `_InverRect`, and NewRoutineDescriptor builds a real descriptor (mac68k-engine
     // tests/routine_descriptors.rs). The three now run to their event loops (Dialog: slice 3 calls its user item through the UPP).
-    for (app, bound, needed) in [("HelloWorld", "NGetTrapAddress", "GetFPos"), ("Dialog", "NewRoutineDescriptor", "FlushEvents"), ("WDEFShell", "NewRoutineDescriptor", "OpenDeskAcc")] {
+    for (app, bound, needed) in [("HelloWorld", "NGetTrapAddress", "GrowWindow"), ("Dialog", "NewRoutineDescriptor", "FlushEvents"), ("WDEFShell", "NewRoutineDescriptor", "OpenDeskAcc")] {
         let Some((c, log, refused)) = run(app) else { return };
         assert!(refused.is_empty(), "{app}: {refused:?}");
         assert!(!c.next_needed.iter().any(|n| n.ends_with(&format!("/{bound}"))), "{app}: {bound} is bound: {:?}", c.next_needed);
@@ -47,6 +47,11 @@ fn retro68_ppc_samples_bind_their_interfacelib_imports_and_stop_at_the_first_rou
     let at = |needle: &str| log.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}: {log:#?}"));
     assert!(at("[mixedmode] NewRoutineDescriptor") < at("[mixedmode] user item 2 of 0x245210"));
     assert!(at("[mixedmode] user item 2 of 0x245210") < at("[quickdraw] FrameRoundRect") && at("[quickdraw] FrameRoundRect") < at("ModalDialog 0x245210 blocks"));
+    // The Retro68 runtime's File Manager imports (FSRead, FSWrite, FSClose, GetFPos, SetFPos, FlushVol, GetVRefNum ...) are bound since `files.rs`.
+    for f in ["FSRead", "FSWrite", "FSClose", "GetFPos", "SetFPos", "FlushVol", "GetVRefNum"] {
+        let Some((c, _, _)) = run("HelloWorld") else { return };
+        assert!(!c.next_needed.iter().any(|n| n.ends_with(&format!("/{f}"))), "{f} is bound: {:?}", c.next_needed);
+    }
     // Raytracer polls Button / GetMouse: both are bound now (mouse.rs) and it no longer stops at an unbound import.
     let Some((c, _, refused)) = run("Raytracer") else { return };
     assert!(!c.next_needed.iter().any(|n| n.ends_with("/Button") || n.ends_with("/GetMouse")), "{:?}", c.next_needed);
@@ -68,7 +73,7 @@ fn macintosh_garden_glider_pro_fat_app_binds_most_of_interfacelib_and_names_what
     let frag = m.instantiate(&frag_name, &pef).unwrap();
     let c = Census::of(&frag);
     // Still unbound and NAMED: Window Manager calls without a handler, and OS traps whose C prototype is not in OS_SIGS yet.
-    for needed in ["ZoomWindow", "GetIconSuite", "Gestalt", "SysEnvirons", "FlushEvents"] {
+    for needed in ["ZoomWindow", "GetIconSuite", "Gestalt", "SysEnvirons", "FlushEvents", "FSpOpenDF"] {
         assert!(c.next_needed.iter().any(|n| n.ends_with(&format!("/{needed}"))), "{needed} is unbound and named: {:?}", c.next_needed);
     }
     // Bound since the Mac 68k lane added the Scrap Manager, alerts, DragWindow, the resource-file calls and GetCursor to the shared

@@ -36,7 +36,9 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     /// procInfo)`, `DisposeRoutineDescriptor(upp)`. CALLING a UPP is the callback machine's (Mixed Mode slice 3).
     NewRoutineDescriptor, NewFatRoutineDescriptor, DisposeRoutineDescriptor,
     /// The address a PowerPC callback returns to (`crate::callback`): a pseudo-call the run loop answers from the frame stack.
-    CallbackReturn }
+    CallbackReturn,
+    /// A `Files.h` routine (`FSRead`, `HOpen`, `GetVol` ...): the C glue over the 68k engine's File Manager traps ([`crate::files`]).
+    File(crate::files::FileCall) }
 
 /// Which trap table a [`Native::TrapAddress`] import names, as the calling 68k trap word's type bits would.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +74,7 @@ impl Native {
             "GetToolTrapAddress" => Native::TrapAddress(TrapQuery::Tool), "GetTrapAddress" => Native::TrapAddress(TrapQuery::Old),
             "NewRoutineDescriptor" => Native::NewRoutineDescriptor, "NewFatRoutineDescriptor" => Native::NewFatRoutineDescriptor,
             "DisposeRoutineDescriptor" => Native::DisposeRoutineDescriptor,
-            _ => return None,
+            _ => return crate::files::FileCall::by_name(name).map(Native::File),
         })
     }
 }
