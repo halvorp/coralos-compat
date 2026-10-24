@@ -150,6 +150,8 @@ fn main() {
             println!();
         }
         if prof { let t = m.exec().tier; println!("{}", m.exec().prof.line(elapsed_us, t)); }
+        if let Some(d) = m.exec().divergence() { println!("LOCKSTEP DIVERGENCE: tier 1 and tier 0 differ in the block at {:#x}: {}", d.block, d.what.join(", ")); }
+        else if m.exec().tier == retro_ppc::Tier::Lockstep { println!("lockstep: no divergence ({:?})", m.exec().lockstep_stats()); }
         if pcs > 0 {
             if let Some(c) = m.cpu() {
                 println!("recent pcs (oldest first): {}", c.recent_pcs().map(|p| format!("{p:#x}")).collect::<Vec<_>>().join(" "));

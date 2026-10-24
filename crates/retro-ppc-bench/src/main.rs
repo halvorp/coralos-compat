@@ -84,6 +84,7 @@ fn main() {
             let m = ms[ms.len() / 2].clone();
             println!("{:<24} {:>4} {:>12} {:>9} {:>11} {:>10.2}  {:016x}   {}", name, t.number(), m.insns, m.natives, m.elapsed_us, m.ips() / 1e6, m.digest, m.outcome);
             println!("    {}", m.prof.line(m.elapsed_us, t));
+            if t != Tier::Interp { println!("    tier 1: {} blocks run ({:.2} instructions each), {:?}{}", m.prof.blocks, (m.insns - m.natives) as f64 / m.prof.blocks.max(1) as f64, m.cache, if t == Tier::Lockstep { format!(", lockstep {:?}", m.lockstep) } else { String::new() }); }
             per_tier.push(m);
         }
         if let Some(base) = per_tier.first().cloned() {

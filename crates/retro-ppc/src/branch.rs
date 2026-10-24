@@ -7,7 +7,7 @@ use crate::Host;
 /// BO / BI evaluation of bc, bclr, bcctr (PEM Figure 4-? "BO operand encodings"). BO bit 0 (value 0x10) = ignore
 /// the condition; bit 1 (0x08) = the CR bit value to test; bit 2 (0x04) = do not decrement CTR; bit 3 (0x02) =
 /// branch when CTR == 0 instead of != 0.
-fn take_branch(cpu: &mut Cpu, bo: u32, bi: u32) -> bool {
+pub(crate) fn take_branch(cpu: &mut Cpu, bo: u32, bi: u32) -> bool {
     if bo & 0x04 == 0 { cpu.ctr = cpu.ctr.wrapping_sub(1); }
     let ctr_ok = bo & 0x04 != 0 || ((cpu.ctr != 0) ^ (bo & 0x02 != 0));
     let cond_ok = bo & 0x10 != 0 || (cpu.cr_bit(bi) == (bo & 0x08 != 0));

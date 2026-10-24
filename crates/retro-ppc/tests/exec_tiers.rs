@@ -35,7 +35,7 @@ fn tier_0_through_exec_is_resume_and_counts_what_it_retired() {
 
 #[test]
 fn the_profile_line_has_the_agreed_shape() {
-    let p = retro_ppc::Prof { insns: 3_000_000, natives: 12, native_time: 0 };
+    let p = retro_ppc::Prof { insns: 3_000_000, natives: 12, ..Default::default() };
     assert_eq!(p.line(1_500_000, Tier::Interp), "[PPC-PROF insns=3000000 native_calls=12 elapsed_us=1500000 mips=2.00 tier=0]");
     assert_eq!(p.line(0, Tier::Interp), "[PPC-PROF insns=3000000 native_calls=12 elapsed_us=0 mips=0.00 tier=0]", "no division by zero");
 }

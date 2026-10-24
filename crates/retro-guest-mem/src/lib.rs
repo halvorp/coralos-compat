@@ -3,6 +3,8 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 pub mod heap;
+mod watch;
+pub use watch::CODE_PAGE_SHIFT;
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
@@ -43,10 +45,10 @@ pub const MASK_32: u32 = 0xFFFF_FFFF;
 /// byte of every address is ignored (Inside Macintosh: Memory, "24-bit addressing"; apps keep flags there).
 pub const MASK_24: u32 = 0x00FF_FFFF;
 
-pub struct GuestMem { ram: Vec<u8>, mask: u32 }
+pub struct GuestMem { ram: Vec<u8>, mask: u32, hooks: watch::Hooks }
 
 impl GuestMem {
-    pub fn new(size: usize) -> Self { GuestMem { ram: vec![0; size], mask: MASK_32 } }
+    pub fn new(size: usize) -> Self { GuestMem { ram: vec![0; size], mask: MASK_32, hooks: watch::Hooks::default() } }
     /// Select the address bus width: every access (guest CPU and host handlers alike) drops the bits outside `mask`.
     pub fn set_addr_mask(&mut self, mask: u32) { self.mask = mask; }
     pub fn addr_mask(&self) -> u32 { self.mask }
@@ -76,12 +78,14 @@ impl GuestMem {
         let len = u32::try_from(src.len()).map_err(|_| MemError::OutOfRange { addr, len: u32::MAX })?;
         self.check(addr, len)?;
         let addr = self.strip(addr);
+        self.hooks.before_write(&self.ram, addr, len);
         self.ram[addr as usize..addr as usize + src.len()].copy_from_slice(src);
         Ok(())
     }
     pub fn zero(&mut self, addr: u32, len: u32) -> Result<(), MemError> {
         self.check(addr, len)?;
         let addr = self.strip(addr);
+        self.hooks.before_write(&self.ram, addr, len);
         self.ram[addr as usize..(addr + len) as usize].fill(0);
         Ok(())
     }
@@ -94,6 +98,7 @@ impl GuestMem {
     fn write_be(&mut self, addr: u32, len: u32, val: u32) -> Result<(), MemError> {
         self.check(addr, len)?;
         let addr = self.strip(addr);
+        self.hooks.before_write(&self.ram, addr, len);
         for i in 0..len {
             self.ram[(addr + i) as usize] = (val >> (8 * (len - 1 - i))) as u8;
         }

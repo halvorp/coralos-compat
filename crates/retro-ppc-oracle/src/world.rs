@@ -3,7 +3,7 @@ use crate::state::{fill_window, State, CODE, RAM};
 use ppc::{PpcAlignmentPolicy, PpcCpu, PpcException, PpcMemory, PpcSectionMem, PpcStepResult};
 use retro_guest_mem::GuestMem;
 use retro_ppc::cpu::{Cpu, Trap};
-use retro_ppc::{resume, Host};
+use retro_ppc::{Exec, Host, Tier};
 
 /// Trap classes both sides are mapped onto. `Illegal` folds retro's Unimplemented / InvalidForm / Privileged and
 /// ppc-rs's Unimplemented / IllegalInstruction / FloatingPointUnavailable (the detail is kept in `Snap::note`).
@@ -44,6 +44,9 @@ impl Host for H {
 /// behaviour is what is being compared (lmw/stmw/lwarx/stwcx. require word alignment), `EmulateData` otherwise
 /// (retro, like the 6xx in big-endian mode, handles unaligned plain loads/stores).
 pub struct Pair {
+    /// The retro-ppc execution tier under test (one runner for the whole run, so tier 1's block cache sees every
+    /// case's code replaced by the next: invalidation is exercised too).
+    exec: Exec,
     retro: Cpu,
     h: H,
     ppc: PpcCpu,
@@ -52,12 +55,24 @@ pub struct Pair {
 
 impl Default for Pair { fn default() -> Self { Pair::new() } }
 
+/// The tier `Pair::new` tests: `RETRO_PPC_TIER` (`0`, `1`, `lockstep`) if set, else retro-ppc's default.
+pub fn tier_from_env() -> Tier {
+    match std::env::var("RETRO_PPC_TIER") {
+        Ok(t) => Tier::parse(&t).unwrap_or_else(|| panic!("RETRO_PPC_TIER={t:?}: expected 0, 1 or lockstep")),
+        Err(_) => Exec::default().tier,
+    }
+}
+
 impl Pair {
-    pub fn new() -> Pair {
+    pub fn new() -> Pair { Pair::with_tier(tier_from_env()) }
+    pub fn with_tier(tier: Tier) -> Pair {
         let mut mem = PpcSectionMem::new();
         mem.add_region(0, vec![0; RAM]);
-        Pair { retro: Cpu::new(0, 0), h: H(GuestMem::new(RAM)), ppc: PpcCpu::new(), mem }
+        Pair { exec: Exec::new(tier), retro: Cpu::new(0, 0), h: H(GuestMem::new(RAM)), ppc: PpcCpu::new(), mem }
     }
+    pub fn tier(&self) -> Tier { self.exec.tier }
+    /// NEGATIVE CONTROL: tier 1 with its code-page invalidation disabled (see retro_ppc::Exec::plant_stale_code_mutant).
+    pub fn plant_stale_code_mutant(&mut self) { self.exec.plant_stale_code_mutant(); }
 
     /// Load `words` at CODE and `st` into both machines.
     pub fn load(&mut self, words: &[u32], st: &State, strict_align: bool) {
@@ -115,7 +130,8 @@ impl Pair {
     /// Execute one instruction on each machine and snapshot both.
     pub fn step(&mut self) -> (Snap, Snap) {
         let (mut rt, mut rn, mut why) = (Tr::None, String::new(), None);
-        let s = resume(&mut self.h, &mut self.retro, 1);
+        let s = self.exec.resume(&mut self.h, &mut self.retro, 1);
+        if let Some(d) = self.exec.divergence() { panic!("lockstep: tier 1 and tier 0 diverged at {:#x}: {:?}", d.block, d.what); }
         if let Some(t) = s.trap {
             rn = format!("{t}");
             rt = match t {

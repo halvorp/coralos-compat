@@ -153,7 +153,7 @@ pub(crate) fn logical(cpu: &mut Cpu, w: W, xo: u32) -> Option<R> {
 }
 
 /// Arithmetic right shift by `n` (0-63) with PowerPC's CA: set when the source is negative and a 1 bit was shifted out.
-fn sra(s: u32, n: u32) -> (u32, bool) {
+pub(crate) fn sra(s: u32, n: u32) -> (u32, bool) {
     let neg = (s as i32) < 0;
     if n >= 32 { return (if neg { u32::MAX } else { 0 }, neg); }
     let r = ((s as i32) >> n) as u32;

@@ -10,7 +10,7 @@ use crate::Host;
 enum Op { Lfs, Lfd, Stfs, Stfd, Stfiw }
 
 /// lfs: widen exactly. A NaN keeps its payload and its quiet bit (a host `as` cast would quiet a signalling NaN).
-fn single_to_double(s: u32) -> u64 {
+pub(crate) fn single_to_double(s: u32) -> u64 {
     let x = f32::from_bits(s);
     if x.is_nan() { (s as u64 & 0x8000_0000) << 32 | 0x7FF << 52 | (s as u64 & 0x007F_FFFF) << 29 } else { (x as f64).to_bits() }
 }
@@ -21,7 +21,7 @@ fn single_to_double(s: u32) -> u64 {
 ///  * 874 <= FRS[1:11] <= 896 (a single denormal): the implicit 1 and the fraction are shifted right by 897-exp and
 ///    the low bits are dropped.
 ///  * smaller magnitudes are architecturally undefined; we store a signed zero.
-fn double_to_single(d: u64) -> u32 {
+pub(crate) fn double_to_single(d: u64) -> u32 {
     let exp = (d >> 52 & 0x7FF) as u32;
     let sign = (d >> 32) as u32 & 0x8000_0000;
     if exp > 896 || d << 1 == 0 {

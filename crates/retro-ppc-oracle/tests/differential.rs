@@ -8,15 +8,47 @@ use retro_ppc_oracle::rng::Rng;
 use retro_ppc_oracle::run::{run_case, Verdict};
 use retro_ppc_oracle::table::table;
 use retro_ppc_oracle::world::{Pair, Tr};
+use retro_ppc::Tier;
 use std::collections::BTreeMap;
 
 const PER_FAMILY: u64 = 150;
 const SEQUENCES: u64 = 3000;
 
 #[test]
-fn every_family_agrees_with_ppc_rs_apart_from_the_named_exclusions() {
+fn every_family_agrees_with_ppc_rs_apart_from_the_named_exclusions() { sweep(Pair::new()) }
+
+/// The same sweep on each retro-ppc tier explicitly, whatever the default and RETRO_PPC_TIER say: tier 0 is the
+/// reference, tier 1 must agree with ppc-rs exactly as it does, and lockstep checks tier 1 against tier 0 on top.
+#[test]
+fn every_family_agrees_on_tier_0_tier_1_and_in_lockstep() {
+    for t in [Tier::Interp, Tier::Blocks, Tier::Lockstep] {
+        if t == retro_ppc_oracle::world::tier_from_env() { continue; } // the test above ran it
+        let p = Pair::with_tier(t);
+        assert_eq!(p.tier(), t);
+        sweep(p);
+    }
+}
+
+/// NEGATIVE CONTROL: tier 1 that never invalidates decoded code goes RED within a few cases (each case loads new code
+/// where the last one's was, and sequences patch their own next instruction).
+#[test]
+fn the_stale_code_mutant_is_caught() {
     let t = table();
-    let mut pair = Pair::new();
+    let mut pair = Pair::with_tier(Tier::Blocks);
+    pair.plant_stale_code_mutant();
+    let mut caught = None;
+    for i in 0..2_000u64 {
+        let mut r = Rng::new(0x5EED ^ i);
+        let c = gen::single(&mut r, &t[(i as usize * 7) % t.len()]);
+        if let Verdict::Differ { .. } = run_case(&mut pair, &c) { caught = Some(i); break; }
+    }
+    let i = caught.expect("the stale-code mutant survived 2000 cases: the oracle cannot see stale decoded code");
+    eprintln!("stale-code mutant caught at case {i}");
+    assert!(i < 50, "caught only at case {i}");
+}
+
+fn sweep(mut pair: Pair) {
+    let t = table();
     let mut agree: BTreeMap<&str, u64> = BTreeMap::new();
     let mut excl: BTreeMap<&str, u64> = BTreeMap::new();
     let mut compared: BTreeMap<&str, u64> = BTreeMap::new();

@@ -4,6 +4,8 @@
 //! other tier must leave the SAME architectural state at every exit: same registers, memory, time base, trap and pc.
 use crate::census::Census;
 use crate::cpu::{Cpu, RunStats};
+use crate::t1::{self, Divergence, LockstepStats};
+use crate::t1cache::{Cache, CacheStats};
 use crate::{exec, Host};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -13,13 +15,20 @@ use alloc::collections::BTreeMap;
 pub enum Tier {
     /// Tier 0: the reference, one instruction at a time.
     Interp,
+    /// Tier 1: pre-decoded blocks, invalidated by code-page write generations ([`crate::t1cache`]).
+    Blocks,
+    /// Tier 1 checked against tier 0 on every block (slow; for gates and triage). Stops at the first divergence,
+    /// which [`Exec::divergence`] then names.
+    Lockstep,
 }
 
 impl Tier {
     /// The number a `[PPC-PROF ... tier=]` line prints.
-    pub fn number(self) -> u32 { match self { Tier::Interp => 0 } }
-    /// Parse `0`; None for anything else.
-    pub fn parse(s: &str) -> Option<Tier> { match s { "0" | "interp" => Some(Tier::Interp), _ => None } }
+    pub fn number(self) -> u32 { match self { Tier::Interp => 0, Tier::Blocks | Tier::Lockstep => 1 } }
+    /// Parse `0` / `interp`, `1` / `blocks`, `lockstep`; None for anything else.
+    pub fn parse(s: &str) -> Option<Tier> {
+        match s { "0" | "interp" => Some(Tier::Interp), "1" | "blocks" => Some(Tier::Blocks), "lockstep" => Some(Tier::Lockstep), _ => None }
+    }
 }
 
 /// Cheap counters, kept by every tier (none costs anything per instruction).
@@ -31,6 +40,8 @@ pub struct Prof {
     pub natives: u64,
     /// Time spent inside native hooks, in the clock's units (only with [`Exec::profile_natives`]).
     pub native_time: u64,
+    /// Tier 1: blocks run.
+    pub blocks: u64,
 }
 
 impl Prof {
@@ -49,15 +60,21 @@ pub struct Exec {
     pub prof: Prof,
     census: Option<Box<Census>>,
     natives: Option<Box<NativeProfile>>,
+    cache: Option<Box<Cache>>,
+    lockstep: LockstepStats,
+    divergence: Option<Divergence>,
 }
 
 /// Per native address: (calls, time inside), timed by a host-supplied clock.
 pub struct NativeProfile { clock: fn() -> u64, pub by_addr: BTreeMap<u32, (u64, u64)> }
 
-impl Default for Exec { fn default() -> Self { Exec::new(Tier::Interp) } }
+/// The default tier is tier 1: it passed the gates (docs/PPC-SPEED.md: the differential oracle on every tier, lockstep
+/// on every workload with zero divergence, the planted stale-code mutant RED, the speed floor). Tier 0 stays the
+/// reference, one `Exec::new(Tier::Interp)` away.
+impl Default for Exec { fn default() -> Self { Exec::new(Tier::Blocks) } }
 
 impl Exec {
-    pub fn new(tier: Tier) -> Exec { Exec { tier, prof: Prof::default(), census: None, natives: None } }
+    pub fn new(tier: Tier) -> Exec { Exec { tier, prof: Prof::default(), census: None, natives: None, cache: None, lockstep: LockstepStats::default(), divergence: None } }
     /// Collect an opcode/block census from now on (tier 0 runs it; it costs a table update per instruction).
     pub fn enable_census(&mut self) { self.census.get_or_insert_with(Box::default); }
     pub fn census(&self) -> Option<&Census> { self.census.as_deref() }
@@ -65,15 +82,41 @@ impl Exec {
     /// reads per native call, nothing per instruction.
     pub fn profile_natives(&mut self, clock: fn() -> u64) { self.natives = Some(Box::new(NativeProfile { clock, by_addr: BTreeMap::new() })); }
     pub fn native_profile(&self) -> Option<&NativeProfile> { self.natives.as_deref() }
+    /// Tier 1's cache counters (zero before tier 1 ran).
+    pub fn cache_stats(&self) -> CacheStats { self.cache.as_ref().map(|c| c.stats).unwrap_or_default() }
+    /// What lockstep compared so far.
+    pub fn lockstep_stats(&self) -> LockstepStats { self.lockstep }
+    /// The divergence that stopped (halted) a lockstep run, if one did.
+    pub fn divergence(&self) -> Option<&Divergence> { self.divergence.as_ref() }
+    /// NEGATIVE CONTROL ONLY: plant the stale-code mutant (tier 1 never invalidates a block when its code page is
+    /// written). The planted-mutant tests and gates must go RED with it.
+    #[doc(hidden)]
+    pub fn plant_stale_code_mutant(&mut self) { self.cache_mut().ignore_generations = true; }
+    fn cache_mut(&mut self) -> &mut Cache { self.cache.get_or_insert_with(|| Box::new(Cache::new())) }
 
     /// Execute `cpu` until [`Cpu::halt`], [`Cpu::block`], a trap, or `budget` instructions: [`crate::resume`] on the
-    /// selected tier.
+    /// selected tier. A census or native profile runs on tier 0 whatever the tier. A lockstep divergence HALTS the CPU
+    /// (the run is over; every further call returns at once) and [`Exec::divergence`] says why.
     pub fn resume<H: Host>(&mut self, host: &mut H, cpu: &mut Cpu, budget: u64) -> RunStats {
         cpu.clear_blocked();
         let st = if self.census.is_some() || self.natives.is_some() {
             interp_census(host, cpu, budget, &mut self.prof, self.census.as_deref_mut(), self.natives.as_deref_mut())
         } else {
-            interp(host, cpu, budget, &mut self.prof)
+            match self.tier {
+                Tier::Interp => interp(host, cpu, budget, &mut self.prof),
+                Tier::Blocks => {
+                    let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));
+                    t1::run(host, cpu, budget, &mut self.prof, cache)
+                }
+                Tier::Lockstep => {
+                    if self.divergence.is_some() { cpu.halt(); return RunStats { insns: 0, halted: true, blocked: false, trap: None }; }
+                    let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));
+                    let (mut st, d) = t1::lockstep(host, cpu, budget, &mut self.prof, cache, &mut self.lockstep);
+                    if d.is_some() { cpu.halt(); st.halted = true; }
+                    self.divergence = d;
+                    st
+                }
+            }
         };
         self.prof.insns += st.insns;
         st

@@ -152,8 +152,11 @@ pub(crate) fn x31<H: Host>(host: &mut H, cpu: &mut Cpu, w: W, xo: u32) -> Option
             let line = ea & !(LINE - 1);
             return Some(host.mem().zero(line, LINE).map_err(|_| Trap::BusFault { pc: cpu.pc, addr: line, write: true }));
         }
+        // icbi: the guest says the instruction block at EA changed. This interpreter fetches from memory every time, but a
+        // decoded-code cache (tier 1) must drop what it decoded from that page: tell the watch (a no-op if unwatched).
+        982 => { host.mem().invalidate_code(ea); return Some(Ok(())) }
         // Cache / ordering hints: no cache and a single in-order CPU, so there is nothing to do. dcbi is supervisor.
-        54 | 86 | 246 | 278 | 982 | 598 | 854 => return Some(Ok(())),
+        54 | 86 | 246 | 278 | 598 | 854 => return Some(Ok(())),
         566 => return Some(Err(cpu.privileged(w, "tlbsync"))),
         470 => return Some(Err(cpu.privileged(w, "dcbi"))),
         _ => return None,

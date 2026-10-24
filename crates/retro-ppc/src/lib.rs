@@ -8,6 +8,12 @@
 //!
 //! Faults are named [`Trap`]s with `pc` left at the faulting instruction; nothing here panics on guest input.
 //!
+//! Execution tiers ([`Exec`], [`Tier`]): tier 0 ([`resume`]) fetches and decodes every instruction and is the
+//! reference; tier 1 (the default of [`Exec`]) runs pre-decoded blocks cached per guest pc and invalidated by the
+//! write generation of their 4 KiB code page (retro-guest-mem's code watch: every write, from the guest or the host,
+//! and `icbi`), leaving the same architectural state as tier 0 at every exit; [`Tier::Lockstep`] runs both on every
+//! block and stops at the first difference. Measurements: docs/PPC-SPEED.md.
+//!
 //! Deliberate deviations (each is a named refusal or documented here, none silent):
 //! - FP arithmetic is round-to-nearest-even only; with FPSCR[RN] != 0 an arithmetic FP instruction is a named
 //!   `Unimplemented` trap (fctiw honours RN). XX/FI/FR and UX are not tracked; OX, ZX and the VX* flags are.
@@ -39,6 +45,12 @@ mod x31;
 mod names;
 pub mod census;
 mod tier;
+mod t1;
+mod t1cache;
+mod t1op;
+mod t1run;
+pub use t1::{Divergence, LockstepStats};
+pub use t1cache::CacheStats;
 pub use tier::{Exec, Prof, Tier};
 pub use cpu::{Cpu, CpuContext, Reg, RunStats, Trap, XER_CA, XER_OV, XER_SO};
 use retro_guest_mem::GuestMem;

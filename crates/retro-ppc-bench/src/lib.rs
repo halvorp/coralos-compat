@@ -25,6 +25,8 @@ pub struct Measure {
     pub prof: retro_ppc::Prof,
     /// With native timing: (symbol, calls, nanoseconds inside), most time first.
     pub native_report: Vec<(String, u64, u64)>,
+    pub cache: retro_ppc::CacheStats,
+    pub lockstep: retro_ppc::LockstepStats,
 }
 
 impl Measure {
@@ -75,8 +77,9 @@ pub fn run_synth(s: &synth::Synth, tier: Tier, o: Opts) -> (Measure, Exec) {
     let elapsed_us = t.elapsed().as_micros() as u64;
     let mut outcome = match (st.halted, st.trap) { (true, None) => "exit".to_string(), (_, Some(t)) => format!("TRAP {t}"), _ => "stopped".into() };
     if let Err(e) = (s.check)(&c, &v, s.n) { outcome = format!("{outcome}; CHECK FAILED: {e}"); }
+    if let Some(d) = exec.divergence() { outcome = format!("LOCKSTEP DIVERGENCE at block {:#x}: {:?}; {outcome}", d.block, d.what); }
     let native_report = native_report(&exec, |a| format!("{a:#x}"));
-    let m = Measure { name: s.name.into(), tier, insns: exec.prof.insns, natives: exec.prof.natives, elapsed_us, digest: digest(&c, &v.mem), outcome, prof: exec.prof, native_report };
+    let m = Measure { name: s.name.into(), tier, insns: exec.prof.insns, natives: exec.prof.natives, elapsed_us, digest: digest(&c, &v.mem), outcome, prof: exec.prof, native_report, cache: exec.cache_stats(), lockstep: exec.lockstep_stats() };
     (m, exec)
 }
 
@@ -88,11 +91,12 @@ pub fn run_app(a: &apps::App, tier: Tier, o: Opts) -> Result<(Measure, Exec), St
     let elapsed_us = t.elapsed().as_micros() as u64;
     let exec = std::mem::take(m.exec());
     let d = m.cpu().map_or(0, |c| digest(c, &m.mac.mem));
-    let outcome = format!("{step:?}{}", m.fault().map(|f| format!(" ({})", f.chars().take(120).collect::<String>())).unwrap_or_default());
+    let mut outcome = format!("{step:?}{}", m.fault().map(|f| format!(" ({})", f.chars().take(120).collect::<String>())).unwrap_or_default());
+    if let Some(d) = exec.divergence() { outcome = format!("LOCKSTEP DIVERGENCE at block {:#x}: {:?}; {outcome}", d.block, d.what); }
     debug_assert_eq!(n, exec.prof.insns);
     let stubs: std::collections::BTreeMap<u32, String> = (0..m.glue.len()).filter_map(|i| m.glue.entry(i)).map(|e| (e.stub, format!("{}/{}", e.library, e.symbol))).collect();
     let native_report = native_report(&exec, |a| stubs.get(&a).cloned().unwrap_or_else(|| format!("{a:#x}")));
-    Ok((Measure { name: a.name.clone(), tier, insns: exec.prof.insns, natives: exec.prof.natives, elapsed_us, digest: d, outcome, prof: exec.prof, native_report }, exec))
+    Ok((Measure { name: a.name.clone(), tier, insns: exec.prof.insns, natives: exec.prof.natives, elapsed_us, digest: d, outcome, prof: exec.prof, native_report, cache: exec.cache_stats(), lockstep: exec.lockstep_stats() }, exec))
 }
 
 /// Geometric mean of positive ratios (0 for an empty list).

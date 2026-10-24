@@ -29,6 +29,7 @@ impl Host for Vm {
     }
 }
 
+#[derive(Clone)]
 pub struct Synth {
     pub name: &'static str,
     pub what: &'static str,
