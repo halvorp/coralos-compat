@@ -133,6 +133,21 @@ fn reading_gets_lines_at_cr_chars_ungetc_eof_and_seeks() {
     assert_eq!(r.c("fseek", &[fp, 100, 0]), EOF);
     assert_eq!(r.c("fseek", &[fp, 0, 9]), EOF, "an unknown whence");
     assert_eq!(r.c("fclose", &[fp]), 0);
+    // a GCC/Retro68 text file ('\n' = LF) is read the same way, and no byte is translated either way
+    r.m.mac.fm.tree.put_file(root, "Unix", b"one\ntwo\r\nthree".to_vec()).unwrap();
+    let fp = r.open("Unix", "r");
+    assert_eq!(r.c("fgets", &[OUT, 100, fp]), OUT);
+    assert_eq!(r.m.get_bytes(OUT, 5, "t").unwrap(), b"one\n\0");
+    r.c("fgets", &[OUT, 100, fp]);
+    assert_eq!(r.m.get_bytes(OUT, 5, "t").unwrap(), b"two\r\0", "a CRLF file: the CR line, then a one-byte LF line");
+    r.c("fgets", &[OUT, 100, fp]);
+    assert_eq!(r.m.get_bytes(OUT, 2, "t").unwrap(), b"\n\0");
+    r.c("fclose", &[fp]);
+    let w = r.open("Raw", "w");
+    r.m.mac.mem.write_bytes(OUT, b"a\nb\rc").unwrap();
+    r.c("fwrite", &[OUT, 1, 5, w]);
+    r.c("fclose", &[w]);
+    assert_eq!(r.file_bytes("Raw").unwrap(), b"a\nb\rc", "NEGATIVE CONTROL: nothing is translated on the way out");
 }
 
 #[test]
