@@ -11,8 +11,9 @@ PATH="$HOME/.cargo/bin:$PATH"
 command -v "${CARGO:-cargo}" >/dev/null 2>&1 || { echo "RED  seam/deps: cargo not found (PATH=$PATH): the dependency check cannot run"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "RED  seam/deps: jq not found: the dependency check cannot run"; exit 1; }
 ENGINES="amiga68k-engine mac68k-engine macppc-engine"
-# Pure crates an engine may use besides guestui-abi and retro-*: the interpreter cores' soft-float and the engine chain.
-ALLOWED_EXTRA="mac68k-engine musashi softfloat soft-float rustc_apfloat"
+# Pure crates an engine may use besides guestui-abi and retro-*: the interpreter cores' soft-float, the engine chain, and libm
+# (musl's maths as a no_std crate: StdCLib/MathLib natives answer sin/pow/... with it - computation, no host or UI reach).
+ALLOWED_EXTRA="mac68k-engine musashi softfloat soft-float rustc_apfloat libm"
 APPS='dopus|directoryopus|igame|amimon|amiagent|finder|executor'
 
 check_deps() { # $1 = root; prints RED lines, returns 1 if any
