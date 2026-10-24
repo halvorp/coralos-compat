@@ -629,3 +629,23 @@ fn a_direct_screen_write_shows_in_the_topmost_of_two_overlapping_windows_only() 
     assert_eq!(w.m.qd.canvases[&w.win].get(120 - 50, 160 - 100), Some(0), "the window behind it does not (that pixel is covered)");
     assert_eq!(w.m.qd.canvases[&w.win].get(10, 10), Some(67), "a pixel only the back window covers lands there");
 }
+
+#[test]
+fn copybits_to_the_address_of_a_colour_ports_portbits_draws_in_the_window_not_through_the_pixmap_handle() {
+    // ResEdit's About box passes &thePort->portBits as the destination even though the dialog is a CGrafPort, where +2 holds portPixMap (a
+    // HANDLE): the engine read that handle as a BitMap ("756-bit pixels"). The address of a colour window's portBits is the window.
+    let mut w = color_window();
+    // an offscreen 1-bit BitMap at 0x3300 over 0x3400: row 0 = 11110000, row 1 = 00001111
+    w.m.mem.write_bytes(0x3300, &[0, 0, 0x34, 0x00, 0, 2, 0, 0, 0, 0, 0, 2, 0, 8]).unwrap();
+    w.m.mem.write_bytes(0x3400, &[0xF0, 0x00, 0x0F, 0x00]).unwrap();
+    for (a, r) in [(0x3100u32, [0i16, 0, 2, 8]), (0x3108, [10, 20, 12, 28])] { for (i, v) in r.into_iter().enumerate() { w.m.mem.write_u16(a + 2 * i as u32, v as u16).unwrap(); } }
+    let win = w.win;
+    let mut p = Prog::new();
+    p.set_port(win).l(0x3300).l(win + 2).l(0x3100).l(0x3108).w(0).l(0).trap(0xA8EC).exit();
+    run(&mut w.m, &p);
+    assert!(w.m.refused.is_empty(), "{:?}", w.m.refused);
+    // black pixels (1-bit 1) land as the colour window's black (index 255 of the 8-bit table): compare ink presence
+    let ink = |x: i32, y: i32| w.px(x, y) != w.px(0, 0);
+    assert_eq!((20..28).map(|x| ink(x, 10)).collect::<Vec<_>>(), [true, true, true, true, false, false, false, false], "row 0");
+    assert_eq!((20..28).map(|x| ink(x, 11)).collect::<Vec<_>>(), [false, false, false, false, true, true, true, true], "row 1");
+}

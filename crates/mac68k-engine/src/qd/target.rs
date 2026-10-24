@@ -103,6 +103,7 @@ fn screen_base<U: GuestUi>(m: &Mac<U>) -> u32 { m.mem.strip(m.mem.read_u32(crate
 /// drawing goes there, not to the window's canvas, until the program points `portBits` back at the screen.
 fn redirected<U: GuestUi>(m: &Mac<U>, port: u32, bm_addr: u32) -> bool {
     bm_addr == port.wrapping_add(P_BITS) && m.qd.canvases.contains_key(&port) && !m.cqd.window_pix.contains_key(&bm_addr)
+        && !is_cport(&m.mem, port) // a CGrafPort's +2 is its portPixMap HANDLE, not a BitMap a program can have pointed elsewhere
         && m.mem.read_u32(bm_addr.wrapping_add(BM_BASE)).is_ok_and(|b| m.mem.strip(b) != screen_base(m))
 }
 
@@ -121,6 +122,8 @@ pub fn open_bits<U: GuestUi>(m: &mut Mac<U>, bm_addr: u32) -> Result<Target, Ref
     let mut port = m.cqd.window_pix.get(&bm_addr).copied().unwrap_or_else(|| bm_addr.wrapping_sub(P_BITS));
     if !m.qd.canvases.contains_key(&port) { port = screen_bits_port(m, bm_addr).unwrap_or(port); }
     if redirected(m, port, bm_addr) { port = 0; }
+    // &thePort->portBits of a CGrafPort is the portPixMap HANDLE field: the PixMap record is what it points at
+    let bm_addr = if port != 0 && bm_addr == port.wrapping_add(P_BITS) && is_cport(&m.mem, port) { m.mem.read_u32(bm_addr).ok().and_then(|h| m.mm.block(m.mem.strip(h))).map_or(bm_addr, |b| b.ptr) } else { bm_addr };
     if let Some(bm) = m.qd.canvases.remove(&port) {
         let (r, g, deep) = (port_rect(&m.mem, port), m.windows.get(&port).map(|w| w.rect), bm.depth() > 1);
         let clut = if deep { m.pixmap_clut(bm_addr, bm.depth()).map_err(|e| { Refusal(format!("window {port:#x}: {}", e.0)) }) } else { Ok(alloc::vec::Vec::new()) };
