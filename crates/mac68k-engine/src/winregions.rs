@@ -17,8 +17,9 @@ pub const WR_CONT_RGN: u32 = 118;
 pub const WR_UPDATE_RGN: u32 = 122;
 const TITLE_BAR: i32 = 18;
 
-/// Does a window of this `procID` have a title bar? (documents, zoom documents and the rounded document; not dialog boxes)
-fn titled(proc_id: u16) -> bool { proc_id >> 4 == 1 || matches!(proc_id & 7, 0 | 4) }
+/// Does a window of this `procID` have a title bar? Asked of the ONE WDEF binding table ([`crate::toolbox::role_of`]): a document
+/// has a title bar, a dialog box does not, and a procID the table does not bind is a named refusal, never a guess from its bits.
+fn titled(proc_id: u16) -> Result<bool, Refusal> { Ok(crate::toolbox::role_of(proc_id)?.0 == guestui_abi::WindowRole::Document) }
 
 impl<U: GuestUi> Mac<U> {
     /// Store `g` in the region handle held at `win + off`, making the handle if the record has none (or a stale one).
@@ -31,10 +32,10 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// Rewrite `strucRgn`, `contRgn` and `updateRgn` of `win` from its rectangle and its update region.
-    pub(crate) fn sync_window_regions(&mut self, win: u32) -> Result<(), Refusal> {
+    pub fn sync_window_regions(&mut self, win: u32) -> Result<(), Refusal> {
         let Some(w) = self.windows.get(&win) else { return Ok(()) };
         let r = Rect::new(i32::from(w.rect.left), i32::from(w.rect.top), i32::from(w.rect.right), i32::from(w.rect.bottom));
-        let top = if titled(w.proc_id) { TITLE_BAR + 1 } else { 1 };
+        let top = if titled(w.proc_id)? { TITLE_BAR + 1 } else { 1 };
         let struc = Region::from_rect(Rect::new(r.x0 - 1, r.y0 - top, r.x1 + 1, r.y1 + 1));
         let mut upd = self.qd.update.get(&win).cloned().unwrap_or_default();
         upd.translate(r.x0, r.y0); // local -> global: the content's local origin is (0, 0)

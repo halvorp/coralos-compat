@@ -108,7 +108,7 @@ pub fn decode_header(h: &[u8], external: impl Fn(u32, u32) -> Option<Vec<u8>>) -
                     for s in pcm.chunks_exact_mut(2) { s.swap(0, 1); }
                     Ok(Sound { rate_hz, channels: channels as u8, format: AudioFormat::S16Le, pcm, looped })
                 }
-                other => Err(bad(&format!("{other}-bit samples (8 and 16 are decoded)"))),
+                other => Err(bad(&format!("{other}-bit samples (8 and 16 are framed)"))),
             }
         }
         0xFE => Err(bad("a compressed sound header (MACE or IMA): no decompressor is modelled")),

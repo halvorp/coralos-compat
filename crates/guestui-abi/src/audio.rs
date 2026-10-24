@@ -1,7 +1,8 @@
 //! AUDIO OUT: the one way a retro engine makes sound. Generic, like every other part of this seam: no engine's types cross it
-//! (no Sound Manager channel, no `audio.device` IORequest), and no guest address does either. The engine decodes whatever the
-//! guest handed its OS (a sampled-sound resource, an 8SVX body, a synthesizer command) into interleaved PCM and queues it on a
-//! STREAM; the host plays the stream and mixes it with the others. The engine never opens a sound device and never links an
+//! (no Sound Manager channel, no `audio.device` IORequest), and no guest address does either. The engine FRAMES whatever
+//! UNCOMPRESSED sampled sound the guest handed its OS (the layout of a `'snd '` resource and its sound header, an 8SVX body) into
+//! interleaved PCM and queues it on a STREAM; the host plays the stream and mixes it with the others. Compressed formats (MACE, IMA,
+//! ...) are CODECS: the engine refuses them by name, and they will go through a datatype boundary, never through the engine. The engine never opens a sound device and never links an
 //! audio crate (ruling 17: engines link only this seam and `retro-*`).
 //!
 //! # What the host must provide (a requirement on the CoralOS side; nothing here pretends to meet it)

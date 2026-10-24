@@ -15,8 +15,8 @@
 //! **Named limits** (each is logged where it applies, none is silent): drag selection inside `TEClick` is not tracked (the click
 //! selects a point, a double click a word; Shift extends); `clikLoop`, `wordBreak`, `highHook` and `caretHook` are stored but not
 //! called; text is drawn in the engine's single stand-in font whatever `txFont` says (the metrics it measures with are the metrics it
-//! draws with); styled TextEdit (`TEStyleNew`, `TEDispatch`) and `TEAutoView` are unimplemented and refused by name. The text limit
-//! is 32767 bytes.
+//! draws with). Styled TextEdit is in [`styled`] / [`styles`] (`TEStyleNew`, `TEGetOffset`, `_TEDispatch`: nine of its fifteen selectors; the
+//! rest are refused by name there) and `TEAutoView` / `TESelView` / `TEPinScroll` in [`view`]. The text limit is 32767 bytes.
 pub mod draw;
 pub mod edit;
 pub mod layout;

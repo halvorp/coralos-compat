@@ -6,8 +6,9 @@
 //!   run in order the moment they are given, so the guest queue is always empty: playback order is the order PCM is queued on
 //!   the channel's stream, which the HOST plays.
 //! * **Streams** are the seam's ([`guestui_abi::AudioStreamModel`]): a channel opens one when its first sound has a format, and a
-//!   sound of another rate / width / channel count opens another (idle ones are closed first). The engine decodes the `'snd '`
-//!   resource and the sound header ([`snd`]) into PCM; it plays nothing itself. A host with no audio service refuses
+//!   sound of another rate / width / channel count opens another (idle ones are closed first). The engine FRAMES the `'snd '`
+//!   resource and the uncompressed sound header ([`snd`]: layout, byte order, channel and width) into PCM; it plays nothing itself, and a
+//!   compressed header (MACE / IMA) is refused by name: that is a codec, which will go through a datatype boundary, never the engine. A host with no audio service refuses
 //!   `open_audio_stream`, and then `SndNewChannel` answers `notEnoughHardware` (-201), as a Mac without sound hardware does.
 //! * **Traps**: `SndNewChannel` ($A807), `SndDisposeChannel` ($A801), `SndAddModifier` ($A802, refused: no modifier code is
 //!   modelled), `SndDoCommand` ($A803), `SndDoImmediate` ($A804), `SndPlay` ($A805), `SndControl` ($A806, refused), `SysBeep` ($A9C8)

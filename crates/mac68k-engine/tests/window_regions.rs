@@ -61,3 +61,16 @@ fn moving_a_window_moves_its_structure_and_content_regions() {
     assert_eq!(bbox(&g, WR_CONT_RGN), Some((200, 300, 320, 500)), "contRgn after MoveWindow (no update was posted: this is the rectangle sync alone)");
     assert_eq!(bbox(&g, WR_STRUC_RGN), Some((181, 299, 321, 501)));
 }
+
+#[test]
+fn a_procid_the_wdef_table_does_not_bind_is_refused_by_name_not_guessed_from_its_bits() {
+    let mut g = Rig::new();
+    // dBoxProc (1) is a dialog box: no title bar, so its structure region grows by the 1-pixel frame only
+    g.m.windows.get_mut(&g.win).unwrap().proc_id = 1;
+    g.m.sync_window_regions(g.win).unwrap();
+    assert_eq!(bbox(&g, WR_STRUC_RGN), Some((99, 49, 221, 251)), "a dialog box has no title bar");
+    // WDEF 128, variation 0: the program's own window definition
+    g.m.windows.get_mut(&g.win).unwrap().proc_id = 2048;
+    let e = g.m.sync_window_regions(g.win).unwrap_err();
+    assert!(e.0.contains("WDEF-UNSUPPORTED"), "{}", e.0);
+}

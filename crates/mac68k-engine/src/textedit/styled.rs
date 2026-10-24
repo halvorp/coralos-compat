@@ -23,8 +23,10 @@
 //! | 13 | `TENumStyles(start, stop, hTE)` | 12 | LONGINT |
 //! | 14 | `TEFeatureFlag(feature, action, hTE)` | 8 | INTEGER |
 //!
-//! Implemented: 1, 3, 4, 5, 8, 9, 10, 13, 14 and `TEStyleNew` / `TEGetOffset`. Selectors 0, 2, 6, 7, 11 and 12 pop their frame and are
-//! refused BY NAME (they need the style scrap formats or hooks the engine does not model yet).
+//! Implemented: `TESetStyle` (1), `TEGetStyle` (3), `TEGetStyleHandle` (4), `TESetStyleHandle` (5), `TEGetPoint` (8), `TEGetHeight` (9),
+//! `TEContinuousStyle` (10), `TENumStyles` (13), `TEFeatureFlag` (14: auto-scroll is real, other features read as clear) and `TEStyleNew` /
+//! `TEGetOffset`. Selectors 0 (`TEStylePaste`), 2, 6, 7, 11 and 12 pop their frame and are refused BY NAME (they need the style scrap
+//! formats or hook procedures run as guest code, which the engine does not model yet).
 //! NAMED LIMIT: one stand-in font draws everything, so a style's font id and size are stored and reported but do not change glyphs
 //! or line heights (a face -- bold, italic, underline -- does).
 use super::styles::*;
