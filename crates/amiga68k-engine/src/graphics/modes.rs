@@ -21,7 +21,7 @@ pub const INVALID_MODE: u32 = 0xFFFF_FFFF;
 pub const WORKBENCH_MODE: u32 = 0x29000;
 const INVALID_ID: u32 = 0xFFFF_FFFF;
 const DTAG_DISP: u32 = 0x8000_0000;
-const DTAG_DIMS: u32 = 0x8000_1000;
+pub(crate) const DTAG_DIMS: u32 = 0x8000_1000;
 const DTAG_NAME: u32 = 0x8000_3000;
 const DIMENSIONINFO_SIZE: usize = 88;
 const NAMEINFO_SIZE: usize = 56;
@@ -66,7 +66,7 @@ fn find_display_info<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
 /// MinRasterHeight 20, MaxRasterWidth 22, MaxRasterHeight 24, Nominal 26, MaxOScan 34, VideoOScan 42, TxtOScan 50, StdOScan 58 (each a
 /// Rectangle of four WORDs MinX MinY MaxX MaxY), pad 66, reserved 80 = 88 bytes; NameInfo = QueryHeader 16, Name[32] 16, reserved 48
 /// = 56 bytes (sizes and offsets checked with m68k-linux-gnu-gcc -m68020 -mno-align-int).
-pub(super) fn record(tag: u32, id: u32) -> Option<alloc::vec::Vec<u8>> {
+pub(crate) fn record(tag: u32, id: u32) -> Option<alloc::vec::Vec<u8>> {
     let size = match tag { DTAG_DISP => DISPLAYINFO_SIZE, DTAG_DIMS => DIMENSIONINFO_SIZE, DTAG_NAME => NAMEINFO_SIZE, _ => return None };
     let mut rec = alloc::vec![0u8; size];
     let (w, h) = (SCREEN_WIDTH as u16, SCREEN_HEIGHT as u16);

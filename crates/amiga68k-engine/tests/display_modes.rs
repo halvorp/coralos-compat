@@ -88,3 +88,28 @@ fn the_screen_mode_prefs_editor_opens_over_the_one_mode() {
     // NEGATIVE CONTROL: the stack never reached the program's image (the recursion this guards against).
     assert!(a.log.len() < 20_000, "{} log lines: a notification loop?", a.log.len());
 }
+
+const QUERY_OVERSCAN: i32 = -474;
+
+/// DOpus's ViewFont asks QueryOverscan before it opens its screen (rom/intuition/queryoverscan.c): the answer is the mode's DimensionInfo
+/// rectangle for the type, TRUE; the one screen has no overscan, so every type is the whole raster.
+#[test]
+fn query_overscan_answers_the_mode_rectangle_and_refuses_what_it_does_not_have() {
+    let mut g = G::new();
+    let rects: Vec<u32> = (0..6).map(|_| g.bytes(&[0xAA; 8])).collect();
+    g.run(&[intu(QUERY_OVERSCAN, &[a(0, MODE), a(1, rects[0]), d(0, 1)]),
+            intu(QUERY_OVERSCAN, &[a(0, MODE), a(1, rects[1]), d(0, 2)]),
+            intu(QUERY_OVERSCAN, &[a(0, MODE), a(1, rects[2]), d(0, 3)]),
+            intu(QUERY_OVERSCAN, &[a(0, MODE), a(1, rects[3]), d(0, 4)]),
+            intu(QUERY_OVERSCAN, &[a(0, 0x1234_0000), a(1, rects[4]), d(0, 1)]),
+            intu(QUERY_OVERSCAN, &[a(0, MODE), a(1, rects[5]), d(0, 9)])]);
+    for i in 0..4 {
+        assert_eq!(g.result(i), 1, "type {} is TRUE", i + 1);
+        let r = rects[i as usize];
+        assert_eq!((g.r16(r), g.r16(r + 2), g.r16(r + 4), g.r16(r + 6)), (0, 0, 639, 255), "type {} rectangle", i + 1);
+    }
+    // NEGATIVE CONTROLS: an unknown mode and an unknown type answer FALSE and leave the rectangle alone.
+    assert_eq!((g.result(4), g.result(5)), (0, 0));
+    assert_eq!((g.r32(rects[4]), g.r32(rects[5])), (0xAAAA_AAAA, 0xAAAA_AAAA));
+    assert!(g.a.refused.is_empty(), "{:?}", g.a.refused);
+}

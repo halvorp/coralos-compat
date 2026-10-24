@@ -65,7 +65,23 @@ pub fn unlock_pub_screen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
 }
 
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
-    b.named("LockPubScreenList", lock_pub_screen_list::<U>).named("UnlockPubScreenList", unlock_pub_screen_list::<U>).named("LockIBase", lock_ibase::<U>).named("UnlockIBase", unlock_ibase::<U>).named("ScreenToFront", |a, c| screen_depth(a, c, "ScreenToFront")).named("ScreenToBack", |a, c| screen_depth(a, c, "ScreenToBack"))
+    b.named("LockPubScreenList", lock_pub_screen_list::<U>).named("UnlockPubScreenList", unlock_pub_screen_list::<U>).named("LockIBase", lock_ibase::<U>).named("UnlockIBase", unlock_ibase::<U>).named("ScreenToFront", |a, c| screen_depth(a, c, "ScreenToFront")).named("ScreenToBack", |a, c| screen_depth(a, c, "ScreenToBack")).named("QueryOverscan", query_overscan::<U>)
+}
+
+/// QueryOverscan(a0 = displayid, a1 = Rectangle*, d0.w = oscantype) -> TRUE when the mode exists and the type is known
+/// (rom/intuition/queryoverscan.c:73-105): the rectangle is the matching one of the mode's DimensionInfo (DTAG_DIMS), OSCAN_TEXT 1 ->
+/// TxtOScan, STANDARD 2 -> StdOScan, MAX 3 -> MaxOScan, VIDEO 4 -> VideoOScan. An unknown mode or type answers FALSE and leaves the
+/// rectangle alone. DimensionInfo offsets: MaxOScan 34, VideoOScan 42, TxtOScan 50, StdOScan 58 (graphics/modes.rs).
+fn query_overscan<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (id, rect, ty) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0) as u16);
+    let Some(dims) = crate::graphics::modes::record(crate::graphics::modes::DTAG_DIMS, id).filter(|_| id == crate::graphics::modes::WORKBENCH_MODE) else {
+        cpu.set_d0(0);
+        return Ok(format!("[intuition] QueryOverscan mode {id:#x}: no such mode -> FALSE"));
+    };
+    let off = match ty { 1 => 50, 2 => 58, 3 => 34, 4 => 42, _ => { cpu.set_d0(0); return Ok(format!("[intuition] QueryOverscan type {ty}: not OSCAN_TEXT/STANDARD/MAX/VIDEO -> FALSE")); } };
+    a.mem.write_bytes(rect, &dims[off..off + 8]).map_err(Refusal::mem("QueryOverscan rectangle"))?;
+    cpu.set_d0(1);
+    Ok(format!("[intuition] QueryOverscan mode {id:#x} type {ty} -> TRUE"))
 }
 
 /// ScreenToFront / ScreenToBack(a0 = screen): there is one screen, so its depth order cannot change; the call is accepted for
