@@ -79,6 +79,9 @@ pub enum ControlKind {
     List { columns: Vec<String>, rows: Vec<Vec<String>>, selected: Option<u32>, top: u32 },
     /// A read-only progress bar: `value` of `max` (a MUI Gauge). `max` is at least 1.
     Gauge { value: u32, max: u32 },
+    /// A palette: one of several colour swatches the user picks from (a GadTools PALETTE_KIND). `colors` are `0x00RRGGBB` in the guest's own
+    /// order (never empty); `selected` indexes them. The host draws the swatches and reports the pick as `SetValue(Choice(index))`.
+    Swatches { colors: Vec<u32>, selected: u32 },
 }
 
 impl ControlKind {
@@ -95,6 +98,7 @@ impl ControlKind {
                 Ok(())
             }
             ControlKind::Gauge { value, max } if *max == 0 || value > max => Err(UiRefusal::InvalidGeometry("gauge value outside 0..=max")),
+            ControlKind::Swatches { colors, selected } if colors.is_empty() || *selected as usize >= colors.len() => Err(UiRefusal::InvalidGeometry("swatch selection outside its colours")),
             _ => Ok(()),
         }
     }
@@ -131,7 +135,7 @@ pub struct ControlModel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlValue { Pressed, Checked(bool), Text(String), Level(i32), Scroll { total: u32, visible: u32, top: u32 },
-    /// The selected index of a [`ControlKind::Choice`].
+    /// The selected index of a [`ControlKind::Choice`] or [`ControlKind::Swatches`].
     Choice(u32),
     /// The whole content of a [`ControlKind::List`].
     Rows { rows: Vec<Vec<String>>, selected: Option<u32>, top: u32 },
@@ -166,6 +170,10 @@ impl ControlModel {
                 if rows.iter().any(|row| row.len() != width) { return Err(UiRefusal::InvalidGeometry("list row with the wrong number of cells")); }
                 if sel.is_some_and(|i| i as usize >= rows.len()) { return Err(UiRefusal::InvalidGeometry("list selection past its rows")); }
                 (*r, *selected, *top) = (rows.clone(), *sel, (*t).min(rows.len().saturating_sub(1) as u32));
+            }
+            (ControlKind::Swatches { colors, selected }, ControlValue::Choice(i)) => {
+                if (*i as usize) >= colors.len() { return Err(UiRefusal::InvalidGeometry("swatch index past its colours")); }
+                *selected = *i;
             }
             (ControlKind::Gauge { value, max }, ControlValue::Level(l)) => {
                 if *l < 0 || *l as u32 > *max { return Err(UiRefusal::InvalidGeometry("gauge value outside 0..=max")); }

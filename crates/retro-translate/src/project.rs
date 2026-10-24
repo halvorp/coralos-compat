@@ -25,7 +25,7 @@ pub fn state(k: &ControlKind) -> Option<ControlValue> {
         ControlKind::ScrollBar { total, visible, top, .. } => ControlValue::Scroll { total: *total, visible: *visible, top: *top },
         ControlKind::Field { text, .. } | ControlKind::Label { text, .. } | ControlKind::String { text, .. } => ControlValue::Text(text.clone()),
         ControlKind::Slider { value, .. } => ControlValue::Level(*value),
-        ControlKind::Choice { selected, .. } => ControlValue::Choice(*selected),
+        ControlKind::Choice { selected, .. } | ControlKind::Swatches { selected, .. } => ControlValue::Choice(*selected),
         ControlKind::List { rows, selected, top, .. } => ControlValue::Rows { rows: rows.clone(), selected: *selected, top: *top },
         ControlKind::Gauge { value, .. } => ControlValue::Level(*value as i32),
         _ => return None,
@@ -46,6 +46,7 @@ pub fn same_shape(a: &ControlModel, b: &ControlModel) -> bool {
         (K::Choice { style: x, labels: l, .. }, K::Choice { style: y, labels: m, .. }) => (x, l) == (y, m),
         (K::List { columns: x, .. }, K::List { columns: y, .. }) => x == y,
         (K::Gauge { max: x, .. }, K::Gauge { max: y, .. }) => x == y,
+        (K::Swatches { colors: x, .. }, K::Swatches { colors: y, .. }) => x == y,
         (x, y) => core::mem::discriminant(x) == core::mem::discriminant(y),
     }
 }

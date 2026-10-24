@@ -31,7 +31,7 @@ pub fn role_of(kind: &ControlKind) -> Option<Role> {
         ControlKind::ScrollBar { .. } => Role::Scroll,
         ControlKind::Field { .. } | ControlKind::String { .. } => Role::Field,
         ControlKind::Slider { .. } => Role::Slider,
-        ControlKind::Choice { .. } => Role::Choice,
+        ControlKind::Choice { .. } | ControlKind::Swatches { .. } => Role::Choice, // a palette is a choice among colours
         ControlKind::List { .. } => Role::List,
         ControlKind::Label { .. } | ControlKind::Group { .. } | ControlKind::Gauge { .. } => return None,
     })
