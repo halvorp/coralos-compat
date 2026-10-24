@@ -75,7 +75,7 @@ fn without_the_library_or_with_a_broken_one_every_import_names_why() {
 #[test]
 fn guest_ram_is_large_enough_for_a_big_application_and_gestalt_reports_it() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
-    assert!(m.mac.mem.len() >= 256 << 20);
+    assert!(m.mac.mem.len() >= 512 << 20, "Warcraft III Frozen Throne wants 320 MB of (virtual) memory");
     let big = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 100 << 20, false);
     assert!(big.is_ok(), "a 100 MB block: {big:?}");
     m.bind("Gestalt");

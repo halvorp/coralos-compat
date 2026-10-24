@@ -58,8 +58,9 @@ pub struct MacPpc<U: GuestUi> {
 }
 
 /// Guest RAM of a PowerPC Macintosh: large PowerPC applications are tens of megabytes of code and data before their heap (Warcraft III: a 14 MB
-/// application). The address space is zero-filled lazily by the host, so the size costs nothing until it is touched. `with_ram` picks another.
-pub const DEFAULT_PPC_RAM: usize = 256 << 20;
+/// application). The address space is zero-filled lazily by the host, so the size costs nothing until it is touched. `with_ram` picks another. 512 MB: the Frozen Throne
+/// refuses to start below 320 MB of (virtual) memory, read from Gestalt `ram `.
+pub const DEFAULT_PPC_RAM: usize = 512 << 20;
 
 impl<U: GuestUi> MacPpc<U> {
     pub fn new(ui: U) -> Result<Self, CfmError> { Self::with_ram(ui, DEFAULT_PPC_RAM) }
