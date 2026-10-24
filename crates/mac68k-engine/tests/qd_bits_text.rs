@@ -420,3 +420,26 @@ fn measure_text_gives_the_left_edge_of_every_character_and_the_end() {
     assert_eq!(g.m.mem.read_u16(0x3420).unwrap(), 0);
     assert_eq!(g.m.mem.read_u16(0x3422).unwrap(), 0, "and nothing past it");
 }
+
+#[test]
+fn text_drawn_into_a_port_over_an_empty_bitmap_is_clipped_away_not_refused() {
+    // WriteNow 2.2 measures text in a scratch port whose BitMap has bounds (0,0,0,104): zero rows. There is nothing to draw on, so nothing is drawn.
+    let mut g = Rig::new();
+    put(&mut g.m, BM, &[0, 0, 0x34, 0x00, 0, 14, 0, 0, 0, 0, 0, 0, 0, 104]); // base 0x3400, rowBytes 14, bounds 0,0,0,104
+    put(&mut g.m, 0x3600, &pstr("abc"));
+    let win = g.win;
+    let mut p = Prog::new();
+    draw_offscreen(&mut p, |p| { p.move_to(5, 5).draw_string(0x3600); }, win);
+    g.run(p.exit());
+    g.no_refusals();
+    assert!(g.m.log.iter().any(|l| l.contains("has an empty BitMap: nothing is drawn")), "{:#?}", g.m.log);
+    assert_eq!(g.count_black(), 0, "and the window is untouched");
+    // negative control: the same string into a BitMap with rows is drawn
+    put(&mut g.m, BM, &[0, 0, 0x34, 0x00, 0, 14, 0, 0, 0, 0, 0, 16, 0, 104]);
+    let mut p = Prog::new();
+    draw_offscreen(&mut p, |p| { p.move_to(5, 10).draw_string(0x3600); }, win);
+    g.run(p.exit());
+    g.no_refusals();
+    let ink = g.m.mem.bytes(g.m.mem.span(0x3400, 16 * 14).unwrap()).unwrap().iter().filter(|&&b| b != 0).count();
+    assert!(ink > 0, "text drawn into a real offscreen BitMap");
+}

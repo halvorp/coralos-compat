@@ -263,3 +263,16 @@ fn moving_van_draws_its_pictures_builds_its_lists_and_five_buttons_and_parks_in_
     assert_eq!(kinds.iter().filter(|k| matches!(k, ControlKind::Button)).count(), 5, "five push buttons");
     assert_eq!(kinds.iter().filter(|k| matches!(k, ControlKind::List { .. })).count(), 2, "two native lists");
 }
+
+#[test]
+fn writenow_2_x_open_an_untitled_document_and_the_ruler_on_the_plus_they_were_written_for() {
+    // 68000 programs (6-byte exception frames): the census names the machine in the TSV's fifth column. WriteNow 2.0 and 2.2 open "Untitled-1"
+    // and the Ruler and then wait on null events. Open: WriteNow 2.2 pushes args through a jump-table helper (1818(a5)) that leaves SetItmStyle
+    // a garbage first argument; the stack imbalance is not resolved, so refusals are not pinned to zero here.
+    for rel in ["mac/writenow/fx/z22_1/WriteNow 2.2.bin"] {
+        let Some(m) = census_on(rel, "mac-plus") else { return };
+        assert!(m.log.iter().any(|l| l.contains("Untitled-1")), "{rel}: {:#?}", m.log.iter().rev().take(30).collect::<Vec<_>>());
+        assert!(m.log.iter().any(|l| l.contains("Ruler")), "{rel}");
+        assert!(!m.log.iter().any(|l| l.contains("DrawString REFUSED")), "{rel}: text into an empty-bounds port draws nothing instead of being refused");
+    }
+}

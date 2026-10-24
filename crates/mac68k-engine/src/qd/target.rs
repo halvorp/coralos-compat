@@ -61,6 +61,9 @@ pub fn checked_port(p: u32) -> Result<u32, Refusal> {
     if p.checked_add(PORT_SIZE).is_none() { Err(Refusal(format!("QuickDraw: GrafPort pointer {p:#010x} runs past the end of the address space"))) } else { Ok(p) }
 }
 
+/// The marker in the refusal for a BitMap with empty bounds: a port over one has no pixels, so drawing into it draws nothing ([`with`]).
+pub const EMPTY_BITMAP: &str = "[EMPTY-BITMAP]";
+
 /// A guest BitMap or PixMap unpacked into a chunky bitmap: (bitmap, base address, row bytes, bounds, colour table).
 pub type Unpacked = (Bitmap, u32, u16, Rect, Option<alloc::vec::Vec<Rgb>>);
 
@@ -73,7 +76,8 @@ pub fn read_bitmap<U: GuestUi>(m: &Mac<U>, bm: u32) -> Result<Unpacked, Refusal>
     if !pixmap::supported_depth(depth) { return Err(Refusal(format!("PixMap {bm:#x}: {depth}-bit pixels are not implemented (indexed 1, 2, 4 and 8 bits only)"))); }
     let b = read_rect(&m.mem, bm.wrapping_add(BM_BOUNDS))?;
     let (w, h) = (i32::from(b.right) - i32::from(b.left), i32::from(b.bottom) - i32::from(b.top));
-    if w <= 0 || h <= 0 || w > 1 << 15 || h > 1 << 15 { return Err(Refusal(format!("BitMap {bm:#x}: bounds ({},{},{},{}) are empty or too large", b.top, b.left, b.bottom, b.right))); }
+    if w <= 0 || h <= 0 { return Err(Refusal(format!("BitMap {bm:#x}: bounds ({},{},{},{}) are empty {EMPTY_BITMAP}", b.top, b.left, b.bottom, b.right))); }
+    if w > 1 << 15 || h > 1 << 15 { return Err(Refusal(format!("BitMap {bm:#x}: bounds ({},{},{},{}) are too large", b.top, b.left, b.bottom, b.right))); }
     if i32::from(row) * 8 < w * i32::from(depth) { return Err(Refusal(format!("BitMap {bm:#x}: rowBytes {row} is too small for {w} pixels of {depth} bits"))); }
     let bytes = m.mem.bytes(m.mem.span(base, u32::from(row) * h as u32).map_err(&e)?).map_err(&e)?;
     let out = pixmap::unpack(bytes, usize::from(row), w, h, depth as u8)?;
@@ -160,7 +164,8 @@ pub fn finish<U: GuestUi>(m: &mut Mac<U>, t: Target, touched: Rect) -> Result<()
 /// Run `f` against the destination of `port`, always putting it back.
 pub fn with<U: GuestUi, F>(m: &mut Mac<U>, port: u32, f: F) -> Result<(), Refusal>
 where F: FnOnce(&mut Mac<U>, &mut Target) -> Result<Rect, Refusal> {
-    let mut t = open(m, port)?;
+    // a port whose BitMap has empty bounds (a program measuring text in a scratch port) has nothing to draw on: the drawing is clipped away, as on a Mac
+    let mut t = match open(m, port) { Err(Refusal(e)) if e.contains(EMPTY_BITMAP) => { m.log.push(format!("[quickdraw] port {port:#x} has an empty BitMap: nothing is drawn")); return Ok(()); } o => o? };
     let r = f(m, &mut t);
     let touched = r.as_ref().map(|r| *r).unwrap_or_default();
     finish(m, t, touched)?;
