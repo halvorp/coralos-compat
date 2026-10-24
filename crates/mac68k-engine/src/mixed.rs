@@ -140,19 +140,29 @@ impl<U: GuestUi> Mac<U> {
     /// Call an OS-convention trap by its C prototype ([`OsSig`]). Runs the SAME handler the 68k A-line bridge runs.
     pub fn os_call(&mut self, opcode: u16, sig: &OsSig, values: &[u32]) -> Result<Return, MixedError> {
         let name = trap_name(opcode).unwrap_or(sig.name);
-        let entry = self.table.get(&trap_key(opcode)).copied().ok_or_else(|| MixedError::Unimplemented(name.into()))?;
-        let Conv::Os(handler) = entry.conv else { return Err(MixedError::WrongConvention(name.into())) };
         if sig.args.len() != values.len() { return Err(MixedError::ArgCount { name: name.into(), want: sig.args.len(), got: values.len() }); }
         let mut regs = Regs { opcode, d0: 0, a0: 0, d1: 0, a1: 0 };
         for (slot, &v) in sig.args.iter().zip(values) {
             match slot { Reg::D0 => regs.d0 = v, Reg::D1 => regs.d1 = v, Reg::A0 => regs.a0 = v, Reg::A1 => regs.a1 = v }
         }
+        let (regs, mut ret) = self.os_call_regs(regs)?;
+        ret.value = match sig.result { Some(Reg::D0) => regs.d0, Some(Reg::A0) => regs.a0, Some(Reg::A1) => regs.a1, Some(Reg::D1) => regs.d1, None => 0 };
+        Ok(ret)
+    }
+
+    /// Call an OS-convention trap with its register file given whole, and get the register file back: for routines whose
+    /// C prototype returns more than one value (`PurgeSpace`: D0 and A0) or packs two arguments into one register
+    /// (`FlushEvents`: D0 = stopMask << 16 | eventMask). `Return::value` is D0. Runs the SAME handler the 68k A-line bridge runs.
+    pub fn os_call_regs(&mut self, mut regs: Regs) -> Result<(Regs, Return), MixedError> {
+        let opcode = regs.opcode;
+        let name = trap_name(opcode).unwrap_or("?");
+        let entry = self.table.get(&trap_key(opcode)).copied().ok_or_else(|| MixedError::Unimplemented(name.into()))?;
+        let Conv::Os(handler) = entry.conv else { return Err(MixedError::WrongConvention(name.into())) };
         let mut cpu = Cpu::detached();
         let outcome = handler(self, &mut cpu, &mut regs);
         if cpu.touched_registers() { self.ev.waiting = None; return Err(MixedError::NeedsCpuRegisters(name.into())); }
         self.finish_os(name, outcome, &mut regs);
-        let value = match sig.result { Some(Reg::D0) => regs.d0, Some(Reg::A0) => regs.a0, Some(Reg::A1) => regs.a1, Some(Reg::D1) => regs.d1, None => 0 };
-        Ok(Return { value, halted: cpu.is_halted(), blocked: cpu.is_blocked() })
+        Ok((regs, Return { value: regs.d0, halted: cpu.is_halted(), blocked: cpu.is_blocked() }))
     }
 
     /// `MemError()`: the last Memory Manager result (a read of the low-memory word, not a trap on any CPU).

@@ -1,0 +1,75 @@
+//! Operating System routines a PowerPC program calls by C prototype, whose 68k traps take their arguments in D0/A0/A1 and may
+//! return TWO values (`PurgeSpace`: D0 and A0) or pack two arguments in one register (`FlushEvents`: D0 = stopMask << 16 | eventMask).
+//! The generic [`mac68k_engine::mixed::OsSig`] table maps one-in-one-out Memory Manager calls; the routines here need pointers
+//! written back or a combined register, so each is a few lines over [`Mac::os_call_regs`], running the SAME handler as the 68k
+//! A-line bridge (prototypes: Universal Interfaces `Events.h`, `Timer.h`/`OSUtils.h`, `MacMemory.h`, `Gestalt.h`).
+use crate::machine::MacPpc;
+use alloc::format;
+use alloc::string::String;
+use guestui_abi::GuestUi;
+use mac68k_engine::mixed::trap_opcode;
+use mac68k_engine::osconv::Regs;
+
+/// `gestaltSysArchitecture`: 1 = 68k, 2 = PowerPC (Gestalt.h; executor src/gestalt.cpp:146 answers `gestaltPowerPC` for it).
+pub const GESTALT_SYS_ARCHITECTURE: u32 = u32::from_be_bytes(*b"sysa");
+pub const GESTALT_POWERPC: u32 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsRoutine { FlushEvents, Delay, PurgeSpace, MaxMem, MoveHHi, HandToHand, PtrToHand, PtrAndHand, HandAndHand, Gestalt }
+
+impl OsRoutine {
+    pub fn by_name(name: &str) -> Option<OsRoutine> {
+        use OsRoutine::*;
+        Some(match name {
+            "FlushEvents" => FlushEvents, "Delay" => Delay, "PurgeSpace" => PurgeSpace, "MaxMem" => MaxMem, "MoveHHi" => MoveHHi,
+            "HandToHand" => HandToHand, "PtrToHand" => PtrToHand, "PtrAndHand" => PtrAndHand, "HandAndHand" => HandAndHand, "Gestalt" => Gestalt,
+            _ => return None,
+        })
+    }
+    /// How many C arguments the prototype takes.
+    pub fn arg_count(self) -> usize {
+        use OsRoutine::*;
+        match self { MaxMem | MoveHHi | HandToHand => 1, FlushEvents | Delay | PurgeSpace | HandAndHand | Gestalt => 2, PtrToHand | PtrAndHand => 3 }
+    }
+}
+
+impl<U: GuestUi> MacPpc<U> {
+    /// One routine; the value to put in r3 (0 for `void` routines). A pointer outside guest RAM is a refusal BY NAME.
+    pub(crate) fn os_routine(&mut self, c: OsRoutine, a: &[u32]) -> Result<u32, String> {
+        use OsRoutine::*;
+        let name = format!("{c:?}");
+        let store = |m: &mut MacPpc<U>, at: u32, v: u32| m.mac.mem.write_u32(at, v).map_err(|_| format!("{name}: result pointer {at:#x} is outside guest RAM"));
+        if c == Gestalt && a[0] == GESTALT_SYS_ARCHITECTURE {
+            // The shared Gestalt answers for the 68k machine profile; the PowerPC personality is the one fact that differs.
+            store(self, a[1], GESTALT_POWERPC)?;
+            self.mac.log.push(format!("[toolbox] Gestalt 'sysa' -> {GESTALT_POWERPC:#x} (PowerPC)"));
+            return Ok(0);
+        }
+        let opcode = trap_opcode(&name).ok_or_else(|| format!("{name}: no trap word"))?;
+        let mut regs = Regs { opcode, d0: 0, a0: 0, d1: 0, a1: 0 };
+        match c {
+            FlushEvents => regs.d0 = (a[1] & 0xFFFF) << 16 | (a[0] & 0xFFFF),
+            Delay => regs.a0 = a[0],
+            PurgeSpace => {}
+            MaxMem => {}
+            MoveHHi => regs.a0 = a[0],
+            HandToHand => regs.a0 = self.mac.mem.read_u32(a[0]).map_err(|_| format!("{name}: handle pointer {:#x} is outside guest RAM", a[0]))?,
+            PtrToHand => { regs.a0 = a[0]; regs.d0 = a[2]; }
+            PtrAndHand => { regs.a0 = a[0]; regs.a1 = a[1]; regs.d0 = a[2]; }
+            HandAndHand => { regs.a0 = a[0]; regs.a1 = a[1]; }
+            Gestalt => regs.d0 = a[0],
+        }
+        let (out, ret) = self.mac.os_call_regs(regs).map_err(|e| format!("{name}: {e}"))?;
+        if ret.blocked { return Err(format!("{name}: the handler tried to block the caller")); }
+        let err = out.d0 as u16 as i16 as i32 as u32;
+        match c {
+            FlushEvents | MoveHHi => Ok(0),
+            Delay => { store(self, a[1], out.d0)?; Ok(0) }
+            PurgeSpace => { store(self, a[0], out.d0)?; store(self, a[1], out.a0)?; Ok(0) }
+            MaxMem => { store(self, a[0], out.a0)?; Ok(out.d0) }
+            HandToHand | PtrToHand => { if out.d0 as u16 == 0 { store(self, if c == HandToHand { a[0] } else { a[1] }, out.a0)?; } Ok(err) }
+            PtrAndHand | HandAndHand => Ok(err),
+            Gestalt => { if out.d0 as u16 == 0 { store(self, a[1], out.a0)?; } Ok(err) }
+        }
+    }
+}

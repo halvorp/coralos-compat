@@ -29,6 +29,7 @@ pub mod glue;
 pub mod host;
 pub mod machine;
 pub mod natives;
+pub mod osroutines;
 pub mod run;
 pub mod source;
 pub mod stdclib;

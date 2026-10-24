@@ -38,7 +38,9 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     /// The address a PowerPC callback returns to (`crate::callback`): a pseudo-call the run loop answers from the frame stack.
     CallbackReturn,
     /// A `Files.h` routine (`FSRead`, `HOpen`, `GetVol` ...): the C glue over the 68k engine's File Manager traps ([`crate::files`]).
-    File(crate::files::FileCall) }
+    File(crate::files::FileCall),
+    /// A register-convention OS routine with pointer outputs or packed arguments ([`crate::osroutines`]).
+    Os(crate::osroutines::OsRoutine) }
 
 /// Which trap table a [`Native::TrapAddress`] import names, as the calling 68k trap word's type bits would.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +76,7 @@ impl Native {
             "GetToolTrapAddress" => Native::TrapAddress(TrapQuery::Tool), "GetTrapAddress" => Native::TrapAddress(TrapQuery::Old),
             "NewRoutineDescriptor" => Native::NewRoutineDescriptor, "NewFatRoutineDescriptor" => Native::NewFatRoutineDescriptor,
             "DisposeRoutineDescriptor" => Native::DisposeRoutineDescriptor,
-            _ => return crate::files::FileCall::by_name(name).map(Native::File),
+            _ => return crate::files::FileCall::by_name(name).map(Native::File).or_else(|| crate::osroutines::OsRoutine::by_name(name).map(Native::Os)),
         })
     }
 }

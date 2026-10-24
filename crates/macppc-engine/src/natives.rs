@@ -125,6 +125,10 @@ impl<U: GuestUi> MacPpc<U> {
                 let args = match self.arg_values(nargs, regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{c:?}: {e}")) };
                 match self.file_call(c, &args) { Ok(e) => { regs[3] = err(e); GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::Os(c) => {
+                let args = match self.arg_values(c.arg_count(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{c:?}: {e}")) };
+                match self.os_routine(c, &args) { Ok(v) => { regs[3] = v; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
             Native::BlockZero => {
                 let (dest, n) = (a(0), a(1));
