@@ -5,9 +5,13 @@
 //!
 //! ```text
 //! gdRefNum 0  gdID 2  gdType 4  gdITable 6 (ITabHandle)  gdResPref 10  gdSearchProc 12  gdCompProc 16  gdFlags 20
-//! gdPMap 22 (PixMapHandle)  gdRefCon 24  gdNextGD 28 (GDHandle)  gdRect 32  gdMode 40  gdCCBytes 44  gdCCDepth 46
-//! gdCCXData 48  gdCCXMask 52  gdReserved 56                                                             = 62 bytes
+//! gdPMap 22 (PixMapHandle)  gdRefCon 26 (LONGINT)  gdNextGD 30 (GDHandle)  gdRect 34  gdMode 42  gdCCBytes 46  gdCCDepth 48
+//! gdCCXData 50  gdCCXMask 54  gdReserved 58                                                             = 62 bytes
 //! ```
+//! (Until 2026-10-24 the table here put gdRefCon at 24, overlapping the 4-byte `gdPMap`, and every later field two bytes early, so a
+//! program that read `(**GetMainDevice()).gdRect` itself - SimpleText 1.3 sizing its first window - got the screen's bottom, right and
+//! the high half of `gdMode` instead. Inside Macintosh sums to 62 bytes only with `gdPMap` 4 bytes wide; systemless writes `gdRect.top`
+//! at +34.)
 //! `gdFlags` bits (Quickdraw.h): 0 gdDevType (color), 10 ramInit, 11 mainScreen, 12 allInit, 13 screenDevice, 14 noDriver,
 //! 15 screenActive. `gdITable` is NIL: the inverse table is not modelled (`Color2Index` is answered by the engine).
 use super::color;
@@ -23,8 +27,10 @@ use retro_m68k::Cpu;
 pub const GD_TYPE: u32 = 4;
 pub const GD_FLAGS: u32 = 20;
 pub const GD_PMAP: u32 = 22;
-pub const GD_NEXT: u32 = 28;
-pub const GD_RECT: u32 = 32;
+pub const GD_REF_CON: u32 = 26;
+pub const GD_NEXT: u32 = 30;
+pub const GD_RECT: u32 = 34;
+pub const GD_MODE: u32 = 42;
 pub const GD_SIZE: u32 = 62;
 pub const GD_DEV_TYPE: u16 = 0;
 pub const NO_DRIVER: u16 = 14;
@@ -159,7 +165,7 @@ fn new_gdevice<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     let pm = m.new_pixmap(1, blank, 0, 0, 0)?;
     let gd = m.new_device_record(pm, blank, 1 << NO_DRIVER)?;
     let p = m.deref_handle(gd, "NewGDevice")?;
-    m.mem.write_u16(p + 0, rn as u16).and_then(|_| m.mem.write_u32(p + 40, mode)).map_err(Refusal::mem("GDevice"))?;
+    m.mem.write_u16(p + 0, rn as u16).and_then(|_| m.mem.write_u32(p + GD_MODE, mode)).map_err(Refusal::mem("GDevice"))?;
     Ok(Done { result: gd, log: format!("[quickdraw] NewGDevice -1 mode {mode:#x} -> {gd:#x}") })
 }
 

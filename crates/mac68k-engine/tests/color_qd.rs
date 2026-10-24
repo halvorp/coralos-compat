@@ -104,8 +104,9 @@ fn the_main_device_is_an_8_bit_indexed_screen_with_the_standard_table() {
     assert!(gd != 0 && m.mem.read_u32(0x3404).unwrap() == gd && m.mem.read_u32(0x3408).unwrap() == gd, "main = current = the whole list");
     let gp = m.mem.read_u32(gd).unwrap();
     assert_eq!(m.mem.read_u16(gp + 20).unwrap(), 0xBC01, "gdFlags: color, ramInit, mainScreen, allInit, screenDevice, screenActive");
-    assert_eq!(m.mem.read_u32(gp + 28).unwrap(), 0, "gdNextGD: the only device");
-    let (pmh, rect) = (m.mem.read_u32(gp + 22).unwrap(), gp + 32);
+    assert_eq!(m.mem.read_u32(gp + 30).unwrap(), 0, "gdNextGD (offset 30: gdPMap is a 4-byte handle at 22, gdRefCon a LONGINT at 26): the only device");
+    // gdRect is at +34 (Inside Macintosh sums the record to 62 bytes only this way; systemless writes gdRect.top at gd+34)
+    let (pmh, rect) = (m.mem.read_u32(gp + 22).unwrap(), gp + 34);
     assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_u16(rect + o).unwrap()), [0, 0, 342, 512], "gdRect = the screen");
     let pm = m.mem.read_u32(pmh).unwrap();
     assert_eq!((m.mem.read_u16(pm + 4).unwrap(), m.mem.read_u16(pm + 32).unwrap(), m.mem.read_u16(pm + 34).unwrap(), m.mem.read_u16(pm + 36).unwrap()), (0x8000 | 512, 8, 1, 8), "PixMap: rowBytes with the PixMap flag, pixelSize 8, one 8-bit component");
@@ -501,4 +502,21 @@ fn set_port_pix_repoints_a_colour_port_and_set_port_bits_will_not_overwrite_one(
     script(&mut m, &[call("SetPBits", &[Lit(0x3A00)], None)]);
     assert!(m.refused.iter().any(|r| r.contains("SetPortBits") && r.contains("SetPortPix")), "{:?}", m.refused);
     assert_eq!((m.mem.read_u32(PORT + 2).unwrap(), m.mem.read_u16(PORT + 6).unwrap() & 0xC000), (h2, 0xC000));
+}
+
+#[test]
+fn the_gdevice_record_has_the_inside_macintosh_offsets_for_every_field_a_program_reads() {
+    // gdRefNum 0, gdFlags 20, gdPMap 22 (4 bytes), gdRefCon 26, gdNextGD 30, gdRect 34, gdMode 42 (Imaging With QuickDraw sums to 62
+    // bytes only this way). A program that reads (**GetMainDevice()).gdRect itself (SimpleText 1.3 centring its first window) must
+    // see the screen there, not the high half of gdMode.
+    let mut m = machine("mac-ii");
+    script(&mut m, &[call("GetMainDevice", &[], Some(0x3400)), call("NewGDevice", &[Lit(0xFFFF), Lit(0x1234_5678)], Some(0x3404))]);
+    let (main, new) = (m.mem.read_u32(0x3400).unwrap(), m.mem.read_u32(0x3404).unwrap());
+    let (mp, np) = (m.mem.read_u32(main).unwrap(), m.mem.read_u32(new).unwrap());
+    assert_eq!(m.mm.block(main).unwrap().size, 62, "the record is 62 bytes");
+    assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_i16(mp + 34 + o).unwrap()), [0, 0, 342, 512], "gdRect is at +34");
+    assert_eq!(m.mem.read_u32(mp + 26).unwrap(), 0, "gdRefCon (+26) is clear and does not overlap gdPMap (+22)");
+    assert_ne!(m.mem.read_u32(mp + 22).unwrap(), 0, "gdPMap survives");
+    assert_eq!((m.mem.read_u16(np).unwrap(), m.mem.read_u32(np + 42).unwrap()), (0xFFFF, 0x1234_5678), "NewGDevice stores refNum at 0 and gdMode at +42");
+    assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_i16(np + 34 + o).unwrap()), [0, 0, 0, 0], "a new device's gdRect is empty: the mode did not leak into it");
 }
