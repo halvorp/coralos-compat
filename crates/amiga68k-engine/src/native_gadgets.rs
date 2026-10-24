@@ -193,6 +193,16 @@ pub fn resync<U: GuestUi>(a: &mut Amiga<U>, g: u32) -> Result<(), Refusal> {
 /// classic gadget; guest-defined classes register through their super GM_RENDER.
 pub fn sync_chain<U: GuestUi>(a: &mut Amiga<U>, win: u32, gadgets: &[u32]) -> Result<(), Refusal> {
     for &g in gadgets {
+        // A GadTools gadget (gadtools.rs) is projected through its own table; it joins a window by AddGList / AddGadget as well as by WA_Gadgets.
+        if let Some(info) = a.gadgets.get(&g).cloned() {
+            if info.kind != crate::gadtools::CONTEXT {
+                if let Some(&native) = a.windows.get(&win) {
+                    let model = crate::gt_kinds::control_model(&info, g);
+                    a.gt_ctls.sync(&mut a.ui, Some(native), u64::from(g), win, Some(model)).map_err(Refusal::ui)?;
+                }
+            }
+            continue;
+        }
         if a.classes.class_of(g).is_none() || direct_system(a, g) { ensure(a, win, g)?; }
     }
     Ok(())
@@ -202,6 +212,7 @@ pub fn sync_chain<U: GuestUi>(a: &mut Amiga<U>, win: u32, gadgets: &[u32]) -> Re
 pub fn forget<U: GuestUi>(a: &mut Amiga<U>, gadgets: &[u32]) -> Result<(), Refusal> {
     for g in gadgets {
         a.native_gads.retire(&mut a.ui, u64::from(*g)).map_err(Refusal::ui)?;
+        a.gt_ctls.retire(&mut a.ui, u64::from(*g)).map_err(Refusal::ui)?;
     }
     Ok(())
 }

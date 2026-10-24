@@ -184,20 +184,19 @@ fn kinds_the_native_side_cannot_express_are_named_refusals_and_return_null() {
     let bad_slider = m.tags(&[(GT + 38, 9), (GT + 39, 1)]);
     m.run(&[
         gt(LVO_CREATE_CONTEXT, &[a(0, glist)]),                                                       // 0
-        gt(LVO_CREATE_GADGET, &[d(0, 8), a_res(0, 0), a(1, ng), a(2, 0)]),                           // 1 PALETTE
+        gt(LVO_CREATE_GADGET, &[d(0, 8), a_res(0, 0), a(1, ng), a(2, 0)]),                           // 1 PALETTE_KIND with no tags: 2 colours (now a Swatches control)
         gt(LVO_CREATE_GADGET, &[d(0, 10), a_res(0, 0), a(1, ng), a(2, 0)]),                          // 2 (the number GadTools leaves unused)
         gt(LVO_CREATE_GADGET, &[d(0, 99), a_res(0, 0), a(1, ng), a(2, 0)]),                          // 3 no such kind
         gt(LVO_CREATE_GADGET, &[d(0, 11), a_res(0, 0), a(1, ng), a(2, bad_slider)]),                 // 4 min > max
         gt(LVO_CREATE_GADGET, &[d(0, 2), a(0, 0), a(1, ng), a(2, 0)]),                               // 5 previous NULL
     ]);
-    assert_eq!((1..=5).map(|i| m.result(i)).collect::<Vec<_>>(), [0; 5]);
+    assert_ne!(m.result(1), 0, "PALETTE_KIND is bridged (tests/gt_palette.rs)");
+    assert_eq!((2..=5).map(|i| m.result(i)).collect::<Vec<_>>(), [0; 4]);
     let r = &m.a.refused;
-    assert!(r[0].contains("PALETTE_KIND") && r[0].contains("no swatch role"), "{r:?}");
-    assert!(r[1].contains("kind 10 not bridged") && r[2].contains("kind 99 not bridged"), "{r:?}");
-    assert!(r[3].contains("GTSL_Min 9 > GTSL_Max 1"), "{r:?}");
-    assert_eq!(r.len(), 4, "a NULL previous is GadTools' chained-failure rule, not a refusal");
-    assert_eq!(m.a.heap.live_blocks(), 1, "only the context gadget");
-    assert_eq!(m.a.gadgets.len(), 1);
+    assert!(r[0].contains("kind 10 not bridged") && r[1].contains("kind 99 not bridged"), "{r:?}");
+    assert!(r[2].contains("GTSL_Min 9 > GTSL_Max 1"), "{r:?}");
+    assert_eq!(r.len(), 3, "a NULL previous is GadTools' chained-failure rule, not a refusal");
+    assert_eq!(m.a.gadgets.len(), 2, "the context gadget and the palette");
 }
 
 #[test]

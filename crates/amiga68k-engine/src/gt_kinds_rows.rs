@@ -7,8 +7,11 @@
 //! | LISTVIEW_KIND (4) | `List` (one headless column) | GTLV_Labels (a `struct List` of Nodes, `ln_Name` = the row; `~0` = detached), GTLV_Top, GTLV_Selected, GTLV_ReadOnly |
 //! | SCROLLER_KIND (9) | `ScrollBar` | GTSC_Top / Total / Visible, PGA_Freedom (LORIENT_VERT, anything but LORIENT_HORIZ = vertical; default horizontal) |
 //! | NUMBER_KIND (6) | `Label` (read-only) | GTNM_Number, GTNM_Border, GTNM_Format (default `%ld`) |
+//! | PALETTE_KIND (8) | `Swatches` | GTPA_Depth (2^depth colours) or GTPA_NumColors (wins; default 2), GTPA_Color (a PEN), GTPA_ColorOffset, GTPA_ColorTable |
 //!
-//! PALETTE_KIND (8) stays a named refusal: no swatch role exists in guestui-abi.
+//! PALETTE_KIND (paletteclass.c): the colours are the pens `offset + i` (or `ColorTable[i]`) read from the screen palette when the gadget is made or
+//! its colour set changes (a later LoadRGB does not repaint the swatches); GTPA_Color is a PEN, held as an index (`pd_Color`) and read back as a pen
+//! (`GetPalettePen`); a pick ends with Code = the PEN. GTPA_IndicatorWidth / Height and GA_LabelPlace are layout the host owns.
 //!
 //! Facts (AROS workbench/libs/gadtools, APL, read for behaviour only): `cycleclass.c` (GTCY_Labels resets the active entry to 0;
 //! a click ends with GMR_VERIFY and Code = active), `mxclass.c` (GACT_IMMEDIATE, so the message is GADGETDOWN; OM_SET knows only
@@ -43,6 +46,11 @@ pub const GTSC_ARROWS: u32 = GT_TAGBASE + 59;
 pub const GTLV_SHOWSELECTED: u32 = GT_TAGBASE + 53;
 pub const GTLV_SELECTED: u32 = GT_TAGBASE + 54;
 pub const GTNM_BORDER: u32 = GT_TAGBASE + 58;
+pub const GTPA_DEPTH: u32 = GT_TAGBASE + 16;
+pub const GTPA_COLOR: u32 = GT_TAGBASE + 17;
+pub const GTPA_COLOR_OFFSET: u32 = GT_TAGBASE + 18;
+pub const GTPA_NUM_COLORS: u32 = GT_TAGBASE + 70;
+pub const GTPA_COLOR_TABLE: u32 = GT_TAGBASE + 82;
 pub const GTNM_FORMAT: u32 = GT_TAGBASE + 75;
 /// intuition/gadgetclass.h: LORIENT_HORIZ (the default); any other PGA_Freedom value is vertical (gadgets.c makescroller).
 const LORIENT_HORIZ: u32 = 1;
@@ -68,17 +76,23 @@ pub struct RowState {
     pub number: i32,
     pub format: String,
     pub format_ptr: u32,
+    /// PALETTE_KIND: how many colours, the pen of index 0 (no table), the guest's GTPA_ColorTable pointer and its pens, and the swatch colours (0xRRGGBB).
+    pub num_colors: u32,
+    pub color_offset: u8,
+    pub table_ptr: u32,
+    pub table: Vec<u8>,
+    pub colors: Vec<u32>,
 }
 impl Default for RowState {
     fn default() -> Self {
-        Self { labels: vec![], labels_ptr: 0, selected: 0, top: 0, total: 0, visible: 0, vertical: false, read_only: false, number: 0, format: "%ld".to_string(), format_ptr: 0 }
+        Self { labels: vec![], labels_ptr: 0, selected: 0, top: 0, total: 0, visible: 0, vertical: false, read_only: false, number: 0, format: "%ld".to_string(), format_ptr: 0, num_colors: 2, color_offset: 0, table_ptr: 0, table: vec![], colors: vec![] }
     }
 }
 
-pub fn owns(kind: u32) -> bool { matches!(kind, CYCLE_KIND | MX_KIND | LISTVIEW_KIND | SCROLLER_KIND | NUMBER_KIND) }
+pub fn owns(kind: u32) -> bool { matches!(kind, CYCLE_KIND | MX_KIND | LISTVIEW_KIND | SCROLLER_KIND | NUMBER_KIND | PALETTE_KIND) }
 
 fn kind_name(kind: u32) -> &'static str {
-    match kind { CYCLE_KIND => "CYCLE_KIND", MX_KIND => "MX_KIND", LISTVIEW_KIND => "LISTVIEW_KIND", SCROLLER_KIND => "SCROLLER_KIND", _ => "NUMBER_KIND" }
+    match kind { CYCLE_KIND => "CYCLE_KIND", MX_KIND => "MX_KIND", LISTVIEW_KIND => "LISTVIEW_KIND", SCROLLER_KIND => "SCROLLER_KIND", PALETTE_KIND => "PALETTE_KIND", _ => "NUMBER_KIND" }
 }
 
 /// A NULL-terminated STRPTR array (GTCY_Labels / GTMX_Labels); NULL = no labels.
@@ -120,6 +134,7 @@ fn settle(kind: u32, rs: &mut RowState, what: &str) -> Result<(), Refusal> {
         }
         LISTVIEW_KIND => rs.top = rs.top.min(rs.labels.len().saturating_sub(1) as u32),
         SCROLLER_KIND => rs.top = rs.top.min(max_top(rs)),
+        PALETTE_KIND if rs.selected >= rs.num_colors => return Err(Refusal(format!("{what}: PALETTE_KIND colour index {} outside its {} colours", rs.selected, rs.num_colors))),
         _ => {}
     }
     Ok(())
@@ -153,6 +168,7 @@ pub fn from_tags<U: GuestUi>(a: &mut Amiga<U>, kind: u32, t: &[(u32, u32)], text
                 a.refused.push("gadtools.library/CreateGadgetA: GTSC_Arrows: the arrow gadgets are not made; the native bar scrolls without them".into());
             }
         }
+        PALETTE_KIND => palette_from_tags(a, t, &mut rs)?,
         _ => {
             rs.number = get(GTNM_NUMBER).unwrap_or(0) as i32;
             rs.format_ptr = get(GTNM_FORMAT).unwrap_or(0);
@@ -216,6 +232,7 @@ pub fn control_kind(info: &GadgetInfo) -> ControlKind {
             top: s.top,
         },
         SCROLLER_KIND => ControlKind::ScrollBar { vertical: s.vertical, total: s.total, visible: s.visible.min(s.total), top: s.top },
+        PALETTE_KIND => ControlKind::Swatches { colors: s.colors.clone(), selected: s.selected },
         _ => ControlKind::Label { text: info.text.clone(), framed: info.framed },
     }
 }
@@ -229,6 +246,10 @@ pub fn intent_value(info: &GadgetInfo, intent: &Intent) -> Result<Option<Control
         _ => unreachable!("a LISTVIEW_KIND gadget projects as a List"),
     };
     Ok(Some(match (info.kind, intent) {
+        (PALETTE_KIND, Intent::SetValue(ControlValue::Choice(i))) => {
+            if *i >= s.num_colors { return Err(Refusal(format!("{name}: colour {i} outside its {} colours", s.num_colors))); }
+            ControlValue::Choice(*i)
+        }
         (CYCLE_KIND | MX_KIND, Intent::SetValue(ControlValue::Choice(i))) => {
             if *i as usize >= s.labels.len() { return Err(Refusal(format!("{name}: choice {i} outside its {} labels", s.labels.len()))); }
             ControlValue::Choice(*i)
@@ -287,8 +308,14 @@ pub fn set_attr<U: GuestUi>(a: &mut Amiga<U>, info: &GadgetInfo, tag: u32, data:
             rs.format_ptr = data;
             rs.format = if data == 0 { "%ld".to_string() } else { a.mem.read_cstr(data).map_err(Refusal::mem("GTNM_Format"))? };
         }
+        (PALETTE_KIND, GTPA_COLOR) => rs.selected = palette_index_of_pen(rs, data)?,
+        (PALETTE_KIND, GTPA_DEPTH) => { rs.num_colors = palette_depth(data)?; palette_reset(rs) }
+        (PALETTE_KIND, GTPA_NUM_COLORS) => { rs.num_colors = data as u16 as u32; palette_reset(rs) }
+        (PALETTE_KIND, GTPA_COLOR_OFFSET) => rs.color_offset = data as u8,
+        (PALETTE_KIND, GTPA_COLOR_TABLE) => { rs.table_ptr = data; rs.table = Vec::new() }
         _ => return Ok(None),
     }
+    if info.kind == PALETTE_KIND { palette_refresh(a, &mut next.state.rows)?; }
     settle(info.kind, &mut next.state.rows, "GT_SetGadgetAttrsA")?;
     if info.kind == NUMBER_KIND { next.text = format_number(a, next.state.rows.number, &next.state.rows.format)?; }
     Ok(Some(next))
@@ -303,8 +330,77 @@ pub fn get_attr(info: &GadgetInfo, tag: u32) -> Option<u32> {
         (LISTVIEW_KIND, GTLV_TOP) | (SCROLLER_KIND, GTSC_TOP) => s.top,
         (SCROLLER_KIND, GTSC_TOTAL) => s.total,
         (SCROLLER_KIND, GTSC_VISIBLE) => s.visible,
+        (PALETTE_KIND, GTPA_COLOR) => palette_pen(s, s.selected),
+        (PALETTE_KIND, GTPA_COLOR_OFFSET) => s.color_offset as u32,
+        (PALETTE_KIND, GTPA_COLOR_TABLE) => s.table_ptr,
         (NUMBER_KIND, GTNM_NUMBER) => s.number as u32,
         (NUMBER_KIND, GTNM_FORMAT) => s.format_ptr,
         _ => return None,
     })
+}
+
+// ---- PALETTE_KIND (paletteclass.c) ----
+
+/// `GetPalettePen`: the pen of colour index `idx`.
+pub fn palette_pen(rs: &RowState, idx: u32) -> u32 {
+    if rs.table.is_empty() { idx.wrapping_add(rs.color_offset as u32) & 0xFFFF } else { rs.table.get(idx as usize).copied().unwrap_or(0) as u32 }
+}
+
+/// `GTPA_Color` is a pen: palette_set converts it to an index (the table position, or pen - offset as a UBYTE). A pen the table does not hold is a
+/// named refusal (AROS would keep the raw number as an index, which can point past the colours).
+fn palette_index_of_pen(rs: &RowState, pen: u32) -> Result<u32, Refusal> {
+    if rs.table_ptr != 0 && !rs.table.is_empty() {
+        return rs.table.iter().position(|p| *p as u32 == pen as u8 as u32).map(|i| i as u32)
+            .ok_or_else(|| Refusal(format!("PALETTE_KIND: GTPA_Color pen {pen} is not in the gadget's GTPA_ColorTable")));
+    }
+    Ok((pen as u8).wrapping_sub(rs.color_offset) as u32)
+}
+
+/// GTPA_Depth is a UBYTE shift: 1 << depth colours; a palette of more than 65536 colours is not a palette (GTPA_NumColors is a UWORD).
+fn palette_depth(depth: u32) -> Result<u32, Refusal> {
+    let d = depth as u8;
+    if d > 16 { return Err(Refusal(format!("PALETTE_KIND: GTPA_Depth {d} is beyond 16 bits (65536 colours; GTPA_NumColors is a UWORD)"))); }
+    Ok(1u32 << d)
+}
+
+/// After a depth / colour count change AROS checks the selection fits: `if (pd_Color > pd_NumColors - 1) pd_Color = 0` (palette_set, relayout).
+fn palette_reset(rs: &mut RowState) { if rs.selected >= rs.num_colors { rs.selected = 0; } }
+
+/// Re-read the GTPA_ColorTable (if any, `num_colors` pens) and the swatch colours from the screen palette. A pen outside the screen's 256
+/// entries, an empty palette and a table the memory cannot hold are named refusals.
+fn palette_refresh<U: GuestUi>(a: &mut Amiga<U>, rs: &mut RowState) -> Result<(), Refusal> {
+    if rs.num_colors == 0 { return Err(Refusal("PALETTE_KIND: a palette of 0 colours".into())); }
+    if rs.table_ptr != 0 {
+        rs.table = (0..rs.num_colors).map(|i| a.mem.read_u8(rs.table_ptr + i).map_err(Refusal::mem("GTPA_ColorTable"))).collect::<Result<_, _>>()?;
+    }
+    let mut colors = Vec::with_capacity(rs.num_colors as usize);
+    for i in 0..rs.num_colors {
+        let pen = palette_pen(rs, i);
+        let rgb = a.gfx.palette().rgb.get(pen as usize).copied().ok_or_else(|| Refusal(format!("PALETTE_KIND: colour {i} is pen {pen}, outside the screen's 256-entry palette")))?;
+        colors.push(rgb & 0x00FF_FFFF);
+    }
+    rs.colors = colors;
+    Ok(())
+}
+
+fn palette_from_tags<U: GuestUi>(a: &mut Amiga<U>, t: &[(u32, u32)], rs: &mut RowState) -> Result<(), Refusal> {
+    let get = |tag| tags::get(t, tag);
+    // palette_set: GTPA_NumColors overrides GTPA_Depth; the default is 2 colours, pen = index + offset.
+    rs.color_offset = get(GTPA_COLOR_OFFSET).unwrap_or(0) as u8;
+    rs.table_ptr = get(GTPA_COLOR_TABLE).unwrap_or(0);
+    let sized = get(GTPA_DEPTH).is_some() || get(GTPA_NUM_COLORS).is_some();
+    if let Some(d) = get(GTPA_DEPTH) { rs.num_colors = palette_depth(d)?; }
+    if let Some(n) = get(GTPA_NUM_COLORS) { rs.num_colors = n as u16 as u32; }
+    palette_refresh_table_only(a, rs)?;
+    if let Some(pen) = get(GTPA_COLOR) { rs.selected = palette_index_of_pen(rs, pen)?; }
+    if sized { palette_reset(rs); }
+    palette_refresh(a, rs)
+}
+
+/// The table must be known before GTPA_Color (a pen) can be turned into an index.
+fn palette_refresh_table_only<U: GuestUi>(a: &Amiga<U>, rs: &mut RowState) -> Result<(), Refusal> {
+    if rs.table_ptr != 0 {
+        rs.table = (0..rs.num_colors).map(|i| a.mem.read_u8(rs.table_ptr + i).map_err(Refusal::mem("GTPA_ColorTable"))).collect::<Result<_, _>>()?;
+    }
+    Ok(())
 }

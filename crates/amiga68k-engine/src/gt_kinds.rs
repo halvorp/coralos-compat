@@ -8,7 +8,7 @@
 //! | SLIDER_KIND (GTSL_Min / Max / Level) | `Slider` | host-side level (read back with GT_GetGadgetAttrsA) |
 //!
 //! CYCLE_KIND, MX_KIND, LISTVIEW_KIND, SCROLLER_KIND and NUMBER_KIND (`Choice`, `List`, `ScrollBar`, `Label`) are in
-//! [`crate::gt_kinds_rows`]; only PALETTE_KIND stays a NAMED refusal (guestui-abi has no swatch role).
+//! [`crate::gt_kinds_rows`], and PALETTE_KIND (`Swatches`).
 //!
 //! Native events come back through [`control_changed`]: a Button press, a Checkbox toggle, a String commit and a Slider
 //! release become IDCMP_GADGETUP with IAddress = the guest Gadget (Code = checked / level), after the guest-visible
@@ -81,10 +81,7 @@ pub fn bridged(kind: u32) -> bool {
 
 /// Why a kind is refused, by name.
 pub fn refusal(kind: u32) -> Refusal {
-    let why = match kind {
-        PALETTE_KIND => "PALETTE_KIND: guestui-abi has no swatch role, so palette gadgets are refused by name",
-        _ => "no such GadTools kind is bridged",
-    };
+    let why = "no such GadTools kind is bridged";
     Refusal(format!("CreateGadgetA: kind {kind} not bridged: {why}"))
 }
 
@@ -203,7 +200,7 @@ fn normalize(info: &GadgetInfo, v: ControlValue) -> Result<ControlValue, Refusal
         }
         (SLIDER_KIND, ControlValue::Level(l)) if (s.min..=s.max).contains(&l) => Ok(ControlValue::Level(l)),
         (SLIDER_KIND, ControlValue::Level(l)) => Err(Refusal(format!("SLIDER_KIND: level {l} outside {}..={}", s.min, s.max))),
-        (CYCLE_KIND | MX_KIND, c @ ControlValue::Choice(_)) | (LISTVIEW_KIND, c @ ControlValue::Rows { .. }) | (SCROLLER_KIND, c @ ControlValue::Scroll { .. }) => Ok(c),
+        (CYCLE_KIND | MX_KIND | PALETTE_KIND, c @ ControlValue::Choice(_)) | (LISTVIEW_KIND, c @ ControlValue::Rows { .. }) | (SCROLLER_KIND, c @ ControlValue::Scroll { .. }) => Ok(c),
         (NUMBER_KIND, t @ ControlValue::Text(_)) => Ok(t),
         (k, v) => Err(Refusal(format!("a {v:?} value cannot be held by a kind-{k} gadget"))),
     }
@@ -240,7 +237,9 @@ pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32, intent: I
             _ => None,
         },
     };
-    let posted = translate::message(row, 0, value.as_ref());
+    let mut posted = translate::message(row, 0, value.as_ref());
+    // paletteclass.c: a pick ends with Code = the PEN of the colour (GetPalettePen), not its index.
+    if let (PALETTE_KIND, Some((_, code)), Some(ControlValue::Choice(i))) = (info.kind, posted.as_mut(), value.as_ref()) { *code = rows::palette_pen(&info.state.rows, *i) as u16; }
     if posted.is_none() && row.post.is_some() { return Err(Refusal("deliver: a GadTools row sent no message".into())); }
     let level_changed = matches!(&value, Some(ControlValue::Level(l)) if *l != info.state.level);
     let changed = level_changed || value.as_ref().is_some_and(|v| rows::moved(&info, v));
