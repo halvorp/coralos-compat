@@ -88,6 +88,9 @@ pub struct Cpu {
     pub(crate) redirected: bool,
     halted: bool,
     blocked: bool,
+    /// The last `trace_cap` program counters executed (oldest first); empty and free when `trace_cap` is 0.
+    trace: alloc::collections::VecDeque<u32>,
+    trace_cap: usize,
 }
 
 /// The saved state of one guest; the same type, named as in retro-m68k.
@@ -100,7 +103,7 @@ impl Cpu {
         gpr[1] = sp;
         Cpu {
             gpr, fpr: [0; 32], cr: 0, lr: 0, ctr: 0, xer: 0, fpscr: 0, pc: entry, tb: 0, reservation: None,
-            natives: BTreeSet::new(), next: 0, redirected: false, halted: false, blocked: false,
+            natives: BTreeSet::new(), next: 0, redirected: false, halted: false, blocked: false, trace: alloc::collections::VecDeque::new(), trace_cap: 0,
         }
     }
     pub fn reg(&self, r: Reg) -> u32 {
@@ -132,6 +135,15 @@ impl Cpu {
     pub fn halt(&mut self) { self.halted = true }
     /// Stop after the current instruction but leave the guest resumable (a host call that must wait).
     pub fn block(&mut self) { self.blocked = true }
+    /// Keep the program counters of the last `n` executed instructions (0 turns it off): the post-mortem of a fault.
+    pub fn trace_pcs(&mut self, n: usize) { self.trace_cap = n; self.trace.clear(); }
+    /// The recorded program counters, oldest first (the faulting instruction is the last).
+    pub fn recent_pcs(&self) -> impl Iterator<Item = u32> + '_ { self.trace.iter().copied() }
+    pub(crate) fn note_pc(&mut self, pc: u32) {
+        if self.trace_cap == 0 { return; }
+        if self.trace.len() == self.trace_cap { self.trace.pop_front(); }
+        self.trace.push_back(pc);
+    }
     pub(crate) fn halted(&self) -> bool { self.halted }
     pub(crate) fn blocked(&self) -> bool { self.blocked }
     pub(crate) fn clear_blocked(&mut self) { self.blocked = false }

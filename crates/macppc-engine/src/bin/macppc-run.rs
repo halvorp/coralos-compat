@@ -1,4 +1,4 @@
-//! Host runner: `macppc-run [--census] [--run] [--insns N] [--strict] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
+//! Host runner: `macppc-run [--census] [--run] [--insns N] [--pcs N] [--strict] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
 //! `<file>` is `--fixture` (a built-in MacBinary application importing the classic startup calls), a bare PEF, or a classic Mac application (MacBinary, AppleSingle, or an AppleDouble header file whose data
 //! fork is the sibling file with the `%` / `._` prefix removed, or `--data`). It instantiates the fragment (sections placed,
 //! imports bound by symbol name onto the mac68k Toolbox handlers, relocations applied) and prints what it did. `--run`
@@ -20,11 +20,11 @@ fn sibling_data_fork(p: &Path) -> Option<PathBuf> {
     q.is_file().then_some(q)
 }
 
-fn usage() -> ! { eprintln!("usage: macppc-run [--census] [--run] [--insns N] [--strict] [--data <data fork file>] (--fixture | <file>)"); std::process::exit(2) }
+fn usage() -> ! { eprintln!("usage: macppc-run [--census] [--run] [--insns N] [--pcs N] [--strict] [--data <data fork file>] (--fixture | <file>)"); std::process::exit(2) }
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut census, mut strict, mut data, mut run, mut insns, mut rsrc) = (false, false, None, false, 50_000_000u64, None);
+    let (mut census, mut strict, mut data, mut run, mut insns, mut rsrc, mut pcs) = (false, false, None, false, 50_000_000u64, None, 0usize);
     while let Some(a) = args.first().cloned() {
         match a.as_str() {
             "--census" => { census = true; args.remove(0); }
@@ -32,6 +32,7 @@ fn main() {
             "--rsrc" => { args.remove(0); if args.is_empty() { usage() } rsrc = Some(PathBuf::from(args.remove(0))); }
             "--run" => { run = true; args.remove(0); }
             "--insns" => { args.remove(0); if args.is_empty() { usage() } insns = args.remove(0).parse().unwrap_or_else(|_| usage()); }
+            "--pcs" => { args.remove(0); if args.is_empty() { usage() } pcs = args.remove(0).parse().unwrap_or_else(|_| usage()); }
             "--data" => { args.remove(0); if args.is_empty() { usage() } data = Some(PathBuf::from(args.remove(0))); }
             _ => break,
         }
@@ -77,6 +78,7 @@ fn main() {
     for l in c.library_table() { println!("{l}"); }
     let mut stopped_at = None;
     if (run || census) && started {
+        m.trace_pcs(pcs);
         let (step, n) = m.run_loop(insns);
         for l in &m.mac.log { println!("  | {l}"); }
         for l in &m.mac.refused { println!("  | REFUSED {l}"); }
@@ -87,6 +89,13 @@ fn main() {
             Step::Fault(f) => { if let Some(n) = f.strip_prefix("NEXT-NEEDED ") { stopped_at = Some(n.to_string()); } f.clone() }
         };
         println!("RAN {n} PowerPC instructions: {why}");
+        if pcs > 0 {
+            if let Some(c) = m.cpu() {
+                println!("recent pcs (oldest first): {}", c.recent_pcs().map(|p| format!("{p:#x}")).collect::<Vec<_>>().join(" "));
+                println!("registers: pc {:#x} lr {:#x} ctr {:#x} cr {:#x} xer {:#x}", c.pc, c.lr, c.ctr, c.cr, c.xer);
+                for r in 0..32 { print!("r{r}={:#x}{}", c.gpr[r], if r % 8 == 7 { "\n" } else { " " }); }
+            }
+        }
     }
     if census {
         match (stopped_at, c.next_needed.first()) {

@@ -350,3 +350,29 @@ fn color_quickdraw_imports_bind_onto_the_shared_68k_core() {
     assert!(matches!(m.glue_call("HasDepth", &mut r), GlueOutcome::Return));
     assert_eq!(r[3], 0);
 }
+
+#[test]
+fn the_recent_pc_ring_ends_at_the_faulting_instruction_and_is_off_by_default() {
+    // li r3,0 ; li r4,1 ; li r5,2 ; <opcode 0: unimplemented>
+    let mut a = Asm::new();
+    a.li(3, 0).li(4, 1).li(5, 2);
+    let mut bytes = a.finish();
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    let mut b = PefBuilder::new();
+    b.code(&bytes);
+    let d = b.data(&[0; 8], 8);
+    b.reloc(d as u16, &[0x4600]);
+    b.main(d as i32, 0);
+    let image = b.build();
+    let (mut m, frag) = boot(&image);
+    let code = frag.section_bases[0].unwrap();
+    m.trace_pcs(3);
+    let (step, _) = m.step(10_000);
+    assert!(matches!(&step, Step::Fault(w) if w.starts_with("PowerPC fault: unimplemented")), "{step:?}");
+    let pcs: Vec<u32> = m.cpu().unwrap().recent_pcs().collect();
+    assert_eq!(pcs, [code + 4, code + 8, code + 12], "the last THREE pcs, oldest first, the bad word last");
+    // NEGATIVE CONTROL: with the ring off (the default) nothing is recorded
+    let (mut m, _) = boot(&image);
+    let _ = m.step(10_000);
+    assert_eq!(m.cpu().unwrap().recent_pcs().count(), 0);
+}

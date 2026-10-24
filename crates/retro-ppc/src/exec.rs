@@ -13,6 +13,7 @@ impl Cpu {
 
 pub(crate) fn step<H: Host>(host: &mut H, cpu: &mut Cpu) -> R {
     let pc = cpu.pc;
+    cpu.note_pc(pc);
     cpu.redirected = false;
     if cpu.natives.contains(&pc) {
         if !host.native(cpu, pc) { return Err(Trap::NativeUnhandled { addr: pc }); }

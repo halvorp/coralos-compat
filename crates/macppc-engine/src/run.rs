@@ -81,6 +81,8 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// The CPU while a program is loaded (for inspection; `None` once it exited).
     pub fn cpu(&self) -> Option<&Cpu> { self.rt.cpu.as_ref() }
+    /// Record the program counters of the last `n` instructions (0 = off), read back with `cpu().recent_pcs()` after a stop.
+    pub fn trace_pcs(&mut self, n: usize) { if let Some(c) = self.rt.cpu.as_mut() { c.trace_pcs(n); } }
     /// The refusal or trap that ended the program, if one did.
     pub fn fault(&self) -> Option<&str> { self.rt.fault.as_deref() }
 
