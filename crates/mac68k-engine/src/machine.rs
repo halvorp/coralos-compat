@@ -110,6 +110,8 @@ pub struct Mac<U: GuestUi> {
     pub(crate) pending_user_items: Option<crate::translate::useritems::Run>,
     /// A `ModalDialog` filterProc call to start once the trap has finished ([`crate::translate::filterproc`]).
     pub(crate) pending_modal_filter: Option<crate::translate::filterproc::Filter>,
+    /// A `ModalDialog` whose filterProc answered FALSE parks at (trap word, argument stack) until something happens.
+    pub(crate) pending_modal_wait: Option<(u32, u32)>,
     /// Routine descriptors `NewRoutineDescriptor` / `NewFatRoutineDescriptor` allocated (`mixed_mode`): the blocks
     /// `DisposeRoutineDescriptor` may free, once. Ownership only: a descriptor the program built itself is callable too.
     pub routine_descriptors: alloc::collections::BTreeSet<u32>,
@@ -147,7 +149,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT,
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT,
         };
         m.rm.add_system(crate::system_res::system_fork());
         m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start
@@ -327,6 +329,7 @@ impl<U: GuestUi> Host for Mac<U> {
                 }
                 if let Some(run) = self.pending_user_items.take() { self.enter_user_items(cpu, run); }
                 if let Some(f) = self.pending_modal_filter.take() { self.enter_modal_filter(cpu, f); }
+                if let Some((pc, sp)) = self.pending_modal_wait.take() { cpu.set_areg(7, sp); cpu.set_pc(pc); cpu.block(); self.tr.dlg.filter_wait = Some(self.ev.ticks); }
             }
             Conv::Os(handler) => {
                 let mut regs = Regs::read(cpu, opcode);

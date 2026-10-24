@@ -122,12 +122,12 @@ impl<U: GuestUi> Mac<U> {
     /// more matches no mask bit rather than overflowing the shift.)
     pub fn event_pending(&self, mask: u16) -> bool { self.ev.queue.iter().any(|e| mask_accepts(mask, e.what)) }
 
-    fn take_event(&mut self, mask: u16, remove: bool) -> Option<MacEvent> {
+    pub(crate) fn take_event(&mut self, mask: u16, remove: bool) -> Option<MacEvent> {
         let i = self.ev.queue.iter().position(|e| mask_accepts(mask, e.what))?;
         if remove { self.ev.queue.remove(i) } else { self.ev.queue.get(i).copied() }
     }
 
-    fn write_event(&mut self, at: u32, e: &MacEvent) -> Result<(), Refusal> {
+    pub(crate) fn write_event(&mut self, at: u32, e: &MacEvent) -> Result<(), Refusal> {
         let r = Refusal::mem("EventRecord");
         self.mem.write_u16(at, e.what).map_err(&r)?;
         self.mem.write_u32(at + 2, e.message).map_err(&r)?;
@@ -141,6 +141,7 @@ impl<U: GuestUi> Mac<U> {
     /// Returns false while the guest must stay blocked.
     pub(crate) fn complete_wait(&mut self) -> bool {
         if self.tr.dlg.asked.is_some() { return self.complete_alert(); }
+        if let Some(t0) = self.tr.dlg.filter_wait { return self.complete_filter_wait(t0); }
         if self.tr.dlg.modal.is_some() { return self.complete_modal(); }
         let Some(w) = self.ev.waiting else { return true };
         self.pump_ui();

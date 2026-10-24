@@ -315,16 +315,29 @@ fn a_filter_proc_answering_true_ends_modal_dialog_with_its_item_hit() {
 }
 
 #[test]
-fn a_filter_proc_answering_false_leaves_the_standard_wait_and_is_not_called_again() {
+fn a_filter_proc_answering_false_is_called_again_on_every_tick_and_input_and_before_a_hit_ends_the_call() {
     let mut m = machine();
     modal_with_filter(&mut m, 0);
     assert_eq!(m.step(1_000_000).0, Step::Blocked, "{:#?}", m.log);
-    assert_eq!(m.mem.read_u16(CALLS).unwrap(), 1);
+    assert_eq!((m.mem.read_u16(CALLS).unwrap(), m.mem.read_u16(SEEN_ITEM).unwrap()), (1, 0), "once, with a null event");
+    // nothing happened: still parked, the filter is not spun
+    assert_eq!(m.step(1_000_000).0, Step::Blocked);
+    assert_eq!(m.mem.read_u16(CALLS).unwrap(), 1, "no tick, no input: no call");
+    // a tick of the host clock: the filter runs again (null event)
+    m.advance_ticks(1);
+    assert_eq!(m.step(1_000_000).0, Step::Blocked, "{:#?}", m.log);
+    assert_eq!(m.mem.read_u16(CALLS).unwrap(), 2, "one more call after a tick");
+    // a mouse click nothing native took: the filter is handed THAT event (what = 1)
+    m.post(1, 0, 40, 50);
+    assert_eq!(m.step(1_000_000).0, Step::Blocked, "{:#?}", m.log);
+    assert_eq!((m.mem.read_u16(CALLS).unwrap(), m.mem.read_u16(SEEN_ITEM).unwrap()), (3, 1), "called with the mouseDown");
+    assert!(m.ev.queue.iter().all(|e| e.what != 1), "and the event was consumed");
+    // the OK button's hit: the filter is asked first (FALSE), then the standard handling returns the hit
     let w = win(&m);
     let h = m.tr.dlg.dialogs[&w].list[0].handle;
     let native = m.tr.projected(Obj::Control(h)).unwrap().native;
     m.ui.push_intent(m.windows[&w].native.unwrap(), native, guestui_abi::Intent::Activate).unwrap();
     assert_eq!(m.step(1_000_000).0, Step::Exited, "{:#?}", m.log);
-    assert_eq!((m.mem.read_u16(cells::HIT1).unwrap(), m.mem.read_u16(CALLS).unwrap()), (1, 1), "the button's hit, one filter call");
+    assert_eq!((m.mem.read_u16(cells::HIT1).unwrap(), m.mem.read_u16(CALLS).unwrap()), (1, 4), "the button's hit, after one more filter call");
     assert!(m.refused.is_empty(), "{:?}", m.refused);
 }

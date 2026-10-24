@@ -94,6 +94,8 @@ pub struct State {
     pub modal: Option<u32>,
     /// `ModalDialog`'s filterProc has been called for this call: the trap word that runs again goes straight to the wait.
     pub filter_done: bool,
+    /// `ModalDialog` with a filterProc is parked AT its trap word (to run the filter again): the tick it parked at. See [`super::filterproc`].
+    pub filter_wait: Option<u32>,
     /// The alert a blocked `Alert` call is showing: disposed when its hit arrives (alerts are not the program's to dispose).
     pub alert: Option<u32>,
     /// The alert a blocked `Alert` call ASKED of the host (`GuestUi::request`), not drawn: see [`super::alerts`].
@@ -403,10 +405,13 @@ fn modal_dialog<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<D
     let (filter, at) = (c.args.get(0), c.args.get(1));
     let win = m.front_dialog().ok_or_else(|| Refusal("ModalDialog: no dialog is open".into()))?;
     if m.update_modal_dialog(cpu, win)? { return done(format!("[dialog] ModalDialog {win:#x}: the dialog's user items are drawn first, then the call runs again")); }
-    if filter != 0 && !m.tr.dlg.filter_done {
-        match m.schedule_modal_filter(cpu, win, filter, at) {
-            Ok(()) => return done(format!("[dialog] ModalDialog {win:#x}: the filterProc {filter:#x} runs first")),
-            Err(Refusal(why)) => m.note_refusal("ModalDialog", why),
+    let mut filtered = false;
+    if filter != 0 {
+        if m.tr.dlg.filter_done { filtered = true; } else {
+            match m.schedule_modal_filter(cpu, win, filter, at) {
+                Ok(()) => return done(format!("[dialog] ModalDialog {win:#x}: the filterProc {filter:#x} runs first")),
+                Err(Refusal(why)) => m.note_refusal("ModalDialog", why),
+            }
         }
     }
     m.tr.dlg.filter_done = false;
@@ -414,6 +419,12 @@ fn modal_dialog<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<D
         m.mem.write_u16(at, item as u16).map_err(Refusal::mem("itemHit"))?;
         m.tr.dlg.modal = None;
         return done(format!("[dialog] ModalDialog {win:#x} -> itemHit {item}"));
+    }
+    if filtered {
+        // the filter answered FALSE and nothing was hit: park AT the trap word, so that the next tick, queued event or hit runs the
+        // filter again (a real ModalDialog calls GetNextEvent and the filter in a loop)
+        m.pending_modal_wait = Some((m.trap_pc, cpu.areg(7)));
+        return done(format!("[dialog] ModalDialog {win:#x}: waits at its trap for the next event or tick, then calls the filterProc again"));
     }
     m.tr.dlg.modal = Some(at);
     cpu.block();

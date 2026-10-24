@@ -7,10 +7,15 @@
 //! * FALSE: the program is put back at the trap word with its arguments, and `ModalDialog` runs again with the filter marked as
 //!   called ([`super::dialogs::State::filter_done`]), so the standard handling (the wait for a native control's hit) follows.
 //!
-//! The event the filter is given is a null event (`what` = 0, `when` = `Ticks`): the host's controls and text fields consume the
-//! keys and clicks before the Dialog Manager sees them (see the dialogs module), so there is nothing else to hand over, and the
-//! filter is called ONCE per `ModalDialog` call, before the wait; it is not called again while the call stays blocked. That is
-//! the limit of this model, and what it can answer is an idle-time or "dismiss at once" filter.
+//! The event the filter is given is the next queued mouse or key event (mouseDown/Up, keyDown/Up, autoKey) if there is one, else a
+//! null event (`what` = 0, `when` = `Ticks`). The host's native controls and text fields still consume their own clicks and keys
+//! (the hits reach `ModalDialog` as item hits), so the filter sees the raw events nothing native took.
+//!
+//! **Re-calling while blocked.** When the filter answers FALSE and nothing was hit, `ModalDialog` does not block in place: it parks
+//! the CPU AT its own trap word with the argument frame still on the stack ([`Mac::pending_modal_wait`], the same trick the
+//! user-item retry uses) and a wake condition ([`Mac::complete_filter_wait`]): a tick of the host clock, a queued event, or an item
+//! hit. Any of them lets the CPU run the trap again, which calls the filter again: the loop a real `ModalDialog` is (GetNextEvent,
+//! filter, standard handling). An item hit ends the call through the ordinary path on that re-run, with the filter marked as called.
 //!
 //! A PowerPC caller (no 68k CPU to schedule on) keeps the named refusal: its filterProc is a UPP run by macppc-engine.
 use crate::guestcall::{Frame, TRAMPOLINE};
@@ -58,6 +63,8 @@ impl<U: GuestUi> Mac<U> {
         f.item = sp + 16;
         let ticks = self.mem.read_u32(crate::lowmem::TICKS).unwrap_or(0);
         let _ = self.mem.write_bytes(f.event, &[0u8; 18]).and_then(|_| self.mem.write_u32(f.event + 6, ticks));
+        // mouseDown 1, mouseUp 2, keyDown 3, keyUp 4, autoKey 5: the raw input nothing native consumed
+        if let Some(e) = self.take_event(0x003E, true) { let _ = self.write_event(f.event, &e); }
         let push = |m: &mut Self, sp: &mut u32, v: u32, long: bool| { *sp = sp.wrapping_sub(if long { 4 } else { 2 }); let _ = if long { m.mem.write_u32(*sp, v) } else { m.mem.write_u16(*sp, v as u16) }; };
         push(self, &mut sp, 0, false);
         f.result_slot = sp;
@@ -71,6 +78,16 @@ impl<U: GuestUi> Mac<U> {
         self.log.push(format!("[dialog] ModalDialog {:#x}: the program's filterProc {:#x} runs (null event)", f.win, f.proc));
         cpu.set_pc(f.proc);
         self.call_stack.push(Frame::ModalFilter(f));
+    }
+
+    /// Is a `ModalDialog` parked at its trap (see the module) ready to run its filter again?
+    pub(crate) fn complete_filter_wait(&mut self, parked_at: u32) -> bool {
+        self.pump_ui();
+        let hit = self.front_dialog().is_some_and(|w| self.tr.dlg.hits.iter().any(|&(h, _)| h == w));
+        let input = self.ev.queue.iter().any(|e| (1..=5).contains(&e.what));
+        if self.ev.ticks == parked_at && !input && !hit { return false; }
+        self.tr.dlg.filter_wait = None;
+        true
     }
 
     /// The filter returned to the trampoline.
