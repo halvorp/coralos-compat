@@ -14,13 +14,11 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header { pub top: i16, pub left: i16, pub bottom: i16, pub right: i16, pub v2: bool, pub body: usize }
 
-fn be16(b: &[u8], at: usize) -> Option<u16> { retro_common::bytes::be16(b, at) }
-
 /// `picSize` (2), `picFrame` (8), then `$11 $01` (version 1) or `$0011 $02FF` (version 2).
 pub fn header(b: &[u8]) -> Result<Header, String> {
-    let r = |i: usize| be16(b, i).map(|v| v as i16).ok_or_else(|| String::from("shorter than its picFrame"));
+    let r = |i: usize| retro_common::bytes::be16(b, i).map(|v| v as i16).ok_or_else(|| String::from("shorter than its picFrame"));
     let (top, left, bottom, right) = (r(2)?, r(4)?, r(6)?, r(8)?);
-    match (b.get(10), b.get(11), be16(b, 10), be16(b, 12)) {
+    match (b.get(10), b.get(11), retro_common::bytes::be16(b, 10), retro_common::bytes::be16(b, 12)) {
         (Some(0x11), Some(0x01), _, _) => Ok(Header { top, left, bottom, right, v2: false, body: 12 }),
         (_, _, Some(0x0011), Some(0x02FF)) => Ok(Header { top, left, bottom, right, v2: true, body: 14 }),
         _ => Err(format!("version opcode {:02x}{:02x}{:02x}{:02x} is neither $1101 (version 1) nor $001102FF (version 2)", b.get(10).copied().unwrap_or(0), b.get(11).copied().unwrap_or(0), b.get(12).copied().unwrap_or(0), b.get(13).copied().unwrap_or(0))),
@@ -79,7 +77,7 @@ fn unpack_rows(b: &[u8], at: &mut usize, rows: usize, row_bytes: usize, packed: 
             *at += row_bytes;
             continue;
         }
-        let n = if row_bytes > 250 { let v = be16(b, *at).ok_or("row count past the end")? as usize; *at += 2; v } else { let v = *b.get(*at).ok_or("row count past the end")? as usize; *at += 1; v };
+        let n = if row_bytes > 250 { let v = retro_common::bytes::be16(b, *at).ok_or("row count past the end")? as usize; *at += 2; v } else { let v = *b.get(*at).ok_or("row count past the end")? as usize; *at += 1; v };
         let packed_row = b.get(*at..*at + n).ok_or_else(|| format!("packed row {r} runs past the end of the picture"))?;
         *at += n;
         let start = out.len();
@@ -106,44 +104,44 @@ fn unpack_rows(b: &[u8], at: &mut usize, rows: usize, row_bytes: usize, packed: 
 /// Read the opcode at `*at` and step past it. `Err` = the stream is malformed (named).
 pub fn next(b: &[u8], at: &mut usize, v2: bool) -> Result<Op, String> {
     if v2 && *at % 2 == 1 { *at += 1; } // version 2 opcodes are word aligned
-    let op = if v2 { let v = be16(b, *at).ok_or("no end opcode")?; *at += 2; v } else { let v = *b.get(*at).ok_or("no end opcode")?; *at += 1; u16::from(v) };
+    let op = if v2 { let v = retro_common::bytes::be16(b, *at).ok_or("no end opcode")?; *at += 2; v } else { let v = *b.get(*at).ok_or("no end opcode")?; *at += 1; u16::from(v) };
     let skip = |at: &mut usize, n: usize| -> Result<Op, String> { if *at + n > b.len() { Err(format!("opcode {op:#x} runs past the end")) } else { *at += n; Ok(Op::Skip) } };
     match op {
         0x00 | 0x1E => Ok(Op::Skip),
         0xFF => Ok(Op::End), // $FF in version 1, $00FF in version 2
-        0x01 => { let n = be16(b, *at).ok_or("clip region has no size")? as usize; skip(at, n) } // Clip: region record
+        0x01 => { let n = retro_common::bytes::be16(b, *at).ok_or("clip region has no size")? as usize; skip(at, n) } // Clip: region record
         0x0C00 => skip(at, 24), // v2 header opcode: version, bbox / resolution
         0xA0 => skip(at, 2),
-        0xA1 => { let n = be16(b, *at + 2).ok_or("long comment has no size")? as usize; skip(at, 4 + n + if v2 { n & 1 } else { 0 }) }
+        0xA1 => { let n = retro_common::bytes::be16(b, *at + 2).ok_or("long comment has no size")? as usize; skip(at, 4 + n + if v2 { n & 1 } else { 0 }) }
         0x90 | 0x91 | 0x98 | 0x99 => {
             let packed = op == 0x98 || op == 0x99;
             let has_rgn = op == 0x91 || op == 0x99;
-            let rb_raw = be16(b, *at).ok_or("bitmap opcode has no rowBytes")?;
+            let rb_raw = retro_common::bytes::be16(b, *at).ok_or("bitmap opcode has no rowBytes")?;
             let pixmap = rb_raw & 0x8000 != 0;
             let row_bytes = rb_raw & 0x3FFF;
             let mut i = *at + 2;
-            let rect = |i: &mut usize| -> Result<[i16; 4], String> { let r = [be16(b, *i), be16(b, *i + 2), be16(b, *i + 4), be16(b, *i + 6)]; *i += 8; Ok([r[0].ok_or("rect past the end")? as i16, r[1].ok_or("rect past the end")? as i16, r[2].ok_or("rect past the end")? as i16, r[3].ok_or("rect past the end")? as i16]) };
+            let rect = |i: &mut usize| -> Result<[i16; 4], String> { let r = [retro_common::bytes::be16(b, *i), retro_common::bytes::be16(b, *i + 2), retro_common::bytes::be16(b, *i + 4), retro_common::bytes::be16(b, *i + 6)]; *i += 8; Ok([r[0].ok_or("rect past the end")? as i16, r[1].ok_or("rect past the end")? as i16, r[2].ok_or("rect past the end")? as i16, r[3].ok_or("rect past the end")? as i16]) };
             let bounds = rect(&mut i)?;
             let (mut pixel_size, mut clut) = (1u16, Vec::new());
             if pixmap {
                 // after the bounds: pmVersion 2, packType 2, packSize 4, hRes 4, vRes 4, pixelType 2, pixelSize 2, cmpCount 2, cmpSize 2,
                 // planeBytes 4, pmTable 4, pmReserved 4 = 36 bytes (baseAddr, rowBytes and bounds are the 14 the PICT form shortens to 10)
-                pixel_size = be16(b, i + 18).ok_or("PixMap past the end")?;
+                pixel_size = retro_common::bytes::be16(b, i + 18).ok_or("PixMap past the end")?;
                 i += 36;
                 // colour table: ctSeed 4, ctFlags 2, ctSize 2, (ctSize + 1) ColorSpecs of 8 bytes
-                let ct_size = be16(b, i + 6).ok_or("colour table past the end")? as usize;
+                let ct_size = retro_common::bytes::be16(b, i + 6).ok_or("colour table past the end")? as usize;
                 i += 8;
                 for _ in 0..=ct_size {
-                    let v = be16(b, i).ok_or("colour table past the end")?;
-                    clut.push((v, [be16(b, i + 2).ok_or("colour table past the end")?, be16(b, i + 4).ok_or("colour table past the end")?, be16(b, i + 6).ok_or("colour table past the end")?]));
+                    let v = retro_common::bytes::be16(b, i).ok_or("colour table past the end")?;
+                    clut.push((v, [retro_common::bytes::be16(b, i + 2).ok_or("colour table past the end")?, retro_common::bytes::be16(b, i + 4).ok_or("colour table past the end")?, retro_common::bytes::be16(b, i + 6).ok_or("colour table past the end")?]));
                     i += 8;
                 }
             }
             let src = rect(&mut i)?;
             let dst = rect(&mut i)?;
-            let mode = be16(b, i).ok_or("mode past the end")?;
+            let mode = retro_common::bytes::be16(b, i).ok_or("mode past the end")?;
             i += 2;
-            let rgn = if has_rgn { let n = be16(b, i).ok_or("mask region past the end")? as usize; let r = b.get(i..i + n).ok_or("mask region past the end")?.to_vec(); i += n; Some(r) } else { None };
+            let rgn = if has_rgn { let n = retro_common::bytes::be16(b, i).ok_or("mask region past the end")? as usize; let r = b.get(i..i + n).ok_or("mask region past the end")?.to_vec(); i += n; Some(r) } else { None };
             if pixel_size > 8 { *at = i; return Ok(Op::Unsupported(op, "bitmap opcode with direct (16 / 32-bit) pixels")); }
             let rows = (i32::from(bounds[2]) - i32::from(bounds[0])).max(0) as usize;
             let pixels = unpack_rows(b, &mut i, rows, usize::from(row_bytes), packed)?;
