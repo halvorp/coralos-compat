@@ -109,7 +109,14 @@ fn the_powerpc_gestalt_profile_answers_only_what_is_true_and_names_what_it_will_
         let name = String::from_utf8_lossy(*s).to_string();
         assert!(m.mac.log.iter().any(|l| l.contains(&format!("Gestalt '{name}'")) && l.contains(why)), "{name}: {:?}", m.mac.log.last());
     }
-    for s in ["cbon", "appr", "nav ", "mpsv", "sysv"] { assert!(unanswered(*s.as_bytes().first_chunk::<4>().unwrap()).is_some(), "{s}"); }
+    for s in ["appr", "nav ", "mpsv"] { assert!(unanswered(*s.as_bytes().first_chunk::<4>().unwrap()).is_some(), "{s}"); }
+    // RULING: the version selectors name the personality (Mac OS 9.2.1, CarbonLib 1.4); NEGATIVE control: they are no longer in the unanswered list
+    m.mac.mem.write_u32(OUT, 0).unwrap();
+    assert_eq!(call(&mut m, "Gestalt", &[sel(b"sysv"), OUT]), 0);
+    assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 0x0921);
+    assert_eq!(call(&mut m, "Gestalt", &[sel(b"cbon"), OUT]), 0);
+    assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 0x0140);
+    assert!(unanswered(*b"sysv").is_none() && unanswered(*b"cbon").is_none());
     // NEGATIVE CONTROL: nothing is both answered and unanswered
     for (s, _) in UNANSWERED { assert!(answer(**s).is_none(), "{}", String::from_utf8_lossy(*s)); }
 }

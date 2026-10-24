@@ -1,13 +1,16 @@
 //! The Script Manager by C name (`GetScriptManagerVariable`, `SetScriptManagerVariable`, `KeyScript`, `FontScript`, `IntlScript`, `FontToScript`, `GetScriptVariable`) for a Mac with the
-//! Roman script only. The answers are the 68k `_ScriptUtil` ones (`mac68k_engine::script::manager_variable`): one table for both CPUs. Anything without an honest Roman-only answer
-//! is refused BY NAME (the selector is in the message), never answered with a made-up number. `SetScriptManagerVariable` accepts only the value the variable already has
-//! (there is one script system, so there is nothing to change to); `GetScriptVariable` has no verified Roman-only table yet and refuses every selector.
+//! Roman script only. The answers are the 68k `_ScriptUtil` ones (`mac68k_engine::script::manager_variable`): one table for both CPUs. `GetScriptManagerVariable`
+//! follows the spec (macos9-specs/InterfaceLib/GetScriptManagerVariable): a stored value, else the table (smRegionCode 40 is 2 = verBritain, the CoralOS default region), else 0.
+//! `SetScriptManagerVariable` stores and answers noErr; paramErr for the read-only verbs (smVersion, smEnabled, smSysRef). `GetScriptVariable` has no verified Roman-only table yet and refuses every selector.
 use crate::clib::arg;
 use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
 use guestui_abi::GuestUi;
 use retro_ppc::Cpu;
+
+#[derive(Default)]
+pub struct ScriptState { vars: alloc::collections::BTreeMap<i16, u32> }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScFn { GetScriptManagerVariable, SetScriptManagerVariable, KeyScript, FontScript, IntlScript, FontToScript, GetScriptVariable }
@@ -28,17 +31,16 @@ impl<U: GuestUi> MacPpc<U> {
         use ScFn::*;
         let (a0, a1) = (arg(self, cpu, 0)?, arg(self, cpu, 1).unwrap_or(0));
         let r: u32 = match f {
+            // spec (macos9-specs/InterfaceLib/GetScriptManagerVariable): a value the program stored wins; else the Roman-only table (smRegionCode is 2, verBritain: the CoralOS default
+            // region); a verb outside the table answers 0 (the ROM sets ScriptMgrError and returns 0)
             GetScriptManagerVariable => {
                 let sel = a0 as u16 as i16;
-                mac68k_engine::script::manager_variable(sel).map(|(v, _)| v).ok_or_else(|| format!("GetScriptManagerVariable({sel}) has no Roman-only answer here"))?
+                self.sc.vars.get(&sel).copied().or_else(|| mac68k_engine::script::manager_variable(sel).map(|(v, _)| v)).unwrap_or(0)
             }
+            // SetScriptManagerVariable(verb, param) -> OSErr: stores the value; the read-only verbs smVersion (0), smEnabled (4) and smSysRef (24) are paramErr (-50)
             SetScriptManagerVariable => {
                 let sel = a0 as u16 as i16;
-                match mac68k_engine::script::manager_variable(sel) {
-                    Some((v, what)) if v == a1 => { let _ = what; 0 }
-                    Some((v, what)) => return Err(format!("SetScriptManagerVariable({sel}, {a1}): {what} is {v} and this machine has one script system, so it cannot be changed")),
-                    None => return Err(format!("SetScriptManagerVariable({sel}) has no Roman-only meaning here")),
-                }
+                if matches!(sel, 0 | 4 | 24) { (-50i32) as u32 } else if (0..=42).contains(&sel) && sel % 2 == 0 { self.sc.vars.insert(sel, a1); 0 } else { (-50i32) as u32 }
             }
             // one keyboard script: switching to it is a no-op the program may rely on
             KeyScript => 0,

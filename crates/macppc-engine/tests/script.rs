@@ -22,13 +22,16 @@ fn roman_only_answers_are_the_68k_ones_and_the_rest_is_refused_by_name() {
     assert_eq!(call(&mut m, "GetScriptManagerVariable", &[6]), 0, "smBidirect");
     assert_eq!((call(&mut m, "FontScript", &[]), call(&mut m, "IntlScript", &[]), call(&mut m, "FontToScript", &[3])), (0, 0, 0));
     assert_eq!(call(&mut m, "KeyScript", &[0xFFFF]), 0);
-    // setting a variable to the value it has is fine; to another value it is refused (one script system)
-    assert_eq!(call(&mut m, "SetScriptManagerVariable", &[4, 1]), 0);
-    // NEGATIVE CONTROLS: an unknown selector is not given a made-up number; changing the script system is refused; GetScriptVariable has no verified table
-    let GlueOutcome::Refused(w) = run(&mut m, "GetScriptManagerVariable", &[77]) else { panic!() };
-    assert!(w.contains("GetScriptManagerVariable(77)"), "{w}");
-    let GlueOutcome::Refused(w) = run(&mut m, "SetScriptManagerVariable", &[4, 0]) else { panic!() };
-    assert!(w.contains("one script system"), "{w}");
+    // smRegionCode (40) is 2 = verBritain, the CoralOS default; the rest of the table is zero (spec: macos9-specs/InterfaceLib/GetScriptManagerVariable)
+    assert_eq!(call(&mut m, "GetScriptManagerVariable", &[40]), 2);
+    assert_eq!(call(&mut m, "GetScriptManagerVariable", &[18]), 0, "smSysScript");
+    // Set stores (and the next Get sees it); the read-only verbs smVersion, smEnabled, smSysRef are paramErr and keep their value
+    assert_eq!(call(&mut m, "SetScriptManagerVariable", &[40, 0]), 0);
+    assert_eq!(call(&mut m, "GetScriptManagerVariable", &[40]), 0);
+    assert_eq!(call(&mut m, "SetScriptManagerVariable", &[4, 0]) as i32, -50);
+    assert_eq!(call(&mut m, "GetScriptManagerVariable", &[4]), 1, "NEGATIVE control: the read-only verb kept its value");
+    // a verb outside the table answers 0 (the ROM's dispatcher), it is not invented
+    assert_eq!(call(&mut m, "GetScriptManagerVariable", &[77]), 0);
     let GlueOutcome::Refused(w) = run(&mut m, "GetScriptVariable", &[0, 2]) else { panic!() };
     assert!(w.contains("GetScriptVariable"), "{w}");
 }

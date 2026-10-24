@@ -30,6 +30,10 @@ pub fn manager_variable(sel: i16) -> Option<(u32, &'static str)> {
         4 => (1, "smEnabled"),                 // one script system: Roman
         6 => (0, "smBidirect"),                // no right-to-left script is installed
         8 | 10 | 12 | 14 | 16 | 18 | 20 | 22 => (0, "a script code (smRoman)"), // smFontForce .. smKeyScript: all Roman
+        // the rest of the Roman-only table (spec: macos9-specs/InterfaceLib/GetScriptManagerVariable): smMunged, smSysRef .. smKeyDisableState are 0
+        2 | 24 | 26 | 28 | 30 | 32 | 34 | 36 | 38 | 42 => (0, "a Roman-only zero"),
+        // smRegionCode: 2 = verBritain -- CoralOS's default region (Peter: European first, British default), ruled by the coordinator 2026-10-24; the 9.2.1 System file itself holds 0 (verUS)
+        40 => (2, "smRegionCode (verBritain)"),
         _ => return None,
     })
 }

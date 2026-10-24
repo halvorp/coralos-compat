@@ -292,3 +292,10 @@ Build order from it (each is one small step, in the order the Warcraft III famil
 extended calls (`PBHGetVolParmsSync`, the Desktop Database `PBDT*`, `PBHCopyFileSync`, `PBHOpenDenySync`), Display Manager (`DMGetFirstScreenDevice`/`DMGetNextScreenDevice`/`DMGetDisplayIDByGDevice`,
 a real list of one display), `LaunchApplication`, the Time Manager (`InsTime`/`PrimeTime`/`RmvTime`), `dec2num`/`num2dec`/`nan` (SANE/Decimal and the math library), CFString format and bytes
 (`CFStringCreateWithFormat`, `CFStringCreateWithBytes`), `CFURLCreateFromFSRef` and the property-list calls (they need FSRef and XML parsing), and `HideMenuBar`/`GrowWindow` (host chrome; seam additions).
+
+## Ruling: a version selector names the personality; per-call gaps are named refusals (coordinator, 2026-10-24)
+
+The engine IS a Mac OS 9.2.1 personality with CarbonLib 1.4 (Peter's own system, confirmed by the 9.2.1 oracle). Gestalt therefore answers `'sysv'` = 0x0921 and `'cbon'` = 0x0140 (the value
+on the 9.2.1 CD) together with `'cfrg'` and `'thds'`; every call the personality lacks is already refused BY NAME, which is the honest place for the gap. `'mpsv'`, `'appr'` and `'nav '` stay
+unanswered until the calls each promises are bound. `tests/osroutines.rs` pins both values. Script Manager `smRegionCode` (selector 40) answers 2 = verBritain (CoralOS default region; the 9.2.1
+System file itself holds 0 = verUS), consistently British wherever a region shows.

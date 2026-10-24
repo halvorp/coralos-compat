@@ -1,7 +1,6 @@
 //! The PowerPC Gestalt machine profile. The shared Gestalt (`mac68k_engine::gestalt`) describes a 68k Macintosh II; a PowerPC program asks the
 //! same selectors and must hear the PowerPC machine's answers, and ONLY true ones: a selector whose feature this engine does not provide is
-//! `gestaltUndefSelectorErr` (-5551) with the selector and the missing piece NAMED in the log, never an invented value. A Carbon application
-//! that finds `'cbon'` unanswered takes its own "CarbonLib not present" path instead of running into calls that would refuse mid-session.
+//! `gestaltUndefSelectorErr` (-5551) with the selector and the missing piece NAMED in the log, never an invented value. 'sysv' (0x0921) and 'cbon' (0x0140) name the Mac OS 9.2.1 / CarbonLib 1.4 personality; what the engine lacks of it is refused per call, by name.
 //! An entry moves from [`UNANSWERED`] to [`answer`] in the same change that lands its feature (the Thread Manager's `'thds'` with the Thread
 //! Manager, ...); `docs/consults/2026-10-24-macppc-full-app-gap-map.md` lists what each one waits for.
 //!
@@ -17,6 +16,10 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
         b"cput" => 0x108,
         b"cfrg" => 1,
         b"altv" => 0,
+        // RULING (coordinator, 2026-10-24): the engine IS a Mac OS 9.2.1 personality with CarbonLib 1.4 (Peter's own system, confirmed by the oracle). A version selector names the
+        // personality; every call the engine lacks is a per-call NAMED refusal. `gestaltSystemVersion` 0x0921 and `gestaltCarbonVersion` 0x0140 (CarbonLib 1.4, as on the 9.2.1 CD).
+        b"sysv" => 0x0921,
+        b"cbon" => 0x0140,
         // gestaltThreadMgrAttr: bit 0 gestaltThreadMgrPresent, bit 2 gestaltThreadsLibraryPresent (ThreadsLib is provided); bit 1 (exact-match support) is not claimed
         b"thds" => 0b101,
         _ => return None,
@@ -25,8 +28,6 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
 
 /// Selectors the shared (68k) profile would answer WRONGLY for a PowerPC program, or that wait for a feature, with the reason each has no answer.
 pub const UNANSWERED: &[(&[u8; 4], &str)] = &[
-    (b"sysv", "reports the Mac OS version the engine implements; a Carbon game requires 9.1 and this engine does not yet provide CarbonLib's event model, Appearance, Navigation Services, Thread Manager or Multiprocessing Services, so no version above the shared profile's System 7.0 is claimed"),
-    (b"cbon", "CarbonLib has the Carbon Event Manager core and CreateNewWindow (carbon.rs), menu commands (kEventCommandProcess) and some Control Manager accessors, but not HIToolbox views, Appearance drawing or Navigation Services: a version number would promise them"),
     (b"appr", "the Appearance Manager is not provided"),
     (b"nav ", "Navigation Services is not provided"),
     (b"mpsv", "Multiprocessing Services runs cooperatively (no preemption, one processor, see mp.rs); the selector's value carries the MP Services version and attribute bits, which are not claimed"),

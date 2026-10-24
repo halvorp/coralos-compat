@@ -79,7 +79,7 @@ impl<U: GuestUi> MacPpc<U> {
             GetMenuItemProperty => {
                 let (size, actual, buf) = (arg(self, cpu, 4)?, arg(self, cpu, 5)?, arg(self, cpu, 6)?);
                 match self.rt_mn.props.get(&(a0, a1 as u16, a2, a3)).cloned() {
-                    _ if self.mn_check(a0, a1, n).is_err() => MENU_ITEM_NOT_FOUND,
+                    _ if self.mn_check(a0, a1).is_err() => MENU_ITEM_NOT_FOUND,
                     None => PROPERTY_NOT_FOUND,
                     Some(v) => {
                         if actual != 0 { self.mac.mem.write_u32(actual, v.len() as u32).map_err(|_| format!("{n}: actualSize leaves guest RAM"))?; }
@@ -89,7 +89,7 @@ impl<U: GuestUi> MacPpc<U> {
             }
             SetMenuItemProperty => {
                 let (size, buf) = (arg(self, cpu, 4)?, arg(self, cpu, 5)?);
-                if let Err(c) = self.mn_check(a0, a1, n) { c }
+                if let Err(c) = self.mn_check(a0, a1) { c }
                 else { let v = self.get_bytes(buf, size, n)?; self.rt_mn.props.insert((a0, a1 as u16, a2, a3), v); 0 }
             }
             // MenuKey(charCode): the item of an ENABLED menu in the bar whose command-key equivalent is that character (case-insensitive); (menuID << 16) | item, or 0
@@ -139,11 +139,11 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// The menu must exist and the item be 0..=count; the Menu Manager's property calls report a bad item as paramErr.
-    fn mn_check(&self, menu: u32, item: u32, who: &str) -> Result<(), i32> {
+    fn mn_check(&self, menu: u32, item: u32) -> Result<(), i32> {
         match self.mac.menu_view(menu) {
             Ok(p) if (item as usize) <= p.items.len() => Ok(()),
             Ok(_) => Err(MENU_ITEM_NOT_FOUND),
-            Err(_) => { let _ = who; Err(MENU_ITEM_NOT_FOUND) }
+            Err(_) => Err(MENU_ITEM_NOT_FOUND)
         }
     }
 }
