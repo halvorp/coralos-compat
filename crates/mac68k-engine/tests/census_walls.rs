@@ -349,3 +349,38 @@ fn get_app_parms_names_the_application_and_hands_over_an_empty_finder_startup_li
     assert!(name > 0);
     assert!(m.fm.open_fork(mac68k_engine::resmgr::APP_REF_NUM).is_some_and(|f| f.rsrc && !f.perm.write));
 }
+
+#[test]
+fn ae_get_attribute_ptr_answers_the_events_class_and_id_and_finds_nothing_else() {
+    // SimpleText's open-application handler calls Pack8 selector $0E15 (14 argument words): AEGetAttributePtr(event, key, desiredType,
+    // VAR typeCode, dataPtr, maxSize, VAR actualSize): OSErr. The event here is the 'aevt'/'oapp' this host delivers.
+    const DESC: u32 = 0x3300;
+    let mut g = Rig::new();
+    let data = g.m.mm.new_handle(&mut g.m.mem, &mut g.m.heap, 8, false).unwrap();
+    let p = g.m.mm.block(data).unwrap().ptr;
+    g.m.mem.write_u32(p, four(b"aevt")).unwrap();
+    g.m.mem.write_u32(p + 4, four(b"oapp")).unwrap();
+    g.m.mem.write_u32(DESC, four(b"aevt")).unwrap();
+    g.m.mem.write_u32(DESC + 4, data).unwrap();
+    let call = |p: &mut Prog, key: &[u8; 4], desired: &[u8; 4], max: u32, at: u32| {
+        p.clr_w().l(DESC).l(four(key)).l(four(desired)).l(at).l(at + 4).l(max).l(at + 8);
+        dispatch(p, 0x0E15, 0xA816);
+        p.pop_w(at + 12);
+    };
+    let mut p = Prog::new();
+    p.l(0xCAFE_F00D);
+    call(&mut p, b"evcl", b"****", 4, 0x3400);   // wildcard: any type
+    call(&mut p, b"evid", b"type", 4, 0x3420);   // the attribute's own type
+    call(&mut p, b"miss", b"****", 0, 0x3440);   // keyMissedKeywordAttr: nothing was missed because there are no parameters
+    call(&mut p, b"evid", b"TEXT", 4, 0x3460);   // a type it cannot be coerced to
+    call(&mut p, b"evcl", b"type", 2, 0x3480);   // a buffer shorter than the value gets the first bytes
+    p.pop_l(0x34A0);
+    g.run(p.exit());
+    g.no_refusals();
+    assert_eq!((l(&g, 0x3400), l(&g, 0x3404), l(&g, 0x3408), w(&g, 0x340C)), (four(b"type"), four(b"aevt"), 4, 0));
+    assert_eq!((l(&g, 0x3424), l(&g, 0x3428), w(&g, 0x342C)), (four(b"oapp"), 4, 0));
+    assert_eq!(w(&g, 0x344C), -1701, "errAEDescNotFound");
+    assert_eq!(w(&g, 0x346C), -1700, "errAECoercionFail");
+    assert_eq!((g.m.mem.read_u16(0x3484).unwrap(), w(&g, 0x348C)), (0x6165, 0), "two bytes of 'aevt'");
+    assert_eq!(l(&g, 0x34A0), 0xCAFE_F00D, "every 14-word frame was popped exactly");
+}
