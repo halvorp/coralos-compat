@@ -54,6 +54,7 @@ pub struct Runtime {
     /// Open `FILE` streams by the FILE block's guest address ([`crate::stdio`]).
     /// The task table ([`crate::sched`]).
     pub(crate) sched: crate::sched::Sched,
+    pub(crate) mp: crate::mp::MpState,
     pub(crate) streams: alloc::collections::BTreeMap<u32, crate::stdio::Stream>,
     pub(crate) rand_seeded: bool,
     pub(crate) errno: u32,
@@ -196,6 +197,11 @@ impl<U: GuestUi> Host for MacPpc<U> {
         match self.bindings.get(&symbol).cloned() {
             Some(Binding::Native(Native::C(f))) => {
                 if let Err(why) = self.c_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
+                self.sync_natives(cpu);
+                return true;
+            }
+            Some(Binding::Native(Native::Mp(f))) => {
+                if let Err(why) = self.mp_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
                 self.sync_natives(cpu);
                 return true;
             }

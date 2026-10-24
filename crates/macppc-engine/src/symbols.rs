@@ -47,6 +47,8 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Stdio(crate::stdio::StdioFn),
     /// A Thread Manager call ([`crate::threads`]); switches the live registers.
     Thread(crate::threads::ThreadFn),
+    /// A Multiprocessing Services call ([`crate::mp`]).
+    Mp(crate::mp::MpFn),
     /// An FSSpec call (`FSMakeFSSpec`, `FSpOpenDF` ...): [`crate::fsspec`].
     Spec(crate::fsspec::SpecCall),
     /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.

@@ -53,11 +53,11 @@ impl ThreadFn {
     }
 }
 
-fn state_code(s: TState) -> u32 { match s { TState::Ready => 0, TState::Stopped => 1, TState::Running => 2 } }
+fn state_code(s: TState) -> u32 { match s { TState::Ready => 0, TState::Stopped | TState::Waiting => 1, TState::Running => 2 } }
 
 impl<U: GuestUi> MacPpc<U> {
     /// The `$ThreadExit` stub address (interned, bound as a native on first use).
-    fn thread_exit_stub(&mut self) -> Result<u32, String> {
+    pub(crate) fn thread_exit_stub(&mut self) -> Result<u32, String> {
         self.bindings.insert(THREAD_EXIT.into(), Binding::Native(Native::Thread(ThreadFn::Exit)));
         let id = self.glue.intern(&mut self.mac, "CFM", THREAD_EXIT).map_err(|e| format!("{e:?}"))?;
         self.glue.entry(id).map(|e| e.stub).ok_or_else(|| String::from("the $ThreadExit glue cell is missing"))
@@ -77,10 +77,10 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// The next thread to run when the current one cannot: its suggestion if ready, else round robin; none is a named fault.
-    fn pick(&self, suggested: u32, who: &str) -> Result<u32, String> {
-        let s = &self.rt.sched;
-        if suggested != 0 && suggested != s.current && s.tasks.get(&suggested).is_some_and(|t| t.state == TState::Ready) { return Ok(suggested); }
-        s.next_ready(s.current).ok_or_else(|| format!("{who}: no thread is ready to run (the last runnable thread stopped or ended)"))
+    fn pick(&mut self, suggested: u32, who: &str) -> Result<u32, String> {
+        let cur = self.rt.sched.current;
+        if suggested != 0 && suggested != cur && self.rt.sched.tasks.get(&suggested).is_some_and(|t| t.state == TState::Ready) { return Ok(suggested); }
+        self.runnable_after(cur, true).ok_or_else(|| format!("{who}: no task is ready to run (the last runnable task stopped, ended or waits with no deadline)"))
     }
 
     /// Serve `f` for the call the CPU is making.
@@ -109,13 +109,13 @@ impl<U: GuestUi> MacPpc<U> {
                 let id = self.rt.sched.next_id;
                 self.rt.sched.next_id += 1;
                 let state = if options & K_NEW_SUSPEND != 0 { TState::Stopped } else { TState::Ready };
-                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state, kind: Kind::Thread, stack: Some(block), result_ptr: result_p });
+                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state, kind: Kind::Thread, stack: Some(block), result_ptr: result_p, wait: None, woken: None, notify: None });
                 self.put32(made_p, id, "NewThread")?;
                 self.mac.log.push(format!("[threads] NewThread -> {id} ({}{}, entry {tv:#x}, stack {size})", if style == K_PREEMPTIVE { "preemptive requested, run cooperatively, " } else { "cooperative, " }, if state == TState::Stopped { "stopped" } else { "ready" }));
                 0
             }
             GetCurrentThread => { self.put32(a0, cur, "GetCurrentThread")?; 0 }
-            YieldToAnyThread => match self.rt.sched.next_ready(cur) {
+            YieldToAnyThread => match self.runnable_after(cur, false) {
                 Some(to) => { cpu.gpr[3] = 0; return self.switch_to(cpu, to, Some(TState::Ready), ret); }
                 None => 0,
             },
@@ -172,11 +172,12 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// The running thread ends with exit value `value`: store it, run the next ready thread. The application thread cannot end this way.
-    fn end_current(&mut self, cpu: &mut Cpu, value: u32) -> Result<(), String> {
+    pub(crate) fn end_current(&mut self, cpu: &mut Cpu, value: u32) -> Result<(), String> {
         let cur = self.rt.sched.current;
         if cur == MAIN_TASK { cpu.gpr[3] = THREAD_PROTOCOL as u32; return Ok(()); }
-        let rp = self.rt.sched.tasks.get(&cur).map_or(0, |t| t.result_ptr);
+        let (rp, notify, kind) = self.rt.sched.tasks.get(&cur).map_or((0, None, Kind::Thread), |t| (t.result_ptr, t.notify, t.kind));
         self.put32(rp, value, "thread exit")?;
+        if kind == Kind::Mp { self.mp_task_ended(notify, value); }
         let to = self.pick(0, "thread exit")?;
         self.mac.log.push(format!("[threads] thread {cur} ended (value {value:#x}); thread {to} runs"));
         self.switch_to(cpu, to, None, 0)

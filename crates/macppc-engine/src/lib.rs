@@ -34,6 +34,7 @@ pub mod natives;
 pub mod osroutines;
 pub mod run;
 pub mod source;
+pub mod mp;
 pub mod sched;
 pub mod stdclib;
 pub mod threads;

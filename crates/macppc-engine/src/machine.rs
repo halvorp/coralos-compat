@@ -72,6 +72,14 @@ impl<U: GuestUi> MacPpc<U> {
                     b
                 }
             },
+            crate::mp::NAME => match crate::stdclib::mp_lookup(name) {
+                Some(b) => { self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
+                None => {
+                    let b = Binding::Unbound(alloc::format!("{name} is not in the part of MPLibrary this engine provides"));
+                    self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
+                    b
+                }
+            },
             crate::threads::NAME => match crate::stdclib::threads_lookup(name) {
                 Some(b) => { self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
                 None => {

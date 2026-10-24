@@ -21,11 +21,19 @@ use retro_ppc::Cpu;
 pub const MAIN_TASK: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TState { Ready, Stopped, Running }
+pub enum TState { Ready, Stopped, Running, Waiting }
 
 /// What a task is, for the API that created it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind { Main, Thread, Mp }
+
+/// What a Waiting task waits on (Multiprocessing Services) and where its results go when it wakes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitOn { Queue(u32), Semaphore(u32), Region(u32) }
+#[derive(Debug, Clone, Copy)]
+pub struct Wait { pub on: WaitOn, /// the tick at which the wait times out (None = forever)
+    pub deadline: Option<u32>, /// MPWaitOnQueue's three result pointers
+    pub out: [u32; 3] }
 
 pub struct Task {
     /// The saved registers while the task is not the live one (`None` for the live task and before its first switch-out).
@@ -37,6 +45,11 @@ pub struct Task {
     pub stack: Option<u32>,
     /// Where a thread's exit value is stored when it ends (`NewThread`'s `threadResult`), or 0.
     pub result_ptr: u32,
+    pub wait: Option<Wait>,
+    /// A wake-up status delivered to the LIVE task (it has no saved registers to put it in): `block` reads it back.
+    pub(crate) woken: Option<i32>,
+    /// MPCreateTask's termination notice: (queue, parameter1, parameter2).
+    pub notify: Option<(u32, u32, u32)>,
 }
 
 #[derive(Default)]
@@ -59,7 +72,7 @@ impl<U: GuestUi> MacPpc<U> {
     /// The task table exists once anything schedules: task 1 is the application, running.
     pub(crate) fn ensure_sched(&mut self) {
         if self.rt.sched.tasks.is_empty() {
-            self.rt.sched.tasks.insert(MAIN_TASK, Task { cpu: None, callbacks: Vec::new(), state: TState::Running, kind: Kind::Main, stack: None, result_ptr: 0 });
+            self.rt.sched.tasks.insert(MAIN_TASK, Task { cpu: None, callbacks: Vec::new(), state: TState::Running, kind: Kind::Main, stack: None, result_ptr: 0, wait: None, woken: None, notify: None });
             self.rt.sched.current = MAIN_TASK;
             self.rt.sched.next_id = MAIN_TASK + 1;
         }
@@ -102,7 +115,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub(crate) fn idle_yield(&mut self, cpu: &mut Cpu, addr: u32) -> bool {
         if self.rt.sched.tasks.len() < 2 { return false; }
         let cur = self.rt.sched.current;
-        let Some(to) = self.rt.sched.next_ready(cur) else { return false };
+        let Some(to) = self.runnable_after(cur, false) else { return false };
         // the call is not parked: it will simply run again, so the machine-wide wait markers must not survive
         self.rt.wait_mask = None;
         self.rt.wait_deadline = None;
