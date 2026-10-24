@@ -31,7 +31,26 @@ use retro_raster::Region;
 
 /// The program's state while the procedures run.
 #[derive(Debug, Clone)]
-struct Saved { regs: [u32; 15], sr: u32, pc: u32, sp: u32, port: u32 }
+pub(super) struct Saved { regs: [u32; 15], sr: u32, pc: u32, sp: u32, port: u32 }
+
+impl Saved {
+    /// The program's state at a trap that is about to run guest code: resume at `pc` with `sp`. Returns it, the registers and `thePort`.
+    pub(super) fn capture<U: GuestUi>(m: &Mac<U>, cpu: &Cpu, pc: u32, sp: u32) -> (Saved, [u32; 15], u32) {
+        let mut regs = [0u32; 15];
+        for (i, r) in regs.iter_mut().enumerate() { *r = if i < 8 { cpu.dreg(i as u32) } else { cpu.areg(i as u32 - 8) }; }
+        let port = if m.qd_globals != 0 { m.mem.read_u32(m.qd_globals).unwrap_or(0) } else { 0 };
+        (Saved { regs, sr: cpu.sr(), pc, sp, port }, regs, port)
+    }
+
+    /// Put the registers, the status register and `thePort` back; the caller sets `sp` and `pc` as the outcome needs.
+    pub(super) fn restore<U: GuestUi>(&self, m: &mut Mac<U>, cpu: &mut Cpu, regs: &[u32; 15], port: u32) {
+        if m.qd_globals != 0 { let _ = m.mem.write_u32(m.qd_globals, port); }
+        for (i, v) in regs.iter().enumerate() { if i < 8 { cpu.set_dreg(i as u32, *v) } else { cpu.set_areg(i as u32 - 8, *v) } }
+        cpu.set_sr(self.sr);
+        cpu.set_areg(7, self.sp);
+        cpu.set_pc(self.pc);
+    }
+}
 
 /// One round of user-item drawing, waiting to start or running.
 #[derive(Debug, Clone)]

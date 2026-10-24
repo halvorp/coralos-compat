@@ -25,6 +25,7 @@ pub mod fallback;
 pub mod input;
 pub mod lists;
 pub mod useritems;
+pub mod filterproc;
 
 use crate::events::Delivered;
 use crate::machine::Mac;

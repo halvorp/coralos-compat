@@ -134,15 +134,8 @@ fn typed_keys_edit_the_text_and_a_command_key_is_consumed_by_name() {
 }
 
 #[test]
-fn a_filter_proc_is_named_not_silently_ignored() {
-    let mut m = machine();
-    let mut p = Prog::new();
-    p.script(&m, &dialog_script()[..1]);
-    p.l(0x1234).l(cells::HIT1).trap(0xA991).exit();
-    m.start(&p.0, 0).unwrap();
-    assert_eq!(m.step(1_000_000).0, Step::Blocked);
-    assert!(m.refused.iter().any(|r| r.contains("ModalDialog") && r.contains("filterProc 0x1234")), "{:?}", m.refused);
-    // NEGATIVE control: a NIL filterProc says nothing (every other dialog test asserts refused is empty)
+fn a_nil_filter_proc_says_nothing() {
+    // a non-NIL filterProc is guest code and runs (dialog_items.rs, "ModalDialog's filterProc"); NIL is the standard filtering, silently
     let (m, ..) = parked();
     assert!(m.refused.is_empty(), "{:?}", m.refused);
 }

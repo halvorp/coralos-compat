@@ -43,6 +43,8 @@ pub(crate) enum Frame {
     UserItems(crate::translate::useritems::Run),
     /// A Sound Manager completion routine ([`crate::sound::callback`]): every register and the SR, then free the command record.
     SndCallBack(crate::vbl::VblDone, u32),
+    /// A `ModalDialog` filterProc ([`crate::translate::filterproc`]): TRUE ends the call, FALSE resumes the trap.
+    ModalFilter(crate::translate::filterproc::Filter),
 }
 
 impl<U: GuestUi> Mac<U> {
@@ -73,6 +75,7 @@ impl<U: GuestUi> Mac<U> {
             Some(Frame::Vbl(done)) => { self.finish_vbl(cpu, done); true }
             Some(Frame::Ae(done)) => { self.finish_ae(cpu, done); true }
             Some(Frame::UserItems(run)) => { self.next_user_item(cpu, run); true }
+            Some(Frame::ModalFilter(f)) => { self.finish_modal_filter(cpu, f); true }
             Some(Frame::SndCallBack(done, cmd)) => { self.finish_sound_callback(cpu, done, cmd); true }
         }
     }

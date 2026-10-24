@@ -278,3 +278,53 @@ fn a_dlog_with_a_dctb_is_a_colour_window_on_a_colour_machine_and_a_plain_one_oth
     assert_eq!(make(mac68k_engine::fixture::dialog_fork(), "mac-ii"), (false, 0), "no dctb: a plain GrafPort");
     assert_eq!(make(mac68k_engine::fixture::color_dialog_fork(), "mac-plus"), (false, 0), "no Color QuickDraw: a plain GrafPort whatever the resources");
 }
+
+// ---- ModalDialog's filterProc: guest code run through the trampoline ----
+
+/// `FUNCTION Filter(d, VAR event, VAR itemHit): BOOLEAN` in 68k: records the event's `what` and the dialog, counts calls, sets
+/// `itemHit` to 2 when `verdict` is TRUE, pops its twelve argument bytes and returns the verdict.
+fn filter_proc(verdict: u8) -> Vec<u8> {
+    let mut p = Prog::new();
+    words(&mut p, &[0x206F, 0x0008, 0x33D0, 0x0000, 0x3600]);       // movea.l 8(sp),a0; move.w (a0),SEEN_ITEM  (the event's what)
+    words(&mut p, &[0x23EF, 0x000C, 0x0000, 0x3604]);               // move.l 12(sp),SEEN_WIN (the dialog)
+    words(&mut p, &[0x5279, 0x0000, 0x360C]);                       // addq.w #1,CALLS
+    words(&mut p, &[0x76FF]);                                       // moveq #-1,d3 (clobbered; the engine puts it back)
+    if verdict != 0 { words(&mut p, &[0x206F, 0x0004, 0x30BC, 0x0002]); } // movea.l 4(sp),a0; move.w #2,(a0)
+    words(&mut p, &[0x1F7C, verdict as u16, 0x0010]);               // move.b #verdict,16(sp)
+    words(&mut p, &[0x225F, 0x4FEF, 0x000C, 0x4ED1]);               // movea.l (sp)+,a1; lea 12(sp),sp; jmp (a1)
+    p.0
+}
+
+fn modal_with_filter(m: &mut Mac<RecordingGuestUi>, verdict: u8) {
+    for (a, b) in filter_proc(verdict).iter().enumerate() { m.mem.write_u8(USER_PROC + a as u32, *b).unwrap(); }
+    let mut p = Prog::new();
+    let open = ScriptCall { name: "GetNewDialog", args: vec![Lit(128), Lit(0), Lit(0xFFFF_FFFF)], save: Some(cells::DIALOG) };
+    p.script(m, &[open, call("ModalDialog", &[Lit(USER_PROC), Lit(cells::HIT1)])]);
+    p.exit();
+    m.start(&p.0, 0).unwrap();
+}
+
+#[test]
+fn a_filter_proc_answering_true_ends_modal_dialog_with_its_item_hit() {
+    let mut m = machine();
+    modal_with_filter(&mut m, 1);
+    assert_eq!(m.step(1_000_000).0, Step::Exited, "{:#?}", m.log);
+    assert!(m.refused.is_empty(), "{:?}", m.refused);
+    let w = win(&m);
+    assert_eq!((m.mem.read_u16(cells::HIT1).unwrap(), m.mem.read_u32(SEEN_WIN).unwrap(), m.mem.read_u16(SEEN_ITEM).unwrap(), m.mem.read_u16(CALLS).unwrap()), (2, w, 0, 1), "itemHit 2, called as filter(dialog, nullEvent, itemHit) once");
+}
+
+#[test]
+fn a_filter_proc_answering_false_leaves_the_standard_wait_and_is_not_called_again() {
+    let mut m = machine();
+    modal_with_filter(&mut m, 0);
+    assert_eq!(m.step(1_000_000).0, Step::Blocked, "{:#?}", m.log);
+    assert_eq!(m.mem.read_u16(CALLS).unwrap(), 1);
+    let w = win(&m);
+    let h = m.tr.dlg.dialogs[&w].list[0].handle;
+    let native = m.tr.projected(Obj::Control(h)).unwrap().native;
+    m.ui.push_intent(m.windows[&w].native.unwrap(), native, guestui_abi::Intent::Activate).unwrap();
+    assert_eq!(m.step(1_000_000).0, Step::Exited, "{:#?}", m.log);
+    assert_eq!((m.mem.read_u16(cells::HIT1).unwrap(), m.mem.read_u16(CALLS).unwrap()), (1, 1), "the button's hit, one filter call");
+    assert!(m.refused.is_empty(), "{:?}", m.refused);
+}

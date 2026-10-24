@@ -21,8 +21,8 @@
 //! item's hit (`aDefItem`, 1 unless the program changed it); an `aDefItem` that names no item is ignored by name.
 //! A disabled item's hit is ignored by name, as `ModalDialog` ignores clicks in disabled items. `ModalDialog` blocks like an
 //! event call; the PowerPC adapter parks the caller on the same wake condition ([`Mac::modal_ready`]).
-//! A non-NIL `filterProc` is a guest callback the trap bridge cannot run from inside a trap: it is named as a refusal
-//! (the standard filtering applies), never ignored silently.
+//! A non-NIL `filterProc` is guest code: a 68k caller's runs through the completion trampoline ([`super::filterproc`]); a
+//! PowerPC caller's is named as a refusal (the standard filtering applies), never ignored silently.
 use super::{guest_rect, Obj};
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_pstring, read_rect, Arg, Rect};
@@ -92,6 +92,8 @@ pub struct State {
     pub hits: VecDeque<(u32, i16)>,
     /// A blocked `ModalDialog`: where its `itemHit` result goes.
     pub modal: Option<u32>,
+    /// `ModalDialog`'s filterProc has been called for this call: the trap word that runs again goes straight to the wait.
+    pub filter_done: bool,
     /// The alert a blocked `Alert` call is showing: disposed when its hit arrives (alerts are not the program's to dispose).
     pub alert: Option<u32>,
     /// The alert a blocked `Alert` call ASKED of the host (`GuestUi::request`), not drawn: see [`super::alerts`].
@@ -401,7 +403,13 @@ fn modal_dialog<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<D
     let (filter, at) = (c.args.get(0), c.args.get(1));
     let win = m.front_dialog().ok_or_else(|| Refusal("ModalDialog: no dialog is open".into()))?;
     if m.update_modal_dialog(cpu, win)? { return done(format!("[dialog] ModalDialog {win:#x}: the dialog's user items are drawn first, then the call runs again")); }
-    if filter != 0 { m.note_refusal("ModalDialog", format!("filterProc {filter:#x} is a guest callback and is not called; the standard filtering applies")); }
+    if filter != 0 && !m.tr.dlg.filter_done {
+        match m.schedule_modal_filter(cpu, win, filter, at) {
+            Ok(()) => return done(format!("[dialog] ModalDialog {win:#x}: the filterProc {filter:#x} runs first")),
+            Err(Refusal(why)) => m.note_refusal("ModalDialog", why),
+        }
+    }
+    m.tr.dlg.filter_done = false;
     if let Some(item) = m.take_hit(win) {
         m.mem.write_u16(at, item as u16).map_err(Refusal::mem("itemHit"))?;
         m.tr.dlg.modal = None;
