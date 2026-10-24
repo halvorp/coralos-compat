@@ -42,6 +42,7 @@ pub mod threads;
 pub mod alias_c;
 pub mod carbon_ctl;
 pub mod script_c;
+pub mod tsm_c;
 pub mod gworld;
 pub mod toolbox_c;
 pub mod stdio;

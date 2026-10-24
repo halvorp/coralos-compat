@@ -64,6 +64,8 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Pb(crate::pb::PbCall),
     /// An Apple Event Manager call for PowerPC programs: the handler registry, `AEProcessAppleEvent` ([`crate::ae_c`]).
     Ae(crate::ae_c::AeFn),
+    /// A Text Services Manager document call, no input method ([`crate::tsm_c`]).
+    Tsm(crate::tsm_c::TsmFn),
     /// A Script Manager call, Roman only ([`crate::script_c`]).
     Sc(crate::script_c::ScFn),
     /// An Alias Manager call ([`crate::alias_c`]).
@@ -113,6 +115,7 @@ impl Native {
             "DisposeRoutineDescriptor" => Native::DisposeRoutineDescriptor,
             n if crate::ae_c::AeFn::by_name(n).is_some() => Native::Ae(crate::ae_c::AeFn::by_name(n).expect("checked")),
             n if crate::pb::PbCall::by_name(n).is_some() => Native::Pb(crate::pb::PbCall::by_name(n).expect("checked")),
+            n if crate::tsm_c::TsmFn::by_name(n).is_some() => Native::Tsm(crate::tsm_c::TsmFn::by_name(n).expect("checked")),
             n if crate::script_c::ScFn::by_name(n).is_some() => Native::Sc(crate::script_c::ScFn::by_name(n).expect("checked")),
             n if crate::carbon_ctl::CxFn::by_name(n).is_some() => Native::Cx(crate::carbon_ctl::CxFn::by_name(n).expect("checked")),
             n if crate::gworld::GwFn::by_name(n).is_some() => Native::Gw(crate::gworld::GwFn::by_name(n).expect("checked")),

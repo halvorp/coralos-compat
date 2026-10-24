@@ -43,6 +43,8 @@ pub struct MacPpc<U: GuestUi> {
     pub(crate) cdata: BTreeMap<String, u32>,
     /// Control / Window Manager bookkeeping with no home in the 68k records ([`crate::carbon_ctl`]).
     pub(crate) cx: crate::carbon_ctl::CxState,
+    /// Text Services Manager documents ([`crate::tsm_c`]).
+    pub(crate) tsm: crate::tsm_c::TsmState,
     /// Everything the program wrote with `printf`/`puts`/`putchar`: there is no console device, so the bytes are kept here (and logged).
     pub console: Vec<u8>,
     /// PEF libraries supplied by name (the application's own `cfrg` import-library members, files beside it): loaded on first import.
@@ -71,7 +73,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
     }
 
     /// Make a PEF library available under `name` (the fragment name an import table uses). Instantiated, with its own imports and init routine, the first time something imports from it.
