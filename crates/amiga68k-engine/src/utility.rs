@@ -1,6 +1,6 @@
 //! utility.library: the TagItem helpers (FindTagItem, GetTagData, NextTagItem, PackBoolTags), CallHookPkt, and the
 //! integer/string odds and ends C code reaches for (SMult32, UMult32, Stricmp, Strnicmp, ToUpper, ToLower).
-//! SDivMod32/UDivMod32 return the remainder in D1, which a host handler cannot set (Cpu has only set_d0): they stay
+//! SDivMod32/UDivMod32 (quotient D0, remainder D1) are below; they used to stay
 //! named refusals. Item addresses matter here (FindTagItem returns a pointer), so the walk keeps them; the control tags
 //! (TAG_IGNORE/MORE/SKIP/DONE) behave as in tags.rs. Facts: utility/tagitem.h, utility/hooks.h, AROS rom/utility.
 use alloc::boxed::Box;
@@ -101,6 +101,19 @@ fn u_mult32<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     Ok(format!("[utility] UMult32 -> {r:#x}"))
 }
 
+/// SDivMod32 / UDivMod32(d0 = dividend, d1 = divisor) -> d0 = quotient, d1 = remainder (utility_lib.fd: "for m68k assembly programmers"; AROS's C body returns
+/// only the quotient, the m68k-native assembly returns both, and every classic binary reads D1). Signed: the remainder takes the dividend's sign (DIVS).
+/// A zero divisor is a divide-by-zero exception on the 68000: refused by name, not answered.
+fn div_mod32<U: GuestUi>(cpu: &mut Cpu, signed: bool) -> Result<String, Refusal> {
+    let (n, d) = (cpu.dreg(0), cpu.dreg(1));
+    let name = if signed { "SDivMod32" } else { "UDivMod32" };
+    if d == 0 { return Err(Refusal(format!("{name}({n:#x}, 0): division by zero (a 68000 exception)"))); }
+    let (q, r) = if signed { ((n as i32).wrapping_div(d as i32) as u32, (n as i32).wrapping_rem(d as i32) as u32) } else { (n / d, n % d) };
+    cpu.set_d0(q);
+    cpu.set_dreg(1, r);
+    Ok(format!("[utility] {name} {n:#x} / {d:#x} -> {q:#x} rem {r:#x}"))
+}
+
 fn cmp(a: &[u8], b: &[u8]) -> i32 {
     for i in 0..a.len().max(b.len()) {
         let (x, y) = (a.get(i).copied().unwrap_or(0).to_ascii_uppercase(), b.get(i).copied().unwrap_or(0).to_ascii_uppercase());
@@ -136,6 +149,6 @@ fn to_lower<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
     b.named("FindTagItem", find_tag_item::<U>).named("GetTagData", get_tag_data::<U>).named("NextTagItem", next_tag_item::<U>)
         .named("PackBoolTags", pack_bool_tags::<U>).named("CallHookPkt", call_hook_pkt::<U>)
-        .named("SMult32", s_mult32::<U>).named("UMult32", u_mult32::<U>)
+        .named("SMult32", s_mult32::<U>).named("UMult32", u_mult32::<U>).named("SDivMod32", |_, c| div_mod32::<U>(c, true)).named("UDivMod32", |_, c| div_mod32::<U>(c, false))
         .named("Stricmp", stricmp::<U>).named("Strnicmp", strnicmp::<U>).named("ToUpper", to_upper::<U>).named("ToLower", to_lower::<U>)
 }
