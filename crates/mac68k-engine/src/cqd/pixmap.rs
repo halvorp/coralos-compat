@@ -91,7 +91,9 @@ mod tests {
     }
 }
 
-use crate::machine::Mac;
+use crate::machine::{Call, Done, Mac};
+use crate::pascal::Arg;
+use retro_m68k::Cpu;
 use crate::pascal::Rect;
 use guestui_abi::GuestUi;
 
@@ -110,4 +112,62 @@ impl<U: GuestUi> Mac<U> {
         self.mem.write_u32(p + PM_TABLE, table).map_err(&e)?;
         Ok(h)
     }
+}
+
+/// Register the PixMap traps: `NewPixMap`, `DisposePixMap`, `CopyPixMap`.
+pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
+    use crate::qd::reg;
+    reg(m, 0xAA03, "NewPixMap", &[], Some(Arg::L), new_pixmap_trap::<U>)?;
+    reg(m, 0xAA04, "DisposePixMap", &[Arg::L], None, dispose_pixmap::<U>)?;
+    reg(m, 0xAA05, "CopyPixMap", &[Arg::L, Arg::L], None, copy_pixmap::<U>)
+}
+
+/// `FUNCTION NewPixMap: PixMapHandle` (Inside Macintosh V-70; Executor qCGrafPort.cpp `C_NewPixMap`): every field comes from the
+/// PixMap of `TheGDevice` (so a new map describes the screen's depth, resolution and `baseAddr`), except `pmTable`: a color table
+/// of its own is allocated and left uninitialised (one entry, seed unique), to be filled by `CopyPixMap` or the program.
+fn new_pixmap_trap<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
+    let gd = m.the_gdevice()?;
+    let gp = m.deref_handle(gd, "NewPixMap")?;
+    let src_h = m.mem.read_u32(gp + super::gdevice::GD_PMAP).map_err(Refusal::mem("GDevice"))?;
+    let src = m.deref_handle(src_h, "NewPixMap: the device's PixMap")?;
+    let rec = m.mem.bytes(m.mem.span(src, PM_SIZE).map_err(Refusal::mem("PixMap"))?).map_err(Refusal::mem("PixMap"))?.to_vec();
+    let (h, p) = m.alloc_handle(PM_SIZE, "PixMap")?;
+    m.mem.write_bytes(p, &rec).map_err(Refusal::mem("PixMap"))?;
+    let (ct, cp) = m.alloc_handle(super::ctab::CT_TABLE + super::ctab::SPEC, "NewPixMap color table")?;
+    let seed = m.unique_seed();
+    m.mem.write_u32(cp + super::ctab::CT_SEED, seed).map_err(Refusal::mem("ColorTable"))?;
+    m.mem.write_u32(p + PM_TABLE, ct).map_err(Refusal::mem("PixMap"))?;
+    Ok(Done { result: h, log: format!("[quickdraw] NewPixMap -> {h:#x} (fields of the device's PixMap {src_h:#x}, its own color table {ct:#x})") })
+}
+
+/// `PROCEDURE DisposePixMap(pm)`: the color table, then the map. NIL is accepted.
+fn dispose_pixmap<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let h = c.args.get(0);
+    if h != 0 {
+        let p = m.deref_handle(h, "DisposePixMap")?;
+        let ct = m.mem.read_u32(p + PM_TABLE).map_err(Refusal::mem("PixMap"))?;
+        if ct != 0 && m.mm.block(ct).is_some() { m.dispose_handle(ct).map_err(|e| Refusal(format!("DisposePixMap: color table {ct:#x}: memory manager error {e}")))?; }
+        m.dispose_handle(h).map_err(|e| Refusal(format!("DisposePixMap {h:#x}: memory manager error {e}")))?;
+    }
+    Ok(Done { result: 0, log: format!("[quickdraw] DisposePixMap {h:#x}") })
+}
+
+/// `PROCEDURE CopyPixMap(srcPM, dstPM)`: the record, except that `dstPM` keeps its own color table, whose contents become the
+/// source table's (Executor `C_CopyPixMap`).
+fn copy_pixmap<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (sh, dh) = (c.args.get(0), c.args.get(1));
+    let (sp, dp) = (m.deref_handle(sh, "CopyPixMap source")?, m.deref_handle(dh, "CopyPixMap destination")?);
+    let e = Refusal::mem("PixMap");
+    let rec = m.mem.bytes(m.mem.span(sp, PM_SIZE).map_err(&e)?).map_err(&e)?.to_vec();
+    let (sct, dct) = (m.mem.read_u32(sp + PM_TABLE).map_err(&e)?, m.mem.read_u32(dp + PM_TABLE).map_err(&e)?);
+    m.mem.write_bytes(dp, &rec).map_err(&e)?;
+    m.mem.write_u32(dp + PM_TABLE, dct).map_err(&e)?;
+    if sct != 0 && dct != 0 {
+        let (sb, ssize) = { let b = m.mm.block(sct).ok_or_else(|| Refusal(format!("CopyPixMap: source color table {sct:#x} is not a handle")))?; (b.ptr, b.size) };
+        let bytes = m.mem.bytes(m.mem.span(sb, ssize).map_err(&e)?).map_err(&e)?.to_vec();
+        m.mm.set_handle_size(&mut m.mem, &mut m.heap, dct, ssize).map_err(|x| Refusal(format!("CopyPixMap: no memory for the color table (memFullErr {x})")))?;
+        let db = m.deref_handle(dct, "CopyPixMap destination color table")?;
+        m.mem.write_bytes(db, &bytes).map_err(&e)?;
+    }
+    Ok(Done { result: 0, log: format!("[quickdraw] CopyPixMap {sh:#x} -> {dh:#x}") })
 }

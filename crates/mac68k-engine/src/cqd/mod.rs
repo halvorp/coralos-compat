@@ -58,6 +58,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     ctab::register(m)?;
     gdevice::register(m)?;
     depth::register(m)?;
+    pixmap::register(m)?;
     cport::register(m)?;
     pens::register(m)
 }

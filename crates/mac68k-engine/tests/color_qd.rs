@@ -520,3 +520,39 @@ fn the_gdevice_record_has_the_inside_macintosh_offsets_for_every_field_a_program
     assert_eq!((m.mem.read_u16(np).unwrap(), m.mem.read_u32(np + 42).unwrap()), (0xFFFF, 0x1234_5678), "NewGDevice stores refNum at 0 and gdMode at +42");
     assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_i16(np + 34 + o).unwrap()), [0, 0, 0, 0], "a new device's gdRect is empty: the mode did not leak into it");
 }
+
+#[test]
+fn newpixmap_takes_the_devices_fields_and_its_own_color_table_and_dispose_and_copy_work() {
+    // Inside Macintosh V-70 / Executor C_NewPixMap: every field from TheGDevice's PixMap, pmTable a table of its own
+    let mut m = machine("mac-ii");
+    script(&mut m, &[call("NewPixMap", &[], Some(0x3400)), call("NewPixMap", &[], Some(0x3404)), call("GetMainDevice", &[], Some(0x3408))]);
+    let (a, b, gd) = (m.mem.read_u32(0x3400).unwrap(), m.mem.read_u32(0x3404).unwrap(), m.mem.read_u32(0x3408).unwrap());
+    assert!(a != 0 && b != 0 && a != b, "two distinct handles");
+    let (ap, bp, gp) = (m.mem.read_u32(a).unwrap(), m.mem.read_u32(b).unwrap(), m.mem.read_u32(gd).unwrap());
+    let dev = m.mem.read_u32(m.mem.read_u32(gp + 22).unwrap()).unwrap();
+    let field = |p: u32, o: u32| m.mem.read_u16(p + o).unwrap();
+    assert_eq!((field(ap, 4), field(ap, 32), field(ap, 34), field(ap, 36)), (field(dev, 4), 8, 1, 8), "rowBytes (with the PixMap flag), pixelSize 8 ... come from the device");
+    assert_eq!(m.mem.read_u32(ap + 22).unwrap(), 0x0048_0000, "hRes 72 dpi");
+    let (ta, tb, td) = (m.mem.read_u32(ap + 42).unwrap(), m.mem.read_u32(bp + 42).unwrap(), m.mem.read_u32(dev + 42).unwrap());
+    assert!(ta != 0 && tb != 0 && ta != tb && ta != td, "each new map has a colour table of its own, not the device's");
+    // CopyPixMap(src = the device's map handle, dst = a): the record arrives, a keeps ITS table, whose contents become the source's
+    let dev_h = m.mem.read_u32(gp + 22).unwrap();
+    script(&mut m, &[call("CopyPixMap", &[Lit(dev_h), Lit(a)], None)]);
+    let ap = m.mem.read_u32(a).unwrap();
+    assert_eq!(m.mem.read_u32(ap + 42).unwrap(), ta, "the destination keeps its own table handle");
+    assert_eq!(m.read_ctab(ta).unwrap(), m.read_ctab(td).unwrap(), "and gets the source table's colours (the standard 256)");
+    // DisposePixMap frees the map and its table; NIL is accepted
+    script(&mut m, &[call("DisposePixMap", &[Lit(b)], None), call("DisposePixMap", &[Lit(0)], None)]);
+    assert!(m.mm.block(b).is_none() && m.mm.block(tb).is_none(), "map and colour table both freed");
+    assert!(m.refused.is_empty(), "{:?}", m.refused);
+}
+
+#[test]
+fn newpixmap_on_a_machine_without_color_quickdraw_is_a_named_refusal() {
+    let mut m = machine("mac-plus");
+    let mut p = Prog::new();
+    p.clr_l().trap(0xAA03).exit();
+    m.start(&p.0, 0).unwrap();
+    let _ = m.run_loop(1_000_000);
+    assert!(m.refused.iter().any(|r| r.contains("no current GDevice")), "{:?}", m.refused);
+}
