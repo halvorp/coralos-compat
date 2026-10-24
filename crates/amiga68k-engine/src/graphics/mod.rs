@@ -20,6 +20,7 @@ mod draw;
 pub(crate) mod drawinfo;
 pub mod fonts;
 pub(crate) mod palette;
+mod videocontrol;
 mod pixelarrays;
 pub mod rastport;
 pub mod record;
@@ -44,7 +45,7 @@ pub const TOPAZ8_WIDTH: u32 = 8;
 
 /// graphics.library's implemented vectors.
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
-    b.named("PolyDraw", draw::poly_draw::<U>).named("InitArea", areas::init_area::<U>).named("AreaMove", areas::area_move::<U>).named("AreaDraw", areas::area_draw::<U>).named("AreaEllipse", areas::area_ellipse::<U>).named("AreaEnd", areas::area_end::<U>).named("BltPattern", bltpattern::blt_pattern::<U>).with(modes::register::<U>).with(pixelarrays::register::<U>).named("Flood", flood::flood::<U>).named("InitRastPort", rastport::init_rast_port::<U>)
+    b.named("PolyDraw", draw::poly_draw::<U>).named("InitArea", areas::init_area::<U>).named("AreaMove", areas::area_move::<U>).named("AreaDraw", areas::area_draw::<U>).named("AreaEllipse", areas::area_ellipse::<U>).named("AreaEnd", areas::area_end::<U>).named("BltPattern", bltpattern::blt_pattern::<U>).with(modes::register::<U>).with(videocontrol::register::<U>).with(pixelarrays::register::<U>).named("Flood", flood::flood::<U>).named("InitRastPort", rastport::init_rast_port::<U>)
         .named("SetAPen", rastport::set_a_pen::<U>)
         .named("SetBPen", rastport::set_b_pen::<U>)
         .named("SetDrMd", rastport::set_dr_md::<U>)
