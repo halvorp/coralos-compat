@@ -306,7 +306,7 @@ fn append_menu<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
         if n <= 31 { if *dis { p.flags &= !(1 << n); } else { p.flags |= 1 << n; } }
     }
     m.menu_store(h, &p)?;
-    done(format!("[menu] AppendMenu menu {} +{} items (now {})", p.id, added.len(), p.items.len()))
+    done(format!("[menu] AppendMenu menu {} {:?} +{} items (now {})", p.id, mac_text(&data), added.len(), p.items.len()))
 }
 
 /// `InsertMenuItem(theMenu, itemString, afterItem)`: like `AppendMenu` (the same metacharacters) but after item `afterItem`

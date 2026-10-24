@@ -143,10 +143,12 @@ impl<U: GuestUi> Mac<U> {
         })();
         let undo = |m: &mut Self| if owned { let _ = m.mm.dispose_ptr(&mut m.heap, win); };
         if let Err(e) = fill { undo(self); return Err(e); }
+        let title = s.title.clone();
         self.windows.insert(win, MacWindow { native: None, owned, rect: r, title: s.title, go_away: s.go_away, visible: s.visible, proc_id: s.proc_id, color });
         // behind: -1 = in front of all, 0 = behind all, else behind that window
         let at = match s.behind { 0xFFFF_FFFF => 0, 0 => self.z.len(), b => self.z.iter().position(|&z| z == b).map_or(0, |i| i + 1) };
         self.z.insert(at, win);
+        if let Err(e) = self.put_window_title(win, &title) { self.windows.remove(&win); self.z.retain(|&z| z != win); undo(self); return Err(e); }
         if let Err(e) = self.set_window_rect(win, r).and_then(|_| self.relink_windows()).and_then(|_| crate::qd::lifecycle::window_created(self, win)) { crate::qd::lifecycle::window_disposed(self, win); self.windows.remove(&win); self.z.retain(|&z| z != win); undo(self); return Err(e); }
         if s.visible {
             if let Err(e) = self.open_native(win) { crate::qd::lifecycle::window_disposed(self, win); self.windows.remove(&win); self.z.retain(|&z| z != win); let _ = self.relink_windows(); undo(self); return Err(e); }
@@ -284,6 +286,7 @@ impl<U: GuestUi> Mac<U> {
         self.pal.by_window.remove(&win);
         let dialog_storage = self.release_dialog(win);
         let w = self.windows.remove(&win).ok_or_else(|| Refusal(format!("DisposeWindow: {win:#x} is not an open window")))?;
+        self.free_window_title(win);
         crate::qd::lifecycle::window_disposed(self, win);
         if let Some(n) = w.native { self.ui.close_window(n).map_err(Refusal::ui)?; }
         if w.owned { self.mm.dispose_ptr(&mut self.heap, win).map_err(|e| Refusal(format!("DisposeWindow: {e}")))?; }

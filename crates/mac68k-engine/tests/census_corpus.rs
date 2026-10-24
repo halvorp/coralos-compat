@@ -18,6 +18,27 @@ fn census_on(rel: &str, machine: &str) -> Option<Mac<RecordingGuestUi>> {
     Some(m)
 }
 
+/// Like [`census_on`], then the host's 60 Hz clock: while the guest waits for an event one tick passes (and its null event is delivered),
+/// up to `idle` times, as `mac68k-run --idle` does.
+fn census_idle(rel: &str, machine: &str, idle: u32) -> Option<Mac<RecordingGuestUi>> {
+    let path = format!("/data/build/corpus-bin/{rel}");
+    let file = std::fs::read(&path).ok().or_else(|| { eprintln!("SKIPPED: corpus binary {path} not present (docs/CORPUS.md)"); None })?;
+    let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+    m.stop_on_unimplemented = true;
+    m.ui.drain_audio = true;
+    m.set_machine(machine).unwrap();
+    m.launch(&file).unwrap();
+    let mut left = 50_000_000u64;
+    let mut r = m.run_loop(left).unwrap();
+    for _ in 0..idle {
+        left = left.saturating_sub(r.stats.insns);
+        if !r.stats.blocked || left == 0 { break; }
+        m.advance_ticks(1);
+        r = m.run_loop(left).unwrap();
+    }
+    Some(m)
+}
+
 fn census_in(rel: &str, mode: mac68k_engine::addrmode::AddrMode) -> Option<Mac<RecordingGuestUi>> {
     let path = format!("/data/build/corpus-bin/{rel}");
     let file = std::fs::read(&path).ok().or_else(|| { eprintln!("SKIPPED: corpus binary {path} not present (docs/CORPUS.md)"); None })?;
@@ -267,12 +288,14 @@ fn moving_van_draws_its_pictures_builds_its_lists_and_five_buttons_and_parks_in_
 #[test]
 fn writenow_2_x_open_an_untitled_document_and_the_ruler_on_the_plus_they_were_written_for() {
     // 68000 programs (6-byte exception frames): the census names the machine in the TSV's fifth column. WriteNow 2.0 and 2.2 open "Untitled-1"
-    // and the Ruler and then wait on null events. Open: WriteNow 2.2 pushes args through a jump-table helper (1818(a5)) that leaves SetItmStyle
-    // a garbage first argument; the stack imbalance is not resolved, so refusals are not pinned to zero here.
+    // and the Ruler and then wait on null events. WriteNow 2.2's Window menu update searches the menu for the window's title, copied from
+    // (**WindowPeek(w)->titleHandle) by a profiler-hooked helper (1818(a5)): with titleHandle NIL it found nothing, pushed no arguments and
+    // SetItmStyle read stack garbage. There was no stack imbalance; the cause was the NIL field. Nothing is refused now.
     for rel in ["mac/writenow/fx/z22_1/WriteNow 2.2.bin"] {
-        let Some(m) = census_on(rel, "mac-plus") else { return };
+        let Some(m) = census_idle(rel, "mac-plus", 300) else { return };
         assert!(m.log.iter().any(|l| l.contains("Untitled-1")), "{rel}: {:#?}", m.log.iter().rev().take(30).collect::<Vec<_>>());
         assert!(m.log.iter().any(|l| l.contains("Ruler")), "{rel}");
+        assert!(m.refused.is_empty(), "{rel}: {:?}", m.refused);
         assert!(!m.log.iter().any(|l| l.contains("DrawString REFUSED")), "{rel}: text into an empty-bounds port draws nothing instead of being refused");
     }
 }

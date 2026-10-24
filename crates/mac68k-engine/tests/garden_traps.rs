@@ -504,3 +504,22 @@ fn is_dialog_event_is_true_only_for_events_that_belong_to_a_dialog_and_dialog_se
     assert_eq!((l(&g, OUT + 0x30), w(&g, OUT + 0x34)), (dlg, 1));
     assert_eq!(sel(&mut g), 0, "the hit was consumed");
 }
+
+#[test]
+fn the_window_records_title_handle_is_a_handle_to_the_pascal_title_that_set_wtitle_keeps_current() {
+    // WriteNow 2.2 copies window titles into its Window menu from (**WindowPeek(w)->titleHandle) (offset 134); with the field NIL the copy
+    // was an empty string, its search for the item found nothing, the helper pushed no arguments and SetItmStyle got stack garbage.
+    let mut g = Rig::new();
+    let win = g.win;
+    let title_of = |g: &Rig| { let h = l(g, win + 134); assert_ne!(h, 0, "titleHandle is a real handle"); let p = g.m.mm.block(h).expect("a handle").ptr; text(g, p) };
+    assert_eq!(title_of(&g), "QD", "the title the window was made with");
+    let h0 = l(&g, win + 134);
+    put(&mut g.m, STR, &pstr("A longer title than before"));
+    g.run(Prog::new().l(win).l(STR).trap(0xA91A).exit());
+    g.no_refusals();
+    assert_eq!(title_of(&g), "A longer title than before");
+    assert_eq!(l(&g, win + 134), h0, "the same handle, resized");
+    // the handle goes with the window
+    g.run(Prog::new().l(win).trap(0xA914).exit()); // DisposeWindow
+    assert!(g.m.mm.block(h0).is_none(), "the title handle is freed with the window");
+}

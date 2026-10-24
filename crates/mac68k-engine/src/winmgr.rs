@@ -2,7 +2,9 @@
 //! basics in [`crate::toolbox`] keep: `SetWTitle`/`GetWTitle`, `SetWRefCon`/`GetWRefCon`, `MoveWindow`, `SizeWindow`, and the
 //! Color Window Manager's `NewCWindow`/`GetNewCWindow`.
 //!
-//! * A title change goes to the native window (`set_window_title`); the WindowRecord's `refCon` (offset 152) is real guest memory.
+//! * A title change goes to the native window (`set_window_title`); the WindowRecord's `refCon` (offset 152) is real guest memory, and
+//!   so is its `titleHandle` (134): a handle to the Pascal string, kept in step by [`Mac::put_window_title`] (WriteNow 2.2 copies its
+//!   window titles into the Window menu from `(**WindowPeek(w)->titleHandle)`). `titleWidth` (138) stays 0: the title bar is the host's.
 //! * `SizeWindow`/`MoveWindow` change the content rectangle the guest sees (`portRect`, `portBits.bounds`, FindWindow); the
 //!   canvas is rebuilt and the program gets an `updateEvt` (`SizeWindow(.., fUpdate = TRUE)` and any growth). The seam has no
 //!   call to resize or move a native window, so the native window keeps the size the user gave it: a named limit, logged.
@@ -13,6 +15,8 @@ use crate::events::UPDATE_EVT;
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_pstring, read_rect, write_pstring, Arg, Rect};
 use crate::toolbox::{WindowSpec, WR_REF_CON};
+
+pub(crate) const WR_TITLE_HANDLE: u32 = 134;
 use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
@@ -80,6 +84,28 @@ fn close_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
 }
 
 impl<U: GuestUi> Mac<U> {
+    /// Store `title` in the WindowRecord's `titleHandle` (a Pascal string), making the handle the first time.
+    pub(crate) fn put_window_title(&mut self, win: u32, title: &str) -> Result<(), Refusal> {
+        let e = Refusal::mem("WindowRecord.titleHandle");
+        let bytes: alloc::vec::Vec<u8> = title.chars().map(|ch| ch as u32 as u8).take(255).collect();
+        let at = win + WR_TITLE_HANDLE;
+        let mut h = self.mem.read_u32(at).map_err(&e)?;
+        if h == 0 || self.mm.block(h).is_none() {
+            h = self.mm.new_handle(&mut self.mem, &mut self.heap, bytes.len() as u32 + 1, false).map_err(|c| Refusal(format!("window title: no memory (memFullErr {c})")))?;
+            self.mem.write_u32(at, h).map_err(&e)?;
+        } else {
+            self.mm.set_handle_size(&mut self.mem, &mut self.heap, h, bytes.len() as u32 + 1).map_err(|c| Refusal(format!("window title: SetHandleSize failed ({c})")))?;
+        }
+        let p = self.mm.block(h).map(|b| b.ptr).ok_or_else(|| Refusal("window title: handle vanished".into()))?;
+        write_pstring(&mut self.mem, p, &bytes)
+    }
+
+    /// Free the title handle with its window.
+    pub(crate) fn free_window_title(&mut self, win: u32) {
+        let h = self.mem.read_u32(win + WR_TITLE_HANDLE).unwrap_or(0);
+        if h != 0 && self.mm.block(h).is_some() { let _ = self.mm.dispose_handle(&mut self.mem, &mut self.heap, h); }
+    }
+
     fn open_win(&self, what: &str, win: u32) -> Result<(), Refusal> {
         if self.windows.contains_key(&win) { Ok(()) } else { Err(Refusal(format!("{what}: {win:#x} is not an open window"))) }
     }
@@ -93,6 +119,7 @@ fn set_w_title<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
         w.title = title.clone();
         w.native
     };
+    m.put_window_title(win, &title)?;
     if let Some(n) = native { m.ui.set_window_title(n, title.clone()).map_err(Refusal::ui)?; }
     Ok(Done { result: 0, log: format!("[toolbox] SetWTitle {win:#x} \"{title}\"") })
 }
