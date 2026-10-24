@@ -22,7 +22,7 @@ const D: i32 = TOC0 + 4 * 21;
 // data (word offsets from D): bytes at D..: rect (8), spec (8), title cstring (16), then results
 const RECT: i32 = D; const SPEC: i32 = D + 8; const TITLE: i32 = D + 16; const ATTRS: i32 = D + 40; const WIN: i32 = D + 44; const REF: i32 = D + 48; const CFS: i32 = D + 52;
 const R: i32 = D + 64; // results R + 4*i
-const K: i32 = D + 256; // constants: 'mloc', 'QDPt', 'zzzz', 'magn'
+const K: i32 = D + 256; // constants: 'mloc', 'QDpt', 'zzzz', 'magn'
 const EVSAVE: i32 = R + 60;
 
 fn toc(i: i32) -> i32 { TOC0 + 4 * i }
@@ -60,7 +60,7 @@ fn data(spec: (u32, u32), attrs: u32) -> Vec<u8> {
     v.extend(t);
     v.extend(words(&[attrs]));
     v.resize((K - D) as usize, 0);
-    v.extend(words(&[fc(b"mloc"), fc(b"QDPt"), fc(b"zzzz"), fc(b"magn")]));
+    v.extend(words(&[fc(b"mloc"), fc(b"QDpt"), fc(b"zzzz"), fc(b"magn")]));
     v
 }
 fn boot(bytes: &[u8]) -> M {
@@ -98,7 +98,7 @@ fn recording_handler(result: i32) -> Asm {
     h.stw(5, R + 20, 2).stw(4, EVSAVE, 2);
     h.lwz(3, EVSAVE, 2).call_toc(toc(GCLASS)).stw(3, R + 12, 2);
     h.lwz(3, EVSAVE, 2).call_toc(toc(GKIND)).stw(3, R + 16, 2);
-    h.lwz(3, EVSAVE, 2).lwz(4, K, 2).lwz(5, K + 4, 2).li(6, 0).li(7, 4).li(8, 0).addi(9, 2, R + 24).call_toc(toc(GPARAM)).stw(3, R + 28, 2);   // 'mloc' as QDPt
+    h.lwz(3, EVSAVE, 2).lwz(4, K, 2).lwz(5, K + 4, 2).li(6, 0).li(7, 4).li(8, 0).addi(9, 2, R + 24).call_toc(toc(GPARAM)).stw(3, R + 28, 2);   // 'mloc' as QDpt
     h.lwz(3, EVSAVE, 2).lwz(4, K + 8, 2).li(5, 0).li(6, 0).li(7, 4).li(8, 0).addi(9, 2, R + 40).call_toc(toc(GPARAM)).stw(3, R + 32, 2);        // 'zzzz': not found
     h.lwz(3, EVSAVE, 2).lwz(4, K, 2).lwz(5, K + 12, 2).li(6, 0).li(7, 4).li(8, 0).addi(9, 2, R + 40).call_toc(toc(GPARAM)).stw(3, R + 36, 2);  // 'mloc' as 'magn': no coercion
     h.call_toc(toc(QUIT));

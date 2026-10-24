@@ -18,6 +18,8 @@
 //! * The class/kind/parameter four-character codes and numbers are CarbonEvents.h's as I know them (mous 1/2, keyb 1/2/3, wind 1/5/6/72/73, appl 1/2; '----' 'mloc' 'mbtn' 'kmod'
 //!   'kcod' 'kchr' 'ccnt'); eventNotHandledErr -9874 and eventLoopTimedOutErr -9875 are confirmed by the Systemless importer's constants, -9870 eventParameterNotFoundErr is from the
 //!   header. No Carbon header is in the reference tree to check the rest against.
+//! * Checked against the Mac OS 9.2.1 CD's CarbonLib 1.4 (docs/consults/2026-10-24-macos921-oracle.md): its static EventTypeSpec tables carry exactly these classes and kinds, and the
+//!   point type is `'QDpt'` (typeQDPoint), not `'QDPt'`.
 //! * Window classes: `kDocumentWindowClass` (6) maps to the classic document procIDs (zoom+grow 8, grow 0, none 4); plain (13) 2; alert/modal (1..4) the dialog frames 1 and 5; floating (5) and
 //!   utility (8) are presented as document windows without a grow box (the seam has no floating role yet -- logged on creation). Any other class is `paramErr`.
 use crate::callback::{Continuation, Frame, Saved};
@@ -48,7 +50,7 @@ const C_MOUSE: u32 = fc(b"mous"); const C_KEY: u32 = fc(b"keyb"); const C_WINDOW
 const K_WINDOW_UPDATE: u32 = 1; const K_WINDOW_ACTIVATED: u32 = 5; const K_WINDOW_DEACTIVATED: u32 = 6; const K_WINDOW_CLOSE: u32 = 72; const K_WINDOW_CLOSED: u32 = 73;
 const P_DIRECT: u32 = fc(b"----"); const P_MLOC: u32 = fc(b"mloc"); const P_MBTN: u32 = fc(b"mbtn"); const P_KMOD: u32 = fc(b"kmod"); const P_KCOD: u32 = fc(b"kcod");
 const P_KCHR: u32 = fc(b"kchr"); const P_CCNT: u32 = fc(b"ccnt");
-const T_WINDOW: u32 = fc(b"wind"); const T_QDPOINT: u32 = fc(b"QDPt"); const T_MBTN: u32 = fc(b"mbtn"); const T_UINT32: u32 = fc(b"magn"); const T_CHAR: u32 = fc(b"TEXT");
+const T_WINDOW: u32 = fc(b"wind"); const T_QDPOINT: u32 = fc(b"QDpt"); const T_MBTN: u32 = fc(b"mbtn"); const T_UINT32: u32 = fc(b"magn"); const T_CHAR: u32 = fc(b"TEXT");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CarbonFn {
