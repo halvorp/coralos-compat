@@ -21,7 +21,10 @@ pub const FRAG_LIB_NOT_FOUND: i16 = -2804;
 pub const SYMBOL_CLASS_DATA: u8 = 1;
 pub const SYMBOL_CLASS_TVECTOR: u8 = 2;
 /// The libraries `GetSharedLibrary` can hand out: the ones whose symbols the binding table resolves.
-pub const PROVIDED_LIBRARIES: &[&str] = &["InterfaceLib", "CarbonLib", "AppearanceLib", "ControlsLib", "DialogsLib", "MenusLib", "WindowsLib", "NavigationLib", crate::stdclib::NAME];
+/// Whether the engine provides library `l`: the Toolbox libraries (one list, [`crate::glue::TOOLBOX_LIBRARIES`]) and StdCLib.
+pub fn provided(l: &str) -> bool {
+    crate::glue::TOOLBOX_LIBRARIES.contains(&l) || l == crate::stdclib::NAME
+}
 
 fn err(e: i16) -> u32 { e as i32 as u32 }
 
@@ -142,7 +145,7 @@ impl<U: GuestUi> MacPpc<U> {
             Native::GetSharedLibrary => {
                 let (name_p, conn_p, main_p, err_p) = (a(0), a(3), a(4), a(5));
                 let name = match self.pstr(name_p) { Ok(n) => n, Err(e) => return GlueOutcome::Refused(format!("GetSharedLibrary: {e}")) };
-                if !PROVIDED_LIBRARIES.contains(&name.as_str()) {
+                if !provided(name.as_str()) {
                     if err_p != 0 { let _ = self.mac.mem.write_u8(err_p, name.len().min(255) as u8).and_then(|_| self.mac.mem.write_bytes(err_p + 1, &name.as_bytes()[..name.len().min(255)])); }
                     self.mac.log.push(format!("[cfm] GetSharedLibrary \"{name}\" -> fragLibNotFound"));
                     regs[3] = err(FRAG_LIB_NOT_FOUND);

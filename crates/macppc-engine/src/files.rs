@@ -15,6 +15,7 @@ use mac68k_engine::mixed::{trap_opcode, OsSig, Reg};
 
 /// The scratch parameter block is the largest File Manager block (HFileInfo / DirInfo, 108 bytes) rounded up.
 const PB_SIZE: u32 = 128;
+/// The HFS bit of a File Manager trap word (`_HOpen` = `_Open` | HFS): selects the hierarchical parameter-block form.
 const HFS: u16 = 0x0200;
 /// `fsAtMark`: ioPosMode for FSRead/FSWrite (Files.h: fsAtMark 0, fsFromStart 1, fsFromLEOF 2, fsFromMark 3).
 const FS_AT_MARK: i16 = 0;

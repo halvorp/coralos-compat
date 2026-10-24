@@ -41,12 +41,12 @@ fn carbonlib_and_the_toolbox_sublibraries_resolve_through_the_one_toolbox_table_
     assert_eq!(o, GlueOutcome::Return);
     assert!(p != 0 && m.mac.mem.read_u8(p).is_ok(), "NewPtr through CarbonLib gave {p:#x}");
     // GetSharedLibrary("CarbonLib") hands out a connection like InterfaceLib's (applications probe for CarbonLib this way)
-    assert!(macppc_engine::natives::PROVIDED_LIBRARIES.contains(&"CarbonLib") && macppc_engine::natives::PROVIDED_LIBRARIES.contains(&"WindowsLib"));
+    assert!(macppc_engine::natives::provided("CarbonLib") && macppc_engine::natives::provided("WindowsLib") && macppc_engine::natives::provided("StdCLib"));
 }
 
 #[test]
 fn every_toolbox_library_is_also_a_provided_library() {
-    for l in macppc_engine::glue::TOOLBOX_LIBRARIES { assert!(macppc_engine::natives::PROVIDED_LIBRARIES.contains(l), "{l}"); }
+    assert!(!macppc_engine::natives::provided("OpenGLLibrary"), "a library the engine does not provide is not claimed");
 }
 
 #[test]

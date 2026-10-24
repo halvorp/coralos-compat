@@ -26,7 +26,7 @@ fn flush_events_packs_event_mask_and_stop_mask_into_the_register_it_was_given() 
     m.mac.ev.queue.extend([ev(1), ev(3), ev(3)]);
     call(&mut m, "FlushEvents", &[1 << 3, 0]);
     assert_eq!(m.mac.ev.queue.iter().map(|e| e.what).collect::<Vec<_>>(), [1], "both keyDowns flushed, the mouseDown kept");
-    // NEGATIVE CONTROL: a stopMask hit first protects what follows it (proves the second argument reaches the high half of D0)
+    // Negative control: a stopMask hit first protects what follows it (proves the second argument reaches the high half of D0)
     m.mac.ev.queue.extend([ev(3)]);
     call(&mut m, "FlushEvents", &[1 << 3, 1 << 1]);
     assert_eq!(m.mac.ev.queue.iter().map(|e| e.what).collect::<Vec<_>>(), [1, 3], "stopped at the mouseDown: nothing flushed");
@@ -69,7 +69,7 @@ fn the_handle_utilities_copy_append_and_report_errors() {
     assert_eq!(m.mac.handle_bytes(copy).unwrap(), b"abcdefab");
     assert_eq!(call(&mut m, "HandAndHand", &[copy, h]), 0);
     assert_eq!(m.mac.handle_bytes(h).unwrap().len(), 16);
-    // NEGATIVE CONTROL: a bad source handle is memWZErr (-111) and writes nothing
+    // Negative control: a bad source handle is memWZErr (-111) and writes nothing
     m.mac.mem.write_u32(OUT, 0x1234).unwrap();
     assert_eq!(call(&mut m, "HandToHand", &[OUT]) as i32, -111);
     assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 0x1234);
@@ -84,7 +84,7 @@ fn gestalt_answers_the_powerpc_architecture_and_still_refuses_what_it_cannot_ans
     // the shared answers still apply
     assert_eq!(call(&mut m, "Gestalt", &[u32::from_be_bytes(*b"vers"), OUT]), 0);
     assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 1);
-    // NEGATIVE CONTROL: an unknown selector is gestaltUndefSelectorErr and the response is untouched
+    // Negative control: an unknown selector is gestaltUndefSelectorErr and the response is untouched
     m.mac.mem.write_u32(OUT, 0xCAFE).unwrap();
     assert_eq!(call(&mut m, "Gestalt", &[u32::from_be_bytes(*b"zzzz"), OUT]) as i32, -5551);
     assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 0xCAFE);

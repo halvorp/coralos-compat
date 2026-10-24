@@ -66,7 +66,7 @@ impl<U: GuestUi> MacPpc<U> {
                 Some(b) => { self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
                 None => Binding::Unbound(alloc::format!("{name} is not in the part of StdCLib this engine provides")),
             },
-            l if crate::natives::PROVIDED_LIBRARIES.contains(&l) => self.bind(name),
+            l if crate::natives::provided(l) => self.bind(name),
             l => {
                 // Recorded under the glue key like every other binding: a CALL of the symbol must refuse by NAME (`NEXT-NEEDED lib/sym: ...`),
                 // not stop on "no binding was recorded for this glue stub".
