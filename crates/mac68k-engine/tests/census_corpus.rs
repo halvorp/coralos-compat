@@ -68,7 +68,7 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // Each pins how far the app gets TODAY; when a trap lands the stop moves on and the row is updated deliberately.
     // WriteNow 2.0 sets its ruler dialog's twelve user items (SetDialogItem), has DrawDialog call the draw procedure (which composes its picture
     // offscreen through SetPortBits on the dialog's own port, CopyBits it back, and returns through a flagged address), and runs on into its
-    // event loop: no missing trap at all. 2.2 gets as far as 2.0 and then jumps into low memory (the next wall, not a Toolbox routine).
+    // event loop: no missing trap at all. 2.2 gets as far as 2.0 (its empty-bounds scratch port draws nothing) and then jumps into low memory on the default II (a 68000 program; on mac-plus it opens its window, see below).
     if let Some(m) = census("mac/writenow/fx/z20_0/WriteNow 2.0.bin") {
         assert!(m.refused.iter().all(|r| !r.contains("unimplemented")), "{:?}", m.refused);
         for needle in ["[dialog] DrawDialog", "user item 1 of", "SetPortBits", "[quickdraw] CopyBits"] { assert!(m.log.iter().any(|l| l.contains(needle)), "{needle}: {:#?}", m.log.len()); }
@@ -76,7 +76,7 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     }
     if let Some(m) = census("mac/writenow/fx/z22_1/WriteNow 2.2.bin") {
         assert!(m.refused.iter().all(|r| !r.contains("unimplemented")), "no Toolbox routine is missing for 2.2 either: {:?}", m.refused);
-        assert!(m.refused.iter().any(|r| r.starts_with("DrawString: port") && r.contains("bounds (0,0,0,")), "the next wall: the offscreen BitMap it measures font names into has no rows: {:?}", m.refused.last());
+        assert!(!m.refused.iter().any(|r| r.starts_with("DrawString: port")), "text into the empty-bounds scratch port is clipped away, no longer a wall: {:?}", m.refused);
     }
     // The WriteNow 4.0 installer now gets through GetAppParms and DrawDialog to its event loop: no missing trap at all.
     if let Some(m) = census("mac/writenow/fx40_1/Install WriteNow 4.0.bin") {
