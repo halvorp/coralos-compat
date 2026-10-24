@@ -181,6 +181,7 @@ impl<U: GuestUi> Mac<U> {
         crate::cursor::register(&mut m)?;
         crate::clock::register(&mut m)?;
         crate::winmgr::register(&mut m)?;
+        crate::textedit::register(&mut m)?;
         crate::fontnames::register(&mut m)?;
         menu::register(&mut m)?;
         crate::menu_items::register(&mut m)?;

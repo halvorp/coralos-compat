@@ -14,6 +14,7 @@ OS produced. Nothing here names an application or looks at what pixels look like
 | `translate/controls.rs` | ONE `procID` -> CDEF table (`PROCS`) and ONE role x intent row table (`TABLE`: effect, then the `TrackControl` part code), the attribute map into the real `ControlRecord`, part geometry, the Control Manager traps |
 | `translate/dialogs.rs` | ONE table: DITL item type -> item (`ITEM_TABLE`) and the text-intent row table (`TABLE`), `DialogRecord` + DITL copy with item handles, `ModalDialog` and the item traps |
 | `translate/input.rs` | pointer and key events for content (`mouseDown/Up`, `keyDown/autoKey`, low-memory `Mouse`/`MBState`) |
+| `textedit/` | TextEdit: a real `TERec` behind a handle, ROM line breaking (`layout.rs`, pure), drawing through the engine's QuickDraw into `inPort` (`draw.rs`), `TEKey` / `TEClick` / the TE scrap (`edit.rs`); styled TextEdit is refused by name |
 | `qd/plane.rs` | the retained display list per window port, pens as roles, `present_plane` once per step |
 
 macppc-engine adds nothing but one native (`ModalDialog` parks the PowerPC caller on the front dialog's item hit,
@@ -110,7 +111,7 @@ list names (and to name at least 60 % of them).
   `Get/SetCRefCon`, `UpdtControl`, `LActivate`, `DrawDialog` / `UpdtDialog` / `CloseDialog` / `SelectDialogItemText`, `BringToFront`
   / `SendBehind` / `HiliteWindow` / `DrawGrowIcon` / `CloseWindow`.
 
-Next walls (census): TextEdit (`TENew`, `TEStyleNew`: SimpleText 1.3/1.4, Toolbox Showcase), window regions
+Next walls (census): styled TextEdit (`TEStyleNew`: SimpleText 1.4, Toolbox Showcase; plain TextEdit landed 2026-10-24), window regions
 (WriteNow 2.0 / 2.2 call `PtInRgn` on NIL `contRgn`), `SetDialogItem` (a user item's draw procedure is a guest callback), PICT v2
 (`DrawPicture` of Moving Van's pictures), the List Manager's scroll-bar controls (`vScroll` is NIL, so `SetCRefCon(NIL)` is
 refused), `ModalDialog` filter procedures.

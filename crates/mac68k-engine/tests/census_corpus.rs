@@ -52,9 +52,13 @@ fn retro68_68k_samples_get_through_their_startup_and_the_trap_patch_and_stop_at_
 fn the_toolbox_showcase_fat_app_runs_past_the_file_manager_to_the_colour_window_manager() {
     // systemless's Toolbox Showcase (68k CODE in the resource fork, cut out by tools/corpus-extract-showcase.py): it used to stop at
     // the HFS dispatcher (_HFSDispatch $A260); the File Manager exists now and _GetNewCWindow is modelled now (winmgr.rs); the Palette Manager
-    // answers (palette.rs) and the next wall is TextEdit (_TENew).
+    // answers (palette.rs); plain TextEdit exists now (textedit/), so it creates its text edit record (_TENew) and the next wall is the
+    // STYLED one (_TEStyleNew).
     let Some(m) = census("systemless-showcase/showcase.rsrc") else { return };
-    assert_eq!(m.refused, vec!["unimplemented trap _TENew ($A9D2)".to_string()], "{:#?}", m.log);
+    assert!(m.log.iter().any(|l| l.starts_with("[textedit] TENew")), "the showcase's TENew is answered: {:#?}", m.log);
+    // (it runs further now, so it also asks the List Manager for LDoDraw, which is a named refusal until the next step)
+    assert_eq!(m.refused.last().map(String::as_str), Some("unimplemented trap _TEStyleNew ($A83E)"), "{:#?}", m.log);
+    assert!(m.refused.iter().filter(|r| r.contains("LDoDraw")).count() == 3 && m.refused.len() == 4, "{:?}", m.refused);
 }
 
 #[test]

@@ -56,6 +56,7 @@ pub mod scrap;
 pub mod segment;
 pub mod strcmp;
 pub mod sysenv;
+pub mod textedit;
 pub mod toolbox;
 pub mod toolutil;
 pub mod winmgr;

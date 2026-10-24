@@ -61,10 +61,9 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA86E, &[Arg::L], None, init_graf::<U>)?; // InitGraf(globalPtr)
     m.register(0xA873, &[Arg::P], None, set_port::<U>)?; // SetPort(gp)
     m.register(0xA874, &[Arg::L], None, get_port::<U>)?; // GetPort(VAR gp)
-    // PROCEDURE InitFonts; InitCursor; TEInit; SystemTask: nothing to keep yet
-    for t in [0xA8FE, 0xA850, 0xA9CC, 0xA9B4] { m.register(t, &[], None, accept::<U>)?; }
-    m.register(0xA97B, &[Arg::L], None, accept::<U>)?; // InitDialogs(resumeProc)
-    m.register(0xA9DA, &[Arg::L], None, accept::<U>) // TEIdle(hTE)
+    // PROCEDURE InitFonts; InitCursor; SystemTask: nothing to keep yet (TEInit and TEIdle are the TextEdit module's)
+    for t in [0xA8FE, 0xA850, 0xA9B4] { m.register(t, &[], None, accept::<U>)?; }
+    m.register(0xA97B, &[Arg::L], None, accept::<U>) // InitDialogs(resumeProc)
 }
 
 pub(crate) fn accept<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

@@ -49,6 +49,10 @@ pub const DLG_FONT: u32 = 0xAFA; // short: the font number the Dialog Manager se
 pub const MBAR_HEIGHT: u32 = 0xBAA; // short
 pub const THE_GDEVICE: u32 = 0xCC8; // GDHandle: the current graphics device (SetGDevice)
 pub const MMU_32_BIT: u32 = 0xCB2; // byte: the Memory Manager's mode, true (1) = 32-bit addressing (Inside Macintosh: Memory)
+pub const DOUBLE_TIME: u32 = 0x2F0; // long: the double-click interval in ticks (read by TextEdit; 0 = the Toolbox default, 32)
+pub const CARET_TIME: u32 = 0x2F4; // long: the caret blink interval in ticks (read by TextEdit; 0 = the Toolbox default, 32)
+pub const TE_SCRP_LENGTH: u32 = 0xAB0; // word: the length of the TextEdit scrap (TECopy / TECut), written by the TextEdit traps
+pub const TE_SCRP_HANDLE: u32 = 0xAB4; // Handle: the TextEdit scrap (TEInit allocates it)
 
 /// One entry of the map: address, size in bytes, name.
 pub type Global = (u32, u32, &'static str);
