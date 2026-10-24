@@ -145,7 +145,7 @@ fn copy_mask<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, 
 }
 
 /// The shared body of `CopyBits` and `CopyMask`: open both ends, express the source in the destination's pens, blit.
-fn copy_through<U: GuestUi>(m: &mut Mac<U>, name: &str, sb: u32, db: u32, sr: Rect, dr: Rect, mode_bits: u16, mask: Option<retro_raster::Region>) -> Result<Done, Refusal> {
+pub(crate) fn copy_through<U: GuestUi>(m: &mut Mac<U>, name: &str, sb: u32, db: u32, sr: Rect, dr: Rect, mode_bits: u16, mask: Option<retro_raster::Region>) -> Result<Done, Refusal> {
     let mode = mode_bits;
     let mut dt = open_bits(m, db)?;
     let clip_port = match port_for_bits(m, db) { Ok(p) => p, Err(e) => { finish(m, dt, Rect::default())?; return Err(e); } };

@@ -99,19 +99,9 @@ fn kill_picture<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
     Ok(Done { result: 0, log: format!("[quickdraw] KillPicture {h:#x}") })
 }
 
-/// `DrawPicture(pic, dstRect)`: a picture with no drawing ops draws nothing (and is accepted); the rest is refused by name.
+/// `DrawPicture(pic, dstRect)`: a stored picture's opcodes are parsed and its bitmaps drawn ([`super::pictplay`]); an opcode that is not drawn is refused by name.
 fn draw_picture<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (h, dst) = (c.args.get(0), c.args.get(1));
-    let bytes = m.handle_bytes(h).ok_or_else(|| Refusal(format!("DrawPicture: {h:#x} is not a Picture handle")))?;
-    if bytes.len() < 13 || bytes[10] != 0x11 { return Err(Refusal(format!("DrawPicture {h:#x}: not a version-1 picture (first op {:#04x}); PICT v2 and drawing ops are not interpreted", bytes.get(10).copied().unwrap_or(0)))); }
-    let mut at = 12;
-    while at < bytes.len() {
-        match bytes[at] {
-            0xFF => { let r = read_rect(&m.mem, dst)?; return Ok(Done { result: 0, log: format!("[quickdraw] DrawPicture {h:#x} into ({},{},{},{}): no drawing ops", r.top, r.left, r.bottom, r.right) }); }
-            0xA0 => at += 3,
-            0xA1 => { let n = bytes.get(at + 3..at + 5).map_or(0, |b| usize::from(u16::from_be_bytes([b[0], b[1]]))); at += 5 + n + (n & 1); }
-            op => return Err(Refusal(format!("DrawPicture {h:#x}: picture opcode {op:#04x} is not interpreted (only empty pictures replay)"))),
-        }
-    }
-    Err(Refusal(format!("DrawPicture {h:#x}: picture has no end opcode")))
+    let log = super::pictplay::play(m, h, dst)?;
+    Ok(Done { result: 0, log })
 }

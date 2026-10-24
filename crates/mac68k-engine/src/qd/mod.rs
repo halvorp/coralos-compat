@@ -22,6 +22,8 @@ pub mod draw;
 pub mod fontmetrics;
 pub mod inset;
 pub mod origin;
+pub mod pict;
+pub mod pictplay;
 pub mod picture;
 pub mod lifecycle;
 pub mod plane;

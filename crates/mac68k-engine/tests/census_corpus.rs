@@ -66,12 +66,6 @@ fn the_toolbox_showcase_fat_app_runs_past_the_file_manager_to_the_colour_window_
 fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named() {
     // Real shipped classic Mac applications (Macintosh Garden, owner-authorised local test use; docs/CORPUS.md, tools/corpus-apps-mac-garden.tsv).
     // Each pins how far the app gets TODAY; when a trap lands the stop moves on and the row is updated deliberately.
-    for (app, stop) in [
-        ("mac/glider-pro/fx/Utilities_Moving Van.bin", "DrawPicture 0x"), // past SetControlReference: its PICT is a version-2 picture
-    ] {
-        let Some(m) = census(app) else { continue };
-        assert!(m.refused.last().is_some_and(|r| r.contains(stop)), "{app}: {:?}\n{:#?}", m.refused.last(), m.log);
-    }
     // WriteNow 2.0 sets its ruler dialog's twelve user items (SetDialogItem), has DrawDialog call the draw procedure (which composes its picture
     // offscreen through SetPortBits on the dialog's own port, CopyBits it back, and returns through a flagged address), and runs on into its
     // event loop: no missing trap at all. 2.2 gets as far as 2.0 and then jumps into low memory (the next wall, not a Toolbox routine).
@@ -126,9 +120,12 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     assert!(m.log.iter().any(|l| l.starts_with("[res] MaxSizeRsrc")) && m.log.iter().any(|l| l.starts_with("[res] GetCursor 1 -> 0x") && !l.contains("-> 0x0 ")), "{:#?}", m.log);
     assert!(!m.log.iter().any(|l| l.contains("Couldn't Load a Resource")), "the load-failure alert is gone");
     // then SetEntries (its palette), ShieldCursor, direct writes to the frame buffer (shown in its window), and its sound: the next wall is
-    // its looped sounds loop on the seam (queue_audio_looped) and its callBackCmd routines run; the next wall is PICT v2 (DrawPicture, refused by name)
+    // its looped sounds loop on the seam (queue_audio_looped), its callBackCmd routines run, and its 150 PICT v2 pictures are DRAWN (qd/pictplay.rs):
+    // nothing is refused any more; it ends in its own "There are no houses on this drive!" alert (the corpus has no house files)
     assert!(m.log.iter().any(|l| l.contains("LOOPING frames")), "a looped sound was queued looping");
-    assert!(m.refused.last().is_some_and(|r| r.contains("DrawPicture")), "the next wall: {:?}", m.refused.last());
+    assert!(m.log.iter().filter(|l| l.contains("[quickdraw] DrawPicture") && l.contains("bitmap(s)")).count() >= 20, "its pictures were drawn");
+    assert!(m.refused.is_empty(), "nothing refused: {:?}", m.refused);
+    assert!(m.log.iter().any(|l| l.contains("Alert 1006")), "its no-houses alert");
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.
@@ -251,4 +248,18 @@ fn simpletext_opens_its_untitled_window_with_menus_and_a_scroll_bar_and_parks_in
         // what is still refused is named: the outline-highlight feature flag, GetScriptVariable, the Apple Event selector
         assert!(m.refused.iter().all(|r| r.contains("TEFeatureFlag") || r.contains("GetScriptVariable") || r.contains("Apple Event")), "{app}: {:?}", m.refused);
     }
+}
+
+#[test]
+fn moving_van_draws_its_pictures_builds_its_lists_and_five_buttons_and_parks_in_its_event_loop() {
+    // Glider PRO's Moving Van: its PICT v2 pictures are drawn (qd/pictplay.rs), LNew(.., scrollV) gives its lists a real vScroll control (a hidden
+    // one: the native list draws its own bar), so SetCRefCon of it is no longer a refusal; it opens one document window and waits.
+    use guestui_abi::{ControlKind, UiCall};
+    let Some(m) = census("mac/glider-pro/fx/Utilities_Moving Van.bin") else { return };
+    assert!(m.refused.is_empty(), "nothing is refused: {:?}", m.refused);
+    assert!(m.unimplemented_at.is_empty());
+    assert!(m.log.iter().any(|l| l.contains("[quickdraw] DrawPicture") && l.contains("bitmap(s)")), "a picture was drawn");
+    let kinds: Vec<_> = m.ui.calls.iter().filter_map(|c| match c { UiCall::AddControl(_, c) => Some(c.kind.clone()), _ => None }).collect();
+    assert_eq!(kinds.iter().filter(|k| matches!(k, ControlKind::Button)).count(), 5, "five push buttons");
+    assert_eq!(kinds.iter().filter(|k| matches!(k, ControlKind::List { .. })).count(), 2, "two native lists");
 }
