@@ -230,7 +230,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let args = match self.arg_values(c.arg_count(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{}: {e}", c.name())) };
                 match self.spec_call(c, &args) { Ok(v) => { regs[3] = v; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
-            Native::C(_) | Native::Math(_) | Native::Stdio(_) | Native::Thread(_) | Native::Mp(_) | Native::Carbon(_) | Native::Ae(_) => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
+            Native::C(_) | Native::Math(_) | Native::Stdio(_) | Native::Thread(_) | Native::Mp(_) | Native::Invoke(_) | Native::Carbon(_) | Native::Ae(_) => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
             Native::BlockZero => {
                 let (dest, n) = (a(0), a(1));

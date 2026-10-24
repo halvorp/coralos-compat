@@ -60,6 +60,8 @@ pub(crate) enum Continuation {
     AeHandler,
     /// A Time Manager task's procedure ran at a safepoint: the interrupted glue call is entered again ([`crate::tm_c`]).
     TimerTask,
+    /// A program's UPP called through an `Invoke<Name>UPP` ([`crate::invoke_c`]): the result goes back to the caller.
+    Invoke(crate::invoke_c::Result_),
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +142,7 @@ impl<U: GuestUi> MacPpc<U> {
             Continuation::AeHandler => self.ae_handler_returned(cpu, frame),
             Continuation::SwitchIn => { frame.saved.restore(cpu); Ok(()) }
             Continuation::TimerTask => { frame.saved.restore(cpu); Ok(()) }
+            Continuation::Invoke(res) => { self.invoke_returned(cpu, frame, res); Ok(()) }
         }
     }
 
