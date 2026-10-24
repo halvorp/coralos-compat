@@ -154,6 +154,11 @@ impl<U: GuestUi> MacPpc<U> {
                 cpu.gpr = *regs;
                 match self.tb_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::Gw(f) => {
+                let mut cpu = retro_ppc::Cpu::new(0, regs[1]);
+                cpu.gpr = *regs;
+                match self.gw_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
             Native::Pb(c) => {
                 let args = match self.arg_values(1, regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("PB call: {e}")) };
                 match self.pb_call(c, args[0]) { Ok(e) => { regs[3] = err(e); GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }

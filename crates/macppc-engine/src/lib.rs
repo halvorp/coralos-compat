@@ -39,6 +39,7 @@ pub mod mp;
 pub mod sched;
 pub mod stdclib;
 pub mod threads;
+pub mod gworld;
 pub mod toolbox_c;
 pub mod stdio;
 pub mod symbols;

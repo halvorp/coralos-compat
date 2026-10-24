@@ -26,6 +26,7 @@ pub mod color;
 pub mod ctab;
 pub mod depth;
 pub mod gdevice;
+pub mod gworld;
 pub mod pens;
 pub mod pixmap;
 
@@ -46,6 +47,8 @@ pub struct Cqd {
     pub devices: alloc::vec::Vec<u32>,
     /// PixMap record address -> the colour window's port whose pixels it describes (the canvas lives host-side).
     pub window_pix: alloc::collections::BTreeMap<u32, u32>,
+    /// Every live offscreen graphics world by its port ([`gworld`]).
+    pub gworlds: alloc::collections::BTreeMap<u32, gworld::Gw>,
 }
 
 /// Seeds below this are the standard tables' (their `'clut'` id); `GetCTSeed` starts above it (Imaging With QuickDraw).
