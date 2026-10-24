@@ -153,6 +153,7 @@ impl<U: GuestUi> Mac<U> {
         m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start
         lowmem::init(&mut m.mem)?;
         lowmem::set_rom85(&mut m.mem, m.profile.rom85)?;
+        lowmem::set_screen(&mut m.mem, m.profile.color_qd)?;
         m.set_address_mode(crate::addrmode::AddrMode::Bit24)?; // a classic 68k Mac boots in 24-bit mode
         crate::addrmode::register(&mut m)?;
         m.install_trampoline()?;
@@ -215,6 +216,7 @@ impl<U: GuestUi> Mac<U> {
         let p = crate::profile::lookup(name).ok_or_else(|| Refusal(format!("unknown machine profile \"{name}\" (known: {})", crate::profile::PROFILES.iter().map(|p| p.name).collect::<Vec<_>>().join(", "))))?;
         self.set_address_mode(p.addr)?;
         lowmem::set_rom85(&mut self.mem, p.rom85)?;
+        lowmem::set_screen(&mut self.mem, p.color_qd)?;
         self.profile = p;
         Ok(())
     }

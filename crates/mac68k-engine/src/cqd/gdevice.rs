@@ -14,7 +14,7 @@
 //! 15 screenActive. `gdITable` is NIL: the inverse table is not modelled (`Color2Index` is answered by the engine).
 use super::color;
 use super::pixmap::{PM_PIXEL_SIZE, PM_TABLE};
-use crate::lowmem::{DEVICE_LIST, MAIN_DEVICE, SCREEN_BASE, SCREEN_H, SCREEN_W, THE_GDEVICE};
+use crate::lowmem::{DEVICE_LIST, MAIN_DEVICE, SCREEN_BASE, THE_GDEVICE};
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::{read_rect, Arg, Rect};
 use crate::Refusal;
@@ -54,9 +54,10 @@ impl<U: GuestUi> Mac<U> {
     /// Make the main screen device (once) when this machine has Color QuickDraw, and publish it.
     pub fn init_devices(&mut self) -> Result<(), Refusal> {
         if !self.profile.color_qd || self.cqd.main_device != 0 { return Ok(()); }
-        let screen = Rect { top: 0, left: 0, bottom: SCREEN_H, right: SCREEN_W };
+        let (w, h) = crate::lowmem::screen_size(true);
+        let screen = Rect { top: 0, left: 0, bottom: h, right: w };
         let table = self.new_ctab(&color::clut8(), u32::from(SCREEN_DEPTH), super::ctab::DEVICE_TABLE)?;
-        let pm = self.new_pixmap(SCREEN_DEPTH, screen, SCREEN_BASE, u32::from(SCREEN_W as u16), table)?;
+        let pm = self.new_pixmap(SCREEN_DEPTH, screen, SCREEN_BASE, u32::from(w as u16), table)?;
         let gd = self.new_device_record(pm, screen, MAIN_FLAGS)?;
         let e = Refusal::mem("device globals");
         for g in [MAIN_DEVICE, DEVICE_LIST, THE_GDEVICE] { self.mem.write_u32(g, gd).map_err(&e)?; }

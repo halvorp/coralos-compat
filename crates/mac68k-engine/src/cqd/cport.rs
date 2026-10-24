@@ -59,7 +59,7 @@ impl<U: GuestUi> Mac<U> {
         self.init_devices()?;
         let (depth, table) = self.device_pixmap(self.cqd.main_device)?;
         let bounds = crate::pascal::Rect { top: 0, left: 0, bottom: 0, right: 0 };
-        let pm = self.new_pixmap(depth as u8, bounds, crate::lowmem::SCREEN_BASE, u32::from(crate::lowmem::SCREEN_W as u16), table)?;
+        let pm = self.new_pixmap(depth as u8, bounds, crate::lowmem::SCREEN_BASE, u32::from(crate::lowmem::screen_size(true).0 as u16), table)?;
         let p = self.deref_handle(pm, "PixMap")?;
         self.begin_cport(win, pm)?;
         self.cqd.window_pix.insert(p, win);

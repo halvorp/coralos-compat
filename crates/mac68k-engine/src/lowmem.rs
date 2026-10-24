@@ -71,6 +71,13 @@ pub static MAP: &[Global] = &[
 /// display size is bridged from the host.
 pub const SCREEN_W: i16 = 512;
 pub const SCREEN_H: i16 = 342;
+/// The Macintosh II class machine's screen: the 13" RGB display, 640 x 480, 8 bits deep. Glider PRO copies 640 x 460 pixels into the
+/// frame buffer with its own code and so does any program written for a Mac II display.
+pub const COLOR_W: i16 = 640;
+pub const COLOR_H: i16 = 480;
+
+/// (width, height) of the display of a machine with (`color`) or without Color QuickDraw.
+pub fn screen_size(color: bool) -> (i16, i16) { if color { (COLOR_W, COLOR_H) } else { (SCREEN_W, SCREEN_H) } }
 pub const MENU_BAR_HEIGHT: i16 = 20;
 /// ApplLimit: the engine's stack lies between here and `STACK_TOP` (the heap is above the stack, the reverse of a real
 /// Mac, so StackSpace = SP - ApplLimit is the stack headroom).
@@ -79,9 +86,9 @@ pub const APPL_LIMIT_ADDR: u32 = 0x2_0000;
 pub const ZONE_STUB: u32 = 0xC00;
 /// The screen's frame buffer: `ScrnBase` and the main device's PixMap `baseAddr`. QuickDraw draws into windows' canvases, not here, but a
 /// program that writes video memory itself (a game blitting to the screen) writes HERE, and [`crate::qd::screen`] shows those writes in
-/// the windows over them. Sized for the deepest screen the engine has (the Mac II's 8 bits, 512 x 342 = 175,104 bytes); the 1-bit
+/// the windows over them. Sized for the biggest screen the engine has (the Mac II's 8 bits, 640 x 480 = 307,200 bytes); the 1-bit
 /// Plus uses the first 342 x 64 of it. At the very top of RAM; the heap ends below it.
-pub const SCREEN_BYTES: u32 = SCREEN_W as u32 * SCREEN_H as u32;
+pub const SCREEN_BYTES: u32 = COLOR_W as u32 * COLOR_H as u32;
 pub const SCREEN_BASE: u32 = DEFAULT_SIZE as u32 - SCREEN_BYTES;
 
 /// Initialise the globals a program expects at launch.
@@ -111,6 +118,16 @@ pub fn init(mem: &mut GuestMem) -> Result<(), Refusal> {
     mem.write_u32(LO_3_BYTES, 0x00FF_FFFF).map_err(&e)?;
     mem.write_u16(RES_LOAD, 0x0100).map_err(&e)?; // ResLoad = TRUE (Boolean in the high byte)
     mem.write_u16(MBAR_HEIGHT, MENU_BAR_HEIGHT as u16).map_err(&e)
+}
+
+/// The display a machine profile has: `CrsrPin` (the rectangle the cursor is confined to, which `InitGraf` copies into
+/// `screenBits.bounds`) and `ScreenRow` (the 1-bit view's rowBytes).
+pub fn set_screen(mem: &mut GuestMem, color: bool) -> Result<(), Refusal> {
+    let e = Refusal::mem("low-memory globals");
+    let (w, h) = screen_size(color);
+    mem.write_u16(SCREEN_ROW, (w / 8) as u16).map_err(&e)?;
+    for (i, v) in [0, 0, h, w].into_iter().enumerate() { mem.write_u16(CRSR_PIN + 2 * i as u32, v as u16).map_err(&e)?; }
+    Ok(())
 }
 
 /// The machine profile's `ROM85` word (`Mac::new` and `Mac::set_machine` call this).

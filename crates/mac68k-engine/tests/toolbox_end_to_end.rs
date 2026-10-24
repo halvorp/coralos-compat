@@ -104,8 +104,8 @@ fn init_graf_fills_the_quickdraw_globals_below_the_port() {
     let p = 0x1_0000 + HELLO.len() as u32 - 4;
     let r = |a: u32| m.mem.read_u32(a).unwrap();
     assert_eq!(r(p - 126), 1, "randSeed");
-    assert_eq!(m.mem.read_u16(p - 122 + 4).unwrap(), 64, "screenBits.rowBytes");
-    assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_u16(p - 122 + 6 + o).unwrap()), [0, 0, 342, 512], "screenBits.bounds");
+    assert_eq!(m.mem.read_u16(p - 122 + 4).unwrap(), 80, "screenBits.rowBytes (640 pixels / 8: the Macintosh II display)");
+    assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_u16(p - 122 + 6 + o).unwrap()), [0, 0, 480, 640], "screenBits.bounds");
     assert_eq!(m.mem.read_u16(p - 108 + 2).unwrap(), 0x4000, "arrow data row 1");
     assert_eq!(m.mem.read_u16(p - 108 + 32 + 30).unwrap(), 0x0380, "arrow mask row 15");
     assert_eq!((m.mem.read_u16(p - 108 + 64).unwrap(), m.mem.read_u16(p - 108 + 66).unwrap()), (1, 1), "hot spot");

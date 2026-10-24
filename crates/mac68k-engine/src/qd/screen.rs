@@ -10,7 +10,7 @@
 //!
 //! Only CHANGED pixels are copied, so what QuickDraw drew into a canvas is never overwritten by the (blank) buffer beneath.
 use super::target;
-use crate::lowmem::{SCREEN_BASE, SCREEN_BYTES, SCREEN_H, SCREEN_W};
+use crate::lowmem::{screen_size, SCREEN_BASE};
 use crate::machine::Mac;
 use alloc::vec::Vec;
 use guestui_abi::GuestUi;
@@ -26,15 +26,17 @@ fn depth<U: GuestUi>(m: &Mac<U>) -> u8 { if m.cqd.main_device != 0 { crate::cqd:
 pub fn sync<U: GuestUi>(m: &mut Mac<U>) {
     let d = depth(m);
     if d != 8 { return; } // 1-bit direct screen writes are not shown (named in the module note); no corpus program does it
-    let Ok(span) = m.mem.span(SCREEN_BASE, SCREEN_BYTES) else { return };
+    let (sw, sh) = screen_size(true); // an 8-bit screen is a colour machine's
+    let bytes = sw as u32 * sh as u32;
+    let Ok(span) = m.mem.span(SCREEN_BASE, bytes) else { return };
     let Ok(now) = m.mem.bytes(span) else { return };
-    if m.qd.screen.shadow.is_empty() { m.qd.screen.shadow = alloc::vec![0; SCREEN_BYTES as usize]; }
+    if m.qd.screen.shadow.is_empty() { m.qd.screen.shadow = alloc::vec![0; bytes as usize]; }
     if m.qd.screen.shadow.as_slice() == now { return; }
     let now = now.to_vec();
-    let w = SCREEN_W as usize;
+    let w = sw as usize;
     // the changed pixels' bounding box
-    let (mut x0, mut y0, mut x1, mut y1) = (w, SCREEN_H as usize, 0usize, 0usize);
-    for y in 0..SCREEN_H as usize {
+    let (mut x0, mut y0, mut x1, mut y1) = (w, sh as usize, 0usize, 0usize);
+    for y in 0..sh as usize {
         let (a, b) = (&m.qd.screen.shadow[y * w..(y + 1) * w], &now[y * w..(y + 1) * w]);
         if a == b { continue; }
         let first = a.iter().zip(b).position(|(p, q)| p != q).unwrap_or(0);

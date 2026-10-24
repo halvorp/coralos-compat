@@ -107,9 +107,9 @@ fn the_main_device_is_an_8_bit_indexed_screen_with_the_standard_table() {
     assert_eq!(m.mem.read_u32(gp + 30).unwrap(), 0, "gdNextGD (offset 30: gdPMap is a 4-byte handle at 22, gdRefCon a LONGINT at 26): the only device");
     // gdRect is at +34 (Inside Macintosh sums the record to 62 bytes only this way; systemless writes gdRect.top at gd+34)
     let (pmh, rect) = (m.mem.read_u32(gp + 22).unwrap(), gp + 34);
-    assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_u16(rect + o).unwrap()), [0, 0, 342, 512], "gdRect = the screen");
+    assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_u16(rect + o).unwrap()), [0, 0, 480, 640], "gdRect = the screen");
     let pm = m.mem.read_u32(pmh).unwrap();
-    assert_eq!((m.mem.read_u16(pm + 4).unwrap(), m.mem.read_u16(pm + 32).unwrap(), m.mem.read_u16(pm + 34).unwrap(), m.mem.read_u16(pm + 36).unwrap()), (0x8000 | 512, 8, 1, 8), "PixMap: rowBytes with the PixMap flag, pixelSize 8, one 8-bit component");
+    assert_eq!((m.mem.read_u16(pm + 4).unwrap(), m.mem.read_u16(pm + 32).unwrap(), m.mem.read_u16(pm + 34).unwrap(), m.mem.read_u16(pm + 36).unwrap()), (0x8000 | 640, 8, 1, 8), "PixMap: rowBytes with the PixMap flag, pixelSize 8, one 8-bit component");
     assert_eq!(m.mem.read_u32(pm + 22).unwrap(), 0x0048_0000, "hRes 72 dpi");
     let ct = m.mem.read_u32(m.mem.read_u32(pm + 42).unwrap()).unwrap();
     assert_eq!((m.mem.read_u32(ct).unwrap(), m.mem.read_u16(ct + 4).unwrap(), m.mem.read_u16(ct + 6).unwrap()), (8, 0x8000, 255), "ctSeed 8, device table, 256 entries");
@@ -514,7 +514,7 @@ fn the_gdevice_record_has_the_inside_macintosh_offsets_for_every_field_a_program
     let (main, new) = (m.mem.read_u32(0x3400).unwrap(), m.mem.read_u32(0x3404).unwrap());
     let (mp, np) = (m.mem.read_u32(main).unwrap(), m.mem.read_u32(new).unwrap());
     assert_eq!(m.mm.block(main).unwrap().size, 62, "the record is 62 bytes");
-    assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_i16(mp + 34 + o).unwrap()), [0, 0, 342, 512], "gdRect is at +34");
+    assert_eq!([0, 2, 4, 6].map(|o| m.mem.read_i16(mp + 34 + o).unwrap()), [0, 0, 480, 640], "gdRect is at +34");
     assert_eq!(m.mem.read_u32(mp + 26).unwrap(), 0, "gdRefCon (+26) is clear and does not overlap gdPMap (+22)");
     assert_ne!(m.mem.read_u32(mp + 22).unwrap(), 0, "gdPMap survives");
     assert_eq!((m.mem.read_u16(np).unwrap(), m.mem.read_u32(np + 42).unwrap()), (0xFFFF, 0x1234_5678), "NewGDevice stores refNum at 0 and gdMode at +42");
@@ -585,14 +585,14 @@ fn set_entries_writes_the_device_table_by_position_or_by_value_and_refuses_past_
 
 #[test]
 fn a_program_writing_the_frame_buffer_itself_shows_in_the_window_over_it_and_only_where_it_changed() {
-    // Glider PRO blits straight into video memory after SwapMMUMode: a pixel written at ScrnBase + y * 512 + x appears at global (x, y) in the
+    // Glider PRO blits straight into video memory after SwapMMUMode: a pixel written at ScrnBase + y * 640 + x appears at global (x, y) in the
     // topmost window over it. The window here is global (left 50, top 100) .. (250, 220).
     use mac68k_engine::lowmem::SCREEN_BASE;
     let mut w = color_window();
     // what QuickDraw drew stays: paint pen 5 into local (0,0)
     w.script(&[call("ForeColor", &[Lit(33)], None)]); // any call that leaves the canvas alone
     let before = w.px(3, 4);
-    let at = |x: u32, y: u32| SCREEN_BASE + y * 512 + x;
+    let at = |x: u32, y: u32| SCREEN_BASE + y * 640 + x;
     w.m.mem.write_u8(at(53, 104), 77).unwrap(); // global (53,104) = local (3,4)
     w.m.mem.write_u8(at(300, 104), 88).unwrap(); // outside the window: nobody shows it
     w.m.mem.write_u8(at(60, 90), 99).unwrap(); // above it too
@@ -621,9 +621,9 @@ fn a_direct_screen_write_shows_in_the_topmost_of_two_overlapping_windows_only() 
     let front = w.m.make_window_as(spec, true).unwrap(); // in front of the first
     assert_eq!(w.m.z.first(), Some(&front), "the new window is frontmost");
     // global (120,160) is inside both: the front window gets it, the back one does not
-    w.m.mem.write_u8(SCREEN_BASE + 160 * 512 + 120, 66).unwrap();
+    w.m.mem.write_u8(SCREEN_BASE + 160 * 640 + 120, 66).unwrap();
     // global (60,110) is inside the back window only
-    w.m.mem.write_u8(SCREEN_BASE + 110 * 512 + 60, 67).unwrap();
+    w.m.mem.write_u8(SCREEN_BASE + 110 * 640 + 60, 67).unwrap();
     mac68k_engine::qd::flush(&mut w.m);
     assert_eq!(w.m.qd.canvases[&front].get(120 - 100, 160 - 150), Some(66), "the front window shows the pixel");
     assert_eq!(w.m.qd.canvases[&w.win].get(120 - 50, 160 - 100), Some(0), "the window behind it does not (that pixel is covered)");

@@ -109,3 +109,19 @@ fn macwrite_4_5_passes_its_trap_4_path_on_a_mac_plus_and_stumbles_on_a_68020() {
     assert!(!ii.ui.calls.iter().any(|c| format!("{c:?}").contains("OpenWindow")), "no window on the 68020");
 }
 
+
+#[test]
+fn the_display_is_the_machines_a_mac_ii_has_640_by_480_eight_bit_and_the_plus_and_se_512_by_342_one_bit() {
+    // Glider PRO copies 640 x 460 pixels into the frame buffer with its own code (22,112 stores past the end of a 512 x 342 buffer);
+    // that is the Mac II's 13" RGB display. The 1-bit machines keep the compact Mac's screen.
+    let read = |m: &Mac<RecordingGuestUi>| ([0, 2, 4, 6].map(|o| m.mem.read_u16(0x0834 + o).unwrap()), m.mem.read_u16(0x0106).unwrap());
+    let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+    assert_eq!(read(&m), ([0, 0, 480, 640], 80), "the default machine is a Mac II: CrsrPin and ScreenRow");
+    let base = m.mem.read_u32(0x824).unwrap(); // ScrnBase
+    m.mem.write_u8(base + 640 * 480 - 1, 1).expect("the frame buffer holds the whole 640 x 480 screen: its last pixel is writable");
+    for (name, bounds, row) in [("mac-ii", [0, 0, 480, 640], 80), ("mac-plus", [0, 0, 342, 512], 64), ("mac-se", [0, 0, 342, 512], 64)] {
+        let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+        m.set_machine(name).unwrap();
+        assert_eq!(read(&m), (bounds, row), "{name}");
+    }
+}
