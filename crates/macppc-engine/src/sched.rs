@@ -55,6 +55,8 @@ pub struct Task {
     pub(crate) switch_out: Option<(u32, u32)>,
     /// MPCreateTask's termination notice: (queue, parameter1, parameter2).
     pub notify: Option<(u32, u32, u32)>,
+    /// How many glue entries the SAVED `cpu` already has bound (the live CPU always has `rt.bound`): a switch back binds only what was interned since.
+    pub(crate) bound: usize,
 }
 
 #[derive(Default)]
@@ -64,6 +66,8 @@ pub struct Sched {
     pub next_id: u32,
     /// `ThreadBeginCritical` nesting (cooperative scheduling makes it a count, nothing more).
     pub critical: u32,
+    /// `bind_native` calls made by task switches (a test counts them: a switch must not rebind what the task already has).
+    pub rebinds: u64,
 }
 
 impl Sched {
@@ -74,10 +78,13 @@ impl Sched {
 }
 
 impl<U: GuestUi> MacPpc<U> {
+    /// The `bind_native` calls task switches have made so far.
+    pub fn switch_rebinds(&self) -> u64 { self.rt.sched.rebinds }
+
     /// The task table exists once anything schedules: task 1 is the application, running.
     pub(crate) fn ensure_sched(&mut self) {
         if self.rt.sched.tasks.is_empty() {
-            self.rt.sched.tasks.insert(MAIN_TASK, Task { cpu: None, callbacks: Vec::new(), state: TState::Running, kind: Kind::Main, stack: None, result_ptr: 0, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: None });
+            self.rt.sched.tasks.insert(MAIN_TASK, Task { cpu: None, callbacks: Vec::new(), state: TState::Running, kind: Kind::Main, stack: None, result_ptr: 0, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: None, bound: 0 });
             self.rt.sched.current = MAIN_TASK;
             self.rt.sched.next_id = MAIN_TASK + 1;
         }
@@ -118,25 +125,27 @@ impl<U: GuestUi> MacPpc<U> {
         let callbacks = core::mem::take(&mut self.rt.callbacks);
         let ending = cur_state.is_none();
         let mut dead_stack = None;
-        if let Some(state) = cur_state {
-            let mut saved = cpu.clone();
-            saved.pc = resume_pc;
-            let t = self.rt.sched.tasks.get_mut(&cur).ok_or_else(|| format!("the current task {cur} is not in the table"))?;
-            t.cpu = Some(saved);
-            t.callbacks = callbacks;
-            t.state = state;
-        } else if let Some(t) = self.rt.sched.tasks.remove(&cur) { dead_stack = t.stack; }
+        // The incoming task's registers come out first so the outgoing CPU can be MOVED into its slot: no clone (a clone copied the whole native-address set on every switch).
         let t = self.rt.sched.tasks.get_mut(&to).expect("checked");
         let next = t.cpu.take().expect("checked");
-        self.rt.callbacks = core::mem::take(&mut t.callbacks);
+        let (next_callbacks, next_bound) = (core::mem::take(&mut t.callbacks), t.bound);
         t.state = TState::Running;
+        let mut old = core::mem::replace(cpu, next);
+        if let Some(state) = cur_state {
+            old.pc = resume_pc;
+            let t = self.rt.sched.tasks.get_mut(&cur).ok_or_else(|| format!("the current task {cur} is not in the table"))?;
+            t.cpu = Some(old);
+            t.callbacks = callbacks;
+            t.state = state;
+            t.bound = self.rt.bound; // the live CPU had exactly these stubs bound
+        } else if let Some(t) = self.rt.sched.tasks.remove(&cur) { dead_stack = t.stack; }
+        self.rt.callbacks = next_callbacks;
         self.rt.sched.current = to;
-        *cpu = next;
         let pc = cpu.pc;
         cpu.set_pc(pc); // the native "returned" into the other task: the run loop must not overwrite pc with this task's LR
-        // stubs interned since this task last ran are not in its bound set
-        for i in 0..self.glue.len() { if let Some(e) = self.glue.entry(i) { cpu.bind_native(e.stub); } }
-        self.rt.bound = self.rt.bound.max(self.glue.len());
+        // only the stubs interned since this task last ran are missing from its bound set
+        for i in next_bound..self.glue.len() { if let Some(e) = self.glue.entry(i) { cpu.bind_native(e.stub); self.rt.sched.rebinds += 1; } }
+        self.rt.bound = self.glue.len().max(self.rt.bound);
         if ending { if let Some(s) = dead_stack { let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, s); } }
         Ok(())
     }

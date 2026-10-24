@@ -109,7 +109,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let id = self.rt.sched.next_id;
                 self.rt.sched.next_id += 1;
                 let state = if options & K_NEW_SUSPEND != 0 { TState::Stopped } else { TState::Ready };
-                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state, kind: Kind::Thread, stack: Some(block), result_ptr: result_p, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: None });
+                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state, kind: Kind::Thread, stack: Some(block), result_ptr: result_p, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: None, bound: 0 });
                 self.put32(made_p, id, "NewThread")?;
                 self.mac.log.push(format!("[threads] NewThread -> {id} ({}{}, entry {tv:#x}, stack {size})", if style == K_PREEMPTIVE { "preemptive requested, run cooperatively, " } else { "cooperative, " }, if state == TState::Stopped { "stopped" } else { "ready" }));
                 0
