@@ -26,6 +26,7 @@ fn usage() -> ! { eprintln!("usage: macppc-run [--census] [--run] [--insns N] [-
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut dump: Vec<(u32, u32)> = Vec::new();
+    let mut find: Vec<u32> = Vec::new();
     let (mut census, mut strict, mut data, mut run, mut insns, mut rsrc, mut pcs, mut libdir, mut idle) = (false, false, None, false, 50_000_000u64, None, 0usize, None::<PathBuf>, 0u32);
     let (mut tier, mut prof) = (None::<retro_ppc::Tier>, false);
     while let Some(a) = args.first().cloned() {
@@ -61,6 +62,12 @@ fn main() {
                 let a = args.remove(0);
                 let (at, n) = a.split_once(':').unwrap_or((&a, "16"));
                 dump.push((u32::from_str_radix(at.trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()), n.parse().unwrap_or_else(|_| usage())));
+            }
+            "--find" => {
+                // `--find HEXWORD`: after the run stops, list every 4-aligned guest address (up to 64) holding that big-endian word
+                args.remove(0);
+                if args.is_empty() { usage() }
+                find.push(u32::from_str_radix(args.remove(0).trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()));
             }
             "--data" => { args.remove(0); if args.is_empty() { usage() } data = Some(PathBuf::from(args.remove(0))); }
             _ => break,
@@ -144,6 +151,12 @@ fn main() {
             Step::Fault(f) => { if let Some(n) = f.strip_prefix("NEXT-NEEDED ") { stopped_at = Some(n.to_string()); } f.clone() }
         };
         println!("RAN {n} PowerPC instructions: {why}");
+        for w in &find {
+            let mut hits = Vec::new();
+            let mut a = 0u32;
+            while (a as usize) + 4 <= m.mac.mem.len() && hits.len() < 64 { if m.mac.mem.read_u32(a).ok() == Some(*w) { hits.push(format!("{a:#x}")); } a += 4; }
+            println!("find {w:#x}: {}", hits.join(" "));
+        }
         for (at, n) in &dump {
             print!("dump {at:#x}:");
             for i in 0..*n { print!(" {:08x}", m.mac.mem.read_u32(at + 4 * i).unwrap_or(0xDEAD_DEAD)); }
