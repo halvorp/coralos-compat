@@ -35,10 +35,21 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA852, &[], None, hide_cursor::<U>)?;
     m.register(0xA853, &[], None, show_cursor::<U>)?;
     m.register(0xA856, &[], None, obscure_cursor::<U>)?;
+    m.register(0xA855, &[Arg::L, Arg::L], None, shield_cursor::<U>)?;
     m.register(0xAA1B, &[Arg::W], Some(Arg::L), get_c_cursor::<U>)?;
     m.register(0xAA1C, &[Arg::L], None, set_c_cursor::<U>)?;
     m.register(0xAA26, &[Arg::L], None, dispose_c_cursor::<U>)?;
     m.register(0xAA1D, &[], None, |_, _, _| Ok(Done { result: 0, log: "[toolbox] AllocCursor (nothing to preallocate: the host owns the pointer)".into() }))
+}
+
+/// `PROCEDURE ShieldCursor(shieldRect: Rect; offsetPt: Point)` (Inside Macintosh V-?; the cursor is hidden while it is in `shieldRect`,
+/// which a program asks for before it draws there, because the ROM draws the pointer INTO the screen bits and would be smeared). The
+/// host owns the pointer here and never draws it into the program's pixels, so there is nothing to protect; the rectangle is read (a wild
+/// pointer is still a named refusal) and the call is logged.
+fn shield_cursor<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let r = crate::pascal::read_rect(&m.mem, c.args.get(0))?;
+    let pt = c.args.get(1);
+    Ok(Done { result: 0, log: format!("[toolbox] ShieldCursor ({},{},{},{}) offset ({},{}) (the host draws the pointer outside the program's pixels: nothing to shield)", r.top, r.left, r.bottom, r.right, (pt >> 16) as i16, pt as i16) })
 }
 
 /// sizeof(CCrsr).

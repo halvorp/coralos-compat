@@ -346,3 +346,22 @@ fn get_scrap_copies_into_a_handle_and_resizes_it() {
     assert_eq!(m.handle_bytes(h).unwrap(), b"0123456789", "the handle grew from 2 to 10 bytes and holds the scrap");
     let _ = pstr("x");
 }
+
+#[test]
+fn shield_cursor_reads_its_rectangle_and_a_wild_pointer_is_refused_by_name() {
+    let run = |rect_at: u32| {
+        let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+        m.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).unwrap(); // the top address byte counts, so 0x7FFF_FFF0 is off the end of RAM
+        let mut p = Prog::new();
+        p.l(rect_at).l((5 << 16) | 6).trap(0xA855).exit();
+        m.start(&p.0, 0).unwrap();
+        for (i, v) in [10i16, 20, 30, 40].into_iter().enumerate() { m.mem.write_u16(0x3000 + 2 * i as u32, v as u16).unwrap(); } // after start: it resets RAM
+        let _ = m.run_loop(100_000);
+        m
+    };
+    let m = run(0x3000);
+    assert!(m.log.iter().any(|l| l.contains("ShieldCursor (10,20,30,40) offset (5,6)")), "{:#?}", m.log);
+    assert!(m.refused.is_empty());
+    let m = run(0x7FFF_FFF0); // a rectangle that is not in RAM
+    assert!(m.refused.iter().any(|r| r.contains("ShieldCursor")), "{:?}", m.refused);
+}
