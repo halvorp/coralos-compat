@@ -20,14 +20,14 @@ const SCREEN_ACTIVE: u16 = 1 << 11;
 pub struct SysState { location: [u8; 12] }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SysFn { DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr }
+pub enum SysFn { DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr, DMGetDisplayIDByGDevice }
 
 impl SysFn {
     pub fn by_name(name: &str) -> Option<SysFn> {
         use SysFn::*;
         Some(match name {
             "DMGetFirstScreenDevice" => DMGetFirstScreenDevice, "DMGetNextScreenDevice" => DMGetNextScreenDevice,
-            "ReadLocation" => ReadLocation, "WriteLocation" => WriteLocation, "DebugStr" => DebugStr,
+            "ReadLocation" => ReadLocation, "WriteLocation" => WriteLocation, "DMGetDisplayIDByGDevice" => DMGetDisplayIDByGDevice, "DebugStr" => DebugStr,
             _ => return None,
         })
     }
@@ -55,6 +55,14 @@ impl<U: GuestUi> MacPpc<U> {
                     Some(i) if a0 != 0 => list[i + 1..].iter().copied().find(|&d| self.qualifies(d, a1 & 0xFF != 0)).unwrap_or(0),
                     _ => 0,
                 }
+            }
+            // DMGetDisplayIDByGDevice(device, &displayID, failToMain) -> OSErr (spec: macos9-specs/Misc/DMGetDisplayIDByGDevice): the main display is id 1; a device that is not a
+            // screen is kDMGenErr (-71130) unless failToMain substitutes the main device; a NULL out pointer is paramErr
+            DMGetDisplayIDByGDevice => {
+                let a2 = arg(self, cpu, 2)?;
+                if a1 == 0 { (-50i32) as u32 } else if self.qualifies(a0, false) || a2 & 0xFF != 0 {
+                    self.mac.mem.write_u32(a1, 1).map_err(|_| format!("{n}: the result pointer leaves guest RAM"))?; 0
+                } else { (-71130i32) as u32 }
             }
             ReadLocation => { let loc = self.sys.location; self.put_bytes(a0, &loc, &n)?; 0 }
             WriteLocation => { let b = self.get_bytes(a0, 12, &n)?; self.sys.location.copy_from_slice(&b); 0 }

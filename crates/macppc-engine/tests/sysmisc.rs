@@ -27,6 +27,12 @@ fn one_display_the_screen_device_walk() {
     assert_eq!((call(&mut m, "DMGetFirstScreenDevice", &[1]), call(&mut m, "DMGetFirstScreenDevice", &[0])), (main, main));
     assert_eq!(call(&mut m, "DMGetNextScreenDevice", &[main, 1]), 0);
     assert_eq!(call(&mut m, "DMGetNextScreenDevice", &[0, 0]), 0);
+    // DMGetDisplayIDByGDevice: the main display is id 1; a non-screen handle is kDMGenErr unless failToMain; a NULL out is paramErr (spec: Misc/DMGetDisplayIDByGDevice)
+    assert_eq!(call(&mut m, "DMGetDisplayIDByGDevice", &[main, OUT, 0]), 0);
+    assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 1);
+    assert_eq!(call(&mut m, "DMGetDisplayIDByGDevice", &[0x1234, OUT, 0]) as i32, -71130);
+    assert_eq!(call(&mut m, "DMGetDisplayIDByGDevice", &[0x1234, OUT, 1]), 0);
+    assert_eq!(call(&mut m, "DMGetDisplayIDByGDevice", &[main, 0, 0]) as i32, -50);
     // NEGATIVE control: a handle that is not in the device list has no successor
     assert_eq!(call(&mut m, "DMGetNextScreenDevice", &[0x1234, 0]), 0);
 }

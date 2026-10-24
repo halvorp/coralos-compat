@@ -43,6 +43,7 @@ pub mod alias_c;
 pub mod carbon_ctl;
 pub mod cf_more;
 pub mod decimal;
+pub mod dsp_c;
 pub mod script_c;
 pub mod stdalert_c;
 pub mod sysmisc_c;

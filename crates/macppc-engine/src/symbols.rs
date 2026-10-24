@@ -70,6 +70,8 @@ pub enum Native { StandardAlert, GetSharedLibrary, FindSymbol, CloseConnection, 
     Mn(crate::menu_c::MnFn),
     /// DM screen devices, the machine location, DebugStr ([`crate::sysmisc_c`]).
     Sys(crate::sysmisc_c::SysFn),
+    /// DrawSprocket, windowed ([`crate::dsp_c`]).
+    Dsp(crate::dsp_c::DspFn),
     /// A Text Services Manager document call, no input method ([`crate::tsm_c`]).
     Tsm(crate::tsm_c::TsmFn),
     /// A Script Manager call, Roman only ([`crate::script_c`]).
@@ -123,6 +125,7 @@ impl Native {
             n if crate::pb::PbCall::by_name(n).is_some() => Native::Pb(crate::pb::PbCall::by_name(n).expect("checked")),
             n if crate::menu_c::MnFn::by_name(n).is_some() => Native::Mn(crate::menu_c::MnFn::by_name(n).expect("checked")),
             n if crate::sysmisc_c::SysFn::by_name(n).is_some() => Native::Sys(crate::sysmisc_c::SysFn::by_name(n).expect("checked")),
+            n if crate::dsp_c::DspFn::by_name(n).is_some() => Native::Dsp(crate::dsp_c::DspFn::by_name(n).expect("checked")),
             n if crate::tsm_c::TsmFn::by_name(n).is_some() => Native::Tsm(crate::tsm_c::TsmFn::by_name(n).expect("checked")),
             n if crate::script_c::ScFn::by_name(n).is_some() => Native::Sc(crate::script_c::ScFn::by_name(n).expect("checked")),
             n if crate::carbon_ctl::CxFn::by_name(n).is_some() => Native::Cx(crate::carbon_ctl::CxFn::by_name(n).expect("checked")),
