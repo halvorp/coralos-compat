@@ -116,3 +116,11 @@ Next walls (census): styled TextEdit (`TEStyleNew`: SimpleText 1.4, Toolbox Show
 (WriteNow 2.0 / 2.2 call `PtInRgn` on NIL `contRgn`), `SetDialogItem` (a user item's draw procedure is a guest callback), PICT v2
 (`DrawPicture` of Moving Van's pictures), the List Manager's scroll-bar controls (`vScroll` is NIL, so `SetCRefCon(NIL)` is
 refused), `ModalDialog` filter procedures.
+
+## Host requirements the engine states (CoralOS RetroCompat host)
+
+* **`WindowRole::Utility` as a palette window.** A program's own window definition is presented natively only through an explicit
+  binding entry (`wdef_binding.rs`: id, byte length and FNV-1a digest of the `WDEF`; no definition code is stored or run). The first
+  entry is MacPaint 2.1F's floating palette (WDEF 34, procID 544), bound to `Utility`, not resizable. The host maps `Utility` to a
+  small-title-bar palette frame that floats above the document windows (kit gap 15: Dialog is framed today, Utility is not yet). A host
+  without it refuses `open_window` by name; the engine reports the refusal to the program.
