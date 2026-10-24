@@ -114,7 +114,7 @@ fn im_draw_step<U: GuestUi>(a: &mut Amiga<U>, job: DrawJob) -> Result<crate::gue
     use crate::guest_call::Next;
     let cl = a.classes.class_of(job.im).ok_or_else(|| Refusal(format!("{}: {:#x} is not a BOOPSI object", job.what, job.im)))?;
     let entry = a.mem.read_u32(cl + crate::boopsi_ids::CL_H_ENTRY).map_err(Refusal::mem("cl_Dispatcher.h_Entry"))?;
-    let msg = crate::boopsi_send::make_msg(a, &[crate::boopsi_ids::IM_DRAW, job.rp, ((job.left as u16 as u32) << 16) | job.top as u16 as u32, job.state, job.dri])?;
+    let msg = crate::boopsi_send::make_msg(a, &[crate::boopsi_ids::IM_DRAW, job.rp, crate::boopsi_send::xy(job.left, job.top), job.state, job.dri])?;
     let (obj, next_im) = (job.im, read_image(a, job.im)?.next);
     let then = alloc::boxed::Box::new(move |a: &mut Amiga<U>, cpu: &mut Cpu, _d0: u32| {
         a.heap.free(msg, crate::boopsi_send::MSG_BLOCK).map_err(|e| Refusal(format!("BOOPSI message: {e}")))?;

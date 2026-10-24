@@ -152,7 +152,7 @@ fn issue<U: GuestUi>(a: &mut Amiga<U>, mut job: Job) -> Result<Next<U>, Refusal>
     let (mx, my) = (job.x - l, job.y - t);
     let s = job.scratch;
     let e = Refusal::mem("gadget input message");
-    let xy = ((mx as u16 as u32) << 16) | (my as u16 as u32);
+    let xy = crate::boopsi_send::xy(mx, my);
     match job.stage {
         Stage::Hit => { a.mem.write_u32(s, GM_HITTEST).map_err(&e)?; a.mem.write_u32(s + 4, job.gi).map_err(&e)?; a.mem.write_u32(s + GPHT_MOUSE, xy).map_err(&e)?; }
         Stage::GoActive | Stage::Input => {

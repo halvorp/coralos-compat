@@ -26,6 +26,11 @@ pub fn send<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, class: u32, obj: u32, m
     guest_call::start(a, cpu, Next::Call { target: entry, d0: 0, aregs: vec![(0, class), (1, msg), (2, obj)], then })
 }
 
+/// A `struct { WORD X; WORD Y; }` (impPos, gpht_Mouse, gpi_Mouse ...) as the one longword a message carries: X high, Y low.
+pub fn xy(x: i32, y: i32) -> u32 {
+    ((x as u16 as u32) << 16) | y as u16 as u32
+}
+
 /// A scratch message of up to 32 bytes, longwords from `words`.
 pub fn make_msg<U: GuestUi>(a: &mut Amiga<U>, words: &[u32]) -> Result<u32, Refusal> {
     let m = memory::alloc_zeroed(a, MSG_BLOCK, "BOOPSI message")?;
