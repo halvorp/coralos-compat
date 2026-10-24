@@ -25,14 +25,18 @@ ANCHORS = {("timer.device","GetSysTime"):-66,("timer.device","AddTime"):-42,("ti
 # AROS's locale.conf lists its functions without the NDK's one extra reserved vector (locale_lib.fd is "##bias 36": CloseCatalog -36),
 # yet AmigaOS binaries call GetCatalogStr at -72 and OpenCatalogA at -150 (measured in the real AROS m68k Snoopy: `jsr -72(a6)`
 # then `jsr -150(a6)`). Extra reserved vectors per library, before the first listed function.
-EXTRA_RESERVED = {"locale": 1}
+EXTRA_RESERVED = {}  # was {"locale": 1}: that vector is the blank line at locale.conf:34, which the generator now counts as genmodule does
 def parse(path, extra=0):
     L = open(path).read().split("\n")
     s = next(i for i, l in enumerate(L) if l.strip() == "##begin functionlist")
     entries = []  # (index, name or None)
     for l in L[s + 1:]:
+        raw = l
         l = l.split("#")[0].strip() if not l.strip().startswith("##") else l.strip()
         if l == "##end functionlist": break
+        # genmodule (tools/genmodule/config.c:1695-1710): an EMPTY (or blank) line is one reserved vector (lvo++); a line whose first
+        # character is '#' is a comment and counts for nothing (config.c:1895).
+        if not raw.strip(): entries.append(None); continue
         if not l: continue
         m = re.match(r"\.skip\s+(\d+)", l)
         if m: entries += [None] * int(m.group(1)); continue
