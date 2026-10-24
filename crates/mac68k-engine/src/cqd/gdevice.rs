@@ -8,10 +8,8 @@
 //! gdPMap 22 (PixMapHandle)  gdRefCon 26 (LONGINT)  gdNextGD 30 (GDHandle)  gdRect 34  gdMode 42  gdCCBytes 46  gdCCDepth 48
 //! gdCCXData 50  gdCCXMask 54  gdReserved 58                                                             = 62 bytes
 //! ```
-//! (Until 2026-10-24 the table here put gdRefCon at 24, overlapping the 4-byte `gdPMap`, and every later field two bytes early, so a
-//! program that read `(**GetMainDevice()).gdRect` itself - SimpleText 1.3 sizing its first window - got the screen's bottom, right and
-//! the high half of `gdMode` instead. Inside Macintosh sums to 62 bytes only with `gdPMap` 4 bytes wide; systemless writes `gdRect.top`
-//! at +34.)
+//! (`gdPMap` is a 4-byte handle: Inside Macintosh's fields sum to 62 bytes only so, and systemless writes `gdRect.top` at +34.
+//! Programs read `(**GetMainDevice()).gdRect` themselves, so every offset here is load-bearing.)
 //! `gdFlags` bits (Quickdraw.h): 0 gdDevType (color), 10 ramInit, 11 mainScreen, 12 allInit, 13 screenDevice, 14 noDriver,
 //! 15 screenActive. `gdITable` is NIL: the inverse table is not modelled (`Color2Index` is answered by the engine).
 use super::color;
