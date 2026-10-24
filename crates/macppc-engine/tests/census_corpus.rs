@@ -39,7 +39,7 @@ fn retro68_ppc_samples_bind_their_interfacelib_imports_and_stop_at_the_first_rou
         if needed.is_empty() { assert!(c.next_needed.is_empty(), "{app}: {:?}", c.next_needed); } else {
             assert!(c.next_needed.iter().any(|n| n.ends_with(&format!("/{needed}"))), "{app}: {needed} is unbound (named, not silent): {:?}", c.next_needed);
         }
-        let waits = if app == "Dialog" { "ModalDialog 0x245210 blocks" } else { "WaitNextEvent" };
+        let waits = if app == "Dialog" { "ModalDialog 0x245228 blocks" } else { "WaitNextEvent" };
         assert!(log.iter().any(|l| l.contains(waits)), "{app} reached its event loop: {log:#?}");
     }
     let Some((_, log, _)) = run("HelloWorld") else { return };
@@ -48,8 +48,8 @@ fn retro68_ppc_samples_bind_their_interfacelib_imports_and_stop_at_the_first_rou
     // draws the default button's outline (PenSize 3x3, FrameRoundRect) and returns; ModalDialog then waits for a hit
     let Some((_, log, _)) = run("Dialog") else { return };
     let at = |needle: &str| log.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}: {log:#?}"));
-    assert!(at("[mixedmode] NewRoutineDescriptor") < at("[mixedmode] user item 2 of 0x245210"));
-    assert!(at("[mixedmode] user item 2 of 0x245210") < at("[quickdraw] FrameRoundRect") && at("[quickdraw] FrameRoundRect") < at("ModalDialog 0x245210 blocks"));
+    assert!(at("[mixedmode] NewRoutineDescriptor") < at("[mixedmode] user item 2 of 0x245228"));
+    assert!(at("[mixedmode] user item 2 of 0x245228") < at("[quickdraw] FrameRoundRect") && at("[quickdraw] FrameRoundRect") < at("ModalDialog 0x245228 blocks"));
     // The Retro68 runtime's File Manager imports (FSRead, FSWrite, FSClose, GetFPos, SetFPos, FlushVol, GetVRefNum ...) are bound since `files.rs`.
     for f in ["FSRead", "FSWrite", "FSClose", "GetFPos", "SetFPos", "FlushVol", "GetVRefNum"] {
         let Some((c, _, _)) = run("HelloWorld") else { return };

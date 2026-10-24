@@ -54,7 +54,10 @@ fn the_real_application_starts_up_loads_its_menus_and_stops_at_tenew() {
     assert!(log.contains("GetMenu 142 -> menu 142 \"Renderer\" 3 items") && log.contains("DrawMenuBar: 4 menus"), "{log}");
     // ...and stops at TENew (TextEdit), by name, with the interpreter's instruction count. It used to stop earlier, at SetPalette:
     // the PowerPC import name of NSetPalette (symbols.rs INTERFACELIB_ALIASES); the colour window and its palette now go through.
-    assert!(matches!(&step, Step::Fault(f) if f.starts_with("NEXT-NEEDED TENew")), "{step:?}");
+    // 2026-10-24: mac68k-engine's TextEdit (textedit/) answers TENew, so the run goes on to the next import with no handler: the PowerPC
+    // List Manager's LNew (a PowerPC name of the _Pack0 selector; macppc's concern).
+    assert!(matches!(&step, Step::Fault(f) if f.starts_with("NEXT-NEEDED LNew")), "{step:?}");
+    assert!(m.mac.log.iter().any(|l| l.starts_with("[textedit] TENew")), "TENew ran: {:#?}", m.mac.log);
     assert!(insns > 400, "{insns} PowerPC instructions executed: past the SetPalette that used to stop it");
     // negative control: without the resource fork the same code asks for MBAR 128, finds none, and the application quits
     let (mut m2, _) = load(&pef, None);
