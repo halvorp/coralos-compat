@@ -119,6 +119,10 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 self.finish(name, r, Some(Arg::B), regs)
             }
+            Native::StandardAlert => {
+                let args = match self.arg_values(5, regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("StandardAlert: {e}")) };
+                match self.standard_alert(&args) { Ok(None) => GlueOutcome::Idle, Ok(Some(e)) => { regs[3] = e; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
             Native::ModalDialog => {
                 // filterProc, VAR itemHit. The shared handler returns a queued hit or asks to block; a blocked call parks the CPU
                 // ON the call and the run loop retries it once the front dialog has a hit (`Mac::modal_ready`).

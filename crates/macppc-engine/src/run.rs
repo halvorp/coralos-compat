@@ -43,6 +43,8 @@ pub struct Runtime {
     pub(crate) wait_timed_out: bool,
     /// Set by a `ModalDialog` that parked the CPU: it resumes when the front dialog has an item hit.
     pub(crate) wait_dialog: bool,
+    /// A `StandardAlert` is parked on the host's answer ([`crate::stdalert_c`]).
+    pub(crate) std_alert: bool,
     /// `main`'s entry state, held while the init routine runs.
     after_init: Option<StartState>,
     /// Init routines still to run before `main` (the libraries' and the application's), in order.

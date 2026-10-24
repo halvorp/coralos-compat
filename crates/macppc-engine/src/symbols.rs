@@ -19,7 +19,7 @@ use mac68k_engine::Mac;
 /// used as it is: the 68k event calls suspend a 68k guest through its run loop, so the PowerPC adapter ([`crate::natives`]) polls
 /// the handler with `sleep = 0` and parks the CPU itself (`WaitNextEvent` with a sleep); `GetNextEvent` never waits; `ModalDialog` is parked the same way, on the front dialog's item hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent, ModalDialog, SysBeep,
+pub enum Native { StandardAlert, GetSharedLibrary, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent, ModalDialog, SysBeep,
     /// `HasDepth` / `SetDepth`: selectors of the 68k `PaletteDispatch` trap, so they have no trap name of their own; the shared routines in `cqd::depth`.
     HasDepth, SetDepth,
     /// StdCLib `__setjmp`, `exit`, `_BreakPoint`: they need the CPU's registers, so [`crate::run`] serves them, not `glue_call`.
@@ -112,7 +112,7 @@ impl Native {
     pub fn by_name(name: &str) -> Option<Native> {
         Some(match name {
             "GetSharedLibrary" => Native::GetSharedLibrary, "FindSymbol" => Native::FindSymbol, "CloseConnection" => Native::CloseConnection,
-            "MemError" => Native::MemError, "WaitNextEvent" => Native::WaitNextEvent, "GetNextEvent" => Native::GetNextEvent, "ModalDialog" => Native::ModalDialog, "BlockZero" => Native::BlockZero, "SysBeep" => Native::SysBeep, "ExitToShell" => Native::Exit, "HasDepth" => Native::HasDepth, "SetDepth" => Native::SetDepth,
+            "MemError" => Native::MemError, "WaitNextEvent" => Native::WaitNextEvent, "GetNextEvent" => Native::GetNextEvent, "ModalDialog" => Native::ModalDialog, "StandardAlert" => Native::StandardAlert, "BlockZero" => Native::BlockZero, "SysBeep" => Native::SysBeep, "ExitToShell" => Native::Exit, "HasDepth" => Native::HasDepth, "SetDepth" => Native::SetDepth,
             "NGetTrapAddress" => Native::TrapAddress(TrapQuery::ByType), "GetOSTrapAddress" => Native::TrapAddress(TrapQuery::Os),
             "GetToolTrapAddress" => Native::TrapAddress(TrapQuery::Tool), "GetTrapAddress" => Native::TrapAddress(TrapQuery::Old),
             "NewRoutineDescriptor" => Native::NewRoutineDescriptor, "NewFatRoutineDescriptor" => Native::NewFatRoutineDescriptor,
