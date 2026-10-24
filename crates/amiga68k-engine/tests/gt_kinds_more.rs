@@ -328,11 +328,12 @@ fn a_number_format_that_would_read_more_than_the_number_is_refused_by_name_and_m
 }
 
 #[test]
-fn palette_stays_a_named_refusal() {
+fn palette_is_a_swatches_control_now() {
+    // It was a named refusal while guestui-abi had no swatch role; tests/gt_palette.rs holds its behaviour.
     let mut m = M::new();
     let ng = new_gadget(&mut m, None, 1);
     let glist = DATA - 8;
     m.run(&[gt(LVO_CREATE_CONTEXT, &[a(0, glist)]), gt(LVO_CREATE_GADGET, &[d(0, PALETTE), a_res(0, 0), a(1, ng), a(2, 0)])]);
-    assert_eq!(m.result(1), 0);
-    assert!(m.a.refused.iter().any(|x| x.contains("PALETTE_KIND") && x.contains("no swatch role")), "{:?}", m.a.refused);
+    assert_ne!(m.result(1), 0, "{:?}", m.a.refused);
+    assert!(!m.a.refused.iter().any(|x| x.contains("PALETTE_KIND")), "{:?}", m.a.refused);
 }
