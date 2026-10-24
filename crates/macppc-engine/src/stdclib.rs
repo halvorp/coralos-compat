@@ -36,6 +36,12 @@ pub fn lookup(name: &str) -> Option<Binding> {
         "_IntEnv" => Binding::CData(INT_ENV_BYTES),
         "__C_phase" | "_exit_status" | "__NubAt3" => Binding::CData(4),
         "__target_for_exit" => Binding::CData(4 * CLASSIC_JUMP_BUF_WORDS),
-        _ => return None,
+        _ => return crate::clib::CFn::by_name(name).map(|f| Binding::Native(Native::C(f))),
     })
 }
+
+/// The library name for MathLib imports.
+pub const MATH_NAME: &str = "MathLib";
+
+/// How `name` is served by MathLib.
+pub fn math_lookup(name: &str) -> Option<Binding> { crate::clib_math::MathFn::by_name(name).map(|f| Binding::Native(Native::Math(f))) }

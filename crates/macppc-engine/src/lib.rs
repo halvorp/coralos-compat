@@ -35,6 +35,10 @@ pub mod source;
 pub mod stdclib;
 pub mod symbols;
 pub mod callback;
+pub mod clib;
+pub mod clib_fmt;
+pub mod clib_math;
+pub mod clib_num;
 
 pub use error::CfmError;
 pub use host::{GlueOutcome, PpcHost};

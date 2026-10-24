@@ -40,7 +40,11 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     /// A `Files.h` routine (`FSRead`, `HOpen`, `GetVol` ...): the C glue over the 68k engine's File Manager traps ([`crate::files`]).
     File(crate::files::FileCall),
     /// A register-convention OS routine with pointer outputs or packed arguments ([`crate::osroutines`]).
-    Os(crate::osroutines::OsRoutine) }
+    Os(crate::osroutines::OsRoutine),
+    /// A StdCLib function served natively over guest memory and the PowerPC argument registers ([`crate::clib`]).
+    C(crate::clib::CFn),
+    /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.
+    Math(crate::clib_math::MathFn) }
 
 /// Which trap table a [`Native::TrapAddress`] import names, as the calling 68k trap word's type bits would.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -227,7 +227,7 @@ fn budget_spent_resumes_where_it_stopped() {
 #[test]
 fn stdclib_runtime_state_setjmp_and_exit() {
     // __setjmp(&__target_for_exit) ; exit(7): the jmp_buf holds r1, r2 and the caller's LR; _exit_status becomes 7; the run ends
-    let libs: &[fixture::Lib] = &[("StdCLib", false, &[("__target_for_exit", SymbolClass::Data, false), ("_exit_status", SymbolClass::Data, false), ("__setjmp", SymbolClass::TVector, false), ("exit", SymbolClass::TVector, false), ("memcpy", SymbolClass::TVector, false)])];
+    let libs: &[fixture::Lib] = &[("StdCLib", false, &[("__target_for_exit", SymbolClass::Data, false), ("_exit_status", SymbolClass::Data, false), ("__setjmp", SymbolClass::TVector, false), ("exit", SymbolClass::TVector, false), ("qsort", SymbolClass::TVector, false)])];
     let mut a = Asm::new();
     a.mflr(0).stw(0, 8, 1).stwu(1, -64, 1);
     a.lwz(3, 8, 2).call_toc(16).stw(3, 40, 1); // r3 = &jmp_buf; __setjmp returns 0
@@ -246,8 +246,8 @@ fn stdclib_runtime_state_setjmp_and_exit() {
     // provide is NEXT-NEEDED by name rather than being served by a Toolbox handler of the same name
     assert_ne!(imp("_exit_status"), buf);
     let c = macppc_engine::census::Census::of(&frag);
-    assert_eq!(c.next_needed, ["StdCLib/memcpy"]);
-    assert!(c.lines.iter().any(|l| l.contains("memcpy") && l.contains("not in the part of StdCLib")), "{:?}", c.lines);
+    assert_eq!(c.next_needed, ["StdCLib/qsort"]);
+    assert!(c.lines.iter().any(|l| l.contains("qsort") && l.contains("not in the part of StdCLib")), "{:?}", c.lines);
 }
 
 #[test]

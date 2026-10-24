@@ -47,6 +47,10 @@ pub struct Runtime {
     after_init: Option<StartState>,
     /// The scratch File Manager parameter block (`crate::files`), allocated on first use.
     pub(crate) fm_pb: Option<u32>,
+    /// `rand`'s state and the last `errno` a native set.
+    pub(crate) rand: u32,
+    pub(crate) rand_seeded: bool,
+    pub(crate) errno: u32,
     main_tvector: u32,
     /// A refusal or CPU trap; once set, every step reports it again (the program cannot continue).
     fault: Option<String>,
@@ -183,6 +187,19 @@ impl<U: GuestUi> Host for MacPpc<U> {
             return true;
         }
         if let Some(Binding::Native(n @ (Native::SetJmp | Native::CExit | Native::BreakPoint))) = self.bindings.get(&symbol).cloned() { self.cpu_native(n, cpu); return true; }
+        match self.bindings.get(&symbol).cloned() {
+            Some(Binding::Native(Native::C(f))) => {
+                if let Err(why) = self.c_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
+                self.sync_natives(cpu);
+                return true;
+            }
+            Some(Binding::Native(Native::Math(f))) => {
+                if let Err(why) = self.math_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
+                self.sync_natives(cpu);
+                return true;
+            }
+            _ => {}
+        }
         if symbol == crate::callback::CALLBACK_RETURN {
             if let Err(why) = self.callback_returned(cpu) { self.rt.fault = Some(why); cpu.halt(); }
             self.sync_natives(cpu);

@@ -65,6 +65,7 @@ name = "macppc-engine"
 version = "0.1.0"
 dependencies = [
  "guestui-abi",
+ "libm",
  "mac68k-engine",
  "macppc-engine",
  "retro-common",

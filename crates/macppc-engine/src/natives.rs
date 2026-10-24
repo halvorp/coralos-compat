@@ -23,7 +23,7 @@ pub const SYMBOL_CLASS_TVECTOR: u8 = 2;
 /// The libraries `GetSharedLibrary` can hand out: the ones whose symbols the binding table resolves.
 /// Whether the engine provides library `l`: the Toolbox libraries (one list, [`crate::glue::TOOLBOX_LIBRARIES`]) and StdCLib.
 pub fn provided(l: &str) -> bool {
-    crate::glue::TOOLBOX_LIBRARIES.contains(&l) || l == crate::stdclib::NAME
+    crate::glue::TOOLBOX_LIBRARIES.contains(&l) || l == crate::stdclib::NAME || l == crate::stdclib::MATH_NAME
 }
 
 fn err(e: i16) -> u32 { e as i32 as u32 }
@@ -132,6 +132,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let args = match self.arg_values(c.arg_count(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{c:?}: {e}")) };
                 match self.os_routine(c, &args) { Ok(v) => { regs[3] = v; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::C(_) | Native::Math(_) => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
             Native::BlockZero => {
                 let (dest, n) = (a(0), a(1));

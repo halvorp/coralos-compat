@@ -29,6 +29,8 @@ pub struct MacPpc<U: GuestUi> {
     /// names this list.
     pub unbound_data: Vec<String>,
     pub(crate) cdata: BTreeMap<String, u32>,
+    /// Everything the program wrote with `printf`/`puts`/`putchar`: there is no console device, so the bytes are kept here (and logged).
+    pub console: Vec<u8>,
 }
 
 impl<U: GuestUi> MacPpc<U> {
@@ -36,7 +38,7 @@ impl<U: GuestUi> MacPpc<U> {
         let mut mac = Mac::new(ui).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), console: Vec::new() })
     }
 
     /// The binding for `name`, computed once against the handlers `mac` has registered.
@@ -64,7 +66,19 @@ impl<U: GuestUi> MacPpc<U> {
         match lib {
             crate::stdclib::NAME => match crate::stdclib::lookup(name) {
                 Some(b) => { self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
-                None => Binding::Unbound(alloc::format!("{name} is not in the part of StdCLib this engine provides")),
+                None => {
+                    let b = Binding::Unbound(alloc::format!("{name} is not in the part of StdCLib this engine provides"));
+                    self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
+                    b
+                }
+            },
+            crate::stdclib::MATH_NAME => match crate::stdclib::math_lookup(name) {
+                Some(b) => { self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
+                None => {
+                    let b = Binding::Unbound(alloc::format!("{name} is not in the part of MathLib this engine provides"));
+                    self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
+                    b
+                }
             },
             l if crate::natives::provided(l) => self.bind(name),
             l => {
