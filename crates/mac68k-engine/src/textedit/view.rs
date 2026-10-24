@@ -14,6 +14,8 @@ pub const T_HIDDEN: u32 = 66;
 pub const HIDDEN_SIZE: u32 = 20;
 pub const HIDDEN_FLAGS: u32 = 16;
 pub const AUTO_VIEW_BIT: u32 = 1;
+/// `teFOutlineHilite`: a deactivated record shows its selection as an outline instead of not at all.
+pub const OUTLINE_BIT: u32 = 2;
 
 impl<U: GuestUi> Mac<U> {
     fn te_hidden(&self, h: u32) -> Result<u32, Refusal> {
@@ -21,13 +23,15 @@ impl<U: GuestUi> Mac<U> {
         let hh = self.r32(p, T_HIDDEN)?;
         self.mm.block(hh).map(|b| b.ptr).ok_or_else(|| Refusal(format!("TextEdit: the record {h:#x} has no hidden record (recalBack {hh:#x} is not a live handle)")))
     }
-    pub(super) fn te_auto_view(&self, h: u32) -> Result<bool, Refusal> {
-        Ok(self.mem.read_u32(self.te_hidden(h)? + HIDDEN_FLAGS).map_err(Refusal::mem("TEHidden"))? & AUTO_VIEW_BIT != 0)
+    pub(super) fn te_auto_view(&self, h: u32) -> Result<bool, Refusal> { self.te_flag(h, AUTO_VIEW_BIT) }
+    pub(super) fn te_set_auto_view(&mut self, h: u32, on: bool) -> Result<(), Refusal> { self.te_set_flag(h, AUTO_VIEW_BIT, on) }
+    pub(super) fn te_flag(&self, h: u32, bit: u32) -> Result<bool, Refusal> {
+        Ok(self.mem.read_u32(self.te_hidden(h)? + HIDDEN_FLAGS).map_err(Refusal::mem("TEHidden"))? & bit != 0)
     }
-    pub(super) fn te_set_auto_view(&mut self, h: u32, on: bool) -> Result<(), Refusal> {
+    pub(super) fn te_set_flag(&mut self, h: u32, bit: u32, on: bool) -> Result<(), Refusal> {
         let at = self.te_hidden(h)? + HIDDEN_FLAGS;
         let f = self.mem.read_u32(at).map_err(Refusal::mem("TEHidden"))?;
-        self.mem.write_u32(at, if on { f | AUTO_VIEW_BIT } else { f & !AUTO_VIEW_BIT }).map_err(Refusal::mem("TEHidden"))
+        self.mem.write_u32(at, if on { f | bit } else { f & !bit }).map_err(Refusal::mem("TEHidden"))
     }
 
     /// `TEPinScroll`: scroll by (`dh`, `dv`) but never past the text: `destRect.top` stays at or above `viewRect.top`, the end of the

@@ -267,7 +267,7 @@ fn simpletext_opens_its_untitled_window_with_menus_and_a_scroll_bar_and_parks_in
         assert!(m.ui.calls.iter().any(|c| matches!(c, UiCall::SetMenuStrip(..))) && m.log.iter().any(|l| l.starts_with("[textedit] TEStyleNew")), "{app}: menus and a styled record");
         assert!(m.log.iter().any(|l| l.starts_with("[script] GetScriptManagerVariable")) && m.log.iter().any(|l| l.starts_with("[help] HMGetBalloons")), "{app}");
         // what is still refused is named: the outline-highlight feature flag, GetScriptVariable, the Apple Event selector
-        assert!(m.refused.iter().all(|r| r.contains("TEFeatureFlag") || r.contains("GetScriptVariable") || r.contains("Apple Event")), "{app}: {:?}", m.refused);
+        assert!(m.refused.iter().all(|r| r.contains("GetScriptVariable") || r.contains("Apple Event")), "{app}: {:?}", m.refused);
     }
 }
 

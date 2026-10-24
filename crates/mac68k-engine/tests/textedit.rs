@@ -420,6 +420,32 @@ fn tegetpoint_tegetheight_tegetoffset_and_tenumstyles_answer_from_the_layout() {
 }
 
 #[test]
+fn outline_highlight_frames_a_deactivated_selection_only_when_the_feature_is_set() {
+    // SimpleText 1.3 sets teFOutlineHilite (feature 2): a record that is not active shows its selection as an outline, the way a window
+    // that is not frontmost shows its text selection.
+    let mut g = rig();
+    put(&mut g.m, TEXT, b"hello");
+    go(&mut g, |p| { te_new(p); te_set_text(p, b"hello"); te_cal(p); te_sel(p, 0, 5); te_update(p); });
+    let lh = rec(&g, T_LINE_HEIGHT) as i32;
+    let plain = g.count_in(10, 10, 90, 50);
+    let left_edge = |g: &Rig| g.count_in(10, 10, 11, 10 + lh);
+    assert!(left_edge(&g) < lh as usize, "no frame yet: the edge column is not solid");
+    go(&mut g, |p| { p.clr_w().w(2).w(1).rgn_arg(TEH); disp(p, 14); p.pop_w(RES); p.clr_w().w(2).w(-1).rgn_arg(TEH); disp(p, 14); p.pop_w(RES + 2); });
+    assert_eq!((g.m.mem.read_u16(RES).unwrap(), g.m.mem.read_u16(RES + 2).unwrap()), (0, 1), "set answers the previous state (clear); a test then reads set");
+    go(&mut g, |p| { te_update(p); });
+    assert_eq!(left_edge(&g), lh as usize, "the outline's left edge is solid black");
+    assert_eq!(g.count_in(10, 10 + lh - 1, 50, 10 + lh), 40, "and so is its bottom edge");
+    assert!(g.count_in(10, 10, 90, 50) > plain, "the frame adds ink around the text");
+    // an ACTIVE record inverts as before (no frame): TEActivate then update
+    go(&mut g, |p| { one(p, 0xA9D8); });
+    assert_eq!(g.count_in(10, 10, 90, 10 + lh), 5 * 8 * lh as usize - plain, "active: the plain inversion");
+    // clearing the feature takes the frame away again
+    go(&mut g, |p| { one(p, 0xA9D9); p.clr_w().w(2).w(0).rgn_arg(TEH); disp(p, 14); p.pop_w(RES); te_update(p); });
+    assert_eq!((g.m.mem.read_u16(RES).unwrap(), left_edge(&g) < lh as usize, g.count_in(10, 10, 90, 50)), (1, true, plain));
+    g.no_refusals();
+}
+
+#[test]
 fn unimplemented_dispatch_selectors_and_feature_setting_are_named_and_pop_their_frames() {
     let mut g = rig();
     go(&mut g, |p| { te_style_new(p); });

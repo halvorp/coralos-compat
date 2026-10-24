@@ -24,7 +24,7 @@ pub struct Geo { pub dest: Rect, pub view: Rect, pub line_height: i16, pub ascen
 
 /// What to show on top of the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mark { None, Range(usize, usize), Caret(usize) }
+pub enum Mark { None, Range(usize, usize), Caret(usize), /** a deactivated record's selection with `teFOutlineHilite` set */ Outline(usize, usize) }
 
 fn ir(r: Rect) -> retro_raster::Rect { raster(r) }
 
@@ -51,6 +51,15 @@ fn range_rects(g: &Geo, text: &[u8], starts: &[u16], a: usize, b: usize, w: &dyn
         rg.or_rect(retro_raster::Rect::new(i32::from(g.dest.left) + from, top, i32::from(g.dest.left) + to.max(from), top + i32::from(g.line_height)));
     }
     rg
+}
+
+/// The one-pixel boundary of `r`: its pixels that have a neighbour (left, right, above, below) outside it.
+fn outline_of(r: &Region) -> Region {
+    let mut inner = r.clone();
+    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] { let mut s = r.clone(); s.translate(dx, dy); inner.and_region(&s); }
+    let mut out = r.clone();
+    out.clear_region(&inner);
+    out
 }
 
 /// The width of every byte in the font that is drawn (the layout's `w` function).
@@ -124,6 +133,7 @@ fn lines<U: GuestUi>(m: &mut Mac<U>, port: u32, g: &Geo, text: &[u8], starts: &[
         Mark::None => return Ok(()),
         Mark::Range(a, b) => range_rects(g, text, starts, a, b, &w),
         Mark::Caret(at) => Region::from_rect(ir(caret_rect(g, text, starts, at, &w))),
+        Mark::Outline(a, b) => return paint_region(m, port, &outline_of(&range_rects(g, text, starts, a, b, &w)), PAT_COPY, &BLACK),
     };
     paint_region(m, port, &inverted, PAT_XOR, &BLACK)
 }

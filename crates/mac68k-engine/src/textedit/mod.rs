@@ -158,6 +158,7 @@ impl<U: GuestUi> Mac<U> {
         let r = self.te_load(h, what)?;
         if r.port == 0 { return Ok(()); }
         let mark = match (r.active, r.sel) {
+            (false, (a, b)) if a != b && self.te_flag(h, view::OUTLINE_BIT)? => Mark::Outline(a, b),
             (false, _) => Mark::None,
             (true, (a, b)) if a != b => Mark::Range(a, b),
             (true, (a, _)) if r.caret_state == CARET_VIS => Mark::Caret(a),

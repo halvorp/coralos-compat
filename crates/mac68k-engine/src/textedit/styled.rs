@@ -301,15 +301,16 @@ fn run_selector<U: GuestUi>(m: &mut Mac<U>, sel: u16, sp: u32) -> Result<(Ret, S
             Ok((Ret::Long(n as u32), format!("TENumStyles {start}..{stop} -> {n}")))
         }
         14 => {
-            // feature 0 is teFAutoScroll (the only one modelled: view.rs); action 0 clears, 1 sets, -1 tests; the answer is the PREVIOUS state
+            // feature 0 is teFAutoScroll and 2 teFOutlineHilite (the two modelled: view.rs, draw.rs); action 0 clears, 1 sets, -1 tests; the answer is the PREVIOUS state
             let (action, feature) = (rd16(m, sp + 6)? as i16, rd16(m, sp + 8)? as i16);
-            if feature != 0 {
-                if action == 1 { return Err(Refusal(format!("TEFeatureFlag: setting feature {feature} (text buffering, outline highlight, inline input, text services) is not modelled; it reads as clear"))); }
+            let (bit, what) = match feature { 0 => (view::AUTO_VIEW_BIT, "auto-scroll"), 2 => (view::OUTLINE_BIT, "outline highlight"), _ => (0, "") };
+            if bit == 0 {
+                if action == 1 { return Err(Refusal(format!("TEFeatureFlag: setting feature {feature} (text buffering, inline input, text services) is not modelled; it reads as clear"))); }
                 return Ok((Ret::Word(0), format!("TEFeatureFlag feature {feature} action {action} -> clear")));
             }
-            let was = m.te_auto_view(h)?;
-            if action == 1 || action == 0 { m.te_set_auto_view(h, action == 1)?; }
-            Ok((Ret::Word(u16::from(was)), format!("TEFeatureFlag auto-scroll action {action} -> was {was}")))
+            let was = m.te_flag(h, bit)?;
+            if action == 1 || action == 0 { m.te_set_flag(h, bit, action == 1)?; }
+            Ok((Ret::Word(u16::from(was)), format!("TEFeatureFlag {what} action {action} -> was {was}")))
         }
         other => {
             let name = SEL_FRAMES.iter().find(|f| f.0 == other).map_or("?", |f| f.1);
