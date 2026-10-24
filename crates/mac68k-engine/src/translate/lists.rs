@@ -19,6 +19,7 @@
 //! |---|---|---|---|
 //! | $44 | `LNew` | rView, dataBounds (Rect ptrs), cSize (Point), proc, window, drawIt, hasGrow, scrollH, scrollV | ListHandle |
 //! | $28 | `LDispose` | lHandle | |
+//! | $2C | `LDoDraw` | drawIt, lHandle | (sets / clears `lDrawingModeOff` in `listFlags`) |
 //! | $08 | `LAddRow` | count, rowNum, lHandle | INTEGER (the first new row) |
 //! | $24 | `LDelRow` | count, rowNum, lHandle | |
 //! | $58 | `LSetCell` | dataPtr, dataLen, theCell, lHandle | |
@@ -56,6 +57,9 @@ pub const L_CELL_SIZE: u32 = 16;
 pub const L_VISIBLE: u32 = 20;
 pub const L_SEL_FLAGS: u32 = 36;
 pub const L_ACTIVE: u32 = 37;
+pub const L_LIST_FLAGS: u32 = 39;
+/// `listFlags` bit 3, `lDrawingModeOff`: the program asked the list not to draw (`LDoDraw(FALSE)`).
+pub const L_DRAWING_MODE_OFF: u8 = 0x08;
 pub const L_CLICK_TIME: u32 = 40;
 pub const L_LAST_CLICK: u32 = 56;
 pub const L_DATA_BOUNDS: u32 = 72;
@@ -291,6 +295,17 @@ fn run_selector<U: GuestUi>(m: &mut Mac<U>, sel: u16, sp: u32) -> Result<(u32, S
             (0, format!("[list] LActivate {h:#x} {act}"))
         }
         0x28 => { let h = lh(m)?; m.dispose_list(h)?; (0, format!("[list] LDispose {h:#x}")) }
+        0x2C => {
+            // LDoDraw(drawIt, lHandle): AMS `LSetDrawingMode_call` clears lDrawingModeOff for TRUE and sets it for FALSE. The record is
+            // the program's to read; a projected native list always shows its cells (the program batches updates with this call, and
+            // the batch is invisible to a user), which is a named limit.
+            let (h, draw) = (lh(m)?, boolean(m, sp + 6)?);
+            let p = m.list_rec(h, "LDoDraw")?;
+            let flags = m.mem.read_u8(p + L_LIST_FLAGS).map_err(Refusal::mem("ListRec"))?;
+            let flags = if draw { flags & !L_DRAWING_MODE_OFF } else { flags | L_DRAWING_MODE_OFF };
+            m.mem.write_u8(p + L_LIST_FLAGS, flags).map_err(Refusal::mem("ListRec"))?;
+            (0, format!("[list] LDoDraw {h:#x} {draw} (listFlags {flags:#04x}; a native list always shows its cells)"))
+        }
         0x08 => {
             let (h, row, count) = (lh(m)?, word(m, sp + 6)?, word(m, sp + 8)?);
             let f = m.list_facts(h)?;

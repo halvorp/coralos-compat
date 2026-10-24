@@ -86,6 +86,34 @@ fn lnew_makes_a_real_list_rec_and_the_text_ldef_list_is_a_native_list() {
     assert_eq!(list_kind(&w), ControlKind::List { columns: vec![], rows: rows(&["alpha", "beta", "gamma"]), selected: None, top: 0 });
 }
 
+fn l_do_draw(p: &mut Prog, on: bool) { p.b(on as u8).rgn_arg(LH); sel(p, 0x2C); }
+fn list_flags(w: &World) -> u8 { let p = w.rig.m.mm.block(lh(w)).unwrap().ptr; w.rig.m.mem.read_u8(p + mac68k_engine::translate::lists::L_LIST_FLAGS).unwrap() }
+
+#[test]
+fn ldodraw_sets_and_clears_the_drawing_mode_off_bit_and_the_frame_is_balanced() {
+    // PROCEDURE LDoDraw(drawIt: BOOLEAN; lHandle): AMS clears lDrawingModeOff (listFlags bit 3) for TRUE, sets it for FALSE. The frame
+    // is selector + handle + a Boolean slot = 8 bytes (the FRAMES table, checked by its own test).
+    let mut w = world(0, |p, _| { l_do_draw(p, false); p.exit(); });
+    let (step, _) = w.rig.m.step(1_000_000);
+    assert_eq!(step, Step::Exited, "{:#?}", w.rig.m.log);
+    assert!(w.rig.m.refused.is_empty(), "LDoDraw is implemented: {:?}", w.rig.m.refused);
+    assert_eq!(list_flags(&w), 0x08, "LDoDraw(FALSE) sets lDrawingModeOff");
+    let mut w = world(0, |p, _| { l_do_draw(p, false); l_do_draw(p, true); p.exit(); });
+    assert_eq!(w.rig.m.step(1_000_000).0, Step::Exited);
+    assert_eq!(list_flags(&w), 0, "LDoDraw(TRUE) clears it again (negative control: a handler that only ever sets it is RED here)");
+    // other listFlags bits are left alone
+    let mut w = world(0, |p, _| { p.exit(); });
+    assert_eq!(w.rig.m.step(1_000_000).0, Step::Exited);
+    let pr = w.rig.m.mm.block(lh(&w)).unwrap().ptr;
+    w.rig.m.mem.write_u8(pr + mac68k_engine::translate::lists::L_LIST_FLAGS, 0x02).unwrap();
+    let mut p = Prog::new();
+    l_do_draw(&mut p, false);
+    l_do_draw(&mut p, true);
+    w.rig.m.start(&p.exit().0, 0).unwrap();
+    assert_eq!(w.rig.m.step(1_000_000).0, Step::Exited);
+    assert_eq!(list_flags(&w), 0x02, "lDoVAutoscroll survives a draw-off / draw-on pair");
+}
+
 /// WaitNextEvent(mouseDownMask, &EV, 60, nil) then GlobalToLocal(EV.where): the mouseUp the native click queues stays queued.
 fn wait_mouse_down(p: &mut Prog, win: u32) {
     p.set_port(win).clr_w().w(2).l(EV).l(60).l(0).trap(0xA860).pop_w(OUT + 2);

@@ -56,9 +56,7 @@ fn the_toolbox_showcase_fat_app_runs_past_the_file_manager_to_the_colour_window_
     // STYLED one (_TEStyleNew).
     let Some(m) = census("systemless-showcase/showcase.rsrc") else { return };
     assert!(m.log.iter().any(|l| l.starts_with("[textedit] TENew")), "the showcase's TENew is answered: {:#?}", m.log);
-    // (it runs further now, so it also asks the List Manager for LDoDraw, which is a named refusal until the next step)
-    assert_eq!(m.refused.last().map(String::as_str), Some("unimplemented trap _TEStyleNew ($A83E)"), "{:#?}", m.log);
-    assert!(m.refused.iter().filter(|r| r.contains("LDoDraw")).count() == 3 && m.refused.len() == 4, "{:?}", m.refused);
+    assert_eq!(m.refused, vec!["unimplemented trap _TEStyleNew ($A83E)".to_string()], "LDoDraw is answered now; only the styled TE call is left: {:#?}", m.log);
 }
 
 #[test]
