@@ -50,7 +50,7 @@ fn unknown_trap_is_a_named_refusal_and_the_run_continues() {
     let mut m = mac();
     let r = m.run_program(UNKNOWN_TRAP, 0, 1000).unwrap();
     assert!(r.stats.halted);
-    assert_eq!(m.refused, vec!["unimplemented trap _SysBeep ($A9C8)".to_string()]);
+    assert_eq!(m.refused, vec!["unimplemented trap _SCSIDispatch ($A815)".to_string()]);
     let inits = m.log.iter().filter(|l| l.contains("InitCursor")).count();
     assert_eq!(inits, 2, "non-census: execution went on past the refusal: {:#?}", m.log);
 }
@@ -62,7 +62,7 @@ fn census_mode_halts_at_the_first_unknown_trap() {
     m.stop_on_unimplemented = true;
     let r = m.run_program(UNKNOWN_TRAP, 0, 1000).unwrap();
     assert!(r.stats.halted);
-    assert_eq!(m.refused, vec!["unimplemented trap _SysBeep ($A9C8)".to_string()]);
+    assert_eq!(m.refused, vec!["unimplemented trap _SCSIDispatch ($A815)".to_string()]);
     let inits = m.log.iter().filter(|l| l.contains("InitCursor")).count();
     assert_eq!(inits, 1, "{:#?}", m.log);
 }

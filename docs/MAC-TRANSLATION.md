@@ -15,6 +15,7 @@ OS produced. Nothing here names an application or looks at what pixels look like
 | `translate/dialogs.rs` | ONE table: DITL item type -> item (`ITEM_TABLE`) and the text-intent row table (`TABLE`), `DialogRecord` + DITL copy with item handles, `ModalDialog` and the item traps |
 | `translate/input.rs` | pointer and key events for content (`mouseDown/Up`, `keyDown/autoKey`, low-memory `Mouse`/`MBState`) |
 | `textedit/` | TextEdit: a real `TERec` behind a handle, ROM line breaking (`layout.rs`, pure), drawing through the engine's QuickDraw into `inPort` (`draw.rs`), `TEKey` / `TEClick` / the TE scrap (`edit.rs`); styled TextEdit is refused by name |
+| `sound/` | the Sound Manager: real `SndChannel` records, `'snd '` and sound-header decoding (`snd.rs`, pure), `_SoundDispatch` (`dispatch.rs`); PCM goes out through the AUDIO part of the seam (`guestui-abi` `audio.rs`), never to a device; a host without it answers `notEnoughHardware` |
 | `qd/plane.rs` | the retained display list per window port, pens as roles, `present_plane` once per step |
 
 macppc-engine adds nothing but one native (`ModalDialog` parks the PowerPC caller on the front dialog's item hit,

@@ -129,6 +129,8 @@ pub struct Mac<U: GuestUi> {
     pub pal: crate::palette::Palettes,
     /// The engine's own International Resource handles (intl.rs).
     pub intl: crate::intl::IntlHandles,
+    /// The Sound Manager's channels beside the guest's records (sound/).
+    pub snd: crate::sound::SoundState,
     /// Which classic Mac this is (profile.rs): the CPU model, the boot address mode, what Gestalt / SysEnvirons answer.
     pub profile: crate::profile::MachineProfile,
 }
@@ -143,7 +145,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), profile: crate::profile::DEFAULT,
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT,
         };
         m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start
         lowmem::init(&mut m.mem)?;
@@ -183,6 +185,7 @@ impl<U: GuestUi> Mac<U> {
         crate::winmgr::register(&mut m)?;
         crate::textedit::register(&mut m)?;
         crate::script::register(&mut m)?;
+        crate::sound::register(&mut m)?;
         crate::fontnames::register(&mut m)?;
         menu::register(&mut m)?;
         crate::menu_items::register(&mut m)?;

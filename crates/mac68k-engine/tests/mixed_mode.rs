@@ -80,8 +80,8 @@ fn wrong_arity_wrong_convention_and_unimplemented_are_named_errors_not_calls() {
     assert!(matches!(m.os_call(trap_opcode("NewWindow").unwrap(), os_sig("NewHandle").unwrap(), &[1]), Err(MixedError::WrongConvention(_))));
     assert!(matches!(m.pascal_call(nh, &[1]), Err(MixedError::WrongConvention(_))));
     assert!(matches!(m.pascal_call(trap_opcode("NewWindow").unwrap(), &[0]), Err(MixedError::ArgCount { want: 8, got: 1, .. })));
-    let sysbeep = trap_opcode("SysBeep").unwrap();
-    assert!(matches!(m.pascal_call(sysbeep, &[1]), Err(MixedError::Unimplemented(n)) if n == "SysBeep"));
+    let scsi = trap_opcode("SCSIDispatch").unwrap(); // (SysBeep was this example until the Sound Manager landed)
+    assert!(matches!(m.pascal_call(scsi, &[1]), Err(MixedError::Unimplemented(n)) if n == "SCSIDispatch"));
     assert!(m.log.is_empty() && m.refused.is_empty(), "structural errors never reach a handler");
 }
 

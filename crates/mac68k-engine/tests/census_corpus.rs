@@ -116,7 +116,9 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // NO ioDirID: it used to read the stack garbage after the block as a dirID and get dirNFErr -120). A first run has no such file: fnfErr.
     assert!(m.log.iter().any(|l| l.contains("[file] open data fork \"Glider Prefs\"") && l.ends_with("-> -43")), "{:#?}", m.log);
     assert!(!m.log.iter().any(|l| l.contains("-> -120")), "no dirNFErr: {:#?}", m.log);
-    assert!(m.refused.last().is_some_and(|r| r.contains("_SoundDispatch ($A800)")), "the next wall is the Sound Manager: {:?}", m.refused);
+    // the Sound Manager answers (sound/): GetDefaultOutputVolume is its first call; the next wall is the Resource Manager's MaxSizeRsrc
+    assert!(m.log.iter().any(|l| l.starts_with("[sound] GetDefaultOutputVolume")), "its volume question is answered: {:#?}", m.log);
+    assert!(m.refused.last().is_some_and(|r| r.contains("_MaxSizeRsrc ($A821)")), "the next wall: {:?}", m.refused);
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.
