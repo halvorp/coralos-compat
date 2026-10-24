@@ -53,6 +53,7 @@ pub mod rects;
 pub mod resmgr;
 pub mod run;
 pub mod scrap;
+pub mod script;
 pub mod segment;
 pub mod strcmp;
 pub mod sysenv;
