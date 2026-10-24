@@ -44,7 +44,7 @@ crates/retro-theme/src/uifont_data.rs: Nunito Sans Regular bitmap strip (generat
 
 crates/macppc-engine/src/keys_c.rs (KeyTranslate's KCHR walk) follows Executor's C_KeyTranslate (src/toolevent.cpp,
 github.com/autc04/executor), under its MIT-style licence:
-||||||| parent of 48a6955 (mac68k: sentinel fixes - the title bar comes from the one WDEF binding table; stale TextEdit comments; audio wording says FRAMES, not decodes)
+
 The four standard cursors in crates/mac68k-engine/src/system_res.rs (CURS 1-4, 68 bytes each) are data from Executor's res/System
 (github.com/autc04/executor), under its MIT-style licence:
 
