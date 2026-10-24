@@ -1,4 +1,4 @@
-//! Host runner: `macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--strict] [--bind-list <exports file> [LIB]] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
+//! Host runner: `macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--strict] [--dump ADDR:WORDS]... [--bind-list <exports file> [LIB]] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
 //! `<file>` is `--fixture` (a built-in MacBinary application importing the classic startup calls), a bare PEF, or a classic Mac application (MacBinary, AppleSingle, or an AppleDouble header file whose data
 //! fork is the sibling file with the `%` / `._` prefix removed, or `--data`). It instantiates the fragment (sections placed,
 //! imports bound by symbol name onto the mac68k Toolbox handlers, relocations applied) and prints what it did. `--run`
@@ -24,6 +24,7 @@ fn usage() -> ! { eprintln!("usage: macppc-run [--census] [--run] [--insns N] [-
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut dump: Vec<(u32, u32)> = Vec::new();
     let (mut census, mut strict, mut data, mut run, mut insns, mut rsrc, mut pcs, mut libdir, mut idle) = (false, false, None, false, 50_000_000u64, None, 0usize, None::<PathBuf>, 0u32);
     while let Some(a) = args.first().cloned() {
         match a.as_str() {
@@ -48,6 +49,14 @@ fn main() {
                     println!("{}\t{class}\t{name}", if matches!(b, macppc_engine::symbols::Binding::Unbound(_)) { "UNBOUND" } else { "BOUND" });
                 }
                 return;
+            }
+            "--dump" => {
+                // `--dump ADDR:WORDS`: print that many big-endian words of guest memory after the run stops (hex ADDR), for reading a fault's neighbourhood
+                args.remove(0);
+                if args.is_empty() { usage() }
+                let a = args.remove(0);
+                let (at, n) = a.split_once(':').unwrap_or((&a, "16"));
+                dump.push((u32::from_str_radix(at.trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()), n.parse().unwrap_or_else(|_| usage())));
             }
             "--data" => { args.remove(0); if args.is_empty() { usage() } data = Some(PathBuf::from(args.remove(0))); }
             _ => break,
@@ -128,6 +137,11 @@ fn main() {
             Step::Fault(f) => { if let Some(n) = f.strip_prefix("NEXT-NEEDED ") { stopped_at = Some(n.to_string()); } f.clone() }
         };
         println!("RAN {n} PowerPC instructions: {why}");
+        for (at, n) in &dump {
+            print!("dump {at:#x}:");
+            for i in 0..*n { print!(" {:08x}", m.mac.mem.read_u32(at + 4 * i).unwrap_or(0xDEAD_DEAD)); }
+            println!();
+        }
         if pcs > 0 {
             if let Some(c) = m.cpu() {
                 println!("recent pcs (oldest first): {}", c.recent_pcs().map(|p| format!("{p:#x}")).collect::<Vec<_>>().join(" "));
