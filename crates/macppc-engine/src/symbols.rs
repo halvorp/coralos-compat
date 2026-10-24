@@ -35,6 +35,9 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     /// the procedure's own TVector. `NewRoutineDescriptor(proc, procInfo, ISA)`, `NewFatRoutineDescriptor(m68kProc, ppcProc,
     /// procInfo)`, `DisposeRoutineDescriptor(upp)`. CALLING a UPP is the callback machine's (Mixed Mode slice 3).
     NewRoutineDescriptor, NewFatRoutineDescriptor, DisposeRoutineDescriptor,
+    /// `NewXxxUPP(proc)` / `DisposeXxxUPP(upp)`: CarbonLib exports one constructor per callback type; on PowerPC each builds a PowerPC routine descriptor around the TVector
+    /// (`procInfo` is only needed to cross to 68k code, which a Carbon program never does), and disposing frees it.
+    NewUpp, DisposeUpp,
     /// The address a PowerPC callback returns to (`crate::callback`): a pseudo-call the run loop answers from the frame stack.
     CallbackReturn,
     /// A `Files.h` routine (`FSRead`, `HOpen`, `GetVol` ...): the C glue over the 68k engine's File Manager traps ([`crate::files`]).
@@ -53,6 +56,12 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Cf(crate::cf::CfFn),
     /// A Carbon Event Manager / Carbon window call ([`crate::carbon`]).
     Carbon(crate::carbon::CarbonFn),
+    /// A Process Manager / Temporary Memory routine by C name (`GetCurrentProcess` ...): the shared `_OSDispatch` body, selector given.
+    Process(u16),
+    /// Toolbox library glue with no trap (`GetIndString`, `NumToString`, `LMGet...`, the clocks): [`crate::toolbox_c`].
+    Tb(crate::toolbox_c::TbFn),
+    /// A File Manager parameter-block call (`PBReadSync` ...): [`crate::pb`].
+    Pb(crate::pb::PbCall),
     /// An FSSpec call (`FSMakeFSSpec`, `FSpOpenDF` ...): [`crate::fsspec`].
     Spec(crate::fsspec::SpecCall),
     /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.
@@ -92,6 +101,10 @@ impl Native {
             "GetToolTrapAddress" => Native::TrapAddress(TrapQuery::Tool), "GetTrapAddress" => Native::TrapAddress(TrapQuery::Old),
             "NewRoutineDescriptor" => Native::NewRoutineDescriptor, "NewFatRoutineDescriptor" => Native::NewFatRoutineDescriptor,
             "DisposeRoutineDescriptor" => Native::DisposeRoutineDescriptor,
+            n if crate::pb::PbCall::by_name(n).is_some() => Native::Pb(crate::pb::PbCall::by_name(n).expect("checked")),
+            n if crate::toolbox_c::TbFn::by_name(n).is_some() => Native::Tb(crate::toolbox_c::TbFn::by_name(n).expect("checked")),
+            n if n.len() > 6 && n.starts_with("New") && n.ends_with("UPP") => Native::NewUpp,
+            n if n.len() > 9 && n.starts_with("Dispose") && n.ends_with("UPP") => Native::DisposeUpp,
             _ => return crate::files::FileCall::by_name(name).map(Native::File).or_else(|| crate::osroutines::OsRoutine::by_name(name).map(Native::Os)).or_else(|| crate::fsspec::SpecCall::by_name(name).map(Native::Spec)),
         })
     }
@@ -106,6 +119,8 @@ pub enum Binding {
     Native(Native),
     /// The QuickDraw globals record `qd` (a data import).
     Qd,
+    /// A symbol another loaded fragment EXPORTS (a private library the program carries or a PEF supplied beside it): the address to relocate to (a function's TVector, a data symbol's storage).
+    Export(u32),
     /// A zero-initialised variable of this many bytes in guest memory (StdCLib's runtime state).
     CData(u32),
     /// No binding; the string says why.
@@ -121,6 +136,7 @@ impl Binding {
             Binding::Pascal(op) => format!("Toolbox trap {}", describe(*op)),
             Binding::Os(op, s) => format!("OS trap {} as C routine {}", describe(*op), s.name),
             Binding::Native(n) => format!("native {n:?}"),
+            Binding::Export(a) => format!("export of a loaded fragment at {a:#x}"),
             Binding::Qd => "data: QuickDraw globals".into(),
             Binding::CData(n) => format!("data: {n} zeroed bytes of C runtime state"),
             Binding::Unbound(why) => why.clone(),
@@ -140,13 +156,14 @@ const NEEDS_68K_RUN_LOOP: &[(&str, &str)] = &[
 /// trap words case-insensitively; `GetMenu` is the Menu Manager's `_GetRMenu` (menu.rs registers it under that word); `SetPalette` is `_NSetPalette`'s word ($AA95, which the 68k table names after the newer INTEGER form; the older Boolean `cUpdates` fits the same slot); `SetPortBits` is `_SetPBits`. The three `Invert*` C names whose traps keep the short `_Inver*` spelling;
 /// InvertOval/InvertArc/InvertPoly already match.
 pub const INTERFACELIB_ALIASES: &[(&str, &str)] = &[("GetMenu", "GetRMenu"), ("BeginUpdate", "BeginUpDate"), ("EndUpdate", "EndUpDate"), ("XorRgn", "XOrRgn"), ("SetPalette", "NSetPalette"), ("SetPortBits", "SetPBits"),
-    ("InvertRect", "InverRect"), ("InvertRoundRect", "InverRoundRect"), ("InvertRgn", "InverRgn")];
+    ("DisableMenuItem", "DisableItem"), ("EnableMenuItem", "EnableItem"), ("InvertRect", "InverRect"), ("InvertRoundRect", "InverRoundRect"), ("InvertRgn", "InverRgn")];
 
 /// How `name` would be served, given the handlers `mac` has registered.
 pub fn lookup<U: GuestUi>(mac: &Mac<U>, name: &str) -> Binding {
     let name = INTERFACELIB_ALIASES.iter().find(|(from, _)| *from == name).map_or(name, |&(_, trap)| trap);
     if let Some(n) = Native::by_name(name) { return Binding::Native(n); }
     if name == "qd" { return Binding::Qd; }
+    if let Some(sel) = mac68k_engine::procmgr::selector_of::<U>(name) { return Binding::Native(Native::Process(sel)); }
     if let Some((_, why)) = NEEDS_68K_RUN_LOOP.iter().find(|(n, _)| *n == name) { return Binding::Unbound(format!("{name}: {why}")); }
     let Some(op) = trap_opcode(name) else {
         return Binding::Unbound(format!("{name} is not a Toolbox or OS trap name in the engine's tables"));

@@ -94,6 +94,10 @@ impl<U: GuestUi> MacPpc<U> {
             // the value a function import relocates to: a TVector for TVector class, the code address (the stub) for Code class
             let fn_value = |glue: &crate::glue::Glue, id: usize| glue.entry(id).map_or(0, |e| if imp.class == SymbolClass::Code { e.stub } else { e.tvector });
             let b = self.bind_from(&lib.name, &imp.name);
+            if let Binding::Export(addr) = b {
+                resolved.push(ResolvedImport { library: lib.name.clone(), symbol: imp.name.clone(), class: imp.class, weak: imp.weak || lib.weak, status: ImportStatus::Bound(b.describe()), value: addr });
+                continue;
+            }
             let weak = imp.weak || lib.weak;
             // Why this import cannot be served as declared, if it cannot.
             let why = match (&b, imp.class) {
@@ -123,7 +127,16 @@ impl<U: GuestUi> MacPpc<U> {
             };
             resolved.push(ResolvedImport { library: lib.name.clone(), symbol: imp.name.clone(), class: imp.class, weak, status, value });
         }
-        // 3. relocations
+        // 3. relocations. First a dry run with a distinct sentinel per import: it tells which guest word each import's value is added into (the TOC slot), which is how a call
+        // through an ABSENT weak import (value 0) is traced back to its name when it faults (`MacPpc::null_call_import`).
+        let n_imports = resolved.len() as u32;
+        let sentinels: Vec<u32> = (0..n_imports).map(|i| 0xF000_0000 + i).collect();
+        let mut slots = Vec::new();
+        loader.relocate(&bases, &sentinels, &mut |sec, off, addend| {
+            if addend >= 0xF000_0000 && addend - 0xF000_0000 < n_imports { if let Some(b) = bases.get(usize::from(sec)).copied().flatten() { slots.push((b.wrapping_add(off), (addend - 0xF000_0000) as usize)); } }
+            Ok(())
+        })?;
+        for (at, i) in slots { self.import_slots.insert(at, (resolved[i].library.clone(), resolved[i].symbol.clone(), resolved[i].weak)); }
         let values: Vec<u32> = resolved.iter().map(|r| r.value).collect();
         let mem = &mut self.mac.mem;
         loader.relocate(&bases, &values, &mut |sec, off, addend| {

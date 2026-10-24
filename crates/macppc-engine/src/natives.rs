@@ -75,6 +75,14 @@ impl<U: GuestUi> MacPpc<U> {
                 };
                 GlueOutcome::Return
             }
+            Native::NewUpp => {
+                regs[3] = match mac68k_engine::mixed_mode::new_routine_descriptor(&mut self.mac, a(0), 0, mac68k_engine::mixed_mode::ISA_PPC) {
+                    Ok(upp) => upp,
+                    Err(e) => { self.mac.log.push(format!("[mixedmode] NewUPP: {e} -> NIL")); 0 }
+                };
+                GlueOutcome::Return
+            }
+            Native::DisposeUpp => { let _ = mac68k_engine::mixed_mode::dispose_routine_descriptor(&mut self.mac, a(0)); GlueOutcome::Return }
             Native::DisposeRoutineDescriptor => match mac68k_engine::mixed_mode::dispose_routine_descriptor(&mut self.mac, a(0)) {
                 Ok(()) => { self.mac.log.push(format!("[mixedmode] DisposeRoutineDescriptor {:#x}", a(0))); GlueOutcome::Return }
                 Err(e) => GlueOutcome::Refused(format!("{e}")),
@@ -131,6 +139,24 @@ impl<U: GuestUi> MacPpc<U> {
             Native::Os(c) => {
                 let args = match self.arg_values(c.arg_count(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{c:?}: {e}")) };
                 match self.os_routine(c, &args) { Ok(v) => { regs[3] = v; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
+            Native::Process(sel) => {
+                let n = mac68k_engine::procmgr::arg_count::<U>(sel).unwrap_or(0);
+                let args = match self.arg_values(n, regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("Process Manager routine {sel:#x}: {e}")) };
+                match mac68k_engine::procmgr::call_selector(&mut self.mac, sel, &args) {
+                    Ok((v, kind)) => { regs[3] = match kind { Some(Arg::W) => v as u16 as i16 as i32 as u32, Some(Arg::B) => v & 0xFF, _ => v }; GlueOutcome::Return }
+                    Err(e) => GlueOutcome::Refused(format!("Process Manager routine {sel:#x}: {}", e.0)),
+                }
+            }
+            Native::Tb(f) => {
+                // these need arguments and a result in registers only: run them on a scratch register file
+                let mut cpu = retro_ppc::Cpu::new(0, regs[1]);
+                cpu.gpr = *regs;
+                match self.tb_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
+            Native::Pb(c) => {
+                let args = match self.arg_values(1, regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("PB call: {e}")) };
+                match self.pb_call(c, args[0]) { Ok(e) => { regs[3] = err(e); GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Spec(c) => {
                 let args = match self.arg_values(c.arg_count(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{}: {e}", c.name())) };
@@ -214,6 +240,7 @@ impl<U: GuestUi> PpcHost for MacPpc<U> {
             }
             Binding::Native(n) => self.native(n, regs),
             Binding::Qd | Binding::CData(_) => GlueOutcome::Refused(format!("{symbol} is a data symbol, it cannot be called")),
+            Binding::Export(a) => GlueOutcome::Refused(format!("{symbol}: an export at {a:#x} is called through its own TVector, never through glue")),
             Binding::Unbound(why) => {
                 let line = format!("{UNIMPLEMENTED} import {symbol}: {why}");
                 self.mac.log.push(format!("[toolbox] REFUSED: {line}"));

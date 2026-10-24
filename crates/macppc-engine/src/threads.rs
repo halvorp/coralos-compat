@@ -39,7 +39,7 @@ const K_PREEMPTIVE: u32 = 2;
 const K_NEW_SUSPEND: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThreadFn { NewThread, GetCurrentThread, YieldToThread, YieldToAnyThread, DisposeThread, GetThreadState, SetThreadState, ThreadBeginCritical, ThreadEndCritical, GetDefaultThreadStackSize, Exit }
+pub enum ThreadFn { NewThread, GetCurrentThread, YieldToThread, YieldToAnyThread, DisposeThread, GetThreadState, SetThreadState, ThreadBeginCritical, ThreadEndCritical, GetDefaultThreadStackSize, ThreadCurrentStackSpace, SetThreadTerminator, SetThreadSwitcher, Exit }
 
 impl ThreadFn {
     pub fn by_name(name: &str) -> Option<ThreadFn> {
@@ -47,7 +47,7 @@ impl ThreadFn {
         Some(match name {
             "NewThread" => NewThread, "GetCurrentThread" => GetCurrentThread, "YieldToThread" => YieldToThread, "YieldToAnyThread" => YieldToAnyThread,
             "DisposeThread" => DisposeThread, "GetThreadState" => GetThreadState, "SetThreadState" => SetThreadState,
-            "ThreadBeginCritical" => ThreadBeginCritical, "ThreadEndCritical" => ThreadEndCritical, "GetDefaultThreadStackSize" => GetDefaultThreadStackSize,
+            "ThreadBeginCritical" => ThreadBeginCritical, "ThreadEndCritical" => ThreadEndCritical, "GetDefaultThreadStackSize" => GetDefaultThreadStackSize, "ThreadCurrentStackSpace" => ThreadCurrentStackSpace, "SetThreadTerminator" => SetThreadTerminator, "SetThreadSwitcher" => SetThreadSwitcher,
             _ => return None,
         })
     }
@@ -109,7 +109,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let id = self.rt.sched.next_id;
                 self.rt.sched.next_id += 1;
                 let state = if options & K_NEW_SUSPEND != 0 { TState::Stopped } else { TState::Ready };
-                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state, kind: Kind::Thread, stack: Some(block), result_ptr: result_p, wait: None, woken: None, notify: None });
+                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state, kind: Kind::Thread, stack: Some(block), result_ptr: result_p, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: None });
                 self.put32(made_p, id, "NewThread")?;
                 self.mac.log.push(format!("[threads] NewThread -> {id} ({}{}, entry {tv:#x}, stack {size})", if style == K_PREEMPTIVE { "preemptive requested, run cooperatively, " } else { "cooperative, " }, if state == TState::Stopped { "stopped" } else { "ready" }));
                 0
@@ -165,6 +165,38 @@ impl<U: GuestUi> MacPpc<U> {
             }
             ThreadBeginCritical => { self.rt.sched.critical += 1; 0 }
             ThreadEndCritical => { self.rt.sched.critical = self.rt.sched.critical.saturating_sub(1); 0 }
+            // ThreadCurrentStackSpace(thread, &freeBytes): the stack the thread has left below its r1 (the application thread's stack is the one `start` made)
+            // SetThreadTerminator(thread, UPP, param): called as `proc(thread, param)` when the thread ends. The application thread ends with the program
+            // (ExitToShell), so its terminator never runs.
+            SetThreadTerminator => {
+                if !self.rt.sched.tasks.contains_key(&a0) { THREAD_NOT_FOUND } else {
+                    let tv = if a1 == 0 { None } else { Some(self.proc_tvector(a1)?) };
+                    self.rt.sched.tasks.get_mut(&a0).expect("checked").terminator = tv.map(|t| (t, a2));
+                    0
+                }
+            }
+            // SetThreadSwitcher(thread, UPP, param, inOrOut): `proc(thread, param)` runs on the thread each time it is switched IN (inOrOut true) or OUT (false)
+            SetThreadSwitcher => {
+                if !self.rt.sched.tasks.contains_key(&a0) { THREAD_NOT_FOUND } else {
+                    let hook = if a1 == 0 { None } else { Some((self.proc_tvector(a1)?, a2)) };
+                    let into = a(self, 3)? & 0xFF != 0;
+                    let t = self.rt.sched.tasks.get_mut(&a0).expect("checked");
+                    if into { t.switch_in = hook; } else { t.switch_out = hook; }
+                    0
+                }
+            }
+            ThreadCurrentStackSpace => {
+                let task = self.rt.sched.tasks.get(&a0);
+                match task {
+                    None => THREAD_NOT_FOUND,
+                    Some(t) => {
+                        let r1 = if a0 == cur { cpu.gpr[1] } else { t.cpu.as_ref().map_or(0, |c| c.gpr[1]) };
+                        let base = if a0 == MAIN_TASK { self.rt.main_stack } else { t.stack.unwrap_or(0) };
+                        self.put32(a1, r1.saturating_sub(base), "ThreadCurrentStackSpace")?;
+                        0
+                    }
+                }
+            }
             GetDefaultThreadStackSize => { self.put32(a1, DEFAULT_STACK, "GetDefaultThreadStackSize")?; 0 }
         };
         cpu.gpr[3] = r as u32;
@@ -180,6 +212,14 @@ impl<U: GuestUi> MacPpc<U> {
         if kind == Kind::Mp { self.mp_task_ended(notify, value); }
         let to = self.pick(0, "thread exit")?;
         self.mac.log.push(format!("[threads] thread {cur} ended (value {value:#x}); thread {to} runs"));
+        if let Some((tv, param)) = self.rt.sched.tasks.get(&cur).and_then(|t| t.terminator) {
+            // the terminator runs on the dying thread's own stack, then control moves on
+            let frame = crate::callback::Frame { saved: crate::callback::Saved::of(cpu, 0), cont: crate::callback::Continuation::ThreadEnd(to) };
+            let sp = cpu.gpr[1];
+            self.enter_tvector(cpu, tv, &[cur, param], sp).map_err(|e| format!("thread terminator: {e}"))?;
+            self.rt.callbacks.push(frame);
+            return Ok(());
+        }
         self.switch_to(cpu, to, None, 0)
     }
 }

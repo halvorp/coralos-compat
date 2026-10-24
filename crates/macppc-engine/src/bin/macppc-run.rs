@@ -1,4 +1,4 @@
-//! Host runner: `macppc-run [--census] [--run] [--insns N] [--pcs N] [--strict] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
+//! Host runner: `macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--strict] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
 //! `<file>` is `--fixture` (a built-in MacBinary application importing the classic startup calls), a bare PEF, or a classic Mac application (MacBinary, AppleSingle, or an AppleDouble header file whose data
 //! fork is the sibling file with the `%` / `._` prefix removed, or `--data`). It instantiates the fragment (sections placed,
 //! imports bound by symbol name onto the mac68k Toolbox handlers, relocations applied) and prints what it did. `--run`
@@ -20,11 +20,11 @@ fn sibling_data_fork(p: &Path) -> Option<PathBuf> {
     q.is_file().then_some(q)
 }
 
-fn usage() -> ! { eprintln!("usage: macppc-run [--census] [--run] [--insns N] [--pcs N] [--strict] [--data <data fork file>] (--fixture | <file>)"); std::process::exit(2) }
+fn usage() -> ! { eprintln!("usage: macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--strict] [--data <data fork file>] (--fixture | <file>)"); std::process::exit(2) }
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut census, mut strict, mut data, mut run, mut insns, mut rsrc, mut pcs) = (false, false, None, false, 50_000_000u64, None, 0usize);
+    let (mut census, mut strict, mut data, mut run, mut insns, mut rsrc, mut pcs, mut libdir, mut idle) = (false, false, None, false, 50_000_000u64, None, 0usize, None::<PathBuf>, 0u32);
     while let Some(a) = args.first().cloned() {
         match a.as_str() {
             "--census" => { census = true; args.remove(0); }
@@ -33,6 +33,8 @@ fn main() {
             "--run" => { run = true; args.remove(0); }
             "--insns" => { args.remove(0); if args.is_empty() { usage() } insns = args.remove(0).parse().unwrap_or_else(|_| usage()); }
             "--pcs" => { args.remove(0); if args.is_empty() { usage() } pcs = args.remove(0).parse().unwrap_or_else(|_| usage()); }
+            "--libdir" => { args.remove(0); if args.is_empty() { usage() } libdir = Some(PathBuf::from(args.remove(0))); }
+            "--idle" => { args.remove(0); if args.is_empty() { usage() } idle = args.remove(0).parse().unwrap_or_else(|_| usage()); }
             "--data" => { args.remove(0); if args.is_empty() { usage() } data = Some(PathBuf::from(args.remove(0))); }
             _ => break,
         }
@@ -52,6 +54,19 @@ fn main() {
     match m.attach_resources(fork_file.as_deref().unwrap_or(&file)) {
         Ok(n) => println!("resources: {n} in the application's resource fork"),
         Err(e) => println!("resources: none attached ({e})"),
+    }
+    // private libraries the application carries in its own data fork (its cfrg import-library members), then every PEF file in --libdir (named by file name)
+    for (lname, bytes) in macppc_engine::source::library_fragments(&file, data_bytes.as_deref()) { println!("library {lname:?}: {} bytes inside the application file", bytes.len()); m.provide_library(&lname, &bytes); }
+    if let Some(dir) = &libdir {
+        let mut names: Vec<_> = std::fs::read_dir(dir).unwrap_or_else(|e| { eprintln!("{}: {e}", dir.display()); std::process::exit(1) }).filter_map(|e| e.ok()).collect();
+        names.sort_by_key(|e| e.file_name());
+        for e in names {
+            let Ok(bytes) = std::fs::read(e.path()) else { continue };
+            if !Pef::has_magic(&bytes) || e.file_name().to_string_lossy().ends_with(":rsrc") { continue; }
+            let lname = e.file_name().to_string_lossy().into_owned();
+            println!("library {lname:?}: {} bytes from {}", bytes.len(), dir.display());
+            m.provide_library(&lname, &bytes);
+        }
     }
     m.strict_imports = strict;
     let frag = match m.instantiate(&name, &pef) {
@@ -81,7 +96,15 @@ fn main() {
     let mut stopped_at = None;
     if (run || census) && started {
         m.trace_pcs(pcs);
-        let (step, n) = m.run_loop(insns);
+        let (mut step, mut n) = m.run_loop(insns);
+        // --idle T: a program waiting for an event (or a timeout) is given T more ticks of virtual time and resumed, up to the instruction budget in total
+        let mut rounds = 0u32;
+        while idle > 0 && step == Step::Blocked && n < insns && rounds < 2_000_000 {
+            m.mac.advance_ticks(idle);
+            rounds += 1;
+            let (st, k) = m.run_loop(insns - n);
+            step = st; n += k;
+        }
         for l in &m.mac.log { println!("  | {l}"); }
         for l in &m.mac.refused { println!("  | REFUSED {l}"); }
         let why = match &step {

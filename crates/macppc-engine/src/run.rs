@@ -45,6 +45,8 @@ pub struct Runtime {
     pub(crate) wait_dialog: bool,
     /// `main`'s entry state, held while the init routine runs.
     after_init: Option<StartState>,
+    /// Init routines still to run before `main` (the libraries' and the application's), in order.
+    init_queue: alloc::collections::VecDeque<crate::cfm::Tv>,
     /// The scratch File Manager parameter block (`crate::files`), allocated on first use.
     pub(crate) fm_pb: Option<u32>,
     /// `rand`'s state and the last `errno` a native set.
@@ -61,6 +63,8 @@ pub struct Runtime {
     pub(crate) rand_seeded: bool,
     pub(crate) errno: u32,
     main_tvector: u32,
+    /// The lowest address of the application thread's stack (for `ThreadCurrentStackSpace`; accurate to the 16-byte alignment of r1).
+    pub(crate) main_stack: u32,
     /// A refusal or CPU trap; once set, every step reports it again (the program cannot continue).
     pub(crate) fault: Option<String>,
     /// Callbacks into the program in progress, innermost last (`crate::callback`).
@@ -70,6 +74,21 @@ pub struct Runtime {
 fn idle() -> RunStats { RunStats { insns: 0, halted: false, blocked: true, trap: None } }
 
 impl<U: GuestUi> MacPpc<U> {
+    /// The pointer-glue sequence (`lwz r12,d(r2); stw r2,20(r1); lwz r0,0(r12) ...`) that jumped to 0, decoded from the call site in LR: which import's TOC slot held the 0.
+    fn null_call_import(&self, cpu: &Cpu) -> Option<String> {
+        let call = cpu.lr.wrapping_sub(4);
+        let w = self.mac.mem.read_u32(call).ok()?;
+        if w >> 26 != 18 || w & 3 != 1 { return None; } // not a `bl`
+        let li = ((w & 0x03FF_FFFC) as i32) << 6 >> 6;
+        let glue = call.wrapping_add(li as u32);
+        let first = self.mac.mem.read_u32(glue).ok()?;
+        if first >> 26 != 32 || (first >> 21) & 31 != 12 || (first >> 16) & 31 != 2 { return None; } // not `lwz r12,d(r2)`
+        let caller_toc = self.mac.mem.read_u32(cpu.gpr[1].wrapping_add(20)).ok()?;
+        let slot = caller_toc.wrapping_add(first as u16 as i16 as i32 as u32);
+        let (lib, sym, weak) = self.import_slots.get(&slot)?;
+        Some(format!("the call at {call:#x} went through {lib}/{sym}, an import that is {} and was relocated to 0", if *weak { "WEAK and absent" } else { "unresolved" }))
+    }
+
     /// Prepare to run `frag`: `main` (after `init`, when it has one).
     pub fn start(&mut self, frag: &Fragment) -> Result<(), CfmError> {
         let main = self.prepare_main(frag)?;
@@ -78,14 +97,18 @@ impl<U: GuestUi> MacPpc<U> {
         cpu.gpr[2] = main.r2;
         cpu.gpr[12] = frag.main.map_or(0, |t| t.address);
         cpu.lr = main.lr;
-        self.rt = Runtime { main_tvector: cpu.gpr[12], ..Runtime::default() };
-        if let Some(init) = frag.init {
+        self.rt = Runtime { main_tvector: cpu.gpr[12], main_stack: (main.r1 + 64).saturating_sub(crate::cfm::STACK_SIZE), ..Runtime::default() };
+        // every library's init routine (dependencies first), then the application's own, run before main; each returns to `$InitDone`, which starts the next
+        let mut inits: alloc::collections::VecDeque<crate::cfm::Tv> = self.lib_inits.iter().copied().collect();
+        if let Some(init) = frag.init { inits.push_back(init); }
+        if let Some(first) = inits.pop_front() {
             let id = self.glue.intern(&mut self.mac, "CFM", INIT_DONE)?;
-            cpu.pc = init.code;
-            cpu.gpr[2] = init.toc;
-            cpu.gpr[12] = init.address;
+            cpu.pc = first.code;
+            cpu.gpr[2] = first.toc;
+            cpu.gpr[12] = first.address;
             cpu.lr = self.glue.entry(id).map_or(0, |e| e.stub);
             self.rt.after_init = Some(main);
+            self.rt.init_queue = inits;
         }
         self.sync_natives(&mut cpu);
         self.rt.cpu = Some(cpu);
@@ -131,6 +154,8 @@ impl<U: GuestUi> MacPpc<U> {
                     why = format!("{why} -- the placeholder address of an unbound DATA import; unbound data imports of this fragment: {}", self.unbound_data.join(", "));
                 }
             }
+            // a branch to address 0 is, almost always, a call through a weak import that is absent: name it
+            if matches!(t, retro_ppc::Trap::Unimplemented { pc: 0, .. } | retro_ppc::Trap::BusFault { pc: 0, .. }) { if let Some(n) = self.null_call_import(&cpu) { why = format!("{why} -- {n}"); } }
             self.rt.fault = Some(why);
         }
         let step = if let Some(f) = &self.rt.fault { Step::Fault(f.clone()) }
@@ -180,7 +205,7 @@ impl<U: GuestUi> Host for MacPpc<U> {
     fn native(&mut self, cpu: &mut Cpu, addr: u32) -> bool {
         let Some(symbol) = self.glue_symbol_at(addr) else { return false };
         if symbol == INIT_DONE {
-            let Some(m) = self.rt.after_init.take() else { self.rt.fault = Some("the init routine returned twice".into()); cpu.halt(); return true };
+            let Some(m) = self.rt.after_init.clone() else { self.rt.fault = Some("the init routine returned twice".into()); cpu.halt(); return true };
             // a CFM initialization function returns an OSErr (16 bits); nonzero fails the fragment's preparation, so main never runs
             let status = cpu.gpr[3] as u16 as i16;
             if status != 0 {
@@ -188,6 +213,16 @@ impl<U: GuestUi> Host for MacPpc<U> {
                 cpu.halt();
                 return true;
             }
+            if let Some(next) = self.rt.init_queue.pop_front() {
+                // the next init routine; r3 = 0 where the CFM passes a CFragInitBlock
+                cpu.gpr[2] = next.toc;
+                cpu.gpr[12] = next.address;
+                cpu.gpr[3] = 0;
+                cpu.lr = addr;
+                cpu.set_pc(next.code);
+                return true;
+            }
+            self.rt.after_init = None;
             cpu.gpr[1] = m.r1;
             cpu.gpr[2] = m.r2;
             cpu.gpr[12] = self.rt.main_tvector;

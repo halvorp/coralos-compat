@@ -50,6 +50,12 @@ pub(crate) enum Continuation {
     AtExit,
     /// A Carbon event being offered to the program's handlers ([`crate::carbon`]).
     Carbon(crate::carbon::Dispatch),
+    /// A thread's terminator ran; now switch to this thread and drop the ended one.
+    ThreadEnd(u32),
+    /// The leaving thread's out-switcher ran: now the switch (to this task, the leaving one saved as `state`, resuming at `pc`).
+    SwitchOut { to: u32, state: Option<crate::sched::TState>, pc: u32 },
+    /// The new thread's in-switcher ran: its registers come back and it continues.
+    SwitchIn,
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +131,9 @@ impl<U: GuestUi> MacPpc<U> {
             Continuation::Bsearch(_) => self.search_returned(cpu, frame),
             Continuation::AtExit => self.exit_handler_returned(cpu, frame),
             Continuation::Carbon(_) => self.dispatch_returned(cpu, frame),
+            Continuation::ThreadEnd(to) => self.switch_to(cpu, to, None, 0),
+            Continuation::SwitchOut { to, state, pc } => { frame.saved.restore(cpu); self.finish_switch(cpu, to, state, pc) }
+            Continuation::SwitchIn => { frame.saved.restore(cpu); Ok(()) }
         }
     }
 

@@ -13,7 +13,7 @@ use guestui_abi::GuestUi;
 use retro_ppc::Cpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CfFn { MakeConstantString, CreateWithCString, CreateWithPascalString, Retain, Release, GetLength, GetCString, GetPascalString, GetCStringPtr, GetCharacterAtIndex }
+pub enum CfFn { MakeConstantString, CreateWithCString, CreateWithPascalString, Retain, Release, GetLength, GetCString, GetPascalString, GetCStringPtr, GetCharacterAtIndex, NoBundle }
 
 impl CfFn {
     pub fn by_name(name: &str) -> Option<CfFn> {
@@ -21,6 +21,8 @@ impl CfFn {
         Some(match name {
             "__CFStringMakeConstantString" => MakeConstantString, "CFStringCreateWithCString" => CreateWithCString, "CFStringCreateWithPascalString" => CreateWithPascalString,
             "CFRetain" => Retain, "CFRelease" => Release, "CFStringGetLength" => GetLength, "CFStringGetCString" => GetCString, "CFStringGetPascalString" => GetPascalString,
+            // There are no bundles on this machine (no Mac OS X, no frameworks on disk): the lookups answer NULL, which is their documented "not found" answer
+            "CFBundleGetBundleWithIdentifier" | "CFBundleGetMainBundle" | "CFBundleGetIdentifier" | "CFBundleGetFunctionPointerForName" | "CFBundleGetFunction" => NoBundle,
             "CFStringGetCStringPtr" => GetCStringPtr, "CFStringGetCharacterAtIndex" => GetCharacterAtIndex,
             _ => return None,
         })
@@ -75,6 +77,7 @@ impl<U: GuestUi> MacPpc<U> {
             }
             // "may return NULL": the internal storage is not exposed
             GetCStringPtr => { self.rt.cf.strings.get(&a0).ok_or_else(|| bad("CFStringGetCStringPtr", a0))?; 0 }
+            NoBundle => 0,
             GetCharacterAtIndex => {
                 let s = &self.rt.cf.strings.get(&a0).ok_or_else(|| bad("CFStringGetCharacterAtIndex", a0))?.0;
                 u32::from(*s.get(a1 as usize).ok_or_else(|| format!("CFStringGetCharacterAtIndex: index {a1} is past the end ({} characters)", s.len()))?)

@@ -5,6 +5,7 @@
 //! An entry moves from [`UNANSWERED`] to [`answer`] in the same change that lands its feature (the Thread Manager's `'thds'` with the Thread
 //! Manager, ...); `docs/consults/2026-10-24-macppc-full-app-gap-map.md` lists what each one waits for.
 //!
+//! `'ram '`/`'lram'` (physical/logical RAM) are the machine's actual guest RAM size, answered in osroutines.rs (the shared profile says 16 MB).
 //! Values: `gestaltSysArchitecture` ('sysa') 2 = PowerPC and `gestaltNativeCPUtype` ('cput') `gestaltCPU750` = 0x108 (executor src/gestalt.cpp:139-147
 //! answers both for a PowerPC build; the interpreter runs the 601/603/G3 user set, a 750). `gestaltCFMAttr` ('cfrg') bit 0 = `gestaltCFMPresent`: the
 //! Code Fragment Manager calls (`GetSharedLibrary`, `FindSymbol`, `CloseConnection`) are native here. `'altv'` 0 = no AltiVec (retro-ppc has none).

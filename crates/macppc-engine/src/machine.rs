@@ -15,6 +15,18 @@ pub const QD_GLOBALS_SIZE: u32 = 206;
 /// Where a strong data import with no provider points: outside guest RAM, so any access is a bus fault the CPU reports.
 pub const UNBOUND_DATA: u32 = 0xBAD0_0000;
 
+/// A shared library the program can import that is a PEF of its own (not one of the engine's native libraries).
+pub enum LibSlot {
+    /// Supplied, not yet instantiated (the PEF bytes).
+    Available(Vec<u8>),
+    /// Being instantiated now (an import cycle would find it here).
+    Loading,
+    /// Instantiated: exported name -> address.
+    Loaded(BTreeMap<String, u32>),
+    /// Could not be instantiated; every import from it names why.
+    Failed(String),
+}
+
 pub struct MacPpc<U: GuestUi> {
     pub mac: Mac<U>,
     pub glue: Glue,
@@ -31,14 +43,56 @@ pub struct MacPpc<U: GuestUi> {
     pub(crate) cdata: BTreeMap<String, u32>,
     /// Everything the program wrote with `printf`/`puts`/`putchar`: there is no console device, so the bytes are kept here (and logged).
     pub console: Vec<u8>,
+    /// PEF libraries supplied by name (the application's own `cfrg` import-library members, files beside it): loaded on first import.
+    pub libs: BTreeMap<String, LibSlot>,
+    /// Init routines of the libraries loaded so far, dependencies first: `start` runs them before the application's own.
+    pub lib_inits: Vec<crate::cfm::Tv>,
+    /// Guest address of every TOC/data word an import's value was relocated into -> (library, symbol, weak): names a call through a null weak import.
+    pub import_slots: BTreeMap<u32, (String, String, bool)>,
 }
 
+/// Guest RAM of a PowerPC Macintosh: large PowerPC applications are tens of megabytes of code and data before their heap (Warcraft III: a 14 MB
+/// application). The address space is zero-filled lazily by the host, so the size costs nothing until it is touched. `with_ram` picks another.
+pub const DEFAULT_PPC_RAM: usize = 256 << 20;
+
 impl<U: GuestUi> MacPpc<U> {
-    pub fn new(ui: U) -> Result<Self, CfmError> {
+    pub fn new(ui: U) -> Result<Self, CfmError> { Self::with_ram(ui, DEFAULT_PPC_RAM) }
+
+    /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.
+    pub fn with_ram(ui: U, ram: usize) -> Result<Self, CfmError> {
         let mut mac = Mac::new(ui).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
+        let base = mac.mem.len();
+        if ram > base {
+            mac.mem.grow_to(ram);
+            mac.heap.add_region(base as u32, (ram - base) as u32);
+            let _ = mac.mem.write_u32(mac68k_engine::lowmem::MEM_TOP, ram as u32); // MemTop: the top of the (larger) RAM
+        }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), console: Vec::new() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
+    }
+
+    /// Make a PEF library available under `name` (the fragment name an import table uses). Instantiated, with its own imports and init routine, the first time something imports from it.
+    pub fn provide_library(&mut self, name: &str, pef: &[u8]) { self.libs.insert(name.into(), LibSlot::Available(pef.to_vec())); }
+
+    fn export_binding(&mut self, lib: &str, name: &str) -> Binding {
+        if let Some(LibSlot::Available(_)) = self.libs.get(lib) {
+            let Some(LibSlot::Available(bytes)) = self.libs.insert(lib.into(), LibSlot::Loading) else { unreachable!() };
+            let loaded = retro_pef::Pef::parse(&bytes).map_err(|e| alloc::format!("{e}")).and_then(|pef| self.instantiate(lib, &pef).map_err(|e| alloc::format!("{e}")));
+            match loaded {
+                Ok(frag) => {
+                    if let Some(init) = frag.init { self.lib_inits.push(init); }
+                    self.libs.insert(lib.into(), LibSlot::Loaded(frag.exports.iter().cloned().collect()));
+                }
+                Err(why) => { self.libs.insert(lib.into(), LibSlot::Failed(why)); }
+            }
+        }
+        match self.libs.get(lib) {
+            Some(LibSlot::Loaded(ex)) => ex.get(name).map_or_else(|| Binding::Unbound(alloc::format!("{name} is not exported by the PEF library {lib}")), |&a| Binding::Export(a)),
+            Some(LibSlot::Loading) => Binding::Unbound(alloc::format!("{lib} imports {name} from itself while it is being loaded (an import cycle)")),
+            Some(LibSlot::Failed(why)) => Binding::Unbound(alloc::format!("the PEF library {lib} could not be loaded: {why}")),
+            _ => Binding::Unbound(alloc::format!("library {lib} is not provided")),
+        }
     }
 
     /// The binding for `name`, computed once against the handlers `mac` has registered.
@@ -103,6 +157,14 @@ impl<U: GuestUi> MacPpc<U> {
                 b
             }
             l if crate::natives::provided(l) => self.bind(name),
+            l if self.libs.contains_key(l) => self.export_binding(l, name),
+            // Universal Procedure Pointer constructors are library glue everywhere (CarbonLib exports one per callback type, including the networking and multimedia ones
+            // whose OTHER calls this engine lacks): building a routine descriptor needs nothing from the absent library, and an unguarded call must not jump to 0.
+            l if (name.starts_with("New") && name.ends_with("UPP") && name.len() > 6) || (name.starts_with("Dispose") && name.ends_with("UPP") && name.len() > 9) => {
+                let b = Binding::Native(if name.starts_with("New") { crate::symbols::Native::NewUpp } else { crate::symbols::Native::DisposeUpp });
+                self.bindings.insert(crate::glue::binding_key(l, name), b.clone());
+                b
+            }
             l => {
                 // Recorded under the glue key like every other binding: a CALL of the symbol must refuse by NAME (`NEXT-NEEDED lib/sym: ...`),
                 // not stop on "no binding was recorded for this glue stub".

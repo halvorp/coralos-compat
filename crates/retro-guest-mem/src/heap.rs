@@ -18,6 +18,12 @@ impl Heap {
         let s = (start + GRAIN - 1) & !(GRAIN - 1);
         Heap { free: BTreeMap::from([(s, end - s)]), live: BTreeMap::new() }
     }
+    /// Add a free region `[start, start + len)` (memory that did not exist when the heap was made). It must not overlap anything the heap knows.
+    pub fn add_region(&mut self, start: u32, len: u32) {
+        let s = (start + GRAIN - 1) & !(GRAIN - 1);
+        let len = len.saturating_sub(s - start) & !(GRAIN - 1);
+        if len > 0 { self.free.insert(s, len); }
+    }
     /// First fit; None = no block large enough (AllocMem's NULL, a legitimate answer).
     pub fn alloc(&mut self, size: u32) -> Option<u32> {
         let want = size.checked_add(GRAIN - 1)? & !(GRAIN - 1);

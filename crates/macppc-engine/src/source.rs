@@ -62,3 +62,17 @@ pub fn fragment_bytes(file: &[u8], data_fork: Option<&[u8]>) -> Result<(String, 
     let name = if m.name.is_empty() { opened.name.unwrap_or_else(|| format!("(cfrg member)")) } else { m.name.clone() };
     Ok((name, data[m.offset as usize..end].to_vec()))
 }
+
+/// The PowerPC IMPORT-LIBRARY members of the `cfrg` of `file` that live in its data fork: private shared libraries an application carries inside its own file (Blizzard's
+/// StormCarbon, CursorDeviceLib). `(name, PEF bytes)`; the application's own fragment is [`fragment_bytes`]. Empty for a bare PEF or a file with no such members.
+pub fn library_fragments(file: &[u8], data_fork: Option<&[u8]>) -> Vec<(String, Vec<u8>)> {
+    let Ok(opened) = retro_resfork::open(file) else { return Vec::new() };
+    let Ok(fork) = ResFork::parse(file[opened.rsrc.clone()].to_vec()) else { return Vec::new() };
+    let Some(i) = fork.find(*b"cfrg", 0) else { return Vec::new() };
+    let Ok(members) = cfrg::parse(fork.data(i).unwrap_or(&[])) else { return Vec::new() };
+    let data: &[u8] = match (&opened.data, data_fork) { (_, Some(d)) => d, (Some(r), None) => &file[r.clone()], (None, None) => return Vec::new() };
+    members.iter().filter(|m| &m.arch == b"pwpc" && m.usage == cfrg::USAGE_IMPORT_LIBRARY && m.location == WHERE_DATA_FORK).filter_map(|m| {
+        let end = if m.length == 0 { data.len() } else { (m.offset as usize).saturating_add(m.length as usize) };
+        (m.offset as usize <= data.len() && end <= data.len() && Pef::has_magic(&data[m.offset as usize..end])).then(|| (m.name.clone(), data[m.offset as usize..end].to_vec()))
+    }).collect()
+}

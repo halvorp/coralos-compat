@@ -159,3 +159,19 @@ impl<U: GuestUi> Mac<U> {
         h.ok().and_then(|h| self.handle_bytes(h)).filter(|b| b.len() >= 2).map_or(0, |b| u32::from(u16::from_be_bytes([b[0], b[1]])))
     }
 }
+
+/// The selector of the Process Manager / Temporary Memory routine named `name` (`"GetCurrentProcess"` -> 0x37), if this engine has it.
+pub fn selector_of<U: GuestUi>(name: &str) -> Option<u16> { (0u16..0x40).find(|&s| lookup::<U>(s).is_some_and(|r| r.name == name)) }
+
+/// Run routine `selector` with its Pascal arguments as VALUES (declaration order), as the PowerPC adapter does: the same body `_OSDispatch` runs for a 68k
+/// caller. Returns the result and its width (`None` for a procedure), or the handler's refusal.
+pub fn call_selector<U: GuestUi>(m: &mut Mac<U>, selector: u16, values: &[u32]) -> Result<(u32, Option<Arg>), Refusal> {
+    let rt = lookup::<U>(selector).ok_or_else(|| Refusal(format!("OSDispatch selector {selector:#x} is not a routine this engine implements")))?;
+    let args = crate::pascal::Args::from_values(rt.args, values)?;
+    let mut cpu = Cpu::detached();
+    let Done { result, .. } = (rt.run)(m, &mut cpu, &Call { opcode: 0xA88F, pc: 0, name: rt.name, args })?;
+    Ok((result, rt.result))
+}
+
+/// How many arguments routine `selector` takes.
+pub fn arg_count<U: GuestUi>(selector: u16) -> Option<usize> { lookup::<U>(selector).map(|r| r.args.len()) }

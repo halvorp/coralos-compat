@@ -48,6 +48,11 @@ pub struct Task {
     pub wait: Option<Wait>,
     /// A wake-up status delivered to the LIVE task (it has no saved registers to put it in): `block` reads it back.
     pub(crate) woken: Option<i32>,
+    /// `SetThreadTerminator`: (TVector, parameter) called with (thread id, parameter) when the thread ends.
+    pub(crate) terminator: Option<(u32, u32)>,
+    /// `SetThreadSwitcher`: (TVector, parameter) called with (thread id, parameter) as the thread is switched IN / OUT.
+    pub(crate) switch_in: Option<(u32, u32)>,
+    pub(crate) switch_out: Option<(u32, u32)>,
     /// MPCreateTask's termination notice: (queue, parameter1, parameter2).
     pub notify: Option<(u32, u32, u32)>,
 }
@@ -72,7 +77,7 @@ impl<U: GuestUi> MacPpc<U> {
     /// The task table exists once anything schedules: task 1 is the application, running.
     pub(crate) fn ensure_sched(&mut self) {
         if self.rt.sched.tasks.is_empty() {
-            self.rt.sched.tasks.insert(MAIN_TASK, Task { cpu: None, callbacks: Vec::new(), state: TState::Running, kind: Kind::Main, stack: None, result_ptr: 0, wait: None, woken: None, notify: None });
+            self.rt.sched.tasks.insert(MAIN_TASK, Task { cpu: None, callbacks: Vec::new(), state: TState::Running, kind: Kind::Main, stack: None, result_ptr: 0, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: None });
             self.rt.sched.current = MAIN_TASK;
             self.rt.sched.next_id = MAIN_TASK + 1;
         }
@@ -83,6 +88,31 @@ impl<U: GuestUi> MacPpc<U> {
     /// Make `cpu` the registers of task `to`. The current task is saved as `cur_state` and resumes at `resume_pc` (with whatever `cpu` holds now), or,
     /// with `None`, it is over: removed, its stack freed. `to` must be a Ready task.
     pub(crate) fn switch_to(&mut self, cpu: &mut Cpu, to: u32, cur_state: Option<TState>, resume_pc: u32) -> Result<(), String> {
+        let cur = self.rt.sched.current;
+        // the thread's out-switcher runs first, on the leaving thread; the switch itself happens when it returns (callback.rs: SwitchOut)
+        if let Some((tv, param)) = self.rt.sched.tasks.get(&cur).and_then(|t| t.switch_out) {
+            let frame = Frame { saved: crate::callback::Saved::of(cpu, resume_pc), cont: crate::callback::Continuation::SwitchOut { to, state: cur_state, pc: resume_pc } };
+            let sp = cpu.gpr[1];
+            self.enter_tvector(cpu, tv, &[cur, param], sp).map_err(|e| format!("thread switcher (out): {e}"))?;
+            self.rt.callbacks.push(frame);
+            return Ok(());
+        }
+        self.finish_switch(cpu, to, cur_state, resume_pc)
+    }
+
+    /// The switch itself, then the new thread's in-switcher (run on the new thread before it continues).
+    pub(crate) fn finish_switch(&mut self, cpu: &mut Cpu, to: u32, cur_state: Option<TState>, resume_pc: u32) -> Result<(), String> {
+        self.raw_switch(cpu, to, cur_state, resume_pc)?;
+        if let Some((tv, param)) = self.rt.sched.tasks.get(&to).and_then(|t| t.switch_in) {
+            let frame = Frame { saved: crate::callback::Saved::of(cpu, cpu.pc), cont: crate::callback::Continuation::SwitchIn };
+            let sp = cpu.gpr[1];
+            self.enter_tvector(cpu, tv, &[to, param], sp).map_err(|e| format!("thread switcher (in): {e}"))?;
+            self.rt.callbacks.push(frame);
+        }
+        Ok(())
+    }
+
+    fn raw_switch(&mut self, cpu: &mut Cpu, to: u32, cur_state: Option<TState>, resume_pc: u32) -> Result<(), String> {
         let cur = self.rt.sched.current;
         if !self.rt.sched.tasks.get(&to).is_some_and(|t| t.state == TState::Ready && t.cpu.is_some()) { return Err(format!("switch to task {to}: it is not a ready task with saved registers")); }
         let callbacks = core::mem::take(&mut self.rt.callbacks);

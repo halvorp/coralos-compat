@@ -15,13 +15,13 @@ use mac68k_engine::osconv::Regs;
 pub const GESTALT_UNDEF_SELECTOR_ERR: i32 = -5551;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OsRoutine { FlushEvents, Delay, PurgeSpace, MaxMem, MoveHHi, HandToHand, PtrToHand, PtrAndHand, HandAndHand, Gestalt }
+pub enum OsRoutine { HLockHi, MaxBlock, TempFreeMem, TempMaxMem, FlushEvents, Delay, PurgeSpace, MaxMem, MoveHHi, HandToHand, PtrToHand, PtrAndHand, HandAndHand, Gestalt }
 
 impl OsRoutine {
     pub fn by_name(name: &str) -> Option<OsRoutine> {
         use OsRoutine::*;
         Some(match name {
-            "FlushEvents" => FlushEvents, "Delay" => Delay, "PurgeSpace" => PurgeSpace, "MaxMem" => MaxMem, "MoveHHi" => MoveHHi,
+            "HLockHi" => HLockHi, "MaxBlock" => MaxBlock, "TempFreeMem" => TempFreeMem, "TempMaxMem" => TempMaxMem, "FlushEvents" => FlushEvents, "Delay" => Delay, "PurgeSpace" => PurgeSpace, "MaxMem" => MaxMem, "MoveHHi" => MoveHHi,
             "HandToHand" => HandToHand, "PtrToHand" => PtrToHand, "PtrAndHand" => PtrAndHand, "HandAndHand" => HandAndHand, "Gestalt" => Gestalt,
             _ => return None,
         })
@@ -29,7 +29,7 @@ impl OsRoutine {
     /// How many C arguments the prototype takes.
     pub fn arg_count(self) -> usize {
         use OsRoutine::*;
-        match self { MaxMem | MoveHHi | HandToHand => 1, FlushEvents | Delay | PurgeSpace | HandAndHand | Gestalt => 2, PtrToHand | PtrAndHand => 3 }
+        match self { MaxMem | MoveHHi | HandToHand | TempMaxMem | HLockHi => 1, MaxBlock | TempFreeMem => 0, FlushEvents | Delay | PurgeSpace | HandAndHand | Gestalt => 2, PtrToHand | PtrAndHand => 3 }
     }
 }
 
@@ -42,7 +42,7 @@ impl<U: GuestUi> MacPpc<U> {
         if c == Gestalt {
             let sel = a[0].to_be_bytes();
             let shown: String = sel.iter().map(|&b| char::from(b)).collect();
-            if let Some(v) = crate::gestalt_ppc::answer(sel) {
+            if let Some(v) = crate::gestalt_ppc::answer(sel).or_else(|| matches!(&sel, b"ram " | b"lram").then_some(self.mac.mem.len() as u32)) {
                 store(self, a[1], v)?;
                 self.mac.log.push(format!("[toolbox] Gestalt '{shown}' -> {v:#x} (PowerPC profile)"));
                 return Ok(0);
@@ -52,12 +52,29 @@ impl<U: GuestUi> MacPpc<U> {
                 return Ok(GESTALT_UNDEF_SELECTOR_ERR as u32);
             }
         }
+        // Memory Manager queries with no trap handler in the shared core: the PowerPC process has the one heap, no temporary-memory partition
+        // (Temp* answer the same free space), so `MaxBlock` is the largest free block now, `TempFreeMem` the total free bytes.
+        match c {
+            // HLockHi(h) is the Memory Manager glue `MoveHHi(h); HLock(h)` (blocks never move here, so the first only validates the handle)
+            HLockHi => {
+                for step in ["MoveHHi", "HLock"] {
+                    let op = trap_opcode(step).ok_or_else(|| format!("{step}: no trap word"))?;
+                    let (out, ret) = self.mac.os_call_regs(Regs { opcode: op, d0: 0, a0: a[0], d1: 0, a1: 0 }).map_err(|e| format!("HLockHi: {e}"))?;
+                    let _ = (out, ret);
+                }
+                return Ok(0);
+            }
+            MaxBlock => return Ok(self.mac.heap.available(true)),
+            TempFreeMem => return Ok(self.mac.heap.available(false)),
+            TempMaxMem => { store(self, a[0], 0)?; return Ok(self.mac.heap.available(true)); } // *grow = 0: the heap cannot grow
+            _ => {}
+        }
         let opcode = trap_opcode(&name).ok_or_else(|| format!("{name}: no trap word"))?;
         let mut regs = Regs { opcode, d0: 0, a0: 0, d1: 0, a1: 0 };
         match c {
             FlushEvents => regs.d0 = (a[1] & 0xFFFF) << 16 | (a[0] & 0xFFFF),
             Delay => regs.a0 = a[0],
-            PurgeSpace => {}
+            PurgeSpace | MaxBlock | TempFreeMem | TempMaxMem | HLockHi => {}
             MaxMem => {}
             MoveHHi => regs.a0 = a[0],
             HandToHand => regs.a0 = self.mac.mem.read_u32(a[0]).map_err(|_| format!("{name}: handle pointer {:#x} is outside guest RAM", a[0]))?,
@@ -70,6 +87,7 @@ impl<U: GuestUi> MacPpc<U> {
         if ret.blocked { return Err(format!("{name}: the handler tried to block the caller")); }
         let err = out.d0 as u16 as i16 as i32 as u32;
         match c {
+            MaxBlock | TempFreeMem | TempMaxMem | HLockHi => unreachable!("answered above"),
             FlushEvents | MoveHHi => Ok(0),
             Delay => { store(self, a[1], out.d0)?; Ok(0) }
             PurgeSpace => { store(self, a[0], out.d0)?; store(self, a[1], out.a0)?; Ok(0) }

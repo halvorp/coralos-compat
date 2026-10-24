@@ -412,9 +412,8 @@ pub mod sel {
     pub const OPEN_DF: u16 = 0x1A;
 }
 
-fn dispatch<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> R {
-    let selector = c.dreg(0) as u16;
-    let body: Option<(&str, Body<U>)> = match selector {
+fn selector_body<U: GuestUi>(selector: u16) -> Option<(&'static str, Body<U>)> {
+    match selector {
         sel::OPEN_WD => Some(("OpenWD", open_wd::<U>)),
         sel::CLOSE_WD => Some(("CloseWD", close_wd::<U>)),
         sel::CAT_MOVE => Some(("CatMove", cat_move::<U>)),
@@ -425,7 +424,21 @@ fn dispatch<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> R {
         sel::SET_CAT_INFO => Some(("SetCatInfo", set_cat_info::<U>)),
         sel::OPEN_DF => Some(("OpenDF", open_data::<U>)),
         _ => None,
-    };
+    }
+}
+
+/// `PBxxx` by VALUE for a PowerPC caller (no D0/A0 registers): the `_HFSDispatch`/`_FSDispatch` routine `selector` on the parameter block at `pb`, asynchronously when
+/// `async_call`. Returns the OSErr (what the trap leaves in D0) -- `None` when this engine has no such selector. The same body the 68k trap runs.
+pub fn call_selector<U: GuestUi>(m: &mut Mac<U>, selector: u16, pb: u32, async_call: bool, hfs: bool) -> Option<Result<i16, Refusal>> {
+    let (name, f) = selector_body::<U>(selector)?;
+    let opcode = 0xA260 | if selector != sel::OPEN_DF || hfs { HFS } else { 0 } | if async_call { ASYNC } else { 0 };
+    let mut r = Regs { opcode, d0: 0, a0: pb, d1: 0, a1: 0 };
+    Some(run(m, &mut r, name, f).map(|log| { m.log.push(log); r.d0 as u16 as i16 }))
+}
+
+fn dispatch<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> R {
+    let selector = c.dreg(0) as u16;
+    let body = selector_body::<U>(selector);
     match body {
         // Every selector but OpenDF exists only in its HFS form. OpenDF is also PBOpenDF through `FSDispatch` ($A060, bit 9 clear): a
         // 50-byte IOParam block with no ioDirID, the directory being the working directory in ioVRefNum.

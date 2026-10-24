@@ -53,6 +53,8 @@ impl GuestMem {
     /// `addr` as the bus sees it (StripAddress).
     pub fn strip(&self, addr: u32) -> u32 { addr & self.mask }
     pub fn len(&self) -> usize { self.ram.len() }
+    /// Make the address space `new_len` bytes (zero-filled); never shrinks. For machines whose personality has more RAM than the default.
+    pub fn grow_to(&mut self, new_len: usize) { if new_len > self.ram.len() { self.ram.resize(new_len, 0); } }
     pub fn is_empty(&self) -> bool { self.ram.is_empty() }
 
     pub fn contains(&self, addr: u32, len: u32) -> bool {
