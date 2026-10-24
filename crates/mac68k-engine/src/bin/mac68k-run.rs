@@ -33,6 +33,7 @@ fn main() {
         std::fs::read(&arg).unwrap_or_else(|e| { eprintln!("{arg}: {e}"); std::process::exit(1) })
     };
     let mut m = Mac::new(RecordingGuestUi::new()).expect("machine");
+    m.ui.drain_audio = true; // nobody is listening: queued audio counts as played, so completion routines are not left waiting
     m.stop_on_unimplemented = census;
     if let Some(name) = &machine { if let Err(e) = m.set_machine(name) { eprintln!("{}", e.0); std::process::exit(2) } }
     if bit32 { m.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).expect("mode"); }

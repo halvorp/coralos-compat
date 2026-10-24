@@ -11,6 +11,7 @@ fn census_on(rel: &str, machine: &str) -> Option<Mac<RecordingGuestUi>> {
     let file = std::fs::read(&path).ok().or_else(|| { eprintln!("SKIPPED: corpus binary {path} not present (docs/CORPUS.md)"); None })?;
     let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
     m.stop_on_unimplemented = true;
+    m.ui.drain_audio = true; // headless: queued audio counts as played (completion routines run)
     m.set_machine(machine).unwrap();
     m.launch(&file).unwrap();
     m.run_loop(50_000_000).unwrap();
@@ -22,6 +23,7 @@ fn census_in(rel: &str, mode: mac68k_engine::addrmode::AddrMode) -> Option<Mac<R
     let file = std::fs::read(&path).ok().or_else(|| { eprintln!("SKIPPED: corpus binary {path} not present (docs/CORPUS.md)"); None })?;
     let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
     m.stop_on_unimplemented = true;
+    m.ui.drain_audio = true; // headless: queued audio counts as played (completion routines run)
     m.set_address_mode(mode).unwrap();
     m.launch(&file).unwrap();
     m.run_loop(50_000_000).unwrap();
@@ -124,9 +126,10 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     assert!(m.log.iter().any(|l| l.starts_with("[res] MaxSizeRsrc")) && m.log.iter().any(|l| l.starts_with("[res] GetCursor 1 -> 0x") && !l.contains("-> 0x0 ")), "{:#?}", m.log);
     assert!(!m.log.iter().any(|l| l.contains("Couldn't Load a Resource")), "the load-failure alert is gone");
     // then SetEntries (its palette), ShieldCursor, direct writes to the frame buffer (shown in its window), and its sound: the next wall is
-    // the Sound Manager's callBackCmd (a completion routine into the guest), refused by name
+    // the Sound Manager's looped sounds (loopEnd - loopStart > 1: it loops its engine / music sound and re-arms it from a callBackCmd routine,
+    // which now runs), refused by name; the seam would need a looping stream
     assert!(m.log.iter().any(|l| l.starts_with("[toolbox] ShieldCursor")) && m.log.iter().any(|l| l.contains("SetEntries")), "{:#?}", m.log);
-    assert!(m.refused.last().is_some_and(|r| r.contains("callBackCmd")), "the next wall: {:?}", m.refused.last());
+    assert!(m.refused.last().is_some_and(|r| r.contains("looped sound")), "the next wall: {:?}", m.refused.last());
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.
@@ -192,6 +195,7 @@ fn macwrite_4_6_opens_its_window_with_menus_and_parks_in_its_event_loop() {
     let Some(file) = std::fs::read("/data/build/corpus-bin/mac/macwrite/fx46/MacWrite.bin").ok().or_else(|| { eprintln!("SKIPPED: MacWrite 4.6 not present"); None }) else { return };
     let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
     m.stop_on_unimplemented = true;
+    m.ui.drain_audio = true; // headless: queued audio counts as played (completion routines run)
     m.launch(&file).unwrap();
     let r = m.run_loop(5_000_000).unwrap();
     assert!(r.stats.blocked && !r.stats.halted, "parked in its event loop: {:?} {:#?}", r.stats, m.log);

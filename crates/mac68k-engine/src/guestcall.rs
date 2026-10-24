@@ -41,6 +41,8 @@ pub(crate) enum Frame {
     Ae(crate::appleevents::AeDone),
     /// A dialog's user-item draw procedure ([`crate::translate::useritems`]): the next one, or the program's state back.
     UserItems(crate::translate::useritems::Run),
+    /// A Sound Manager completion routine ([`crate::sound::callback`]): every register and the SR, then free the command record.
+    SndCallBack(crate::vbl::VblDone, u32),
 }
 
 impl<U: GuestUi> Mac<U> {
@@ -71,6 +73,7 @@ impl<U: GuestUi> Mac<U> {
             Some(Frame::Vbl(done)) => { self.finish_vbl(cpu, done); true }
             Some(Frame::Ae(done)) => { self.finish_ae(cpu, done); true }
             Some(Frame::UserItems(run)) => { self.next_user_item(cpu, run); true }
+            Some(Frame::SndCallBack(done, cmd)) => { self.finish_sound_callback(cpu, done, cmd); true }
         }
     }
 }

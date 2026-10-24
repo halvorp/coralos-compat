@@ -84,6 +84,9 @@ pub struct RecordingGuestUi {
     pub audio: BTreeMap<u32, RecordedAudio>,
     /// Make every audio call refuse by name (a host with no audio service).
     pub refuse_audio: bool,
+    /// A headless run with nobody listening: queued audio counts as played at once (so a program that waits for its sound to end, with a
+    /// completion routine, is not left waiting for a clock that never ticks). Off by default: tests keep the clock with `play_audio`.
+    pub drain_audio: bool,
     /// Make `request` refuse by name (a host with no alert part).
     pub refuse_requests: bool,
     /// A headless run with nobody to answer: every request not covered by `request_answers` is answered at once with its Escape
@@ -316,6 +319,7 @@ impl GuestUi for RecordingGuestUi {
         let a = self.audio.get_mut(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?;
         if pcm.len() as u32 % a.model.frame_bytes() != 0 { return Err(UiRefusal::InvalidGeometry("queued audio is not a whole number of frames")); }
         a.queued.extend_from_slice(pcm);
+        if self.drain_audio { a.played = a.queued.len(); }
         self.calls.push(UiCall::QueueAudio(stream, pcm.len()));
         Ok(())
     }
@@ -564,5 +568,21 @@ mod audio_tests {
         assert!(matches!(ui.set_audio_volume(s, AUDIO_UNITY + 1, 0), Err(UiRefusal::InvalidGeometry(_))));
         ui.refuse_audio = true;
         assert!(matches!(ui.queue_audio(s, &[0; 4]), Err(UiRefusal::Unsupported(_))));
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+    #[test]
+    fn a_draining_headless_host_plays_what_is_queued_at_once_and_the_default_does_not() {
+        let m = AudioStreamModel { rate_hz: 8000, channels: 1, format: AudioFormat::U8, label: "t".into() };
+        let mut ui = RecordingGuestUi::new();
+        let s = ui.open_audio_stream(m.clone()).unwrap();
+        ui.queue_audio(s, &[1, 2, 3]).unwrap();
+        assert_eq!(ui.audio_queued_bytes(s).unwrap(), 3, "by default nothing plays until the test says so");
+        ui.drain_audio = true;
+        ui.queue_audio(s, &[4, 5]).unwrap();
+        assert_eq!(ui.audio_queued_bytes(s).unwrap(), 0, "draining: everything queued has played");
     }
 }

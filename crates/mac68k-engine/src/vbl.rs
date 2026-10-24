@@ -40,7 +40,7 @@ pub struct Vbl {
 
 /// What the trampoline restores when a task returns.
 #[derive(Debug, Clone)]
-pub(crate) struct VblDone { regs: [u32; 15], sr: u32 }
+pub(crate) struct VblDone { pub(crate) regs: [u32; 15], pub(crate) sr: u32 }
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register_os(0xA033, v_install::<U>)?;

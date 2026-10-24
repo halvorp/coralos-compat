@@ -13,13 +13,13 @@
 //!   modelled), `SndDoCommand` ($A803), `SndDoImmediate` ($A804), `SndPlay` ($A805), `SndControl` ($A806, refused), `SysBeep` ($A9C8)
 //!   and `SoundDispatch` ($A800, [`dispatch`]).
 //! * **Commands**: `nullCmd`, `quietCmd`, `flushCmd`, `pauseCmd`, `resumeCmd`, `rateCmd`, `volumeCmd`, `soundCmd`, `bufferCmd`.
-//!   Every other command is refused BY NAME, none succeeds silently. NAMED LIMITS: `callBackCmd` / `syncCmd` / `waitCmd` (a completion
-//!   callback into the guest, a timed wait) are refused; a looped sound (`loopEnd - loopStart > 1`) is refused; compressed (MACE /
+//!   Every other command is refused BY NAME, none succeeds silently. NAMED LIMITS: `syncCmd` / `waitCmd` (a timed wait) are refused (`callBackCmd` runs the channel's routine: callback.rs); a looped sound (`loopEnd - loopStart > 1`) is refused; compressed (MACE /
 //!   IMA) sound headers are refused; only the sampled synthesizer (and "any", 0) exists, the square-wave, wave-table and note
 //!   synthesizers answer `notEnoughHardware`; a synchronous `SndPlay` (`async` FALSE) returns when the sound is QUEUED, not when it has
 //!   played (the engine is not real-time: `SndChannelStatus` says `scChannelBusy` from the host's own queue length).
 //! * **`SndDisposeChannel(.., quietNow = FALSE)`** lets what is queued play out: its streams go on a draining list the next sound call
 //!   reaps once the host reports them idle. `quietNow` TRUE flushes first.
+pub mod callback;
 pub mod dispatch;
 pub mod snd;
 
@@ -76,6 +76,10 @@ pub struct SoundState {
     default_volume: Option<u32>,
     beep_state: Option<u16>,
     next_temp: u32,
+    /// Bytes ever queued per stream id (with the host's unplayed count this says how much has PLAYED; callback.rs).
+    queued_total: BTreeMap<u32, u64>,
+    pending: Vec<callback::Pending>,
+    in_callback: bool,
 }
 
 impl SoundState {
@@ -140,6 +144,7 @@ impl<U: GuestUi> Mac<U> {
         let frame = (s.channels as usize) * s.format.bytes_per_sample() as usize;
         let whole = s.pcm.len() / frame * frame;
         self.ui.queue_audio(stream, &s.pcm[..whole]).map_err(|e| Refusal(format!("the host refused queued audio: {e:?}")))?;
+        *self.snd.queued_total.entry(stream.id).or_insert(0) += whole as u64;
         Ok((NO_ERR, format!("{} Hz {}ch {:?}, {} bytes queued", rate, s.channels, s.format, whole)))
     }
 
@@ -194,6 +199,7 @@ impl<U: GuestUi> Mac<U> {
                 let (err, text) = self.snd_play_sound(key, s)?;
                 Ok((err, format!("{} {text}", if c.cmd == snd::SOUND_CMD { "soundCmd" } else { "bufferCmd" })))
             }
+            snd::CALL_BACK_CMD => self.snd_queue_callback(key, c),
             other => Err(Refusal(format!("{} (command {other}) is not implemented", cmd_name(other)))),
         }
     }
@@ -244,7 +250,7 @@ fn snd_new_channel<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<
     m.mem.write_u16(p + SC_Q_TAIL, 0).map_err(&e)?;
     m.snd.chans.insert(p, Chan { streams: alloc::vec![Stream { r: first, fmt: f }], ..Chan::default() });
     m.snd_apply_volume(p).map_err(|e| Refusal(format!("SndNewChannel: {e:?}")))?;
-    err_done(NO_ERR, format!("SndNewChannel {p:#x} synth {synth}{}", if user != 0 { " (a callBack routine is stored, never called: callBackCmd is refused)" } else { "" }))
+    err_done(NO_ERR, format!("SndNewChannel {p:#x} synth {synth}{}", if user != 0 { " (its callBack routine runs for each callBackCmd, after the sound queued before it has played)" } else { "" }))
 }
 
 /// `FUNCTION SndDisposeChannel(chan: SndChannelPtr; quietNow: BOOLEAN): OSErr`.

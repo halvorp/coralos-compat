@@ -276,6 +276,8 @@ impl<U: GuestUi> Host for Mac<U> {
         self.trap_pc = pc;
         // A vertical-retrace task that came due runs first; this very trap word then runs again (vbl.rs).
         if !via_stub && self.enter_vbl(cpu, pc) { return true; }
+        // A Sound Manager completion routine whose sound has played runs next, the same way (sound/callback.rs).
+        if !via_stub && self.enter_sound_callback(cpu, pc) { return true; }
         // A patched trap (`_SetTrapAddress`) runs the guest routine first; the routine chains to the original through the
         // stub `GetTrapAddress` gave it, and that stub's own trap word (`via_stub`) is not patched again.
         if !via_stub {

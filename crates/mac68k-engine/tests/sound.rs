@@ -169,9 +169,9 @@ fn unsupported_synths_and_commands_are_named_not_silent() {
     go(&mut g, |p| { new_channel(p, 1); }); // squareWaveSynth
     assert_eq!((word(&g, OUT), g.m.snd.channels()), (-201, 0));
     go(&mut g, |p| { new_channel(p, 5); });
-    set_cmd(&mut g, 13, 0, 0x1234); // callBackCmd: a completion routine into the guest
-    go(&mut g, |p| { do_cmd(p, 13, 0, 0x1234); });
-    assert!(g.m.refused.iter().any(|r| r.contains("callBackCmd")), "{:?}", g.m.refused);
+    set_cmd(&mut g, 10, 0, 0x1234); // waitCmd: a timed wait in the queue
+    go(&mut g, |p| { do_cmd(p, 10, 0, 0x1234); });
+    assert!(g.m.refused.iter().any(|r| r.contains("waitCmd")), "{:?}", g.m.refused);
     g.m.refused.clear();
     // a compressed header
     let mut h = std_header(0x56EE_8BA3, &[1, 2]);
@@ -220,4 +220,46 @@ fn dispose_without_quiet_now_lets_the_queued_sound_play_out_and_with_it_drops_it
         assert_eq!(g.m.ui.audio.values().any(|a| a.queued.len() == 4 && a.played == 0), survives, "quietNow {quiet}: {:?}", g.m.ui.audio);
         assert!(g.m.snd.channels() == 0, "the channel itself is gone either way");
     }
+}
+
+#[test]
+fn callbackcmd_runs_the_channels_routine_after_the_queued_sound_has_played_and_only_once() {
+    // The routine (guest code at 0x3700): movea.l 4(sp),a0 ; move.l 4(a0),$3600 ; movea.l 8(sp),a1 ; move.l a1,$3604 ; move.w 2(a0),$3608 ; rtd #8
+    let code: [u8; 30] = [0x20, 0x6F, 0x00, 0x04, 0x23, 0xE8, 0x00, 0x04, 0x00, 0x00, 0x36, 0x00, 0x22, 0x6F, 0x00, 0x08, 0x23, 0xC9, 0x00, 0x00, 0x36, 0x04,
+        0x33, 0xE8, 0x00, 0x02, 0x00, 0x00, 0x36, 0x08];
+    let mut g = Rig::new();
+    put(&mut g.m, 0x3700, &code);
+    put(&mut g.m, 0x3700 + 30, &[0x4E, 0x74, 0x00, 0x08]); // rtd #8
+    go(&mut g, |p| { p.clr_w().l(CHAN).w(5).l(0).l(0x3700).trap(0xA807).pop_w(OUT); });
+    assert_eq!(word(&g, OUT), 0);
+    g.m.mem.write_bytes(HDR, &std_header(0x56EE_8BA3, &[9; 40])).unwrap();
+    set_cmd(&mut g, 81, 0, HDR);
+    go(&mut g, |p| { do_cmd(p, 81, 0, HDR); });
+    set_cmd(&mut g, 13, 7, 0xABCD);
+    go(&mut g, |p| { do_cmd(p, 13, 7, 0xABCD); p.trap(0xA850); }); // and a trap after it
+    g.no_refusals();
+    assert_eq!(g.m.mem.read_u32(0x3600).unwrap(), 0, "40 bytes are still queued and unplayed: the routine has not run");
+    // the host plays the sound; the routine runs before the next trap
+    let (id, _) = streams(&g)[0];
+    g.m.ui.play_audio(guestui_abi::UiObjectRef { id, generation: 1 }, 40).unwrap();
+    go(&mut g, |p| { p.trap(0xA850); });
+    assert_eq!(g.m.mem.read_u32(0x3600).unwrap(), 0xABCD, "param2 reached the routine through its SndCommand");
+    assert_eq!((g.m.mem.read_u32(0x3604).unwrap(), g.m.mem.read_i16(0x3608).unwrap()), (chan(&g), 7), "and the channel and param1");
+    assert!(g.m.log.iter().any(|l| l.starts_with("[sound] callBack routine 0x3700 runs")), "{:#?}", g.m.log);
+    // exactly once: clear the marker, trap again, it stays clear
+    g.m.mem.write_u32(0x3600, 0).unwrap();
+    go(&mut g, |p| { p.trap(0xA850); });
+    assert_eq!(g.m.mem.read_u32(0x3600).unwrap(), 0, "a callBackCmd fires once");
+    g.no_refusals();
+}
+
+#[test]
+fn a_channel_with_no_callback_routine_ignores_callbackcmd_and_a_sound_queued_after_it_does_not_delay_it() {
+    let mut g = Rig::new();
+    go(&mut g, |p| { new_channel(p, 5); });
+    set_cmd(&mut g, 13, 1, 2);
+    go(&mut g, |p| { do_cmd(p, 13, 1, 2); });
+    assert_eq!(word(&g, OUT + 4), 0, "noErr");
+    assert!(g.m.log.iter().any(|l| l.contains("no callBack routine: ignored")));
+    g.no_refusals();
 }
