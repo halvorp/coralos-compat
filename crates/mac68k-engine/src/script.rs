@@ -24,7 +24,7 @@ const NAMES: [&str; 18] = ["FontScript", "IntlScript", "KeyScript", "FontToScrip
     "SetScriptVariable", "CharByte", "CharType", "Pixel2Char", "Char2Pixel", "Transliterate", "FindWord", "HiliteText", "DrawJust", "MeasureJust", "ParseTable"];
 
 /// The Roman answer for `GetScriptManagerVariable(selector)`, or None when there is no honest one.
-fn manager_variable(sel: i16) -> Option<(u32, &'static str)> {
+pub fn manager_variable(sel: i16) -> Option<(u32, &'static str)> {
     Some(match sel {
         0 => (0x0007, "smVersion"),            // Script Manager 7
         4 => (1, "smEnabled"),                 // one script system: Roman
