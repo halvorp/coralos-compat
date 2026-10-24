@@ -17,7 +17,7 @@ mod flood;
 pub(crate) mod modes;
 mod modes_best;
 mod draw;
-mod drawinfo;
+pub(crate) mod drawinfo;
 pub mod fonts;
 pub(crate) mod palette;
 mod pixelarrays;

@@ -101,12 +101,16 @@ fn rd16<U: GuestUi>(a: &Amiga<U>, at: u32) -> Result<i32, Refusal> { a.mem.read_
 /// The gadget's box in window coordinates (boopsigadgets.c: RELRIGHT adds Width-1, RELBOTTOM Height-1, RELWIDTH/RELHEIGHT the size).
 pub(crate) fn gadget_box<U: GuestUi>(a: &Amiga<U>, win: u32, g: u32) -> Result<(i32, i32, i32, i32), Refusal> {
     let fl = a.mem.read_u16(g + GAD_FLAGS).map_err(Refusal::mem("Gadget.Flags"))? as u32;
-    let (ww, wh) = (rd16(a, win + 8)?, rd16(a, win + 10)?);
+    let (mut ww, mut wh) = (rd16(a, win + 8)?, rd16(a, win + 10)?);
     let (mut l, mut t, mut w, mut h) = (rd16(a, g + GAD_LEFT)?, rd16(a, g + GAD_TOP)?, rd16(a, g + GAD_WIDTH)?, rd16(a, g + GAD_HEIGHT)?);
+    // A Requester's gadget is relative to the requester's own rectangle (request_region.rs), which the Rel* flags refer to as well.
+    let origin = a.req.origin.get(&g).copied();
+    if let Some(o) = origin { (ww, wh) = (o.w, o.h); }
     if fl & GFLG_RELRIGHT != 0 { l += ww - 1; }
     if fl & GFLG_RELBOTTOM != 0 { t += wh - 1; }
     if fl & GFLG_RELWIDTH != 0 { w += ww; }
     if fl & GFLG_RELHEIGHT != 0 { h += wh; }
+    if let Some(o) = origin { l += o.x; t += o.y; }
     Ok((l, t, w, h))
 }
 

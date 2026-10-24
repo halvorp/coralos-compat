@@ -135,7 +135,12 @@ pub fn point_in_image<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Str
 
 /// DrawBorder(a0 = rp, a1 = border, d0 = left, d1 = top): each Border chains lines in its own pens and mode.
 pub fn draw_border<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (rp, mut bd, l, t) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)));
+    let (rp, bd, l, t) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)));
+    draw_borders(a, rp, bd, l, t)
+}
+
+/// DrawBorder's body: the Border chain `bd` into `rp` at (l, t). Shared with the Requester renderer (request_region.rs).
+pub(crate) fn draw_borders<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut bd: u32, l: i32, t: i32) -> Result<String, Refusal> {
     let m = Refusal::mem("Border");
     let st = rastport::read(a, rp)?;
     let mut n = 0;
@@ -170,7 +175,12 @@ fn itext_font<U: GuestUi>(a: &mut Amiga<U>, it: u32, rp_font: u32) -> Result<u32
 
 /// PrintIText(a0 = rp, a1 = IntuiText, d0 = left, d1 = top).
 pub fn print_itext<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (rp, mut it, l, t) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)));
+    let (rp, it, l, t) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)));
+    print_itexts(a, rp, it, l, t)
+}
+
+/// PrintIText's body: the IntuiText chain `it` into `rp` at (l, t). Shared with the Requester renderer (request_region.rs).
+pub(crate) fn print_itexts<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut it: u32, l: i32, t: i32) -> Result<String, Refusal> {
     let m = Refusal::mem("IntuiText");
     let mask = a.mem.read_u8(rp + RP_MASK).map_err(&m)?;
     let (rp_font, mut n) = (a.mem.read_u32(rp + RP_FONT).map_err(&m)?, 0);
@@ -245,3 +255,12 @@ pub fn get_screen_data<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
 
 /// DrawImageState for `img` (classic Image chain or a BOOPSI image object) at (x, y): the entry the native gadget classes use.
 pub fn draw_image_at<U: GuestUi>(a: &mut Amiga<U>, rp: u32, img: u32, x: i32, y: i32, state: u32) -> Result<(), Refusal> { draw_chain(a, rp, img, x, y, state, "DrawImageState").map(|_| ()) }
+
+/// SetRast-style fill of the box (x, y, w, h) of `rp` in pen `pen` (a Requester's BackFill, requesters.c:91).
+pub(crate) fn fill_pen<U: GuestUi>(a: &mut Amiga<U>, rp: u32, (x, y, w, h): (i32, i32, i32, i32), pen: u8) -> Result<(), Refusal> {
+    let st = rastport::read(a, rp)?;
+    let b = Brush { fg: pen, bg: pen, mode: JAM2, mask: st.mask };
+    let r = Rect::from_size(x, y, w, h);
+    target::paint(a, rp, "Requester BackFill", |bm, clip, (ox, oy)| paint::fill_rect(bm, r.translate(-ox, -oy), &b, None, clip))?;
+    Ok(())
+}

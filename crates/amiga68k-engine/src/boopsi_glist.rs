@@ -10,6 +10,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
 use crate::boopsi_ids::*;
+use crate::native_gadgets;
 use crate::boopsi_send::make_msg;
 use crate::guest_call::{self, Next};
 use crate::{machine::Amiga, Refusal};
@@ -39,7 +40,7 @@ pub fn chain<U: GuestUi>(a: &Amiga<U>, mut g: u32, num: i32) -> Result<Vec<u32>,
 pub fn window_gadgets<U: GuestUi>(a: &Amiga<U>, win: u32) -> Result<Vec<u32>, Refusal> { chain(a, rd(a, win + WD_FIRST_GADGET, "Window.FirstGadget")?, -1) }
 
 /// Link the `num` gadgets from `first` into `win`'s list at `pos` (past the end = the end); returns the position used.
-fn link_in<U: GuestUi>(a: &mut Amiga<U>, win: u32, first: u32, pos: u32, num: i32) -> Result<u32, Refusal> {
+pub(crate) fn link_in<U: GuestUi>(a: &mut Amiga<U>, win: u32, first: u32, pos: u32, num: i32) -> Result<u32, Refusal> {
     let new = chain(a, first, num)?;
     if new.is_empty() { return Ok(pos); }
     let all = window_gadgets(a, win)?;
@@ -71,6 +72,17 @@ pub fn add_glist<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     run_methods(a, cpu, Job { win, gadgets: boopsi, i: 0, method: GM_LAYOUT, result: used })?;
     Ok(log)
 }
+
+/// AddGList without the guest call: link `num` gadgets from `g` into `win`'s list at `pos` and register their native controls. Used by Request
+/// (a requester's gadgets are added to its window, request.c:171).
+pub(crate) fn attach<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32, pos: u32, num: i32) -> Result<u32, Refusal> {
+    let used = link_in(a, win, g, pos, num)?;
+    native_gadgets::sync_chain(a, win, &chain(a, g, num)?)?;
+    Ok(used)
+}
+
+/// RemoveGList without the guest call (EndRequest takes a requester's gadgets back out).
+pub(crate) fn detach<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32, num: i32) -> Result<u32, Refusal> { unlink(a, win, g, num) }
 
 /// AddGadget(a0 = window, a1 = gadget, d0 = position): one gadget.
 pub fn add_gadget<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {

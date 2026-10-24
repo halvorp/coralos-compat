@@ -31,7 +31,7 @@ fn load(a: &mut Amiga<RecordingGuestUi>, prefix: &str, dir: &std::path::Path) {
 fn viewfont_and_directory_opus_run_until_the_next_function_nobody_has_written() {
     // The first unimplemented function each real binary reaches (None = it runs on without one: Directory Opus reaches its idle
     // loop, which tests/dopus_idle.rs checks in detail).
-    for (prog, progdir, next) in [("C/viewfont", "DOpus5:C", Some("intuition.library/Request")), ("DirectoryOpus", "DOpus5:", None)] {
+    for (prog, progdir, next) in [("C/viewfont", "DOpus5:C", None::<&str>), ("DirectoryOpus", "DOpus5:", None)] {
         let Some((_, unimpl)) = census(prog, progdir) else { return };
         let want = next.map(|n| format!("{n}: unimplemented"));
         assert_eq!(unimpl.last(), want.as_ref(), "{prog}: all of {unimpl:?}");

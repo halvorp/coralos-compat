@@ -182,6 +182,7 @@ pub fn close_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     a.ui.close_window(native).map_err(Refusal::ui)?;
     crate::gadtools::detach(a, win);
     crate::native_gadgets::detach(a, win);
+    crate::request_region::forget_window(a, win);
     idcmp::free_user_port(a, win)?;
     idcmp::free_window_port(a, win)?;
     a.menu_strips.remove(&win);
