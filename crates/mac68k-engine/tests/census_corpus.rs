@@ -270,8 +270,8 @@ fn simpletext_opens_its_untitled_window_with_menus_and_a_scroll_bar_and_parks_in
         assert_eq!((opens[0].title.as_str(), opens[0].role), ("untitled", WindowRole::Document));
         assert!(m.ui.calls.iter().any(|c| matches!(c, UiCall::SetMenuStrip(..))) && m.log.iter().any(|l| l.starts_with("[textedit] TEStyleNew")), "{app}: menus and a styled record");
         assert!(m.log.iter().any(|l| l.starts_with("[script] GetScriptManagerVariable")) && m.log.iter().any(|l| l.starts_with("[help] HMGetBalloons")), "{app}");
-        // what is still refused is named: the outline-highlight feature flag, GetScriptVariable, the Apple Event selector
-        assert!(m.refused.iter().all(|r| r.contains("GetScriptVariable") || r.contains("Apple Event")), "{app}: {:?}", m.refused);
+        // the outline-highlight flag, GetScriptVariable (valid styles) and AEGetAttributePtr all answer now: nothing is refused
+        assert!(m.refused.is_empty(), "{app}: {:?}", m.refused);
     }
 }
 

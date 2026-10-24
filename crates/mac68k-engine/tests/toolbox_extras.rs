@@ -421,20 +421,22 @@ fn script_util_answers_the_roman_script_and_pops_every_frame_it_decodes() {
 
 #[test]
 fn get_script_variable_answers_only_what_the_specs_ground_and_names_the_rest() {
-    // GetScriptVariable(script, selector): LONGINT result, two word arguments, $8404000C (SimpleText's own call, selector 90)
+    // GetScriptVariable(script, selector): LONGINT result, two word arguments, $8404000C (SimpleText's own call asks selector 90)
     let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
     let mut p = Prog::new();
     p.w(0x7777);
     p.clr_l().w(0).w(6).l(0x8404_000C).trap(0xA8B5).pop_l(0x3000);          // Roman, "not double-byte" -> 0
     p.clr_l().w(-1).w(0x54).l(0x8404_000C).trap(0xA8B5).pop_l(0x3004); // smSystemScript, the system font record -> Chicago 12
-    p.l(0x4444_4444).w(0).w(90).l(0x8404_000C).trap(0xA8B5).pop_l(0x3008); // an ungrounded selector: refused, result untouched
+    p.clr_l().w(0).w(90).l(0x8404_000C).trap(0xA8B5).pop_l(0x3014);        // smScriptValidStyles: itlb 0's 0x7F
+    p.clr_l().w(0).w(92).l(0x8404_000C).trap(0xA8B5).pop_l(0x3018);        // smScriptAliasStyle: italic
+    p.l(0x4444_4444).w(0).w(94).l(0x8404_000C).trap(0xA8B5).pop_l(0x3008); // an ungrounded selector: refused, result untouched
     p.l(0x5555_5555).w(1).w(6).l(0x8404_000C).trap(0xA8B5).pop_l(0x300C);  // script 1 (smJapanese) is not installed: refused
     p.pop_w(0x3010);
     m.start(&{ p.exit(); p.0.clone() }, 0).unwrap();
     let _ = m.run_loop(100_000);
     let r = |a: u32| m.mem.read_u32(a).unwrap();
-    assert_eq!((r(0x3000), r(0x3004)), (0, 12), "the grounded selectors");
+    assert_eq!((r(0x3000), r(0x3004), r(0x3014), r(0x3018)), (0, 12, 0x7F, 2), "the grounded selectors");
     assert_eq!((r(0x3008), r(0x300C)), (0x4444_4444, 0x5555_5555), "refused calls leave their result slots alone");
     assert_eq!(m.mem.read_u16(0x3010).unwrap(), 0x7777, "every frame was popped exactly");
-    assert!(m.refused.len() == 2 && m.refused[0].contains("selector 90") && m.refused[1].contains("only the Roman script"), "named: {:?}", m.refused);
+    assert!(m.refused.len() == 2 && m.refused[0].contains("selector 94") && m.refused[1].contains("only the Roman script"), "named: {:?}", m.refused);
 }

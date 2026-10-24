@@ -43,11 +43,18 @@ pub fn manager_variable(sel: i16) -> Option<(u32, &'static str)> {
 /// disagree with each other), so every other selector is refused by name with its number.
 /// * 6: the CoreFoundation script-flag test `GetScriptVariable(script, 6) == 0` means "not a double-byte script"
 ///   (spec: macos9-specs/CoreFoundationLib/CFStringGetBytes.md, step 1): 0 for Roman.
+/// * 90 and 92: `smScriptValidStyles` and `smScriptAliasStyle`, the last two bytes of the script's `itlb` bundle. The Mac OS 9.2.1
+///   System file's `itlb` 0 "Roman" (50 bytes, from the owner's install CD, docs/consults/2026-10-24-macos921-oracle.md) ends `7F 02`:
+///   every QuickDraw style but none beyond (bold, italic, underline, outline, shadow, condense, extend = 0x7F) and italic (2) as the
+///   alias style. The selector numbers are the Script.h ones (valid styles follows the three font-and-size records at 84, 86, 88);
+///   SimpleText asks 90 to enable its Style menu.
 /// * 0x54: the script's system font record, `fondID << 16 | size`, which `UseThemeFont` reads (spec:
 ///   macos9-specs/AppearanceLib/ThemeBrushes.md, UseThemeFont): Chicago (family 0) at 12 points, the classic Roman system font.
 pub fn script_variable(sel: i16) -> Option<(u32, &'static str)> {
     Some(match sel {
         6 => (0, "not a double-byte script"),
+        90 => (0x7F, "smScriptValidStyles: itlb 0 itlbValidStyles"),
+        92 => (2, "smScriptAliasStyle: itlb 0 itlbAliasStyle, italic"),
         0x54 => (12, "the system font record: Chicago (family 0), 12 points"),
         _ => return None,
     })

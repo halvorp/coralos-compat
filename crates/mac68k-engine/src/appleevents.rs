@@ -23,6 +23,7 @@
 //! `AESetInteractionAllowed` (0x011E) / `AEGetInteractionAllowed` (0x021D) keep the process's interaction level (default
 //! `kAEInteractWithLocal`); no event is ever sent, so nothing consults it yet.
 //!
+//! `AEGetAttributePtr` (0x0E15) answers the event's `evcl` and `evid` attributes and `errAEDescNotFound` for the rest (`miss` included).
 //! `AEDisposeDesc` (0x0204) is modelled (it frees the descriptor's handle and nulls it); building, sending and reading events
 //! (`AECreateAppleEvent`, `AESend`, `AEGetParamPtr`, lists) answer `paramErr` with a named refusal and pop their frame.
 use crate::machine::Mac;
@@ -43,11 +44,15 @@ mod sel {
     pub const GET_EVENT_HANDLER: u16 = 0x0921;
     pub const PROCESS_APPLE_EVENT: u16 = 0x021B;
     pub const DISPOSE_DESC: u16 = 0x0204;
+    pub const GET_ATTRIBUTE_PTR: u16 = 0x0E15;
     pub const SET_INTERACTION_ALLOWED: u16 = 0x011E;
     pub const GET_INTERACTION_ALLOWED: u16 = 0x021D;
 }
 
 pub const ERR_AE_EVENT_NOT_HANDLED: i16 = -1708;
+/// `errAEDescNotFound`, `errAECoercionFail` (AEDataModel.h).
+const ERR_AE_DESC_NOT_FOUND: i16 = -1701;
+const ERR_AE_COERCION_FAIL: i16 = -1700;
 /// `kHighLevelEvent`: the `what` of an Apple Event in the Event Manager.
 pub const HIGH_LEVEL_EVENT: u16 = 23;
 const FOUR_AEVT: u32 = u32::from_be_bytes(*b"aevt");
@@ -124,6 +129,12 @@ fn pack8<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> Result<String
             m.mem.write_u8(out, level as u8).map_err(&e)?;
             (0, format!("[ae] AEGetInteractionAllowed -> {level}"))
         }
+        sel::GET_ATTRIBUTE_PTR => {
+            // AEGetAttributePtr(event, keyword, desiredType, VAR typeCode, dataPtr, maxSize, VAR actualSize): the last argument is nearest sp
+            let (actual, max, data, type_out, desired, key, ev) = (arg_long(m, 0).map_err(&e)?, arg_long(m, 4).map_err(&e)?, arg_long(m, 8).map_err(&e)?, arg_long(m, 12).map_err(&e)?, arg_long(m, 16).map_err(&e)?, arg_long(m, 20).map_err(&e)?, arg_long(m, 24).map_err(&e)?);
+            let err = get_attribute(m, ev, key, desired, type_out, data, max, actual)?;
+            (err, format!("[ae] AEGetAttributePtr '{}'", tag(key)))
+        }
         sel::PROCESS_APPLE_EVENT => return process_apple_event(m, c, r, sp),
         other => {
             m.note_refusal("Pack8", format!("Apple Event selector {other:#06x} is not modelled (no event is ever delivered to a program here); the {words}-word frame is popped and the call answers paramErr"));
@@ -134,6 +145,24 @@ fn pack8<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> Result<String
     c.set_areg(7, result_at);
     r.d0 = 0;
     Ok(format!("{log} -> {err}"))
+}
+
+/// `AEGetAttributePtr`: the attributes of the event this host delivers (a synthetic `'aevt'` with only its class and id). `evcl` and
+/// `evid` are `typeType` values; every other attribute, `miss` (keyMissedKeywordAttr) included, is `errAEDescNotFound` -- which is what
+/// a handler's "were all the required parameters used?" test wants to see for an event with no parameters (Inside Macintosh:
+/// Interapplication Communication, "Getting Attributes"). The desired type must be `typeWildCard` or the attribute's own type.
+#[allow(clippy::too_many_arguments)]
+fn get_attribute<U: GuestUi>(m: &mut Mac<U>, ev: u32, key: u32, desired: u32, type_out: u32, data: u32, max: u32, actual: u32) -> Result<i16, Refusal> {
+    let e = Refusal::mem("AEGetAttributePtr");
+    let handle = m.mem.read_u32(ev + 4).map_err(&e)?;
+    let ptr = m.mm.block(handle).map(|b| b.ptr).ok_or_else(|| Refusal("AEGetAttributePtr: the event has no data".into()))?;
+    let value = match &key.to_be_bytes() { b"evcl" => m.mem.read_u32(ptr).map_err(&e)?, b"evid" => m.mem.read_u32(ptr + 4).map_err(&e)?, _ => return Ok(ERR_AE_DESC_NOT_FOUND) };
+    let type_type = u32::from_be_bytes(*b"type");
+    if desired != u32::from_be_bytes(*b"****") && desired != type_type { return Ok(ERR_AE_COERCION_FAIL); }
+    if type_out != 0 { m.mem.write_u32(type_out, type_type).map_err(&e)?; }
+    if actual != 0 { m.mem.write_u32(actual, 4).map_err(&e)?; }
+    if data != 0 && max > 0 { let n = max.min(4) as usize; m.mem.write_bytes(data, &value.to_be_bytes()[..n]).map_err(&e)?; }
+    Ok(0)
 }
 
 /// `AEProcessAppleEvent(theEventRecord)`: find the handler and run it in the guest (see the module comment for the stack).
