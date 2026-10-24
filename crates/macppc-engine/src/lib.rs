@@ -35,6 +35,7 @@ pub mod osroutines;
 pub mod run;
 pub mod source;
 pub mod stdclib;
+pub mod stdio;
 pub mod symbols;
 pub mod callback;
 pub mod callback_c;

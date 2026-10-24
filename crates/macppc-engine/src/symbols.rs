@@ -43,6 +43,8 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Os(crate::osroutines::OsRoutine),
     /// A StdCLib function served natively over guest memory and the PowerPC argument registers ([`crate::clib`]).
     C(crate::clib::CFn),
+    /// A C `FILE` stream function over the File Manager ([`crate::stdio`]).
+    Stdio(crate::stdio::StdioFn),
     /// An FSSpec call (`FSMakeFSSpec`, `FSpOpenDF` ...): [`crate::fsspec`].
     Spec(crate::fsspec::SpecCall),
     /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.

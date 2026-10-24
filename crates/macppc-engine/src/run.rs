@@ -51,6 +51,8 @@ pub struct Runtime {
     pub(crate) rand: u32,
     /// `atexit` handlers (TVectors), in registration order.
     pub(crate) atexit: alloc::vec::Vec<u32>,
+    /// Open `FILE` streams by the FILE block's guest address ([`crate::stdio`]).
+    pub(crate) streams: alloc::collections::BTreeMap<u32, crate::stdio::Stream>,
     pub(crate) rand_seeded: bool,
     pub(crate) errno: u32,
     main_tvector: u32,
@@ -192,6 +194,11 @@ impl<U: GuestUi> Host for MacPpc<U> {
         match self.bindings.get(&symbol).cloned() {
             Some(Binding::Native(Native::C(f))) => {
                 if let Err(why) = self.c_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
+                self.sync_natives(cpu);
+                return true;
+            }
+            Some(Binding::Native(Native::Stdio(f))) => {
+                if let Err(why) = self.stdio_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
                 self.sync_natives(cpu);
                 return true;
             }

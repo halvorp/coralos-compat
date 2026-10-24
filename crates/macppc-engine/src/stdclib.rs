@@ -36,7 +36,9 @@ pub fn lookup(name: &str) -> Option<Binding> {
         "_IntEnv" => Binding::CData(INT_ENV_BYTES),
         "__C_phase" | "_exit_status" | "__NubAt3" => Binding::CData(4),
         "__target_for_exit" => Binding::CData(4 * CLASSIC_JUMP_BUF_WORDS),
-        _ => return crate::clib::CFn::by_name(name).map(|f| Binding::Native(Native::C(f))),
+        // three FILE structs: stdin, stdout, stderr (macros `stdout` = &_iob[1])
+        "_iob" => Binding::CData(crate::stdio::IOB_BYTES),
+        _ => return crate::clib::CFn::by_name(name).map(|f| Binding::Native(Native::C(f))).or_else(|| crate::stdio::StdioFn::by_name(name).map(|f| Binding::Native(Native::Stdio(f)))),
     })
 }
 
