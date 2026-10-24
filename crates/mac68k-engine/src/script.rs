@@ -9,7 +9,7 @@
 //! selector is known from the selector itself: the callee pops selector + arguments and leaves the result above them.
 //!
 //! Implemented: `FontScript`, `IntlScript`, `FontToScript` (all answer smRoman, 0), `KeyScript` (accepted: there is one keyboard
-//! script), `GetScriptManagerVariable` for the variables that have an honest Roman answer (below), `CharByte` (every byte is a single
+//! script), `GetScriptManagerVariable` and `GetScriptVariable` for the variables that have an honest Roman answer (below), `CharByte` (every byte is a single
 //! byte), `VisibleLength` ($84080028: trailing blanks and tabs excluded). Every other selector pops its frame and is refused BY NAME,
 //! the result slot untouched. NAMED LIMIT: Roman only; `smEnabled` is 1.
 use crate::machine::{Mac, Regs};
@@ -34,6 +34,21 @@ pub fn manager_variable(sel: i16) -> Option<(u32, &'static str)> {
         2 | 24 | 26 | 28 | 30 | 32 | 34 | 36 | 38 | 42 => (0, "a Roman-only zero"),
         // smRegionCode: 2 = verBritain -- CoralOS's default region (Peter: European first, British default), ruled by the coordinator 2026-10-24; the 9.2.1 System file itself holds 0 (verUS)
         40 => (2, "smRegionCode (verBritain)"),
+        _ => return None,
+    })
+}
+
+/// The Roman answer for `GetScriptVariable(script, selector)`, or None when there is no honest one. Only the two selectors the Stage-A
+/// specs ground are answered; the Script Manager's selector numbering is NOT taken from memory (Executor's header and systemless
+/// disagree with each other), so every other selector is refused by name with its number.
+/// * 6: the CoreFoundation script-flag test `GetScriptVariable(script, 6) == 0` means "not a double-byte script"
+///   (spec: macos9-specs/CoreFoundationLib/CFStringGetBytes.md, step 1): 0 for Roman.
+/// * 0x54: the script's system font record, `fondID << 16 | size`, which `UseThemeFont` reads (spec:
+///   macos9-specs/AppearanceLib/ThemeBrushes.md, UseThemeFont): Chicago (family 0) at 12 points, the classic Roman system font.
+pub fn script_variable(sel: i16) -> Option<(u32, &'static str)> {
+    Some(match sel {
+        6 => (0, "not a double-byte script"),
+        0x54 => (12, "the system font record: Chicago (family 0), 12 points"),
         _ => return None,
     })
 }
@@ -66,6 +81,15 @@ fn script_util<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, _: &mut Regs) -> Resul
             match manager_variable(v) {
                 Some((val, what)) => { put(m, val)?; format!("GetScriptManagerVariable {v} ({what}) -> {val}") }
                 None => { done(cpu); return Err(Refusal(format!("GetScriptManagerVariable({v}) has no Roman-only answer here (the frame was popped, the result is untouched)"))); }
+            }
+        }
+        (_, 12) if result == 4 && params == 4 => {
+            let (selector, script) = (m.mem.read_u16(at).map_err(Refusal::mem("GetScriptVariable"))? as i16, m.mem.read_u16(at + 2).map_err(Refusal::mem("GetScriptVariable"))? as i16);
+            // smSystemScript (-1), smCurrentScript (-2) and smRoman (0) all name the one installed script; smAllScripts (-3) names no script
+            if !matches!(script, -2..=0) { done(cpu); return Err(Refusal(format!("GetScriptVariable(script {script}, selector {selector}): only the Roman script (0, -1, -2) is installed here (the frame was popped, the result is untouched)"))); }
+            match script_variable(selector) {
+                Some((val, what)) => { put(m, val)?; format!("GetScriptVariable {script} {selector} ({what}) -> {val}") }
+                None => { done(cpu); return Err(Refusal(format!("GetScriptVariable(script {script}, selector {selector}) has no Roman-only answer here (the frame was popped, the result is untouched)"))); }
             }
         }
         (_, 16) if result == 2 => { put(m, 0)?; String::from("CharByte -> smSingleByte") }
