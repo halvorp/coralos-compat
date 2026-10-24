@@ -250,6 +250,11 @@ impl<U: GuestUi> Host for MacPpc<U> {
                 Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
             }
         }
+        if let Some(Binding::Native(Native::Invoke(f))) = self.bindings.get(&symbol).cloned() {
+            if let Err(why) = self.begin_invoke(cpu, f) { self.rt.fault = Some(why); cpu.halt(); }
+            self.sync_natives(cpu);
+            return true;
+        }
         if let Some(Binding::Native(n @ (Native::SetJmp | Native::CExit | Native::BreakPoint))) = self.bindings.get(&symbol).cloned() { self.cpu_native(n, cpu); return true; }
         match self.bindings.get(&symbol).cloned() {
             Some(Binding::Native(Native::C(f))) => {
