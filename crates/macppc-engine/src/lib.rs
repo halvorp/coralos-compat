@@ -46,6 +46,7 @@ pub mod script_c;
 pub mod tsm_c;
 pub mod gworld;
 pub mod keys_c;
+pub mod menu_c;
 pub mod toolbox_c;
 pub mod stdio;
 pub mod symbols;
