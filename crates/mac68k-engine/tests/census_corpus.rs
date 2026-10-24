@@ -291,7 +291,7 @@ fn writenow_2_x_open_an_untitled_document_and_the_ruler_on_the_plus_they_were_wr
     // and the Ruler and then wait on null events. WriteNow 2.2's Window menu update searches the menu for the window's title, copied from
     // (**WindowPeek(w)->titleHandle) by a profiler-hooked helper (1818(a5)): with titleHandle NIL it found nothing, pushed no arguments and
     // SetItmStyle read stack garbage. There was no stack imbalance; the cause was the NIL field. Nothing is refused now.
-    for rel in ["mac/writenow/fx/z22_1/WriteNow 2.2.bin"] {
+    for rel in ["mac/writenow/fx/z22_1/WriteNow 2.2.bin", "mac/writenow/fx/z20_0/WriteNow 2.0.bin"] {
         let Some(m) = census_idle(rel, "mac-plus", 300) else { return };
         assert!(m.log.iter().any(|l| l.contains("Untitled-1")), "{rel}: {:#?}", m.log.iter().rev().take(30).collect::<Vec<_>>());
         assert!(m.log.iter().any(|l| l.contains("Ruler")), "{rel}");
