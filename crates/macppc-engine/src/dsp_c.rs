@@ -1,4 +1,4 @@
-//! DrawSprocket (`DrawSprocketLib`) as a NATIVE library with the games-run-windowed rule (Peter, via the coordinator's ruling 2026-10-24): the one main display has ONE context;
+//! DrawSprocket (`DrawSprocketLib`) as a NATIVE library under the games-run-windowed rule: the one main display has ONE context;
 //! reserving it and making it active gives the game its own native window at the requested size -- never a display-mode change and never exclusive full screen. Apple's library is
 //! not on the 9.2.1 CD, so the contract is the public API (Game Sprockets reference) and the structure offsets confirmed by systemless (GPL, facts only: the
 //! `DSpContextAttributes` offsets frequency 0, width 4, height 8, contextOptions 28, backBufferDepthMask 32, displayDepthMask 36, backBufferBestDepth 40, displayBestDepth 44, pageCount 48).

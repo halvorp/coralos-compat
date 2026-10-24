@@ -70,7 +70,7 @@ impl<U: GuestUi> MacPpc<U> {
                     let wake = if t.extended && t.prev_wake_tick != 0 { t.prev_wake_tick + ticks_of(count) } else { now + ticks_of(count) };
                     self.mac.mem.write_u32(task + TM_COUNT, count as u32).map_err(|_| format!("{n}: the TMTask leaves guest RAM"))?;
                     self.mac.mem.write_u16(task + Q_TYPE, q | ACTIVE).map_err(|_| format!("{n}: the TMTask leaves guest RAM"))?;
-                    if t.extended { let _ = self.mac.mem.write_u32(task + TM_WAKE_UP, (wake * 1000 / 60) as u32); }
+                    if t.extended { self.mac.mem.write_u32(task + TM_WAKE_UP, (wake * 1000 / 60) as u32).map_err(|_| format!("{n}: the TMTask leaves guest RAM"))?; }
                     self.tm.tasks.insert(task, Task { wake_tick: Some(wake), prev_wake_tick: if t.extended { wake } else { 0 }, ..t });
                     0
                 } else { -1 }
@@ -81,7 +81,7 @@ impl<U: GuestUi> MacPpc<U> {
                     let q = rd16(self, task + Q_TYPE)?;
                     let left = if q & ACTIVE != 0 { t.wake_tick.map_or(0, |w| w.saturating_sub(now)) * 1000 / 60 } else { 0 };
                     self.mac.mem.write_u16(task + Q_TYPE, q & 0x1F).and_then(|_| self.mac.mem.write_u32(task + TM_COUNT, left as u32)).map_err(|_| format!("{n}: the TMTask leaves guest RAM"))?;
-                    if t.extended { let w = t.wake_tick.map_or(0, |w| (w * 1000 / 60) as u32); let _ = self.mac.mem.write_u32(task + TM_WAKE_UP, w); }
+                    if t.extended { let w = t.wake_tick.map_or(0, |w| (w * 1000 / 60) as u32); self.mac.mem.write_u32(task + TM_WAKE_UP, w).map_err(|_| format!("{n}: the TMTask leaves guest RAM"))?; }
                     0
                 }
             },
