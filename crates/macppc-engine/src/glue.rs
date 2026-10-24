@@ -19,11 +19,18 @@ pub struct GlueEntry { pub library: String, pub symbol: String, pub tvector: u32
 #[derive(Default)]
 pub struct Glue { chunks: Vec<u32>, entries: Vec<GlueEntry>, by_key: BTreeMap<(String, String), usize> }
 
-/// The key a symbol's [`crate::symbols::Binding`] is stored under: the bare name for InterfaceLib (the Toolbox) and the
+/// The libraries whose exports are the Macintosh Toolbox under the Universal Interfaces' C names: InterfaceLib itself, CarbonLib, and the
+/// Mac OS 8.6+ sub-libraries the Toolbox was split into (the import-library set of a Mac OS 9 SDK, Retro68 `ImportLibraries/`: AppearanceLib,
+/// ControlsLib, DialogsLib, MenusLib, WindowsLib, NavigationLib; metamage_1 `Roles/libcarbon/A-line.confd/PPC.conf` imports the same four).
+/// One name table serves them all, so an import resolves by name whichever of them the fragment names; a name the table cannot serve is
+/// NEXT-NEEDED with the library in its message.
+pub const TOOLBOX_LIBRARIES: &[&str] = &["InterfaceLib", "CarbonLib", "AppearanceLib", "ControlsLib", "DialogsLib", "MenusLib", "WindowsLib", "NavigationLib"];
+
+/// The key a symbol's [`crate::symbols::Binding`] is stored under: the bare name for the Toolbox libraries and the
 /// engine's own pseudo-library, `Library::name` for every other provided library, so two libraries exporting one name
 /// keep separate bindings.
 pub fn binding_key(library: &str, symbol: &str) -> String {
-    if library == "InterfaceLib" || library == "CFM" { symbol.into() } else { alloc::format!("{library}::{symbol}") }
+    if library == "CFM" || TOOLBOX_LIBRARIES.contains(&library) { symbol.into() } else { alloc::format!("{library}::{symbol}") }
 }
 
 impl GlueEntry { pub fn key(&self) -> String { binding_key(&self.library, &self.symbol) } }

@@ -58,7 +58,7 @@ impl<U: GuestUi> MacPpc<U> {
         Ok(n)
     }
 
-    /// The binding for `name` as library `lib` exports it: StdCLib only what [`crate::stdclib`] provides, InterfaceLib the
+    /// The binding for `name` as library `lib` exports it: StdCLib only what [`crate::stdclib`] provides, the Toolbox libraries (`glue::TOOLBOX_LIBRARIES`: InterfaceLib, CarbonLib, ...) the
     /// Toolbox, anything else unbound.
     pub fn bind_from(&mut self, lib: &str, name: &str) -> Binding {
         match lib {
@@ -67,7 +67,13 @@ impl<U: GuestUi> MacPpc<U> {
                 None => Binding::Unbound(alloc::format!("{name} is not in the part of StdCLib this engine provides")),
             },
             l if crate::natives::PROVIDED_LIBRARIES.contains(&l) => self.bind(name),
-            l => Binding::Unbound(alloc::format!("library {l} is not provided by the engine")),
+            l => {
+                // Recorded under the glue key like every other binding: a CALL of the symbol must refuse by NAME (`NEXT-NEEDED lib/sym: ...`),
+                // not stop on "no binding was recorded for this glue stub".
+                let b = Binding::Unbound(alloc::format!("library {l} is not provided by the engine"));
+                self.bindings.insert(crate::glue::binding_key(l, name), b.clone());
+                b
+            }
         }
     }
 

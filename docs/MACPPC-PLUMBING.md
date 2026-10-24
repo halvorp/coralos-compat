@@ -183,3 +183,12 @@ allocated or shown and returns NIL. WDEFShell's custom windows (WDEF 128, a 68k 
 after this: real WindowRecord regions and windowDefProc, WindowDefinition continuations (NewWindow/wNew/wCalcRgns, FindWindow/wHit,
 wDraw), in-memory PEF preparation through the one CFM loader (WDEF 129), and native presentation only through an explicit binding;
 68k code reached from PowerPC (WDEF 128) waits for general cross-ISA execution.
+
+## Files, OS routines and libraries (2026-10-24)
+* `files.rs`: the `Files.h` C routines (FSOpen/FSRead/FSWrite/GetFPos/SetFPos/GetEOF/SetEOF/FlushVol/GetVol/SetVol/Create/FSDelete/HOpen/HOpenDF/HOpenRF/HCreate/HDelete/GetVRefNum)
+  fill a scratch parameter block and run the 68k engine's File Manager trap handlers through `Mac::os_call`; one volume, one set of refnums for both CPUs.
+* `osroutines.rs`: FlushEvents, Delay, PurgeSpace, MaxMem, MoveHHi, HandToHand, PtrToHand, PtrAndHand, HandAndHand and Gestalt (`'sysa'` = PowerPC) over `Mac::os_call_regs`
+  (the whole register file in and out, for two results or a packed argument).
+* Libraries: `glue::TOOLBOX_LIBRARIES` (InterfaceLib, CarbonLib, AppearanceLib, ControlsLib, DialogsLib, MenusLib, WindowsLib, NavigationLib) resolve through the one Toolbox name
+  table; a symbol of any other library is recorded Unbound under its glue key, so CALLING it refuses `NEXT-NEEDED Lib::sym: library Lib is not provided by the engine`.
+  The plan for a full Mac OS 9 game is `docs/consults/2026-10-24-macppc-full-app-gap-map.md`.

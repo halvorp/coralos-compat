@@ -21,7 +21,7 @@ pub const FRAG_LIB_NOT_FOUND: i16 = -2804;
 pub const SYMBOL_CLASS_DATA: u8 = 1;
 pub const SYMBOL_CLASS_TVECTOR: u8 = 2;
 /// The libraries `GetSharedLibrary` can hand out: the ones whose symbols the binding table resolves.
-pub const PROVIDED_LIBRARIES: &[&str] = &["InterfaceLib", crate::stdclib::NAME];
+pub const PROVIDED_LIBRARIES: &[&str] = &["InterfaceLib", "CarbonLib", "AppearanceLib", "ControlsLib", "DialogsLib", "MenusLib", "WindowsLib", "NavigationLib", crate::stdclib::NAME];
 
 fn err(e: i16) -> u32 { e as i32 as u32 }
 
