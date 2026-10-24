@@ -1,6 +1,6 @@
 //! Appearance Manager entry points and the Control / Dialog / Window Manager Carbon accessors, by C name through the PowerPC glue, over the SAME guest records the 68k
 //! Toolbox keeps: an accessor must see what a Classic program reads from the record, and a mutator must reach the record and the host presentation through the trap.
-use guestui_abi::RecordingGuestUi;
+use guestui_abi::{RecordingGuestUi, UiCall};
 use macppc_engine::{GlueOutcome, MacPpc, PpcHost};
 use mac68k_engine::pascal::Rect;
 use mac68k_engine::toolbox::WindowSpec;
@@ -156,4 +156,30 @@ fn testcontrol_reports_the_part_under_a_local_point_and_nothing_for_hidden_inact
     call(&mut m, "ActivateControl", &[ctl]);
     call(&mut m, "SetControlVisibility", &[ctl, 0, 0]);
     assert_eq!(call(&mut m, "TestControl", &[ctl, at(20, 30)]), 0, "a hidden control takes no hit");
+}
+
+#[test]
+fn hidewindow_keeps_the_window_open_and_tells_the_host_and_showwindow_brings_it_back() {
+    let (mut m, win) = machine();
+    call(&mut m, "ShowWindow", &[win]);
+    assert_eq!(call(&mut m, "IsWindowVisible", &[win]), 1);
+    let hides = |m: &M| m.mac.ui.calls.iter().filter(|c| matches!(c, UiCall::HideWindow(_))).count();
+    call(&mut m, "HideWindow", &[win]);
+    assert_eq!(call(&mut m, "IsWindowVisible", &[win]), 0);
+    assert!(m.mac.windows.contains_key(&win), "still open");
+    assert_eq!(hides(&m), 1);
+    // FrontWindow skips it; hiding again is a no-op that does not tell the host twice (NEGATIVE control)
+    assert_eq!(call(&mut m, "FrontWindow", &[]), 0);
+    call(&mut m, "HideWindow", &[win]);
+    assert_eq!(hides(&m), 1);
+    call(&mut m, "ShowWindow", &[win]);
+    assert_eq!(call(&mut m, "IsWindowVisible", &[win]), 1);
+    assert!(m.mac.ui.calls.iter().any(|c| matches!(c, UiCall::ShowWindow(_))));
+    assert_eq!(call(&mut m, "FrontWindow", &[]), win);
+    // an unknown window is refused by name
+    m.bind("HideWindow");
+    let mut regs = [0u32; 32];
+    regs[3] = 0x1234;
+    let _ = m.glue_call("HideWindow", &mut regs);
+    assert!(m.mac.refused.iter().chain(m.mac.log.iter()).any(|l| l.contains("HideWindow") && l.contains("not an open window")), "{:?} {:?}", m.mac.refused, m.mac.log.last());
 }

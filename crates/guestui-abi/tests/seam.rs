@@ -147,6 +147,21 @@ fn the_default_present_plane_is_a_named_refusal() {
     }
     let e = Bare.present_plane(UiObjectRef { id: 1, generation: 1 }, Plane { id: 1, rect: r(0, 0, 1, 1), ops: vec![] });
     assert!(matches!(e, Err(UiRefusal::Unsupported(w)) if w.contains("planes")));
+    // the same for hide/show: a host without them refuses by name (additive trait methods, 2026-10-24)
+    let w = UiObjectRef { id: 1, generation: 1 };
+    assert!(matches!(Bare.hide_window(w), Err(UiRefusal::Unsupported(m)) if m.contains("hide_window")));
+    assert!(matches!(Bare.show_window(w), Err(UiRefusal::Unsupported(m)) if m.contains("show_window")));
+}
+
+#[test]
+fn the_recording_host_records_hide_and_show_and_refuses_a_closed_window() {
+    let mut ui = RecordingGuestUi::new();
+    let w = ui.open_window(win()).unwrap();
+    ui.hide_window(w).unwrap();
+    ui.show_window(w).unwrap();
+    assert!(matches!(ui.calls[1], UiCall::HideWindow(_)) && matches!(ui.calls[2], UiCall::ShowWindow(_)));
+    ui.close_window(w).unwrap();
+    assert_eq!(ui.hide_window(w), Err(UiRefusal::UnknownObject(w)), "NEGATIVE control");
 }
 
 #[test]

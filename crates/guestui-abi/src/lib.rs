@@ -55,6 +55,15 @@ pub trait GuestUi: 'static {
     /// Replaces the window's menu strip (the plan's `MenuModel`).
     fn set_menu_strip(&mut self, win: UiObjectRef, menu: MenuModel) -> Result<(), UiRefusal>;
     fn clear_menu_strip(&mut self, win: UiObjectRef) -> Result<(), UiRefusal>;
+    /// The guest hid a window it keeps (Mac Window Manager `HideWindow`): it stays open, with its content and controls, but is not shown or in the window list. Hosts without it
+    /// refuse by name (a guest that hides a window is not told it worked).
+    fn hide_window(&mut self, _win: UiObjectRef) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("hiding a window (no hide_window in this host)"))
+    }
+    /// The guest showed a window it had hidden (`ShowWindow` after `HideWindow`).
+    fn show_window(&mut self, _win: UiObjectRef) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("showing a hidden window (no show_window in this host)"))
+    }
     fn add_control(&mut self, win: UiObjectRef, control: ControlModel) -> Result<UiObjectRef, UiRefusal>;
     fn remove_control(&mut self, win: UiObjectRef, control: UiObjectRef) -> Result<(), UiRefusal>;
     /// The guest changed a control's state (a label's text, a checkbox, a slider level). A value the control's kind

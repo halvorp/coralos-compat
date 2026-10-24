@@ -10,6 +10,8 @@ pub enum UiCall {
     OpenWindow(WindowModel),
     CloseWindow(UiObjectRef),
     SetWindowTitle(UiObjectRef, alloc::string::String),
+    HideWindow(UiObjectRef),
+    ShowWindow(UiObjectRef),
     SetMenuStrip(UiObjectRef, MenuModel),
     ClearMenuStrip(UiObjectRef),
     AddControl(UiObjectRef, ControlModel),
@@ -154,6 +156,8 @@ impl GuestUi for RecordingGuestUi {
         self.calls.push(UiCall::OpenWindow(model));
         Ok(self.alloc(0, token))
     }
+    fn hide_window(&mut self, win: UiObjectRef) -> Result<(), UiRefusal> { self.check(win)?; self.calls.push(UiCall::HideWindow(win)); Ok(()) }
+    fn show_window(&mut self, win: UiObjectRef) -> Result<(), UiRefusal> { self.check(win)?; self.calls.push(UiCall::ShowWindow(win)); Ok(()) }
     fn close_window(&mut self, win: UiObjectRef) -> Result<(), UiRefusal> {
         self.check(win)?;
         self.live.remove(&win.id);

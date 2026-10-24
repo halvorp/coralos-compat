@@ -183,6 +183,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9BD, &[Arg::W, Arg::L, Arg::L], Some(Arg::L), get_new_window::<U>)?;
     m.register(0xA914, &[Arg::P], None, dispose_window::<U>)?;
     m.register(0xA915, &[Arg::P], None, show_window::<U>)?;
+    m.register(0xA916, &[Arg::P], None, hide_window_trap::<U>)?;
     m.register(0xA91F, &[Arg::P], None, select_window::<U>)?;
     m.register(0xA925, &[Arg::P, Arg::L, Arg::P], None, drag_window::<U>)?;
     m.register(0xA924, &[], Some(Arg::L), front_window::<U>)?;
@@ -297,10 +298,35 @@ impl<U: GuestUi> Mac<U> {
     /// `ShowWindow`: the window becomes visible and gets its native window the first time.
     pub(crate) fn show_window(&mut self, win: u32) -> Result<(), Refusal> {
         let w = self.windows.get_mut(&win).ok_or_else(|| Refusal(format!("ShowWindow: {win:#x} is not an open window")))?;
+        let was_visible = w.visible;
         w.visible = true;
         if w.native.is_none() { self.open_native(win)?; }
+        else if !was_visible {
+            // a window the program hid with HideWindow: the host window is shown again, and its content is redrawn
+            let n = self.windows[&win].native.expect("checked");
+            self.ui.show_window(n).map_err(Refusal::ui)?;
+            self.mem.write_u8(win + WR_VISIBLE, 1).map_err(Refusal::mem("WindowRecord"))?;
+            self.post(UPDATE_EVT, win, 0, 0);
+        }
         Ok(())
     }
+
+    /// `HideWindow`: the window stays open (record, canvas, controls) but is not shown. The host is told through `GuestUi::hide_window` -- a host without it refuses by name and the
+    /// window is left VISIBLE (the guest's state is not changed to something the screen does not show).
+    pub(crate) fn hide_window(&mut self, win: u32) -> Result<(), Refusal> {
+        let w = self.windows.get(&win).ok_or_else(|| Refusal(format!("HideWindow: {win:#x} is not an open window")))?;
+        if !w.visible { return Ok(()); }
+        if let Some(n) = w.native { self.ui.hide_window(n).map_err(Refusal::ui)?; }
+        if let Some(w) = self.windows.get_mut(&win) { w.visible = false; }
+        self.mem.write_u8(win + WR_VISIBLE, 0).map_err(Refusal::mem("WindowRecord"))?;
+        Ok(())
+    }
+}
+
+fn hide_window_trap<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = c.args.get(0);
+    m.hide_window(win)?;
+    done(format!("[toolbox] HideWindow {win:#x}"))
 }
 
 fn select_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
