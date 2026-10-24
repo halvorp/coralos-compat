@@ -23,6 +23,7 @@ impl<U: GuestUi> Mac<U> {
         self.mem.write_u32(STACK_TOP - 4, EXIT_STUB).map_err(|e| e.to_string())?; // return address for the program's final rts
         self.ev.waiting = None; // a new program replaces the old one, including its blocked event call
         self.tr.dlg.modal = None; // ... and its blocked ModalDialog
+        self.tr.dlg.filter_wait = None;
         if let Some(a) = self.tr.dlg.asked.take() { let _ = self.ui.close_request(a.req); } // ... and an alert it asked and nobody answered
         self.ctx = Some(retro_m68k::start_model(self, CODE_BASE + entry, STACK_TOP - 4, &[], self.profile.cpu));
         Ok(())
