@@ -78,7 +78,7 @@ impl<U: GuestUi> Mac<U> {
         let bits = crate::qd::port::bits_addr(&self.mem, win)?; // portBits, or a colour window's PixMap
         // portBits.bounds maps local coordinates to the screen: its top-left is minus the global origin of the content.
         for (i, v) in [-r.top, -r.left, -r.top + h, -r.left + wd].into_iter().enumerate() { self.mem.write_u16(bits + 6 + 2 * i as u32, v as u16).map_err(&e)?; }
-        Ok(())
+        self.sync_window_regions(win)
     }
 
     /// Rewrite WindowList and every nextWindow link from the z-order (front first).

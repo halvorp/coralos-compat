@@ -22,6 +22,7 @@ impl<U: GuestUi> Mac<U> {
     fn add_invalid(&mut self, win: u32, g: &Region) {
         self.qd.update.entry(win).or_default().or_region(g);
         if !self.ev.queue.iter().any(|e| e.what == UPDATE_EVT && e.message == win) { self.post(UPDATE_EVT, win, 0, 0); }
+        let _ = self.sync_window_regions(win);
     }
 }
 
@@ -29,7 +30,7 @@ impl<U: GuestUi> Mac<U> {
 pub(crate) fn invalidate_all<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(), Refusal> {
     let r = raster(read_rect(&m.mem, win.wrapping_add(P_RECT))?);
     m.qd.update.insert(win, Region::from_rect(r));
-    Ok(())
+    m.sync_window_regions(win)
 }
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
@@ -52,6 +53,7 @@ pub(crate) fn begin_update_of<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<Re
     narrowed.and_region(&m.qd.update.remove(&win).unwrap_or_default());
     m.write_region(h, &narrowed)?;
     m.qd.saved_vis.insert(win, vis);
+    m.sync_window_regions(win)?; // the update region was emptied
     Ok(narrowed)
 }
 /// `EndUpdate(win)`: the `visRgn` `BeginUpdate` narrowed comes back.
@@ -85,6 +87,7 @@ fn valid<U: GuestUi>(m: &mut Mac<U>, g: Region, name: &str) -> Result<Done, Refu
     let win = current_port(m)?;
     m.require_window(win, name)?;
     if let Some(u) = m.qd.update.get_mut(&win) { u.clear_region(&g); }
+    m.sync_window_regions(win)?;
     Ok(Done { result: 0, log: format!("[quickdraw] {name} {win:#x}") })
 }
 fn inval_rect<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { let g = rect_region(m, c.args.get(0))?; inval(m, g, "InvalRect") }

@@ -64,6 +64,7 @@ pub mod textedit;
 pub mod toolbox;
 pub mod toolutil;
 pub mod winmgr;
+pub mod winregions;
 pub mod traptable;
 pub mod mixed_mode;
 pub mod vbl;

@@ -202,5 +202,5 @@ fn disposing_a_window_frees_its_regions() {
     let mut g = Rig::new();
     let with_window = g.m.mm.live_handles();
     g.run(Prog::new().l(g.win).trap(0xA914).exit()); // DisposeWindow
-    assert_eq!(g.m.mm.live_handles(), with_window - 2, "visRgn and clipRgn are freed with the window");
+    assert_eq!(g.m.mm.live_handles(), with_window - 5, "visRgn, clipRgn and the WindowRecord's strucRgn, contRgn and updateRgn are freed with the window");
 }

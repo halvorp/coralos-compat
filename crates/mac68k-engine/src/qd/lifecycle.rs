@@ -93,6 +93,7 @@ pub(crate) fn window_resized<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(),
 
 /// The window is gone: canvas, bookkeeping and its two region handles.
 pub(crate) fn window_disposed<U: GuestUi>(m: &mut Mac<U>, win: u32) {
+    m.free_window_regions(win);
     m.qd.canvases.remove(&win);
     m.qd.update.remove(&win);
     m.qd.saved_vis.remove(&win);
