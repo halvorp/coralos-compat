@@ -156,6 +156,14 @@ fn set_eof<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
     let g = mem_err("block");
     m.fm.set_eof(pb.i16(&m.mem, IO_REF_NUM).map_err(&g)?, pb.u32(&m.mem, IO_MISC).map_err(&g)?)
 }
+/// `PBLockRange` / `PBUnlockRange` (HFSDispatch selectors $10 and $11): the byte-range locks exist for file sharing, so on a Mac with
+/// nobody else on the volume they succeed and do nothing (Executor's `hfsPBLockRange` is `noErr`, with the note that the real ones
+/// "don't do anything if you're not on a network"). The file must be open: a closed refnum is rfNumErr, as everywhere. MacWrite 4.6 locks
+/// a range of each file it has open.
+fn lock_range<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
+    let r = pb.i16(&m.mem, IO_REF_NUM).map_err(&mem_err("block"))?;
+    m.fm.eof(r).map(|_| ())
+}
 fn get_fpos<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
     let g = mem_err("block");
     let mk = m.fm.mark(pb.i16(&m.mem, IO_REF_NUM).map_err(&g)?)?;
@@ -426,6 +434,8 @@ pub mod sel {
     pub const GET_FCB_INFO: u16 = 8;
     pub const GET_CAT_INFO: u16 = 9;
     pub const SET_CAT_INFO: u16 = 10;
+    pub const LOCK_RNG: u16 = 0x10;
+    pub const UNLOCK_RNG: u16 = 0x11;
     pub const OPEN_DF: u16 = 0x1A;
     pub const GET_VOL_PARMS: u16 = 0x30;
 }
@@ -440,6 +450,8 @@ fn selector_body<U: GuestUi>(selector: u16) -> Option<(&'static str, Body<U>)> {
         sel::GET_FCB_INFO => Some(("GetFCBInfo", get_fcb_info::<U>)),
         sel::GET_CAT_INFO => Some(("GetCatInfo", get_cat_info::<U>)),
         sel::SET_CAT_INFO => Some(("SetCatInfo", set_cat_info::<U>)),
+        sel::LOCK_RNG => Some(("LockRng", lock_range::<U>)),
+        sel::UNLOCK_RNG => Some(("UnlockRng", lock_range::<U>)),
         sel::OPEN_DF => Some(("OpenDF", open_data::<U>)),
         sel::GET_VOL_PARMS => Some(("HGetVolParms", get_vol_parms::<U>)),
         _ => None,

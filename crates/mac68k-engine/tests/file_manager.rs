@@ -317,3 +317,28 @@ fn set_vol_takes_the_bare_volume_name_get_vol_returned_and_restores_the_volume_r
     assert_eq!(w(&m, OUT + 4), -120);
     assert_eq!(m.fm.def_dir, docs, "a refused SetVol leaves the default alone");
 }
+
+#[test]
+fn lock_range_and_unlock_range_succeed_on_an_open_file_and_refuse_a_closed_refnum() {
+    // MacWrite 4.6 calls HFSDispatch selector $10 (PBLockRange) on every file it has open; with no one else on the volume the call is
+    // noErr and does nothing (Executor hfsPBLockRange). A refnum that is not open is rfNumErr.
+    let mut m = machine();
+    set(&mut m, NAME, &pstr("Locked"));
+    setl(&mut m, PB + 18, NAME);
+    m.mem.write_u8(PB + 27, 3).unwrap();
+    let mut a = Asm::default();
+    a.call(0xA008, OUT).call(0xA000, OUT + 2); // _Create, _Open
+    run(&mut m, &a);
+    assert_eq!((w(&m, OUT), w(&m, OUT + 2)), (0, 0));
+    let mut b = Asm::default();
+    b.moveq_d0(0x10).lea_a0(PB).trap(0xA260).d0_to_w(OUT + 4);   // LockRng on the open refnum
+    b.moveq_d0(0x11).lea_a0(PB).trap(0xA260).d0_to_w(OUT + 6);   // UnlockRng
+    run(&mut m, &b);
+    assert_eq!((w(&m, OUT + 4), w(&m, OUT + 6)), (0, 0), "both succeed");
+    assert!(m.refused.is_empty(), "{:?}", m.refused);
+    // negative control: after Close the same block names a refnum that is not open
+    let mut c = Asm::default();
+    c.call(0xA001, OUT + 8).moveq_d0(0x10).lea_a0(PB).trap(0xA260).d0_to_w(OUT + 10);
+    run(&mut m, &c);
+    assert_eq!((w(&m, OUT + 8), w(&m, OUT + 10)), (0, -51), "rfNumErr on a closed refnum");
+}

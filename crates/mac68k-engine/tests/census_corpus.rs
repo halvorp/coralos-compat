@@ -299,3 +299,12 @@ fn writenow_2_x_open_an_untitled_document_and_the_ruler_on_the_plus_they_were_wr
         assert!(!m.log.iter().any(|l| l.contains("DrawString REFUSED")), "{rel}: text into an empty-bounds port draws nothing instead of being refused");
     }
 }
+
+#[test]
+fn macwrite_4_6_locks_the_ranges_of_its_open_files_and_is_refused_nothing_with_idle_time() {
+    // After its first null events MacWrite 4.6 writes its files and calls PBLockRange (HFSDispatch $10) on each; with the lock a no-op
+    // (fm/traps.rs lock_range) the run has no refusal at all.
+    let Some(m) = census_idle("mac/macwrite/fx46/MacWrite.bin", "mac-ii", 300) else { return };
+    assert!(m.refused.is_empty(), "{:?}", m.refused);
+    assert!(m.log.iter().any(|l| l.contains("[file] Write (async)")), "it wrote its files first");
+}
