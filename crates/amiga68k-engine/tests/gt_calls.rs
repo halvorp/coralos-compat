@@ -236,7 +236,7 @@ fn set_and_get_gadget_attrs_for_each_kind() {
         gt(LVO_SET_ATTRS, &[a_res(0, 3), a_res(1, 5), a(2, 0), a(3, set_int_big)]),                  // refused
         gt(LVO_SET_ATTRS, &[a_res(0, 4), a_res(1, 5), a(2, 0), a(3, set_sld)]),                      // clamped
         gt(LVO_SET_ATTRS, &[a_res(0, 4), a_res(1, 5), a(2, 0), a(3, wrong_kind)]),                   // refused
-        gt(LVO_SET_ATTRS, &[a_res(0, 4), a_res(1, 5), a(2, 0), a(3, disabled)]),                     // level applied, GA_Disabled refused
+        gt(LVO_SET_ATTRS, &[a_res(0, 4), a_res(1, 5), a(2, 0), a(3, disabled)]),                     // level applied, GA_Disabled ghosts the control
         gt(LVO_GET_ATTRS, &[a_res(0, 4), a_res(1, 5), a(2, 0), a(3, get_sld)]),                      // 13: 3 of 4 readable
         gt(LVO_GET_ATTRS, &[a_res(0, 3), a_res(1, 5), a(2, 0), a(3, get_rest)]),                     // 14: integer: number only
         gt(LVO_GET_ATTRS, &[a_res(0, 2), a_res(1, 5), a(2, 0), a(3, get_rest)]),                     // 15: string: string only
@@ -262,20 +262,22 @@ fn set_and_get_gadget_attrs_for_each_kind() {
     assert_eq!(ctl(&m, 2), Some((4, ControlValue::Text("123456".into()))));
     assert_eq!(m.r32(m.r32(int_g + 34) + 28), 123456, "StringInfo.LongInt");
     assert_eq!(ctl(&m, 3), Some((5, ControlValue::Level(10))), "GTSL_Level clamped to the slider's range");
-    assert_eq!(ctl(&m, 4), Some((5, ControlValue::Level(2))), "the level of a call whose GA_Disabled is refused is still applied");
+    assert_eq!(ctl(&m, 4), Some((5, ControlValue::Level(2))), "the level of a call that also sets GA_Disabled is applied");
+    assert!(m.a.ui.calls.iter().any(|c| matches!(c, UiCall::SetControlEnabled(_, c, false) if c.id == 5)), "GA_Disabled reaches the host as set_control_enabled(false) on the slider");
+    assert_eq!(m.r16(m.result(4) + 12) & 0x100, 0x100, "and the gadget's GFLG_DISABLED is set (gadtools ghosting is Intuition's flag)");
+    assert_eq!(m.a.ui.calls.iter().filter(|c| matches!(c, UiCall::SetControlEnabled(..))).count(), 1, "NEGATIVE CONTROL: no other control was ghosted");
     let r = &m.a.refused;
     assert!(r[0].contains("does not fit MaxChars 6"), "{r:?}");
     assert!(r[1].contains("on a kind-11 gadget"), "{r:?}");
-    assert!(r[2].contains("GA_Disabled"), "{r:?}");
     // GT_GetGadgetAttrsA fills what the kind has, counts it, and records the rest as refused.
     assert_eq!((m.r32(out), m.r32(out + 4), m.r32(out + 8)), (2, 0, 10), "level 2 (the last applied), min 0, max 10");
     assert_eq!(m.result(13), 3);
-    assert!(r[3].contains("not readable on a kind-11 gadget"), "{r:?}");
+    assert!(r[2].contains("not readable on a kind-11 gadget"), "{r:?}");
     assert_eq!((m.result(14), m.r32(out + 16) as i32), (1, 123456));
     assert_eq!((m.result(15), m.a.mem.read_cstr(m.r32(out + 20)).unwrap()), (1, "hello".to_string()));
     assert_eq!((m.result(16), m.r32(out + 24)), (1, 0), "checkbox was unchecked by the set");
     assert_eq!(m.result(17), 0, "a NULL gadget fills nothing");
-    assert_eq!(r.len(), 3 + 1 + 1 + 1, "one refusal per unreadable tag: slider/checked, integer/string, string/number: {r:?}");
+    assert_eq!(r.len(), 2 + 1 + 1 + 1, "one refusal per unreadable tag: slider/checked, integer/string, string/number: {r:?}");
 }
 
 #[test]

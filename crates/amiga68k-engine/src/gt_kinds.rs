@@ -258,7 +258,7 @@ pub fn control_changed<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32, intent: I
 
 /// GT_SetGadgetAttrsA(a0 = gadget, a1 = window, a2 = requester, a3 = tags): GTTX_Text (text), GTCB_Checked, GTST_String,
 /// GTIN_Number and GTSL_Level change the native control and the guest-visible state. A tag the gadget's kind does not
-/// have is refused; GA_Disabled and GTSL_Min/Max after creation are refused by name (no native call for them), after
+/// have is refused; GTSL_Min/Max after creation is refused by name (no native call for it), after
 /// the other tags were applied. Other tags are ignored, as GadTools ignores tags a kind does not know.
 pub fn set_gadget_attrs<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let g = cpu.areg(0);
@@ -286,7 +286,21 @@ pub fn set_gadget_attrs<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
             (GTTX_TEXT | GTCB_CHECKED | GTST_STRING | GTIN_NUMBER | GTSL_LEVEL, k) => {
                 return Err(Refusal(format!("GT_SetGadgetAttrsA: tag {tag:#x} on a kind-{k} gadget")));
             }
-            (GA_DISABLED, _) => { unsupported.push("GA_Disabled: GuestUi has no control enabled-state call"); continue }
+            (GA_DISABLED, _) => {
+                // gadtools gt_support: GA_Disabled is the gadget's GFLG_DISABLED and ghosts it; the host learns through the projection's
+                // enabled flag (`GuestUi::set_control_enabled`). The mirror of a kind's state is `KindState::disabled`.
+                let mut next = a.gadgets[&g].clone();
+                next.state.disabled = data != 0;
+                let fl = a.mem.read_u16(g + crate::boopsi_ids::GAD_FLAGS).map_err(Refusal::mem("Gadget.Flags"))?;
+                let fl = if data != 0 { fl | crate::boopsi_ids::GFLG_DISABLED as u16 } else { fl & !(crate::boopsi_ids::GFLG_DISABLED as u16) };
+                a.mem.write_u16(g + crate::boopsi_ids::GAD_FLAGS, fl).map_err(Refusal::mem("Gadget.Flags"))?;
+                if let Some((win, meta)) = a.gt_ctls.get(u64::from(g)).map(|p| (p.window, p.meta)) {
+                    a.gt_ctls.sync(&mut a.ui, Some(win), u64::from(g), meta, Some(control_model(&next, g))).map_err(Refusal::ui)?;
+                }
+                a.gadgets.insert(g, next);
+                changed += &format!(" GA_Disabled={}", data != 0);
+                continue;
+            }
             (GTSL_MIN | GTSL_MAX, SLIDER_KIND) => { unsupported.push("GTSL_Min/GTSL_Max after creation: GuestUi has no slider-range update"); continue }
             _ => continue,
         };
