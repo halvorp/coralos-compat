@@ -66,3 +66,23 @@ fn a_symbol_of_an_unprovided_library_refuses_by_name_when_called_not_at_load() {
     assert!(m.mac.refused.iter().any(|r| r.contains("glBegin")), "{:?}", m.mac.refused);
     assert_eq!(call(&mut m, &frag, 2, &[16]).0, GlueOutcome::Return);
 }
+
+#[test]
+fn the_census_counts_bound_named_and_weak_missing_imports_per_library() {
+    use macppc_engine::census::{Census, LibraryRow};
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let frag = load(&mut m, &[
+        ("CarbonLib", false, &[("NewPtr", F, false), ("NoSuchToolboxCall", F, false)]),
+        ("OpenGLLibrary", false, &[("glBegin", F, false), ("glEnd", F, false)]),
+        ("QuickTimeLib", true, &[("EnterMovies", F, false)]),
+    ]);
+    let c = Census::of(&frag);
+    let row = |l: &str, bound, named, weak_missing| LibraryRow { library: l.into(), bound, named, weak_missing };
+    assert_eq!(c.libraries, [row("CarbonLib", 1, 1, 0), row("OpenGLLibrary", 0, 2, 0), row("QuickTimeLib", 0, 0, 1)]);
+    // the rows add up to the flat counters (a row that lost an import would not)
+    assert_eq!(c.libraries.iter().map(|r| r.bound).sum::<usize>(), c.bound);
+    assert_eq!(c.libraries.iter().map(|r| r.named).sum::<usize>(), c.next_needed.len());
+    assert_eq!(c.libraries.iter().map(|r| r.weak_missing).sum::<usize>(), c.weak_absent);
+    let t = c.library_table();
+    assert!(t[0].starts_with("LIBRARY") && t[2].starts_with("OpenGLLibrary") && t[2].contains("2"), "{t:?}");
+}

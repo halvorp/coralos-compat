@@ -74,6 +74,7 @@ fn main() {
     let c = Census::of(&frag);
     for l in &c.lines { println!("{l}"); }
     println!("{}", c.summary());
+    for l in c.library_table() { println!("{l}"); }
     let mut stopped_at = None;
     if (run || census) && started {
         let (step, n) = m.run_loop(insns);
