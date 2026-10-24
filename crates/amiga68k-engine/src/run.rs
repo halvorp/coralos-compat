@@ -43,6 +43,10 @@ impl<U: GuestUi> Amiga<U> {
         screen::setup(&mut self.mem).map_err(|r| r.0)?;
         crate::graphics::setup(self).map_err(|r| r.0)?;
         crate::doslist::sync(self).map_err(|r| r.0)?; // the volumes are mounted by now: publish them in DosInfo
+        // A CLI process always has a current directory LOCK (the shell's `cd`); here the boot volume's root. Programs that run
+        // `CurrentDir(0)` + `DupLock(old)` at startup (SAS/C's startup code does) treat a NULL old lock as failure and quit.
+        let root = crate::fs::new_lock_in(self, self.fs.vol.boot_device(), false, true).map_err(|r| r.0)?.ok_or("no memory for the current-directory lock")?;
+        self.mem.write_u32(process::PROCESS + 152, root >> 2).map_err(|e| e.to_string())?; // pr_CurrentDir
         let regs = [(retro_m68k::REG_A0, process::ARGS), (retro_m68k::REG_D0, EMPTY_ARGS.len() as u32)];
         // The main program is the first task; its registers are created at its first dispatch (sched.rs).
         self.sched = Default::default();

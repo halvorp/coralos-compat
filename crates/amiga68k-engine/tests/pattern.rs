@@ -28,5 +28,6 @@ fn patterns_and_directory_walks_follow_amigados() {
     assert_eq!((r[31], r[32], r[33]), (0, 1, 232), "a plain name matches itself, ITSWILD clear, a file is not entered");
     assert_eq!(r[34], 303, "ap_Buf too small for the path: ERROR_BUFFER_OVERFLOW");
     assert!(a.fs.anchors.live() == 0, "every walk was ended or failed cleanly");
-    assert!(a.fs.locks.keys().all(|&l| a.fs.dos.entries.iter().any(|e| e.lock_bptrs().contains(&(l >> 2))) || l == 0), "no AChain lock leaked: {:?}", a.fs.locks.keys().collect::<Vec<_>>());
+    let cwd = a.mem.read_u32(0x6000 + 152).unwrap(); // pr_CurrentDir: the process owns this lock for its whole life
+    assert!(a.fs.locks.keys().all(|&l| a.fs.dos.entries.iter().any(|e| e.lock_bptrs().contains(&(l >> 2))) || l == 0 || l >> 2 == cwd), "no AChain lock leaked: {:?}", a.fs.locks.keys().collect::<Vec<_>>());
 }

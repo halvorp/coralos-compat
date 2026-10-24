@@ -994,3 +994,20 @@ The table fix is the finding that matters: 143 intuition names from `ChangeWindo
 Verified against the vector number written in every `AROS_LH` header (100 % match for 20 libraries). Nothing else in the census moved: the engine's handlers are registered by name
 from this table, so a program that called a shifted vector reached the neighbour's handler or an "unimplemented" line; the corpus programs that did were not on a path the census follows.
 Still true: the engine has ONE screen that nothing opens or closes, so a registered screen notification never fires.
+
+## Round 2 (amiga lane), 2026-10-24: Request, GA_Disabled, IM_DRAW, Swatches, long MUI text, the current-directory lock, VideoControl, SDivMod32
+`tools/corpus-census.py` over all 64 (`amiga68k-run --census`, same inputs), base 964640e against this branch. Columns: first unimplemented call / refusals / native controls.
+
+| program | before | after | what changed |
+|---|---|---|---|
+| dopus-viewfont | next `intuition.library/Request`, 2 refusals (`GA_Disabled`, `DrawImageState` of a guest class), 8 UI calls | no unimplemented call, 0 refusals, window + 2 controls + menu strip, waits in its event loop | `Request` / `EndRequest` / `InitRequester` (a zero-size requester is AROS's FALSE); GadTools `GA_Disabled` through `set_control_enabled`; `DrawImageState` runs a guest class's `IM_DRAW` as a guest call |
+| aros-prefs-Editor | 1 refusal (`PALETTE_KIND`), 0 controls | 0 refusals, 14 native controls (Button, Checkbox, Choice, String, **Swatches**) | new `Swatches` role (guestui-abi, additive); GadTools gadgets added with `AddGList` / `AddGadget` now get their controls (only `WA_Gadgets` did) |
+| aros-gtdemo | 1 refusal (`PALETTE_KIND`) | its palette is a Swatches control; 2 new named gaps: `DrawBevelBoxA` `BBFT_RIDGE` / `BBFT_ICONDROPBOX`, `GTSC_Arrows` | |
+| aros-About | 4 refusals, no window | 1 window, 16 controls, 0 refusals | MUI string attributes are read whole (`GuestMem::read_cstr_long`, additive); the credits text is over 256 bytes |
+| SnoopDos 3.11 | "I need AT LEAST Kickstart 2.0", exit after 11,778 insns | window + 19 native controls + 4 menus, waits in its event loop, 0 refusals | the main process now has a current-directory LOCK (`CurrentDir(0)` + `DupLock(old)` is its startup test); `VideoControl`; `SDivMod32` / `UDivMod32` |
+
+The remaining classic-app walls, found by reading their logs (none is a missing call of a library the engine bridges):
+* **YAM 2.9** exits cleanly after 150k instructions: `OpenLibrary("codesets.library", 6)` -> NULL (a third-party library, not in the corpus), after `picture.datatype` -> NULL.
+* **iGame** prints "Can't open render.library v30 or greater" (third-party), once TextEditor.mcc loads.
+* **AWeb / AWebCfg** open `gadgets/layout.gadget` (ReAction), then quit.
+* **Directory Opus 5** and the amimcp tools run to their event loops (91 and 10-11 UI calls) with no refusal.
