@@ -208,3 +208,87 @@ Done: Alias Manager by C name (`alias_c.rs`, over the 68k bodies), Script Manage
 Editors 847,417 / 810,164 to `StandardAlert`; BNUpdate 95,575 to `GetScriptManagerVariable(40)` (no verified Roman answer); the Installer 92,970 to `SndDoImmediate` (68k worker).
 Next: Menu Manager Carbon accessors (`GetMenuTitle`, `SetMenuTitle`, `GetMenuID`, `IsMenuItemEnabled`, `SetMenuItemProperty`, `MenuKey`, `PopUpMenuSelect`, Show/HideMenuBar), `StandardAlert`,
 then the CarbonLib export list (5715 names on the 9.2.1 CD, /data/build/corpus-bin/mac/macos921/exports/) to rank the remaining gap; OpenGL waits for the CoralOS-side design.
+
+## CarbonLib gap, ranked (round 7, 2026-10-24)
+
+Measured by `tools/carbon-gap.py` (needs the Mac OS 9.2.1 oracle export list under `/data/build/corpus-bin/mac/macos921/exports/` and a release `macppc-run`; it skips when they are absent).
+It binds every CarbonLib 1.4 export name through the engine's own `bind_from` (`macppc-run --bind-list`), then weights each UNBOUND name by the PowerPC programs of the corpus that import it
+(static import census; Warcraft III family programs count 3, the Garden/Retro68 programs 1). Family is by name prefix, deliberately coarse ("other" is mostly Toolbox calls with no common prefix:
+Time Manager, Display Manager, Dialog Manager, Theme drawing, TextEdit). Reading it: the top of the second table is the build order; the first table says how much of CarbonLib no measured program touches.
+
+```
+CarbonLib 1.4 exports: 5715; bound by this engine: 1173; unbound: 4542; measured PPC programs: 20
+
+== unbound exports by family (all of CarbonLib) ==
+  2497  other
+   421  CoreFoundation
+   277  Text/Unicode/TEC
+   260  Files/Aliases/FSRef
+   201  Windows
+   191  Menus
+   185  Printing
+   109  QuickDraw/Regions/Pixmaps
+    84  Apple Events
+    82  HIToolbox views/controls
+    66  Sound/QuickTime/Components
+    50  Threads/MP/Timer
+    49  Drag Manager
+    43  Navigation Services
+    23  Memory/Resources
+     4  Carbon Events
+
+== unbound names the measured programs import, by weight (top 45) ==
+  30  GetDialogItemAsControl                   HIToolbox views/controls     10 program(s)
+  30  PBHGetVolParmsSync                       Files/Aliases/FSRef          10 program(s)
+  30  SetControlData                           HIToolbox views/controls     10 program(s)
+  30  SetThemeBackground                       other                        10 program(s)
+  27  GetControlData                           HIToolbox views/controls     9 program(s)
+  27  LaunchApplication                        other                        9 program(s)
+  27  dec2num                                  other                        9 program(s)
+  27  nan                                      other                        9 program(s)
+  27  num2dec                                  other                        9 program(s)
+  24  DMGetFirstScreenDevice                   other                        8 program(s)
+  24  DMGetNextScreenDevice                    other                        8 program(s)
+  24  HideMenuBar                              Menus                        8 program(s)
+  24  ReadLocation                             other                        8 program(s)
+  24  SetControlFontStyle                      HIToolbox views/controls     8 program(s)
+  24  SetControlViewSize                       HIToolbox views/controls     8 program(s)
+  22  DebugStr                                 other                        8 program(s)
+  21  CFStringCreateWithFormat                 CoreFoundation               7 program(s)
+  21  DrawThemeFocusRect                       other                        7 program(s)
+  18  CFURLCreateFromFSRef                     CoreFoundation               6 program(s)
+  18  DrawThemeEditTextFrame                   other                        6 program(s)
+  18  PBDTGetCommentSync                       Files/Aliases/FSRef          6 program(s)
+  18  PBDTGetPath                              Files/Aliases/FSRef          6 program(s)
+  18  PBDTOpenInform                           Files/Aliases/FSRef          6 program(s)
+  18  PBDTSetCommentSync                       Files/Aliases/FSRef          6 program(s)
+  18  PBHCopyFileSync                          Files/Aliases/FSRef          6 program(s)
+  18  PBHOpenDenySync                          Files/Aliases/FSRef          6 program(s)
+  18  PBHOpenRFDenySync                        Files/Aliases/FSRef          6 program(s)
+  18  PBXGetVolInfoSync                        Files/Aliases/FSRef          6 program(s)
+  16  GrowWindow                               Windows                      8 program(s)
+  16  HideDialogItem                           other                        6 program(s)
+  15  CFPropertyListCreateFromXMLData          CoreFoundation               5 program(s)
+  15  CFURLCreateDataAndPropertiesFromResource CoreFoundation               5 program(s)
+  15  DirCreate                                other                        5 program(s)
+  15  DrawThemeButton                          other                        5 program(s)
+  15  GetFontName                              Text/Unicode/TEC             5 program(s)
+  15  GetPortTextFace                          QuickDraw/Regions/Pixmaps    5 program(s)
+  15  GetPortTextFont                          QuickDraw/Regions/Pixmaps    5 program(s)
+  15  GetPortTextSize                          QuickDraw/Regions/Pixmaps    5 program(s)
+  15  HRstFLock                                other                        5 program(s)
+  15  InsTime                                  other                        5 program(s)
+  15  InstallExceptionHandler                  other                        5 program(s)
+  15  PBCatSearchSync                          Files/Aliases/FSRef          5 program(s)
+  15  PrimeTime                                other                        5 program(s)
+  15  RemoveResource                           Memory/Resources             5 program(s)
+  15  RmvTime                                  other                        5 program(s)
+
+181 distinct unbound names are imported by the measured programs
+```
+
+Build order from it (each is one small step, in the order the Warcraft III family needs them): the Control Manager data calls (`GetControlData`/`SetControlData`/`SetControlViewSize`/`SetControlFontStyle`,
+`GetDialogItemAsControl`), Theme drawing (`SetThemeBackground`, `DrawThemeFocusRect`, `DrawThemeEditTextFrame`, `DrawThemeButton`: drawn by the host, so these need a seam decision first), File Manager
+extended calls (`PBHGetVolParmsSync`, the Desktop Database `PBDT*`, `PBHCopyFileSync`, `PBHOpenDenySync`), Display Manager (`DMGetFirstScreenDevice`/`DMGetNextScreenDevice`/`DMGetDisplayIDByGDevice`,
+a real list of one display), `LaunchApplication`, the Time Manager (`InsTime`/`PrimeTime`/`RmvTime`), `dec2num`/`num2dec`/`nan` (SANE/Decimal and the math library), CFString format and bytes
+(`CFStringCreateWithFormat`, `CFStringCreateWithBytes`), `CFURLCreateFromFSRef` and the property-list calls (they need FSRef and XML parsing), and `HideMenuBar`/`GrowWindow` (host chrome; seam additions).

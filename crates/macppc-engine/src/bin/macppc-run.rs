@@ -1,4 +1,4 @@
-//! Host runner: `macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--strict] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
+//! Host runner: `macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--strict] [--bind-list <exports file> [LIB]] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
 //! `<file>` is `--fixture` (a built-in MacBinary application importing the classic startup calls), a bare PEF, or a classic Mac application (MacBinary, AppleSingle, or an AppleDouble header file whose data
 //! fork is the sibling file with the `%` / `._` prefix removed, or `--data`). It instantiates the fragment (sections placed,
 //! imports bound by symbol name onto the mac68k Toolbox handlers, relocations applied) and prints what it did. `--run`
@@ -35,6 +35,20 @@ fn main() {
             "--pcs" => { args.remove(0); if args.is_empty() { usage() } pcs = args.remove(0).parse().unwrap_or_else(|_| usage()); }
             "--libdir" => { args.remove(0); if args.is_empty() { usage() } libdir = Some(PathBuf::from(args.remove(0))); }
             "--idle" => { args.remove(0); if args.is_empty() { usage() } idle = args.remove(0).parse().unwrap_or_else(|_| usage()); }
+            "--bind-list" => {
+                // `--bind-list <exports file> [LIBRARY]`: for every `class<TAB>name` line (the 9.2.1 oracle's export lists) print BOUND or UNBOUND as this engine would bind it for an import from LIBRARY (default CarbonLib)
+                args.remove(0);
+                if args.is_empty() { usage() }
+                let list = std::fs::read_to_string(args.remove(0)).unwrap_or_else(|e| { eprintln!("--bind-list: {e}"); std::process::exit(1) });
+                let lib = if args.first().is_some_and(|a| !a.starts_with("--")) { args.remove(0) } else { "CarbonLib".to_string() };
+                let mut m = MacPpc::new(RecordingGuestUi::new()).expect("machine");
+                for l in list.lines().filter(|l| !l.starts_with('#')) {
+                    let Some((class, name)) = l.split_once('\t') else { continue };
+                    let b = m.bind_from(&lib, name);
+                    println!("{}\t{class}\t{name}", if matches!(b, macppc_engine::symbols::Binding::Unbound(_)) { "UNBOUND" } else { "BOUND" });
+                }
+                return;
+            }
             "--data" => { args.remove(0); if args.is_empty() { usage() } data = Some(PathBuf::from(args.remove(0))); }
             _ => break,
         }
