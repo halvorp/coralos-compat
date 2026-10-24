@@ -105,10 +105,3 @@ fn the_default_volume_is_read_and_set_by_name() {
     pstr(&mut m, NAME, "No Such Disk:");
     assert_eq!(call(&mut m, "FlushVol", &[NAME, 0]), -35, "nsvErr");
 }
-
-/// What this module does NOT yet serve stays refused by name: the FSSpec forms are not Files.h routines of this module.
-#[test]
-fn the_fsspec_forms_are_still_refused_by_name() {
-    let mut m = machine();
-    assert!(matches!(m.bind("FSpOpenDF"), Binding::Unbound(why) if why.contains("FSpOpenDF")));
-}

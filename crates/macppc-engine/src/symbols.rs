@@ -43,6 +43,8 @@ pub enum Native { GetSharedLibrary, FindSymbol, CloseConnection, MemError, Block
     Os(crate::osroutines::OsRoutine),
     /// A StdCLib function served natively over guest memory and the PowerPC argument registers ([`crate::clib`]).
     C(crate::clib::CFn),
+    /// An FSSpec call (`FSMakeFSSpec`, `FSpOpenDF` ...): [`crate::fsspec`].
+    Spec(crate::fsspec::SpecCall),
     /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.
     Math(crate::clib_math::MathFn) }
 
@@ -80,7 +82,7 @@ impl Native {
             "GetToolTrapAddress" => Native::TrapAddress(TrapQuery::Tool), "GetTrapAddress" => Native::TrapAddress(TrapQuery::Old),
             "NewRoutineDescriptor" => Native::NewRoutineDescriptor, "NewFatRoutineDescriptor" => Native::NewFatRoutineDescriptor,
             "DisposeRoutineDescriptor" => Native::DisposeRoutineDescriptor,
-            _ => return crate::files::FileCall::by_name(name).map(Native::File).or_else(|| crate::osroutines::OsRoutine::by_name(name).map(Native::Os)),
+            _ => return crate::files::FileCall::by_name(name).map(Native::File).or_else(|| crate::osroutines::OsRoutine::by_name(name).map(Native::Os)).or_else(|| crate::fsspec::SpecCall::by_name(name).map(Native::Spec)),
         })
     }
 }

@@ -190,3 +190,9 @@ impl FileMgr {
         Ok(())
     }
 }
+
+impl<U: GuestUi> Mac<U> {
+    /// The `FSp...` calls by VALUE (selector as in [`sel`], arguments in declaration order, missing ones 0): the entry a PowerPC caller uses, which
+    /// has no 68k stack to read them from. Runs the same body the `_HighLevelFSDispatch` trap runs; `Ok(v)` is 0, or the refnum for `sel::OPEN_RES_FILE`.
+    pub fn fsp_call(&mut self, selector: u16, args: &[u32]) -> Result<u32, i16> { fsp(self, selector, &|i| args.get(i).copied().unwrap_or(0)) }
+}

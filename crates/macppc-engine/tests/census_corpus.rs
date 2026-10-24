@@ -76,12 +76,12 @@ fn macintosh_garden_glider_pro_fat_app_binds_most_of_interfacelib_and_names_what
     let frag = m.instantiate(&frag_name, &pef).unwrap();
     let c = Census::of(&frag);
     // Still unbound and NAMED: Window Manager calls without a handler, and OS traps whose C prototype is not in OS_SIGS yet.
-    for needed in ["ZoomWindow", "GetIconSuite", "SysEnvirons", "FSpOpenDF"] {
+    for needed in ["ZoomWindow", "GetIconSuite", "SysEnvirons", "ResolveAliasFile"] {
         assert!(c.next_needed.iter().any(|n| n.ends_with(&format!("/{needed}"))), "{needed} is unbound and named: {:?}", c.next_needed);
     }
     // Bound since the Mac 68k lane added the Scrap Manager, alerts, DragWindow, the resource-file calls and GetCursor to the shared
     // Toolbox core (155 unbound before, 145 now): the PowerPC half gets them with no PowerPC code.
-    for bound in ["GetScrap", "PutScrap", "ZeroScrap", "GetCursor", "Alert", "DragWindow", "OpenResFile", "CloseResFile", "SetResLoad", "HiliteWindow"] {
+    for bound in ["GetScrap", "PutScrap", "ZeroScrap", "GetCursor", "Alert", "DragWindow", "OpenResFile", "CloseResFile", "SetResLoad", "HiliteWindow", "FSpOpenDF", "FSMakeFSSpec", "FSpCreate", "FSpDelete"] {
         assert!(!c.next_needed.iter().any(|n| n.ends_with(&format!("/{bound}"))), "{bound} is bound: {:?}", c.next_needed);
     }
     assert!(c.next_needed.len() < 155, "fewer than the 155 unbound before: {}", c.next_needed.len());

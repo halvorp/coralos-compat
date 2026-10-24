@@ -23,6 +23,7 @@ pub mod cfrg;
 pub mod driver;
 pub mod error;
 pub mod files;
+pub mod fsspec;
 #[cfg(feature = "fixtures")]
 pub mod fixture;
 pub mod glue;
