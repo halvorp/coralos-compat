@@ -263,3 +263,32 @@ fn a_channel_with_no_callback_routine_ignores_callbackcmd_and_a_sound_queued_aft
     assert!(g.m.log.iter().any(|l| l.contains("no callBack routine: ignored")));
     g.no_refusals();
 }
+
+#[test]
+fn a_looped_sound_loops_on_the_seam_until_quiet_and_a_callback_behind_it_waits_for_the_quiet() {
+    // header loopStart 2, loopEnd 8 over 10 samples (offsets 12 and 16): the sound plays once to frame 8, then frames 2..8 repeat
+    let mut h = std_header(0x56EE_8BA3, &[7; 10]);
+    h[12..16].copy_from_slice(&2u32.to_be_bytes());
+    h[16..20].copy_from_slice(&8u32.to_be_bytes());
+    let code: [u8; 16] = [0x20, 0x6F, 0x00, 0x04, 0x23, 0xE8, 0x00, 0x04, 0x00, 0x00, 0x36, 0x00, 0x4E, 0x74, 0x00, 0x08];
+    let mut g = Rig::new();
+    put(&mut g.m, 0x3700, &code);
+    go(&mut g, |p| { p.clr_w().l(CHAN).w(5).l(0).l(0x3700).trap(0xA807).pop_w(OUT); });
+    g.m.mem.write_bytes(HDR, &h).unwrap();
+    set_cmd(&mut g, 81, 0, HDR);
+    go(&mut g, |p| { do_cmd(p, 81, 0, HDR); });
+    g.no_refusals();
+    assert!(g.m.ui.calls.iter().any(|c| matches!(c, UiCall::QueueAudioLooped(_, 8, 2, 8))), "queued looping: 8 bytes up to the loop end, loop 2..8: {:?}", g.m.ui.calls);
+    set_cmd(&mut g, 13, 0, 0x1111);
+    go(&mut g, |p| { do_cmd(p, 13, 0, 0x1111); });
+    let (id, _) = streams(&g)[0];
+    let sref = guestui_abi::UiObjectRef { id, generation: 1 };
+    g.m.ui.play_audio(sref, 1000).unwrap();
+    go(&mut g, |p| { p.trap(0xA850); });
+    assert_eq!(g.m.mem.read_u32(0x3600).unwrap(), 0, "the loop never finishes, so the callback behind it has not run");
+    // quietCmd ends the loop; the callback is then due
+    set_cmd(&mut g, 3, 0, 0);
+    go(&mut g, |p| { do_cmd(p, 3, 0, 0); });
+    go(&mut g, |p| { p.trap(0xA850); });
+    assert_eq!(g.m.mem.read_u32(0x3600).unwrap(), 0x1111, "after quietCmd the routine runs");
+}

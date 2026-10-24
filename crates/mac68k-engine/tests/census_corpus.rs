@@ -126,10 +126,9 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     assert!(m.log.iter().any(|l| l.starts_with("[res] MaxSizeRsrc")) && m.log.iter().any(|l| l.starts_with("[res] GetCursor 1 -> 0x") && !l.contains("-> 0x0 ")), "{:#?}", m.log);
     assert!(!m.log.iter().any(|l| l.contains("Couldn't Load a Resource")), "the load-failure alert is gone");
     // then SetEntries (its palette), ShieldCursor, direct writes to the frame buffer (shown in its window), and its sound: the next wall is
-    // the Sound Manager's looped sounds (loopEnd - loopStart > 1: it loops its engine / music sound and re-arms it from a callBackCmd routine,
-    // which now runs), refused by name; the seam would need a looping stream
-    assert!(m.log.iter().any(|l| l.starts_with("[toolbox] ShieldCursor")) && m.log.iter().any(|l| l.contains("SetEntries")), "{:#?}", m.log);
-    assert!(m.refused.last().is_some_and(|r| r.contains("looped sound")), "the next wall: {:?}", m.refused.last());
+    // its looped sounds loop on the seam (queue_audio_looped) and its callBackCmd routines run; the next wall is PICT v2 (DrawPicture, refused by name)
+    assert!(m.log.iter().any(|l| l.contains("LOOPING frames")), "a looped sound was queued looping");
+    assert!(m.refused.last().is_some_and(|r| r.contains("DrawPicture")), "the next wall: {:?}", m.refused.last());
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.

@@ -73,7 +73,7 @@ pub fn parse_snd(body: &[u8]) -> Result<Vec<(Cmd, bool)>, Refusal> {
 
 /// A decoded sound: PCM in the seam's layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sound { pub rate_hz: u32, pub channels: u8, pub format: AudioFormat, pub pcm: Vec<u8>, pub looped: bool }
+pub struct Sound { pub rate_hz: u32, pub channels: u8, pub format: AudioFormat, pub pcm: Vec<u8>, /** the loop, in FRAMES from the start of the sound: `loopStart .. loopEnd`, when `loopEnd - loopStart > 1` */ pub loop_frames: Option<(u32, u32)> }
 
 /// Hz from a `Fixed` (16.16) sample rate, rounded down as the hardware's integer divider does.
 pub fn hz(fixed: u32) -> u32 { fixed >> 16 }
@@ -87,12 +87,12 @@ pub fn decode_header(h: &[u8], external: impl Fn(u32, u32) -> Option<Vec<u8>>) -
     let encode = *h.get(20).ok_or_else(|| bad("no encode byte"))?;
     let rate_hz = hz(rate);
     if rate_hz == 0 { return Err(bad("sample rate 0")); }
-    let looped = loop_end.saturating_sub(loop_start) > 1;
+    let loop_frames = (loop_end.saturating_sub(loop_start) > 1).then_some((loop_start, loop_end));
     match encode {
         0 => {
             let samples = if sample_ptr == 0 { h.get(22..22 + len_or_chans as usize).map(<[u8]>::to_vec).ok_or_else(|| bad(&format!("{len_or_chans} samples run past the end of the resource")))? }
                           else { external(sample_ptr, len_or_chans).ok_or_else(|| bad(&format!("samplePtr {sample_ptr:#x} is not readable memory")))? };
-            Ok(Sound { rate_hz, channels: 1, format: AudioFormat::U8, pcm: samples, looped })
+            Ok(Sound { rate_hz, channels: 1, format: AudioFormat::U8, pcm: samples, loop_frames })
         }
         0xFF => {
             let (channels, frames, size) = (len_or_chans, be32(h, 22).ok_or_else(|| bad("no numFrames"))?, be16(h, 48).ok_or_else(|| bad("no sampleSize"))?);
@@ -101,12 +101,12 @@ pub fn decode_header(h: &[u8], external: impl Fn(u32, u32) -> Option<Vec<u8>>) -
             let raw = if sample_ptr == 0 { h.get(64..64 + bytes).map(<[u8]>::to_vec).ok_or_else(|| bad("the extended header's samples run past the end of the resource"))? }
                       else { external(sample_ptr, bytes as u32).ok_or_else(|| bad(&format!("samplePtr {sample_ptr:#x} is not readable memory")))? };
             match size {
-                8 => Ok(Sound { rate_hz, channels: channels as u8, format: AudioFormat::U8, pcm: raw, looped }),
+                8 => Ok(Sound { rate_hz, channels: channels as u8, format: AudioFormat::U8, pcm: raw, loop_frames }),
                 16 => {
                     // two's complement, big-endian on the Mac, little-endian in the seam
                     let mut pcm = raw;
                     for s in pcm.chunks_exact_mut(2) { s.swap(0, 1); }
-                    Ok(Sound { rate_hz, channels: channels as u8, format: AudioFormat::S16Le, pcm, looped })
+                    Ok(Sound { rate_hz, channels: channels as u8, format: AudioFormat::S16Le, pcm, loop_frames })
                 }
                 other => Err(bad(&format!("{other}-bit samples (8 and 16 are framed)"))),
             }
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn a_standard_header_is_unsigned_8_bit_mono_at_the_rate_in_whole_hz() {
         let s = decode_header(&std_header(0x56EE_8BA3, &[0x80, 0x90, 0x70]), |_, _| None).unwrap();
-        assert_eq!((s.rate_hz, s.channels, s.format, s.pcm.as_slice(), s.looped), (22254, 1, AudioFormat::U8, &[0x80u8, 0x90, 0x70][..], false));
+        assert_eq!((s.rate_hz, s.channels, s.format, s.pcm.as_slice(), s.loop_frames), (22254, 1, AudioFormat::U8, &[0x80u8, 0x90, 0x70][..], None));
         // samplePtr: the samples live elsewhere
         let mut h = std_header(0x2B77_0000, &[]);
         h[3] = 1;
@@ -205,7 +205,7 @@ mod tests {
         assert!(decode_header(&std_header(0, &[1]), |_, _| None).unwrap_err().0.contains("rate 0"));
         let mut l = std_header(0x56EE_8BA3, &[1, 2, 3, 4]);
         l[16..20].copy_from_slice(&3u32.to_be_bytes());
-        assert!(decode_header(&l, |_, _| None).unwrap().looped, "loopEnd - loopStart > 1 is a looped sound");
+        assert_eq!(decode_header(&l, |_, _| None).unwrap().loop_frames, Some((0, 3)), "loopEnd - loopStart > 1 is a looped sound; the points are kept");
     }
 
     #[test]

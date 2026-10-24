@@ -31,6 +31,8 @@ pub enum UiCall {
     OpenAudio(AudioStreamModel),
     /// `queue_audio`: the stream and the number of bytes (the bytes themselves are in [`RecordingGuestUi::audio`]).
     QueueAudio(AudioStreamRef, usize),
+    /// `queue_audio_looped`: the stream, the bytes queued and the loop in frames.
+    QueueAudioLooped(AudioStreamRef, usize, u32, u32),
     FlushAudio(AudioStreamRef),
     PauseAudio(AudioStreamRef, bool),
     SetAudioVolume(AudioStreamRef, u16, u16),
@@ -47,6 +49,8 @@ pub struct RecordedAudio {
     pub played: usize,
     pub paused: bool,
     pub volume: (u16, u16),
+    /// A looping entry is playing: the loop in frames. It never finishes (`audio_queued_bytes` stays at least one frame) until a flush.
+    pub looping: Option<(u32, u32)>,
 }
 
 /// FNV-1a 64 over pixels as big-endian bytes: the stable fingerprint tests pin.
@@ -310,7 +314,7 @@ impl GuestUi for RecordingGuestUi {
         model.validate()?;
         self.calls.push(UiCall::OpenAudio(model.clone()));
         let s = self.alloc(0, CallbackToken(0));
-        self.audio.insert(s.id, RecordedAudio { model, queued: Vec::new(), played: 0, paused: false, volume: (AUDIO_UNITY, AUDIO_UNITY) });
+        self.audio.insert(s.id, RecordedAudio { model, queued: Vec::new(), played: 0, paused: false, volume: (AUDIO_UNITY, AUDIO_UNITY), looping: None });
         Ok(s)
     }
     fn queue_audio(&mut self, stream: AudioStreamRef, pcm: &[u8]) -> Result<(), UiRefusal> {
@@ -323,17 +327,32 @@ impl GuestUi for RecordingGuestUi {
         self.calls.push(UiCall::QueueAudio(stream, pcm.len()));
         Ok(())
     }
+    fn queue_audio_looped(&mut self, stream: AudioStreamRef, pcm: &[u8], loop_start: u32, loop_end: u32) -> Result<(), UiRefusal> {
+        if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
+        self.check(stream)?;
+        let a = self.audio.get_mut(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?;
+        let fb = a.model.frame_bytes();
+        if pcm.len() as u32 % fb != 0 { return Err(UiRefusal::InvalidGeometry("queued audio is not a whole number of frames")); }
+        if loop_start >= loop_end || loop_end * fb > pcm.len() as u32 { return Err(UiRefusal::InvalidGeometry("audio loop outside its sound")); }
+        a.queued.extend_from_slice(pcm);
+        a.looping = Some((loop_start, loop_end));
+        if self.drain_audio { a.played = a.queued.len(); }
+        self.calls.push(UiCall::QueueAudioLooped(stream, pcm.len(), loop_start, loop_end));
+        Ok(())
+    }
     fn audio_queued_bytes(&mut self, stream: AudioStreamRef) -> Result<u32, UiRefusal> {
         if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
         self.check(stream)?;
         let a = self.audio.get(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?;
-        Ok((a.queued.len() - a.played) as u32)
+        let left = (a.queued.len() - a.played) as u32;
+        Ok(if a.looping.is_some() { left.max(a.model.frame_bytes()) } else { left })
     }
     fn flush_audio(&mut self, stream: AudioStreamRef) -> Result<(), UiRefusal> {
         if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }
         self.check(stream)?;
         let a = self.audio.get_mut(&stream.id).ok_or(UiRefusal::UnknownObject(stream))?;
         a.queued.truncate(a.played);
+        a.looping = None;
         self.calls.push(UiCall::FlushAudio(stream));
         Ok(())
     }
@@ -584,5 +603,26 @@ mod drain_tests {
         ui.drain_audio = true;
         ui.queue_audio(s, &[4, 5]).unwrap();
         assert_eq!(ui.audio_queued_bytes(s).unwrap(), 0, "draining: everything queued has played");
+    }
+}
+
+#[cfg(test)]
+mod loop_tests {
+    use super::*;
+    fn model() -> AudioStreamModel { AudioStreamModel { rate_hz: 8000, channels: 1, format: AudioFormat::U8, label: "t".into() } }
+    #[test]
+    fn a_looping_entry_never_finishes_until_flushed_and_a_bad_loop_is_refused() {
+        let mut ui = RecordingGuestUi::new();
+        let s = ui.open_audio_stream(model()).unwrap();
+        ui.queue_audio_looped(s, &[1, 2, 3, 4, 5, 6], 2, 6).unwrap();
+        assert_eq!(ui.audio_queued_bytes(s).unwrap(), 6);
+        ui.play_audio(s, 100).unwrap();
+        assert_eq!(ui.audio_queued_bytes(s).unwrap(), 1, "everything was played once and the loop still runs: never idle");
+        ui.flush_audio(s).unwrap();
+        assert_eq!(ui.audio_queued_bytes(s).unwrap(), 0, "a flush ends the loop");
+        assert!(matches!(ui.queue_audio_looped(s, &[1, 2], 1, 1), Err(UiRefusal::InvalidGeometry(_))), "an empty loop");
+        assert!(matches!(ui.queue_audio_looped(s, &[1, 2], 0, 9), Err(UiRefusal::InvalidGeometry(_))), "a loop past the sound");
+        ui.refuse_audio = true;
+        assert!(matches!(ui.queue_audio_looped(s, &[1, 2], 0, 1), Err(UiRefusal::Unsupported(_))));
     }
 }

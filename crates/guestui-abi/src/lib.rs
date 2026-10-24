@@ -120,6 +120,13 @@ pub trait GuestUi: 'static {
     fn queue_audio(&mut self, _stream: AudioStreamRef, _pcm: &[u8]) -> Result<(), UiRefusal> {
         Err(UiRefusal::Unsupported("audio out (no audio service in this host)"))
     }
+    /// Append `pcm` like `queue_audio`, but LOOPING: once played from the start up to frame `loop_end`, the host repeats frames
+    /// `loop_start .. loop_end` until the stream is flushed (`flush_audio`) or closed. A looping entry never finishes, so
+    /// `audio_queued_bytes` stays above 0 while it plays and whatever the guest queued behind it waits, as on the original OS. `pcm` is the
+    /// sound up to `loop_end` (frames past it are never played); `loop_start < loop_end`, both within `pcm`.
+    fn queue_audio_looped(&mut self, _stream: AudioStreamRef, _pcm: &[u8], _loop_start: u32, _loop_end: u32) -> Result<(), UiRefusal> {
+        Err(UiRefusal::Unsupported("looping audio (no audio service in this host)"))
+    }
     /// Bytes accepted by `queue_audio` that the host has not played yet (0 = the stream is idle).
     fn audio_queued_bytes(&mut self, _stream: AudioStreamRef) -> Result<u32, UiRefusal> {
         Err(UiRefusal::Unsupported("audio out (no audio service in this host)"))

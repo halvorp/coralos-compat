@@ -14,7 +14,7 @@
 //!   modelled), `SndDoCommand` ($A803), `SndDoImmediate` ($A804), `SndPlay` ($A805), `SndControl` ($A806, refused), `SysBeep` ($A9C8)
 //!   and `SoundDispatch` ($A800, [`dispatch`]).
 //! * **Commands**: `nullCmd`, `quietCmd`, `flushCmd`, `pauseCmd`, `resumeCmd`, `rateCmd`, `volumeCmd`, `soundCmd`, `bufferCmd`.
-//!   Every other command is refused BY NAME, none succeeds silently. NAMED LIMITS: `syncCmd` / `waitCmd` (a timed wait) are refused (`callBackCmd` runs the channel's routine: callback.rs); a looped sound (`loopEnd - loopStart > 1`) is refused; compressed (MACE /
+//!   Every other command is refused BY NAME, none succeeds silently. NAMED LIMITS: `syncCmd` / `waitCmd` (a timed wait) are refused (`callBackCmd` runs the channel's routine: callback.rs); compressed (MACE /
 //!   IMA) sound headers are refused; only the sampled synthesizer (and "any", 0) exists, the square-wave, wave-table and note
 //!   synthesizers answer `notEnoughHardware`; a synchronous `SndPlay` (`async` FALSE) returns when the sound is QUEUED, not when it has
 //!   played (the engine is not real-time: `SndChannelStatus` says `scChannelBusy` from the host's own queue length).
@@ -134,7 +134,6 @@ impl<U: GuestUi> Mac<U> {
 
     /// Queue a decoded sound on channel `key`: the OSErr and the log text.
     fn snd_play_sound(&mut self, key: u32, s: snd::Sound) -> Result<(i16, String), Refusal> {
-        if s.looped { return Err(Refusal(String::from("a looped sound (loopEnd - loopStart > 1) is not played: no continuous feed is modelled"))); }
         let rate = self.snd.chans.get(&key).and_then(|c| c.rate).unwrap_or(s.rate_hz);
         let f = Fmt { rate, channels: s.channels, format: s.format };
         let stream = match self.snd_stream_for(key, f) {
@@ -144,6 +143,13 @@ impl<U: GuestUi> Mac<U> {
         };
         let frame = (s.channels as usize) * s.format.bytes_per_sample() as usize;
         let whole = s.pcm.len() / frame * frame;
+        // a looped sound (loopEnd - loopStart > 1) plays up to its loop end and repeats the loop until quietCmd / flushCmd (the seam's looping queue)
+        if let Some((a, b)) = s.loop_frames.filter(|&(a, b)| b as usize * frame <= whole && a < b) {
+            let end = b as usize * frame;
+            self.ui.queue_audio_looped(stream, &s.pcm[..end], a, b).map_err(|e| Refusal(format!("the host refused a looping sound: {e:?}")))?;
+            *self.snd.queued_total.entry(stream.id).or_insert(0) += end as u64;
+            return Ok((NO_ERR, format!("{} Hz {}ch {:?}, {} bytes queued, LOOPING frames {a}..{b} until quietCmd / flushCmd", rate, s.channels, s.format, end)));
+        }
         self.ui.queue_audio(stream, &s.pcm[..whole]).map_err(|e| Refusal(format!("the host refused queued audio: {e:?}")))?;
         *self.snd.queued_total.entry(stream.id).or_insert(0) += whole as u64;
         Ok((NO_ERR, format!("{} Hz {}ch {:?}, {} bytes queued", rate, s.channels, s.format, whole)))

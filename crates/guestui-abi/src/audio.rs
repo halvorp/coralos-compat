@@ -12,6 +12,10 @@
 //! (`UiRefusal::Unsupported`), and the engine answers its guest as its OS does when the hardware is absent
 //! (`notEnoughHardware`), never as though the sound played.
 //!
+//! # Looping
+//! A sound with loop points (`queue_audio_looped`) plays once up to its loop end and then repeats the loop until the stream is flushed or
+//! closed: it never finishes, so a completion the guest queued behind it waits, as on the original OS.
+//!
 //! # Timing
 //! The engine is not real-time. `queue_audio` hands over bytes; `audio_queued_bytes` says how many the host has not yet played, so
 //! the engine can answer a channel-status or "is it done" question truthfully from the host's own clock. Playback pacing is the
