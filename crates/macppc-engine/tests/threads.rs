@@ -151,3 +151,29 @@ fn a_task_that_would_idle_yields_to_a_ready_thread_and_only_then_does_the_machin
     let mut m = boot(&build(&a, &e.finish(), &vec![0u8; 128]));
     assert_eq!(m.run_loop(1_000_000).0, Step::Blocked);
 }
+
+#[test]
+fn a_switch_binds_only_the_stubs_interned_since_the_task_last_ran() {
+    // main and a thread yield to each other 100 times: 200 switches. The glue table has a few dozen stubs; the OLD switch re-bound all of them every time.
+    let mut e = Asm::new();
+    prologue(&mut e);
+    e.label("t");
+    e.call_toc(toc(YIELD));
+    e.b("t");
+    epilogue(&mut e);
+    let mut a = Asm::new();
+    prologue(&mut a);
+    a.li(3, 1).addi(4, 2, 8).li(5, 0).li(6, 0).li(7, 0).addi(8, 2, RESULT).addi(9, 2, TID).call_toc(toc(NEW));
+    a.li(9, 100).stw(9, LOG, 2);
+    a.label("loop");
+    a.call_toc(toc(YIELD));
+    a.lwz(9, LOG, 2).addi(9, 9, -1).stw(9, LOG, 2).cmpwi(9, 0).bne("loop");
+    epilogue(&mut a);
+    let mut m = boot(&build(&a, &e.finish(), &vec![0u8; 64]));
+    let (step, _) = m.run_loop(2_000_000);
+    assert_eq!(step, Step::Exited, "{:?}", m.fault());
+    let stubs = m.glue.len() as u64;
+    assert!(stubs >= 10, "a realistic table: {stubs}");
+    // each of the two tasks needs its own CPU bound once (their first run) and nothing per further switch
+    assert!(m.switch_rebinds() <= 2 * stubs, "{} rebinds for 200 switches over {stubs} stubs: a switch must not rebind what the task has", m.switch_rebinds());
+}

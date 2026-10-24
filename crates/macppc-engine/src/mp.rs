@@ -187,7 +187,7 @@ impl<U: GuestUi> MacPpc<U> {
                 c.gpr[1] = r1; c.gpr[2] = toc; c.gpr[3] = param; c.gpr[12] = tv; c.lr = exit; c.pc = code;
                 let id = self.rt.sched.next_id;
                 self.rt.sched.next_id += 1;
-                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state: TState::Ready, kind: Kind::Mp, stack: Some(block), result_ptr: 0, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: (notify_q != 0).then_some((notify_q, p1, p2)) });
+                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state: TState::Ready, kind: Kind::Mp, stack: Some(block), result_ptr: 0, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: (notify_q != 0).then_some((notify_q, p1, p2)), bound: 0 });
                 put(self, task_p, id, "MPCreateTask")?;
                 self.mac.log.push(format!("[mp] MPCreateTask -> task {id} (entry {tv:#x}, stack {size}, cooperative)"));
                 0
