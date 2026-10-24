@@ -47,8 +47,9 @@ pub fn sound_dispatch<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, regs: &mut Regs
                 Some(key) => {
                     let (streams, paused) = m.snd.chans.get(&key).map(|c| (c.streams.iter().map(|s| s.r).collect::<Vec<_>>(), c.paused)).unwrap_or_default();
                     let busy = streams.iter().any(|s| m.ui.audio_queued_bytes(*s).is_ok_and(|n| n > 0));
-                    // SCStatus, 24 bytes: scStartTime, scEndTime, scCurrentTime (Fixed, not tracked: 0), scChannelBusy, scChannelDisposed,
-                    // scChannelPaused, scUnused, scChannelAttributes, scCPULoad
+                    // SCStatus, 24 bytes: scStartTime, scEndTime, scCurrentTime, scChannelBusy, scChannelDisposed, scChannelPaused,
+                    // scUnused, scChannelAttributes, scCPULoad. The three times are REFUSED BY NAME below: what clock they count and
+                    // from when is not documented in a source we have, so the engine does not invent one; they read 0.
                     let mut rec = [0u8; 24];
                     rec[12] = u8::from(busy);
                     rec[14] = u8::from(paused);
@@ -57,7 +58,8 @@ pub fn sound_dispatch<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, regs: &mut Regs
                 }
             };
             ret_w(m, cpu, err as u16)?;
-            format!("SndChannelStatus {chan:#x} -> {err} (start / end / current times are not tracked: 0)")
+            if err == NO_ERR { m.note_refusal("SndChannelStatus", String::from("scStartTime, scEndTime and scCurrentTime are not modelled (they read 0); scChannelBusy and scChannelPaused are real")); }
+            format!("SndChannelStatus {chan:#x} -> {err}")
         }
         (0x18, 0, 0x0008) | (0x18, _, 0x0008) => {
             let p = arg32(m, 0)?;

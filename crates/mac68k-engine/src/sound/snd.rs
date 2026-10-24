@@ -41,8 +41,7 @@ pub struct Cmd { pub cmd: u16, pub param1: i16, pub param2: u32 }
 /// Where in a resource body a header sits (`param2` of a data command with bit 15 set is an offset into the resource).
 pub const OFFSET_FLAG: u16 = 0x8000;
 
-fn be16(b: &[u8], at: usize) -> Option<u16> { Some(u16::from_be_bytes([*b.get(at)?, *b.get(at + 1)?])) }
-fn be32(b: &[u8], at: usize) -> Option<u32> { Some(u32::from_be_bytes([*b.get(at)?, *b.get(at + 1)?, *b.get(at + 2)?, *b.get(at + 3)?])) }
+use retro_common::bytes::{be16, be32};
 
 /// The commands of a `'snd '` resource body, `param2` of an offset command already turned into an offset from the start of the body
 /// (the caller adds the body's address). Format 2 turns its first `soundCmd` into `bufferCmd`, as the ROM and Executor do.

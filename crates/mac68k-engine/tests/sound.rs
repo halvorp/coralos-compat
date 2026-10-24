@@ -145,7 +145,7 @@ fn sound_dispatch_reports_channel_status_from_the_hosts_own_queue() {
     assert_eq!(word(&g, OUT + 8), -50);
     go(&mut g, |p| { p.clr_w().l(0x1234).w(24).l(STATUS); d0(p, 0x0010_0008); p.trap(0xA800).pop_w(OUT + 8); });
     assert_eq!(word(&g, OUT + 8), -205);
-    g.no_refusals();
+    assert!(!g.m.refused.is_empty() && g.m.refused.iter().all(|r| r.contains("scStartTime")), "the three times are refused by name, nothing else is: {:?}", g.m.refused);
 }
 
 #[test]
