@@ -980,3 +980,17 @@ a guest's own `MUIA_Group_*Spacing` still wins) and `win_pad`. Census: the AROS 
 four-field kit profile versus the full profile, host-measured by the RetroCompat.app test; no corpus app's Zune-default layout changes (the
 workspace corpus tests with a default profile are unchanged: 864 passed, 0 failed, debug and release). New corpus test:
 `a_host_group_profile_keeps_every_group_member_inside_the_panel_and_labels_with_their_controls` (skips when the corpus is absent).
+
+## The LVO table's blank lines, QueryOverscan, WindowAction, StartScreenNotify / EndScreenNotify (amiga lane), 2026-10-24
+`tools/corpus-census.py` over all 64, before (origin/main 49ef058) and after.
+
+| program | before | after | what changed |
+|---|---|---|---|
+| dopus-viewfont | next `intuition.library/QueryOverscan`, 9,422 insns | next `intuition.library/Request`, 31,328 insns; window, 2 controls, menu strip, 2 named refusals (`GT_SetGadgetAttrsA` GA_Disabled, `DrawImageState` of a guest-class image) | `QueryOverscan` answers the mode's DimensionInfo rectangle (queryoverscan.c) |
+| aros-MultiView | next `intuition.library/WindowAction` (really `EndScreenNotify`: `while (!EndScreenNotify(isnstarted)) Delay(10)` never ended), spinning to the 50 M instruction cap | none, exits cleanly after 5,040 insns (no FILE: the file requester answers Cancel, `Cleanup`) | the LVO table counted blank `.conf` lines wrong (genmodule `config.c:1695`: an empty line is a reserved vector); `EndScreenNotify` / `StartScreenNotifyTagList` registered; `WindowAction` (WAC_SENDIDCMPCLOSE) implemented |
+| aros-Exchange | none, 4,553 insns | none, 4,588 insns | its Cleanup now reaches the right `EndScreenNotify` |
+
+The table fix is the finding that matters: 143 intuition names from `ChangeWindowShape` on, and datatypes / iffparse / commodities / cybergraphics, were 1-2 vectors too high.
+Verified against the vector number written in every `AROS_LH` header (100 % match for 20 libraries). Nothing else in the census moved: the engine's handlers are registered by name
+from this table, so a program that called a shifted vector reached the neighbour's handler or an "unimplemented" line; the corpus programs that did were not on a path the census follows.
+Still true: the engine has ONE screen that nothing opens or closes, so a registered screen notification never fires.

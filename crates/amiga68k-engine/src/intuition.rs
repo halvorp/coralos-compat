@@ -108,3 +108,18 @@ pub fn change_window_box<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
     let note = if (w, hh) != (cw, ch) { let (iw, ih) = crate::graphics::resize_window(a, h, (w as i32, hh as i32))?; format!("; canvas now {iw}x{ih}") } else { String::new() };
     Ok(format!("[intuition] ChangeWindowBox {h:#x} -> {l},{t} {w}x{hh} (was {cw}x{ch}{note}; the native window is not moved)"))
 }
+
+/// WAC_SENDIDCMPCLOSE (compiler/include/intuition/extensions.h:65).
+const WAC_SENDIDCMPCLOSE: u32 = 3;
+
+/// WindowAction(a0 = window, d0 = action, a1 = tags). rom/intuition/windowaction.c:51-62 implements ONE action, WAC_SENDIDCMPCLOSE:
+/// `ih_fire_intuimessage(window, IDCMP_CLOSEWINDOW, 0, 0)`, which (fire_message, inputhandler_support.c:195) posts only when the window
+/// subscribes to CLOSEWINDOW and has a UserPort, and is a no-op otherwise. Every other action is not implemented in AROS either and
+/// is a named refusal here (the native window manager would own hide / show / move / size / stacking, but nothing asks for them yet).
+pub fn window_action<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (h, action) = (cpu.areg(0), cpu.dreg(0));
+    open_window(a, "WindowAction", h)?;
+    if action != WAC_SENDIDCMPCLOSE { return Err(Refusal(format!("WindowAction {h:#x}: action {action} is not implemented (only WAC_SENDIDCMPCLOSE, as in AROS)"))); }
+    let d = crate::idcmp::post(a, h, crate::idcmp::IDCMP_CLOSEWINDOW, 0, 0)?;
+    Ok(format!("[intuition] WindowAction {h:#x} WAC_SENDIDCMPCLOSE -> {d:?}"))
+}

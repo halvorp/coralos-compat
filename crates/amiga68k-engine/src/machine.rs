@@ -89,6 +89,8 @@ pub struct Amiga<U: GuestUi> {
     pub ibase_locks: u32,
     /// Outstanding LockPubScreen locks on the one public screen.
     pub screen_locks: u32,
+    /// Outstanding StartScreenNotifyTagList tokens (screen_notify.rs).
+    pub screen_notifies: alloc::collections::BTreeSet<u32>,
     /// Live ReadArgs results: (RDArgs, value buffer, its size, RDArgs allocated by ReadArgs).
     pub rdargs: Vec<(u32, u32, u32, bool)>,
     /// GadTools gadgets by guest address (gadtools.rs).
@@ -134,7 +136,7 @@ impl<U: GuestUi> Amiga<U> {
         let mut a = Amiga {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
-            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), workbench: Default::default(), notify: Default::default(), task_res: Default::default(), asl: Default::default(), cx: Default::default(), requests: Default::default(), iff: Default::default(), keymap: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, ibase_locks: 0, pub_list: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
+            stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), workbench: Default::default(), notify: Default::default(), task_res: Default::default(), asl: Default::default(), cx: Default::default(), requests: Default::default(), iff: Default::default(), keymap: Default::default(), locale: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, screen_notifies: Default::default(), ibase_locks: 0, pub_list: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
             clock_us: 0, timers: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), native_gads: Default::default(), gt_ctls: Default::default(), gfx: graphics::state::State::new(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
@@ -240,6 +242,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(menu_nav::LVO_RESET_MENU_STRIP, "ResetMenuStrip", intuition::set_menu_strip::<U>)
             .named("WindowLimits", intuition::window_limits::<U>)
             .named("ChangeWindowBox", intuition::change_window_box::<U>)
+            .named("WindowAction", intuition::window_action::<U>)
             .func(intuition::LVO_ACTIVATE_WINDOW, "ActivateWindow", intuition::activate_window::<U>)
             .func(intuition::LVO_WINDOW_TO_FRONT, "WindowToFront", intuition::window_to_front::<U>)
             .func(intuition::LVO_WINDOW_TO_BACK, "WindowToBack", intuition::window_to_back::<U>)
@@ -248,6 +251,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(screen::LVO_UNLOCK_PUB_SCREEN, "UnlockPubScreen", screen::unlock_pub_screen::<U>)
             .with(graphics::register_intuition::<U>)
             .with(crate::screen::register::<U>)
+            .with(crate::screen_notify::register::<U>)
             .with(crate::requester::register::<U>)
             .with(crate::boopsi_send::register::<U>)
             .with(crate::boopsi_glist::register::<U>)

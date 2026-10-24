@@ -94,6 +94,7 @@ pub mod process;
 pub mod rdargs;
 pub mod run;
 pub mod screen;
+pub mod screen_notify;
 pub mod cache;
 pub mod commodities;
 pub mod commodities_parse;
