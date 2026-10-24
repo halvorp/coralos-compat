@@ -94,7 +94,8 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // What is pinned is the fact that matters, that the stop is in low memory and not at a Toolbox routine.
     for app in ["mac/macwrite/u45/MacWrite.rsrc"] {
         let Some(m) = census(app) else { continue };
-        let (op, pc) = m.unimplemented_at.last().copied().expect("a stop");
+        // (the memory layout decides whether the garbage ends in a stray A-line word or spins in zeroed RAM until the budget is spent)
+        let Some((op, pc)) = m.unimplemented_at.last().copied() else { assert!(!m.ui.calls.iter().any(|c| format!("{c:?}").contains("OpenWindow")), "{app}: lost, no window"); continue };
         // Where the stray stop lands depends on what the garbage after the bad return happens to contain (address 0 or the middle of an
         // unloaded segment), so only its being a stop that no sane program would call is pinned: an A-line word from the AVL/Drag
         // dispatch range ($AA80, $AD05) at an odd or low-memory pc, never one of the traps this lane implemented.
@@ -123,7 +124,10 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // sounds load, the game gets as far as its title pictures (PICT v2: refused by name) and the palette (_SetEntries)
     assert!(m.log.iter().any(|l| l.starts_with("[res] MaxSizeRsrc")) && m.log.iter().any(|l| l.starts_with("[res] GetCursor 1 -> 0x") && !l.contains("-> 0x0 ")), "{:#?}", m.log);
     assert!(!m.log.iter().any(|l| l.contains("Couldn't Load a Resource")), "the load-failure alert is gone");
-    assert!(m.refused.last().is_some_and(|r| r.contains("_SetEntries ($AA3F)")), "the next wall: {:?}", m.refused.last());
+    // then SetEntries (its palette), ShieldCursor, direct writes to the frame buffer (shown in its window), and its sound: the next wall is
+    // the Sound Manager's callBackCmd (a completion routine into the guest), refused by name
+    assert!(m.log.iter().any(|l| l.starts_with("[toolbox] ShieldCursor")) && m.log.iter().any(|l| l.contains("SetEntries")), "{:#?}", m.log);
+    assert!(m.refused.last().is_some_and(|r| r.contains("callBackCmd")), "the next wall: {:?}", m.refused.last());
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.

@@ -77,8 +77,12 @@ pub const MENU_BAR_HEIGHT: i16 = 20;
 pub const APPL_LIMIT_ADDR: u32 = 0x2_0000;
 /// Where the 52-byte stub Zone record (plus one 8-byte free-block header after it) lives (inside low RAM, below `CODE_BASE`).
 pub const ZONE_STUB: u32 = 0xC00;
-/// The screen's pretend bitmap address (the engine draws nothing to it: QuickDraw output is a later step).
-pub const SCREEN_BASE: u32 = DEFAULT_SIZE as u32 - 0x5580; // 342 rows x 64 bytes, at the very top of RAM; the heap ends below it
+/// The screen's frame buffer: `ScrnBase` and the main device's PixMap `baseAddr`. QuickDraw draws into windows' canvases, not here, but a
+/// program that writes video memory itself (a game blitting to the screen) writes HERE, and [`crate::qd::screen`] shows those writes in
+/// the windows over them. Sized for the deepest screen the engine has (the Mac II's 8 bits, 512 x 342 = 175,104 bytes); the 1-bit
+/// Plus uses the first 342 x 64 of it. At the very top of RAM; the heap ends below it.
+pub const SCREEN_BYTES: u32 = SCREEN_W as u32 * SCREEN_H as u32;
+pub const SCREEN_BASE: u32 = DEFAULT_SIZE as u32 - SCREEN_BYTES;
 
 /// Initialise the globals a program expects at launch.
 pub fn init(mem: &mut GuestMem) -> Result<(), Refusal> {

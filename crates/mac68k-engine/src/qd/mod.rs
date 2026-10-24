@@ -27,6 +27,7 @@ pub mod lifecycle;
 pub mod plane;
 pub mod port;
 pub mod regions;
+pub mod screen;
 pub mod scroll;
 pub mod shapes;
 pub mod stretch;
@@ -66,11 +67,13 @@ pub struct Qd {
     pub pictures: BTreeMap<u32, picture::OpenPic>,
     /// Per colour window: the host colours of its colour table as last presented (a change repaints the window).
     pub palettes: BTreeMap<u32, alloc::vec::Vec<u32>>,
+    /// The frame buffer as last shown (screen.rs).
+    pub screen: screen::ScreenSync,
 }
 
 impl Default for Qd {
     fn default() -> Self {
-        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new(), palettes: BTreeMap::new() }
+        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new(), palettes: BTreeMap::new(), screen: Default::default() }
     }
 }
 
@@ -99,6 +102,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
 /// Publish every window's accumulated drawing: one `present_plane` per changed window (the display list), or, for a host
 /// without plane replay, one `present_content` per damaged window. Called by `Mac::step`.
 pub fn flush<U: GuestUi>(m: &mut Mac<U>) {
+    screen::sync(m);
     refresh_palettes(m);
     plane::flush(m);
     let mut presenter = core::mem::take(&mut m.qd.present);

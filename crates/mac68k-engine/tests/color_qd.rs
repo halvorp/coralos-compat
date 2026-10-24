@@ -582,3 +582,50 @@ fn set_entries_writes_the_device_table_by_position_or_by_value_and_refuses_past_
     let _ = m.run_loop(1_000_000);
     assert!(m.refused.iter().any(|r| r.contains("SetEntries") && r.contains("past the device's 256-entry table")), "{:?}", m.refused);
 }
+
+#[test]
+fn a_program_writing_the_frame_buffer_itself_shows_in_the_window_over_it_and_only_where_it_changed() {
+    // Glider PRO blits straight into video memory after SwapMMUMode: a pixel written at ScrnBase + y * 512 + x appears at global (x, y) in the
+    // topmost window over it. The window here is global (left 50, top 100) .. (250, 220).
+    use mac68k_engine::lowmem::SCREEN_BASE;
+    let mut w = color_window();
+    // what QuickDraw drew stays: paint pen 5 into local (0,0)
+    w.script(&[call("ForeColor", &[Lit(33)], None)]); // any call that leaves the canvas alone
+    let before = w.px(3, 4);
+    let at = |x: u32, y: u32| SCREEN_BASE + y * 512 + x;
+    w.m.mem.write_u8(at(53, 104), 77).unwrap(); // global (53,104) = local (3,4)
+    w.m.mem.write_u8(at(300, 104), 88).unwrap(); // outside the window: nobody shows it
+    w.m.mem.write_u8(at(60, 90), 99).unwrap(); // above it too
+    mac68k_engine::qd::flush(&mut w.m);
+    assert_eq!((before, w.px(3, 4)), (0, 77), "the direct write is in the canvas");
+    assert_eq!(w.px(0, 0), 0, "pixels nobody changed are untouched");
+    // QuickDraw's own drawing is not erased by the (blank) frame buffer beneath on a LATER flush
+    w.m.qd.canvases.get_mut(&w.win).unwrap().set(10, 10, 42);
+    w.m.mem.write_u8(at(55, 105), 11).unwrap();
+    w.m.mem.write_u8(at(70, 120), 12).unwrap(); // the changed pixels' bounding box now covers local (10,10) too
+    mac68k_engine::qd::flush(&mut w.m);
+    assert_eq!((w.px(10, 10), w.px(5, 5), w.px(20, 20)), (42, 11, 12), "a pixel QuickDraw drew survives inside the dirty box; the direct writes arrive");
+    // the window is told: it was repainted (a plane or content frame for it exists after the flush)
+    assert!(w.m.ui.calls.iter().any(|c| matches!(c, UiCall::PresentContent { .. } | UiCall::PresentPlane(..))), "{:?}", w.m.ui.calls.len());
+    // a second flush with no change does nothing
+    let n = w.m.ui.calls.len();
+    mac68k_engine::qd::flush(&mut w.m);
+    assert_eq!(w.m.ui.calls.len(), n, "no change, no repaint");
+}
+
+#[test]
+fn a_direct_screen_write_shows_in_the_topmost_of_two_overlapping_windows_only() {
+    use mac68k_engine::lowmem::SCREEN_BASE;
+    let mut w = color_window(); // global (50,100)..(250,220)
+    let spec = WindowSpec { storage: 0, rect: Rect { top: 150, left: 100, bottom: 300, right: 300 }, title: "F".into(), visible: true, proc_id: 0, behind: 0xFFFF_FFFF, go_away: false, ref_con: 0 };
+    let front = w.m.make_window_as(spec, true).unwrap(); // in front of the first
+    assert_eq!(w.m.z.first(), Some(&front), "the new window is frontmost");
+    // global (120,160) is inside both: the front window gets it, the back one does not
+    w.m.mem.write_u8(SCREEN_BASE + 160 * 512 + 120, 66).unwrap();
+    // global (60,110) is inside the back window only
+    w.m.mem.write_u8(SCREEN_BASE + 110 * 512 + 60, 67).unwrap();
+    mac68k_engine::qd::flush(&mut w.m);
+    assert_eq!(w.m.qd.canvases[&front].get(120 - 100, 160 - 150), Some(66), "the front window shows the pixel");
+    assert_eq!(w.m.qd.canvases[&w.win].get(120 - 50, 160 - 100), Some(0), "the window behind it does not (that pixel is covered)");
+    assert_eq!(w.m.qd.canvases[&w.win].get(10, 10), Some(67), "a pixel only the back window covers lands there");
+}
