@@ -4,8 +4,8 @@
 //! parameter area 24 bytes above r1 (one word each), doubles in f1..f13 and ALSO reserving two GPR slots each (so a variadic callee finds them in
 //! order), results in r3 (or f1). C semantics are the ISO C library's; where the classic library differs or this engine has no state to match
 //! (`rand`'s sequence, `getenv`, locale) the difference is stated at the function.
-//! Not provided, therefore refused by name when called: `qsort`/`bsearch` (they call back into the program: Mixed Mode callbacks),
-//! `atexit` (handlers would never run), the `FILE` family (`fopen`, `fprintf`, `_iob` ...), `longjmp`, `strftime`, `signal`, `sscanf`.
+//! `qsort`/`bsearch`/`atexit`/`exit` call the PROGRAM back and live in [`crate::callback_c`].
+//! Not provided, therefore refused by name when called: the `FILE` family (`fopen`, `fprintf`, `_iob` ...), `longjmp`, `strftime`, `signal`, `sscanf`.
 use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
@@ -23,6 +23,8 @@ pub enum CFn {
     Sprintf, Snprintf, Printf, Puts, Putchar,
     Isalnum, Isalpha, Isascii, Iscntrl, Isdigit, Isgraph, Islower, Isprint, Ispunct, Isspace, Isupper, Isxdigit, Toupper, Tolower, Toascii,
     Getenv, Time, Clock,
+    /// These call the program back: they redirect the CPU into its routine ([`crate::callback_c`]).
+    Qsort, Bsearch, Atexit,
 }
 
 impl CFn {
@@ -39,6 +41,7 @@ impl CFn {
             "islower" => Islower, "isprint" => Isprint, "ispunct" => Ispunct, "isspace" => Isspace, "isupper" => Isupper, "isxdigit" => Isxdigit,
             "toupper" => Toupper, "tolower" => Tolower, "toascii" => Toascii,
             "getenv" => Getenv, "time" => Time, "clock" => Clock,
+            "qsort" => Qsort, "bsearch" => Bsearch, "atexit" => Atexit,
             _ => return None,
         })
     }
@@ -80,6 +83,12 @@ impl<U: GuestUi> MacPpc<U> {
         let name = format!("{f:?}").to_lowercase();
         let a = |m: &Self, i: usize| arg(m, cpu, i);
         let (a0, a1, a2) = (a(self, 0)?, a(self, 1)?, a(self, 2)?);
+        match f {
+            Qsort => { let a3 = a(self, 3)?; return self.start_qsort(cpu, a0, a1, a2, a3); }
+            Bsearch => { let (a3, a4) = (a(self, 3)?, a(self, 4)?); return self.start_bsearch(cpu, a0, a1, a2, a3, a4); }
+            Atexit => { self.register_atexit(a0)?; cpu.gpr[3] = 0; return Ok(()); }
+            _ => {}
+        }
         let r: u32 = match f {
             Malloc => self.alloc(a0, false),
             Calloc => match a0.checked_mul(a1) { Some(n) => self.alloc(n, true), None => 0 },
@@ -176,6 +185,7 @@ impl<U: GuestUi> MacPpc<U> {
             }
             // clock() counts CLOCKS_PER_SEC = 60 ticks per second: TickCount
             Clock => self.mac.ev.ticks,
+            Qsort | Bsearch | Atexit => unreachable!("handled above"),
         };
         cpu.gpr[3] = r;
         Ok(())

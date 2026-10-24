@@ -12,7 +12,7 @@ type M = MacPpc<RecordingGuestUi>;
 const F: SymbolClass = SymbolClass::TVector;
 const STD: &[&str] = &["malloc", "calloc", "realloc", "free", "memcpy", "memmove", "memset", "memcmp", "memchr", "strlen", "strcpy", "strncpy", "strcat", "strncat",
     "strcmp", "strncmp", "strchr", "strrchr", "strstr", "strspn", "strcspn", "strpbrk", "atoi", "atol", "strtol", "strtoul", "abs", "rand", "srand", "sprintf",
-    "snprintf", "printf", "puts", "putchar", "isalpha", "isdigit", "isspace", "toupper", "tolower", "getenv", "time", "clock", "qsort", "fopen"];
+    "snprintf", "printf", "puts", "putchar", "isalpha", "isdigit", "isspace", "toupper", "tolower", "getenv", "time", "clock", "signal", "sscanf"];
 const MATH: &[&str] = &["sin", "cos", "tan", "atan", "atan2", "exp", "log", "log10", "pow", "sqrt", "floor", "ceil", "fabs", "fmod", "ldexp", "frexp", "modf", "hypot", "round", "rint", "pi"];
 
 struct Rig { m: M, frag: Fragment, cpu: Cpu }
@@ -275,10 +275,10 @@ fn mathlib_functions_take_doubles_in_f1_f2_and_answer_in_f1() {
 #[test]
 fn what_is_not_provided_stays_refused_by_name_in_both_libraries() {
     let mut r = rig();
-    let q = r.call("StdCLib", "qsort").unwrap_err();
-    assert!(q.contains("NEXT-NEEDED") && q.contains("qsort"), "{q}");
-    let f = r.call("StdCLib", "fopen").unwrap_err();
-    assert!(f.contains("fopen"), "{f}");
+    let q = r.call("StdCLib", "signal").unwrap_err();
+    assert!(q.contains("NEXT-NEEDED") && q.contains("signal"), "{q}");
+    let f = r.call("StdCLib", "sscanf").unwrap_err();
+    assert!(f.contains("sscanf"), "{f}");
     let p = r.call("MathLib", "pi");
     assert!(p.is_err(), "pi is a data symbol MathLib exports; this engine does not provide it");
 }

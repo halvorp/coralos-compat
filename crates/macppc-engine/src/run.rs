@@ -49,11 +49,13 @@ pub struct Runtime {
     pub(crate) fm_pb: Option<u32>,
     /// `rand`'s state and the last `errno` a native set.
     pub(crate) rand: u32,
+    /// `atexit` handlers (TVectors), in registration order.
+    pub(crate) atexit: alloc::vec::Vec<u32>,
     pub(crate) rand_seeded: bool,
     pub(crate) errno: u32,
     main_tvector: u32,
     /// A refusal or CPU trap; once set, every step reports it again (the program cannot continue).
-    fault: Option<String>,
+    pub(crate) fault: Option<String>,
     /// Callbacks into the program in progress, innermost last (`crate::callback`).
     pub(crate) callbacks: alloc::vec::Vec<crate::callback::Frame>,
 }
@@ -158,7 +160,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let status = cpu.gpr[3];
                 if let Some(&p) = self.cdata.get("_exit_status") { let _ = self.mac.mem.write_u32(p, status); }
                 self.mac.log.push(format!("[stdclib] exit({})", status as i32));
-                cpu.halt();
+                self.begin_exit(cpu);
             }
             _ => self.mac.log.push("[stdclib] _BreakPoint (no debugger: ignored)".into()),
         }

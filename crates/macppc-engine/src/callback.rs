@@ -27,11 +27,11 @@ const CALLBACK_STACK_GAP: u32 = 512;
 
 /// The interrupted call's registers, put back exactly when the continuation resumes it.
 #[derive(Debug, Clone)]
-pub(crate) struct Saved { gpr: [u32; 32], fpr: [u64; 32], cr: u32, lr: u32, ctr: u32, xer: u32, fpscr: u32, pc: u32 }
+pub(crate) struct Saved { pub(crate) gpr: [u32; 32], fpr: [u64; 32], cr: u32, lr: u32, ctr: u32, xer: u32, fpscr: u32, pc: u32 }
 
 impl Saved {
-    fn of(cpu: &Cpu, pc: u32) -> Self { Saved { gpr: cpu.gpr, fpr: cpu.fpr, cr: cpu.cr, lr: cpu.lr, ctr: cpu.ctr, xer: cpu.xer, fpscr: cpu.fpscr, pc } }
-    fn restore(&self, cpu: &mut Cpu) {
+    pub(crate) fn of(cpu: &Cpu, pc: u32) -> Self { Saved { gpr: cpu.gpr, fpr: cpu.fpr, cr: cpu.cr, lr: cpu.lr, ctr: cpu.ctr, xer: cpu.xer, fpscr: cpu.fpscr, pc } }
+    pub(crate) fn restore(&self, cpu: &mut Cpu) {
         cpu.gpr = self.gpr; cpu.fpr = self.fpr; cpu.cr = self.cr; cpu.lr = self.lr; cpu.ctr = self.ctr; cpu.xer = self.xer; cpu.fpscr = self.fpscr;
         cpu.set_pc(self.pc);
     }
@@ -42,10 +42,16 @@ impl Saved {
 pub(crate) enum Continuation {
     /// A dialog's user items before `ModalDialog` waits: the draw (window, procedures left, the port to restore).
     UserItems(UserItemDraw),
+    /// `qsort` in progress ([`crate::callback_c`]): the comparison procedure is the program's.
+    Qsort(crate::callback_c::Sort),
+    /// `bsearch` in progress.
+    Bsearch(crate::callback_c::Search),
+    /// `exit` running the `atexit` handlers, last registered first; the run ends after the last.
+    AtExit,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Frame { saved: Saved, cont: Continuation }
+pub(crate) struct Frame { pub(crate) saved: Saved, pub(crate) cont: Continuation }
 
 impl<U: GuestUi> MacPpc<U> {
     /// The `$CallbackReturn` stub address, interned (and bound as a native) on first use.
@@ -60,9 +66,13 @@ impl<U: GuestUi> MacPpc<U> {
     /// parser) BEFORE any register changes: a descriptor this engine cannot run is a named refusal, the CPU untouched.
     fn enter_upp(&mut self, cpu: &mut Cpu, upp: u32, args: &[u32], sp: u32) -> Result<(), String> {
         let record = parse(&self.mac.mem, upp).and_then(|d| ppc_record(&d)).map_err(|e| format!("{e}"))?;
-        let tv = record.proc_descriptor;
-        let code = self.mac.mem.read_u32(tv).map_err(|e| format!("the TVector at {tv:#x} of UPP {upp:#x}: {e}"))?;
-        let toc = self.mac.mem.read_u32(tv + 4).map_err(|e| format!("the TVector at {tv:#x} of UPP {upp:#x}: {e}"))?;
+        self.enter_tvector(cpu, record.proc_descriptor, args, sp).map_err(|e| format!("UPP {upp:#x}: {e}"))
+    }
+
+    /// Call the PowerPC routine whose TVector is at `tv` (a CFM function pointer) with `args` in r3.., returning to `$CallbackReturn`.
+    pub(crate) fn enter_tvector(&mut self, cpu: &mut Cpu, tv: u32, args: &[u32], sp: u32) -> Result<(), String> {
+        let code = self.mac.mem.read_u32(tv).map_err(|e| format!("the TVector at {tv:#x}: {e}"))?;
+        let toc = self.mac.mem.read_u32(tv + 4).map_err(|e| format!("the TVector at {tv:#x}: {e}"))?;
         let ret = self.callback_return_stub(cpu)?;
         let r1 = (sp.wrapping_sub(CALLBACK_STACK_GAP)) & !0xF;
         self.mac.mem.write_u32(r1, sp).map_err(|e| format!("the callback frame at {r1:#x}: {e}"))?; // back chain
@@ -85,7 +95,7 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// Call the frame's next user item, or finish: `EndUpdate`, the port back, the interrupted call entered again.
     fn next_user_item(&mut self, cpu: &mut Cpu, mut frame: Frame) -> Result<(), String> {
-        let Continuation::UserItems(draw) = &mut frame.cont;
+        let Continuation::UserItems(draw) = &mut frame.cont else { return Err(String::from("a user-item step on another continuation")) };
         match draw.todo.pop_front() {
             Some((upp, item)) => {
                 let win = draw.win;
@@ -109,6 +119,9 @@ impl<U: GuestUi> MacPpc<U> {
         let Some(frame) = self.rt.callbacks.pop() else { return Err(String::from("$CallbackReturn reached with no callback in progress")) };
         match frame.cont {
             Continuation::UserItems(_) => self.next_user_item(cpu, frame),
+            Continuation::Qsort(_) => self.sort_returned(cpu, frame),
+            Continuation::Bsearch(_) => self.search_returned(cpu, frame),
+            Continuation::AtExit => self.exit_handler_returned(cpu, frame),
         }
     }
 

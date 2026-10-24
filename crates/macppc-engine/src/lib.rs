@@ -37,6 +37,7 @@ pub mod source;
 pub mod stdclib;
 pub mod symbols;
 pub mod callback;
+pub mod callback_c;
 pub mod clib;
 pub mod clib_fmt;
 pub mod clib_math;
