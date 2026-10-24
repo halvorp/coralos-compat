@@ -101,7 +101,7 @@ pub struct State {
 }
 
 /// What a dialog or alert window is built from.
-pub(crate) struct Def { pub what: String, pub rect: Rect, pub title: String, pub proc_id: u16, pub go_away: bool, pub ref_con: u32, pub ditl: i16, pub show: bool, /** `NewDialog`'s item list: the dialog uses the program's own handle, as the Dialog Manager does (`GetNewDialog` and alerts copy a `DITL` resource) */ pub items: Option<u32> }
+pub(crate) struct Def { pub what: String, pub rect: Rect, pub title: String, pub proc_id: u16, pub go_away: bool, pub ref_con: u32, pub ditl: i16, pub show: bool, /** a colour dialog: made with `NewCWindow` (a CGrafPort), as the Dialog Manager does when the DLOG has a `dctb` */ pub color: bool, /** `NewDialog`'s item list: the dialog uses the program's own handle, as the Dialog Manager does (`GetNewDialog` and alerts copy a `DITL` resource) */ pub items: Option<u32> }
 
 pub(super) struct Raw { pub rect: Rect, pub ty: u8, pub data: Vec<u8>, pub at: usize }
 
@@ -247,7 +247,7 @@ impl<U: GuestUi> Mac<U> {
         let be = |i: usize| i16::from_be_bytes([b[i], b[i + 1]]);
         let title: String = b[21..21 + b[20] as usize].iter().map(|&x| char::from(x)).collect();
         let def = Def { what: format!("GetNewDialog {id}"), rect: Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) }, title, proc_id: be(8) as u16, go_away: b[12] != 0,
-            ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]), ditl: be(18), show: b[10] != 0, items: None };
+            ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]), ditl: be(18), show: b[10] != 0, color: self.profile.color_qd && self.get_resource(*b"dctb", id, false).is_ok(), items: None };
         self.build_dialog(def, storage, behind).map(Some)
     }
 
@@ -276,7 +276,7 @@ impl<U: GuestUi> Mac<U> {
         };
         let ip = self.mm.block(items).map(|b| b.ptr).ok_or_else(|| Refusal(format!("{id}: the item list has no block")))?;
         let spec = WindowSpec { storage: record, rect: d.rect, title: d.title, visible: false, proc_id: d.proc_id, behind, go_away: d.go_away, ref_con: d.ref_con };
-        let win = self.make_window(spec)?;
+        let win = self.make_window_as(spec, d.color)?;
         let e = Refusal::mem("DialogRecord");
         self.mem.write_u32(win + DR_ITEMS, items).map_err(&e)?;
         self.mem.write_u16(win + crate::toolbox::WR_KIND, crate::toolbox::DIALOG_KIND).map_err(&e)?; // windowKind: dialogKind, not userKind
@@ -348,7 +348,7 @@ fn new_dialog<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
     let (storage, rect, title, visible, proc_id, behind) = (c.args.get(0), read_rect(&m.mem, c.args.get(1))?, read_pstring(&m.mem, c.args.get(2))?, c.args.get(3) as u8 != 0, c.args.get(4) as u16, c.args.get(5));
     let (go_away, ref_con, items) = (c.args.get(6) as u8 != 0, c.args.get(7), c.args.get(8));
     if items == 0 { return Err(Refusal("NewDialog: the item list is NIL".into())); }
-    let def = Def { what: "NewDialog".into(), rect, title, proc_id, go_away, ref_con, ditl: 0, show: visible, items: Some(items) };
+    let def = Def { what: "NewDialog".into(), rect, title, proc_id, go_away, ref_con, ditl: 0, show: visible, color: false, items: Some(items) };
     let win = m.build_dialog(def, storage, behind)?;
     Ok(Done { result: win, log: format!("[dialog] NewDialog -> {win:#x} ({} items)", m.tr.dlg.dialogs[&win].list.len()) })
 }

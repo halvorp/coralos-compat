@@ -133,7 +133,12 @@ pub mod cells {
 
 /// A dialog application's resources: `DLOG` 128 (dBoxProc, visible), `DITL` 128: 1 OK button, 2 Cancel button, 3 check box
 /// "Remember", 4 static text "Name:", 5 edit text "Hello", 6 a disabled user item.
-pub fn dialog_fork() -> alloc::vec::Vec<u8> {
+pub fn dialog_fork() -> alloc::vec::Vec<u8> { dialog_fork_with(false) }
+
+/// [`dialog_fork`] plus a `dctb` 128 (a dialog colour table): on a machine with Color QuickDraw `GetNewDialog` then makes a COLOUR window.
+pub fn color_dialog_fork() -> alloc::vec::Vec<u8> { dialog_fork_with(true) }
+
+fn dialog_fork_with(dctb: bool) -> alloc::vec::Vec<u8> {
     let item = |rect: [i16; 4], ty: u8, data: &[u8]| {
         let mut v = alloc::vec![0u8; 4];
         for r in rect { v.extend_from_slice(&r.to_be_bytes()); }
@@ -153,7 +158,9 @@ pub fn dialog_fork() -> alloc::vec::Vec<u8> {
     dlog.extend_from_slice(&0u32.to_be_bytes()); // refCon
     dlog.extend_from_slice(&128i16.to_be_bytes()); // itemsID
     dlog.extend_from_slice(&ps("Dialog"));
-    retro_resfork::writer::ForkBuilder::new().add(b"DLOG", 128, None, &dlog).add(b"DITL", 128, None, &ditl).build()
+    let mut b = retro_resfork::writer::ForkBuilder::new().add(b"DLOG", 128, None, &dlog).add(b"DITL", 128, None, &ditl);
+    if dctb { b = b.add(b"dctb", 128, None, &[0u8; 8]); } // an empty window colour table: its presence is what the Dialog Manager looks for
+    b.build()
 }
 
 /// The dialog program: open `DLOG` 128, wait for a hit, read item 5's text, the check box and the item's type/box, rewrite the

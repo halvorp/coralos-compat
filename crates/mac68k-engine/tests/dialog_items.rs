@@ -258,3 +258,23 @@ fn get_new_dialog_makes_a_dialog_kind_window_in_the_dialog_font() {
     assert_eq!(m.mem.read_u16(w + 68).unwrap(), 3, "txFont is DlgFont");
     assert_eq!((m.mem.read_u16(w + 164).unwrap(), m.mem.read_u16(w + 168).unwrap()), (4, 1), "editField is the first editText item (index 4: item 5), aDefItem 1");
 }
+
+#[test]
+fn a_dlog_with_a_dctb_is_a_colour_window_on_a_colour_machine_and_a_plain_one_otherwise() {
+    // Inside Macintosh: on a Mac with Color QuickDraw the Dialog Manager makes the dialog a COLOUR window (NewCWindow) when the DLOG has a 'dctb'.
+    // ResEdit 2.1.3's About box then reads (CGrafPtr)port->portPixMap: through a plain GrafPort that was the screen's baseAddr (CopyPixMap
+    // refused "0xffaa80 is not a handle").
+    let make = |fork: Vec<u8>, profile: &str| {
+        let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+        m.set_machine(profile).unwrap();
+        mac68k_engine::quickdraw::fill_globals(&mut m, GLOBALS).unwrap();
+        m.qd_globals = GLOBALS;
+        m.rm.open_fork(mac68k_engine::resmgr::APP_REF_NUM, retro_resfork::ResFork::parse(fork).unwrap());
+        run(&mut m, &[]);
+        let w = win(&m);
+        (m.windows[&w].color, m.mem.read_u16(w + 6).unwrap() & 0xC000)
+    };
+    assert_eq!(make(mac68k_engine::fixture::color_dialog_fork(), "mac-ii"), (true, 0xC000), "dctb + Color QuickDraw: a CGrafPort (portVersion's two high bits)");
+    assert_eq!(make(mac68k_engine::fixture::dialog_fork(), "mac-ii"), (false, 0), "no dctb: a plain GrafPort");
+    assert_eq!(make(mac68k_engine::fixture::color_dialog_fork(), "mac-plus"), (false, 0), "no Color QuickDraw: a plain GrafPort whatever the resources");
+}
