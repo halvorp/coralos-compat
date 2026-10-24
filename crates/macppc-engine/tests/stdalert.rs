@@ -29,10 +29,10 @@ fn a_standard_alert_is_asked_parked_and_answered_with_the_dialogs_h_item_number(
     pstr(&mut m, ERR, "Save changes?");
     pstr(&mut m, EXPL, "Your changes will be lost.");
     pstr(&mut m, T_SAVE, "Save");
-    // AlertStdAlertParamRec: defaultText "Save", cancelText standard (-1), otherText standard "Don't Save"; default button 1, cancel button 2
-    for (o, v) in [(8u32, T_SAVE), (12, 0xFFFF_FFFF), (16, 0xFFFF_FFFF)] { m.mac.mem.write_u32(PARAM + o, v).unwrap(); }
-    m.mac.mem.write_u16(PARAM + 20, 1).unwrap();
-    m.mac.mem.write_u16(PARAM + 22, 2).unwrap();
+    // AlertStdAlertParamRec (68k-aligned, the layout Warcraft III World Editor's own record has): defaultText "Save", cancelText standard (-1), otherText standard "Don't Save"; default button 1, cancel button 2
+    for (o, v) in [(6u32, T_SAVE), (10, 0xFFFF_FFFF), (14, 0xFFFF_FFFF)] { m.mac.mem.write_u32(PARAM + o, v).unwrap(); }
+    m.mac.mem.write_u16(PARAM + 18, 1).unwrap();
+    m.mac.mem.write_u16(PARAM + 20, 2).unwrap();
     assert_eq!(sa(&mut m, 2, PARAM), GlueOutcome::Idle, "parked on the host's answer");
     let r = request(&m);
     assert_eq!((r.text.as_str(), r.kind), ("Save changes?\nYour changes will be lost.", RequestKind::Caution));

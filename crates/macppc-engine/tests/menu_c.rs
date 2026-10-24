@@ -34,6 +34,7 @@ fn machine() -> (M, u32) {
 fn titles_ids_enabled_state_and_command_keys() {
     let (mut m, h) = machine();
     assert_eq!(call(&mut m, "GetMenuID", &[h]), 200);
+    assert_eq!(call(&mut m, "CountMenuItems", &[h]), 3, "the Carbon name of CountMItems");
     assert_eq!(call(&mut m, "GetMenuTitle", &[h, OUT]), 0);
     assert_eq!(m.mac.mem.bytes(m.mac.mem.span(OUT, 5).unwrap()).unwrap(), b"\x04File");
     pstr(&mut m, BUF, "Datei");

@@ -1,5 +1,5 @@
 //! `StandardAlert(alertType, error, explanation, param, &itemHit)`: the Appearance Manager's alert, ASKED of the host as the native kit alert (`GuestUi::request`, kind from `alertType`),
-//! never drawn. `AlertStdAlertParamRec` (Dialogs.h): movable 0, helpButton 1, filterProc 4, defaultText 8, cancelText 12, otherText 16, defaultButton 20, cancelButton 22, position 24.
+//! never drawn. `AlertStdAlertParamRec` (Dialogs.h) is 68k-ALIGNED (2-byte packed), as MEASURED from Warcraft III World Editor's own record: movable 0, helpButton 1, filterProc 2, defaultText 6, cancelText 10, otherText 14, defaultButton 18, cancelButton 20, position 22 (a PowerPC natural-alignment guess read -1 as 0xffff0000).
 //! A NULL `param` is one OK button. In `param` a NULL text pointer means "no such button" and `(StringPtr)-1` the standard title (OK, Cancel, Don't Save). The item numbers returned are the
 //! Dialogs.h ones: 1 default (OK), 2 cancel, 3 other. Buttons go left to right as the Platinum alert lays them out: other, cancel, default. The message is the `error` line, then the
 //! `explanation` line. Ignored, said in the log: `movable`, `position`, a non-NIL `filterProc` (a guest callback the glue cannot run mid-call), `helpButton` (no help item is added).
@@ -40,24 +40,25 @@ impl<U: GuestUi> MacPpc<U> {
         if param == 0 { items.push((1, "OK".into())); } else {
             let rd32 = |o: u32| self.mac.mem.read_u32(param + o).map_err(|_| format!("StandardAlert: the parameter record at {param:#x} leaves guest RAM"));
             let rd16 = |o: u32| self.mac.mem.read_u16(param + o).map_err(|_| format!("StandardAlert: the parameter record at {param:#x} leaves guest RAM"));
-            if rd32(4)? != 0 { self.mac.log.push("[alert] StandardAlert: filterProc is a guest callback and is not called".into()); }
+            if rd32(2)? != 0 { self.mac.log.push("[alert] StandardAlert: filterProc is a guest callback and is not called".into()); }
             if self.mac.mem.read_u8(param + 1).unwrap_or(0) != 0 { self.mac.log.push("[alert] StandardAlert: helpButton is not modelled (no help item added)".into()); }
-            for (item, off, std) in [(1i16, 8u32, "OK"), (2, 12, "Cancel"), (3, 16, "Don't Save")] {
+            for (item, off, std) in [(1i16, 6u32, "OK"), (2, 10, "Cancel"), (3, 14, "Don't Save")] {
                 if let Some(t) = self.sa_button(rd32(off)?, std, "button")? { items.push((item, t)); }
             }
-            default_item = rd16(20)? as i16;
-            cancel_item = rd16(22)? as i16;
+            default_item = rd16(18)? as i16;
+            cancel_item = rd16(20)? as i16;
         }
         if items.is_empty() { return Err("StandardAlert: the parameter record names no button".into()); }
         items.sort_by_key(|(n, _)| match n { 3 => 0, 2 => 1, _ => 2 }); // left to right: other, cancel, default
         let find = |want: i16| items.iter().position(|(n, _)| *n == want && want != 0).map(|i| i as u32);
         let model = RequestModel { title: String::new(), text, buttons: items.iter().map(|(_, t)| t.clone()).collect(), default: find(default_item), cancel: find(cancel_item), kind };
+        let shown = model.text.replace('\n', " / ");
         match self.mac.ui.request(None, model) {
             Ok(req) => {
                 self.mac.tr.dlg.asked = Some(Asked { req, items: items.iter().map(|(n, _)| *n).collect(), slot: 0, answer: None });
                 self.rt.std_alert = true;
                 self.rt.wait_dialog = true;
-                self.mac.log.push("[alert] StandardAlert asked of the host; the caller waits for its answer".into());
+                self.mac.log.push(format!("[alert] StandardAlert asked of the host ({kind:?}, \"{shown}\"); the caller waits for its answer"));
                 Ok(None)
             }
             Err(UiRefusal::Unsupported(why)) => Err(format!("StandardAlert: the host cannot ask ({why}); a standard alert has no DITL to show as a dialog")),
