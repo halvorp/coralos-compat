@@ -57,16 +57,19 @@ fn image_pens<U: GuestUi>(a: &Amiga<U>, i: &Im, dest_depth: u8) -> Result<Vec<u8
     Ok(out)
 }
 
-fn draw_chain<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut im: u32, left: i32, top: i32, state: u32, what: &str) -> Result<usize, Refusal> {
+/// Is `im` an image object of a class the GUEST wrote (its IM_DRAW is guest code), as opposed to a system class drawn host-side?
+fn is_guest_image<U: GuestUi>(a: &Amiga<U>, im: u32) -> bool { a.classes.class_of(im).and_then(|c| a.classes.recs.get(&c)).map_or(true, |r| r.native.is_none()) }
+
+/// Draw the chain from `im`, in order, until it ends or reaches an image object of a guest class: returns how many were drawn and that
+/// image's address (0 = the chain is done). The guest image needs a guest call (IM_DRAW), which only a handler with a `Cpu` can start.
+fn draw_chain<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut im: u32, left: i32, top: i32, state: u32, what: &str) -> Result<(usize, u32), Refusal> {
     let mask = a.mem.read_u8(rp + RP_MASK).map_err(Refusal::mem("Mask"))?;
     let mut n = 0;
     while im != 0 && n < 64 {
         let i = read_image(a, im)?;
         if i.depth == CUSTOMIMAGEDEPTH {
-            // A BOOPSI image object: IM_DRAW. Native classes draw host-side (boopsi_draw.rs); a guest class would need a guest call.
-            if a.classes.class_of(im).and_then(|c| a.classes.recs.get(&c)).map_or(true, |r| r.native.is_none()) {
-                return Err(Refusal(format!("{what}: image {im:#x} is an image object of a guest class (IM_DRAW through a guest dispatcher is not implemented here)")));
-            }
+            // A BOOPSI image object: IM_DRAW. Native classes draw host-side (boopsi_draw.rs); a guest class is a guest call.
+            if is_guest_image(a, im) { return Ok((n, im)); }
             crate::boopsi_draw::draw_native_image(a, im, rp, left, top, state)?;
             im = i.next; n += 1;
             continue;
@@ -90,22 +93,51 @@ fn draw_chain<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut im: u32, left: i32, top
         })?;
         im = i.next; n += 1;
     }
-    Ok(n)
+    Ok((n, 0))
+}
+
+/// What a DrawImage / DrawImageState call still has to draw: the chain from `im` (at least one guest-class image object in it).
+#[derive(Clone, Copy)]
+struct DrawJob { rp: u32, im: u32, left: i32, top: i32, state: u32, dri: u32, what: &'static str }
+
+/// Draw the chain, and when it reaches an image object of a guest class send it IM_DRAW (rom/intuition/drawimagestate.c: impDraw = MethodID,
+/// imp_RPort, imp_Offset {X, Y}, imp_State, imp_DrInfo) through its dispatcher as a guest call, then carry on with the image after it.
+fn draw_images<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, job: DrawJob) -> Result<(usize, bool), Refusal> {
+    let (n, stop) = draw_chain(a, job.rp, job.im, job.left, job.top, job.state, job.what)?;
+    if stop == 0 { return Ok((n, false)); }
+    let next = im_draw_step(a, DrawJob { im: stop, ..job })?;
+    crate::guest_call::start(a, cpu, next)?;
+    Ok((n, true))
+}
+
+fn im_draw_step<U: GuestUi>(a: &mut Amiga<U>, job: DrawJob) -> Result<crate::guest_call::Next<U>, Refusal> {
+    use crate::guest_call::Next;
+    let cl = a.classes.class_of(job.im).ok_or_else(|| Refusal(format!("{}: {:#x} is not a BOOPSI object", job.what, job.im)))?;
+    let entry = a.mem.read_u32(cl + crate::boopsi_ids::CL_H_ENTRY).map_err(Refusal::mem("cl_Dispatcher.h_Entry"))?;
+    let msg = crate::boopsi_send::make_msg(a, &[crate::boopsi_ids::IM_DRAW, job.rp, ((job.left as u16 as u32) << 16) | job.top as u16 as u32, job.state, job.dri])?;
+    let (obj, next_im) = (job.im, read_image(a, job.im)?.next);
+    let then = alloc::boxed::Box::new(move |a: &mut Amiga<U>, cpu: &mut Cpu, _d0: u32| {
+        a.heap.free(msg, crate::boopsi_send::MSG_BLOCK).map_err(|e| Refusal(format!("BOOPSI message: {e}")))?;
+        let (_, stop) = draw_chain(a, job.rp, next_im, job.left, job.top, job.state, job.what)?;
+        let _ = cpu;
+        if stop == 0 { Ok(Next::Return(0)) } else { im_draw_step(a, DrawJob { im: stop, ..job }) }
+    });
+    Ok(Next::Call { target: entry, d0: 0, aregs: alloc::vec![(0, cl), (1, msg), (2, obj)], then })
 }
 
 /// DrawImage(a0 = rp, a1 = image, d0 = left, d1 = top).
 pub fn draw_image<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (rp, im, l, t) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)));
-    let n = draw_chain(a, rp, im, l, t, 0, "DrawImage")?;
-    Ok(format!("[intuition] DrawImage {im:#x} ({n} images) at {l},{t}"))
+    let (n, guest) = draw_images(a, cpu, DrawJob { rp, im, left: l, top: t, state: 0, dri: 0, what: "DrawImage" })?;
+    Ok(format!("[intuition] DrawImage {im:#x} ({n} images{}) at {l},{t}", if guest { ", then a guest class's IM_DRAW" } else { "" }))
 }
 
 /// DrawImageState(a0 = rp, a1 = image, d0 = left, d1 = top, d2 = state, a2 = DrawInfo): classic images draw the same in
 /// every state (the ghosting of IDS_DISABLED is a BOOPSI sysiclass job).
 pub fn draw_image_state<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (rp, im, l, t, st) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)), cpu.dreg(2));
-    let n = draw_chain(a, rp, im, l, t, st, "DrawImageState")?;
-    Ok(format!("[intuition] DrawImageState {im:#x} ({n} images) at {l},{t} state {st}"))
+    let (rp, im, l, t, st, dri) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)), cpu.dreg(2), cpu.areg(2));
+    let (n, guest) = draw_images(a, cpu, DrawJob { rp, im, left: l, top: t, state: st, dri, what: "DrawImageState" })?;
+    Ok(format!("[intuition] DrawImageState {im:#x} ({n} images{}) at {l},{t} state {st}", if guest { ", then a guest class's IM_DRAW" } else { "" }))
 }
 
 /// EraseImage(a0 = rp, a1 = image, d0 = left, d1 = top): the image's box in the background pen.
@@ -254,7 +286,13 @@ pub fn get_screen_data<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
 }
 
 /// DrawImageState for `img` (classic Image chain or a BOOPSI image object) at (x, y): the entry the native gadget classes use.
-pub fn draw_image_at<U: GuestUi>(a: &mut Amiga<U>, rp: u32, img: u32, x: i32, y: i32, state: u32) -> Result<(), Refusal> { draw_chain(a, rp, img, x, y, state, "DrawImageState").map(|_| ()) }
+pub fn draw_image_at<U: GuestUi>(a: &mut Amiga<U>, rp: u32, img: u32, x: i32, y: i32, state: u32) -> Result<(), Refusal> {
+    // No guest call can start from here: an image object of a guest class is refused by name.
+    match draw_chain(a, rp, img, x, y, state, "DrawImageState")? {
+        (_, 0) => Ok(()),
+        (_, g) => Err(Refusal(format!("DrawImageState: image {g:#x} is an image object of a guest class (IM_DRAW needs a guest call; not available from this path)"))),
+    }
+}
 
 /// SetRast-style fill of the box (x, y, w, h) of `rp` in pen `pen` (a Requester's BackFill, requesters.c:91).
 pub(crate) fn fill_pen<U: GuestUi>(a: &mut Amiga<U>, rp: u32, (x, y, w, h): (i32, i32, i32, i32), pen: u8) -> Result<(), Refusal> {
