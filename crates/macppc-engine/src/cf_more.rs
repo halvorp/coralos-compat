@@ -118,13 +118,19 @@ impl<U: GuestUi> MacPpc<U> {
                     None => 0,
                 }
             }
-            // CFStringGetBytes(str, range, encoding, lossByte, isExternalRepresentation, buffer, maxBufLen, CFIndex *usedBufLen) -> CFIndex converted
+            // CFStringGetBytes(str, range, encoding, lossByte, isExternalRepresentation, buffer, maxBufLen, CFIndex *usedBufLen) -> characters converted
+            // (spec: macos9-specs/CoreFoundationLib/CFStringGetBytes). The strings here are 8-bit MacRoman, the system default encoding, so the fast path applies: the bytes are copied directly,
+            // count = min(range length, maxBufLen); a NULL buffer copies nothing and reports the count that WOULD convert (maxBufLen ignored). ASCII, ISO Latin-1 and UTF-8 requests are
+            // the same bytes for ASCII text; non-ASCII text in those encodings (a real conversion) and every other encoding are refused by name. isExternalRepresentation (a BOM/header) is
+            // only meaningful for the Unicode encodings, which are refused.
             StringGetBytes => {
                 let (loc, len, enc, buf, max, used) = (a1, a2, a3, arg(self, cpu, 6)?, arg(self, cpu, 7)?, arg(self, cpu, 8)?);
-                if enc != 0 && enc != 0x0600 && enc != 0x0100 { return Err(format!("{n}: encoding {enc:#x} is not implemented (MacRoman 0, ASCII 0x600 and UTF-8 0x08000100 of ASCII text only)")); }
                 let s = self.cfx_str(a0, n)?;
                 let rg = Self::cfx_range(s.len(), loc, len, n)?;
-                let take = rg.len().min(max as usize);
+                let ascii_only = s[rg.clone()].iter().all(|&b| b < 0x80);
+                let ok = match enc { 0 => true, 0x0600 | 0x0201 | 0x0800_0100 => ascii_only, _ => false };
+                if !ok { return Err(format!("{n}: encoding {enc:#x} for this text is not implemented (MacRoman 0, and ASCII 0x600 / ISO Latin-1 0x201 / UTF-8 0x8000100 for ASCII text only)")); }
+                let take = if buf == 0 { rg.len() } else { rg.len().min(max as usize) };
                 if buf != 0 { let b = s[rg.start..rg.start + take].to_vec(); self.put_bytes(buf, &b, n)?; }
                 if used != 0 { self.mac.mem.write_u32(used, take as u32).map_err(|_| format!("{n}: usedBufLen leaves guest RAM"))?; }
                 take as u32
@@ -159,7 +165,9 @@ impl<U: GuestUi> MacPpc<U> {
                 for (i, it) in items.iter().enumerate() { if i > 0 { out.extend_from_slice(&sep); } out.extend(self.cfx_str(*it, n)?); }
                 self.cfx_new_str(out)
             }
-            StringGetSystemEncoding => 0, // kCFStringEncodingMacRoman: the system script is Roman
+            // spec: macos9-specs/CoreFoundationLib/CFStringGetSystemEncoding: the Text Encoding base of the system script/region (GetScriptManagerVariable(smRegionCode = 40) = 2, Britain: a
+            // Roman region) is kCFStringEncodingMacRoman, 0; cached for the process, so a later script change is not noticed
+            StringGetSystemEncoding => 0,
             GetRetainCount => self.cfx_retain_count(a0).ok_or_else(|| format!("{n}: {a0:#x} is not a CoreFoundation object this engine made"))?,
             Show => {
                 let text = match self.rt.cf.string(a0) { Some(s) => String::from_utf8_lossy(s).into_owned(), None => format!("<CF object {a0:#x}>") };

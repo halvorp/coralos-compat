@@ -58,6 +58,13 @@ fn strings_from_unichars_mutation_substring_search_split_join_and_bytes() {
     // GetBytes(str, CFRange{0,5}, MacRoman, lossByte 0, external 0, buf, max 3, &used) copies only what fits
     assert_eq!(call(&mut m, "CFStringGetBytes", &[mu, 0, 5, 0, 0, 0, BUF, 3, OUT]), 3);
     assert_eq!((m.get_bytes(BUF, 3, "t").unwrap(), m.mac.mem.read_u32(OUT).unwrap()), (b"Hel".to_vec(), 3));
+    // spec vectors: range {1,3} with maxBufLen 2 -> 2; a NULL buffer reports the count that would convert, maxBufLen ignored; UTF-8 of ASCII text is the same bytes
+    assert_eq!(call(&mut m, "CFStringGetBytes", &[mu, 1, 3, 0, 0, 0, BUF, 2, OUT]), 2);
+    assert_eq!(call(&mut m, "CFStringGetBytes", &[mu, 0, 5, 0, 0, 0, 0, 0, OUT]), 5);
+    assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 5);
+    assert_eq!(call(&mut m, "CFStringGetBytes", &[mu, 0, 5, 0x0800_0100, 0, 0, BUF, 16, OUT]), 5);
+    // NEGATIVE control: UTF-16 (0x100) is a real conversion and is refused by name
+    assert!(refused(&mut m, "CFStringGetBytes", &[mu, 0, 5, 0x0100, 0, 0, BUF, 16, OUT]).contains("not implemented"));
     // GetCharacters widens to UniChar
     call(&mut m, "CFStringGetCharacters", &[s, 0, 2, CHARS]);
     assert_eq!((m.mac.mem.read_u16(CHARS).unwrap(), m.mac.mem.read_u16(CHARS + 2).unwrap()), (u16::from(b'H'), u16::from(b'e')));
