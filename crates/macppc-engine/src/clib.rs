@@ -4,6 +4,8 @@
 //! parameter area 24 bytes above r1 (one word each), doubles in f1..f13 and ALSO reserving two GPR slots each (so a variadic callee finds them in
 //! order), results in r3 (or f1). C semantics are the ISO C library's; where the classic library differs or this engine has no state to match
 //! (`rand`'s sequence, `getenv`, locale) the difference is stated at the function.
+//! NEWLINES: no byte is translated anywhere. `'\\n'` is the compiler's: 0x0D for MPW/CodeWarrior programs on Apple's StdCLib, 0x0A for GCC/Retro68
+//! builds. `puts` is the one place the library must pick a byte itself (the console log is a byte stream); it appends LF (0x0A).
 //! `qsort`/`bsearch`/`atexit`/`exit` call the PROGRAM back and live in [`crate::callback_c`].
 //! Not provided, therefore refused by name when called: the `FILE` family (`fopen`, `fprintf`, `_iob` ...), `longjmp`, `strftime`, `signal`, `sscanf`.
 use crate::machine::MacPpc;

@@ -6,8 +6,11 @@
 //!   `_cnt` (always 0 here) and so always call `_filbuf`/`_flsbuf`, which are served. `_iob` is an array of three of them; `stdout` (`_iob[1]`) and
 //!   `stderr` (`_iob[2]`) write to the console ([`crate::clib`]), `stdin` (`_iob[0]`) is at end-of-file: there is no keyboard stream.
 //! * Streams are unbuffered (every write goes to the volume at once), so `fflush` has nothing to do and `setvbuf` is accepted as the no-op it is.
-//! * A path is a Mac path (`:` separated, relative to the default directory), looked up by the File Manager's own rules. `'\\n'` is 0x0D on the classic
-//!   Mac (MPW and CodeWarrior compilers), so `fgets` ends a line at CR and nothing is translated.
+//! * A path is a Mac path (`:` separated, relative to the default directory), looked up by the File Manager's own rules.
+//! * NO BYTE IS EVER TRANSLATED: `fwrite`/`fputs`/`fputc`/`fprintf` store exactly the bytes the program produced and `fread`/`fgetc` return the stored bytes.
+//!   Which byte is `'\\n'` is the COMPILER's convention: 0x0D for programs built by MPW or CodeWarrior against Apple's StdCLib, 0x0A for GCC/Retro68 builds;
+//!   the library cannot know, so the only place it must pick is `fgets`' line end, which is the first CR **or** LF read (a CRLF file yields the CR line and
+//!   then a one-byte LF line, as it would on a platform that does not translate).
 //! * `fseek` past the end of a stream open for writing extends the file with zeros at once (ISO C extends it at the next write); on a read-only
 //!   stream it fails. `fopen` failure returns NULL (`errno` is not modelled). `vfprintf`/`vsprintf` (a `va_list`), `fscanf`, `tmpfile`, `fgetpos`
 //!   are not provided and refuse by name.
@@ -31,6 +34,7 @@ const FS_AT_MARK: u16 = 0;
 const FS_FROM_START: u16 = 1;
 const FS_FROM_LEOF: u16 = 2;
 const CR: u8 = 0x0D;
+const LF: u8 = 0x0A;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StdioFn { Fopen, Fclose, Fread, Fwrite, Fputs, Fputc, Fgetc, Fgets, Ungetc, Fprintf, Fseek, Ftell, Rewind, Feof, Ferror, Clearerr, Fflush, Setvbuf, Remove }
@@ -165,7 +169,7 @@ impl<U: GuestUi> MacPpc<U> {
                 Which::File => { let b = self.stream_read(a0, 1, "fgetc")?; b.first().map_or(EOF, |&c| u32::from(c)) }
             },
             Fgets => {
-                // fgets(buf, n, fp): at most n-1 bytes, stopping after a CR ('\n' on the classic Mac); NULL when nothing was read
+                // fgets(buf, n, fp): at most n-1 bytes, stopping after the first CR or LF (either compiler's '\n'); NULL when nothing was read
                 let (buf, n) = (a0, a1);
                 if n == 0 { 0 } else {
                     if matches!(self.which(a2, "fgets")?, Which::Std(_)) { cpu.gpr[3] = 0; return Ok(()); }
@@ -174,7 +178,7 @@ impl<U: GuestUi> MacPpc<U> {
                         let b = self.stream_read(a2, 1, "fgets")?;
                         let Some(&c) = b.first() else { break };
                         line.push(c);
-                        if c == CR { break; }
+                        if c == CR || c == LF { break; }
                     }
                     if line.is_empty() { 0 } else { let mut z = line; z.push(0); self.put_bytes(buf, &z, "fgets")?; buf }
                 }
