@@ -116,11 +116,36 @@ impl GuestMem {
         }
         Err(MemError::Unterminated { addr, max: MAX_CSTR })
     }
+
+    /// Like [`read_cstr`](Self::read_cstr) for TEXT a program owns (a label, a long About text, a Text object's contents): no 256-byte limit, the
+    /// only bound is the end of guest RAM, so a string with no NUL before it is `Unterminated { max: <bytes to the end> }`, a named refusal.
+    pub fn read_cstr_long(&self, addr: u32) -> Result<String, MemError> {
+        let mut s = Vec::new();
+        let mut a = addr;
+        loop {
+            let b = self.read_u8(a).map_err(|_| if s.is_empty() { MemError::OutOfRange { addr, len: 1 } } else { MemError::Unterminated { addr, max: s.len() } })?;
+            if b == 0 { return Ok(String::from_utf8_lossy(&s).into_owned()); }
+            s.push(b);
+            a = a.checked_add(1).ok_or(MemError::Unterminated { addr, max: s.len() })?;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_string_reads_whole_with_read_cstr_long_and_a_runaway_is_a_named_error() {
+        let mut m = GuestMem::new(1024);
+        let text = "x".repeat(700);
+        m.write_bytes(10, text.as_bytes()).unwrap();
+        m.write_u8(710, 0).unwrap();
+        assert_eq!(m.read_cstr_long(10).unwrap(), text, "more than MAX_CSTR bytes");
+        assert_eq!(m.read_cstr(10), Err(MemError::Unterminated { addr: 10, max: MAX_CSTR }), "the bounded read keeps its limit");
+        m.write_bytes(900, &[b'y'; 124]).unwrap();
+        assert_eq!(m.read_cstr_long(900), Err(MemError::Unterminated { addr: 900, max: 124 }), "NEGATIVE CONTROL: no NUL before the end of RAM");
+    }
 
     #[test]
     fn big_endian_round_trip() {

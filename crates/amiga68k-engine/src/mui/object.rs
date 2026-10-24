@@ -94,7 +94,7 @@ pub(crate) fn store_num<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, v: u3
 fn store_str<U: GuestUi>(a: &mut Amiga<U>, obj: u32, attr: u32, ptr: u32) -> Result<(), Refusal> {
     // NM_BARLABEL (-1) as a menu item's title is the separator bar (the same "-" MUI_MakeObjectA's NewMenu path stores).
     let bar = ptr == u32::MAX && matches!(attr, MUIA_Menuitem_Title | MUIA_Menu_Title);
-    let s = if bar { "-".into() } else if ptr == 0 { String::new() } else { a.mem.read_cstr(ptr).map_err(Refusal::mem("MUI string attribute"))? };
+    let s = if bar { "-".into() } else if ptr == 0 { String::new() } else { a.mem.read_cstr_long(ptr).map_err(Refusal::mem("MUI string attribute"))? };
     set_text(a, obj, attr, s);
     Ok(())
 }

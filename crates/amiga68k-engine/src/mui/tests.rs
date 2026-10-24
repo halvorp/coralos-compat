@@ -765,3 +765,19 @@ fn the_host_spacing_and_window_inset_apply_unless_the_guest_names_its_own() {
     let (_, own) = controls_under(host, |a| { let (x, y) = (text_cell(a, "a"), text_cell(a, "b")); make(a, "Group.mui", &[(MUIA_Group_VertSpacing, 1), (MUIA_Group_Child, x), (MUIA_Group_Child, y)]).unwrap() });
     assert_eq!(own[1].rect.top - (own[0].rect.top + own[0].rect.height), 1);
 }
+
+#[test]
+fn a_text_longer_than_256_bytes_is_stored_whole() {
+    // aros-About's credits text is far longer than the bounded string read allowed: its Text object failed with "unterminated within 256 bytes"
+    // and took its parent group, window and the application with it.
+    let mut a = machine();
+    let text = "Zune ".repeat(200); // 1000 bytes
+    let p = zstr(&mut a, &text);
+    let t = make(&mut a, "Text.mui", &[(MUIA_Text_Contents, p)]).unwrap();
+    assert_eq!(get_attr(&mut a, t, MUIA_Text_Contents).map(|v| a.mem.read_cstr_long(v).unwrap()).unwrap(), text, "all 1000 bytes");
+    // NEGATIVE CONTROL: a text with no NUL before the end of guest RAM is still a named refusal, not a hang.
+    let end = (a.mem.len() as u32) - 8;
+    a.mem.write_bytes(end, &[b'x'; 8]).unwrap();
+    let e = make(&mut a, "Text.mui", &[(MUIA_Text_Contents, end)]).unwrap_err().0;
+    assert!(e.contains("MUI string attribute") && e.contains("unterminated within 8 bytes"), "{e}");
+}
