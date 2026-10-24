@@ -44,6 +44,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register_os(0xA023, dispose_handle::<U>)?;
     m.register_os(0xA01F, dispose_ptr::<U>)?;
     m.register_os(0xA025, get_handle_size::<U>)?;
+    m.register_os(0xA126, handle_zone::<U>)?;
     m.register_os(0xA024, set_handle_size::<U>)?;
     m.register_os(0xA021, get_ptr_size::<U>)?;
     m.register_os(0xA029, hlock::<U>)?;
@@ -111,6 +112,16 @@ fn get_handle_size<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
     m.mem_result(r, "GetHandleSize", &format!("{h:#x}"), res.map(|_| ()));
     if let Ok(s) = res { r.d0 = s; }
     Ok(format!("[mem] GetHandleSize {h:#x} -> {:?}", res))
+}
+
+/// `FUNCTION HandleZone(h: Handle): THz` ($A126, register: A0 = handle in, A0 = zone out, D0 = MemErr): the engine has ONE heap, so the zone
+/// of every handle is the stub zone record `TheZone`, `SysZone` and `ApplZone` all name. A pointer that is not a handle is memWZErr, A0 unchanged.
+fn handle_zone<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let h = r.a0;
+    let res = m.mm.handle_size(h).map(|_| ());
+    m.mem_result(r, "HandleZone", &format!("{h:#x}"), res);
+    if res.is_ok() { r.a0 = crate::lowmem::ZONE_STUB; }
+    Ok(format!("[mem] HandleZone {h:#x} -> {:?}", res.map(|_| crate::lowmem::ZONE_STUB)))
 }
 
 fn set_handle_size<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {

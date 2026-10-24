@@ -1,4 +1,6 @@
 //! The Memory Manager as a program sees it: OS traps, register convention, handles as pointers to pointers.
+mod common;
+use common::Prog;
 use guestui_abi::RecordingGuestUi;
 use mac68k_engine::fixture::MEMTEST;
 use mac68k_engine::Mac;
@@ -69,4 +71,24 @@ fn a_wild_blockmove_is_refused_by_name_and_the_run_goes_on() {
     m.run_program(&prog, 0, 100).unwrap();
     assert!(m.refused.is_empty(), "{:?}", m.refused);
     assert_eq!(m.mem.read_u16(0x220).unwrap() as i16, 0);
+}
+
+#[test]
+fn handle_zone_answers_the_one_heap_zone_for_a_handle_and_memwzerr_for_a_stranger() {
+    let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+    let h = m.mm.new_handle(&mut m.mem, &mut m.heap, 16, false).unwrap();
+    // by trap: A0 = handle; the zone comes back in A0
+    let mut p = Prog::new();
+    p.0.extend([0x20, 0x7C]); // movea.l #h,a0
+    p.0.extend(h.to_be_bytes());
+    p.trap(0xA126);
+    p.0.extend([0x23, 0xC8, 0x00, 0x00, 0x30, 0x00]); // move.l a0,$3000
+    p.0.extend([0x20, 0x7C, 0x00, 0x12, 0x34, 0x56]); // movea.l #$123456,a0 (not a handle)
+    p.trap(0xA126);
+    p.0.extend([0x23, 0xC8, 0x00, 0x00, 0x30, 0x04]); // move.l a0,$3004
+    p.exit();
+    m.run_program(&p.0, 0, 100_000).unwrap();
+    assert_eq!(m.mem.read_u32(0x3000).unwrap(), mac68k_engine::lowmem::ZONE_STUB, "a handle's zone is the engine's one zone");
+    assert_eq!(m.mem.read_u32(0x3004).unwrap(), 0x12_3456, "a stranger leaves A0 alone ...");
+    assert!(m.refused.iter().any(|r| r.contains("HandleZone")), "... and is refused by name (memWZErr): {:?}", m.refused);
 }
