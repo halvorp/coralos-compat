@@ -1,15 +1,99 @@
 # macppc full-app gap map: what a large Mac OS 9 PowerPC game (Warcraft III class) imports, what the engine has, what is missing
 
 2026-10-24, branch agent/macppc-1024. North star (Peter, 2026-10-24): launching the Mac OS 9 PowerPC build of Warcraft III must work.
-That binary is not in the corpus (it has to come from Peter's own copy; never committed). This map is built from the engine's code, the
-PowerPC census, and the shape of a Carbon CFM game of that era (CarbonLib, Apple OpenGL 1.2 era libraries, Sound Manager, Sprockets,
-Multiprocessing Services, Navigation Services, big data files, a PEF with hundreds to thousands of imports). Claims about what Warcraft III
-imports are INFERENCE from that shape, not from the binary; the first action on getting the binary is `macppc-run --census` on it and
-replacing this paragraph with its real per-library import counts.
+Peter supplied his own retail discs and patchers (test inputs only; nothing from them is committed, only library and symbol NAMES and counts).
+The measured import tables below REPLACE the inference this document started from; the rest of the document (library by library) is updated against them.
+
+## Measured: Warcraft III for Mac OS 9 (owner-supplied discs, 2026-10-24)
+
+**Where the executables are.** The retail CDs carry the game inside Blizzard's `Installer Tome` (an MPQ archive with encrypted, PKWARE-compressed blocks; names are not
+listed, the keys were recovered from the sector-table structure and the blocks decoded with the zlib `blast` algorithm for ANALYSIS only). The unpacked members are PowerPC
+applications whose data fork holds several CFM fragments: the application, a private shared library **StormCarbon** (Blizzard's Storm: Win32-shaped file/registry/memory calls) and
+**CursorDeviceLib**; `Miles Carbon Library`, `MP3Dec.asi`, `MSSDolby.m3d`, `MSSFast.m3d`, `Reverb3.flt` (the Miles Sound System) are separate PEF files that sit beside the game. Disc
+RoC: `Warcraft III` (11.4 MB data fork), `Warcraft III World Editor`, `BNUpdate` (Battle.net updater). Disc TFT: the same three (the TFT game is 14.0 MB and carries no StormCarbon of
+its own: it imports 107 symbols from `Miles Carbon Library` and none from StormCarbon). **The three TFT patchers do NOT carry the game**: each is a 748 KB code + 28 KB data PowerPC
+application (389 imports, CarbonLib only) followed by ~65 MB of patch data in the same data fork; the first call they cannot make is `MaxBlock`.
+`War3.mpq` (RoC, 420 MB) is game data only (no executables). The RoC `Warcraft III Installer` (600 KB data fork, 345 imports) is also a multi-fragment application (it embeds StormCarbon
+and CursorDeviceLib) and stops at its first StormCarbon call.
+
+**What the first run does today** (census with `--run`): every program that imports StormCarbon stops after ~20 instructions at `StormCarbon::__register_fragment` (the private library is
+a second fragment inside the application's own data fork and the engine instantiates only the first); the TFT game cannot even start because it needs 14 MB of sections and the guest
+RAM is smaller (`no guest memory for the PowerPC stack`); the small helpers (`Read Me`, `The Frozen Throne Installer`) fault at pc 0 after 300-460 instructions (a call through a
+weak-missing import that the program should have tested); the patchers stop at `MaxBlock`; the CarbonLib installer's `Installer Engine` runs and exits.
+
+#### RoC Warcraft III (Mac OS 9 game) — 888 imports from 9 libraries
+
+| library | bound | named refusal | weak-missing | first missing symbols (names only) |
+|---|---|---|---|---|
+| StormCarbon | 0 | 257 | 0 | GetMessage, MemAlloc, __Storm_register_global_object, DeleteCriticalSection, SRgnCreate, ThemeTextDimensionsWithCFString, bind, SBigFromUnsigned |
+| CursorDeviceLib | 0 | 9 | 0 | CursorDeviceButtons, CursorDeviceDisposeDevice, CursorDeviceUnitsPerInch, CursorDeviceMoveTo, CursorDeviceMove, CursorDeviceSetAcceleration, CursorDeviceNewDevice, CursorDeviceSetButtons |
+| CarbonLib | 137 | 178 | 100 | PBSetEOFSync, DeactivateTSMDocument, GetWindowFromPort, CountDITL, EmbedControl, GetControlBounds, GetKeyboardFocus, ActivateControl |
+| Apple;Carbon;Multimedia | 0 | 0 | 12 | GetMovieBox, DisposeMovie, NewMovie, SetMovieBox, EnterMovies, SetMovieGWorld, StopMovie, GetMoviesError |
+| DrawSprocketLib | 0 | 0 | 10 | DSpFindBestContextOnDisplayID, DSpContext_SetState, DSpGetVersion, DSpGetNextContext, DSpStartup, DSpContext_Release, DSpContext_Reserve, DSpContext_FadeGamma |
+| InputSprocketLib | 0 | 0 | 16 | ISpElementList_GetNextEvent, ISpElement_GetConfigurationInfo, ISpElementList_Dispose, ISpGetVersion, ISpElementList_New, ISpDevice_GetElementList, ISpShutdown, ISpStartup |
+| OpenGLLibrary | 0 | 62 | 0 | aglDestroyRendererInfo, glNormal3fv, glActiveTextureARB, aglDescribeRenderer, glTexEnvi, aglSetDrawable, glTexCoordPointer, glLockArraysEXT |
+| OpenGLMemory | 0 | 0 | 2 | glmSetFunc, glmSetMode |
+| Miles Carbon Library | 0 | 105 | 0 | AIL_decompress_ASI, AIL_set_3D_sample_playback_rate, AIL_set_3D_room_type, AIL_set_3D_sample_info, AIL_stream_playback_rate, AIL_decompress_ADPCM, AIL_set_sample_volume, AIL_start_sequence |
+
+#### RoC World Editor — 862 imports from 9 libraries
+
+| library | bound | named refusal | weak-missing | first missing symbols (names only) |
+|---|---|---|---|---|
+| Miles Carbon Library | 0 | 95 | 0 | AIL_decompress_ASI, AIL_set_3D_sample_playback_rate, AIL_set_3D_room_type, AIL_set_3D_sample_info, AIL_stream_playback_rate, AIL_decompress_ADPCM, AIL_set_sample_volume, AIL_start_sequence |
+| CarbonLib | 146 | 182 | 126 | PBSetEOFSync, GetWindowFromPort, CountDITL, EmbedControl, GetControlBounds, GetKeyboardFocus, ActivateControl, SetMenuItemModifiers |
+| Apple;Carbon;Multimedia | 0 | 0 | 12 | GetMovieBox, DisposeMovie, NewMovie, SetMovieBox, EnterMovies, SetMovieGWorld, StopMovie, GetMoviesError |
+| DrawSprocketLib | 0 | 0 | 7 | DSpFindBestContextOnDisplayID, DSpContext_SetState, DSpGetVersion, DSpStartup, DSpContext_Release, DSpContext_Reserve, DSpContext_FadeGamma |
+| InputSprocketLib | 0 | 0 | 16 | ISpElementList_GetNextEvent, ISpElement_GetConfigurationInfo, ISpElementList_Dispose, ISpGetVersion, ISpElementList_New, ISpDevice_GetElementList, ISpShutdown, ISpStartup |
+| OpenGLLibrary | 0 | 58 | 0 | glNormal3fv, glActiveTextureARB, glTexEnvi, aglSetDrawable, glTexCoordPointer, glLockArraysEXT, glDrawBuffer, glNormalPointer |
+| OpenGLMemory | 0 | 2 | 0 | glmSetFunc, glmSetMode |
+| StormCarbon | 0 | 209 | 0 | GetMessage, MemAlloc, __Storm_register_global_object, DeleteCriticalSection, SRgnCreate, RegSetValueEx, ThemeTextDimensionsWithCFString, RegCloseKey |
+| CursorDeviceLib | 0 | 9 | 0 | CursorDeviceButtons, CursorDeviceDisposeDevice, CursorDeviceUnitsPerInch, CursorDeviceMoveTo, CursorDeviceMove, CursorDeviceSetAcceleration, CursorDeviceNewDevice, CursorDeviceSetButtons |
+
+#### RoC BNUpdate — 228 imports from 2 libraries
+
+| library | bound | named refusal | weak-missing | first missing symbols (names only) |
+|---|---|---|---|---|
+| CarbonLib | 88 | 49 | 13 | CountDITL, GetControlBounds, SetWindowContentColor, SetKeyboardFocus, SetThemeCursor, GetDialogPort, CopyPascalStringToC, DrawThemeFocusRect |
+| StormCarbon | 0 | 78 | 0 | SetFilePointer, SStrTokenize__FPPCcPcUlPCcPi, SStrCmp__FPCcPCcUl, VerQueryValue, SStrVPrintf__FPcUlPCcPc, GetWindowsDirectory, SRegLoadString, CloseHandle |
+
+#### TFT Warcraft III (game) — 736 imports from 10 libraries
+
+| library | bound | named refusal | weak-missing | first missing symbols (names only) |
+|---|---|---|---|---|
+| CarbonLib | 165 | 215 | 86 | fabs, PBSetEOFSync, DeactivateTSMDocument, GetWindowFromPort, CountDITL, CFBundleGetMainBundle, EmbedControl, GetControlBounds |
+| Apple;Carbon;Multimedia | 0 | 0 | 12 | GetMovieBox, DisposeMovie, NewMovie, SetMovieBox, EnterMovies, SetMovieGWorld, StopMovie, GetMoviesError |
+| Apple;Carbon;Networking | 0 | 0 | 42 | OTOpenAppleTalkServicesInContext, OTATalkGetZoneList, OTATalkGetMyZone, OTAsyncOpenEndpointInContext, OTCloseProvider, OTRcvOrderlyDisconnect, OTInetStringToAddress, OTRcvUData |
+| DrawSprocketLib | 0 | 0 | 10 | DSpFindBestContextOnDisplayID, DSpContext_SetState, DSpGetVersion, DSpGetNextContext, DSpStartup, DSpContext_Release, DSpContext_Reserve, DSpContext_FadeGamma |
+| InputSprocketLib | 0 | 0 | 16 | ISpElementList_GetNextEvent, ISpElement_GetConfigurationInfo, ISpGetVersion, ISpElementList_New, ISpElementList_Dispose, ISpShutdown, ISpDevice_GetElementList, ISpStartup |
+| Miles Carbon Library | 0 | 107 | 0 | AIL_decompress_ASI, AIL_set_3D_sample_playback_rate, AIL_set_3D_room_type, AIL_set_3D_sample_info, AIL_stream_playback_rate, AIL_decompress_ADPCM, AIL_set_sample_volume, AIL_set_stream_ms_position |
+| OpenGLUtility | 0 | 0 | 1 | gluErrorString |
+| OpenGLMemory | 0 | 0 | 2 | glmSetFunc, glmSetMode |
+| OpenGLLibrary | 0 | 0 | 70 | glClientActiveTextureARB, glDeleteFencesAPPLE, glLightModelfv, glAlphaFunc, glViewport, glNormalPointer, glColorPointer, glClear |
+| CursorDeviceLib | 0 | 0 | 10 | CursorDeviceButtons, CursorDeviceDisposeDevice, CursorDeviceUnitsPerInch, CursorDeviceMoveTo, CursorDeviceMove, CursorDeviceSetAcceleration, CursorDeviceNextDevice, CursorDeviceNewDevice |
+
+#### TFT World Editor — 829 imports from 10 libraries
+
+| library | bound | named refusal | weak-missing | first missing symbols (names only) |
+|---|---|---|---|---|
+| CarbonLib | 181 | 241 | 167 | fabs, PBSetEOFSync, GetWindowFromPort, CountDITL, CFBundleGetMainBundle, EmbedControl, ResolveAlias, GetControlBounds |
+| Apple;Carbon;Multimedia | 0 | 0 | 12 | GetMovieBox, DisposeMovie, NewMovie, SetMovieBox, EnterMovies, SetMovieGWorld, StopMovie, GetMoviesError |
+| Apple;Carbon;Networking | 0 | 0 | 31 | OTOpenAppleTalkServicesInContext, OTATalkGetZoneList, OTATalkGetMyZone, OTAsyncOpenEndpointInContext, OTCloseProvider, OTRcvOrderlyDisconnect, OTInetStringToAddress, OTRcvUData |
+| DrawSprocketLib | 0 | 0 | 7 | DSpFindBestContextOnDisplayID, DSpContext_SetState, DSpGetVersion, DSpStartup, DSpContext_Release, DSpContext_Reserve, DSpContext_FadeGamma |
+| InputSprocketLib | 0 | 0 | 16 | ISpElementList_GetNextEvent, ISpElement_GetConfigurationInfo, ISpGetVersion, ISpElementList_New, ISpElementList_Dispose, ISpShutdown, ISpDevice_GetElementList, ISpStartup |
+| OpenGLLibrary | 0 | 0 | 66 | glClientActiveTextureARB, glDeleteFencesAPPLE, glLightModelfv, glAlphaFunc, glViewport, glNormalPointer, glColorPointer, glClear |
+| OpenGLUtility | 0 | 0 | 1 | gluErrorString |
+| OpenGLMemory | 0 | 0 | 2 | glmSetFunc, glmSetMode |
+| Miles Carbon Library | 0 | 95 | 0 | AIL_decompress_ASI, AIL_set_3D_sample_playback_rate, AIL_set_3D_room_type, AIL_set_3D_sample_info, AIL_stream_playback_rate, AIL_decompress_ADPCM, AIL_set_sample_volume, AIL_start_sequence |
+| CursorDeviceLib | 0 | 0 | 10 | CursorDeviceButtons, CursorDeviceDisposeDevice, CursorDeviceUnitsPerInch, CursorDeviceMoveTo, CursorDeviceMove, CursorDeviceSetAcceleration, CursorDeviceNextDevice, CursorDeviceNewDevice |
+
+Libraries that matter beyond CarbonLib, with the counts above: **StormCarbon** (257 imports by the RoC game: a private library to be loaded from the application's own
+`cfrg` fragments, not emulated), **OpenGLLibrary** (62 strong imports in RoC, 70 weak in TFT: `agl*` and `gl*` entry points), **Miles Carbon Library** (105-107: `AIL_*`, a separate PEF
+on disc that can be loaded as a real fragment, with its own `Apple;Carbon;Multimedia` weak imports), **DrawSprocketLib** / **InputSprocketLib** (all WEAK: the game takes a no-sprocket path
+if they are absent), **QuickTime** (`Apple;Carbon;Multimedia`, weak), **Open Transport** (`Apple;Carbon;Networking`, weak, 42), **CursorDeviceLib** (a private library, also in the data fork).
 
 ## Stand-ins in the corpus (what we can measure today)
 
-No corpus program imports CarbonLib or OpenGL. The honest stand-ins, by what they exercise:
+The earlier stand-ins, by what they exercise (the Warcraft III binaries above now supersede them for CarbonLib, OpenGL and the Sprockets):
 
 | program | libraries it imports (census) | what it stands in for |
 |---|---|---|
@@ -74,10 +158,11 @@ Missing, in build order:
 * Performance: a 1.5 MB game runs hundreds of millions of instructions per frame; the interpreter (`retro-ppc`, 1293 lines) is a decode-and-execute loop with no block cache.
   A threaded or cached-block core is needed before frame rates matter. Measure with FixedBenchmark first (it is a benchmark by design).
 
-## 4. Order I would build it in
+## 4. Order I would build it in (revised against the measured tables)
+0. The CFM prerequisites the measurements exposed: guest RAM large enough for a 14 MB application, and **multi-fragment loading** -- the application's own `cfrg` lists its private libraries (StormCarbon, CursorDeviceLib) as fragments in its data fork, and separate PEF files beside it (Miles) are imported by name: instantiate them first, run their init routines, bind imports to their exports.
 
 1. (done) CFM: named refusal for every unprovided-library symbol; CarbonLib and the Toolbox sub-libraries resolve through the one table.
-2. Census per library (counts), then run the real binary's census: replace the inference in this document with measurement.
+2. (done) Census per library, and the real binaries' census: the measured tables above.
 3. StdCLib + MathLib natives (a C game cannot start without them).
 4. `recent PCs` in `macppc-run` and the FixedBenchmark `locale` fault (interpreter correctness before any more library breadth).
 5. File Manager: FSSpec C names, host-backed large files.

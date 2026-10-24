@@ -1,0 +1,14 @@
+#name	arch	path	note
+# Warcraft III for Mac OS 9, owner-supplied retail discs and patchers (TEST INPUT ONLY, never committed). Extraction: docs/consults/2026-10-24-macppc-full-app-gap-map.md.
+# corpus-census-mac.py SKIPS a row whose file is absent, so this list is safe on any machine.
+warcraft3-roc-game	ppc	mac/warcraft3/apps/roc-Warcraft_III.bin	Warcraft III (RoC), from the Installer Tome: app + StormCarbon + CursorDeviceLib fragments
+warcraft3-roc-worldeditor	ppc	mac/warcraft3/apps/roc-Warcraft_III_World_Editor.bin	World Editor (RoC)
+warcraft3-roc-bnupdate	ppc	mac/warcraft3/apps/roc-BNUpdate.bin	Battle.net updater (RoC)
+warcraft3-tft-game	ppc	mac/warcraft3/apps/tft-Warcraft_III_TFT.bin	Warcraft III: The Frozen Throne (14 MB; imports Miles Carbon Library)
+warcraft3-tft-worldeditor	ppc	mac/warcraft3/apps/tft-Warcraft_III_World_Editor_TFT.bin	World Editor (TFT)
+warcraft3-tft-bnupdate	ppc	mac/warcraft3/apps/tft-BNUpdate_TFT.bin	Battle.net updater (TFT)
+warcraft3-roc-installer	ppc	mac/warcraft3/roc-fs/Warcraft III Installer.bin	RoC installer (multi-fragment, 345 imports)
+warcraft3-tft-installer	ppc	mac/warcraft3/tft/The Frozen Throne/The Frozen Throne Installer	TFT installer (bare PEF + :rsrc sibling)
+warcraft3-tft-patcher-126a	ppc	/home/peter/Downloads/Mac Warcraft 3/War3TFT_1xx-126a_English	TFT patcher 1.26a: 748 KB code + 65 MB patch data, NOT the game
+warcraft3-tft-patcher-121b	ppc	/home/peter/Downloads/Mac Warcraft 3/War3TFT_121b_English	TFT patcher 1.21b
+warcraft3-tft-patcher-122a	ppc	/home/peter/Downloads/Mac Warcraft 3/TFT Patcher 1xx-122a_enUS	TFT patcher 1.22a

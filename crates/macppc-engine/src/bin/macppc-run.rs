@@ -46,6 +46,8 @@ fn main() {
     let pef = Pef::parse(&bytes).unwrap_or_else(|e| { eprintln!("{}: {e}", path.display()); std::process::exit(1) });
     let mut m = MacPpc::new(RecordingGuestUi::new()).expect("machine");
     // the application's resources: a separate raw fork (--rsrc), else the resource fork inside the application file
+    // a sibling `<file>:rsrc` (how 7z unpacks an HFS+ resource fork) is the resource fork unless --rsrc says otherwise
+    let rsrc = rsrc.or_else(|| { let mut n = path.clone().into_os_string(); n.push(":rsrc"); let p = PathBuf::from(n); p.is_file().then_some(p) });
     let fork_file = rsrc.map(|p| std::fs::read(&p).unwrap_or_else(|e| { eprintln!("{}: {e}", p.display()); std::process::exit(1) }));
     match m.attach_resources(fork_file.as_deref().unwrap_or(&file)) {
         Ok(n) => println!("resources: {n} in the application's resource fork"),
