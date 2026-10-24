@@ -125,7 +125,23 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     reg(m, 0xA886, "TextWidth", &[Arg::L, Arg::W, Arg::W], Some(Arg::W), text_width::<U>)?;
     reg(m, 0xA88B, "GetFontInfo", &[Arg::L], None, get_font_info::<U>)?;
     reg(m, 0xA835, "FontMetrics", &[Arg::L], None, super::fontmetrics::font_metrics::<U>)?;
+    reg(m, 0xA837, "MeasureText", &[Arg::W, Arg::L, Arg::L], None, measure_text::<U>)?;
     reg(m, 0xA88E, "SpaceExtra", &[Arg::L], None, space_extra::<U>)
+}
+
+/// `PROCEDURE MeasureText(count: INTEGER; textAddr, charLocs: Ptr)` (Inside Macintosh V "QuickDraw"): `count + 1` INTEGERs, the pen
+/// offset of each character's left edge (`charLocs[0]` = 0) and of the end of the text, in the font that is drawn.
+fn measure_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (count, text, locs) = (c.args.get(0) as u16 as i16, c.args.get(1), c.args.get(2));
+    if count < 0 { return Err(Refusal(format!("MeasureText: negative count {count}"))); }
+    let bytes = text_bytes(m, text, 0, count as u32)?;
+    let mut x = 0i32;
+    m.mem.write_u16(locs, 0).map_err(Refusal::mem("MeasureText charLocs"))?;
+    for (i, ch) in bytes.iter().enumerate() {
+        x += m.qd.font.text_length(&[*ch]);
+        m.mem.write_u16(locs + 2 * (i as u32 + 1), x as u16).map_err(Refusal::mem("MeasureText charLocs"))?;
+    }
+    Ok(Done { result: 0, log: format!("[quickdraw] MeasureText {count} characters -> {x} wide") })
 }
 
 /// `SpaceExtra(extra: Fixed)`: extra pixels added to every space (justification); stored in the port's `spExtra` (76). The

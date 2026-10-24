@@ -400,3 +400,23 @@ fn font_metrics_called_twice_keeps_one_width_table_and_refreshes_it_for_the_curr
     let ptr = g.m.mm.block(h1).unwrap().ptr;
     assert_eq!(g.m.mem.read_u16(ptr + 1036).unwrap(), 9, "rebuilt for the font in use");
 }
+
+#[test]
+fn measure_text_gives_the_left_edge_of_every_character_and_the_end() {
+    let mut g = Rig::new();
+    let w = g.m.qd.font.text_length(b"a") as u16;
+    put(&mut g.m, 0x3300, b"abc");
+    let mut p = Prog::new();
+    p.w(3).l(0x3300).l(0x3400).trap(0xA837);
+    g.run(p.exit());
+    g.no_refusals();
+    let locs: Vec<u16> = (0..4).map(|i| g.m.mem.read_u16(0x3400 + 2 * i).unwrap()).collect();
+    assert_eq!(locs, [0, w, 2 * w, 3 * w], "charLocs[0] = 0, then each cumulative width, count + 1 entries");
+    // negative control: a count of 0 writes only charLocs[0]
+    g.m.mem.write_u16(0x3420, 0x5555).unwrap();
+    let mut p = Prog::new();
+    p.w(0).l(0x3300).l(0x3420).trap(0xA837);
+    g.run(p.exit());
+    assert_eq!(g.m.mem.read_u16(0x3420).unwrap(), 0);
+    assert_eq!(g.m.mem.read_u16(0x3422).unwrap(), 0, "and nothing past it");
+}
