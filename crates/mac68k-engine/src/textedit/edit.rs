@@ -26,7 +26,21 @@ impl<U: GuestUi> Mac<U> {
         let (start, stop) = (start.min(r.text.len()), stop.min(r.text.len()).max(start.min(r.text.len())));
         let mut text = r.text.clone();
         text.splice(start..stop, ins.iter().copied());
-        self.te_store_text(h, &text)?;
+        self.te_write_text(h, &text)?;
+        if let Some((sh, mut tab)) = r.style.clone() {
+            // the new text takes the style typed at the insertion point (a pending null style), else the style of the character before it
+            let (height, ascent) = (self.qd.font.y_size as i16, self.qd.font.baseline as i16 + 1);
+            let mut per = super::styles::expand(&tab.runs, r.text.len());
+            let ins_style = match self.te_null_attrs(sh) {
+                Some(a) if !ins.is_empty() => tab.index_of(&a, height, ascent),
+                _ => per.get(start.wrapping_sub(1)).or(per.first()).copied().unwrap_or(0),
+            };
+            per.splice(start..stop, core::iter::repeat(ins_style).take(ins.len()));
+            tab.runs = super::styles::compress(&per, ins_style);
+            tab.stabilise();
+            self.te_style_write(sh, &tab, text.len())?;
+            if !ins.is_empty() { self.te_null_set(sh, None)?; }
+        }
         let at = (start + ins.len()) as u16;
         self.w16(r.p, T_SEL_START, at)?;
         self.w16(r.p, T_SEL_END, at)?;
@@ -38,6 +52,7 @@ impl<U: GuestUi> Mac<U> {
 
     fn te_move_caret(&mut self, h: u32, a: usize, b: usize, what: &str) -> Result<(), Refusal> {
         let r = self.te_load(h, what)?;
+        self.te_null_clear(h);
         self.w16(r.p, T_SEL_START, a as u16)?;
         self.w16(r.p, T_SEL_END, b as u16)?;
         if r.active { self.w16(r.p, T_CARET_STATE, if a != b { HILITE_VIS } else { CARET_VIS })?; }
@@ -46,7 +61,7 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// The character offset nearest the local point `(v, h)`.
-    fn te_find(&self, r: &Rec, v: i32, h: i32) -> usize {
+    pub(super) fn te_find(&self, r: &Rec, v: i32, h: i32) -> usize {
         let tab = width_table(&self.qd.font);
         let g = &r.geo;
         layout::find(&r.text, &r.starts, v - i32::from(g.dest.top), h - i32::from(g.dest.left), i32::from(g.line_height), i32::from(g.dest.right) - i32::from(g.dest.left), g.just, &|c| tab[usize::from(c)])

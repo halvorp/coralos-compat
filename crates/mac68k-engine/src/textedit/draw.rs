@@ -61,7 +61,7 @@ pub fn width_table(font: &retro_raster::font::Font) -> [i32; 256] {
 }
 
 /// Draw `text` (lines `starts`) into `port` inside `area` (LOCAL), then the mark. See the module note.
-pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, g: &Geo, text: &[u8], starts: &[u16], area: Rect, mark: Mark) -> Result<(), Refusal> {
+pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, g: &Geo, text: &[u8], starts: &[u16], area: Rect, mark: Mark, style: Option<&super::styles::StyleTab>) -> Result<(), Refusal> {
     let clip_box = ir(area).intersect(&ir(g.view));
     if clip_box.is_empty() { return Ok(()); }
     // the clip: the target rectangle, sectioned with the port's own clip (the ROM's `ROMlib_tesave` does the same)
@@ -72,7 +72,7 @@ pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, g: &Geo, text: &[u8], starts
     m.mem.write_u32(port.wrapping_add(P_CLIP), tmp).map_err(Refusal::mem("clipRgn"))?;
     let saved_tx = (m.mem.read_u16(port.wrapping_add(P_TX_FONT)), m.mem.read_u8(port.wrapping_add(P_TX_FACE)), m.mem.read_u16(port.wrapping_add(P_TX_MODE)), m.mem.read_u16(port.wrapping_add(P_TX_SIZE)));
     let pen = read_pen(&m.mem, port)?;
-    let r = lines(m, port, g, text, starts, clip_box, mark);
+    let r = lines(m, port, g, text, starts, clip_box, mark, style);
     // put everything back, whatever happened
     m.mem.write_u32(port.wrapping_add(P_CLIP), saved).map_err(Refusal::mem("clipRgn"))?;
     m.dispose_handle(tmp).map_err(|e| Refusal(alloc::format!("TextEdit: DisposeRgn of the temporary clip failed ({e})")))?;
@@ -84,7 +84,7 @@ pub fn paint<U: GuestUi>(m: &mut Mac<U>, port: u32, g: &Geo, text: &[u8], starts
     r
 }
 
-fn lines<U: GuestUi>(m: &mut Mac<U>, port: u32, g: &Geo, text: &[u8], starts: &[u16], area: retro_raster::Rect, mark: Mark) -> Result<(), Refusal> {
+fn lines<U: GuestUi>(m: &mut Mac<U>, port: u32, g: &Geo, text: &[u8], starts: &[u16], area: retro_raster::Rect, mark: Mark, style: Option<&super::styles::StyleTab>) -> Result<(), Refusal> {
     let bk = read_port_pat(&m.mem, port, PatSlot::Bk)?;
     paint_region(m, port, &Region::from_rect(area), PAT_COPY, &bk)?;
     for (off, v) in [(P_TX_FONT, g.font), (P_TX_MODE, g.mode), (P_TX_SIZE, g.size)] { m.mem.write_u16(port.wrapping_add(off), v).map_err(Refusal::mem("text characteristics"))?; }
@@ -97,12 +97,28 @@ fn lines<U: GuestUi>(m: &mut Mac<U>, port: u32, g: &Geo, text: &[u8], starts: &[
         let top = i32::from(g.dest.top) + line as i32 * lh;
         if top + lh <= area.y0 || top >= area.y1 { continue; }
         let (ls, le) = (usize::from(starts[line]), usize::from(starts[line + 1]));
-        let mut bytes = &text[ls.min(text.len())..le.min(text.len())];
-        while bytes.last() == Some(&CR) { bytes = &bytes[..bytes.len() - 1]; }
-        if bytes.is_empty() { continue; }
+        let mut end = le.min(text.len());
+        while end > ls.min(end) && text[end - 1] == CR { end -= 1; }
+        let ls = ls.min(end);
+        if ls == end { continue; }
         let h = i32::from(g.dest.left) + layout::line_offset(text, starts, line, width, g.just, &w);
         set_pen_loc(&mut m.mem, port, (top + i32::from(g.ascent)) as i16, h as i16)?;
-        crate::qd::text::draw_on(m, port, bytes, "TEUpdate")?;
+        match style {
+            // a styled record: one piece per run, each drawn with its run's font, face and size (the pen carries on)
+            Some(tab) => {
+                let mut at = ls;
+                while at < end {
+                    let run = tab.runs.iter().rposition(|r| usize::from(r.0) <= at).unwrap_or(0);
+                    let stop = tab.runs.get(run + 1).map_or(end, |r| usize::from(r.0)).min(end).max(at + 1);
+                    let a = tab.styles.get(tab.runs[run].1 as usize).map(|s| s.attrs).unwrap_or_default();
+                    for (off, v) in [(P_TX_FONT, a.font as u16), (P_TX_SIZE, a.size as u16)] { m.mem.write_u16(port.wrapping_add(off), v).map_err(Refusal::mem("text characteristics"))?; }
+                    m.mem.write_u8(port.wrapping_add(P_TX_FACE), a.face).map_err(Refusal::mem("txFace"))?;
+                    crate::qd::text::draw_on(m, port, &text[at..stop], "TEUpdate")?;
+                    at = stop;
+                }
+            }
+            None => { crate::qd::text::draw_on(m, port, &text[ls..end], "TEUpdate")?; }
+        }
     }
     let inverted = match mark {
         Mark::None => return Ok(()),

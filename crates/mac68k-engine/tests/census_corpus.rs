@@ -56,7 +56,8 @@ fn the_toolbox_showcase_fat_app_runs_past_the_file_manager_to_the_colour_window_
     // STYLED one (_TEStyleNew).
     let Some(m) = census("systemless-showcase/showcase.rsrc") else { return };
     assert!(m.log.iter().any(|l| l.starts_with("[textedit] TENew")), "the showcase's TENew is answered: {:#?}", m.log);
-    assert_eq!(m.refused, vec!["unimplemented trap _TEStyleNew ($A83E)".to_string()], "LDoDraw is answered now; only the styled TE call is left: {:#?}", m.log);
+    assert_eq!(m.refused, vec!["unimplemented trap _MeasureText ($A837)".to_string()], "styled TextEdit exists now (textedit/styled.rs), so the showcase creates its styled record and the next wall is the Font Manager's MeasureText: {:#?}", m.log);
+    assert!(m.log.iter().any(|l| l.starts_with("[textedit] TEStyleNew")), "TEStyleNew is answered");
 }
 
 #[test]
@@ -65,7 +66,7 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // Each pins how far the app gets TODAY; when a trap lands the stop moves on and the row is updated deliberately.
     for (app, stop) in [
         ("mac/glider-pro/fx/Utilities_Moving Van.bin", "DrawPicture 0x"), // past SetControlReference: its PICT is a version-2 picture
-        ("mac/simpletext/ux/SimpleText.rsrc", "unimplemented trap _TEStyleNew ($A83E)"), // 1.4: past Pack7 (register package), ResErr after GetNewMBar, Pack8 and the Finder's oapp event: its Untitled window wants styled TextEdit
+        ("mac/simpletext/ux/SimpleText.rsrc", "unimplemented trap _Pack14 ($A830)"), // 1.4: past Pack7 (register package), ResErr after GetNewMBar, Pack8, the Finder's oapp event, and styled TextEdit (TEStyleNew, TEAutoView, TEDispatch): the next wall is Pack14
     ] {
         let Some(m) = census(app) else { continue };
         assert!(m.refused.last().is_some_and(|r| r.contains(stop)), "{app}: {:?}\n{:#?}", m.refused.last(), m.log);
@@ -122,7 +123,7 @@ fn macintosh_garden_apps_stop_at_the_first_missing_trap_and_each_stop_is_named()
     // ResEdit 2.1.3 and SimpleText 1.3 have COMPRESSED CODE resources (resource attribute bit 0, header $A89F6572, a 'dcmp' in the file
     // itself). The Resource Manager runs that 'dcmp' IN THE GUEST (compressed.rs); before it did, a LoadSeg read the compressed header as a
     // segment header ("25970 entries at jump-table offset 43167") and the app died there.
-    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", ""), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "unimplemented trap _Unimplemented ($A89F)")] {
+    for (app, stop) in [("mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc", ""), ("mac/simpletext/u13/SimpleText 1.3.rsrc", "unimplemented trap _Pack14 ($A830)")] {
         let Some(m) = census(app) else { continue };
         // ResEdit finds itself (SetVol with GetVol's bare volume name restores the default directory) and accepts its fresh preferences file (a
         // new resource fork is the 286 bytes CreateResFile writes), so it no longer declares itself or its preferences damaged: nothing refused.

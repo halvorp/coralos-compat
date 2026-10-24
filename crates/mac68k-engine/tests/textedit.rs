@@ -254,13 +254,217 @@ fn tetextbox_draws_wrapped_text_into_the_box_and_erases_it_first() {
 }
 
 #[test]
-fn styled_textedit_and_a_wild_handle_are_refused_by_name() {
-    let mut g = rig();
-    g.m.start(&{ let mut p = Prog::new(); p.l(0).l(0).trap(0xA83E).exit(); p.0 }, 0).unwrap();
-    let _ = g.m.run_loop(1_000_000);
-    assert!(g.m.refused.iter().any(|r| r.contains("TEStyleNew")), "TEStyleNew is unimplemented and says so: {:?}", g.m.refused);
+fn a_wild_handle_is_refused_by_name_in_every_routine_that_takes_one() {
     let mut g = rig();
     g.m.start(&{ let mut p = Prog::new(); p.l(UPD).l(0x1234_5678).trap(0xA9D3).exit(); p.0 }, 0).unwrap();
     let _ = g.m.run_loop(1_000_000);
     assert!(g.m.refused.iter().any(|r| r.contains("TEUpdate") && r.contains("not a live handle")), "{:?}", g.m.refused);
+    // the same for the view routines and the dispatcher's
+    let mut g = rig();
+    g.m.start(&{ let mut p = Prog::new(); p.l(0x1234_5678).trap(0xA811).l(0x1234_5678); p.w(4).trap(0xA83D).exit(); p.0 }, 0).unwrap();
+    let _ = g.m.run_loop(1_000_000);
+    assert!(g.m.refused.iter().any(|r| r.contains("TESelView") && r.contains("not a live handle")), "{:?}", g.m.refused);
+    assert!(g.m.refused.iter().any(|r| r.contains("TEGetStyleHandle") && r.contains("not a live handle")), "{:?}", g.m.refused);
+}
+
+// ---- styled TextEdit ----
+
+const STYLE: u32 = 0x3500; // a TextStyle (12 bytes)
+const NEW_STYLE: u32 = 0x3520;
+const RES: u32 = 0x3540; // results land here
+
+fn te_style_new(p: &mut Prog) { p.clr_l().l(DEST).l(VIEW).trap(0xA83E).pop_l(TEH); }
+/// `_TEDispatch`: arguments are pushed by the caller, the selector word LAST.
+fn disp(p: &mut Prog, sel: i16) { p.w(sel).trap(0xA83D); }
+fn set_style(p: &mut Prog, mode: i16, at: u32, redraw: bool) { p.w(mode).l(at).b(redraw as u8).rgn_arg(TEH); disp(p, 1); }
+fn put_style(g: &mut Rig, at: u32, font: i16, face: u8, size: i16) {
+    let a = mac68k_engine::textedit::styles::Attrs { font, face, size, color: [0; 3] };
+    put(&mut g.m, at, &a.write());
+}
+fn style_rec(g: &Rig) -> (u32, u32) { // (the TEStyleRec's address, its handle)
+    let p = g.m.mm.block(teh(g)).unwrap().ptr;
+    let sh = g.m.mem.read_u32(p + T_TX_FONT).unwrap();
+    (g.m.mm.block(sh).unwrap().ptr, sh)
+}
+fn runs(g: &Rig) -> Vec<(u16, i16)> {
+    let (sp, _) = style_rec(g);
+    let n = g.m.mem.read_u16(sp).unwrap();
+    (0..=n as u32).map(|i| (g.m.mem.read_u16(sp + 20 + 4 * i).unwrap(), g.m.mem.read_i16(sp + 22 + 4 * i).unwrap())).collect()
+}
+fn style_face(g: &Rig, idx: usize) -> u8 {
+    let (sp, _) = style_rec(g);
+    let st = g.m.mm.block(g.m.mem.read_u32(sp + 4).unwrap()).unwrap().ptr;
+    g.m.mem.read_u8(st + 18 * idx as u32 + 8).unwrap()
+}
+
+#[test]
+fn testylenew_builds_the_style_structures_the_rom_builds() {
+    let mut g = rig();
+    go(&mut g, |p| { te_style_new(p); });
+    g.no_refusals();
+    assert_eq!((rec(&g, T_LINE_HEIGHT) as i16, rec(&g, T_ASCENT) as i16, rec(&g, 80) as i16), (-1, -1, -1), "lineHeight, fontAscent and txSize are -1 in a styled record");
+    let (sp, sh) = style_rec(&g);
+    assert_ne!(sh, 0);
+    assert_eq!((g.m.mem.read_u16(sp).unwrap(), g.m.mem.read_u16(sp + 2).unwrap()), (1, 1), "nRuns 1, nStyles 1");
+    assert_eq!(runs(&g), [(0, 0), (1, -1)], "one run of style 0 and the sentinel {{ teLength + 1, -1 }}");
+    let st = g.m.mm.block(g.m.mem.read_u32(sp + 4).unwrap()).unwrap();
+    assert_eq!(st.size, 18, "one 18-byte STElement");
+    assert_eq!(g.m.mem.read_u16(st.ptr).unwrap(), 1, "stCount");
+    assert_eq!(g.m.mm.block(g.m.mem.read_u32(sp + 8).unwrap()).unwrap().size, 4, "lhTab: one {{ height, ascent }}");
+    let ns = g.m.mem.read_u32(sp + 16).unwrap();
+    let scrap = g.m.mem.read_u32(g.m.mm.block(ns).unwrap().ptr + 4).unwrap();
+    assert_eq!(g.m.mem.read_u16(g.m.mm.block(scrap).unwrap().ptr).unwrap(), 0, "the null style scrap holds no style yet");
+    // negative control: a plain record has none of this
+    let mut g2 = rig();
+    go(&mut g2, |p| { te_new(p); });
+    assert_eq!(rec(&g2, 80), g2.m.mem.read_u16(g2.win + 74).unwrap(), "a plain record's txSize is the port's");
+}
+
+#[test]
+fn typing_in_a_styled_record_extends_the_run_and_the_sentinel() {
+    let mut g = rig();
+    go(&mut g, |p| { te_style_new(p); one(p, 0xA9D8); for k in *b"abc" { te_key(p, k); } });
+    g.no_refusals();
+    assert_eq!(text(&g), b"abc".to_vec());
+    assert_eq!(runs(&g), [(0, 0), (4, -1)], "still one run; the sentinel follows teLength + 1");
+    go(&mut g, |p| { te_key(p, 0x08); });
+    assert_eq!(runs(&g), [(0, 0), (3, -1)]);
+    // TESetText starts the runs over
+    put(&mut g.m, TEXT, b"hello");
+    go(&mut g, |p| { te_set_text(p, b"hello"); });
+    assert_eq!(runs(&g), [(0, 0), (6, -1)]);
+}
+
+#[test]
+fn tesetstyle_restyles_the_selection_splits_runs_and_tegetstyle_reads_them_back() {
+    let mut g = rig();
+    put_style(&mut g, STYLE, 0, 1, 0); // bold
+    put(&mut g.m, TEXT, b"abcdef");
+    go(&mut g, |p| { te_style_new(p); te_set_text(p, b"abcdef"); te_cal(p); te_sel(p, 1, 3); set_style(p, 2, STYLE, true); });
+    g.no_refusals();
+    assert_eq!(runs(&g), [(0, 0), (1, 1), (3, 0), (7, -1)], "doFace on 1..3 splits the run in three; the sentinel stays");
+    assert_eq!((style_face(&g, 0), style_face(&g, 1)), (0, 1));
+    // TEGetStyle(offset, VAR style, VAR lineHeight, VAR ascent, hTE): offsets 2 (bold) and 4 (plain)
+    for (off, face) in [(2i16, 1u8), (4, 0)] {
+        go(&mut g, |p| { p.w(off).l(NEW_STYLE).l(RES).l(RES + 2).rgn_arg(TEH); disp(p, 3); });
+        assert_eq!(g.m.mem.read_u8(NEW_STYLE + 2).unwrap(), face, "face at {off}");
+        assert_eq!(g.m.mem.read_u16(RES).unwrap(), g.m.qd.font.y_size as u16, "lineHeight");
+    }
+    // the bold run is drawn bold: more ink in its two cells than the same two cells plain
+    let bold = g.count_in(10 + 8, 10, 10 + 24, 10 + g.m.qd.font.y_size as i32);
+    let plain = g.count_in(10 + 24, 10, 10 + 40, 10 + g.m.qd.font.y_size as i32);
+    assert!(bold > plain, "bold {bold} vs plain {plain}\n{}", g.pic(8, 8, 60, 22));
+    // restyle everything plain again: the bold style is no longer used and goes
+    put_style(&mut g, STYLE, 0, 0, 0);
+    go(&mut g, |p| { te_sel(p, 0, 6); set_style(p, 2, STYLE, true); });
+    assert_eq!(runs(&g), [(0, 0), (7, -1)]);
+    let (sp, _) = style_rec(&g);
+    assert_eq!(g.m.mem.read_u16(sp + 2).unwrap(), 1, "nStyles back to 1");
+}
+
+#[test]
+fn a_style_set_at_the_insertion_point_is_the_style_of_the_next_typed_text_until_a_click() {
+    let mut g = rig();
+    put_style(&mut g, STYLE, 0, 2, 0); // italic
+    go(&mut g, |p| { te_style_new(p); one(p, 0xA9D8); te_key(p, b'a'); set_style(p, 2, STYLE, true); te_key(p, b'b'); te_key(p, b'c'); });
+    g.no_refusals();
+    assert_eq!(runs(&g), [(0, 0), (1, 1), (4, -1)], "'a' plain, 'bc' italic: the null style applied to the typed text");
+    // a click ends a pending null style: set bold, click, type
+    put_style(&mut g, STYLE, 0, 1, 0);
+    go(&mut g, |p| { set_style(p, 2, STYLE, true); te_click(p, 12, 10 + 8, false); te_key(p, b'x'); });
+    assert_eq!(runs(&g), [(0, 0), (2, 1), (5, -1)], "x (typed at offset 1) took the style of the character before it, plain 'a', not the abandoned bold: no new run");
+}
+
+#[test]
+fn tecontinuousstyle_tells_which_attributes_are_the_same_through_the_selection() {
+    let mut g = rig();
+    put_style(&mut g, STYLE, 0, 1, 0);
+    put(&mut g.m, TEXT, b"abcd");
+    go(&mut g, |p| { te_style_new(p); te_set_text(p, b"abcd"); te_cal(p); te_sel(p, 0, 2); set_style(p, 2, STYLE, false); te_sel(p, 0, 4); });
+    g.m.mem.write_u16(RES, 2 | 1).unwrap(); // ask about doFace | doFont
+    go(&mut g, |p| { p.clr_w().l(RES).l(NEW_STYLE).rgn_arg(TEH); disp(p, 10); p.pop_w(RES + 4); });
+    assert_eq!(g.m.mem.read_u16(RES).unwrap(), 1, "mode out: the font is continuous, the face is not");
+    assert_eq!(g.m.mem.read_u16(RES + 4).unwrap(), 0, "FALSE: not everything asked about is continuous");
+    // negative control: over the bold run alone the face is continuous too
+    go(&mut g, |p| { te_sel(p, 0, 2); });
+    g.m.mem.write_u16(RES, 2 | 1).unwrap();
+    go(&mut g, |p| { p.clr_w().l(RES).l(NEW_STYLE).rgn_arg(TEH); disp(p, 10); p.pop_w(RES + 4); });
+    assert_eq!((g.m.mem.read_u16(RES).unwrap(), g.m.mem.read_u16(RES + 4).unwrap(), g.m.mem.read_u8(NEW_STYLE + 2).unwrap()), (3, 0x0100, 1));
+}
+
+#[test]
+fn tegetpoint_tegetheight_tegetoffset_and_tenumstyles_answer_from_the_layout() {
+    let mut g = rig();
+    put_style(&mut g, STYLE, 0, 1, 0);
+    put(&mut g.m, TEXT, b"hello world, this is text"); // 4 lines of 10 characters (see the plain-record test)
+    go(&mut g, |p| { te_style_new(p); te_set_text(p, b"hello world, this is text"); te_cal(p); te_sel(p, 2, 4); set_style(p, 2, STYLE, false); });
+    let lh = g.m.qd.font.y_size as i32;
+    let asc = g.m.qd.font.baseline as i32 + 1;
+    // TEGetPoint(offset 8: line 2 starts at 6, so 'w'+2): v = destTop + line * lh + ascent, h = destLeft + width of the line's first chars
+    go(&mut g, |p| { p.clr_l().w(8).rgn_arg(TEH); disp(p, 8); p.pop_l(RES); });
+    assert_eq!(g.m.mem.read_u32(RES).unwrap(), (((10 + lh + asc) as u32) << 16) | (10 + 16), "line 1 (0-based), two characters in");
+    // TEGetHeight(endLine, startLine): lines 1..=4 are four lines high
+    go(&mut g, |p| { p.clr_l().l(4).l(1).rgn_arg(TEH); disp(p, 9); p.pop_l(RES); });
+    assert_eq!(g.m.mem.read_u32(RES).unwrap(), (4 * lh) as u32);
+    go(&mut g, |p| { p.clr_l().l(2).l(2).rgn_arg(TEH); disp(p, 9); p.pop_l(RES); });
+    assert_eq!(g.m.mem.read_u32(RES).unwrap(), lh as u32, "one line");
+    // TEGetOffset(pt): the same answer TEClick would use
+    go(&mut g, |p| { p.clr_w().l((u32::from((10 + lh + 2) as u16) << 16) | u32::from((10 + 16 + 3) as u16)).rgn_arg(TEH).trap(0xA83C).pop_w(RES); });
+    assert_eq!(g.m.mem.read_u16(RES).unwrap(), 8, "3 pixels into the third character of line 1 is before it: offset 6 + 2");
+    // TENumStyles(rangeStart, rangeEnd): runs inside the range, counting the start
+    go(&mut g, |p| { p.clr_l().l(0).l(25).rgn_arg(TEH); disp(p, 13); p.pop_l(RES); });
+    assert_eq!(g.m.mem.read_u32(RES).unwrap(), 3, "plain, bold, plain");
+    go(&mut g, |p| { p.clr_l().l(0).l(2).rgn_arg(TEH); disp(p, 13); p.pop_l(RES); });
+    assert_eq!(g.m.mem.read_u32(RES).unwrap(), 1);
+    g.no_refusals();
+}
+
+#[test]
+fn unimplemented_dispatch_selectors_and_feature_setting_are_named_and_pop_their_frames() {
+    let mut g = rig();
+    go(&mut g, |p| { te_style_new(p); });
+    // TEStylePaste (selector 0) is not implemented: it pops its frame (a marker pushed first comes back intact) and says so
+    go(&mut g, |p| { p.w(0x7777).rgn_arg(TEH); disp(p, 0); p.pop_w(RES); });
+    assert_eq!(g.m.mem.read_u16(RES).unwrap(), 0x7777, "the frame was popped exactly");
+    assert!(g.m.refused.iter().any(|r| r.contains("TEStylePaste")), "{:?}", g.m.refused);
+    g.m.refused.clear();
+    // TEFeatureFlag(feature, action): test reads clear, set is refused by name
+    go(&mut g, |p| { p.clr_w().w(0).w(-1).rgn_arg(TEH); disp(p, 14); p.pop_w(RES); });
+    assert_eq!((g.m.mem.read_u16(RES).unwrap(), g.m.refused.len()), (0, 0));
+    go(&mut g, |p| { p.clr_w().w(3).w(1).rgn_arg(TEH); disp(p, 14); p.pop_w(RES); }); // feature 3 (inline input), action set
+    assert!(g.m.refused.iter().any(|r| r.contains("TEFeatureFlag")), "{:?}", g.m.refused);
+    // a selector that does not exist cannot be popped: named, stack untouched
+    g.m.refused.clear();
+    go(&mut g, |p| { disp(p, 99); });
+    assert!(g.m.refused.iter().any(|r| r.contains("selector 99")), "{:?}", g.m.refused);
+}
+
+#[test]
+fn teautoview_pinscroll_and_selview_keep_the_selection_in_the_view() {
+    let mut g = rig();
+    // 4-line text in a view two lines high
+    let lh = g.m.qd.font.y_size as i16;
+    set_rect(&mut g.m, VIEW, 10, 10, 10 + 2 * lh, 90);
+    set_rect(&mut g.m, DEST, 10, 10, 200, 90);
+    put(&mut g.m, TEXT, b"hello world, this is text");
+    go(&mut g, |p| { te_new(p); te_set_text(p, b"hello world, this is text"); te_cal(p); te_sel(p, 25, 25); });
+    let dest_top = |g: &Rig| g.m.mem.read_i16(g.m.mm.block(teh(g)).unwrap().ptr + T_DEST).unwrap();
+    // auto-scroll off: TESelView does nothing
+    go(&mut g, |p| { one(p, 0xA811); });
+    assert_eq!(dest_top(&g), 10, "auto-scroll is off by default");
+    // TEAutoView(TRUE): the caret on line 4 scrolls into the two-line view (the least scroll: two lines up)
+    go(&mut g, |p| { p.b(1).rgn_arg(TEH).trap(0xA813); one(p, 0xA811); });
+    assert_eq!(dest_top(&g), 10 - 2 * lh, "scrolled so the last line is the view's last line");
+    // TEPinScroll never scrolls past the text: asking for ten lines up from here only goes to the end
+    go(&mut g, |p| { p.w(0).w(-10 * lh).rgn_arg(TEH).trap(0xA812); });
+    assert_eq!(dest_top(&g), 10 - 2 * lh, "already at the end");
+    // ...nor below the top
+    go(&mut g, |p| { p.w(0).w(10 * lh).rgn_arg(TEH).trap(0xA812); });
+    assert_eq!(dest_top(&g), 10, "back at the top and no further");
+    // TEFeatureFlag(teFAutoScroll) reads and writes the same flag and answers the previous state
+    go(&mut g, |p| { p.clr_w().w(0).w(-1).rgn_arg(TEH); disp(p, 14); p.pop_w(RES); });
+    assert_eq!(g.m.mem.read_u16(RES).unwrap(), 1, "test: set");
+    go(&mut g, |p| { p.clr_w().w(0).w(0).rgn_arg(TEH); disp(p, 14); p.pop_w(RES); p.clr_w().w(0).w(-1).rgn_arg(TEH); disp(p, 14); p.pop_w(RES + 2); });
+    assert_eq!((g.m.mem.read_u16(RES).unwrap(), g.m.mem.read_u16(RES + 2).unwrap()), (1, 0), "clear returns the previous state; the flag is clear now");
+    g.no_refusals();
 }
