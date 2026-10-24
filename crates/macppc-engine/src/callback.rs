@@ -58,6 +58,8 @@ pub(crate) enum Continuation {
     SwitchIn,
     /// An Apple Event handler ran for `AEProcessAppleEvent`: its OSErr is the call's result.
     AeHandler,
+    /// A Time Manager task's procedure ran at a safepoint: the interrupted glue call is entered again ([`crate::tm_c`]).
+    TimerTask,
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +76,7 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// Call the PowerPC routine behind `upp` with `args` in r3.., returning to `$CallbackReturn`. The UPP is resolved (one
     /// parser) BEFORE any register changes: a descriptor this engine cannot run is a named refusal, the CPU untouched.
-    fn enter_upp(&mut self, cpu: &mut Cpu, upp: u32, args: &[u32], sp: u32) -> Result<(), String> {
+    pub(crate) fn enter_upp(&mut self, cpu: &mut Cpu, upp: u32, args: &[u32], sp: u32) -> Result<(), String> {
         let record = parse(&self.mac.mem, upp).and_then(|d| ppc_record(&d)).map_err(|e| format!("{e}"))?;
         self.enter_tvector(cpu, record.proc_descriptor, args, sp).map_err(|e| format!("UPP {upp:#x}: {e}"))
     }
@@ -137,6 +139,7 @@ impl<U: GuestUi> MacPpc<U> {
             Continuation::SwitchOut { to, state, pc } => { frame.saved.restore(cpu); self.finish_switch(cpu, to, state, pc) }
             Continuation::AeHandler => self.ae_handler_returned(cpu, frame),
             Continuation::SwitchIn => { frame.saved.restore(cpu); Ok(()) }
+            Continuation::TimerTask => { frame.saved.restore(cpu); Ok(()) }
         }
     }
 

@@ -139,7 +139,9 @@ impl<U: GuestUi> MacPpc<U> {
         if let Some(mask) = self.rt.wait_mask {
             self.mac.pump_ui();
             let timed_out = self.rt.wait_deadline.is_some_and(|d| self.mac.ev.ticks.wrapping_sub(d) < 0x8000_0000);
-            if !self.mac.event_pending(mask) && !timed_out { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
+            // a Time Manager task that is due wakes the parked call too: the retried call is the safepoint that runs it
+            let timer_due = self.tm_next_wake().is_some_and(|w| w <= self.mac.ev.ticks_total);
+            if !self.mac.event_pending(mask) && !timed_out && !timer_due { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
             self.rt.wait_timed_out = timed_out;
             self.rt.wait_mask = None;
             self.rt.wait_deadline = None;
@@ -233,6 +235,14 @@ impl<U: GuestUi> Host for MacPpc<U> {
             cpu.lr = m.lr;
             cpu.set_pc(m.pc);
             return true;
+        }
+        // a Time Manager task that has come due runs now: this glue call is a safepoint (named limit: not interrupt time)
+        if symbol != crate::callback::CALLBACK_RETURN {
+            match self.tm_safepoint(cpu, addr) {
+                Ok(true) => { self.sync_natives(cpu); return true; }
+                Ok(false) => {}
+                Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
+            }
         }
         if let Some(Binding::Native(n @ (Native::SetJmp | Native::CExit | Native::BreakPoint))) = self.bindings.get(&symbol).cloned() { self.cpu_native(n, cpu); return true; }
         match self.bindings.get(&symbol).cloned() {

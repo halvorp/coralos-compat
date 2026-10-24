@@ -16,6 +16,8 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
         b"cput" => 0x108,
         b"cfrg" => 1,
         b"altv" => 0,
+        // gestaltTimeMgrVersion: 4 = the native (PowerPC) Time Manager with extended tasks and Microseconds (spec: macos9-specs/TimeManager/InsTime)
+        b"tmgr" => 4,
         // RULING (coordinator, 2026-10-24): the engine IS a Mac OS 9.2.1 personality with CarbonLib 1.4 (Peter's own system, confirmed by the oracle). A version selector names the
         // personality; every call the engine lacks is a per-call NAMED refusal. `gestaltSystemVersion` 0x0921 and `gestaltCarbonVersion` 0x0140 (CarbonLib 1.4, as on the 9.2.1 CD).
         b"sysv" => 0x0921,
