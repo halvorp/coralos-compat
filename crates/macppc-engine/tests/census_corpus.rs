@@ -88,3 +88,36 @@ fn macintosh_garden_glider_pro_fat_app_binds_most_of_interfacelib_and_names_what
     // NEGATIVE CONTROL: InitWindows is bound (it is not NEXT-NEEDED), so the list is not simply "everything".
     assert!(!c.next_needed.iter().any(|n| n.ends_with("/InitWindows")), "{:?}", c.next_needed);
 }
+
+/// FixedBenchmark's stop (a bus fault at 0x2a4f38) is a defect of the PEF Retro68 produced, not of this loader: the file itself gives TWO different
+/// symbols one address. TOC slot 2980 is a `std::locale::id` (a 4-byte index slot, assigned early) and slot 3620 is the 0x58-byte facet storage
+/// `moneypunct_cache_wf`; both hold the same raw value in the container, and each gets exactly one section-D relocation (the rules of classix
+/// PEFRelocator.cpp: BySectDWithSkip / BySectD add the data section's base to one word; nothing else touches these two). The storage's vtable
+/// store (pc 0x2dc4d4) then overwrites the id, and `_M_id()` returns the vtable pointer minus 1 as an index.
+#[test]
+fn fixedbenchmark_pef_gives_a_locale_id_and_a_cache_object_the_same_address_so_the_loader_is_not_at_fault() {
+    let path = "/data/build/corpus-bin/mac-retro68/ppc/FixedBenchmark.bin";
+    let Ok(file) = std::fs::read(path) else { eprintln!("SKIPPED: corpus binary {path} not present (docs/CORPUS.md)"); return };
+    let (name, bytes) = fragment_bytes(&file, None).unwrap();
+    let pef = Pef::parse(&bytes).unwrap();
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let frag = m.instantiate(&name, &pef).unwrap();
+    let data = frag.section_bases[1].unwrap();
+    let toc = frag.main.unwrap().toc;
+    let (id_slot, storage_slot) = (toc + 2980, toc + 3620);
+    // the container's own bytes (unrelocated)
+    let image = pef.section_image(1).unwrap();
+    let raw = |slot: u32| { let o = (slot - data) as usize; u32::from_be_bytes(image[o..o + 4].try_into().unwrap()) };
+    assert_eq!(raw(id_slot), raw(storage_slot), "the file holds one address for two symbols");
+    // the relocation program touches each of the two words exactly once, with the data section's base
+    let loader = pef.loader().unwrap();
+    let mut hits = std::collections::BTreeMap::<u32, Vec<u32>>::new();
+    let bases = frag.section_bases.clone();
+    let vals: Vec<u32> = frag.imports.iter().map(|r| r.value).collect();
+    loader.relocate(&bases, &vals, &mut |sec, at, add| { if sec == 1 { hits.entry(at).or_default().push(add); } Ok(()) }).unwrap();
+    for slot in [id_slot, storage_slot] { assert_eq!(hits[&(slot - data)], [data], "exactly one section-D relocation at {slot:#x}"); }
+    // and the engine reproduces what the file says: both TOC words point at one guest address
+    assert_eq!(m.mac.mem.read_u32(id_slot).unwrap(), m.mac.mem.read_u32(storage_slot).unwrap());
+    // NEGATIVE CONTROL: neighbouring id slots are distinct addresses (the overlap is the exception, not the layout)
+    assert_ne!(m.mac.mem.read_u32(toc + 2976).unwrap(), m.mac.mem.read_u32(id_slot).unwrap());
+}
