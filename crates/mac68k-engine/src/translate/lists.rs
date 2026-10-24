@@ -9,7 +9,8 @@
 //! A Rect is top, left, bottom, right; a Point/Cell is v (row), h (column). Geometry, bounds and the scroll origin (`visible`) are
 //! read from the record every time, so a program that pokes them is believed. The CELL CONTENTS and the selection flags are held by
 //! the engine (the packed offset array behind `cells` is not modelled: `cells` is a stand-in handle a program must not read).
-//! Scroll bars (`vScroll`/`hScroll`) are not made: the native list scrolls itself and tells the record through `visible`.
+//! Scroll bars: `LNew` with scrollH / scrollV TRUE makes real, HIDDEN `ControlRecord`s in `hScroll` / `vScroll` (a program sets their refCon and ranges);
+//! the native list draws and moves its own scroll bars and tells the record through `visible`.
 //!
 //! **The trap.** `_Pack0` is a Pascal-style call whose selector word is pushed LAST, so the frame differs per selector. [`FRAMES`]
 //! holds every selector's name, popped bytes and result size (the IM equate table, checked against systemless' dispatcher); the 14
@@ -56,6 +57,8 @@ pub const L_PORT: u32 = 8;
 pub const L_CELL_SIZE: u32 = 16;
 pub const L_VISIBLE: u32 = 20;
 pub const L_SEL_FLAGS: u32 = 36;
+pub const L_V_SCROLL: u32 = 28;
+pub const L_H_SCROLL: u32 = 32;
 pub const L_ACTIVE: u32 = 37;
 pub const L_LIST_FLAGS: u32 = 39;
 /// `listFlags` bit 3, `lDrawingModeOff`: the program asked the list not to draw (`LDoDraw(FALSE)`).
@@ -227,6 +230,16 @@ impl<U: GuestUi> Mac<U> {
         self.mem.write_u8(p + L_ACTIVE, 1).map_err(Refusal::mem("ListRec"))?;
         self.mem.write_u32(p + L_CELLS, cells).map_err(Refusal::mem("ListRec"))?;
         self.put_point(p + L_LAST_CLICK, (-1, -1))?;
+        // hasGrow-independent scroll bars (scrollH / scrollV TRUE): real ControlRecords in vScroll / hScroll, so a program that sets their refCon, ranges
+        // or hilite finds them. They are HIDDEN (contrlVis 0, so never projected): the native list draws and moves its own scroll bars.
+        for (field, on, rect) in [
+            (L_V_SCROLL, a.scroll_v, Rect { top: view.top - 1, left: view.right, bottom: view.bottom + 1, right: view.right + 16 }),
+            (L_H_SCROLL, a.scroll_h, Rect { top: view.bottom, left: view.left - 1, bottom: view.bottom + 16, right: view.right + 1 }),
+        ] {
+            if !on { continue; }
+            let ctl = self.create_control(a.window, rect, "", false, 0, 0, 0, 16, 0)?;
+            self.mem.write_u32(p + field, ctl).map_err(Refusal::mem("ListRec"))?;
+        }
         self.tr.lists.insert(lh, ListState { ldef: a.proc, ..Default::default() });
         self.put_rect(p + L_VISIBLE, Rect { top: bounds.top, left: bounds.left, bottom: bounds.top, right: bounds.left })?;
         self.refresh_visible(lh, Some((bounds.top, bounds.left)))?;
@@ -242,6 +255,10 @@ impl<U: GuestUi> Mac<U> {
         let cells = self.mem.read_u32(p + L_CELLS).map_err(Refusal::mem("ListRec"))?;
         let port = self.list_facts(lh)?.port;
         self.sync_projection(port, Obj::List(lh), None)?;
+        for field in [L_V_SCROLL, L_H_SCROLL] {
+            let ctl = self.mem.read_u32(p + field).unwrap_or(0);
+            if ctl != 0 { let _ = self.dispose_control(ctl, true); }
+        }
         self.tr.lists.remove(&lh);
         if cells != 0 { let _ = self.dispose_handle(cells); }
         self.dispose_handle(lh).map_err(|e| Refusal(format!("LDispose: memory manager error {e}")))
@@ -269,7 +286,7 @@ impl<U: GuestUi> Mac<U> {
 }
 
 /// `LNew`'s arguments, read off the frame.
-struct NewArgs { view: u32, bounds: u32, cell: (i16, i16), proc: i16, window: u32 }
+struct NewArgs { view: u32, bounds: u32, cell: (i16, i16), proc: i16, window: u32, scroll_h: bool, scroll_v: bool }
 
 fn word(m: &Mac<impl GuestUi>, at: u32) -> Result<i16, Refusal> { m.mem.read_i16(at).map_err(Refusal::mem("_Pack0 argument")) }
 fn long(m: &Mac<impl GuestUi>, at: u32) -> Result<u32, Refusal> { m.mem.read_u32(at).map_err(Refusal::mem("_Pack0 argument")) }
@@ -282,7 +299,7 @@ fn run_selector<U: GuestUi>(m: &mut Mac<U>, sel: u16, sp: u32) -> Result<(u32, S
     let lh = |m: &Mac<U>| long(m, sp + 2);
     Ok(match sel {
         0x44 => {
-            let a = NewArgs { view: long(m, sp + 24)?, bounds: long(m, sp + 20)?, cell: point(m, sp + 16)?, proc: word(m, sp + 14)?, window: long(m, sp + 10)? };
+            let a = NewArgs { view: long(m, sp + 24)?, bounds: long(m, sp + 20)?, cell: point(m, sp + 16)?, proc: word(m, sp + 14)?, window: long(m, sp + 10)?, scroll_h: boolean(m, sp + 4)?, scroll_v: boolean(m, sp + 2)? };
             let h = m.make_list(&a)?;
             (h, format!("[list] LNew LDEF {} -> {h:#x}", a.proc))
         }

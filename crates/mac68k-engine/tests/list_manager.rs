@@ -296,3 +296,34 @@ fn native_selection_of_a_row_that_does_not_exist_or_is_scrolled_out_of_view_is_r
     assert!(r.iter().any(|x| x.contains("Activate") && x.contains("means nothing for a list")), "{r:?}");
     assert!(w.rig.m.ev.queue.iter().all(|e| e.what != 1), "refused intents produced no guest input");
 }
+
+#[test]
+fn lnew_with_scrollv_makes_a_real_hidden_scroll_bar_control_in_vscroll_and_ldispose_frees_it() {
+    // Moving Van does `SetCRefCon((**list).vScroll, ...)` right after LNew(.., scrollV = TRUE): a NIL vScroll was "0x0 is not a control"
+    let mut rig = Rig::new();
+    let win = rig.win;
+    set_rect(&mut rig.m, VIEW, 10, 20, 70, 140);
+    set_rect(&mut rig.m, BOUNDS, 0, 0, 0, 1);
+    let mut p = Prog::new();
+    p.clr_l().l(VIEW).l(BOUNDS).l(pt(0, 0)).w(0).l(win).b(1).b(0).b(0).b(1); // drawIt, hasGrow, scrollH FALSE, scrollV TRUE
+    sel(&mut p, 0x44);
+    p.pop_l(LH);
+    p.exit();
+    rig.m.start(&p.0, 0).unwrap();
+    assert_eq!(rig.m.step(1_000_000).0, Step::Exited, "{:#?}", rig.m.log);
+    let w = World { rig, win };
+    let (v, h) = (rec(&w, 28, 2), rec(&w, 32, 2));
+    let v = (u32::from(v[0] as u16) << 16) | u32::from(v[1] as u16);
+    assert_ne!(v, 0, "vScroll is a control handle");
+    assert_eq!((h[0], h[1]), (0, 0), "hScroll was not asked for");
+    let cp = w.rig.m.mm.block(v).expect("a live ControlRecord").ptr;
+    assert_eq!(w.rig.m.mem.read_u8(cp + 16).unwrap(), 0, "contrlVis 0: the native list draws its own scroll bar, this one is never projected");
+    // LDispose frees it
+    let mut w = w;
+    let mut p = Prog::new();
+    p.rgn_arg(LH); sel(&mut p, 0x28);
+    p.exit();
+    w.rig.m.start(&p.0, 0).unwrap();
+    assert_eq!(w.rig.m.step(1_000_000).0, Step::Exited);
+    assert!(w.rig.m.mm.block(v).is_none(), "the scroll bar goes with the list (negative control: a leak keeps it)");
+}
