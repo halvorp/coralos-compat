@@ -70,6 +70,9 @@ pub struct Task<U: GuestUi> {
     /// Bookkeeping of a process dos created (dos_newproc.rs); None for the main program and for AddTask tasks.
     pub own: Option<crate::dos_newproc::ProcOwn>,
     pub main: bool,
+    /// The task that was running when this one was added (exec's `GET_THIS_TASK` in newaddtask.c:189 -> `et_Parent`, exec_util.c:169); None
+    /// for the main program, which the host-made launcher starts.
+    pub parent: Option<u32>,
 }
 
 pub struct Sched<U: GuestUi> {
@@ -108,7 +111,8 @@ impl<U: GuestUi> Amiga<U> {
     /// Register a new task that is ready to run at `start`.
     pub fn add_sched_task(&mut self, addr: u32, name: String, main: bool, start: Start, own: Option<crate::dos_newproc::ProcOwn>) {
         let seq = self.sched.next_seq();
-        self.sched.tasks.insert(addr, Task { name, state: RunState::Ready, waiting: None, ctx: None, start: Some(start), forbid: 0, disable: 0, seq, dead: false, calls: Vec::new(), vars: Default::default(), own, main });
+        let parent = if main { None } else { Some(self.sched.cur) };
+        self.sched.tasks.insert(addr, Task { name, state: RunState::Ready, waiting: None, ctx: None, start: Some(start), forbid: 0, disable: 0, seq, dead: false, calls: Vec::new(), vars: Default::default(), own, main, parent });
     }
 
     /// Is `t` a task? Before any program started (a bare machine in a unit test) the table is empty and every address

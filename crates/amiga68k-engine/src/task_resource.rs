@@ -123,15 +123,17 @@ fn get_slot<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     Ok(format!("[task.resource] GetTaskStorageSlot {id} -> {v:#x}"))
 }
 
-/// GetParentTaskStorageSlot(d0 = slot) -> the PARENT task's value of the slot, 0 if it never set one. The engine starts
-/// the program from a host-made "CLI" that owns no task storage, so for the main task the parent's value is 0 (the real
-/// call's answer for a parent with no storage); a task created by CreateNewProc has no recorded parent yet, which is
-/// refused by name rather than answered 0.
+/// GetParentTaskStorageSlot(d0 = slot) -> the PARENT task's value of the slot, 0 if it never set one
+/// (rom/task/GetParentTaskStorageSlot.c: `if (et->et_Parent) result = TaskGetStorageSlot(et->et_Parent, slotid)`). The parent is the task
+/// that was running when this one was added (newaddtask.c:189, `InitETask(task, parent)` exec_util.c:169), recorded as `Task::parent`. The main
+/// program's parent is the host-made launcher, which owns no task storage (0); a parent that has since been removed is orphaned, so 0
+/// too (childorphan.c:78 sets `et_Parent = NULL`). Like GetTaskStorageSlot, a slot nobody set reads 0.
 fn get_parent_slot<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let id = cpu.dreg(0) as i32;
-    if a.sched.cur != crate::process::PROCESS { return Err(Refusal(format!("GetParentTaskStorageSlot {id}: the parent of task {:#x} is not recorded", a.sched.cur))); }
-    cpu.set_d0(0);
-    Ok(format!("[task.resource] GetParentTaskStorageSlot {id} -> 0 (the launcher owns no task storage)"))
+    let parent = a.sched.tasks.get(&a.sched.cur).and_then(|t| t.parent).filter(|p| a.sched.tasks.contains_key(p));
+    let v = parent.and_then(|p| a.task_res.values.get(&(p, id)).copied()).unwrap_or(0);
+    cpu.set_d0(v);
+    Ok(format!("[task.resource] GetParentTaskStorageSlot {id} -> {v:#x} (parent {})", parent.map_or("none".into(), |p| format!("{p:#x}"))))
 }
 
 fn save_storage<U: GuestUi>(_: &mut Amiga<U>, _: &mut Cpu) -> Result<String, Refusal> { Err(Refusal("SaveTaskStorage is not modelled".into())) }

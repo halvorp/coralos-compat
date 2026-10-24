@@ -53,3 +53,15 @@ fn dos_set_vbuf_accepts_the_console_and_fails_like_aros_on_null_or_a_misaligned_
     assert_eq!(refused.len(), 1, "only the never-opened handle is refused: {refused:?}");
     assert!(refused[0].contains("SetVBuf on 0x48d0: not an open file"), "{refused:?}");
 }
+
+#[test]
+fn get_parent_task_storage_slot_reads_the_task_that_added_the_caller() {
+    let mut a = machine();
+    let r = run_refusing(&mut a, include_bytes!("guest/taskparent.bin"));
+    assert_eq!(r[0], 0, "the main program's parent is the launcher, which owns no storage: 0, not a refusal");
+    assert_eq!(r[1], 0xCAFE, "the child added by main sees MAIN's value of the slot (rom/task/GetParentTaskStorageSlot.c)");
+    assert_eq!(r[2], 0, "NEGATIVE CONTROL: the child's own value of the slot is not inherited");
+    assert_eq!(r[4], 0xF00D, "a grandchild sees the CHILD's value, not main's: the parent is who was running at AddTask");
+    assert_eq!(r[3], 1, "the child ran to its end");
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+}
