@@ -1,11 +1,12 @@
-//! Host runner: `macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--strict] [--dump ADDR:WORDS]... [--bind-list <exports file> [LIB]] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
+//! Host runner: `macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--tier T] [--prof] [--strict] [--dump ADDR:WORDS]... [--bind-list <exports file> [LIB]] [--rsrc <resource fork file>] [--data <data fork file>] <file>`.
 //! `<file>` is `--fixture` (a built-in MacBinary application importing the classic startup calls), a bare PEF, or a classic Mac application (MacBinary, AppleSingle, or an AppleDouble header file whose data
 //! fork is the sibling file with the `%` / `._` prefix removed, or `--data`). It instantiates the fragment (sections placed,
 //! imports bound by symbol name onto the mac68k Toolbox handlers, relocations applied) and prints what it did. `--run`
 //! then EXECUTES it on the PowerPC interpreter against a recording UI (up to `--insns`, default 50 million) and prints the
 //! Toolbox calls it made and why it stopped; `--census` does the same and ends with the first NEXT-NEEDED (the static
 //! import census, or the call the run stopped at) and exits 0; `--strict` fails the instantiation on an unresolved strong
-//! import (exit 3).
+//! import (exit 3). `--tier T` picks the PowerPC execution tier (retro_ppc::Tier::parse); `--prof` prints a
+//! `[PPC-PROF insns= native_calls= elapsed_us= mips= tier=]` line for the run (elapsed = the run loop alone).
 use guestui_abi::RecordingGuestUi;
 use macppc_engine::census::Census;
 use macppc_engine::source::fragment_bytes;
@@ -20,14 +21,17 @@ fn sibling_data_fork(p: &Path) -> Option<PathBuf> {
     q.is_file().then_some(q)
 }
 
-fn usage() -> ! { eprintln!("usage: macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--strict] [--data <data fork file>] (--fixture | <file>)"); std::process::exit(2) }
+fn usage() -> ! { eprintln!("usage: macppc-run [--census] [--run] [--insns N] [--pcs N] [--libdir DIR] [--idle TICKS] [--tier T] [--prof] [--strict] [--data <data fork file>] (--fixture | <file>)"); std::process::exit(2) }
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut dump: Vec<(u32, u32)> = Vec::new();
     let (mut census, mut strict, mut data, mut run, mut insns, mut rsrc, mut pcs, mut libdir, mut idle) = (false, false, None, false, 50_000_000u64, None, 0usize, None::<PathBuf>, 0u32);
+    let (mut tier, mut prof) = (None::<retro_ppc::Tier>, false);
     while let Some(a) = args.first().cloned() {
         match a.as_str() {
+            "--tier" => { args.remove(0); if args.is_empty() { usage() } tier = Some(retro_ppc::Tier::parse(&args.remove(0)).unwrap_or_else(|| usage())); }
+            "--prof" => { prof = true; args.remove(0); }
             "--census" => { census = true; args.remove(0); }
             "--strict" => { strict = true; args.remove(0); }
             "--rsrc" => { args.remove(0); if args.is_empty() { usage() } rsrc = Some(PathBuf::from(args.remove(0))); }
@@ -119,6 +123,8 @@ fn main() {
     let mut stopped_at = None;
     if (run || census) && started {
         m.trace_pcs(pcs);
+        if let Some(t) = tier { m.exec().tier = t; }
+        let t0 = std::time::Instant::now();
         let (mut step, mut n) = m.run_loop(insns);
         // --idle T: a program waiting for an event (or a timeout) is given T more ticks of virtual time and resumed, up to the instruction budget in total
         let mut rounds = 0u32;
@@ -128,6 +134,7 @@ fn main() {
             let (st, k) = m.run_loop(insns - n);
             step = st; n += k;
         }
+        let elapsed_us = t0.elapsed().as_micros() as u64;
         for l in &m.mac.log { println!("  | {l}"); }
         for l in &m.mac.refused { println!("  | REFUSED {l}"); }
         let why = match &step {
@@ -142,6 +149,7 @@ fn main() {
             for i in 0..*n { print!(" {:08x}", m.mac.mem.read_u32(at + 4 * i).unwrap_or(0xDEAD_DEAD)); }
             println!();
         }
+        if prof { let t = m.exec().tier; println!("{}", m.exec().prof.line(elapsed_us, t)); }
         if pcs > 0 {
             if let Some(c) = m.cpu() {
                 println!("recent pcs (oldest first): {}", c.recent_pcs().map(|p| format!("{p:#x}")).collect::<Vec<_>>().join(" "));

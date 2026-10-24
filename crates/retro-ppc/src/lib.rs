@@ -37,6 +37,9 @@ mod fpmem;
 mod sys;
 mod x31;
 mod names;
+pub mod census;
+mod tier;
+pub use tier::{Exec, Prof, Tier};
 pub use cpu::{Cpu, CpuContext, Reg, RunStats, Trap, XER_CA, XER_OV, XER_SO};
 use retro_guest_mem::GuestMem;
 

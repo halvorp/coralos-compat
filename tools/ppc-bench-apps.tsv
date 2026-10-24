@@ -1,0 +1,12 @@
+#name	path	libdir	insns	note
+# Corpus programs crates/retro-ppc-bench runs (paths relative to MAC_CORPUS_ROOT, default /data/build/corpus-bin; TEST INPUT ONLY, never committed).
+# libdir '-' = none. A row whose file is absent is SKIPPED with a line saying so.
+warcraft3-roc-startup	mac/warcraft3/apps/roc-Warcraft_III.bin	mac/warcraft3/libs	950000	the startup proper: up to where its two threads begin to idle around its own "needs Mac OS 9" StandardAlert (~960k)
+warcraft3-roc-census	mac/warcraft3/apps/roc-Warcraft_III.bin	mac/warcraft3/libs	50000000	as corpus-census-mac.py runs it (50M, idle 6): mostly that idle loop
+retro68-FixedBenchmark	mac-retro68/ppc/FixedBenchmark.bin	-	20000000	Retro68 sample
+retro68-Raytracer	mac-retro68/ppc/Raytracer.bin	-	20000000	Retro68 sample
+retro68-Raytracer2	mac-retro68/ppc/Raytracer2.bin	-	20000000	Retro68 sample
+retro68-HelloWorld	mac-retro68/ppc/HelloWorld.bin	-	20000000	Retro68 sample
+retro68-HelloWorldCpp	mac-retro68/ppc/HelloWorldCpp.bin	-	20000000	Retro68 sample
+retro68-WDEFShell	mac-retro68/ppc/WDEFShell.bin	-	20000000	Retro68 sample
+retro68-Dialog	mac-retro68/ppc/Dialog.bin	-	20000000	Retro68 sample (stops at its modal dialog)

@@ -11,25 +11,33 @@ impl Cpu {
     pub(crate) fn privileged(&self, w: W, what: &'static str) -> Trap { Trap::Privileged { pc: self.pc, word: w.0, what } }
 }
 
-pub(crate) fn step<H: Host>(host: &mut H, cpu: &mut Cpu) -> R {
+/// One instruction (or one native hook). Ok(true) when it was a native hook.
+pub(crate) fn step<H: Host>(host: &mut H, cpu: &mut Cpu) -> Result<bool, Trap> {
     let pc = cpu.pc;
     cpu.note_pc(pc);
     cpu.redirected = false;
     if cpu.natives.contains(&pc) {
-        if !host.native(cpu, pc) { return Err(Trap::NativeUnhandled { addr: pc }); }
-        if !cpu.redirected { cpu.pc = cpu.lr & !3; }
-        cpu.tb = cpu.tb.wrapping_add(1);
-        return Ok(());
+        native(host, cpu, pc)?;
+        return Ok(true);
     }
     let word = host.mem().read_u32(pc).map_err(|_| Trap::BusFault { pc, addr: pc, write: false })?;
     cpu.next = pc.wrapping_add(4);
     execute(host, cpu, W(word))?;
     cpu.tb = cpu.tb.wrapping_add(1);
     if !cpu.redirected { cpu.pc = cpu.next; }
+    Ok(false)
+}
+
+/// The native hook bound at `pc` (counted as one retired instruction): returns through LR unless the host redirected.
+pub(crate) fn native<H: Host>(host: &mut H, cpu: &mut Cpu, pc: u32) -> R {
+    cpu.redirected = false;
+    if !host.native(cpu, pc) { return Err(Trap::NativeUnhandled { addr: pc }); }
+    if !cpu.redirected { cpu.pc = cpu.lr & !3; }
+    cpu.tb = cpu.tb.wrapping_add(1);
     Ok(())
 }
 
-fn execute<H: Host>(host: &mut H, cpu: &mut Cpu, w: W) -> R {
+pub(crate) fn execute<H: Host>(host: &mut H, cpu: &mut Cpu, w: W) -> R {
     match w.op() {
         3 => int::twi(cpu, w),
         7 | 8 | 10 | 11 | 12 | 13 | 14 | 15 | 20 | 21 | 23 | 24..=29 => int::exec_d(cpu, w),

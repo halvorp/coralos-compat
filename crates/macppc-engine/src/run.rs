@@ -62,6 +62,8 @@ pub struct Runtime {
     pub(crate) cf: crate::cf::CfState,
     pub(crate) cfx: crate::cf_more::CfxState,
     pub(crate) carbon: crate::carbon::CarbonState,
+    /// The PowerPC execution tier and its counters ([`retro_ppc::Exec`]); outlives CPU context switches.
+    pub(crate) exec: retro_ppc::Exec,
     pub(crate) ae: crate::ae_c::AeState,
     pub(crate) streams: alloc::collections::BTreeMap<u32, crate::stdio::Stream>,
     pub(crate) rand_seeded: bool,
@@ -123,6 +125,8 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn cpu(&self) -> Option<&Cpu> { self.rt.cpu.as_ref() }
     /// Record the program counters of the last `n` instructions (0 = off), read back with `cpu().recent_pcs()` after a stop.
     pub fn trace_pcs(&mut self, n: usize) { if let Some(c) = self.rt.cpu.as_mut() { c.trace_pcs(n); } }
+    /// The PowerPC execution tier, its profile counters and census ([`retro_ppc::Exec`]).
+    pub fn exec(&mut self) -> &mut retro_ppc::Exec { &mut self.rt.exec }
     /// The refusal or trap that ended the program, if one did.
     pub fn fault(&self) -> Option<&str> { self.rt.fault.as_deref() }
 
@@ -151,7 +155,9 @@ impl<U: GuestUi> MacPpc<U> {
             self.rt.wait_dialog = false;
         }
         self.sync_natives(&mut cpu);
-        let stats = retro_ppc::resume(self, &mut cpu, budget);
+        let mut exec = core::mem::take(&mut self.rt.exec);
+        let stats = exec.resume(self, &mut cpu, budget);
+        self.rt.exec = exec;
         mac68k_engine::qd::flush(&mut self.mac);
         if let Some(t) = stats.trap {
             let mut why = format!("PowerPC fault: {t}");
