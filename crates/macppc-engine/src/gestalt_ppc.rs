@@ -16,6 +16,8 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
         b"cput" => 0x108,
         b"cfrg" => 1,
         b"altv" => 0,
+        // gestaltThreadMgrAttr: bit 0 gestaltThreadMgrPresent, bit 2 gestaltThreadsLibraryPresent (ThreadsLib is provided); bit 1 (exact-match support) is not claimed
+        b"thds" => 0b101,
         _ => return None,
     })
 }
@@ -26,7 +28,6 @@ pub const UNANSWERED: &[(&[u8; 4], &str)] = &[
     (b"cbon", "CarbonLib is bound to the Toolbox table by name only; there is no Carbon event loop or window model"),
     (b"appr", "the Appearance Manager is not provided"),
     (b"nav ", "Navigation Services is not provided"),
-    (b"thds", "the Thread Manager is not provided"),
     (b"mpsv", "Multiprocessing Services is not provided"),
     (b"mach", "no PowerPC machine model is claimed (the shared value names a 68k Macintosh II)"),
     (b"proc", "'proc' is the 68k processor family; the PowerPC question is 'cput'"),

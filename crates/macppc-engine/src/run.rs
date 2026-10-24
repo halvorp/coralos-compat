@@ -34,7 +34,7 @@ pub const INIT_DONE: &str = "$InitDone";
 pub struct Runtime {
     cpu: Option<Cpu>,
     /// Glue cells below this index are already bound as natives in the CPU.
-    bound: usize,
+    pub(crate) bound: usize,
     /// Set by a `WaitNextEvent` that parked the CPU: the event mask a queued event must match to resume.
     pub(crate) wait_mask: Option<u16>,
     /// The tick at which that wait times out (`WaitNextEvent`'s sleep; none for "until an event comes", sleep >= 0x50000).
@@ -52,6 +52,8 @@ pub struct Runtime {
     /// `atexit` handlers (TVectors), in registration order.
     pub(crate) atexit: alloc::vec::Vec<u32>,
     /// Open `FILE` streams by the FILE block's guest address ([`crate::stdio`]).
+    /// The task table ([`crate::sched`]).
+    pub(crate) sched: crate::sched::Sched,
     pub(crate) streams: alloc::collections::BTreeMap<u32, crate::stdio::Stream>,
     pub(crate) rand_seeded: bool,
     pub(crate) errno: u32,
@@ -197,6 +199,11 @@ impl<U: GuestUi> Host for MacPpc<U> {
                 self.sync_natives(cpu);
                 return true;
             }
+            Some(Binding::Native(Native::Thread(f))) => {
+                if let Err(why) = self.thread_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
+                self.sync_natives(cpu);
+                return true;
+            }
             Some(Binding::Native(Native::Stdio(f))) => {
                 if let Err(why) = self.stdio_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
                 self.sync_natives(cpu);
@@ -230,7 +237,7 @@ impl<U: GuestUi> Host for MacPpc<U> {
         match outcome {
             GlueOutcome::Return => {}
             GlueOutcome::Exit => cpu.halt(),
-            GlueOutcome::Idle => { cpu.block(); cpu.set_pc(addr); }
+            GlueOutcome::Idle => { if !self.idle_yield(cpu, addr) { cpu.block(); cpu.set_pc(addr); } }
             GlueOutcome::Refused(why) => { self.rt.fault = Some(why); cpu.halt(); }
         }
         self.sync_natives(cpu);

@@ -72,6 +72,14 @@ impl<U: GuestUi> MacPpc<U> {
                     b
                 }
             },
+            crate::threads::NAME => match crate::stdclib::threads_lookup(name) {
+                Some(b) => { self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
+                None => {
+                    let b = Binding::Unbound(alloc::format!("{name} is not in the part of ThreadsLib this engine provides"));
+                    self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
+                    b
+                }
+            },
             crate::stdclib::MATH_NAME => match crate::stdclib::math_lookup(name) {
                 Some(b) => { self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
                 None => {

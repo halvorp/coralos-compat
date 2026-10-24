@@ -96,7 +96,7 @@ fn the_powerpc_gestalt_profile_answers_only_what_is_true_and_names_what_it_will_
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     let sel = |s: &[u8; 4]| u32::from_be_bytes(*s);
     // true of this engine: PowerPC, a G3-class (750) processor, CFM present, no AltiVec
-    for (s, v) in [(b"sysa", 2u32), (b"cput", 0x108), (b"cfrg", 1), (b"altv", 0)] {
+    for (s, v) in [(b"sysa", 2u32), (b"cput", 0x108), (b"cfrg", 1), (b"altv", 0), (b"thds", 5)] {
         m.mac.mem.write_u32(OUT, 0xFFFF).unwrap();
         assert_eq!(call(&mut m, "Gestalt", &[sel(s), OUT]), 0);
         assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), v, "{}", String::from_utf8_lossy(s));
@@ -109,7 +109,7 @@ fn the_powerpc_gestalt_profile_answers_only_what_is_true_and_names_what_it_will_
         let name = String::from_utf8_lossy(*s).to_string();
         assert!(m.mac.log.iter().any(|l| l.contains(&format!("Gestalt '{name}'")) && l.contains(why)), "{name}: {:?}", m.mac.log.last());
     }
-    for s in ["cbon", "appr", "nav ", "thds", "mpsv", "sysv"] { assert!(unanswered(*s.as_bytes().first_chunk::<4>().unwrap()).is_some(), "{s}"); }
+    for s in ["cbon", "appr", "nav ", "mpsv", "sysv"] { assert!(unanswered(*s.as_bytes().first_chunk::<4>().unwrap()).is_some(), "{s}"); }
     // NEGATIVE CONTROL: nothing is both answered and unanswered
     for (s, _) in UNANSWERED { assert!(answer(**s).is_none(), "{}", String::from_utf8_lossy(*s)); }
 }

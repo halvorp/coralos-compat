@@ -42,6 +42,9 @@ pub fn lookup(name: &str) -> Option<Binding> {
     })
 }
 
+/// How `name` is served by ThreadsLib.
+pub fn threads_lookup(name: &str) -> Option<Binding> { crate::threads::ThreadFn::by_name(name).map(|f| Binding::Native(Native::Thread(f))) }
+
 /// The library name for MathLib imports.
 pub const MATH_NAME: &str = "MathLib";
 
