@@ -4,7 +4,7 @@ garden-writenow-2.2	68k	mac/writenow/fx/z22_1/WriteNow 2.2.bin	WriteNow 2.2, Dis
 garden-writenow-installer-4.0	68k	mac/writenow/fx40_1/Install WriteNow 4.0.bin	WriteNow 4.0 installer app only; the payload is a proprietary installer archive unar cannot open
 garden-writenow-updater-4.02	68k	mac/writenow/fx/Updaters/WriteNow4.01 to 4.02.bin	WriteNow 4.0.1 to 4.0.2 updater
 garden-macwrite-4.6	68k	mac/macwrite/fx46/MacWrite.bin	MacWrite 4.6 from macwrite_4_6.zip
-garden-macwrite-4.5	68k	mac/macwrite/u45/MacWrite.rsrc	MacWrite 4.5 (StuffIt, AppleDouble .rsrc by unar)
+garden-macwrite-4.5	68k	mac/macwrite/u45/MacWrite.rsrc	MacWrite 4.5 (StuffIt, AppleDouble .rsrc by unar)	mac-plus
 garden-macpaint-2.1F	68k	mac/macpaint/u21/MacPaint 2.1F.rsrc	MacPaint 2.1F (StuffIt, AppleDouble .rsrc by unar)
 garden-resedit-2.1.3	68k	mac/resedit/u213/resedit_2.1.3.sea_/ResEdit.rsrc	ResEdit 2.1.3 (MacBinary self-extractor unpacked by unar)
 garden-simpletext-1.4	68k	mac/simpletext/ux/SimpleText.rsrc	SimpleText 1.4 (StuffIt 5 via unar)

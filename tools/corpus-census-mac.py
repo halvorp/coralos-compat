@@ -6,11 +6,11 @@ Usage: corpus-census-mac.py APPS.tsv [--out FILE]"""
 import json, os, re, subprocess, sys
 ROOT = os.environ.get("MAC_CORPUS_ROOT", "/data/build/corpus-bin")
 BIN = os.environ.get("RETRO_BIN", "/data/wt/compat-corpus/target/release")
-def run(arch, path):
+def run(arch, path, machine=""):
     cmd = [BIN + ("/mac68k-run" if arch == "68k" else "/macppc-run"), "--census"]
     if arch == "68k":
         cmd += ["--insns", os.environ.get("MAC_INSNS", "50000000")]   # compressed resources run a guest decompressor: 5M is not enough
-        if os.environ.get("MAC_MACHINE"): cmd += ["--machine", os.environ["MAC_MACHINE"]]
+        if machine or os.environ.get("MAC_MACHINE"): cmd += ["--machine", machine or os.environ["MAC_MACHINE"]]   # the TSV's 5th column (a 68000-era app: mac-plus) wins
         if os.environ.get("MAC_IDLE", "0") != "0": cmd += ["--idle", os.environ["MAC_IDLE"]]   # virtual 60 Hz ticks passed while the app waits for an event (null events)   # a machine profile (mac-ii default, mac-plus, mac-se)
     if arch == "ppc":
         cmd += ["--run", "--insns", "50000000", "--idle", os.environ.get("MAC_IDLE", "6")]
@@ -26,7 +26,7 @@ def load_groups():
 
 def census(app):
     path = app["path"] if app["path"].startswith("/") else os.path.join(ROOT, app["path"])
-    lines, err = run(app["arch"], path)
+    lines, err = run(app["arch"], path, app.get("machine", ""))
     nxt = next((l.split(" ", 1)[1] for l in lines if l.startswith("NEXT-NEEDED")), "?")
     ran = next((l for l in lines if l.startswith("ran ")), (err[:1] or [""])[0])
     traps = {}
@@ -59,7 +59,7 @@ if __name__ == "__main__":
     for l in open(a[0]):
         f = l.rstrip("\n").split("\t")
         if len(f) < 3 or l.startswith("#"): continue
-        app = dict(name=f[0], arch=f[1], path=f[2], note=f[3] if len(f) > 3 else "")
+        app = dict(name=f[0], arch=f[1], path=f[2], note=f[3] if len(f) > 3 else "", machine=f[4] if len(f) > 4 else "")
         full = app["path"] if app["path"].startswith("/") else os.path.join(ROOT, app["path"])
         if not os.path.exists(full): print("SKIP (binary absent): " + full, file=sys.stderr); continue
         r = census(app); res.append(r); print(json.dumps(r), flush=True)
