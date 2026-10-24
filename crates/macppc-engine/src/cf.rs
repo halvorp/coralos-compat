@@ -13,7 +13,7 @@ use guestui_abi::GuestUi;
 use retro_ppc::Cpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CfFn { MakeConstantString, CreateWithCString, CreateWithPascalString, Retain, Release, GetLength, GetCString, GetPascalString, GetCStringPtr, GetCharacterAtIndex, NoBundle }
+pub enum CfFn { MakeConstantString, CreateWithCString, CreateWithPascalString, Retain, Release, GetLength, GetCString, GetPascalString, GetCStringPtr, GetCharacterAtIndex, NoBundle, CreateWithFormat }
 
 impl CfFn {
     pub fn by_name(name: &str) -> Option<CfFn> {
@@ -23,7 +23,7 @@ impl CfFn {
             "CFRetain" => Retain, "CFRelease" => Release, "CFStringGetLength" => GetLength, "CFStringGetCString" => GetCString, "CFStringGetPascalString" => GetPascalString,
             // There are no bundles on this machine (no Mac OS X, no frameworks on disk): the lookups answer NULL, which is their documented "not found" answer
             "CFBundleGetBundleWithIdentifier" | "CFBundleGetMainBundle" | "CFBundleGetIdentifier" | "CFBundleGetFunctionPointerForName" | "CFBundleGetFunction" => NoBundle,
-            "CFStringGetCStringPtr" => GetCStringPtr, "CFStringGetCharacterAtIndex" => GetCharacterAtIndex,
+            "CFStringCreateWithFormat" => CreateWithFormat, "CFStringGetCStringPtr" => GetCStringPtr, "CFStringGetCharacterAtIndex" => GetCharacterAtIndex,
             _ => return None,
         })
     }
@@ -67,6 +67,20 @@ impl<U: GuestUi> MacPpc<U> {
                 let s = self.get_bytes(a1 + 1, u32::from(n), "CFStringCreateWithPascalString")?;
                 self.cf_new(s, false)
             }
+            // CFStringCreateWithFormat(alloc, formatOptions, CFStringRef format, ...) (spec: macos9-specs/CoreFoundationLib/CFStringCreateWithFormat): the printf engine over the variadic
+            // arguments (integers from r6.., doubles from the FPRs and the parameter area), plus %@ for CFStrings; formatOptions is ignored. A NULL or non-string format gives NULL.
+            CreateWithFormat => match self.rt.cf.string(a2).map(<[u8]>::to_vec) {
+                None => 0,
+                Some(fmt) => {
+                    let tmp = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, fmt.len() as u32 + 1, true).map_err(|_| String::from("CFStringCreateWithFormat: out of memory"))?;
+                    let mut b = fmt; b.push(0);
+                    self.mac.mem.write_bytes(tmp, &b).map_err(|_| String::from("CFStringCreateWithFormat: format buffer"))?;
+                    let out = self.format_c(cpu, 2, tmp);
+                    let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, tmp);
+                    let text = out?;
+                    self.cf_new(text, false)
+                }
+            },
             Retain if self.cfx_adjust(a0, 1).is_some() => a0,
             Release if self.cfx_adjust(a0, -1).is_some() => 0,
             Retain => { let e = self.rt.cf.strings.get_mut(&a0).ok_or_else(|| bad("CFRetain", a0))?; e.1 += 1; a0 }

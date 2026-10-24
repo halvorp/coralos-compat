@@ -123,6 +123,20 @@ fn arrays_dictionaries_numbers_urls_and_retain_counts() {
     assert!(refused(&mut m, "CFDictionaryGetCount", &[d]).contains("not a CFDictionary"), "released to zero: gone");
     // allocator constants are data imports
     assert!(matches!(m.bind_from("CarbonLib", "kCFAllocatorDefault"), Binding::CData(4)));
-    // unbound on purpose: the variadic format call and property-list parsing stop by name
-    assert!(matches!(m.bind_from("CarbonLib", "CFStringCreateWithFormat"), Binding::Unbound(_)));
+    // spec vectors for CFStringCreateWithFormat (macos9-specs/CoreFoundationLib/CFStringCreateWithFormat)
+    let f = cfstr(&mut m, "%d-%d");
+    let r = call(&mut m, "CFStringCreateWithFormat", &[0, 0, f, 3, 4]);
+    assert_eq!(text(&m, r), "3-4");
+    let (f, a) = (cfstr(&mut m, "%@ x"), cfstr(&mut m, "a"));
+    let r = call(&mut m, "CFStringCreateWithFormat", &[0, 0, f, a]);
+    assert_eq!(text(&m, r), "a x");
+    let f = cfstr(&mut m, "100%%");
+    let r = call(&mut m, "CFStringCreateWithFormat", &[0, 0, f]);
+    assert_eq!(text(&m, r), "100%");
+    // NEGATIVE controls: a NULL format gives NULL; %@ of something that is no CFString is refused by name
+    assert_eq!(call(&mut m, "CFStringCreateWithFormat", &[0, 0, 0]), 0);
+    let f = cfstr(&mut m, "%@");
+    assert!(refused(&mut m, "CFStringCreateWithFormat", &[0, 0, f, 0x4321]).contains("not a CFString"));
+    // still unbound on purpose: property-list parsing stops by name
+    assert!(matches!(m.bind_from("CarbonLib", "CFPropertyListCreateFromXMLData"), Binding::Unbound(_)));
 }

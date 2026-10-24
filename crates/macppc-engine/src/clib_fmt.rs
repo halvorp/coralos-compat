@@ -134,6 +134,14 @@ impl<U: GuestUi> MacPpc<U> {
                     fpr += 1; k += 2;
                     pad(float_text(v, conv, &sp), &sp, v.is_finite())
                 }
+                // CoreFoundation's %@ (used by CFStringCreateWithFormat): the text of a CFString argument; any other object is refused by name
+                b'@' => {
+                    let p = word!();
+                    if p == 0 { pad(b"(null)".to_vec(), &sp, false) } else {
+                        let t = self.cf_bytes(p).ok_or_else(|| format!("CFStringCreateWithFormat: %@ argument {p:#x} is not a CFString this engine made (other objects' descriptions are not modelled)"))?.to_vec();
+                        pad(t, &sp, false)
+                    }
+                }
                 b'n' => return Err("printf: %n is refused (it writes through a pointer the format chooses)".into()),
                 other => return Err(format!("printf: unsupported conversion '%{}'", char::from(other))),
             };
