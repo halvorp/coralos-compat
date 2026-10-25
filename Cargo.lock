@@ -69,6 +69,7 @@ dependencies = [
  "mac68k-engine",
  "macppc-engine",
  "retro-common",
+ "retro-gl-abi",
  "retro-guest-mem",
  "retro-pef",
  "retro-ppc",
@@ -88,6 +89,10 @@ dependencies = [
  "retro-guest-mem",
  "retro-volume",
 ]
+
+[[package]]
+name = "retro-gl-abi"
+version = "0.1.0"
 
 [[package]]
 name = "retro-guest-mem"
