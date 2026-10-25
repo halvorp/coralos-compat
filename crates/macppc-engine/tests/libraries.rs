@@ -46,24 +46,25 @@ fn carbonlib_and_the_toolbox_sublibraries_resolve_through_the_one_toolbox_table_
 
 #[test]
 fn every_toolbox_library_is_also_a_provided_library() {
-    assert!(!macppc_engine::natives::provided("OpenGLLibrary"), "a library the engine does not provide is not claimed");
+    assert!(!macppc_engine::natives::provided("Apple;Carbon;Multimedia"), "a library the engine does not provide is not claimed");
+    assert!(macppc_engine::natives::provided("OpenGLLibrary"), "OpenGL is provided since the guest-GL slice: its names are refused or served by the contract table");
 }
 
 #[test]
 fn a_symbol_of_an_unprovided_library_refuses_by_name_when_called_not_at_load() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     // 3 imports: two from a library nobody provides (one strong function, one weak), one served; the fragment LOADS
-    let frag = load(&mut m, &[("OpenGLLibrary", false, &[("glBegin", F, false)]), ("OpenGLUtility", true, &[("gluPerspective", F, false)]), ("CarbonLib", false, &[("NewPtr", F, false)])]);
-    assert!(matches!(&frag.imports[0].status, ImportStatus::Unbound(w) if w.contains("OpenGLLibrary is not provided")));
+    let frag = load(&mut m, &[("Apple;Carbon;Multimedia", false, &[("NewMovie", F, false)]), ("QuickTimeLib", true, &[("EnterMovies", F, false)]), ("CarbonLib", false, &[("NewPtr", F, false)])]);
+    assert!(matches!(&frag.imports[0].status, ImportStatus::Unbound(w) if w.contains("Apple;Carbon;Multimedia is not provided")));
     assert!(matches!(frag.imports[1].status, ImportStatus::WeakAbsent(_)), "{:?}", frag.imports[1].status);
     assert!(matches!(frag.imports[2].status, ImportStatus::Bound(_)));
     let (o, _) = call(&mut m, &frag, 0, &[]);
     match o {
-        GlueOutcome::Refused(why) => assert!(why.contains("NEXT-NEEDED") && why.contains("glBegin") && why.contains("OpenGLLibrary"), "{why}"),
+        GlueOutcome::Refused(why) => assert!(why.contains("NEXT-NEEDED") && why.contains("NewMovie") && why.contains("Apple;Carbon;Multimedia"), "{why}"),
         other => panic!("expected a named refusal, got {other:?}"),
     }
     // the refusal is also on the engine's record, and a served import still works afterwards
-    assert!(m.mac.refused.iter().any(|r| r.contains("glBegin")), "{:?}", m.mac.refused);
+    assert!(m.mac.refused.iter().any(|r| r.contains("NewMovie")), "{:?}", m.mac.refused);
     assert_eq!(call(&mut m, &frag, 2, &[16]).0, GlueOutcome::Return);
 }
 

@@ -50,6 +50,8 @@ pub struct MacPpc<U: GuestUi> {
     pub(crate) sys: crate::sysmisc_c::SysState,
     pub(crate) dsp: crate::dsp_c::DspState,
     pub(crate) tm: crate::tm_c::TmState,
+    /// Guest OpenGL: AGL/GL calls encoded for `retro-gl.engine` ([`crate::gl_c`]).
+    pub gl: crate::gl_c::GlState,
     pub(crate) qa: crate::qdacc_c::QaState,
     pub(crate) isp: crate::isp_c::IspState,
     /// Everything the program wrote with `printf`/`puts`/`putchar`: there is no console device, so the bytes are kept here (and logged).
@@ -81,7 +83,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), qa: Default::default(), isp: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
     }
 
     /// Make a PEF library available under `name` (the fragment name an import table uses). Instantiated, with its own imports and init routine, the first time something imports from it.
@@ -185,6 +187,14 @@ impl<U: GuestUi> MacPpc<U> {
                 self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
                 b
             }
+            l if crate::gl_c::provided(l) => match crate::gl_c::GlFn::by_name(name) {
+                Some(f) => { let b = Binding::Native(crate::symbols::Native::Gl(f)); self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
+                None => {
+                    let b = Binding::Unbound(alloc::format!("{name} is not in the contract table of {l} (heirloom-gl-abi)"));
+                    self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
+                    b
+                }
+            },
             l if crate::natives::provided(l) => self.bind(name),
             l if self.libs.contains_key(l) => self.export_binding(l, name),
             // Universal Procedure Pointer constructors are library glue everywhere (CarbonLib exports one per callback type, including the networking and multimedia ones

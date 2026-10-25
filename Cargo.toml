@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/retro-guest-mem", "crates/retro-m68k", "crates/retro-hunk", "crates/guestui-abi", "crates/retro-common", "crates/amiga68k-engine", "crates/mac68k-engine", "crates/retro-raster", "crates/retro-theme", "crates/retro-resfork", "crates/retro-ppc", "crates/retro-present", "crates/retro-translate", "crates/retro-pef", "crates/macppc-engine", "crates/retro-volume", "crates/heirloom-fmt-sis", "crates/heirloom-mem-paged32", "crates/heirloom-fmt-e32"]
+members = ["crates/retro-guest-mem", "crates/retro-m68k", "crates/retro-hunk", "crates/guestui-abi", "crates/retro-common", "crates/amiga68k-engine", "crates/mac68k-engine", "crates/retro-raster", "crates/retro-theme", "crates/retro-resfork", "crates/retro-ppc", "crates/retro-present", "crates/retro-translate", "crates/retro-pef", "crates/macppc-engine", "crates/retro-volume", "crates/heirloom-fmt-sis", "crates/heirloom-mem-paged32", "crates/heirloom-fmt-e32", "crates/heirloom-gl-abi"]
 exclude = ["crates/retro-ppc-oracle", "crates/retro-ppc-bench"]
 
 [workspace.package]

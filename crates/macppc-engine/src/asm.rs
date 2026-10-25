@@ -31,6 +31,10 @@ impl Asm {
     pub fn label(&mut self, name: &'static str) -> &mut Self { self.labels.insert(name, self.words.len()); self }
 
     pub fn li(&mut self, rt: u32, v: i32) -> &mut Self { self.push(d(14, rt, 0, v)) }
+    /// `lis rt,v` = `addis rt,0,v`.
+    pub fn lis(&mut self, rt: u32, v: i32) -> &mut Self { self.push(d(15, rt, 0, v)) }
+    /// `ori ra,rs,v`.
+    pub fn ori(&mut self, ra: u32, rs: u32, v: i32) -> &mut Self { self.push(d(24, rs, ra, v)) }
     pub fn addi(&mut self, rt: u32, ra: u32, v: i32) -> &mut Self { self.push(d(14, rt, ra, v)) }
     pub fn lwz(&mut self, rt: u32, off: i32, ra: u32) -> &mut Self { self.push(d(32, rt, ra, off)) }
     pub fn stw(&mut self, rs: u32, off: i32, ra: u32) -> &mut Self { self.push(d(36, rs, ra, off)) }

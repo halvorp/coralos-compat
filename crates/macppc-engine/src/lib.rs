@@ -48,7 +48,7 @@ pub mod qdacc_c;
 pub mod script_c;
 pub mod stdalert_c;
 pub mod sysmisc_c;
-pub mod tm_c;
+pub mod tm_c; pub mod gl_c;
 pub mod tsm_c;
 pub mod gworld;
 pub mod invoke_c;

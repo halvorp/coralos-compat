@@ -13,6 +13,7 @@ retro-volume = { path = "../retro-volume" }
 retro-resfork = { path = "../retro-resfork" }
 mac68k-engine = { path = "../mac68k-engine" }
 guestui-abi = { path = "../guestui-abi" }
+heirloom-gl-abi = { path = "../heirloom-gl-abi" }
 retro-ppc = { path = "../retro-ppc" }
 libm = "0.2"
 

@@ -72,6 +72,8 @@ pub enum Native { StandardAlert, GetSharedLibrary, FindSymbol, CloseConnection, 
     Sys(crate::sysmisc_c::SysFn),
     /// DrawSprocket, windowed ([`crate::dsp_c`]).
     Dsp(crate::dsp_c::DspFn),
+    /// An OpenGL / AGL / glm / GLU entry point, by contract-table index ([`crate::gl_c`]); refused by name unless the table says implemented.
+    Gl(crate::gl_c::GlFn),
     /// The Time Manager ([`crate::tm_c`]).
     Tm(crate::tm_c::TmFn),
     /// Carbon QuickDraw accessors and small QuickDraw/OS routines ([`crate::qdacc_c`]).
@@ -134,6 +136,7 @@ impl Native {
             n if crate::menu_c::MnFn::by_name(n).is_some() => Native::Mn(crate::menu_c::MnFn::by_name(n).expect("checked")),
             n if crate::sysmisc_c::SysFn::by_name(n).is_some() => Native::Sys(crate::sysmisc_c::SysFn::by_name(n).expect("checked")),
             n if crate::dsp_c::DspFn::by_name(n).is_some() => Native::Dsp(crate::dsp_c::DspFn::by_name(n).expect("checked")),
+            n if crate::gl_c::GlFn::by_name(n).is_some() => Native::Gl(crate::gl_c::GlFn::by_name(n).expect("checked")),
             n if crate::tm_c::TmFn::by_name(n).is_some() => Native::Tm(crate::tm_c::TmFn::by_name(n).expect("checked")),
             n if crate::qdacc_c::QaFn::by_name(n).is_some() => Native::Qa(crate::qdacc_c::QaFn::by_name(n).expect("checked")),
             n if crate::invoke_c::InvokeFn::by_name(n).is_some() => Native::Invoke(crate::invoke_c::InvokeFn::by_name(n).expect("checked")),

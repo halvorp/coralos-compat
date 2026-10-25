@@ -1,0 +1,6 @@
+[package]
+name = "heirloom-gl-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Guest OpenGL contract as data (the GL/AGL entry points Warcraft III imports, derived GL_VERSION/GL_EXTENSIONS) and the version-first little-endian command-ring ABI between a PPC engine and heirloom-gl.engine (pure, no_std + alloc)"

@@ -56,6 +56,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-gl-abi"
+version = "0.1.0"
+
+[[package]]
 name = "heirloom-mem-paged32"
 version = "0.1.0"
 
@@ -86,6 +90,7 @@ name = "macppc-engine"
 version = "0.1.0"
 dependencies = [
  "guestui-abi",
+ "heirloom-gl-abi",
  "libm",
  "mac68k-engine",
  "macppc-engine",
