@@ -4,6 +4,7 @@ use crate::layout::STUB_SVC_BASE;
 use crate::loader::Process;
 use crate::natives::{self, NativeOutcome};
 
+#[derive(Debug)]
 pub enum Outcome {
     Exited(i32),
     Refused(alloc::string::String),

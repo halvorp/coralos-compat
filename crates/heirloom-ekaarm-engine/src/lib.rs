@@ -5,6 +5,7 @@ extern crate alloc;
 pub mod mem;
 pub mod layout;
 pub mod loader;
+pub mod heap;
 pub mod stubs;
 pub mod natives;
 pub mod run;

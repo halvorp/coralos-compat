@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
-use heirloom_cpu_arm::{Config, Cpu, Unaligned};
+use heirloom_cpu_arm::{Config, Cpu, Memory, Unaligned};
 use heirloom_fmt_e32::{E32Error, E32Image, OrdinalTable};
-use heirloom_mem_paged32::{Prot, VmError};
+use heirloom_mem_paged32::{ChunkId, Prot, VmError};
 use crate::layout::{self, CODE_BASE, DATA_BASE, EXIT_STUB, HEAP_BASE, PAGE, STACK_TOP, STUB_BASE};
 use crate::mem::GuestMem;
 use crate::stubs::{self, Stub};
@@ -11,6 +11,8 @@ pub struct Process {
     pub mem: GuestMem,
     pub stubs: Vec<Stub>,
     pub insns: u64,
+    pub heap: Option<crate::heap::Heap>,
+    pub heap_chunk_id: ChunkId,
 }
 
 #[derive(Debug)]
@@ -121,11 +123,56 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
     }
 
     // EKA2 runs user code with SCTLR.U=1 A=0 and enables VFP for every thread on ARM11 (S60 3rd/5th edition hardware)
-    let mut cpu = Cpu::new(Config { unaligned: Unaligned::Armv6, vfp: true });
-    cpu.regs[13] = STACK_TOP & !7;
-    cpu.regs[14] = EXIT_STUB;
-    cpu.regs[0..4].copy_from_slice(&[0; 4]);
-    cpu.set_pc_interworking(entry);
+    let cpu = Cpu::new(Config { unaligned: Unaligned::Armv6, vfp: true });
+    let mut proc = Process {
+        cpu,
+        mem,
+        stubs: stub_list,
+        insns: 0,
+        heap: None,
+        heap_chunk_id: heap_id,
+    };
 
-    Ok(Process { cpu, mem, stubs: stub_list, insns: 0 })
+    // EKA2 entry state: kernel places SStdEpocThreadCreateInfo (0x40 bytes)
+    // at the top of the user stack; SP and r1 point at it.
+    let info_addr = STACK_TOP - 0x40; // 0x0BFF_FFC0, 8-aligned
+
+    // Zero every register before setting entry arguments so no later partial clear clobbers r1 or r4.
+    for r in proc.cpu.regs.iter_mut() {
+        *r = 0;
+    }
+    proc.cpu.regs[1] = info_addr; // r1 = &SStdEpocThreadCreateInfo
+    proc.cpu.regs[4] = 0;         // r4 = 0 (first thread of process)
+    proc.cpu.regs[13] = info_addr; // SP = top of the 0x40 block (stack grows down)
+    proc.cpu.regs[14] = EXIT_STUB; // LR = exit stub
+    // r0, r2, r3, r5..r12 stay 0.
+    // NOTE: tpidrurw not set — field absent from Cpu.
+    // CPSR.T = entry bit 0 (set_pc_interworking handles this).
+
+    // Write SStdEpocThreadCreateInfo (16 LE words, 0x40 bytes).
+    let info: [u32; 16] = [
+        0,         // 0x00 handle
+        0,         // 0x04 type
+        entry,     // 0x08 func_ptr
+        0,         // 0x0C ptr
+        0,         // 0x10 supervisor_stack
+        0,         // 0x14 supervisor_stack_size
+        info_addr, // 0x18 user_stack (this struct's own address)
+        stack_sz,  // 0x1C user_stack_size
+        0,         // 0x20 init_thread_priority
+        0,         // 0x24 name_len
+        0,         // 0x28 name_ptr
+        0x40,      // 0x2C total_size
+        0,         // 0x30 allocator (0 = "create one")
+        heap_min,  // 0x34 heap_min
+        heap_max,  // 0x38 heap_max
+        0,         // 0x3C padding
+    ];
+    for (i, word) in info.iter().enumerate() {
+        proc.mem.write_u32(info_addr + (i as u32) * 4, *word)
+            .map_err(|_| LoadError::Overlap("failed to write SStdEpocThreadCreateInfo"))?;
+    }
+
+    proc.cpu.set_pc_interworking(entry);
+    Ok(proc)
 }

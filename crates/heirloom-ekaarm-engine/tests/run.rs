@@ -27,12 +27,24 @@ fn the_address_map_has_no_overlap_and_a_too_large_heap_is_refused_by_name() {
 }
 
 #[test]
-fn hero_of_sparta_binds_every_import_and_stops_at_its_first_os_call_by_name() {
+fn hero_of_sparta_binds_every_import_starts_and_stops_at_its_next_os_call_by_name() {
     let Some(mut p) = hero() else { return };
     assert_eq!(p.stubs.len(), 704);
+    // past the process start (create info on the stack, SetupThreadHeap): the next call it needs is refused by name
     match p.run(1_000_000) {
-        Outcome::Refused(why) => assert!(why.contains("euser/") && why.contains("SetupThreadHeap"), "{why}"),
-        _ => panic!("expected the first euser call to be refused by name"),
+        Outcome::Refused(why) => assert!(why.contains("euser/") && why.contains("DllSetTls"), "{why}"),
+        _ => panic!("expected the next euser call to be refused by name"),
+    }
+}
+
+#[test]
+fn file_browser_starts_on_its_create_info_instead_of_faulting_above_the_stack() {
+    // before the create info was placed at the stack top it faulted after 13 instructions writing 0x0C00003C
+    let Ok(bytes) = std::fs::read("/data/build/corpus-symbian/e32/FileBrowser.exe") else { println!("SKIP: FileBrowser.exe absent"); return };
+    let mut p = loader::load(&bytes, &OrdinalTable::parse(ORD_TSV).unwrap()).unwrap();
+    match p.run(1_000_000) {
+        Outcome::Refused(why) => assert!(why.starts_with("NEXT-NEEDED"), "{why}"),
+        _ => panic!("expected a named refusal, not a fault"),
     }
 }
 
