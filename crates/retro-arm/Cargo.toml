@@ -1,8 +1,0 @@
-[package]
-name = "retro-arm"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "ARM32 user-mode interpreter (ARMv5TE ARM + Thumb) for the Symbian engine"
-
-[dependencies]

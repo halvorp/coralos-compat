@@ -2,7 +2,7 @@
 # Assemble a position-independent-by-relocation m68k fixture: tools/asm-fixture.sh in.s out-prefix
 # Produces out-prefix.bin (the .text section, absolute-pointer addends patched in as offsets from the section start)
 # and out-prefix.rel (one decimal byte offset per line: every longword the test must relocate by the hunk base).
-# The tests wrap these as a one-hunk executable with retro-hunk's writer, so they need no cross toolchain to RUN.
+# The tests wrap these as a one-hunk executable with heirloom-fmt-hunk's writer, so they need no cross toolchain to RUN.
 set -e
 in=$1; out=$2
 obj=$(mktemp --suffix=.o)

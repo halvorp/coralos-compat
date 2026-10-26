@@ -1,0 +1,25 @@
+[package]
+name = "heirloom-cpu-ppc-bench"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Host-only benchmark of the heirloom-cpu-ppc execution tiers: synthetic PowerPC workloads, the Retro68 samples and corpus applications (skipped when absent). Not a dependency of anything; not part of the no_std workspace."
+
+# Its own workspace root (a std binary must stay out of the no_std `cargo check --workspace --target x86_64-unknown-none`
+# matrix), like heirloom-cpu-ppc-oracle. The root Cargo.toml `exclude`s it.
+[workspace]
+
+[dependencies]
+heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc" }
+heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
+heirloom-fmt-pef = { path = "../heirloom-fmt-pef" }
+heirloom-ui-abi = { path = "../heirloom-ui-abi" }
+heirloom-macppc-engine = { path = "../heirloom-macppc-engine" }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "ppc-bench"
+path = "src/main.rs"

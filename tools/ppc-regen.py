@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Regenerate the retro-ppc test oracles with LLVM's PowerPC assembler (an encoder independent of ours).
+"""Regenerate the heirloom-cpu-ppc test oracles with LLVM's PowerPC assembler (an encoder independent of ours).
 
-  tests/common/oracle.rs    every instruction literal (`asm("..")`, `r("..", ..)` and `&["..", ..]` lists) found in crates/retro-ppc/tests/*.rs, one line each,
+  tests/common/oracle.rs    every instruction literal (`asm("..")`, `r("..", ..)` and `&["..", ..]` lists) found in crates/heirloom-cpu-ppc/tests/*.rs, one line each,
                             assembled with `llvm-mc -triple=powerpc` (word table: text -> encoding)
-  tests/common/programs.rs  every crates/retro-ppc/tests/asm/*.s assembled to a big-endian word array
+  tests/common/programs.rs  every crates/heirloom-cpu-ppc/tests/asm/*.s assembled to a big-endian word array
 
 Run after adding or changing an asm("...") literal or a .s file:  python3 tools/ppc-regen.py
 The tests never invoke LLVM: they read the committed tables, so `cargo test` needs no toolchain beyond Rust.
 """
 import glob, os, re, subprocess, sys, tempfile
 
-root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "crates", "retro-ppc", "tests")
+root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "crates", "heirloom-cpu-ppc", "tests")
 MC = ["llvm-mc", "-triple=powerpc", "-mcpu=750"]
 
 def one(line, strict=True):

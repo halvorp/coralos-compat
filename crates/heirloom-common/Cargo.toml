@@ -1,0 +1,17 @@
+[package]
+name = "heirloom-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Types every heirloom-compat engine shares: the named Refusal, the resumable-run Step and the GuestMachine driver trait"
+
+[dependencies]
+heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
+heirloom-ui-abi = { path = "../heirloom-ui-abi" }
+heirloom-volume = { path = "../heirloom-volume" }
+
+[dev-dependencies]
+# The driver trait is tested through all three engines it fronts (a dev-dependency cycle is fine for cargo).
+heirloom-ami68k-engine = { path = "../heirloom-ami68k-engine" }
+heirloom-mac68k-engine = { path = "../heirloom-mac68k-engine", features = ["fixtures"] }
+heirloom-macppc-engine = { path = "../heirloom-macppc-engine", features = ["fixtures"] }

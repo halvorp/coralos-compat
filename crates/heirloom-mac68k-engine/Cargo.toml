@@ -1,0 +1,35 @@
+[package]
+name = "heirloom-mac68k-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Classic Mac OS 68k personality (skeleton): A-line trap bridge, Pascal-convention Toolbox calls onto GuestUi"
+
+[dependencies]
+heirloom-common = { path = "../heirloom-common" }
+heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
+heirloom-cpu-68k = { path = "../heirloom-cpu-68k" }
+heirloom-fmt-resfork = { path = "../heirloom-fmt-resfork" }
+heirloom-volume = { path = "../heirloom-volume" }
+heirloom-ui-abi = { path = "../heirloom-ui-abi" }
+heirloom-present = { path = "../heirloom-present" }
+heirloom-raster = { path = "../heirloom-raster" }
+heirloom-translate = { path = "../heirloom-translate" }
+
+[dev-dependencies]
+heirloom-mac68k-engine = { path = ".", features = ["fixtures"] }
+
+[features]
+# The built-in fixture applications and the dialog test script. Off for the product library (CoralOS user mode); the
+# tests and the `mac68k-run` / `mac68k-oracle` CLIs turn it on (the same split as heirloom-macppc-engine).
+fixtures = []
+
+[[bin]]
+name = "mac68k-run"
+path = "src/bin/mac68k-run.rs"
+required-features = ["fixtures"]
+
+[[bin]]
+name = "mac68k-oracle"
+path = "src/bin/mac68k-oracle.rs"
+required-features = ["fixtures"]

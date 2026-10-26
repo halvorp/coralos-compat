@@ -5,7 +5,7 @@ Toolbox managers/traps it called, taken from the engine's own log tags ("[toolbo
 Usage: corpus-census-mac.py APPS.tsv [--out FILE]"""
 import json, os, re, subprocess, sys
 ROOT = os.environ.get("MAC_CORPUS_ROOT", "/data/build/corpus-bin")
-BIN = os.environ.get("RETRO_BIN", "/data/wt/compat-corpus/target/release")
+BIN = os.environ.get("HEIRLOOM_BIN", "/data/wt/compat-corpus/target/release")
 def run(arch, path, machine=""):
     cmd = [BIN + ("/mac68k-run" if arch == "68k" else "/macppc-run"), "--census"]
     if arch == "68k":

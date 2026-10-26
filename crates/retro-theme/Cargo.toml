@@ -1,8 +1,0 @@
-[package]
-name = "retro-theme"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "The Gute Form (CoralOS UI kit) tokens for the retro engines: palette by role, the Amiga pen map, the UI font as a bitmap strip"
-
-[dependencies]

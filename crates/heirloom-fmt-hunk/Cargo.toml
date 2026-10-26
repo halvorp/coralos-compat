@@ -1,0 +1,10 @@
+[package]
+name = "heirloom-fmt-hunk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AmigaOS Hunk executable loader (and a test-only writer)"
+
+[dependencies]
+heirloom-common = { path = "../heirloom-common" }
+heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }

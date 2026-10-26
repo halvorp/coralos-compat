@@ -1,7 +1,7 @@
 # muimaster.library (MUI / Zune) translated natively onto guestui
 
 Ruling 17 for the second Amiga toolkit: MUI becomes ONE table (`src/translate/mui.rs`) plus small adapters, projected through
-the shared `retro-translate` registry. Nothing is drawn by MUI code: the object tree is a HOST-side model, the pixels are the
+the shared `heirloom-translate` registry. Nothing is drawn by MUI code: the object tree is a HOST-side model, the pixels are the
 native UI's, and no code path names an application (`tools/check-translation-seam.sh`).
 
 ## How the compiled program calls MUI
@@ -157,7 +157,7 @@ and user data the host writes there (state stays host-side; a guest write is nev
   There is no `MUIA_Application_Input` attribute in MUI or Zune.
 * `MUIM_Window_SetCycleChain(obj..., NULL)` is MUI's own method; Zune's window.c has no case for it (it falls to rootclass, answers 0, and the chain is the
   `MUIA_CycleChain` objects in setup order). The engine records the program's order (`Objects::cycle_chain`) and refuses an entry that is no MUI object. **Gap:**
-  guestui-abi has no focus order, so the host keeps its own; carrying the order needs a seam change (the lead's call).
+  heirloom-ui-abi has no focus order, so the host keeps its own; carrying the order needs a seam change (the lead's call).
 
 ## intuition.library ModifyProp / NewModifyProp, gadtools DrawBevelBoxA (mui6 lane)
 * `NewModifyProp` / `ModifyProp` (`modify_prop.rs`) store the PropInfo of a classic GTYP_PROPGADGET and bring the gadget's native ScrollBar to the new

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate crates/amiga68k-engine/src/lvo_names.rs: every public function of the common AmigaOS libraries with its
+"""Generate crates/heirloom-ami68k-engine/src/lvo_names.rs: every public function of the common AmigaOS libraries with its
 LVO, from AROS's `.conf` function lists (interface facts: names and vector numbers). Usage: gen-lvo-names.py AROS_DIR.
 Offsets: a list that starts with the library's own open() declares the four standard vectors (Open, Close, Expunge,
 Reserved) itself; one that does not, leaves them implicit. Known anchors are asserted so a miscount cannot ship."""
@@ -71,7 +71,7 @@ for lib, d in LIBS:
     full = lib if "." in lib else lib + ".library"
     for o, n in parse(os.path.join(AROS, d, full.split(".")[0] + ".conf"), EXTRA_RESERVED.get(lib, 0)):
         hdr.append(f"#define LVO_{lib.split('.')[0]}_{n} ({o})")
-open(os.path.join(os.path.dirname(__file__), "..", "crates/amiga68k-engine/tests/guest/c/lvo.h"), "w").write("\n".join(hdr) + "\n")
-dst = os.path.join(os.path.dirname(__file__), "..", "crates/amiga68k-engine/src/lvo_names.rs")
+open(os.path.join(os.path.dirname(__file__), "..", "crates/heirloom-ami68k-engine/tests/guest/c/lvo.h"), "w").write("\n".join(hdr) + "\n")
+dst = os.path.join(os.path.dirname(__file__), "..", "crates/heirloom-ami68k-engine/src/lvo_names.rs")
 open(dst, "w").write("\n".join(out) + "\n")
 print(" ".join(f"{k}={v}" for k, v in seen.items()))

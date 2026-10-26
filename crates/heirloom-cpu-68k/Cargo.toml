@@ -1,0 +1,13 @@
+[package]
+name = "heirloom-cpu-68k"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Safe Rust wrapper over the vendored Musashi 68k core"
+build = "build.rs"
+
+[dependencies]
+heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
+
+[build-dependencies]
+cc = "1"

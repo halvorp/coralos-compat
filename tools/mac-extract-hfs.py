@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract every file of an HFS disk image (.dsk/.img, 400K/800K/1.4M or larger) as MacBinary II files (what retro-resfork reads),
+"""Extract every file of an HFS disk image (.dsk/.img, 400K/800K/1.4M or larger) as MacBinary II files (what heirloom-fmt-resfork reads),
 with no mounting and no execution: machfs (pure Python, MIT) parses the volume. Needs `pip install machfs` (use a venv).
 Usage: mac-extract-hfs.py IMAGE OUTDIR     -> OUTDIR/<path with '/' as '_'>.bin plus an index line per file on stdout."""
 import os, struct, sys

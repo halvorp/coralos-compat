@@ -1,13 +1,13 @@
-# The retro-compat corpus: real binaries, census results, and the toolkit usage matrix
+# The heirloom-compat corpus: real binaries, census results, and the toolkit usage matrix
 
 Peter, 2026-10-18: "Do not just focus on DOpus, but the entire Amiga UI/MUI and test more apps! Also check how this will work
 with MacOS apps, both m68k and PPC." This file is the evidence behind the per-TOOLKIT translation tables of
-`docs/retro-compat/17-TRANSLATION-ARCHITECTURE.md` (in the CoralOS repo): which apps exist to test with, how far the engines get
+`docs/heirloom/17-TRANSLATION-ARCHITECTURE.md` (in the CoralOS repo): which apps exist to test with, how far the engines get
 on each today, which toolkit rows each one uses, and therefore which table rows matter first.
 
 **No third-party binary is in this repository.** Downloads live under `/data/build/corpus-bin/<app>/` (untrusted data, one
 directory per source), each recorded with URL, version, sha256 and licence in `/data/build/corpus-bin/CORPUS.tsv` (reproduced
-in the table below). `tests/census_corpus.rs` in `amiga68k-engine`, `mac68k-engine` and `macppc-engine` drive them and SKIP loudly when a binary is absent.
+in the table below). `tests/census_corpus.rs` in `heirloom-ami68k-engine`, `heirloom-mac68k-engine` and `heirloom-macppc-engine` drive them and SKIP loudly when a binary is absent.
 
 ## How this was produced (all reproducible)
 
@@ -68,19 +68,19 @@ BetterString, TheBar; LGPL-2.1) as `LIBS:mui/` through `--mount MCC=... --assign
 | amimcp (amiagent/amimon/amimon-mui) | 0.13.2 | https://github.com/thomas-luebker/amimcp (release) | d893cabeb50e49678f47bbad192a0c921bde0ee410d61ee65b1724b05430fae3 | Apache-2.0 (repo LICENSE) | already in the corpus before this lane |
 | iGame | 2.6.x (extracted tree) | https://github.com/MrZammler/iGame/releases | n/a (archive not retained) | GPL-3.0 (repo LICENSE) | MUI + TextEditor.mcc; already in the corpus |
 | Directory Opus 5 (Magellan) | 5.102 OS3 | https://github.com/BlitterStudio/dopus5/releases | ea6f59d23a9256227781824b24e78b67642fd1fababd94c01829e458e2f98cfa | AROS Public License (repo COPYING / THIRD_PARTY_NOTICES) | own BOOPSI classes; already in the corpus |
-| Executor packages/go (go.appl, icontest.appl) | tree of /data/refs/retro/executor | https://github.com/autc04/executor | 5b81b2047bb186da9c8e4ee9d6357a33a052ab01757476d1240dfca0179d776d (go) fa1e5a7186686aa063787163fd9d42a5057105b07916aa1d3703b241d39be9a2 (icontest) | MIT (Executor tree) | AppleDouble header files holding the resource forks |
+| Executor packages/go (go.appl, icontest.appl) | tree of /data/refs/heirloom/executor | https://github.com/autc04/executor | 5b81b2047bb186da9c8e4ee9d6357a33a052ab01757476d1240dfca0179d776d (go) fa1e5a7186686aa063787163fd9d42a5057105b07916aa1d3703b241d39be9a2 (icontest) | MIT (Executor tree) | AppleDouble header files holding the resource forks |
 | Retro68 Samples + the toolchain that built them | Retro68 afedcdc (autc04/Retro68) + multiversal 057c802, GCC 16.1.0 for m68k-apple-macos and powerpc-apple-macos | built locally: /data/build/retro68 (log /data/build/retro68/build.log, host tools build-host.log); outputs copied to /data/build/corpus-bin/mac-retro68/{68k,ppc}/ (16 .bin MacBinary files, hashes in mac-retro68/SHA256SUMS) | see mac-retro68/SHA256SUMS | toolchain GPL-3; the Samples sources are Retro68 (GPL-3 with the GCC runtime exception for the linked runtime); outputs are test data only, never redistributed | prerequisites installed locally without sudo: Boost 1.86.0 (built into /data/build/retro68/boost), texinfo stubbed (docs not built) |
 | Skipped: FileX-68K 2.7a | 2.7a | https://aminet.net/disk/moni/FileX-68K.lha | 3b78a191c875ad560f71fee798d29d97048c4bf609af40270332cc529a66610a | UNCLEAR ("Open Source Team", no licence text in readme) | downloaded, NOT used (instruction: skip unclear licences) |
 | Skipped: SimpleMail | - | https://github.com/sba1/simplemail | - | GPL-2.0 | repo publishes no m68k release asset; Aminet name search found no SimpleMail binary |
 | Skipped: FastForward, Legadon | - | https://github.com/amigazen/FastForward , https://github.com/alb42/Legadon | - | - | no release assets; Legadon's package/ directory holds only the .info icon |
-| systemless Toolbox Showcase (fat app, forks cut out of the stored SIT5) | tests/toolbox-showcase of benletchford/systemless | /data/refs/retro/systemless/tests/toolbox-showcase/toolbox-showcase.sit | 373a6a1e268b558228d4bd911b3982557c32d52d75ff9bccbb65eff89c1eb254 (archive); showcase.rsrc 3021fd64872986a0c9903adbbca6fcb773cf7883e8b231d9ece60c7c069197bf; showcase.pef db1ddcad335d9ccc3b5d1fec654273b84c78fcab7b47f59c28dfda008fd77472 | GPL-3 (systemless); test data only, never committed | tools/corpus-extract-showcase.py cuts the forks out |
+| systemless Toolbox Showcase (fat app, forks cut out of the stored SIT5) | tests/toolbox-showcase of benletchford/systemless | /data/refs/heirloom/systemless/tests/toolbox-showcase/toolbox-showcase.sit | 373a6a1e268b558228d4bd911b3982557c32d52d75ff9bccbb65eff89c1eb254 (archive); showcase.rsrc 3021fd64872986a0c9903adbbca6fcb773cf7883e8b231d9ece60c7c069197bf; showcase.pef db1ddcad335d9ccc3b5d1fec654273b84c78fcab7b47f59c28dfda008fd77472 | GPL-3 (systemless); test data only, never committed | tools/corpus-extract-showcase.py cuts the forks out |
 
 ## What the census found and fixed (all in this branch, each with a test and a negative control)
 
 The first run of the engine over the AROS binaries stopped at the loader. Each fix below moved the whole set one step; the
 "before" is the count of the 53 AROS programs that stopped there.
 
-1. **`HUNK_RELRELOC32` (0x3FD)** in `retro-hunk` (53 of 53 refused at load: "unsupported hunk type 0x3fd"). Word-encoded like
+1. **`HUNK_RELRELOC32` (0x3FD)** in `heirloom-fmt-hunk` (53 of 53 refused at load: "unsupported hunk type 0x3fd"). Word-encoded like
    RELOC32SHORT; the field gains `base[target] - base[this hunk]` (AROS `rom/dos/internalloadseg_aos.c`).
 2. **`exec.library/OpenResource` + AROS `task.resource`** (UNIMPLEMENTED within the first 12 instructions of every AROS program;
    then `stdc.library`'s init returned NULL in 50 of 53). New `task_resource.rs`: Alloc/Free/Set/Get storage slots per task, InitTaskHooks/AddTaskHook/RunTaskHooks.
@@ -530,9 +530,9 @@ TextEdit/StandardFile/Control/Dialog/Sound/Palette; GPL-3, used as test data onl
 open *Multiversal* interfaces lack `Controls.h`, `Lists.h`, `Palettes.h`, `QDOffscreen.h`, as its README says, and Apple's Universal
 Interfaces cannot be redistributed), but its `.sit` stores the forks uncompressed, so `tools/corpus-extract-showcase.py` cuts
 the 68k resource fork (`showcase.rsrc`) and the PPC PEF (`showcase.pef`) out of it; the PPC half is driven by
-`macppc-engine/tests/real_app.rs` already. No other freely redistributable classic Mac application with an explicit licence turned
+`heirloom-macppc-engine/tests/real_app.rs` already. No other freely redistributable classic Mac application with an explicit licence turned
 up (Macintosh Garden has none stated, so it was not used). **For Peter, if wanted: Apple's Universal Interfaces 3.4 in
-`/data/refs/retro/Retro68/InterfacesAndLibraries/` would let Retro68 build the Showcase and any other Toolbox source.**
+`/data/refs/heirloom/Retro68/InterfacesAndLibraries/` would let Retro68 build the Showcase and any other Toolbox source.**
 
 ### Results
 
@@ -579,11 +579,11 @@ up (Macintosh Garden has none stated, so it was not used). **For Peter, if wante
 
 Peter authorised downloading from macintoshgarden.org for LOCAL TESTING ONLY. They are abandonware: "owner-authorised local test use, abandonware, never redistributed". Nothing here is committed: binaries and extracted resources live in `/data/build/corpus-bin/mac/<app>/` (URL, version and sha256 of every download in `/data/build/corpus-bin/CORPUS.tsv`). Downloaded archives are untrusted data: they were only ever unpacked with tools (machfs, unar, 7z), never executed on the host.
 
-How they were fetched and unpacked (no sudo): the site serves an incomplete TLS chain, so curl was given the Sectigo intermediate fetched from the certificate's own AIA URL (verification stayed ON, no `-k`). Downloads are the token-signed links the page itself offers. `.zip`/`.dsk`/`.img`/`.toast` HFS images: `tools/mac-extract-hfs.py` (machfs in a venv; handles DiskCopy 4.2 headers) writes MacBinary II files. `.sit`/`.sea.bin`: `unar` (Fedora rpm unpacked into /data/build/rpms/root, run with LD_LIBRARY_PATH) writes AppleDouble `.rsrc` files. Both are read directly by retro-resfork.
+How they were fetched and unpacked (no sudo): the site serves an incomplete TLS chain, so curl was given the Sectigo intermediate fetched from the certificate's own AIA URL (verification stayed ON, no `-k`). Downloads are the token-signed links the page itself offers. `.zip`/`.dsk`/`.img`/`.toast` HFS images: `tools/mac-extract-hfs.py` (machfs in a venv; handles DiskCopy 4.2 headers) writes MacBinary II files. `.sit`/`.sea.bin`: `unar` (Fedora rpm unpacked into /data/build/rpms/root, run with LD_LIBRARY_PATH) writes AppleDouble `.rsrc` files. Both are read directly by heirloom-fmt-resfork.
 
 Still unextracted, for Peter: **WriteNow 4.0.x**: both `WriteNow40.sit` and `writenow_4_02.zip` hold DiskCopy images of an installer (creator SIAP) whose payload is a proprietary installer archive that unar/lsar cannot open, and the 4.0.2 "updater" is only a patch. Needs a classic-Mac installer runner or a StuffIt Installer-Maker unpacker (nothing on vesper). WriteNow 2.0 and 2.2 are real 68k applications and ARE in the corpus. MFS volumes (WriteNow 1.07, MacPaint 1.5) cannot be read by machfs. BBEdit Lite pages list no download. Packages that would help: none required for what is here (`unar`, `p7zip` and python `machfs` are in use); a `hfsutils` or `hfsprogs` install would make HFS checks independent of machfs.
 
-Tools: `tools/corpus-apps-mac-garden.tsv` (the app list; feed it to `corpus-census-mac.py`), `tools/mac-extract-hfs.py`, and `corpus-traps-mac.py --rank` (below). `census_corpus.rs` in `mac68k-engine` and `macppc-engine` pin each stop and SKIP loudly when the binaries are absent.
+Tools: `tools/corpus-apps-mac-garden.tsv` (the app list; feed it to `corpus-census-mac.py`), `tools/mac-extract-hfs.py`, and `corpus-traps-mac.py --rank` (below). `census_corpus.rs` in `heirloom-mac68k-engine` and `heirloom-macppc-engine` pin each stop and SKIP loudly when the binaries are absent.
 
 ### Census (mac68k-run / macppc-run --census)
 
@@ -609,7 +609,7 @@ Findings the census exposed, and what happened to them (macfm lane, 2026-10-18):
 * **MacWrite 4.5 `_OpenPort $8020a9fa` — FIXED: 24-bit addressing.** The classic Mac of that era has 24 address lines; applications keep flags in the high byte of pointers and handles. The machine now boots in 24-bit mode (`addrmode.rs`; `GuestMem` drops the top byte of EVERY access, the 68k bus and the host handlers alike; `_StripAddress` strips; `HLock`/`HPurge`/`HSetRBit`/`HSetState` mirror the lock/purge/resource bits into the master pointer's high byte, `_HGetState` and `**h` see them; `_SwapMMUMode` and the `MMU32Bit` global ($CB2) switch modes; `mac68k-run --32bit` / `Mac::set_address_mode(Bit32)` select 32-bit for a 32-bit-clean app). MacWrite's GrafPort pointer is now a good address; the 32-bit control still reproduces the old refusal.
 * **WriteNow 2.0 / 2.2 ~10M bus faults — CAUSE FOUND AND FIXED (the same 24-bit issue).** Found with `mac68k-run --32bit --insns N --pcs N --dump` (the recent-PCs ring): after `GetResource('CODE',2)` the app's segment-call glue builds a RETURN ADDRESS, `move.l (a0),-(sp); addq.l #4,(sp); move.b #$80,(sp)`, i.e. it sets bit 31 of the return address as a flag, and returns through it with `RTR`. The 24-bit bus ignores that byte; with a 32-bit bus the PC became `$80208a32` (RAM is 16 MiB) and every fetch faulted (`pc` ran `$802091..` for 5M instructions). It was NOT a segment-loader gap. With 24-bit addressing both run on (to `_Pack6`, the International Utilities package).
 * **Glider PRO** is a FAT application: its PEF ('cfrg') binds InterfaceLib imports (see the PPC row below) while its 68k half now stops at `_Pack7` (it passed `_SetToolBoxTrapAddress`).
-* `_SetToolBoxTrapAddress`/`_SetTrapAddress` — IMPLEMENTED: a patched trap enters the guest routine as a `JSR` from the trapping instruction (`guestcall.rs`), which chains to the original through the `GetTrapAddress` stub; Pascal traps reached through a stub keep their frame (the return address sits on top of it). `_HFSDispatch`/`_FSDispatch`/`_HighLevelFSDispatch` and the whole File Manager (`fm/`, over the shared `retro-volume` tree), `_UnloadScrap` and the Scrap Manager (`scrap.rs`), `_Alert`/`_StopAlert`/`_NoteAlert`/`_CautionAlert` (`translate/alerts.rs`), `_Pack2` (`pack2.rs`, named refusals), `_SysEnvirons`, `_Gestalt`, `_DragWindow`, `_GetCursor`, `_PortSize`, `CountTypes`/`Count1Types`/`GetIndType`, `_SetResLoad`, `OpenResFile`/`CreateResFile`/`CloseResFile` landed too.
+* `_SetToolBoxTrapAddress`/`_SetTrapAddress` — IMPLEMENTED: a patched trap enters the guest routine as a `JSR` from the trapping instruction (`guestcall.rs`), which chains to the original through the `GetTrapAddress` stub; Pascal traps reached through a stub keep their frame (the return address sits on top of it). `_HFSDispatch`/`_FSDispatch`/`_HighLevelFSDispatch` and the whole File Manager (`fm/`, over the shared `heirloom-volume` tree), `_UnloadScrap` and the Scrap Manager (`scrap.rs`), `_Alert`/`_StopAlert`/`_NoteAlert`/`_CautionAlert` (`translate/alerts.rs`), `_Pack2` (`pack2.rs`, named refusals), `_SysEnvirons`, `_Gestalt`, `_DragWindow`, `_GetCursor`, `_PortSize`, `CountTypes`/`Count1Types`/`GetIndType`, `_SetResLoad`, `OpenResFile`/`CreateResFile`/`CloseResFile` landed too.
 * **Open finding (next lane): ResEdit 2.1.3 and SimpleText 1.3** now run past every trap but stop at a SEGMENT LOADER refusal: they walk their own CODE resources (`Get1IxResource`, `GetResAttrs`, `ReleaseResource`) and the engine disposes a segment that is still resident (their `UnloadSeg` is accepted but segments stay resident), so the next `LoadSeg` reads freed memory. A real `UnloadSeg` (restore the jump-table entries, unlock the handle) is the fix.
 
 Census, mac68k-run --census, before (971d664) and after this lane:
@@ -825,9 +825,9 @@ Jano's `setup()` takes its screen from `prefs.parent`, which `set_default_prefs`
 
 * `tools/gen-gute-form-font.py` mapped strip row `yy` from scratch row `BASE - baseline + yy`, one row too low, so every ascender and capital
   lost its top ink row ('T' and 'F' had no bar). It now maps from `BASE - asc + yy` (row `tf_Baseline` = the last ink row above the baseline) and asserts
-  that no capital A-Z or plain ascender (b d f h k l t) loses an ink row against the rasteriser's own output. `retro-theme` tests decode the strip
+  that no capital A-Z or plain ascender (b d f h k l t) loses an ink row against the rasteriser's own output. `heirloom-theme` tests decode the strip
   (ascenders span row 0 to the baseline row, capitals are 8-9 rows, T/F/E/Z have a bar). Only one pinned hash moved
-  (`amiga68k-engine/tests/gfx_window.rs`, the "AB" frame; its glyph-ink assertions, computed from the font itself, held).
+  (`heirloom-ami68k-engine/tests/gfx_window.rs`, the "AB" frame; its glyph-ink assertions, computed from the font itself, held).
   Still clipped, by design (Y_SIZE stays 11 = 9 above the baseline + 2 below): the accented capitals 192..=221 lose 2-4 top rows (their accents), and `$ % / \ ¾ Ø å ì í î ù ú û` by one row, `ç ý` lose a row of descender.
 * `_FontMetrics` ($A835): `FMetricRec` (ascent, descent, leading, widMax as Fixed from the same record `GetFontInfo` uses; `wTabHandle`) and the
   Font Manager's 1072-byte global width table (`qd/fontmetrics.rs`; `tabData` is the Fixed `CharWidth` of each character; `WidthPtr` $B10 and
@@ -853,7 +853,7 @@ Census (68k, mac-plus and mac-ii, `--idle 300`, identical on both machines):
 | **all 47** | 28 / 521 / 17 / 12 | 28 / 521 / 18 / 5 | |
 
 All-64 census: 62 programs reach no unimplemented function (60 after mui5); the two others (`dopus-viewfont` `QueryOverscan`, `aros-MultiView` `WindowAction`) are unchanged.
-Findings. (1) Zune's window.c has no `MUIM_Window_SetCycleChain` (it falls to rootclass and answers 0); the engine records the program's order and the seam cannot carry it (no focus order in guestui-abi). (2) Listview.mui passes the List methods, the List attributes and the notifications on them to its List (listview.c:126-266), which is what VMM's refusals were. (3) `MUIM_Application_Input` has no `MUIA_` counterpart; it is `NewInput` with all signals taken as fired.
+Findings. (1) Zune's window.c has no `MUIM_Window_SetCycleChain` (it falls to rootclass and answers 0); the engine records the program's order and the seam cannot carry it (no focus order in heirloom-ui-abi). (2) Listview.mui passes the List methods, the List attributes and the notifications on them to its List (listview.c:126-266), which is what VMM's refusals were. (3) `MUIM_Application_Input` has no `MUIA_` counterpart; it is `NewInput` with all signals taken as fired.
 
 ## Color QuickDraw on the Macintosh II profile (cqd lane), 2026-10-19
 `tools/corpus-census-mac.py` over `corpus-apps-mac.tsv` and `corpus-apps-mac-garden.tsv` (`MAC_IDLE=300`, default profile mac-ii), runners built from the parent
@@ -876,20 +876,20 @@ No other census row changed (the 33 programs of the two lists keep the same stop
 Glider's own offscreen port is `OpenCPort` + `SetPortBits`/the PixMap fields + `CopyBits`/`CopyMask` (its PowerPC imports show `OpenCPort`, `CloseCPort`, no `NewGWorld`), which is
 why the work is the colour PORT and the indexed pixel maps and not GWorlds (not implemented, not reached).
 
-What was built (`crates/mac68k-engine/src/cqd/`, the drawing in `src/qd/`): the structures in guest memory at their documented offsets (`CGrafPort`, `PixMap`,
+What was built (`crates/heirloom-mac68k-engine/src/cqd/`, the drawing in `src/qd/`): the structures in guest memory at their documented offsets (`CGrafPort`, `PixMap`,
 `ColorTable`, `GDevice`, `PixPat`, `CCrsr`), the standard 8-bit table (checked entry by entry against Pomme's `clut8`), the main device (8 bits deep, standard table), the Color
 Manager (`Color2Index`, `Index2Color`, `RealColor`, `InvertColor`, `GetCTable`, `GetCTSeed`, `QDError`), `OpenCPort`/`InitCPort`/`CloseCPort`/`SetPortPix`, colour windows
 (`NewCWindow`/`GetNewCWindow`: native frame, 8-bit canvas shown to the host as exact RGB pixels, never theme roles; a colour-table change repaints the window),
 `RGBForeColor`/`RGBBackColor`/`GetForeColor`/`GetBackColor` and the classic `ForeColor`/`BackColor` on a colour port, `HasDepth`/`SetDepth`, `CopyBits` between depths and tables, `CopyMask`.
-The ops are the SAME ones as before, made depth-aware: the pen is a pair of pen numbers, the Boolean transfer modes act on pixel values (`qd::draw::PenOp`), `retro-raster` gained
+The ops are the SAME ones as before, made depth-aware: the pen is a pair of pen numbers, the Boolean transfer modes act on pixel values (`qd::draw::PenOp`), `heirloom-raster` gained
 `stencil_with`. Refused by name: direct (16/32-bit) pixel maps, colour patterns (`patType` 1/2), arithmetic modes 32..39, `SetDepth` to another depth, `Index2Color` outside the table, a scaling `CopyMask`, `SetPortBits` on a CGrafPort, `NewCWindow` on a machine without Color QuickDraw.
 Heap addresses of an app that calls `InitGraf` on mac-ii move by about 2.3 KB (the main device's records), which is why two tests that pinned a handle address now pin its form.
 
 ## One driver interface for the three engines (engine lane), 2026-10-19
-`retro_common::GuestMachine` is the single surface a host app drives an Amiga, a Mac 68k or a Mac PowerPC program through
+`heirloom_common::GuestMachine` is the single surface a host app drives an Amiga, a Mac 68k or a Mac PowerPC program through
 (`start_file(bytes, name)`, `deliver`, `step`, `advance_clock_to(virtual_us)`, `next_timer_deadline`, `ui`, `volume`, `drain_log`,
 `drain_refused`, `set_stop_on_unimplemented`); the clock is virtual microseconds for all three, and the Mac engines convert to their 60 Hz
-tick at one documented boundary (`ticks_at` / `us_at_tick` in `mac68k_engine::clock`). Tests: `crates/retro-common/tests/guest_machine.rs`
+tick at one documented boundary (`ticks_at` / `us_at_tick` in `heirloom_mac68k_engine::clock`). Tests: `crates/heirloom-common/tests/guest_machine.rs`
 drives every engine only through the trait (fixtures, amimon, and the corpus apps below, which skip when `/data/build/corpus-bin` is absent).
 Real applications reaching their window through the trait. Census: `macppc-run --census --run` output over the 10 PowerPC corpus apps (Retro68 x8, Glider PRO, Toolbox Showcase) is byte-identical before (58e4459) and after (the runners never advance the PowerPC clock); `mac68k-run` is untouched:
 
@@ -959,7 +959,7 @@ next wall is the Sound Manager (`_SoundDispatch`, no seam yet). **Standard File 
 needs a seam call the engine can make and wait on: `request_file(kind: open|save, types, default name) -> (volume, directory, name) | cancelled`, answered through `GuestUiEvent`.
 
 **4. Resource Manager writes.** `AddResource`, `ChangedResource`, `WriteResource`, `UpdateResFile`, `RmveResource`, `SetResInfo`, `SetResAttrs`, `SetResPurge`, `UniqueID` and
-`Unique1ID`, with `CloseResFile` updating the file first (`resmgr/write.rs`, Executor `res/resMod.cpp` as facts). The map lives in memory (`retro_resfork::ResFork` gained
+`Unique1ID`, with `CloseResFile` updating the file first (`resmgr/write.rs`, Executor `res/resMod.cpp` as facts). The map lives in memory (`heirloom_fmt_resfork::ResFork` gained
 `add` / `set_data` / `set_attrs` / `set_info` / `remove` / `to_bytes`; indices never move), a resource's data in the guest handle until it is written, the file (a tree node's
 resource fork) holds what the last update wrote. `AddResource` makes the handle a resource handle and the entry `resChanged`; a NIL or already-resource handle is `addResFailed`
 (-194). `ChangedResource` on a `resProtected` resource is `resAttrErr` (-198), `RmveResource` `rmvResFailed` (-196). `WriteResource` on a fork not open for writing is `wrPermErr`;
@@ -977,7 +977,7 @@ MacWrite 4.5 under mac-ii (the 68000 `TRAP #4` frame); WriteNow 2.0/2.2 on a mis
 own width of a text, `None` = the screen font), `group_head` and `group_inset` (a titled group's contents start `head + inset` under its top edge
 and `inset` inside its other three sides), `label_gap` (room right of a label that labels a control), `spacing` (the host's default neighbour gap,
 a guest's own `MUIA_Group_*Spacing` still wins) and `win_pad`. Census: the AROS Snoopy window (corpus `aros-m68k/sys/System/Snoopy`) with the old
-four-field kit profile versus the full profile, host-measured by the RetroCompat.app test; no corpus app's Zune-default layout changes (the
+four-field kit profile versus the full profile, host-measured by the Heirloom.app test; no corpus app's Zune-default layout changes (the
 workspace corpus tests with a default profile are unchanged: 864 passed, 0 failed, debug and release). New corpus test:
 `a_host_group_profile_keeps_every_group_member_inside_the_panel_and_labels_with_their_controls` (skips when the corpus is absent).
 
@@ -1001,7 +1001,7 @@ Still true: the engine has ONE screen that nothing opens or closes, so a registe
 | program | before | after | what changed |
 |---|---|---|---|
 | dopus-viewfont | next `intuition.library/Request`, 2 refusals (`GA_Disabled`, `DrawImageState` of a guest class), 8 UI calls | no unimplemented call, 0 refusals, window + 2 controls + menu strip, waits in its event loop | `Request` / `EndRequest` / `InitRequester` (a zero-size requester is AROS's FALSE); GadTools `GA_Disabled` through `set_control_enabled`; `DrawImageState` runs a guest class's `IM_DRAW` as a guest call |
-| aros-prefs-Editor | 1 refusal (`PALETTE_KIND`), 0 controls | 0 refusals, 14 native controls (Button, Checkbox, Choice, String, **Swatches**) | new `Swatches` role (guestui-abi, additive); GadTools gadgets added with `AddGList` / `AddGadget` now get their controls (only `WA_Gadgets` did) |
+| aros-prefs-Editor | 1 refusal (`PALETTE_KIND`), 0 controls | 0 refusals, 14 native controls (Button, Checkbox, Choice, String, **Swatches**) | new `Swatches` role (heirloom-ui-abi, additive); GadTools gadgets added with `AddGList` / `AddGadget` now get their controls (only `WA_Gadgets` did) |
 | aros-gtdemo | 1 refusal (`PALETTE_KIND`) | its palette is a Swatches control; 2 new named gaps: `DrawBevelBoxA` `BBFT_RIDGE` / `BBFT_ICONDROPBOX`, `GTSC_Arrows` | |
 | aros-About | 4 refusals, no window | 1 window, 16 controls, 0 refusals | MUI string attributes are read whole (`GuestMem::read_cstr_long`, additive); the credits text is over 256 bytes |
 | SnoopDos 3.11 | "I need AT LEAST Kickstart 2.0", exit after 11,778 insns | window + 19 native controls + 4 menus, waits in its event loop, 0 refusals | the main process now has a current-directory LOCK (`CurrentDir(0)` + `DupLock(old)` is its startup test); `VideoControl`; `SDivMod32` / `UDivMod32` |

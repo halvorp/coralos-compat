@@ -1,6 +1,6 @@
 //! heirloom-gl-abi: the guest OpenGL contract as DATA, and the command-ring ABI between a guest engine (big-endian guest
-//! memory) and `heirloom-gl.engine` (gl4es over the pinned Mesa GLES 2). Ruling: `docs/retro-compat/22-GUEST-GL.md`,
-//! doctrine `RETRO-GL-IS-A-GL4ES-WORKER`.
+//! memory) and `heirloom-gl.engine` (gl4es over the pinned Mesa GLES 2). Ruling: `docs/heirloom/22-GUEST-GL.md`,
+//! doctrine `HEIRLOOM-GL-IS-A-GL4ES-WORKER`.
 //!
 //! Guarantees, each pinned by a test in `tests/negative_controls.rs` that `mutants.sh` proves goes RED when the
 //! guarantee is broken:

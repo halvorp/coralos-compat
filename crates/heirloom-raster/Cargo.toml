@@ -1,0 +1,9 @@
+[package]
+name = "heirloom-raster"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Raster semantics shared by the heirloom engines: chunky bitmaps, rectangles, regions, minterm blits, bitmap fonts"
+
+[dependencies]
+heirloom-theme = { path = "../heirloom-theme" }

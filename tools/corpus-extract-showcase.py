@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cut the fat Toolbox Showcase application (68k CODE in the resource fork + a PowerPC PEF in the data fork) out of systemless's
-STORED (uncompressed) StuffIt 5 archive. The same trick as crates/macppc-engine/tests/real_app.rs. systemless is GPL-3: the
+STORED (uncompressed) StuffIt 5 archive. The same trick as crates/heirloom-macppc-engine/tests/real_app.rs. systemless is GPL-3: the
 output is test data under /data/build/corpus-bin, never committed. Usage: corpus-extract-showcase.py ARCHIVE.sit OUTDIR"""
 import os, struct, sys
 d = open(sys.argv[1], "rb").read(); out = sys.argv[2]

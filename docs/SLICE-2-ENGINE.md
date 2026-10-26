@@ -2,9 +2,9 @@
 
 Design ruling: Astra (openai/gpt-6-astra) consult 2026-10-17, option (a). The guest is a RESUMABLE state machine driven
 by the host's event loop. No second thread, no second loop. This file is the spec for the `coralos-compat` half; the
-CoralOS half (a thin `RetroCompat.app` on the CoralApp SDK) consumes it later and is out of scope here.
+CoralOS half (a thin `Heirloom.app` on the CoralApp SDK) consumes it later and is out of scope here.
 
-## 1. retro-m68k: start + resume (one CPU per process, state survives between calls)
+## 1. heirloom-cpu-68k: start + resume (one CPU per process, state survives between calls)
 
 - `pub fn start<H: Host>(host: &mut H, entry: u32, sp: u32)`: what `run` does today up to and including the reset
   (init, CPU_68020, pulse_reset, the AbsExecBase save/restore), executing NOTHING.
@@ -17,7 +17,7 @@ CoralOS half (a thin `RetroCompat.app` on the CoralApp SDK) consumes it later an
   D0 the host set before resuming. Add `pub fn set_d0` use on resume (already exists) — the host sets D0 first.
 - The lock/ACTIVE discipline stays: ACTIVE is set for the duration of each `resume`, cleared on return.
 
-## 2. amiga68k-engine: Machine states, Exec ports, IDCMP
+## 2. heirloom-ami68k-engine: Machine states, Exec ports, IDCMP
 
 Public API (machine.rs, split files by concern, every file < 1000 lines, no_std + alloc):
 
@@ -27,7 +27,7 @@ pub enum Step { Exited, Blocked, BudgetSpent, Fault(String) }
 // step(): a Waiting guest whose predicate is still unsatisfied executes NO instruction and returns Blocked.
 // deliver(): queues and updates readiness only; it never executes guest code and never overwrites a pending D0.
 impl<U: GuestUi> Amiga<U> {
-    pub fn start_hunk(&mut self, file: &[u8]) -> Result<Loaded, String>; // load + retro_m68k::start
+    pub fn start_hunk(&mut self, file: &[u8]) -> Result<Loaded, String>; // load + heirloom_cpu_68k::start
     pub fn step(&mut self, budget: u64) -> Step;     // resume until exit / block / budget
     pub fn deliver(&mut self, ev: GuestUiEvent) -> Result<(), Refusal>; // host event -> IDCMP message
     pub fn is_blocked(&self) -> bool;
@@ -35,7 +35,7 @@ impl<U: GuestUi> Amiga<U> {
 ```
 `run_hunk` stays as a driver over `start_hunk` + `step` (one path, not two); it returns when the guest blocks, it never
 spins while blocked. `BudgetSpent` means "schedule another host-loop turn"; `Blocked` means "wait for a deliver".
-`Amiga` owns its `retro_m68k::CpuContext`. Sharing with mac68k/macppc is the CPU-neutral boundary only (CpuContext,
+`Amiga` owns its `heirloom_cpu_68k::CpuContext`. Sharing with mac68k/macppc is the CPU-neutral boundary only (CpuContext,
 bounded step, stop reason, GuestUi); Exec signals, ports, menu packing and IntuiMessage bytes stay in this crate.
 
 ### Guest structures (offsets from the AmigaOS NDK 3.x includes; each constant names its struct.field)
@@ -85,7 +85,7 @@ by name.
 Retire the window: its port must have no Delivered-but-unreplied messages (otherwise named Refusal, as on AmigaOS
 where that is a guest bug); queued unread messages are freed; the GuestUi close_window call is made as today.
 
-## 3. Fixture: `native_quit` (fixture.rs, hand-assembled with retro-hunk's writer, as the slice-1 fixture is)
+## 3. Fixture: `native_quit` (fixture.rs, hand-assembled with heirloom-fmt-hunk's writer, as the slice-1 fixture is)
 A guest program that: OpenLibrary("intuition.library"); OpenWindowTagList(title "Native Quit", IDCMP
 CLOSEWINDOW|MENUPICK); SetMenuStrip(Project: Open, Quit); then LOOP: WaitPort(win->UserPort); GetMsg; read Class and
 Code; ReplyMsg; increment a SENTINEL long at a fixed guest address; check every OpenLibrary/OpenWindow result; drain with GetMsg until it returns 0

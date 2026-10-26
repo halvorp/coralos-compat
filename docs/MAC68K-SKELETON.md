@@ -1,18 +1,18 @@
-# mac68k-engine skeleton (2026-10-18)
+# heirloom-mac68k-engine skeleton (2026-10-18)
 
 Goal: prove the shared crates serve a SECOND engine without copying code. A hand-assembled classic Mac 68k program
-runs through the same `retro-m68k` core and the same `guestui-abi` trait as the Amiga engine, with Toolbox calls
+runs through the same `heirloom-cpu-68k` core and the same `heirloom-ui-abi` trait as the Amiga engine, with Toolbox calls
 (A-line traps) bridged onto `GuestUi`.
 
 ## What runs
 
-`crates/mac68k-engine/fixtures/hello.s` (assembled with `m68k-linux-gnu-as -m68020`, bytes in `hello.bin`):
+`crates/heirloom-mac68k-engine/fixtures/hello.s` (assembled with `m68k-linux-gnu-as -m68020`, bytes in `hello.bin`):
 InitGraf, InitFonts, InitWindows, InitMenus, TEInit, InitDialogs, InitCursor, `NewWindow("Hello Mac", Rect 40,30,240,350)`,
 `DisposeWindow`, `ExitToShell`. On `RecordingGuestUi` that is `OpenWindow{title "Hello Mac", left 30 top 40 w 320 h 200}`
-then `CloseWindow`. Tests: `crates/mac68k-engine/tests/toolbox_end_to_end.rs` (each behaviour has a negative control).
+then `CloseWindow`. Tests: `crates/heirloom-mac68k-engine/tests/toolbox_end_to_end.rs` (each behaviour has a negative control).
 
 Flow: `Mac::start(code, entry)` places a flat image at `CODE_BASE` (0x10000) -> `step(budget)` -> an A-line word reaches
-`retro_m68k::Host::aline` -> `traps::trap_key` -> table lookup -> `pascal::read_args` (the Pascal convention, once) ->
+`heirloom_cpu_68k::Host::aline` -> `traps::trap_key` -> table lookup -> `pascal::read_args` (the Pascal convention, once) ->
 named handler in `toolbox.rs` -> `pascal::complete` (pop args, store the result). `deliver(event)` and `run_program`
 mirror the Amiga names. `Mac::stop_on_unimplemented` is census mode.
 
@@ -29,22 +29,22 @@ by `traps::tests`.
 
 ## Shared crates: reused unchanged / extended / new
 
-- Unchanged: `guestui-abi` (WindowModel, GuestUi, RecordingGuestUi, events), `retro-guest-mem`'s `GuestMem`.
-- Extended `retro-m68k`: `Host::aline(cpu, opcode, pc) -> bool` (default declines) and `retro_aline_hook`, called from
+- Unchanged: `heirloom-ui-abi` (WindowModel, GuestUi, RecordingGuestUi, events), `heirloom-mem-flat32`'s `GuestMem`.
+- Extended `heirloom-cpu-68k`: `Host::aline(cpu, opcode, pc) -> bool` (default declines) and `heirloom_aline_hook`, called from
   Musashi's `m68ki_exception_1010` (vendor/m68kcpu.h, one `if`; prototype in m68kconf.h). Handled = PC is already past the
   word and NO exception frame is built, so the trap's stack arguments are still on top. Declined = the normal line-1010
   exception. The Amiga engine does not override it. Two tests, one a negative control.
-- MOVED out of amiga68k-engine into shared code (Amiga re-exports them, behaviour unchanged):
-  `Heap` (first-fit guest allocator) -> `retro-guest-mem::heap` (its Amiga-only `forbid` counter became a field of
-  `Amiga`); `Refusal` and `Step` -> new `retro-common`.
+- MOVED out of heirloom-ami68k-engine into shared code (Amiga re-exports them, behaviour unchanged):
+  `Heap` (first-fit guest allocator) -> `heirloom-mem-flat32::heap` (its Amiga-only `forbid` counter became a field of
+  `Amiga`); `Refusal` and `Step` -> new `heirloom-common`.
 - Mac-only: trap table, Pascal frame helper, Toolbox handlers.
 
 ## Groundwork for real applications (2026-10-18)
 
-New crate `retro-resfork` (no_std, shared with a future macppc engine): the Resource Manager file format (`ResFork`),
+New crate `heirloom-fmt-resfork` (no_std, shared with a future macppc engine): the Resource Manager file format (`ResFork`),
 MacBinary II (CRC-16/XMODEM checked), AppleDouble/AppleSingle header files, and a writer used by the tests.
 
-In `mac68k-engine`, one concern per file:
+In `heirloom-mac68k-engine`, one concern per file:
 
 | file | what |
 |---|---|
@@ -63,7 +63,7 @@ program's own `FindWindow` (-> `inGoAway`) and `TrackGoAway` (-> TRUE) confirm; 
 `mouseDown` in the menu bar plus a queued choice that the program's `MenuSelect` returns as `menuID << 16 | item`;
 `Resized` updates the WindowRecord and queues `updateEvt`; showing a window queues `activateEvt` + `updateEvt`.
 
-Run it: `cargo run -p mac68k-engine --bin mac68k-run -- [--census] [--event close|menu:ID:ITEM] <app or --fixture>`.
+Run it: `cargo run -p heirloom-mac68k-engine --bin mac68k-run -- [--census] [--event close|menu:ID:ITEM] <app or --fixture>`.
 Tests: `tests/app_end_to_end.rs` is a hand-assembled application (CODE 0/1/2, WIND, MENU, MBAR; sources in
 `fixtures/testapp/`, `build.sh` rebuilds the checked-in `.bin`s) run from MacBinary, AppleDouble and a raw fork;
 `tests/real_binaries.rs` runs Executor's MIT-licensed `go` launcher when the Executor tree is present.
@@ -89,7 +89,7 @@ Tests: `tests/app_end_to_end.rs` is a hand-assembled application (CODE 0/1/2, WI
    then `NewControl`/`GetDialogItem`/`HiliteControl`/`GetControlValue`), Gestalt/SysEnvirons/GetTrapAddress, File Manager
    (`GetVolInfo`, `OpenResFile`, `PBxxx`), TextEdit, Scrap, Sound.
 2. MacPaint-class apps additionally need CopyBits/regions/patterns/PICT, `GetNextEvent` key events with modifiers, `MenuKey`.
-3. macppc (PEF reader, CFM, glue and the by-value Mixed Mode seam (Toolbox/Memory Manager handlers callable from PowerPC) are DONE; UPPs/RoutineDescriptors for Toolbox callbacks into PPC code (filterProcs, actionProcs) and the CPU are OPEN: docs/MACPPC-PLUMBING.md). Original note: `retro-resfork` already reads the fork (`cfrg`, `pef`-bearing data forks come via the same containers); add a PEF
+3. macppc (PEF reader, CFM, glue and the by-value Mixed Mode seam (Toolbox/Memory Manager handlers callable from PowerPC) are DONE; UPPs/RoutineDescriptors for Toolbox callbacks into PPC code (filterProcs, actionProcs) and the CPU are OPEN: docs/MACPPC-PLUMBING.md). Original note: `heirloom-fmt-resfork` already reads the fork (`cfrg`, `pef`-bearing data forks come via the same containers); add a PEF
    reader + CFM, a PowerPC core (Moira is 68k; PowerCore/Dingusppc are references only), the Mixed Mode Manager so PPC code
    can call the same trap handlers through routine descriptors, and reuse this engine's Toolbox handlers unchanged
    (they are keyed on the trap table, not on the CPU).

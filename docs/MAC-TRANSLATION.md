@@ -1,24 +1,24 @@
-# The Mac translation layer (ruling 17 pieces 2, 3, 5, 8; shared by mac68k-engine and macppc-engine)
+# The Mac translation layer (ruling 17 pieces 2, 3, 5, 8; shared by heirloom-mac68k-engine and heirloom-macppc-engine)
 
 One design for every Toolbox program, 68k or PowerPC: the engine shows the program's OWN UI objects as semantic controls
-through `guestui-abi`, shows its drawing as a display list, and turns native input back into the exact input the original
+through `heirloom-ui-abi`, shows its drawing as a display list, and turns native input back into the exact input the original
 OS produced. Nothing here names an application or looks at what pixels look like.
 
-## Layout (`crates/mac68k-engine/src`)
+## Layout (`crates/heirloom-mac68k-engine/src`)
 
 | file | what it is |
 |---|---|
-| `retro-translate/src/project.rs` + `rows.rs` | THE generic mapper (`guestui-abi` stays the seam types only), shared by all three engines (amiga68k, mac68k, macppc): `Projections::sync` (add / diff-push / retire a native control), `check_ref` (the single stale-intent rule: token + generation + window), `restore`, `adopt`; plus the role x intent row tables (`Row`, `lookup_role`) |
+| `heirloom-translate/src/project.rs` + `rows.rs` | THE generic mapper (`heirloom-ui-abi` stays the seam types only), shared by all three engines (amiga68k, mac68k, macppc): `Projections::sync` (add / diff-push / retire a native control), `check_ref` (the single stale-intent rule: token + generation + window), `restore`, `adopt`; plus the role x intent row tables (`Row`, `lookup_role`) |
 | `translate/mod.rs` | the Mac engine's thin use of it: which guest object (`Meta`) is which token, `sync_projection`, `deliver_intent` |
 | `translate/fallback.rs` | a control the kit has no part for (a `procID` with no row, a pop-up whose MENU cannot be read) is drawn as the role's default look into the content plane, never dropped |
 | `translate/controls.rs` | ONE `procID` -> CDEF table (`PROCS`) and ONE role x intent row table (`TABLE`: effect, then the `TrackControl` part code), the attribute map into the real `ControlRecord`, part geometry, the Control Manager traps |
 | `translate/dialogs.rs` | ONE table: DITL item type -> item (`ITEM_TABLE`) and the text-intent row table (`TABLE`), `DialogRecord` + DITL copy with item handles, `ModalDialog` and the item traps |
 | `translate/input.rs` | pointer and key events for content (`mouseDown/Up`, `keyDown/autoKey`, low-memory `Mouse`/`MBState`) |
 | `textedit/` | TextEdit: a real `TERec` behind a handle, ROM line breaking (`layout.rs`, pure), drawing through the engine's QuickDraw into `inPort` (`draw.rs`), `TEKey` / `TEClick` / the TE scrap (`edit.rs`); styled TextEdit is refused by name |
-| `sound/` | the Sound Manager: real `SndChannel` records, `'snd '` and sound-header decoding (`snd.rs`, pure), `_SoundDispatch` (`dispatch.rs`); PCM goes out through the AUDIO part of the seam (`guestui-abi` `audio.rs`), never to a device; a host without it answers `notEnoughHardware` |
+| `sound/` | the Sound Manager: real `SndChannel` records, `'snd '` and sound-header decoding (`snd.rs`, pure), `_SoundDispatch` (`dispatch.rs`); PCM goes out through the AUDIO part of the seam (`heirloom-ui-abi` `audio.rs`), never to a device; a host without it answers `notEnoughHardware` |
 | `qd/plane.rs` | the retained display list per window port, pens as roles, `present_plane` once per step |
 
-macppc-engine adds nothing but one native (`ModalDialog` parks the PowerPC caller on the front dialog's item hit,
+heirloom-macppc-engine adds nothing but one native (`ModalDialog` parks the PowerPC caller on the front dialog's item hit,
 `Mac::modal_ready`); every table, handler and record is the 68k engine's, reached through the Mixed Mode core.
 
 ## What an intent becomes (exact guest input)
@@ -117,7 +117,7 @@ Next walls (census): styled TextEdit (`TEStyleNew`: SimpleText 1.4, Toolbox Show
 (`DrawPicture` of Moving Van's pictures), the List Manager's scroll-bar controls (`vScroll` is NIL, so `SetCRefCon(NIL)` is
 refused), `ModalDialog` filter procedures.
 
-## Host requirements the engine states (CoralOS RetroCompat host)
+## Host requirements the engine states (CoralOS Heirloom host)
 
 * **`WindowRole::Utility` as a palette window.** A program's own window definition is presented natively only through an explicit
   binding entry (`wdef_binding.rs`: id, byte length and FNV-1a digest of the `WDEF`; no definition code is stored or run). The first

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Generate crates/amiga68k-engine/src/mui/{ids_gen,names}.rs from MUI's own interface header (libraries/mui.h, the MUI 3.8 developer
+"""Generate crates/heirloom-ami68k-engine/src/mui/{ids_gen,names}.rs from MUI's own interface header (libraries/mui.h, the MUI 3.8 developer
 kit header shipped with AROS's openurl and zune MCC includes; Zune's agrees). INTERFACE FACTS only (names and numbers); no code is copied.
   ids_gen.rs: one `pub const` per MUIA_/MUIM_/MUIV_/MUII_/MUIO_ name that the engine's mui/*.rs sources mention (so a typo is a compile error
               and the number is never hand-typed);
   names.rs  : id -> name for EVERY attribute and method of the header, so a refusal says MUIA_Text_Foo instead of 0x8042....
-Usage: tools/gen-mui-ids.py [HEADER]   (default: the AROS openurl copy under /data/refs/retro)"""
+Usage: tools/gen-mui-ids.py [HEADER]   (default: the AROS openurl copy under /data/refs/heirloom)"""
 import re, sys, os, glob
-HDR = sys.argv[1] if len(sys.argv) > 1 else "/data/refs/retro/AROS/external/openurl/include/libraries/mui.h"
-SRC = os.path.join(os.path.dirname(__file__), "..", "crates", "amiga68k-engine", "src", "mui")
+HDR = sys.argv[1] if len(sys.argv) > 1 else "/data/refs/heirloom/AROS/external/openurl/include/libraries/mui.h"
+SRC = os.path.join(os.path.dirname(__file__), "..", "crates", "heirloom-ami68k-engine", "src", "mui")
 text = open(HDR, "rb").read().decode("latin1")
 vals = {}
 for m in re.finditer(r"^#define\s+(MUI[AMVOI]_\w+)\s+(.*)$", text, re.M):
@@ -19,7 +19,7 @@ for m in re.finditer(r"^#define\s+(MUI[AMVOI]_\w+)\s+(.*)$", text, re.M):
     elif sh: vals[name] = 1 << int(sh.group(1))
 # Names Zune added beyond MUI 3.8's header (multi-line defines in its class headers). Bases: MUIB_MUI = TAG_USER = 0x80000000,
 # MUIB_RSVD = MUIB_MUI | 0x10400000, MUIB_ZUNE = MUIB_RSVD | 0x20000 (mui_identifiers.h), and per-class bases `MUIB_Class = MUIB_ZUNE | n`.
-ZUNE = os.environ.get("ZUNE_CLASSES", "/data/refs/retro/AROS/workbench/libs/muimaster/classes")
+ZUNE = os.environ.get("ZUNE_CLASSES", "/data/refs/heirloom/AROS/workbench/libs/muimaster/classes")
 bases = {"MUIB_MUI": 0x80000000, "MUIB_RSVD": 0x90400000, "MUIB_ZUNE": 0x90420000}
 src = {f: open(f, "rb").read().decode("latin1") for f in glob.glob(os.path.join(ZUNE, "*.h"))}
 for _ in range(3):

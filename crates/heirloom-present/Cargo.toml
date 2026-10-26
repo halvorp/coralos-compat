@@ -1,0 +1,10 @@
+[package]
+name = "heirloom-present"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Damage accumulation and one-present_content-per-step publishing, shared by the heirloom engines"
+
+[dependencies]
+heirloom-ui-abi = { path = "../heirloom-ui-abi" }
+heirloom-raster = { path = "../heirloom-raster" }

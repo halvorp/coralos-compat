@@ -1,0 +1,33 @@
+[package]
+name = "heirloom-macppc-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Classic Mac OS PowerPC personality (plumbing): CFM instantiation of PEF fragments, import binding by symbol name onto the mac68k Toolbox handlers (Mixed Mode seam)"
+
+[dependencies]
+heirloom-common = { path = "../heirloom-common" }
+heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
+heirloom-fmt-pef = { path = "../heirloom-fmt-pef" }
+heirloom-volume = { path = "../heirloom-volume" }
+heirloom-fmt-resfork = { path = "../heirloom-fmt-resfork" }
+heirloom-mac68k-engine = { path = "../heirloom-mac68k-engine" }
+heirloom-ui-abi = { path = "../heirloom-ui-abi" }
+heirloom-gl-abi = { path = "../heirloom-gl-abi" }
+heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc" }
+libm = "0.2"
+
+[dev-dependencies]
+heirloom-raster = { path = "../heirloom-raster" }
+heirloom-macppc-engine = { path = ".", features = ["fixtures"] }
+heirloom-mac68k-engine = { path = "../heirloom-mac68k-engine", features = ["fixtures"] }
+
+[features]
+# The test-only PowerPC assembler and the built-in fixture applications. Off for the product library (CoralOS user mode);
+# the tests and the `macppc-run` CLI turn it on.
+fixtures = []
+
+[[bin]]
+name = "macppc-run"
+path = "src/bin/macppc-run.rs"
+required-features = ["fixtures"]

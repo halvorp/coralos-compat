@@ -1,0 +1,18 @@
+[package]
+name = "heirloom-ami68k-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AmigaOS 68k personality: fake ExecBase, LVO trap bridge, Intuition handlers onto GuestUi"
+
+[dependencies]
+heirloom-common = { path = "../heirloom-common" }
+heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
+heirloom-volume = { path = "../heirloom-volume" }
+heirloom-cpu-68k = { path = "../heirloom-cpu-68k" }
+heirloom-fmt-hunk = { path = "../heirloom-fmt-hunk" }
+heirloom-ui-abi = { path = "../heirloom-ui-abi" }
+heirloom-raster = { path = "../heirloom-raster" }
+heirloom-present = { path = "../heirloom-present" }
+heirloom-translate = { path = "../heirloom-translate" }
+heirloom-theme = { path = "../heirloom-theme" }

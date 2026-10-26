@@ -1,0 +1,9 @@
+[package]
+name = "heirloom-fmt-resfork"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Classic Mac resource forks: the Resource Manager file format, MacBinary II and AppleDouble containers (no_std)"
+
+[dependencies]
+heirloom-common = { path = "../heirloom-common" }

@@ -12,4 +12,4 @@ garden-simpletext-1.3	68k	mac/simpletext/u13/SimpleText 1.3.rsrc	SimpleText 1.3
 garden-glider-pro	68k	mac/glider-pro/fx/Glider PRO™.bin	Glider PRO 1.1.2 (CD toast image)
 garden-glider-edit	68k	mac/glider-pro/fx/Utilities_Glider Edit 1.1.1.bin	Glider PRO house editor
 garden-moving-van	68k	mac/glider-pro/fx/Utilities_Moving Van.bin	Glider PRO Moving Van
-garden-glider-pro-ppc	ppc	mac/glider-pro/fx/Glider PRO™.bin	Glider PRO 1.1.2 fat app: its PEF fragment (cfrg) run by macppc-engine
+garden-glider-pro-ppc	ppc	mac/glider-pro/fx/Glider PRO™.bin	Glider PRO 1.1.2 fat app: its PEF fragment (cfrg) run by heirloom-macppc-engine

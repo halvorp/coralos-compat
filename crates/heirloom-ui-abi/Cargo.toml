@@ -1,0 +1,6 @@
+[package]
+name = "heirloom-ui-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FIRST DRAFT of the normalized guest UI interface heirloom engines call"

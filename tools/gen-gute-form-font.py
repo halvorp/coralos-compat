@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rasterise the Gute Form UI font (Nunito Sans Regular, the kit's --font-ui) into an Amiga TextFont strip.
 
-Usage: gen-gute-form-font.py <NunitoSans-Regular.ttf> > crates/retro-theme/src/uifont_data.rs
+Usage: gen-gute-form-font.py <NunitoSans-Regular.ttf> > crates/heirloom-theme/src/uifont_data.rs
 
 The font is the CoralOS UI kit's UI face (CoralOS_UIKit.html `--font-ui:"Nunito Sans"`, strata_theme.rs text::SCALE_UI),
 SIL OFL 1.1, Copyright 2016 The Nunito Sans Project Authors (https://github.com/Fonthausen/NunitoSans). FreeType's 1-bit

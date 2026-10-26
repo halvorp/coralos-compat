@@ -9,22 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "amiga68k-engine"
-version = "0.1.0"
-dependencies = [
- "guestui-abi",
- "retro-common",
- "retro-guest-mem",
- "retro-hunk",
- "retro-m68k",
- "retro-present",
- "retro-raster",
- "retro-theme",
- "retro-translate",
- "retro-volume",
-]
-
-[[package]]
 name = "cc"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -41,12 +25,74 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
-name = "guestui-abi"
+name = "heirloom-ami68k-engine"
 version = "0.1.0"
+dependencies = [
+ "heirloom-common",
+ "heirloom-cpu-68k",
+ "heirloom-fmt-hunk",
+ "heirloom-mem-flat32",
+ "heirloom-present",
+ "heirloom-raster",
+ "heirloom-theme",
+ "heirloom-translate",
+ "heirloom-ui-abi",
+ "heirloom-volume",
+]
+
+[[package]]
+name = "heirloom-common"
+version = "0.1.0"
+dependencies = [
+ "heirloom-ami68k-engine",
+ "heirloom-mac68k-engine",
+ "heirloom-macppc-engine",
+ "heirloom-mem-flat32",
+ "heirloom-ui-abi",
+ "heirloom-volume",
+]
+
+[[package]]
+name = "heirloom-cpu-68k"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "heirloom-mem-flat32",
+]
+
+[[package]]
+name = "heirloom-cpu-ppc"
+version = "0.1.0"
+dependencies = [
+ "heirloom-mem-flat32",
+ "libm",
+]
 
 [[package]]
 name = "heirloom-fmt-e32"
 version = "0.1.0"
+
+[[package]]
+name = "heirloom-fmt-hunk"
+version = "0.1.0"
+dependencies = [
+ "heirloom-common",
+ "heirloom-mem-flat32",
+]
+
+[[package]]
+name = "heirloom-fmt-pef"
+version = "0.1.0"
+dependencies = [
+ "heirloom-common",
+]
+
+[[package]]
+name = "heirloom-fmt-resfork"
+version = "0.1.0"
+dependencies = [
+ "heirloom-common",
+]
 
 [[package]]
 name = "heirloom-fmt-sis"
@@ -60,7 +106,79 @@ name = "heirloom-gl-abi"
 version = "0.1.0"
 
 [[package]]
+name = "heirloom-mac68k-engine"
+version = "0.1.0"
+dependencies = [
+ "heirloom-common",
+ "heirloom-cpu-68k",
+ "heirloom-fmt-resfork",
+ "heirloom-mac68k-engine",
+ "heirloom-mem-flat32",
+ "heirloom-present",
+ "heirloom-raster",
+ "heirloom-translate",
+ "heirloom-ui-abi",
+ "heirloom-volume",
+]
+
+[[package]]
+name = "heirloom-macppc-engine"
+version = "0.1.0"
+dependencies = [
+ "heirloom-common",
+ "heirloom-cpu-ppc",
+ "heirloom-fmt-pef",
+ "heirloom-fmt-resfork",
+ "heirloom-gl-abi",
+ "heirloom-mac68k-engine",
+ "heirloom-macppc-engine",
+ "heirloom-mem-flat32",
+ "heirloom-raster",
+ "heirloom-ui-abi",
+ "heirloom-volume",
+ "libm",
+]
+
+[[package]]
+name = "heirloom-mem-flat32"
+version = "0.1.0"
+
+[[package]]
 name = "heirloom-mem-paged32"
+version = "0.1.0"
+
+[[package]]
+name = "heirloom-present"
+version = "0.1.0"
+dependencies = [
+ "heirloom-raster",
+ "heirloom-ui-abi",
+]
+
+[[package]]
+name = "heirloom-raster"
+version = "0.1.0"
+dependencies = [
+ "heirloom-theme",
+]
+
+[[package]]
+name = "heirloom-theme"
+version = "0.1.0"
+
+[[package]]
+name = "heirloom-translate"
+version = "0.1.0"
+dependencies = [
+ "heirloom-ui-abi",
+]
+
+[[package]]
+name = "heirloom-ui-abi"
+version = "0.1.0"
+
+[[package]]
+name = "heirloom-volume"
 version = "0.1.0"
 
 [[package]]
@@ -70,40 +188,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
-name = "mac68k-engine"
-version = "0.1.0"
-dependencies = [
- "guestui-abi",
- "mac68k-engine",
- "retro-common",
- "retro-guest-mem",
- "retro-m68k",
- "retro-present",
- "retro-raster",
- "retro-resfork",
- "retro-translate",
- "retro-volume",
-]
-
-[[package]]
-name = "macppc-engine"
-version = "0.1.0"
-dependencies = [
- "guestui-abi",
- "heirloom-gl-abi",
- "libm",
- "mac68k-engine",
- "macppc-engine",
- "retro-common",
- "retro-guest-mem",
- "retro-pef",
- "retro-ppc",
- "retro-raster",
- "retro-resfork",
- "retro-volume",
-]
-
-[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -111,90 +195,6 @@ checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
 ]
-
-[[package]]
-name = "retro-common"
-version = "0.1.0"
-dependencies = [
- "amiga68k-engine",
- "guestui-abi",
- "mac68k-engine",
- "macppc-engine",
- "retro-guest-mem",
- "retro-volume",
-]
-
-[[package]]
-name = "retro-guest-mem"
-version = "0.1.0"
-
-[[package]]
-name = "retro-hunk"
-version = "0.1.0"
-dependencies = [
- "retro-common",
- "retro-guest-mem",
-]
-
-[[package]]
-name = "retro-m68k"
-version = "0.1.0"
-dependencies = [
- "cc",
- "retro-guest-mem",
-]
-
-[[package]]
-name = "retro-pef"
-version = "0.1.0"
-dependencies = [
- "retro-common",
-]
-
-[[package]]
-name = "retro-ppc"
-version = "0.1.0"
-dependencies = [
- "libm",
- "retro-guest-mem",
-]
-
-[[package]]
-name = "retro-present"
-version = "0.1.0"
-dependencies = [
- "guestui-abi",
- "retro-raster",
-]
-
-[[package]]
-name = "retro-raster"
-version = "0.1.0"
-dependencies = [
- "retro-theme",
-]
-
-[[package]]
-name = "retro-resfork"
-version = "0.1.0"
-dependencies = [
- "retro-common",
-]
-
-[[package]]
-name = "retro-theme"
-version = "0.1.0"
-
-[[package]]
-name = "retro-translate"
-version = "0.1.0"
-dependencies = [
- "guestui-abi",
-]
-
-[[package]]
-name = "retro-volume"
-version = "0.1.0"
 
 [[package]]
 name = "shlex"

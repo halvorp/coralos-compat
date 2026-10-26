@@ -1,0 +1,9 @@
+[package]
+name = "heirloom-translate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The toolkit-neutral half of the heirloom UI translation layer: role x intent table rows, lookup, and the one stale-intent check"
+
+[dependencies]
+heirloom-ui-abi = { path = "../heirloom-ui-abi" }

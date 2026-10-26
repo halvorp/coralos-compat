@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Static evidence for classic Mac applications: the resource types in the resource fork (CNTL/DLOG/DITL/MENU/WIND/LDEF...) and
 the Toolbox traps their CODE resources contain, grouped by manager. A-line words found by scanning even offsets of CODE
-resources against the engine's trap table (crates/mac68k-engine/src/trap_names.rs): data that looks like a trap word over-counts,
+resources against the engine's trap table (crates/heirloom-mac68k-engine/src/trap_names.rs): data that looks like a trap word over-counts,
 so read counts as an upper bound. Usage: corpus-traps-mac.py FILE... (AppleDouble header files, MacBinary .bin, or raw forks)"""
 import collections, json, os, re, struct, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 TRAPS = {int(m.group(1), 16): m.group(2) for m in re.finditer(r"\(0x([0-9A-F]{4}), \"(\w+)\"\)",
-         open(os.path.join(HERE, "..", "crates/mac68k-engine/src/trap_names.rs")).read())}
+         open(os.path.join(HERE, "..", "crates/heirloom-mac68k-engine/src/trap_names.rs")).read())}
 MGR = [("Control", r"^(New|Dispose|Get|Set|Hilite|Show|Hide|Draw|Track|Test|Move|Size|Kill|Update|Find|Drag)?(C?Control|Ctl|ControlTitle|ControlValue|ControlMinimum|ControlMaximum|ControlAction|ControlRef|Controls)\w*$|^(HiliteControl|TrackControl|TestControl|FindControl|DrawControls|UpdtControl|SetCtlValue|GetCtlValue|SetCtlMin|SetCtlMax|GetCtlMin|GetCtlMax|SetCtlAction|GetCtlAction|SetCRefCon|GetCRefCon|DragControl|MoveControl|SizeControl|Draw1Control|KillControls|ShowControl|HideControl|SetCTitle|GetCTitle|NewControl|DisposeControl)$"),
        ("Dialog", r"Dialog|Alert|ParamText|DITL|ModalDialog|GetDItem|SetDItem|SelIText|GetIText|SetIText|FindDItem|UpdtDialog|ErrorSound|InitDialogs|CouldDialog|FreeDialog|ShortenDITL|AppendDITL|CountDITL"),
        ("Menu", r"Menu|InsMenuItem|AppendMenu|AddResMenu|CheckItem|SetItem|GetItem|DisableItem|EnableItem|CalcMenuSize|FlashMenuBar|PopUpMenuSelect|DelMenuItem|InsertResMenu|HiliteMenu|SetMenuBar|GetMenuBar|ClearMenuBar|DrawMenuBar|MenuSelect|MenuKey|InitMenus|NewMenu|GetMHandle|SetMenuFlash|SetMFlash|InsertMenu|DeleteMenu|DisposeMenu|GetRMenu"),

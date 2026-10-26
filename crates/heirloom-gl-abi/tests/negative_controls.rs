@@ -1,4 +1,4 @@
-//! Phase 0 negative controls of docs/retro-compat/22-GUEST-GL.md. Each test names the guarantee it pins; `mutants.sh`
+//! Phase 0 negative controls of docs/heirloom/22-GUEST-GL.md. Each test names the guarantee it pins; `mutants.sh`
 //! breaks the implementation one way per guarantee and requires the named test to go RED.
 use heirloom_gl_abi::command::{Command, DrawCommand, Frame};
 use heirloom_gl_abi::contract::{Entry, ENTRIES};

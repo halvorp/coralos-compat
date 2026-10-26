@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Generate crates/amiga68k-engine/src/keymap_us.rs from an AROS keymap descriptor (default: the US PC keymap).
+"""Generate crates/heirloom-ami68k-engine/src/keymap_us.rs from an AROS keymap descriptor (default: the US PC keymap).
 
-    tools/gen-keymap-us.py /data/refs/retro/AROS/workbench/devs/keymaps/pc104_usa.akmd > crates/amiga68k-engine/src/keymap_us.rs
+    tools/gen-keymap-us.py /data/refs/heirloom/AROS/workbench/devs/keymaps/pc104_usa.akmd > crates/heirloom-ami68k-engine/src/keymap_us.rs
 
 The descriptor (APL) is read for FACTS only (which character each raw key gives under each qualifier combination, the string
 descriptors of the function keys, the caps-lock and key-repeat bits); the output is data, not AROS code. The file is Latin-1.
 """
 import re, sys
 
-path = sys.argv[1] if len(sys.argv) > 1 else "/data/refs/retro/AROS/workbench/devs/keymaps/pc104_usa.akmd"
+path = sys.argv[1] if len(sys.argv) > 1 else "/data/refs/heirloom/AROS/workbench/devs/keymaps/pc104_usa.akmd"
 text = open(path, encoding="latin-1").read()
 FLAGS = {"KC_NOQUAL": 0, "KCF_SHIFT": 1, "KCF_ALT": 2, "KCF_CONTROL": 4, "KCF_DOWNUP": 8, "KCF_DEAD": 32, "KCF_STRING": 64, "KCF_NOP": 128, "KC_VANILLA": 7}
 

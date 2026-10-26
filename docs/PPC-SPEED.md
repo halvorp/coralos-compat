@@ -5,9 +5,9 @@ interpreter, later phases a JIT). This file holds the numbers, how to reproduce 
 
 ## The harness
 
-`crates/retro-ppc-bench` (host-only, its own cargo workspace like `retro-ppc-oracle`; the root workspace excludes it):
+`crates/heirloom-cpu-ppc-bench` (host-only, its own cargo workspace like `heirloom-cpu-ppc-oracle`; the root workspace excludes it):
 
-    cd crates/retro-ppc-bench
+    cd crates/heirloom-cpu-ppc-bench
     cargo run --release --bin ppc-bench -- --tiers 0 --reps 5        # baseline table
     cargo run --release --bin ppc-bench -- --census                  # opcode / block census, tier 0
     cargo run --release --bin ppc-bench -- --natives                 # time inside native callouts
@@ -19,7 +19,7 @@ guest RAM at the end). A tier whose digest or instruction count differs from tie
 DIVERGENCE and gets no speed number. Elapsed time is the run loop only (loading, instantiation and relocation excluded).
 
 `macppc-run --prof [--tier T]` prints the same `[PPC-PROF insns= native_calls= elapsed_us= mips= tier=]` line for any
-program (the counters live in `retro_ppc::Exec`, which every tier keeps; none costs anything per instruction).
+program (the counters live in `heirloom_cpu_ppc::Exec`, which every tier keeps; none costs anything per instruction).
 
 Workloads:
 
@@ -35,7 +35,7 @@ Workloads:
 | warcraft3-roc-census | the same program as `corpus-census-mac.py` runs it: 50M instructions, idle 6 ticks |
 | retro68-* | the Retro68 PPC samples in the corpus (20M instructions or to their stop) |
 
-The synthetic programs are `crates/retro-ppc/tests/asm/bench_*.s`, assembled by LLVM through `tools/ppc-regen.py` into
+The synthetic programs are `crates/heirloom-cpu-ppc/tests/asm/bench_*.s`, assembled by LLVM through `tools/ppc-regen.py` into
 `tests/common/programs.rs`. Corpus files that are absent are SKIPPED with a line saying so; no game byte is in git.
 
 ## Baseline: tier 0 before this work (2026-10-24, build host, commit b5a1d72)
@@ -85,11 +85,11 @@ lookup, natives checked once per block, not per instruction) and is the case for
 
 ## Tier 1: decoded blocks (the default since this change)
 
-`retro_ppc::Exec` with `Tier::Blocks` (`Exec::default()`); `Tier::Interp` is tier 0, kept as the reference;
+`heirloom_cpu_ppc::Exec` with `Tier::Blocks` (`Exec::default()`); `Tier::Interp` is tier 0, kept as the reference;
 `Tier::Lockstep` runs both. Selected at run time (`macppc-run --tier 0|1|lockstep`, `ppc-bench --tiers 0,1,lockstep`,
-`RETRO_PPC_TIER` for the oracle).
+`HEIRLOOM_PPC_TIER` for the oracle).
 
-What it does (crates/retro-ppc/src/t1*.rs):
+What it does (crates/heirloom-cpu-ppc/src/t1*.rs):
 - **Blocks** keyed by guest pc in a direct-mapped table (65,536 slots; a colliding block replaces the old one), the
   decoded instructions in one arena dropped whole past 1M instructions: a cache bounded by eviction, never a refusal.
   A block runs to the first branch (`sc` is always a block of its own: it calls the host), the end of its 4 KiB page,
@@ -99,7 +99,7 @@ What it does (crates/retro-ppc/src/t1*.rs):
   branch forms, FP loads/stores; FP arithmetic goes straight to tier 0's `fpu` handler). Only VALID forms are
   specialised (an update load with RA=0 or RA=RT, `bcctr` decrementing CTR, an SPR other than LR/CTR...); everything
   else is `Generic`, which runs tier 0's own `execute` on the word with pc/next/time base exactly as tier 0 has them.
-- **Invalidation by generation** (`retro-guest-mem` `watch.rs`): the cache marks each page it decodes from; the first
+- **Invalidation by generation** (`heirloom-mem-flat32` `watch.rs`): the cache marks each page it decodes from; the first
   write to a marked page (through `write_bytes`, `zero` or any sized store: the guest CPU, the native Toolbox,
   resource loads, BlockMove -- there is no other path, `ram` is private) or an `icbi` bumps the page's generation and
   unmarks it. A block is used only while its page's generation is the one it was decoded at. A store inside a block
@@ -116,9 +116,9 @@ What it does (crates/retro-ppc/src/t1*.rs):
 
 ### Gates (all measured 2026-10-24)
 
-1. **Differential oracle, every tier**: `retro-ppc-oracle` `cargo test --release` 9/9 (the family sweep now runs on
+1. **Differential oracle, every tier**: `heirloom-cpu-ppc-oracle` `cargo test --release` 9/9 (the family sweep now runs on
    the default tier AND explicitly on tier 0, tier 1 and lockstep); `ppc-fuzz 11` (374,000 cases) and the README's
-   headline run `ppc-fuzz 11 20000 400000` (3,940,000 cases) under `RETRO_PPC_TIER=1` and `=lockstep`: **0
+   headline run `ppc-fuzz 11 20000 400000` (3,940,000 cases) under `HEIRLOOM_PPC_TIER=1` and `=lockstep`: **0
    discrepancy groups**, the same 3,297,378 agreeing outright as tier 0.
 2. **Lockstep, block by block, zero divergence** (GPR, FPR, CR, LR, CTR, XER, FPSCR, pc, time base, reservation, the
    trap, every byte either run wrote; MSR is not modelled by this user-mode interpreter): Warcraft III startup 182,790
@@ -161,7 +161,7 @@ the 50M census trace (20.4M).
 On the application workloads the CPU is no longer where the time goes:
 - **warcraft3-roc-census: 70% of elapsed is inside native callouts**, 2.09 s of 3.25 s in `CFM/$CallbackReturn`
   (433,823 calls, 4.8 us each, down from 7.6 us): the thread switch while both threads idle around the StandardAlert.
-  What is left of it is macppc-engine `sched.rs` `raw_switch` re-binding EVERY glue stub into the incoming CPU
+  What is left of it is heirloom-macppc-engine `sched.rs` `raw_switch` re-binding EVERY glue stub into the incoming CPU
   (`for i in 0..self.glue.len() { cpu.bind_native(..) }`: ~900 set lookups, 6-9 us per full re-bind measured in
   isolation). Binding only the stubs interned since that task last ran would remove it; that is engine code, outside
   this change (the engine was touched only at the interpreter entry point).
@@ -190,7 +190,7 @@ On the application workloads the CPU is no longer where the time goes:
 ## A Z83 form (not built)
 
 The harness is host-only (std). To run it on the Z83 inside CoralOS it would need: the synthetic workloads as a
-no_std runner (they only need `retro-ppc` + `retro-guest-mem` + a monotonic clock: the CoralOS time syscall), the
+no_std runner (they only need `heirloom-cpu-ppc` + `heirloom-mem-flat32` + a monotonic clock: the CoralOS time syscall), the
 corpus files on the eMMC datavol (they are not shippable: owner's copies, test input only), and a launch row for a
 bench `.engine` that prints the `[PPC-PROF]` lines to the ring, graded with `z83_ring --grep PPC-PROF`. Nothing of
 that is built here.

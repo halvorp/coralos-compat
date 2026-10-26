@@ -1,7 +1,7 @@
 //! THE CONTRACT AS DATA: every GL/AGL entry point the four Warcraft III binaries import, plus the entries that make
 //! each version/extension claim complete. Imports were read from the PEF import tables of
 //! `roc-Warcraft_III`, `roc-Warcraft_III_World_Editor`, `tft-Warcraft_III_TFT` and `tft-Warcraft_III_World_Editor_TFT`
-//! (libraries OpenGLLibrary, OpenGLUtility, OpenGLMemory; 73 distinct names) with `retro-pef` on 2026-10-25.
+//! (libraries OpenGLLibrary, OpenGLUtility, OpenGLMemory; 73 distinct names) with `heirloom-fmt-pef` on 2026-10-25.
 //!
 //! `implemented` is the ONLY place a capability is switched on, and it is false until the worker backs the entry end to
 //! end. [`crate::caps`] derives the advertised strings from it.

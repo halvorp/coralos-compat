@@ -1,9 +1,9 @@
 # macppc plumbing (2026-10-18): everything around the PowerPC CPU that does not need the CPU
 
-Three pieces, none of which executes a PowerPC instruction. The interpreter (`retro-ppc`, another lane) plugs into the
-contract in `crates/macppc-engine/src/host.rs`.
+Three pieces, none of which executes a PowerPC instruction. The interpreter (`heirloom-cpu-ppc`, another lane) plugs into the
+contract in `crates/heirloom-macppc-engine/src/host.rs`.
 
-## retro-pef (no_std)
+## heirloom-fmt-pef (no_std)
 PEF container: header, section headers/names, section images (pattern-initialised data expanded with all five pidata
 opcodes), the loader section (imported libraries/symbols with class and weak flags, relocation headers, the export hash
 table with lookup through the hash, main/init/term), every relocation opcode decoded and interpreted
@@ -14,15 +14,15 @@ their sections). Executor's loader asserts on SmRepeat/LgRepeat/LgSetOrBySection
 spec (repeat = the preceding `blockCount + 1` INSTRUCTIONS, `repeatCount + 1` more times; no real fragment in the
 corpus exercises them, so they are tested synthetically only).
 
-## The Mixed Mode seam (mac68k-engine `mixed.rs`)
+## The Mixed Mode seam (heirloom-mac68k-engine `mixed.rs`)
 A Toolbox handler's inputs were already values (`Call.args`, `Regs`); what was missing was a way to fill them that is not
 the 68k stack/registers. `Mac::pascal_call(opcode, values)` and `Mac::os_call(opcode, OsSig, values)` run THE SAME handler
 function the A-line bridge runs, and `finish_pascal`/`finish_os` apply the outcome (log line or named refusal) for both
-callers. `OS_SIGS` maps the Memory Manager's C prototypes onto the register contracts. `retro_m68k::Cpu::detached()`
+callers. `OS_SIGS` maps the Memory Manager's C prototypes onto the register contracts. `heirloom_cpu_68k::Cpu::detached()`
 lets a handler run for another processor without touching Musashi's global state. 68k-only handlers (`LoadSeg`) are
-listed by name in `macppc-engine/src/symbols.rs` and bind as NEXT-NEEDED.
+listed by name in `heirloom-macppc-engine/src/symbols.rs` and bind as NEXT-NEEDED.
 
-## macppc-engine
+## heirloom-macppc-engine
 `MacPpc::instantiate(&Pef)`: sections placed in the shared guest heap, imports bound by SYMBOL NAME (natives, `qd`, OS
 routines, Toolbox traps), relocations applied, entry TVectors read. Every imported function is a 16-byte glue cell
 `{TVector{stub,0}, blr}`; the CPU asks `PpcHost::glue_symbol_at(pc)` and calls `PpcHost::glue_call(symbol, &mut regs)`.
@@ -31,7 +31,7 @@ Results: INTEGER sign-extended, Boolean zero-extended. (Event calls: see "macppc
 functions are TVectors that refuse by name when called (`--strict`: refuse at load); strong missing data points outside
 guest RAM.
 
-Run: `cargo run -p macppc-engine --bin macppc-run -- [--census] [--strict] [--data FORK] (--fixture | <PEF | app>)`.
+Run: `cargo run -p heirloom-macppc-engine --bin macppc-run -- [--census] [--strict] [--data FORK] (--fixture | <PEF | app>)`.
 An application file is MacBinary, or an AppleDouble header file (`%name`/`._name`) with its data fork beside it; the
 `cfrg` 0 resource names the `pwpc` application fragment.
 
@@ -42,7 +42,7 @@ An application file is MacBinary, or an AppleDouble header file (`%name`/`._name
 | built-in startup app (19 imports: Init*, NewHandle, GetResource, NewWindow, WaitNextEvent, qd, MoveTo, DrawString, SysBeep ...) | no PPC engine | 16 bound, NEXT-NEEDED MoveTo, DrawString, SysBeep (QuickDraw drawing is the qd lane; they bind automatically when it registers them) |
 
 ## Next
-1. DONE: the CPU lane (retro-ppc) calls `glue_symbol_at` per native hook and `glue_call` on a hit.
+1. DONE: the CPU lane (heirloom-cpu-ppc) calls `glue_symbol_at` per native hook and `glue_call` on a hit.
 2. Float arguments (MathLib, `Fixed`/`Fract` helpers) need f1..f13 in the glue contract.
 3. Imports from other fragments (an app's own shared libraries) via `instantiate` of a second PEF and export lookup.
 4. UPP/routine descriptors: designed 2026-10-20, see "Mixed Mode" below; slice 1 (trap-address queries) DONE.
@@ -54,7 +54,7 @@ An application file is MacBinary, or an AppleDouble header file (`%name`/`._name
 
 # macppc RUNS (2026-10-18, ppcrun lane)
 
-`retro-ppc` is now the CPU. `MacPpc::start(&frag)` builds the CFM entry state (fresh 256 KiB stack, r1 16-byte aligned over a
+`heirloom-cpu-ppc` is now the CPU. `MacPpc::start(&frag)` builds the CFM entry state (fresh 256 KiB stack, r1 16-byte aligned over a
 zero back chain, r2 = RTOC of the main TVector, r12 = the TVector address, LR = the ExitToShell glue); a fragment with an
 `init` routine runs it first (LR = the `$InitDone` pseudo-glue, which switches the CPU to `main`; r3 = 0 where real CFM passes a
 `CFragInitBlock *`; its OSErr result is honoured: nonzero is a sticky fault and `main` does not run; term routines are not run). `MacPpc::step(budget) -> (Step, RunStats)` has the 68k engines' shape:
@@ -72,7 +72,7 @@ pointer; a Point is the two shorts packed in one register). `qd` is the real QDG
 sleep's deadline (`Runtime::wait_deadline`, the same rule as the 68k engine's blocked call: at least one tick, 0x50000+ ticks = until an event;
 the retry then returns the null event instead of parking again). `GetNextEvent` never waits
 (Inside Macintosh): FALSE and a null event at once. (mac68k's `GetNextEvent` still blocks; that is its lane's to change.) The host moves the
-clock in virtual microseconds (`GuestMachine::advance_clock_to`; the 60 Hz boundary rule is in `mac68k_engine::clock`) and reads the wake-up
+clock in virtual microseconds (`GuestMachine::advance_clock_to`; the 60 Hz boundary rule is in `heirloom_mac68k_engine::clock`) and reads the wake-up
 from `GuestMachine::next_timer_deadline`.
 
 Not handled, each a named limit: floating-point arguments/results (f1..f13; no InterfaceLib import this engine binds takes one),
@@ -122,7 +122,7 @@ openai/gpt-6-astra and google/gemini-2.5-pro; Gemini did not answer, so this is 
    only with a caller). Frames live in a per-machine stack; nothing re-enters the interpreter; a trap body is never replayed
    after a callback's side effects.
 3. **PowerPC records only, first.** 68k records are parsed and represented, and selecting one is NEXT-NEEDED by name
-   (API, UPP, target, procInfo) before any register changes. Owner: macppc-engine. Delete-when: cross-ISA argument/result,
+   (API, UPP, target, procInfo) before any register changes. Owner: heirloom-macppc-engine. Delete-when: cross-ISA argument/result,
    nested-call and A5-world witnesses pass for the first 68k resource that needs it.
 4. **Trap addresses are the shared registry's.** DONE (slice 1, below).
 5. **Slices:** (1) trap-address queries; (2) the descriptor constructors/disposal + the resolver; (3) PPC callback
@@ -133,7 +133,7 @@ openai/gpt-6-astra and google/gemini-2.5-pro; Gemini did not answer, so this is 
 ## Slice 1 DONE (2026-10-20): "where is trap N?" from PowerPC code
 
 `NGetTrapAddress(trapNum, tTyp)`, `GetOSTrapAddress`, `GetToolTrapAddress` and `GetTrapAddress` are `Native::TrapAddress`
-imports answered by `mac68k_engine::traptable::trap_address`, the one query the 68k `_GetTrapAddress` family also uses: a
+imports answered by `heirloom_mac68k_engine::traptable::trap_address`, the one query the 68k `_GetTrapAddress` family also uses: a
 guest 68k stub address (or the patch routine of a patched trap), the `_Unimplemented` stub for a trap with no handler.
 InterfaceLib's `InvertRect` / `InvertRoundRect` / `InvertRgn` alias the `_Inver*` trap spellings. Retro68's PowerPC
 HelloWorld now draws its console and waits in its event loop with nothing refused (it stopped at NGetTrapAddress, then at
@@ -143,7 +143,7 @@ with a negative control; the PowerPC answer equals the 68k one), `tests/census_c
 
 ## Slice 2 DONE (2026-10-20): real routine descriptors, one parser
 
-`mac68k_engine::mixed_mode` is the one parser and the constructors: `NewRoutineDescriptor(proc, procInfo, ISA)` and
+`heirloom_mac68k_engine::mixed_mode` is the one parser and the constructors: `NewRoutineDescriptor(proc, procInfo, ISA)` and
 `NewFatRoutineDescriptor(m68kProc, ppcProc, procInfo)` allocate and fill a descriptor (`$AAFE`, version 7, routineCount =
 the last index, 20-byte records with flags `kUseNativeISA`); `DisposeRoutineDescriptor` frees only a block they made, once
 (`Mac::routine_descriptors` is the ownership ledger, not a whitelist: a static descriptor the program built itself parses and
@@ -154,13 +154,13 @@ NewRoutineDescriptor: HelloWorld and WDEFShell run to their WaitNextEvent loops;
 then STOPS with a fault in ModalDialog, which must call that UPP to draw the item (slice 3). CALLING a UPP is slice 3; until
 then nothing claims a user item or a custom WDEF drew. (Correction, same day: the first slice-2 note said all three ran with
 nothing refused; the census helper counted refusals but not a run's fault. It now counts both.)
-Tests: mac68k-engine `tests/routine_descriptors.rs` (5: the documented bytes and not the TVector; a fat descriptor and the
+Tests: heirloom-mac68k-engine `tests/routine_descriptors.rs` (5: the documented bytes and not the TVector; a fat descriptor and the
 68k-only refusal; a static descriptor resolves but is not disposable; version / count / relative / NIL mutations refused and
 the restored block resolves; dispose once, NIL no-op, reuse). RED by mutation: the version check removed.
 
 ## Slice 3 DONE (2026-10-20): PowerPC callbacks, and the first continuation (a dialog's user items)
 
-`macppc_engine::callback`: no handler re-enters the interpreter. When `ModalDialog` is reached and the front dialog has user
+`heirloom_macppc_engine::callback`: no handler re-enters the interpreter. When `ModalDialog` is reached and the front dialog has user
 items over a non-empty update region, the shared Dialog Manager begins the update and hands back the procedures
 (`Mac::begin_modal_user_items`); the adapter saves every register of the interrupted call in a `Frame` (GPRs, FPRs, CR, LR,
 CTR, XER, FPSCR, pc), resolves the item's UPP through the one parser (a descriptor it cannot run is refused BEFORE any
@@ -177,7 +177,7 @@ order NewRoutineDescriptor -> the user item runs -> FrameRoundRect -> ModalDialo
 WDEF slice 1 (2026-10-20, Astra's ruling in docs/consults/2026-10-20-wdef.md): the procID is decoded whole (`16 * WDEF id +
 variation`, `toolbox::role_of`). The system WDEFs 0 and 1 keep their native roles, each by its own row (procID 16, the rounded
 window, no longer aliases procID 0 by its low bits). Any other WDEF is the program's own window definition with no native
-presentation contract (RETRO-ROLES-REQUIRE-A-CONTRACT): `NewWindow` refuses it by name (`[WDEF-UNSUPPORTED]`) before anything is
+presentation contract (HEIRLOOM-ROLES-REQUIRE-A-CONTRACT): `NewWindow` refuses it by name (`[WDEF-UNSUPPORTED]`) before anything is
 allocated or shown and returns NIL. WDEFShell's custom windows (WDEF 128, a 68k stub; WDEF 129, an embedded PEF) and MacPaint
 2.1F's palettes (its own WDEF 34) are refused this way; until slice 1 they were silently document windows. The ruling's order
 after this: real WindowRecord regions and windowDefProc, WindowDefinition continuations (NewWindow/wNew/wCalcRgns, FindWindow/wHit,

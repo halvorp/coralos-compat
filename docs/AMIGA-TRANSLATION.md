@@ -1,10 +1,10 @@
-# amiga68k-engine: how a guest UI reaches the host (ruling 17, Amiga half)
+# heirloom-ami68k-engine: how a guest UI reaches the host (ruling 17, Amiga half)
 
-One seam (`guestui-abi`), per-TOOLKIT tables, no application names (`tools/check-translation-seam.sh` is the gate).
+One seam (`heirloom-ui-abi`), per-TOOLKIT tables, no application names (`tools/check-translation-seam.sh` is the gate).
 
 ## Intents back: `src/translate/`
 
-* The generic mapper is the ONE `retro-translate` crate (shared with mac68k/macppc): the row tables (`Row { role, on, effect, post }`,
+* The generic mapper is the ONE `heirloom-translate` crate (shared with mac68k/macppc): the row tables (`Row { role, on, effect, post }`,
   `lookup(table, control kind, intent)`) and the projection registry (`Projections`: sync / retire / resolve, the one stale-intent
   rule). `translate/mod.rs` holds only the Amiga payloads (`Effect`, `Post`) and `message(row, Gadget.Activation, value)`.
   Native gadgets AND GadTools gadgets are both projected through `Projections<u32>` (`native_gads`, `gt_ctls`).
@@ -27,7 +27,7 @@ One seam (`guestui-abi`), per-TOOLKIT tables, no application names (`tools/check
 * A host without alerts refuses by name and the guest gets 0, as for a requester that could not open. A headless run
   (`amiga68k-run`, `RecordingGuestUi::auto_cancel_requests`) dismisses every request with its Escape button.
 
-## Content out: planes (`graphics/record.rs`, `retro-present/src/plane.rs`)
+## Content out: planes (`graphics/record.rs`, `heirloom-present/src/plane.rs`)
 
 * The guest bitmap stays authoritative (ReadPixel / blits keep working). Next to it each window records a display list.
 * A pen is a ROLE, found through the DrawInfo pen table the guest reads (`dri_Pens`: TEXT, SHINE, SHADOW, FILL, FILLTEXT,
