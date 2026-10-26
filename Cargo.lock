@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "amiga68k-engine"
 version = "0.1.0"
 dependencies = [
@@ -37,6 +43,13 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 [[package]]
 name = "guestui-abi"
 version = "0.1.0"
+
+[[package]]
+name = "heirloom-fmt-sis"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide",
+]
 
 [[package]]
 name = "libm"
@@ -75,6 +88,15 @@ dependencies = [
  "retro-raster",
  "retro-resfork",
  "retro-volume",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
 ]
 
 [[package]]
