@@ -45,11 +45,19 @@ name = "guestui-abi"
 version = "0.1.0"
 
 [[package]]
+name = "heirloom-fmt-e32"
+version = "0.1.0"
+
+[[package]]
 name = "heirloom-fmt-sis"
 version = "0.1.0"
 dependencies = [
  "miniz_oxide",
 ]
+
+[[package]]
+name = "heirloom-mem-paged32"
+version = "0.1.0"
 
 [[package]]
 name = "libm"
