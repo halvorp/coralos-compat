@@ -77,6 +77,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-ekaarm-engine"
+version = "0.1.0"
+dependencies = [
+ "heirloom-cpu-arm",
+ "heirloom-fmt-e32",
+ "heirloom-mem-paged32",
+]
+
+[[package]]
 name = "heirloom-fmt-e32"
 version = "0.1.0"
 

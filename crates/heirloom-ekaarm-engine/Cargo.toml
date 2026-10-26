@@ -1,0 +1,15 @@
+[package]
+name = "heirloom-ekaarm-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Heirloom's Symbian EKA2 (ARM) engine: loads an E32 executable, binds its imports to named native calls and runs it on heirloom-cpu-arm"
+
+[dependencies]
+heirloom-cpu-arm = { path = "../heirloom-cpu-arm" }
+heirloom-fmt-e32 = { path = "../heirloom-fmt-e32" }
+heirloom-mem-paged32 = { path = "../heirloom-mem-paged32" }
+
+[[bin]]
+name = "ekaarm-run"
+path = "src/bin/ekaarm-run.rs"

@@ -1,0 +1,59 @@
+use alloc::format;
+use heirloom_cpu_arm::Exit;
+use crate::layout::STUB_SVC_BASE;
+use crate::loader::Process;
+use crate::natives::{self, NativeOutcome};
+
+pub enum Outcome {
+    Exited(i32),
+    Refused(alloc::string::String),
+    Fault(alloc::string::String),
+    BudgetSpent,
+    Blocked,
+}
+
+impl Process {
+    pub fn run(&mut self, budget: u64) -> Outcome {
+        // step() keeps the instruction count exact even when execution stops at an SVC or fault.
+        loop {
+            if self.insns >= budget {
+                return Outcome::BudgetSpent;
+            }
+            let exit = self.cpu.step(&mut self.mem);
+            self.insns += 1;
+            match exit {
+                Exit::Svc(n) => {
+                    if n == crate::layout::EXIT_SVC {
+                        return Outcome::Exited(self.cpu.regs[0] as i32);
+                    }
+                    if n >= STUB_SVC_BASE {
+                        let idx = (n - STUB_SVC_BASE) as usize;
+                        match natives::call(self, idx) {
+                            NativeOutcome::Return => continue,
+                            NativeOutcome::Exit(code) => return Outcome::Exited(code),
+                            NativeOutcome::Refused(msg) => return Outcome::Refused(msg),
+                        }
+                    }
+                    return Outcome::Refused(format!(
+                        "NEXT-NEEDED exec call SVC #0x{:X} at PC 0x{:08X}",
+                        n, self.cpu.pc()
+                    ));
+                }
+                Exit::Bkpt(n) => return Outcome::Fault(format!(
+                    "BKPT #0x{:X} at PC 0x{:08X}", n, self.cpu.pc()
+                )),
+                Exit::Trap(t) => return Outcome::Fault(format!(
+                    "TRAP pc=0x{:08X} insn=0x{:08X} thumb={} kind={:?}",
+                    t.pc, t.insn, t.thumb, t.kind
+                )),
+                Exit::Fault { pc, fault } => return Outcome::Fault(format!(
+                    "FAULT pc=0x{:08X} addr=0x{:08X} access={:?}",
+                    pc, fault.addr, fault.access
+                )),
+                Exit::Wait => return Outcome::Blocked,
+                // step() reports one retired instruction as a spent budget of one
+                Exit::BudgetSpent => continue,
+            }
+        }
+    }
+}
