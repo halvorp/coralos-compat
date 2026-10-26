@@ -13,6 +13,9 @@ pub struct Process {
     pub insns: u64,
     pub heap: Option<crate::heap::Heap>,
     pub heap_chunk_id: ChunkId,
+    /// Census mode (`Some`): an unimplemented import returns 0 to the guest and is recorded here in call order, so one run
+    /// lists the whole sequence a program reaches. `None` (the default) stops at the first one.
+    pub census: Option<Vec<alloc::string::String>>,
 }
 
 #[derive(Debug)]
@@ -131,6 +134,7 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         insns: 0,
         heap: None,
         heap_chunk_id: heap_id,
+        census: None,
     };
 
     // EKA2 entry state: kernel places SStdEpocThreadCreateInfo (0x40 bytes)

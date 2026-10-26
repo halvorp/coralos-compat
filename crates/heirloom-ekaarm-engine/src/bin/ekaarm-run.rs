@@ -5,16 +5,18 @@ use heirloom_fmt_e32::{E32Image, OrdinalTable};
 const ORD_TSV: &str = include_str!("../../../heirloom-fmt-e32/data/eka-ordinals.tsv");
 
 fn usage() -> ! {
-    eprintln!("usage: ekaarm-run [--max-insns N] <e32 file>");
+    eprintln!("usage: ekaarm-run [--census] [--max-insns N] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
     std::process::exit(2)
 }
 
 fn main() {
     let mut max_insns = 50_000_000u64;
+    let mut census = false;
     let mut file = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--census" => census = true,
             "--max-insns" => {
                 let value = args.next().unwrap_or_else(|| usage());
                 max_insns = value.parse().unwrap_or_else(|_| usage());
@@ -53,7 +55,16 @@ fn main() {
     let unnamed = proc.stubs.iter().filter(|s| s.name.is_none()).count();
     println!("imports: {} dlls, {} stubs ({} unnamed)", dlls, proc.stubs.len(), unnamed);
 
+    if census { proc.census = Some(Vec::new()); }
     let outcome = proc.run(max_insns);
+    if let Some(seen) = &proc.census {
+        let mut first = std::collections::BTreeMap::new();
+        for (i, m) in seen.iter().enumerate() { first.entry(m.as_str()).or_insert(i); }
+        println!("census: {} unimplemented calls, {} distinct (in first-call order):", seen.len(), first.len());
+        let mut order: Vec<_> = first.into_iter().collect();
+        order.sort_by_key(|&(_, i)| i);
+        for (m, _) in order { println!("  {m}"); }
+    }
     match outcome {
         Outcome::Exited(code) => println!("OUTCOME Exited({}) after {} instructions", code, proc.insns),
         Outcome::Refused(msg) => {

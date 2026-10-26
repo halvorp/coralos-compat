@@ -32,7 +32,10 @@ impl Process {
                         match natives::call(self, idx) {
                             NativeOutcome::Return => continue,
                             NativeOutcome::Exit(code) => return Outcome::Exited(code),
-                            NativeOutcome::Refused(msg) => return Outcome::Refused(msg),
+                            NativeOutcome::Refused(msg) => match self.census.as_mut() {
+                                Some(seen) if msg.starts_with("NEXT-NEEDED") => { seen.push(msg); self.cpu.regs[0] = 0; continue }
+                                _ => return Outcome::Refused(msg),
+                            },
                         }
                     }
                     return Outcome::Refused(format!(
