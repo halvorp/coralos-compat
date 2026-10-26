@@ -5,18 +5,20 @@ use heirloom_fmt_e32::{E32Image, OrdinalTable};
 const ORD_TSV: &str = include_str!("../../../heirloom-fmt-e32/data/eka-ordinals.tsv");
 
 fn usage() -> ! {
-    eprintln!("usage: ekaarm-run [--census] [--max-insns N] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
+    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
     std::process::exit(2)
 }
 
 fn main() {
     let mut max_insns = 50_000_000u64;
     let mut census = false;
+    let mut list_imports = false;
     let mut file = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--census" => census = true,
+            "--imports" => list_imports = true,
             "--max-insns" => {
                 let value = args.next().unwrap_or_else(|| usage());
                 max_insns = value.parse().unwrap_or_else(|_| usage());
@@ -55,6 +57,9 @@ fn main() {
     let unnamed = proc.stubs.iter().filter(|s| s.name.is_none()).count();
     println!("imports: {} dlls, {} stubs ({} unnamed)", dlls, proc.stubs.len(), unnamed);
 
+    if list_imports {
+        for s in &proc.stubs { println!("import {}/{} {}", s.dll_base, s.ordinal, s.name.as_deref().unwrap_or("?")); }
+    }
     if census { proc.census = Some(Vec::new()); }
     let outcome = proc.run(max_insns);
     if let Some(seen) = &proc.census {
