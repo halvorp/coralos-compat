@@ -1,0 +1,8 @@
+[package]
+name = "heirloom-cpu-abi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The one C-ABI boundary between a Heirloom family engine and a cpu-*.library (68k, PowerPC, ARM): a version-first repr(C) vtable"
+
+[dependencies]
