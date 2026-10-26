@@ -31,6 +31,11 @@ impl<U: GuestUi> GuestMachine for MacPpc<U> {
     fn start_file(&mut self, file: &[u8], name: &str) -> Result<(), Refusal> {
         let (frag_name, bytes) = fragment_bytes(file, None).map_err(|e| Refusal(format!("{name}: {e}")))?;
         let pef = Pef::parse(&bytes).map_err(|e| Refusal(format!("{name}: {e}")))?;
+        // The private libraries the application carries in its own data fork (its cfrg import-library members, e.g.
+        // Warcraft III's StormCarbon), as the CFM finds them and as macppc-run already provides them.
+        for (lib, lib_bytes) in crate::source::library_fragments(file, None) {
+            self.provide_library(&lib, &lib_bytes);
+        }
         if !Pef::has_magic(file) {
             if let Err(why) = self.attach_resources(file) { self.mac.log.push(format!("[cfm] no resource fork attached: {why}")); }
         }
