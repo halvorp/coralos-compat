@@ -19,6 +19,7 @@ use crate::error::CfmError;
 use crate::host::{GlueOutcome, PpcHost};
 use crate::machine::{MacPpc, UNBOUND_DATA};
 use crate::symbols::{Binding, Native};
+use crate::threads::ThreadFn;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
@@ -145,12 +146,23 @@ impl<U: GuestUi> MacPpc<U> {
             let timed_out = self.rt.wait_deadline.is_some_and(|d| self.mac.ev.ticks.wrapping_sub(d) < 0x8000_0000);
             // a Time Manager task that is due wakes the parked call too: the retried call is the safepoint that runs it
             let timer_due = self.tm_next_wake().is_some_and(|w| w <= self.mac.ev.ticks_total);
-            if !self.mac.event_pending(mask) && !timed_out && !timer_due { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
-            self.rt.wait_timed_out = timed_out;
-            self.rt.wait_mask = None;
-            self.rt.wait_deadline = None;
+            let wake = self.mac.event_pending(mask) || timed_out || timer_due;
+            if self.rt.sched.sweep.is_some() {
+                if wake {
+                    self.rt.sched.sweep = None;
+                    self.rt.wait_timed_out = timed_out;
+                    self.rt.wait_mask = None;
+                    self.rt.wait_deadline = None;
+                }
+                // else the sweep is still going round: another task holds the CPU, so this is not a park
+            } else {
+                if !wake { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
+                self.rt.wait_timed_out = timed_out;
+                self.rt.wait_mask = None;
+                self.rt.wait_deadline = None;
+            }
         }
-        if self.rt.wait_dialog {
+        if self.rt.wait_dialog && self.rt.sched.sweep.is_none() {
             if !self.mac.modal_ready() { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
             self.rt.wait_dialog = false;
         }
@@ -242,6 +254,10 @@ impl<U: GuestUi> Host for MacPpc<U> {
             cpu.set_pc(m.pc);
             return true;
         }
+        // idle sweep: every call is progress except a yield (unless its turn computed) and a call that parks (undone below)
+        let progressed_before = self.rt.sched.sweep.as_ref().map(|s| s.progressed);
+        let yielding = matches!(self.bindings.get(&symbol), Some(Binding::Native(Native::Thread(ThreadFn::YieldToAnyThread | ThreadFn::YieldToThread))));
+        self.note_call(cpu, yielding);
         // a Time Manager task that has come due runs now: this glue call is a safepoint (named limit: not interrupt time)
         if symbol != crate::callback::CALLBACK_RETURN {
             match self.tm_safepoint(cpu, addr) {
@@ -320,7 +336,11 @@ impl<U: GuestUi> Host for MacPpc<U> {
         match outcome {
             GlueOutcome::Return => {}
             GlueOutcome::Exit => cpu.halt(),
-            GlueOutcome::Idle => { if !self.idle_yield(cpu, addr) { cpu.block(); cpu.set_pc(addr); } }
+            GlueOutcome::Idle => {
+                // the call parked: it was not progress after all (note_call counted it before it ran)
+                if let (Some(s), Some(p)) = (&mut self.rt.sched.sweep, progressed_before) { s.progressed = p; }
+                if !self.idle_yield(cpu, addr) { cpu.block(); cpu.set_pc(addr); }
+            }
             GlueOutcome::Refused(why) => { self.rt.fault = Some(why); cpu.halt(); }
         }
         self.sync_natives(cpu);

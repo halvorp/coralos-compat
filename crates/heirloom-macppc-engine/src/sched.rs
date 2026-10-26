@@ -17,6 +17,19 @@ use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
 use heirloom_cpu_ppc::Cpu;
 
+/// A turn (from a task getting the CPU to its yield) that retires more instructions than this is computing, not polling,
+/// so it counts as progress in an idle sweep (ruling docs/consults/2026-10-26-macppc-thread-idle.md, step 4: a flag poller
+/// runs < 64 instructions per turn — Warcraft III's measured < 32 — and a worker that yields every 2,048 is working).
+pub const TURN_WORK_INSNS: u64 = 256;
+
+/// One round of an idle sweep: `origin` parked in a call that would idle (WaitNextEvent) and handed the CPU on. If control
+/// comes back to `origin` with `progressed` still false, every runnable task only yielded and the machine is idle.
+pub struct Sweep {
+    pub origin: u32,
+    /// A task made a call other than a yield, or a turn retired more than [`TURN_WORK_INSNS`].
+    pub progressed: bool,
+}
+
 /// The task the application itself runs as (`kApplicationThreadID` = 1 in Threads.h).
 pub const MAIN_TASK: u32 = 1;
 
@@ -68,6 +81,13 @@ pub struct Sched {
     pub critical: u32,
     /// `bind_native` calls made by task switches (a test counts them: a switch must not rebind what the task already has).
     pub rebinds: u64,
+    /// The open idle sweep, while a task's would-idle call has handed the CPU on (see [`Sweep`]).
+    pub sweep: Option<Sweep>,
+    /// Counters behind the power-of-two cadence of the two sweep log lines.
+    pub(crate) yield_log_count: u32,
+    pub(crate) idle_sweep_log_count: u32,
+    /// The CPU's time base when the running task last got the CPU: the start of its turn.
+    pub(crate) turn_tb: u64,
 }
 
 impl Sched {
@@ -141,6 +161,7 @@ impl<U: GuestUi> MacPpc<U> {
         } else if let Some(t) = self.rt.sched.tasks.remove(&cur) { dead_stack = t.stack; }
         self.rt.callbacks = next_callbacks;
         self.rt.sched.current = to;
+        self.rt.sched.turn_tb = cpu.tb;
         let pc = cpu.pc;
         cpu.set_pc(pc); // the native "returned" into the other task: the run loop must not overwrite pc with this task's LR
         // only the stubs interned since this task last ran are missing from its bound set
@@ -150,16 +171,73 @@ impl<U: GuestUi> MacPpc<U> {
         Ok(())
     }
 
+    /// The idle sweep's progress rule for one call: any call but a yield is progress; a yield is progress when its turn
+    /// computed (more than [`TURN_WORK_INSNS`] retired since the task got the CPU).
+    pub(crate) fn note_call(&mut self, cpu: &Cpu, yielding: bool) {
+        if !yielding { if let Some(s) = &mut self.rt.sched.sweep { s.progressed = true; } } else { self.note_turn(cpu); }
+    }
+
+    fn note_turn(&mut self, cpu: &Cpu) {
+        if cpu.tb.wrapping_sub(self.rt.sched.turn_tb) > TURN_WORK_INSNS { if let Some(s) = &mut self.rt.sched.sweep { s.progressed = true; } }
+    }
+
     /// `GlueOutcome::Idle` with another task ready: run that task now and retry the parked call (`addr`) when this one is scheduled again.
     pub(crate) fn idle_yield(&mut self, cpu: &mut Cpu, addr: u32) -> bool {
-        if self.rt.sched.tasks.len() < 2 { return false; }
+        if self.rt.sched.tasks.len() < 2 {
+            self.rt.sched.sweep = None;
+            return false;
+        }
         let cur = self.rt.sched.current;
-        let Some(to) = self.runnable_after(cur, false) else { return false };
-        // the call is not parked: it will simply run again, so the machine-wide wait markers must not survive
-        self.rt.wait_mask = None;
-        self.rt.wait_deadline = None;
-        self.rt.wait_dialog = false;
-        self.mac.log.push(format!("[sched] task {cur} would idle: task {to} runs instead"));
+
+        // If the origin task vanished mid-sweep, end the sweep.
+        let origin_alive = self.rt.sched.sweep.as_ref()
+            .map_or(true, |s| self.rt.sched.tasks.contains_key(&s.origin));
+        if !origin_alive {
+            self.rt.sched.sweep = None;
+            return false;
+        }
+
+        // the origin's own turn counts too: it may have computed before calling again
+        self.note_turn(cpu);
+        // ── Sweep round completion check ───────────────────────────────────
+        let sweep_complete_idle = self.rt.sched.sweep.as_ref()
+            .is_some_and(|s| s.origin == cur && !s.progressed);
+        if sweep_complete_idle {
+            self.rt.sched.sweep = None;
+            self.rt.sched.idle_sweep_log_count = self.rt.sched.idle_sweep_log_count.wrapping_add(1);
+            let n = self.rt.sched.idle_sweep_log_count;
+            if n.is_power_of_two() {
+                self.mac.log.push(format!(
+                    "[sched] idle sweep: every runnable task only yielded -> blocked until deadline/event rep={n}"
+                ));
+            }
+            return false;
+        }
+
+        // ── Sweep restart (progress was made) or new sweep ─────────────────
+        let sweep_restart = self.rt.sched.sweep.as_ref()
+            .is_some_and(|s| s.origin == cur && s.progressed);
+        if sweep_restart || self.rt.sched.sweep.is_none() {
+            self.rt.sched.sweep = Some(Sweep { origin: cur, progressed: false });
+        }
+        // else: mid-sweep, not at origin — fall through to switch.
+
+        let Some(to) = self.runnable_after(cur, false) else {
+            self.rt.sched.sweep = None;
+            return false;
+        };
+
+        // Wait markers are not cleared while a sweep is open — the machine must
+        // still be able to report Blocked with main's preserved deadline.
+
+        self.rt.sched.yield_log_count = self.rt.sched.yield_log_count.wrapping_add(1);
+        let n = self.rt.sched.yield_log_count;
+        if n.is_power_of_two() {
+            self.mac.log.push(format!(
+                "[sched] task {cur} would idle: task {to} runs instead rep={n}"
+            ));
+        }
+
         match self.switch_to(cpu, to, Some(TState::Ready), addr) {
             Ok(()) => true,
             Err(why) => { self.rt.fault = Some(why); cpu.halt(); true }

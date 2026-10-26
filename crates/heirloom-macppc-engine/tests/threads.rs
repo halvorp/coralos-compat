@@ -177,3 +177,59 @@ fn a_switch_binds_only_the_stubs_interned_since_the_task_last_ran() {
     // each of the two tasks needs its own CPU bound once (their first run) and nothing per further switch
     assert!(m.switch_rebinds() <= 2 * stubs, "{} rebinds for 200 switches over {stubs} stubs: a switch must not rebind what the task has", m.switch_rebinds());
 }
+
+/// Main parked in WaitNextEvent(sleep 60) with `thread` as a second task, and nothing advancing the clock: a test of what
+/// the idle sweep does inside one tick.
+fn main_waits_while(thread: &Asm) -> M {
+    let mut a = Asm::new();
+    prologue(&mut a);
+    a.li(3, 1).addi(4, 2, 8).li(5, 0).li(6, 0).li(7, 0).addi(8, 2, RESULT).addi(9, 2, TID).call_toc(toc(NEW));
+    a.label("wait");
+    a.li(3, -1).addi(4, 2, DATA + 80).li(5, 60).li(6, 0).call_toc(toc(7));
+    a.b("wait");
+    epilogue(&mut a);
+    boot(&build(&a, &thread.finish(), &vec![0u8; 128]))
+}
+
+#[test]
+fn a_worker_that_yields_every_2048_instructions_finishes_while_main_waits_and_the_log_does_not_grow_per_yield() {
+    // A1 (negative control for the idle sweep): 20 chunks of 2,048 instructions of pure arithmetic, a yield after each, no
+    // other Toolbox call. A turn that computed is progress, so the machine must not block until the flag is stored.
+    let mut e = Asm::new();
+    prologue(&mut e);
+    e.li(9, 20).stw(9, LOG + 4, 2);
+    e.label("chunk");
+    e.li(11, 512);
+    e.label("inner");
+    e.addi(12, 12, 3).addi(11, 11, -1).cmpwi(11, 0).bne("inner");
+    e.call_toc(toc(YIELD));
+    e.lwz(9, LOG + 4, 2).addi(9, 9, -1).stw(9, LOG + 4, 2).cmpwi(9, 0).bne("chunk");
+    e.li(9, 77).stw(9, LOG, 2);
+    epilogue(&mut e);
+    let mut m = main_waits_while(&e);
+    let b = base(&m);
+    let (step, _) = m.run_loop(50_000_000);
+    assert_eq!(step, Step::Blocked, "{:?}", m.fault());
+    assert_eq!(rd(&m, b, LOG), 77, "the worker was stalled with {} chunks left: {:#?}", rd(&m, b, LOG + 4), m.mac.log);
+    // A3: 20 yields back to a waiting main; the per-yield line is logged on the 1st, 2nd, 4th, 8th, 16th only
+    let lines = m.mac.log.iter().filter(|l| l.contains("would idle")).count();
+    assert!((1..=5).contains(&lines), "{lines} 'would idle' lines for 20 yields: {:#?}", m.mac.log);
+}
+
+#[test]
+fn a_thread_that_only_yields_while_main_waits_lets_the_machine_block_with_mains_deadline() {
+    // A2: the Warcraft III shape (345,724 slices of "task 1 would idle: task 2 runs instead" on the Z83).
+    // RED before the idle sweep: every slice was BudgetSpent and a host core burned forever.
+    let mut e = Asm::new();
+    prologue(&mut e);
+    e.label("t");
+    e.call_toc(toc(YIELD));
+    e.b("t");
+    epilogue(&mut e);
+    let mut m = main_waits_while(&e);
+    let (step, stats) = m.step(200_000);
+    assert_eq!(step, Step::Blocked, "{:?} {:#?}", m.fault(), m.mac.log);
+    assert!(stats.insns < 1_000, "one idle round, not a slice of polling: {} instructions", stats.insns);
+    assert!(heirloom_common::GuestMachine::next_timer_deadline(&m).is_some(), "main's WaitNextEvent deadline survives the sweep");
+    assert!(m.mac.log.iter().any(|l| l.contains("[sched] idle sweep:")), "{:#?}", m.mac.log);
+}
