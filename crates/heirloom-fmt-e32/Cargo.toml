@@ -1,0 +1,8 @@
+[package]
+name = "heirloom-fmt-e32"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Symbian EKA2 E32 image reader: header, sections, (dll, ordinal) imports, exports, relocations"
+
+[dependencies]

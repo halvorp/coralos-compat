@@ -1,0 +1,8 @@
+[package]
+name = "heirloom-mem-paged32"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sparse paged little-endian 32-bit guest address space with chunk protections for the Symbian engine"
+
+[dependencies]
