@@ -12,12 +12,14 @@ extern crate alloc;
 mod header;
 mod imports;
 mod inflate;
+mod ordinals;
 mod reloc;
 
 use alloc::vec::Vec;
 
 pub use header::{uid_checksum, Compression, E32Header};
 pub use imports::{Import, ImportedDll};
+pub use ordinals::{dso_exports, DsoError, DsoExport, OrdinalTable};
 pub use reloc::{Reloc, RelocKind};
 
 /// Why an image cannot be read. Each names the field or rule it failed.
