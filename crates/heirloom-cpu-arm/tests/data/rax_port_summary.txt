@@ -1,0 +1,67 @@
+[data_processing]
+  dropped: rax assertion false on ARM1176 (exit)     512
+  dropped: rax assertion false on ARM1176 (flag)     564
+  dropped: rax assertion false on ARM1176 (reg)      931
+  duplicate (same encoding and state)                6191
+  ported: full-state check                           3970
+  ported: smoke (rax asserts nothing)                195
+  rax tests                                          12363
+[multiply]
+  dropped: rax assertion false on ARM1176 (exit)     45
+  dropped: rax assertion false on ARM1176 (flag)     36
+  dropped: rax assertion false on ARM1176 (reg)      74
+  duplicate (same encoding and state)                748
+  ported: full-state check                           639
+  ported: smoke (rax asserts nothing)                44
+  rax tests                                          1586
+[memory]
+  dropped: rax assertion false on ARM1176 (exit)     339
+  dropped: rax assertion false on ARM1176 (reg)      89
+  duplicate (same encoding and state)                3099
+  ported: full-state check                           2683
+  ported: smoke (rax asserts nothing)                133
+  rax tests                                          6343
+[branch]
+  dropped: rax assertion false on ARM1176 (exit)     52
+  dropped: rax assertion false on ARM1176 (reg)      8
+  duplicate (same encoding and state)                312
+  ported: full-state check                           355
+  ported: smoke (rax asserts nothing)                11
+  rax tests                                          738
+[misc]
+  dropped: rax assertion false on ARM1176 (exit)     269
+  dropped: rax assertion false on ARM1176 (flag)     12
+  dropped: rax assertion false on ARM1176 (reg)      231
+  duplicate (same encoding and state)                1201
+  ported: full-state check                           599
+  ported: smoke (rax asserts nothing)                44
+  rax tests                                          2356
+[system]
+  dropped: rax assertion false on ARM1176 (exit)     296
+  dropped: rax assertion false on ARM1176 (flag)     8
+  dropped: rax assertion false on ARM1176 (reg)      30
+  duplicate (same encoding and state)                813
+  ported: full-state check                           671
+  ported: smoke (rax asserts nothing)                22
+  rax tests                                          1840
+[coprocessor]
+  dropped: rax assertion false on ARM1176 (exit)     56
+  dropped: rax assertion false on ARM1176 (flag)     9
+  duplicate (same encoding and state)                219
+  ported: full-state check                           248
+  ported: smoke (rax asserts nothing)                10
+  rax tests                                          542
+[vfp]
+  dropped: rax assertion false on ARM1176 (exit)     2216
+  dropped: rax assertion false on ARM1176 (flag)     17
+  dropped: rax assertion false on ARM1176 (reg)      91
+  duplicate (same encoding and state)                15561
+  ported: full-state check                           2749
+  ported: smoke (rax asserts nothing)                173
+  rax tests                                          20807
+[thumb]
+  dropped: rax assertion false on ARM1176 (reg)      8
+  duplicate (same encoding and state)                76
+  ported: full-state check                           33
+  ported: smoke (rax asserts nothing)                4
+  rax tests                                          121

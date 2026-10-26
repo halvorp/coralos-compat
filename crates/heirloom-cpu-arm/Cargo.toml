@@ -1,0 +1,8 @@
+[package]
+name = "heirloom-cpu-arm"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "User-mode ARMv6 (ARM11) interpreter for Heirloom: A32, Thumb-1 and VFPv2. Ported in part from HexRaysSA/rax (MIT, commit 526acfa); see README.md (THIRD_PARTY)."
+
+[dependencies]

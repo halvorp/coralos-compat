@@ -1,0 +1,26 @@
+# Encodings Unicorn (ARM1176 model) executes but this CPU refuses with a named trap, each checked by hand
+# against the ARMv6 ARM (DDI 0100I). `a32 <word without the cond nibble>` or `t16 <halfword>`.
+a32 0e100e10  # MRC p14, 0, r0, c0, c0, 0 (debug ID): no cp14 here, a named Coprocessor trap by design
+a32 0ee00a10  # VMSR FPSID, r0: FPSID is read-only; only FPSCR is writable from user mode
+a32 1400080   # SMLALBB r0, r0, r0, r0: RdHi == RdLo is UNPREDICTABLE
+a32 0400090   # UMAAL r0, r0, r0, r0: RdHi == RdLo is UNPREDICTABLE
+a32 7400010   # SMLALD r0, r0, r0, r0: RdHi == RdLo is UNPREDICTABLE
+a32 7400050   # SMLSLD r0, r0, r0, r0: RdHi == RdLo is UNPREDICTABLE
+a32 0c00090   # SMULL r0, r0, r0, r0: RdHi == RdLo is UNPREDICTABLE
+a32 0e00090   # SMLAL r0, r0, r0, r0: RdHi == RdLo is UNPREDICTABLE
+a32 0a00090   # UMLAL r0, r0, r0, r0: RdHi == RdLo is UNPREDICTABLE
+a32 0800090   # UMULL r0, r0, r0, r0: RdHi == RdLo is UNPREDICTABLE
+a32 04f00d0   # LDRD r0, r1, [pc], #-0: post-indexed (writeback) with Rn = PC is UNPREDICTABLE
+a32 05f00b0   # LDRH r0, [pc], #-0: writeback with Rn = PC is UNPREDICTABLE
+a32 05f00f0   # LDRSH r0, [pc], #-0: writeback with Rn = PC is UNPREDICTABLE
+a32 05f00d0   # LDRSB r0, [pc], #-0: writeback with Rn = PC is UNPREDICTABLE
+a32 07000d0   # LDRSBT (P=0 W=1) is ARMv6T2; on ARMv6 P=0 W=1 is UNPREDICTABLE (and Rn == Rt here)
+a32 07000f0   # LDRSHT (P=0 W=1), as above
+a32 07000b0   # LDRHT (P=0 W=1), as above
+a32 06000b0   # STRHT (P=0 W=1, immediate), as above
+a32 05000b0   # LDRH r0, [r0], #-0: writeback with Rn == Rt is UNPREDICTABLE
+a32 02000b0   # STRHT (P=0 W=1): UNPREDICTABLE on ARMv6 (the unprivileged form is ARMv6T2)
+t16 c3fe      # STMIA r3!, {r1-r7}: base in the list but not the lowest register is UNPREDICTABLE
+t16 c7fe      # STMIA r7!, {r1-r7}: as above
+t16 bf00      # NOP (and the hint space): ARMv6T2 Thumb; UNDEFINED on ARMv6, Unicorn executes it
+t16 b100/f500 # CBZ/CBNZ: ARMv6T2 Thumb; UNDEFINED on ARMv6, Unicorn executes it

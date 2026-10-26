@@ -71,3 +71,7 @@ The four standard cursors in crates/heirloom-mac68k-engine/src/system_res.rs (CU
   WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
   OTHER DEALINGS IN THE SOFTWARE.
+
+crates/heirloom-cpu-arm/: parts adapted from HexRaysSA/rax (https://github.com/HexRaysSA/rax), commit 526acfa,
+MIT License, Copyright (c) 2026 RAX contributors. The adapted files carry a header naming their rax origin; the
+full MIT notice is in crates/heirloom-cpu-arm/README.md (THIRD_PARTY). softfloat.rs is original.
