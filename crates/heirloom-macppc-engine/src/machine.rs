@@ -15,6 +15,43 @@ pub const QD_GLOBALS_SIZE: u32 = 206;
 /// Where a strong data import with no provider points: outside guest RAM, so any access is a bus fault the CPU reports.
 pub const UNBOUND_DATA: u32 = 0xBAD0_0000;
 
+/// Finder's default partition for an application with no SIZE resource.
+/// Documented Finder default; no citation invented.
+pub const NO_SIZE_PARTITION: u32 = 4 << 20; // 4 MiB
+
+/// Read the program's SIZE resource (ID -1 preferred, else 0) and return
+/// max(preferredSize, minimumSize). None when no SIZE is present.
+pub fn partition_bytes(program: &[u8]) -> Option<u32> {
+    let opened = heirloom_fmt_resfork::open(program).ok()?;
+    let rsrc = &program[opened.rsrc];
+    // ResFork owns its bytes, so loading a program copies its resource fork once.
+    let fork = heirloom_fmt_resfork::ResFork::parse(rsrc.to_vec()).ok()?;
+    let idx = fork.find(*b"SIZE", -1).or_else(|| fork.find(*b"SIZE", 0))?;
+    let data = fork.data(idx)?;
+    if data.len() < 10 {
+        return None;
+    }
+    // Inside Macintosh: Processes — u16 flags, u32 preferredSize, u32 minimumSize (BE)
+    let preferred = u32::from_be_bytes([data[2], data[3], data[4], data[5]]);
+    let minimum = u32::from_be_bytes([data[6], data[7], data[8], data[9]]);
+    Some(preferred.max(minimum))
+}
+
+/// Total guest RAM for a program: base + SIZE partition + 8 MiB system
+/// heap/glue/stack, rounded up to 1 MiB.
+pub fn ram_for_program(base: usize, program: &[u8]) -> usize {
+    const SYSTEM_OVERHEAD: usize = 8 << 20; // 8 MiB
+    const MIB: usize = 1 << 20;
+    let partition = partition_bytes(program).unwrap_or(NO_SIZE_PARTITION) as usize;
+    let raw = base
+        .saturating_add(partition)
+        .saturating_add(SYSTEM_OVERHEAD);
+    // Guard the round-up so a saturated value cannot wrap.
+    raw.checked_add(MIB - 1)
+        .map(|x| x & !(MIB - 1))
+        .unwrap_or(usize::MAX)
+}
+
 /// A shared library the program can import that is a PEF of its own (not one of the engine's native libraries).
 pub enum LibSlot {
     /// Supplied, not yet instantiated (the PEF bytes).
@@ -64,26 +101,48 @@ pub struct MacPpc<U: GuestUi> {
     pub import_slots: BTreeMap<u32, (String, String, bool)>,
 }
 
-/// Guest RAM of a PowerPC Macintosh: large PowerPC applications are tens of megabytes of code and data before their heap (Warcraft III: a 14 MB
-/// application). The address space is zero-filled lazily by the host, so the size costs nothing until it is touched. `with_ram` picks another. 512 MB: the Frozen Throne
-/// refuses to start below 320 MB of (virtual) memory, read from Gestalt `ram `.
-pub const DEFAULT_PPC_RAM: usize = 512 << 20;
-
 impl<U: GuestUi> MacPpc<U> {
-    pub fn new(ui: U) -> Result<Self, CfmError> { Self::with_ram(ui, DEFAULT_PPC_RAM) }
-
-    /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.
-    pub fn with_ram(ui: U, ram: usize) -> Result<Self, CfmError> {
-        let mut mac = Mac::new(ui).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
+    /// Private helper: own the fallible growth path. Takes an already-
+    /// constructed `Mac` so callers that need the base (new, for_program)
+    /// can construct `Mac::new(ui)` exactly once.
+    fn from_mac(mut mac: Mac<U>, ram: usize) -> Result<Self, CfmError> {
         let base = mac.mem.len();
         if ram > base {
-            mac.mem.grow_to(ram);
+            mac.mem.try_grow_to(ram).map_err(|_| CfmError::NoMemory {
+                what: "guest RAM",
+                bytes: ram.min(u32::MAX as usize) as u32,
+            })?;
             mac.heap.add_region(base as u32, (ram - base) as u32);
-            let _ = mac.mem.write_u32(heirloom_mac68k_engine::lowmem::MEM_TOP, ram as u32); // MemTop: the top of the (larger) RAM
+            let _ = mac.mem.write_u32(
+                heirloom_mac68k_engine::lowmem::MEM_TOP,
+                ram.min(u32::MAX as usize) as u32,
+            ); // MemTop: the top of the (larger) RAM
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(heirloom_mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
         Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
+    }
+
+    /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.
+    pub fn with_ram(ui: U, ram: usize) -> Result<Self, CfmError> {
+        let mac = Mac::new(ui).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
+        Self::from_mac(mac, ram)
+    }
+
+    pub fn new(ui: U) -> Result<Self, CfmError> {
+        // Construct once to read the base, then build with the computed ram.
+        let mac = Mac::new(ui).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
+        let base = mac.mem.len();
+        let ram = ram_for_program(base, &[]);
+        Self::from_mac(mac, ram)
+    }
+
+    pub fn for_program(ui: U, program: &[u8]) -> Result<Self, CfmError> {
+        // Construct once to read the base, then build with the computed ram.
+        let mac = Mac::new(ui).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
+        let base = mac.mem.len();
+        let ram = ram_for_program(base, program);
+        Self::from_mac(mac, ram)
     }
 
     /// Make a PEF library available under `name` (the fragment name an import table uses). Instantiated, with its own imports and init routine, the first time something imports from it.
@@ -208,7 +267,7 @@ impl<U: GuestUi> MacPpc<U> {
                 // Recorded under the glue key like every other binding: a CALL of the symbol must refuse by NAME (`NEXT-NEEDED lib/sym: ...`),
                 // not stop on "no binding was recorded for this glue stub".
                 let b = Binding::Unbound(alloc::format!("library {l} is not provided by the engine"));
-                self.bindings.insert(crate::glue::binding_key(l, name), b.clone());
+                self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
                 b
             }
         }

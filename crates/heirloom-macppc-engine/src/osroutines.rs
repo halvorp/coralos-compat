@@ -15,6 +15,11 @@ use heirloom_mac68k_engine::osconv::Regs;
 /// gestaltUndefSelectorErr.
 pub const GESTALT_UNDEF_SELECTOR_ERR: i32 = -5551;
 
+/// Virtual memory on: the logical address space a Mac OS 9 machine with VM
+/// reports; costs no host memory. Frozen Throne refuses below 320 MB lram;
+/// RoC below 256 MB.
+pub const LOGICAL_RAM: usize = 512 << 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OsRoutine { HLockHi, MaxBlock, TempFreeMem, TempMaxMem, FlushEvents, Delay, PurgeSpace, MaxMem, MoveHHi, HandToHand, PtrToHand, PtrAndHand, HandAndHand, Gestalt, SysEnvirons }
 
@@ -43,7 +48,13 @@ impl<U: GuestUi> MacPpc<U> {
         if c == Gestalt {
             let sel = a[0].to_be_bytes();
             let shown: String = sel.iter().map(|&b| char::from(b)).collect();
-            if let Some(v) = crate::gestalt_ppc::answer(sel).or_else(|| matches!(&sel, b"ram " | b"lram").then_some(self.mac.mem.len() as u32)) {
+            let answer = crate::gestalt_ppc::answer(sel).or_else(|| match &sel {
+                b"ram " => Some(self.mac.mem.len() as u32),
+                // A 32-bit Mac OS 9 guest cannot report more than 4 GiB.
+                b"lram" => Some(u32::try_from(self.mac.mem.len().max(LOGICAL_RAM)).unwrap_or(u32::MAX)),
+                _ => None,
+            });
+            if let Some(v) = answer {
                 store(self, a[1], v)?;
                 self.mac.log.push(format!("[toolbox] Gestalt '{shown}' -> {v:#x} (PowerPC profile)"));
                 return Ok(0);

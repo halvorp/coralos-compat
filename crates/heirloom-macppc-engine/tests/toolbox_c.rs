@@ -91,7 +91,8 @@ fn clocks_folders_and_the_memory_queries_answer_from_the_machine() {
     assert_ne!(call(&mut m, "FindFolder", &[0, u32::from_be_bytes(*b"zzzz"), 0, PB, PB + 4]) as i32, 0, "an unknown folder type is an error");
     // memory queries: MaxBlock is the largest free block, TempFreeMem the total, HLockHi locks
     let max = call(&mut m, "MaxBlock", &[]);
-    assert!(max > 100 << 20 && call(&mut m, "TempFreeMem", &[]) >= max);
+    // The machine is sized from the program now (no SIZE here -> the Finder default partition), so the bound is the machine, not 512 MiB.
+    assert!(max > 4 << 20 && (max as usize) < m.mac.mem.len() && call(&mut m, "TempFreeMem", &[]) >= max, "MaxBlock {max:#x} of {:#x}", m.mac.mem.len());
     let h = call(&mut m, "NewHandle", &[64]);
     call(&mut m, "HLockHi", &[h]);
     assert_eq!(m.mac.mm.state(h).unwrap() & 0x80, 0x80, "the handle is locked");

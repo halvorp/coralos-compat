@@ -73,16 +73,19 @@ fn without_the_library_or_with_a_broken_one_every_import_names_why() {
 }
 
 #[test]
-fn guest_ram_is_large_enough_for_a_big_application_and_gestalt_reports_it() {
-    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
-    assert!(m.mac.mem.len() >= 512 << 20, "Warcraft III Frozen Throne wants 320 MB of (virtual) memory");
+fn a_warcraft_sized_partition_holds_a_big_block_and_gestalt_reports_real_and_logical_ram() {
+    // Warcraft III's SIZE asks for 156 MiB (preferred = minimum, measured under real Mac OS 9.2.2, 2026-10-26).
+    let ram = heirloom_macppc_engine::machine::ram_for_program(16 << 20, &[]).max((156 + 16 + 8) << 20);
+    let mut m = MacPpc::with_ram(RecordingGuestUi::new(), ram).unwrap();
     let big = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 100 << 20, false);
     assert!(big.is_ok(), "a 100 MB block: {big:?}");
     m.bind("Gestalt");
-    let mut regs = [0u32; 32];
-    regs[3] = u32::from_be_bytes(*b"ram "); regs[4] = 0x3000;
-    assert_eq!(m.glue_call("Gestalt", &mut regs), GlueOutcome::Return);
-    assert_eq!(m.mac.mem.read_u32(0x3000).unwrap() as usize, m.mac.mem.len());
+    for (sel, want) in [(*b"ram ", m.mac.mem.len()), (*b"lram", heirloom_macppc_engine::osroutines::LOGICAL_RAM.max(m.mac.mem.len()))] {
+        let mut regs = [0u32; 32];
+        regs[3] = u32::from_be_bytes(sel); regs[4] = 0x3000;
+        assert_eq!(m.glue_call("Gestalt", &mut regs), GlueOutcome::Return);
+        assert_eq!(m.mac.mem.read_u32(0x3000).unwrap() as usize, want, "{}", core::str::from_utf8(&sel).unwrap());
+    }
     // NEGATIVE CONTROL: a 16 MB machine cannot hold it
     let mut small = MacPpc::with_ram(RecordingGuestUi::new(), 16 << 20).unwrap();
     assert!(small.mac.mm.new_ptr(&mut small.mac.mem, &mut small.mac.heap, 100 << 20, false).is_err());

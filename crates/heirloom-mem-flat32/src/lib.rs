@@ -45,6 +45,14 @@ pub const MASK_32: u32 = 0xFFFF_FFFF;
 /// byte of every address is ignored (Inside Macintosh: Memory, "24-bit addressing"; apps keep flags there).
 pub const MASK_24: u32 = 0x00FF_FFFF;
 
+/// Guest RAM could not grow to `requested` bytes (the host refused the allocation); the memory is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GuestRamExhausted { pub requested: usize }
+impl fmt::Display for GuestRamExhausted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "cannot grow guest RAM to {} bytes", self.requested) }
+}
+impl core::error::Error for GuestRamExhausted {}
+
 pub struct GuestMem { ram: Vec<u8>, mask: u32, hooks: watch::Hooks }
 
 impl GuestMem {
@@ -57,6 +65,15 @@ impl GuestMem {
     pub fn len(&self) -> usize { self.ram.len() }
     /// Make the address space `new_len` bytes (zero-filled); never shrinks. For machines whose personality has more RAM than the default.
     pub fn grow_to(&mut self, new_len: usize) { if new_len > self.ram.len() { self.ram.resize(new_len, 0); } }
+    /// As [`GuestMem::grow_to`], but a host that cannot supply the memory is a named refusal and nothing changes.
+    pub fn try_grow_to(&mut self, new_len: usize) -> Result<(), GuestRamExhausted> {
+        let len = self.ram.len();
+        if new_len > len {
+            self.ram.try_reserve_exact(new_len - len).map_err(|_| GuestRamExhausted { requested: new_len })?;
+            self.ram.resize(new_len, 0);
+        }
+        Ok(())
+    }
     pub fn is_empty(&self) -> bool { self.ram.is_empty() }
 
     pub fn contains(&self, addr: u32, len: u32) -> bool {
@@ -207,5 +224,14 @@ mod tests {
     fn refusal_text_is_stable() {
         let e = GuestMem::new(8).read_u32(0xFFFF_0000).unwrap_err();
         assert_eq!(e.to_string(), "pointer 0xffff0000 outside guest RAM");
+    }
+
+    #[test]
+    fn an_impossible_growth_is_refused_and_changes_nothing() {
+        let mut m = GuestMem::new(4096);
+        assert_eq!(m.try_grow_to(usize::MAX / 2), Err(GuestRamExhausted { requested: usize::MAX / 2 }));
+        assert_eq!(m.len(), 4096);
+        assert_eq!(m.try_grow_to(8192), Ok(()));
+        assert_eq!(m.len(), 8192);
     }
 }
