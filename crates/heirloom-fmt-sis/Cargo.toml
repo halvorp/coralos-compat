@@ -1,0 +1,9 @@
+[package]
+name = "heirloom-fmt-sis"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Symbian SIS/SISX install package reader: field tree, compressed blocks, file table and file data"
+
+[dependencies]
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
