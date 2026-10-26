@@ -30,9 +30,31 @@ const ID_VALIDATED: u32 = 82;
 const ID_WRITE_PROTECTED: u32 = 80;
 const MINUS_ONE: u32 = 0xFFFF_FFFF;
 
+/// Seconds from 1970-01-01 (Unix) to 1978-01-01 (the Amiga epoch): 8 years, 2 leap days.
+pub const UNIX_TO_AMIGA_SECS: i64 = 252_460_800;
+
+/// The host's local wall time at virtual time 0 (`GuestMachine::set_wall_clock`): `now` starts there, and the directories the
+/// machine made itself before any clock existed (RAM:'s Env, EnvArc, T: date 0) take that date instead of the Unix epoch.
+pub fn set_wall_clock<U: GuestUi>(a: &mut Amiga<U>, local_unix_secs: i64) -> Result<(), Refusal> {
+    let since = local_unix_secs - UNIX_TO_AMIGA_SECS;
+    if since < 0 { return Err(Refusal(format!("wall clock {local_unix_secs} (unix) is before the Amiga epoch, 1978-01-01"))); }
+    let day = i32::try_from(since / SECS_PER_DAY as i64).map_err(|_| Refusal(format!("wall clock {local_unix_secs} (unix) is past the Amiga's day count")))?;
+    a.fs.start_day = day;
+    a.fs.start_sec = (since % SECS_PER_DAY as i64) as u32;
+    let date = now(a);
+    if let Some(ram) = a.fs.vol.device("RAM") {
+        let mut todo = alloc::vec![ram];
+        while let Some(id) = todo.pop() {
+            todo.extend_from_slice(a.fs.vol.children(id));
+            if a.fs.vol.get(id).modified_ms == 0 { a.fs.vol.get_mut(id).set_date(date); }
+        }
+    }
+    Ok(())
+}
+
 /// The virtual "now" as a DateStamp: the host's chosen start day plus the engine's virtual clock.
 pub fn now<U: GuestUi>(a: &Amiga<U>) -> [i32; 3] {
-    let secs = a.clock_us / 1_000_000;
+    let secs = u64::from(a.fs.start_sec) + a.clock_us / 1_000_000;
     let day = a.fs.start_day + (secs / SECS_PER_DAY) as i32;
     let in_day = secs % SECS_PER_DAY;
     [day, (in_day / 60) as i32, ((in_day % 60) * TICKS_PER_SEC + (a.clock_us % 1_000_000) * TICKS_PER_SEC / 1_000_000) as i32]

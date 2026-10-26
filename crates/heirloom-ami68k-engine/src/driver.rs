@@ -34,6 +34,7 @@ impl<U: GuestUi> GuestMachine for Amiga<U> {
     }
     /// The Amiga's timer.device counts in microseconds already: the virtual clock is the guest's.
     fn advance_clock_to(&mut self, virtual_us: u64) -> Result<(), Refusal> { Amiga::advance_clock_to(self, virtual_us) }
+    fn set_wall_clock(&mut self, local_unix_secs: i64) -> Result<(), Refusal> { crate::dos_misc::set_wall_clock(self, local_unix_secs) }
     fn next_timer_deadline(&self) -> Option<u64> { Amiga::next_timer_deadline(self) }
     fn ui(&self) -> &U { &self.ui }
     fn ui_mut(&mut self) -> &mut U { &mut self.ui }

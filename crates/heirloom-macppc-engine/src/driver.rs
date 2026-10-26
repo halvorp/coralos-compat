@@ -48,6 +48,7 @@ impl<U: GuestUi> GuestMachine for MacPpc<U> {
         (step, RunStats { insns: s.insns, bus_faults: 0 })
     }
     fn advance_clock_to(&mut self, virtual_us: u64) -> Result<(), Refusal> { self.mac.advance_clock_to_us(virtual_us); Ok(()) }
+    fn set_wall_clock(&mut self, local_unix_secs: i64) -> Result<(), Refusal> { self.mac.set_wall_clock(local_unix_secs) }
     fn next_timer_deadline(&self) -> Option<u64> { self.wait_deadline_us() }
     fn ui(&self) -> &U { &self.mac.ui }
     fn ui_mut(&mut self) -> &mut U { &mut self.mac.ui }

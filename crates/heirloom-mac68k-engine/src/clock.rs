@@ -22,6 +22,8 @@ use heirloom_cpu_68k::Cpu;
 
 /// 2026-10-19 00:00:00, in Mac seconds (1904 epoch).
 pub const DEFAULT_BOOT_SECS: u32 = 3_875_212_800;
+/// Seconds from 1904-01-01 (the Mac epoch) to 1970-01-01 (Unix): 66 years, 17 leap days.
+pub const UNIX_TO_MAC_SECS: i64 = 2_082_844_800;
 
 #[derive(Default)]
 pub struct Clock { pub base: Option<u32> }

@@ -59,6 +59,11 @@ pub trait GuestMachine {
 
     /// Move the virtual clock to `virtual_us` (never backwards) and complete every wait that is due by then.
     fn advance_clock_to(&mut self, virtual_us: u64) -> Result<(), Refusal>;
+    /// The guest's LOCAL wall time, in seconds since 1970-01-01 as read on the host's clock with its time zone applied (the
+    /// Amiga and the classic Mac keep local time and know no zone), at virtual time 0. Call before `start_file`; a host that
+    /// never calls it leaves the engine's documented default date. A time the platform cannot hold (before its epoch, or past
+    /// its range) is a named refusal.
+    fn set_wall_clock(&mut self, local_unix_secs: i64) -> Result<(), Refusal>;
 
     /// The earliest virtual microsecond at which a blocked guest wakes by itself, if one is waiting on time. `None`: it
     /// waits for a window event (or is not blocked).

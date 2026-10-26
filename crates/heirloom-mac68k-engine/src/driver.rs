@@ -31,6 +31,12 @@ impl<U: GuestUi> GuestMachine for Mac<U> {
         (step, RunStats { insns: s.insns, bus_faults: s.bus_faults })
     }
     fn advance_clock_to(&mut self, virtual_us: u64) -> Result<(), Refusal> { self.advance_clock_to_us(virtual_us); Ok(()) }
+    /// Mac time is u32 seconds since 1904-01-01: 1904 through 2040-02-06 06:28:15.
+    fn set_wall_clock(&mut self, local_unix_secs: i64) -> Result<(), Refusal> {
+        let secs = u32::try_from(local_unix_secs + crate::clock::UNIX_TO_MAC_SECS)
+            .map_err(|_| Refusal(alloc::format!("wall clock {local_unix_secs} (unix) is outside the Mac's 1904-2040 range")))?;
+        self.set_clock(secs)
+    }
     fn next_timer_deadline(&self) -> Option<u64> { self.next_deadline_us() }
     fn ui(&self) -> &U { &self.ui }
     fn ui_mut(&mut self) -> &mut U { &mut self.ui }

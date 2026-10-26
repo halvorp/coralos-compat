@@ -45,6 +45,8 @@ pub struct FsState {
     pub disk_libs: Vec<crate::disklib::DiskLib>,
     /// The Amiga-epoch day the virtual clock starts on (dos_misc.rs).
     pub start_day: i32,
+    /// Seconds into `start_day` at virtual time 0 (the host's wall clock, `GuestMachine::set_wall_clock`).
+    pub start_sec: u32,
     /// Live DiskObjects icon.library made: address -> size of the one heap block holding all of it (icon.rs).
     pub icons: BTreeMap<u32, u32>,
     /// The Process's local variables (vars.rs).
@@ -149,6 +151,6 @@ pub fn write_file<U: GuestUi>(a: &mut Amiga<U>, path: &str, bytes: Vec<u8>) -> R
 
 impl Default for FsState {
     fn default() -> Self {
-        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, icons: BTreeMap::new(), vars: Default::default(), dos: Default::default(), devs: Default::default(), anchors: Default::default(), exall: BTreeMap::new() }
+        FsState { vol: Volume::new(), locks: BTreeMap::new(), files: BTreeMap::new(), scans: BTreeMap::new(), segs: BTreeMap::new(), disk_libs: Vec::new(), start_day: crate::dos_misc::EPOCH_DAYS_2026, start_sec: 0, icons: BTreeMap::new(), vars: Default::default(), dos: Default::default(), devs: Default::default(), anchors: Default::default(), exall: BTreeMap::new() }
     }
 }
