@@ -227,3 +227,6 @@ pub fn decode(bytes: &[u8]) -> Result<(Frame, usize), WireError> {
     }
     Ok((frame, end))
 }
+pub mod proxy;
+pub mod host;
+pub mod loopback;
