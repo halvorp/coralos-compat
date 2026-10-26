@@ -233,3 +233,19 @@ fn a_thread_that_only_yields_while_main_waits_lets_the_machine_block_with_mains_
     assert!(heirloom_common::GuestMachine::next_timer_deadline(&m).is_some(), "main's WaitNextEvent deadline survives the sweep");
     assert!(m.mac.log.iter().any(|l| l.contains("[sched] idle sweep:")), "{:#?}", m.mac.log);
 }
+
+#[test]
+fn a_thread_that_polls_get_current_thread_and_yields_lets_the_machine_block() {
+    // Warcraft III's waiting thread, measured on the host: GetCurrentThread + YieldToAnyThread, forever. A query that changes
+    // nothing is not progress (RED before: every GetCurrentThread counted as work and every slice was BudgetSpent).
+    let mut e = Asm::new();
+    prologue(&mut e);
+    e.label("t");
+    e.addi(3, 2, LOG + 8).call_toc(toc(GETCUR));
+    e.call_toc(toc(YIELD));
+    e.b("t");
+    epilogue(&mut e);
+    let mut m = main_waits_while(&e);
+    let (step, _) = m.step(200_000);
+    assert_eq!(step, Step::Blocked, "{:?} {:#?}", m.fault(), m.mac.log);
+}

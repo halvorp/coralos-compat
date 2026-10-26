@@ -256,7 +256,13 @@ impl<U: GuestUi> Host for MacPpc<U> {
         }
         // idle sweep: every call is progress except a yield (unless its turn computed) and a call that parks (undone below)
         let progressed_before = self.rt.sched.sweep.as_ref().map(|s| s.progressed);
-        let yielding = matches!(self.bindings.get(&symbol), Some(Binding::Native(Native::Thread(ThreadFn::YieldToAnyThread | ThreadFn::YieldToThread))));
+        // Not work by itself: a yield; a callback's return (a thread switcher, a dialog filter, a Time Manager task: what the
+        // callback called is noted call by call, and what it computed counts in its task's turn); a Thread Manager query that
+        // changes nothing (Warcraft III's waiting thread polls GetCurrentThread + YieldToAnyThread, measured on the host).
+        let yielding = symbol == crate::callback::CALLBACK_RETURN
+            || matches!(self.bindings.get(&symbol), Some(Binding::Native(Native::Thread(
+                ThreadFn::YieldToAnyThread | ThreadFn::YieldToThread | ThreadFn::GetCurrentThread | ThreadFn::GetThreadState
+                | ThreadFn::GetDefaultThreadStackSize | ThreadFn::ThreadCurrentStackSpace))));
         self.note_call(cpu, yielding);
         // a Time Manager task that has come due runs now: this glue call is a safepoint (named limit: not interrupt time)
         if symbol != crate::callback::CALLBACK_RETURN {
