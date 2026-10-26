@@ -19,6 +19,7 @@ mod model;
 mod plane;
 mod recording;
 mod request;
+pub mod wire;
 
 pub use audio::*;
 pub use event::*;
