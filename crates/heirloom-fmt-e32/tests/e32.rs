@@ -138,10 +138,14 @@ fn an_import_site_outside_the_code_is_refused() {
 }
 
 #[test]
-fn compressed_images_are_refused_by_name() {
+fn byte_pair_images_are_refused_by_name_and_a_bad_deflate_stream_is_not_read() {
+    let mut f = image();
+    put(&mut f, 0x1C, 0x1028_22AA);
+    assert_eq!(E32Image::parse(&f), Err(E32Error::Unsupported("byte-pair compression")));
     let mut f = image();
     put(&mut f, 0x1C, 0x101F_7AFC);
-    assert_eq!(E32Image::parse(&f), Err(E32Error::Unsupported("Symbian deflate compression")));
+    put(&mut f, 0x7C, 0x100);
+    assert!(E32Image::parse(&f).is_err(), "an uncompressed body is not a deflate stream");
 }
 
 /// HEIRLOOM_E32_CORPUS names a directory of E32 images taken from the owner's test packages (never part of the
@@ -172,7 +176,13 @@ fn real_file_browser_images_read_whole() {
 }
 
 #[test]
-fn real_hero_of_sparta_is_refused_as_compressed_until_the_decompressor_lands() {
+fn real_hero_of_sparta_decompresses_and_reads_whole() {
     let Some(f) = corpus("HeroOfSparta.exe") else { return };
-    assert_eq!(E32Image::parse(&f), Err(E32Error::Unsupported("Symbian deflate compression")));
+    let img = E32Image::parse(&f).unwrap();
+    assert_eq!(img.header.compression, Compression::Deflate);
+    assert_eq!(img.code.len(), 0xBF47C);
+    assert_eq!(img.data.len(), 0x23C);
+    assert_eq!(img.imports.len(), 23);
+    assert!(img.imports.iter().any(|d| d.name.starts_with("euser{")));
+    assert!(!img.code_relocs.is_empty() && !img.data_relocs.is_empty());
 }

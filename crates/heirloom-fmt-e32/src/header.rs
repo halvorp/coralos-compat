@@ -53,6 +53,8 @@ pub struct E32Header {
     pub import_offset: u32,
     pub code_reloc_offset: u32,
     pub data_reloc_offset: u32,
+    /// Size of everything after the header once decompressed (`iUncompressedSize`; meaningful when compressed).
+    pub uncompressed_size: u32,
     pub secure_id: u32,
     pub vendor_id: u32,
     /// Capability bits (`SCapabilitySet`, two words).
@@ -109,6 +111,7 @@ impl E32Header {
             import_offset: w(0x6C)?,
             code_reloc_offset: w(0x70)?,
             data_reloc_offset: w(0x74)?,
+            uncompressed_size: w(0x7C)?,
             secure_id: w(0x80)?,
             vendor_id: w(0x84)?,
             capabilities: u64::from(w(0x88)?) | u64::from(w(0x8C)?) << 32,

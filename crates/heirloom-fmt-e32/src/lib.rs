@@ -3,13 +3,15 @@
 //!
 //! Layout facts (`E32ImageHeaderV`, the format EKA2 toolchains emit) were checked against real S60 5th edition images;
 //! every offset and count is range-checked against the file, and anything this reader does not handle is refused by
-//! name. Compressed images (Symbian's own deflate, byte-pair) are refused for now: the offsets in their header refer
-//! to the decompressed image, so a decompressor slots in ahead of [`E32Image::parse`] without changing it.
+//! name. A deflate-compressed image is the header followed by everything else compressed; its header offsets refer to
+//! the decompressed image, so it is decompressed (`inflate`) and then read like any other. Byte-pair compression is
+//! refused by name.
 #![no_std]
 extern crate alloc;
 
 mod header;
 mod imports;
+mod inflate;
 mod reloc;
 
 use alloc::vec::Vec;
@@ -53,10 +55,20 @@ impl E32Image {
     pub fn parse(file: &[u8]) -> Result<Self, E32Error> {
         let header = E32Header::parse(file)?;
         match header.compression {
-            Compression::None => {}
-            Compression::Deflate => return Err(E32Error::Unsupported("Symbian deflate compression")),
-            Compression::BytePair => return Err(E32Error::Unsupported("byte-pair compression")),
+            Compression::None => Self::read(file, header),
+            Compression::Deflate => {
+                let head = slice(file, 0, header.code_offset, "E32 header")?;
+                let rest = file.get(head.len()..).ok_or(E32Error::Truncated("compressed image"))?;
+                let mut image = head.to_vec();
+                image.extend(inflate::inflate(rest, header.uncompressed_size as usize)?);
+                Self::read(&image, header)
+            }
+            Compression::BytePair => Err(E32Error::Unsupported("byte-pair compression")),
         }
+    }
+
+    /// Sections, imports, exports and relocations of an uncompressed image `file` described by `header`.
+    fn read(file: &[u8], header: E32Header) -> Result<Self, E32Error> {
         let code = slice(file, header.code_offset, header.code_size, "code section")?.to_vec();
         let data = slice(file, header.data_offset, header.data_size, "data section")?.to_vec();
         let imports = imports::parse(file, &header, &code)?;
