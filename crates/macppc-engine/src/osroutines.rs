@@ -3,6 +3,7 @@
 //! The generic [`mac68k_engine::mixed::OsSig`] table maps one-in-one-out Memory Manager calls; the routines here need pointers
 //! written back or a combined register, so each is a few lines over [`Mac::os_call_regs`], running the SAME handler as the 68k
 //! A-line bridge (prototypes: Universal Interfaces `Events.h`, `Timer.h`/`OSUtils.h`, `MacMemory.h`, `Gestalt.h`).
+//! `SysEnvirons(versionRequested, theWorld)` is `D0.W = version, A0 = record` into the 68k `_SysEnvirons` handler; r3 = its OSErr.
 use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
@@ -15,21 +16,21 @@ use mac68k_engine::osconv::Regs;
 pub const GESTALT_UNDEF_SELECTOR_ERR: i32 = -5551;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OsRoutine { HLockHi, MaxBlock, TempFreeMem, TempMaxMem, FlushEvents, Delay, PurgeSpace, MaxMem, MoveHHi, HandToHand, PtrToHand, PtrAndHand, HandAndHand, Gestalt }
+pub enum OsRoutine { HLockHi, MaxBlock, TempFreeMem, TempMaxMem, FlushEvents, Delay, PurgeSpace, MaxMem, MoveHHi, HandToHand, PtrToHand, PtrAndHand, HandAndHand, Gestalt, SysEnvirons }
 
 impl OsRoutine {
     pub fn by_name(name: &str) -> Option<OsRoutine> {
         use OsRoutine::*;
         Some(match name {
             "HLockHi" => HLockHi, "MaxBlock" => MaxBlock, "TempFreeMem" => TempFreeMem, "TempMaxMem" => TempMaxMem, "FlushEvents" => FlushEvents, "Delay" => Delay, "PurgeSpace" => PurgeSpace, "MaxMem" => MaxMem, "MoveHHi" => MoveHHi,
-            "HandToHand" => HandToHand, "PtrToHand" => PtrToHand, "PtrAndHand" => PtrAndHand, "HandAndHand" => HandAndHand, "Gestalt" => Gestalt,
+            "HandToHand" => HandToHand, "PtrToHand" => PtrToHand, "PtrAndHand" => PtrAndHand, "HandAndHand" => HandAndHand, "Gestalt" => Gestalt, "SysEnvirons" => SysEnvirons,
             _ => return None,
         })
     }
     /// How many C arguments the prototype takes.
     pub fn arg_count(self) -> usize {
         use OsRoutine::*;
-        match self { MaxMem | MoveHHi | HandToHand | TempMaxMem | HLockHi => 1, MaxBlock | TempFreeMem => 0, FlushEvents | Delay | PurgeSpace | HandAndHand | Gestalt => 2, PtrToHand | PtrAndHand => 3 }
+        match self { MaxMem | MoveHHi | HandToHand | TempMaxMem | HLockHi => 1, MaxBlock | TempFreeMem => 0, FlushEvents | Delay | PurgeSpace | HandAndHand | Gestalt | SysEnvirons => 2, PtrToHand | PtrAndHand => 3 }
     }
 }
 
@@ -82,6 +83,7 @@ impl<U: GuestUi> MacPpc<U> {
             PtrAndHand => { regs.a0 = a[0]; regs.a1 = a[1]; regs.d0 = a[2]; }
             HandAndHand => { regs.a0 = a[0]; regs.a1 = a[1]; }
             Gestalt => regs.d0 = a[0],
+            SysEnvirons => { regs.d0 = a[0] & 0xFFFF; regs.a0 = a[1]; }
         }
         let (out, ret) = self.mac.os_call_regs(regs).map_err(|e| format!("{name}: {e}"))?;
         if ret.blocked { return Err(format!("{name}: the handler tried to block the caller")); }
@@ -93,7 +95,7 @@ impl<U: GuestUi> MacPpc<U> {
             PurgeSpace => { store(self, a[0], out.d0)?; store(self, a[1], out.a0)?; Ok(0) }
             MaxMem => { store(self, a[0], out.a0)?; Ok(out.d0) }
             HandToHand | PtrToHand => { if out.d0 as u16 == 0 { store(self, if c == HandToHand { a[0] } else { a[1] }, out.a0)?; } Ok(err) }
-            PtrAndHand | HandAndHand => Ok(err),
+            PtrAndHand | HandAndHand | SysEnvirons => Ok(err),
             Gestalt => { if out.d0 as u16 == 0 { store(self, a[1], out.a0)?; } Ok(err) }
         }
     }

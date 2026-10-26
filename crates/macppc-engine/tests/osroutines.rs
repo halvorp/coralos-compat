@@ -120,3 +120,26 @@ fn the_powerpc_gestalt_profile_answers_only_what_is_true_and_names_what_it_will_
     // NEGATIVE CONTROL: nothing is both answered and unanswered
     for (s, _) in UNANSWERED { assert!(answer(**s).is_none(), "{}", String::from_utf8_lossy(*s)); }
 }
+
+#[test]
+fn sysenvirons_fills_the_record_through_the_one_68k_handler() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    m.mac.mem.write_bytes(OUT, &[0xAA; 16]).unwrap();
+    assert_eq!(call(&mut m, "SysEnvirons", &[2, OUT]), 0, "noErr for version 2");
+    let w = |m: &M, o: u32| m.mac.mem.read_u16(OUT + o).unwrap();
+    assert_eq!(w(&m, 0), 2, "environsVersion");
+    assert_eq!(w(&m, 2), m.mac.profile.env_machine, "machineType");
+    assert_eq!(w(&m, 4), mac68k_engine::sysenv::SYSTEM_VERSION, "systemVersion");
+    assert_eq!(w(&m, 6), m.mac.profile.env_processor, "processor");
+    assert_eq!(w(&m, 8), u16::from(m.mac.profile.color_qd), "hasFPU FALSE, hasColorQD by profile");
+    assert_eq!(w(&m, 10), 3, "keyBoardType: standard ADB");
+    assert_ne!(w(&m, 14), 0xAAAA, "sysVRefNum written");
+    // a newer version than the engine fills is envVersTooBig with the record filled at version 2
+    assert_eq!(call(&mut m, "SysEnvirons", &[3, OUT]) as i32, mac68k_engine::sysenv::ENV_VERS_TOO_BIG as i32);
+    assert_eq!(w(&m, 0), 2);
+    // version 0 is envBadVers; a record outside guest RAM is refused by name
+    assert_eq!(call(&mut m, "SysEnvirons", &[0, OUT]) as i32, mac68k_engine::sysenv::ENV_BAD_VERS as i32);
+    // a record outside guest RAM: the shared handler's refusal is recorded by name and the caller gets paramErr
+    assert_eq!(call(&mut m, "SysEnvirons", &[2, 0xF000_0000]) as i32, -50);
+    assert!(m.mac.refused.iter().any(|r| r.starts_with("SysEnvirons")), "{:?}", m.mac.refused);
+}
