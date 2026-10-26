@@ -118,6 +118,22 @@ impl<U: GuestUi> MacPpc<U> {
                 ram.min(u32::MAX as usize) as u32,
             ); // MemTop: the top of the (larger) RAM
         }
+        let caps = heirloom_gl_abi::caps::derive(
+            heirloom_gl_abi::ENTRIES,
+            heirloom_gl_abi::caps::ATTESTED_THROUGH,
+        );
+        match crate::gl_extension::install_opengl_engine(&mut mac.fm, &caps) {
+            Ok(true) => {
+                let (maj, min) = caps.version.map_or((0, 0), |v| v.pair()); // Ok(true) only when a version is claimed
+                mac.log.push(alloc::format!("[gl] OpenGLEngine in Extensions: vers {}.{}", maj, min));
+            }
+            Ok(false) => {
+                mac.log.push(alloc::format!("[gl] no OpenGLEngine in Extensions: no GL version is attested"));
+            }
+            Err(e) => {
+                mac.log.push(alloc::format!("[gl] OpenGLEngine install error: {}", e));
+            }
+        }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(heirloom_mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
         Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })

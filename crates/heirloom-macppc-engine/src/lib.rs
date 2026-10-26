@@ -27,6 +27,7 @@ pub mod gestalt_ppc;
 pub mod fsspec;
 #[cfg(feature = "fixtures")]
 pub mod fixture;
+pub mod gl_extension;
 pub mod glue;
 pub mod host;
 pub mod machine;
