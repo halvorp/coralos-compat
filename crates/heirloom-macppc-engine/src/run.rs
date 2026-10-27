@@ -314,6 +314,12 @@ impl<U: GuestUi> Host for MacPpc<U> {
                 self.sync_natives(cpu);
                 return true;
             }
+            Some(Binding::Native(Native::Gl(f))) => {
+                // GL takes float arguments (glClearColor, glFogf, glDepthRange): they live in the FPRs, so GL runs on the real CPU
+                if let Err(why) = self.gl_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
+                self.sync_natives(cpu);
+                return true;
+            }
             Some(Binding::Native(Native::Math(f))) => {
                 if let Err(why) = self.math_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
                 self.sync_natives(cpu);

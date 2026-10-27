@@ -2,7 +2,8 @@
 use alloc::vec::Vec;
 
 /// The ABI version: the FIRST field of every frame, so a reader can refuse an unknown layout before parsing it.
-pub const ABI_VERSION: u16 = 1;
+/// 2: `CallData` and `ReplyData` (texture pixels and read-backs) joined the frame kinds; a version-1 peer refuses a version-2 ring.
+pub const ABI_VERSION: u16 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WireError {

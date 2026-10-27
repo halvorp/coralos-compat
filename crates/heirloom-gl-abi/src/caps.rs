@@ -6,9 +6,18 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// The highest version for which the table lists the COMPLETE core entry set. `None` until the per-version lists are
-/// complete (Phase 3, semantic qualification): the Phase 0 table is the import census plus the GL 1.2 additions, which
-/// is priority, not a capability claim (Astra 2026-10-24), so no core version may be advertised on it.
+/// The highest version whose Phase 3 qualification has been done: the table lists the COMPLETE core entry set (306 / 30 / 4
+/// commands for 1.0 / 1.1 / 1.2, the Khronos registry's lists, 2026-10-27), every listed entry is [`Entry::complete`]
+/// (worker-executed, no gap), AND each family has a semantic test that ran through the worker on a GPU
+/// (`userland/coral-heirloom-gl/tests/gpu_state.rs`, tools/check-heirloom-gl-host.sh step 5).
+///
+/// `None` today: the lists are complete but 295 of the 340 core entries are still refused by name and 2 more run with a gap
+/// (`contract::core_tally`: 45 run, 43 of them without a gap; 13 of the refused ones are gl4es no-op STUBS:
+/// glAccum, glClearAccum, glClearIndex, glCopyPixels,
+/// glDrawBuffer, glFeedbackBuffer, glGetPolygonStipple, glIndexf, glIndexMask, glPassThrough, glPolygonStipple,
+/// glPrioritizeTextures, glReadBuffer), so no core version may be advertised. Set to `Some(Version::V1_2)` in the change
+/// that brings `core_tally` to `complete == listed` for all three versions and adds the family tests for the rest;
+/// the test `attested_through_never_exceeds_what_is_complete` fails the build if it is set before that.
 pub const ATTESTED_THROUGH: Option<Version> = None;
 
 /// What the worker may truthfully tell the guest.
@@ -29,7 +38,7 @@ pub fn derive(entries: &[Entry], attested_through: Option<Version>) -> Capabilit
         }
         let at_or_below = |e: &&Entry| matches!(e.home, Home::Core(w) if w <= v);
         let listed = entries.iter().filter(at_or_below).count();
-        if listed == 0 || entries.iter().filter(at_or_below).any(|e| !e.implemented) {
+        if listed == 0 || entries.iter().filter(at_or_below).any(|e| !e.complete()) {
             break;
         }
         version = Some(v);
@@ -38,7 +47,7 @@ pub fn derive(entries: &[Entry], attested_through: Option<Version>) -> Capabilit
         .into_iter()
         .filter(|x| {
             let mut it = entries.iter().filter(|e| e.home == Home::Ext(*x)).peekable();
-            it.peek().is_some() && it.all(|e| e.implemented)
+            it.peek().is_some() && it.all(|e| e.complete())
         })
         .collect();
     Capabilities { version, extensions }
@@ -69,7 +78,7 @@ mod tests {
     use crate::contract::ENTRIES;
 
     fn all_on() -> Vec<Entry> {
-        ENTRIES.iter().map(|e| Entry { implemented: true, ..*e }).collect()
+        ENTRIES.iter().map(|e| Entry { implemented: true, gap: None, ..*e }).collect()
     }
 
     #[test]
@@ -100,6 +109,25 @@ mod tests {
         assert_eq!(extensions_string(&c), "GL_ARB_multitexture GL_EXT_compiled_vertex_array GL_APPLE_fence GL_APPLE_vertex_array_range");
         // and the same table attested through 1.2 still claims no version: glTexSubImage2D etc. are not implemented
         assert_eq!(derive(ENTRIES, Some(Version::V1_2)).version, None);
+    }
+
+    /// An entry that runs but refuses some argument values (`gap`) is callable and never claimable: one gap withdraws the
+    /// version that lists it and the extension that lists it, while the call itself is still admitted.
+    #[test]
+    fn a_gap_withdraws_the_claim_but_not_the_call() {
+        let mut e = all_on();
+        let i = e.iter().position(|x| x.name == "glBindTexture").unwrap();
+        e[i].gap = Some("a test gap");
+        assert_eq!(derive(&e, Some(Version::V1_2)).version, Some(Version::V1_0), "glBindTexture is core 1.1: the ladder stops below it");
+        assert!(crate::refusal::admit_call(&e, i as u16).is_ok(), "the call itself is admitted");
+        let j = e.iter().position(|x| x.name == "glLockArraysEXT").unwrap();
+        e[j].gap = Some("a test gap");
+        assert!(!extensions_string(&derive(&e, Some(Version::V1_2))).contains("GL_EXT_compiled_vertex_array"));
+    }
+
+    #[test]
+    fn attested_through_never_exceeds_what_is_complete() {
+        assert!(ATTESTED_THROUGH <= derive(ENTRIES, Some(Version::V1_2)).version, "ATTESTED_THROUGH claims a version whose core entries are not all complete");
     }
 
     #[test]

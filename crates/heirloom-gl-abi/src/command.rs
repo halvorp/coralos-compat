@@ -40,6 +40,9 @@ pub enum Command {
     MakeCurrent,
     /// A state call by contract-table index with raw 64-bit argument words.
     Call { entry: u16, args: Vec<u64> },
+    /// A call that carries bytes (a texture's pixels): the words as in `Call`, then `data`, already tight and little-endian
+    /// (`crate::pixel::unpack`). Empty `data` is a call with no client pixels (`glTexImage2D(.., NULL)`).
+    CallData { entry: u16, args: Vec<u64>, data: Vec<u8> },
     Draw(DrawCommand),
     FenceSet { id: u32 },
     Swap { drawable: Token },
@@ -48,6 +51,8 @@ pub enum Command {
     /// Worker to engine: the answer to a request that has one (`ContextCreate` -> the new token in `words`,
     /// `glGetString` -> `text`, `glGetError` -> `words[0]`, ...). `status` 0 is success.
     Reply { status: u32, words: Vec<u64>, text: String },
+    /// Worker to engine: the answer to a read back (`glReadPixels`): `words` as in `Reply`, then the pixels, tight and little-endian.
+    ReplyData { status: u32, words: Vec<u64>, data: Vec<u8> },
     /// Engine to worker: batch `seq` is complete; everything before it may be retired.
     BatchEnd { seq: u64 },
     /// Worker to engine: every batch up to and including `seq` has been replayed AND finished on the GPU
@@ -75,6 +80,8 @@ fn kind_of(c: &Command) -> u16 {
         Command::Reply { .. } => 9,
         Command::BatchEnd { .. } => 10,
         Command::Retired { .. } => 11,
+        Command::CallData { .. } => 12,
+        Command::ReplyData { .. } => 13,
     }
 }
 
@@ -106,6 +113,23 @@ impl Frame {
                 for a in args {
                     p.u64(*a);
                 }
+            }
+            Command::CallData { entry, args, data } => {
+                p.u16(*entry);
+                p.u16(0);
+                p.u32(args.len() as u32);
+                for a in args {
+                    p.u64(*a);
+                }
+                p.bytes(data);
+            }
+            Command::ReplyData { status, words, data } => {
+                p.u32(*status);
+                p.u32(words.len() as u32);
+                for w in words {
+                    p.u64(*w);
+                }
+                p.bytes(data);
             }
             Command::Draw(d) => {
                 p.u32(d.mode);
@@ -202,6 +226,32 @@ impl Frame {
             }
             10 => Command::BatchEnd { seq: p.u64()? },
             11 => Command::Retired { seq: p.u64()? },
+            12 => {
+                let entry = p.u16()?;
+                p.u16()?;
+                let n = p.u32()? as usize;
+                // Size the allocation from bytes actually present, never from the declared count.
+                if n.checked_mul(8).ok_or(WireError::Overflow)? > p.remaining() {
+                    return Err(WireError::LengthMismatch);
+                }
+                let mut args = Vec::with_capacity(n);
+                for _ in 0..n {
+                    args.push(p.u64()?);
+                }
+                Command::CallData { entry, args, data: p.take(p.remaining())?.to_vec() }
+            }
+            13 => {
+                let status = p.u32()?;
+                let n = p.u32()? as usize;
+                if n.checked_mul(8).ok_or(WireError::Overflow)? > p.remaining() {
+                    return Err(WireError::LengthMismatch);
+                }
+                let mut words = Vec::with_capacity(n);
+                for _ in 0..n {
+                    words.push(p.u64()?);
+                }
+                Command::ReplyData { status, words, data: p.take(p.remaining())?.to_vec() }
+            }
             k => return Err(WireError::UnknownKind(k)),
         };
         if p.remaining() != 0 {

@@ -40,6 +40,10 @@ impl Asm {
     pub fn stw(&mut self, rs: u32, off: i32, ra: u32) -> &mut Self { self.push(d(36, rs, ra, off)) }
     pub fn stwu(&mut self, rs: u32, off: i32, ra: u32) -> &mut Self { self.push(d(37, rs, ra, off)) }
     pub fn lhz(&mut self, rt: u32, off: i32, ra: u32) -> &mut Self { self.push(d(40, rt, ra, off)) }
+    /// `lfs frt, off(ra)`: load a single-precision float into an FPR.
+    pub fn lfs(&mut self, frt: u32, off: i32, ra: u32) -> &mut Self { self.push(d(48, frt, ra, off)) }
+    /// `lfd frt, off(ra)`: load a double into an FPR.
+    pub fn lfd(&mut self, frt: u32, off: i32, ra: u32) -> &mut Self { self.push(d(50, frt, ra, off)) }
     pub fn lbz(&mut self, rt: u32, off: i32, ra: u32) -> &mut Self { self.push(d(34, rt, ra, off)) }
     pub fn sth(&mut self, rs: u32, off: i32, ra: u32) -> &mut Self { self.push(d(44, rs, ra, off)) }
     pub fn cmpwi(&mut self, ra: u32, v: i32) -> &mut Self { self.push(d(11, 0, ra, v)) }

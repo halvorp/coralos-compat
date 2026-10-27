@@ -74,7 +74,7 @@ fn the_census_counts_bound_named_and_weak_missing_imports_per_library() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     let frag = load(&mut m, &[
         ("CarbonLib", false, &[("NewPtr", F, false), ("NoSuchToolboxCall", F, false)]),
-        ("OpenGLLibrary", false, &[("glBegin", F, false), ("glEnd", F, false)]),
+        ("OpenGLLibrary", false, &[("glCompileShader", F, false), ("glLinkProgram", F, false)]),
         ("QuickTimeLib", true, &[("EnterMovies", F, false)]),
     ]);
     let c = Census::of(&frag);

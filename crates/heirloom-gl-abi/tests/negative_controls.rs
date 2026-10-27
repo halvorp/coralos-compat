@@ -124,14 +124,14 @@ fn tokens_grow_without_a_fixed_cap() {
 // ---- control 5: an unsupported call is refused by NAME, never skipped ------------------------------------------------
 #[test]
 fn nc_unsupported_call_is_refused_by_name() {
-    // glTexSubImage2D is in the contract (WC3 imports it) and not yet executed by the worker.
-    let i = find(ENTRIES, "glTexSubImage2D").unwrap() as u16;
+    // glBegin is core GL 1.0, listed in the contract, and not yet executed by the worker.
+    let i = find(ENTRIES, "glBegin").unwrap() as u16;
     let r = admit_call(ENTRIES, i).unwrap_err();
-    assert_eq!(r, Refusal::Unsupported { name: "glTexSubImage2D".into() });
-    assert_eq!(refusal_marker(&r), "[HEIRLOOM-GL REFUSED call=glTexSubImage2D]");
+    assert_eq!(r, Refusal::Unsupported { name: "glBegin".into() });
+    assert_eq!(refusal_marker(&r), "[HEIRLOOM-GL REFUSED call=glBegin]");
     let mut on: Vec<Entry> = ENTRIES.to_vec();
     on[i as usize].implemented = true;
-    assert_eq!(admit_call(&on, i).unwrap().name, "glTexSubImage2D");
+    assert_eq!(admit_call(&on, i).unwrap().name, "glBegin");
     assert!(admit_call(ENTRIES, find(ENTRIES, "glDrawElements").unwrap() as u16).is_ok(), "an implemented row passes");
     assert_eq!(admit_call(&on, u16::MAX).unwrap_err(), Refusal::UnknownEntry { index: u16::MAX });
 }
@@ -164,17 +164,18 @@ fn nc_claims_never_exceed_the_implemented_set_for_any_flag_pattern() {
         let mut e: Vec<Entry> = ENTRIES.to_vec();
         for x in e.iter_mut() {
             x.implemented = next() % 8 < density + 1;
+            x.gap = if next() % 16 == 0 { Some("a random gap") } else { None };
         }
         let c = derive(&e, Some(Version::V1_2));
         if let Some(v) = c.version {
             for x in &e {
                 if let heirloom_gl_abi::Home::Core(w) = x.home {
-                    assert!(w > v || x.implemented, "claims {v:?} but {} (core {w:?}) is not implemented", x.name);
+                    assert!(w > v || x.complete(), "claims {v:?} but {} (core {w:?}) is not implemented", x.name);
                 }
             }
         }
         for ext in &c.extensions {
-            assert!(e.iter().filter(|x| x.home == heirloom_gl_abi::Home::Ext(*ext)).all(|x| x.implemented), "claims {ext:?} with a missing entry");
+            assert!(e.iter().filter(|x| x.home == heirloom_gl_abi::Home::Ext(*ext)).all(|x| x.complete()), "claims {ext:?} with a missing entry");
         }
         assert_eq!(extensions_string(&c).split_whitespace().count(), c.extensions.len());
     }
@@ -182,7 +183,7 @@ fn nc_claims_never_exceed_the_implemented_set_for_any_flag_pattern() {
 
 #[test]
 fn nc_one_missing_entry_withdraws_its_extension_and_the_version() {
-    let mut e: Vec<Entry> = ENTRIES.iter().map(|x| Entry { implemented: true, ..*x }).collect();
+    let mut e: Vec<Entry> = ENTRIES.iter().map(|x| Entry { implemented: true, gap: None, ..*x }).collect();
     assert_eq!(derive(&e, Some(Version::V1_2)).version, Some(Version::V1_2));
     let i = find(&e, "glTexImage3D").unwrap();
     e[i].implemented = false; // a GL 1.2 entry
@@ -196,11 +197,13 @@ fn nc_one_missing_entry_withdraws_its_extension_and_the_version() {
 #[test]
 fn nc_frames_are_version_first_and_little_endian() {
     let b = Frame { token: Token { slot: 0x0102_0304, incarnation: 5 }, command: Command::FenceSet { id: 9 } }.encode();
-    assert_eq!(b[..2], [1, 0], "ABI version 1, little-endian, FIRST");
+    assert_eq!(b[..2], [2, 0], "ABI version 2, little-endian, FIRST");
     assert_eq!(b[8..12], [4, 3, 2, 1]);
     let mut bad = b.clone();
-    bad[0] = 2;
-    assert_eq!(Frame::decode(&bad).unwrap_err(), WireError::Version { got: 2 });
+    bad[0] = 3;
+    assert_eq!(Frame::decode(&bad).unwrap_err(), WireError::Version { got: 3 });
+    bad[0] = 1;
+    assert_eq!(Frame::decode(&bad).unwrap_err(), WireError::Version { got: 1 }, "a version-1 peer is refused, not misread");
     assert_eq!(Frame::decode(&b[..1]).unwrap_err(), WireError::Truncated);
 }
 
@@ -213,6 +216,9 @@ fn every_command_round_trips() {
         Command::ContextDestroy,
         Command::MakeCurrent,
         Command::Call { entry: 12, args: vec![1, u64::MAX, 0] },
+        Command::CallData { entry: 13, args: vec![3, 4], data: vec![9, 8, 7] },
+        Command::CallData { entry: 13, args: vec![], data: vec![] },
+        Command::ReplyData { status: 0, words: vec![1], data: vec![0, 255] },
         Command::Draw(draw(&m, &a, idx)),
         Command::FenceSet { id: 4 },
         Command::Swap { drawable: Token { slot: 1, incarnation: 2 } },
@@ -249,7 +255,7 @@ fn a_streaming_reader_learns_each_frames_length_from_its_header_alone() {
         assert_eq!(peek_len(&b[..n]), if n >= 2 { Ok(None) } else { Ok(None) }, "header incomplete at {n}");
     }
     assert_eq!(peek_len(&b[..16]), Ok(Some(b.len())));
-    assert_eq!(peek_len(&[2, 0]), Err(WireError::Version { got: 2 }), "an unknown ABI is refused from its first two bytes");
+    assert_eq!(peek_len(&[3, 0]), Err(WireError::Version { got: 3 }), "an unknown ABI is refused from its first two bytes");
 }
 
 #[test]
@@ -257,4 +263,13 @@ fn a_reply_that_claims_more_words_than_it_carries_is_refused_without_allocating_
     let mut b = Frame { token: Token { slot: 0, incarnation: 0 }, command: Command::Reply { status: 0, words: vec![], text: String::new() } }.encode();
     b[20..24].copy_from_slice(&u32::MAX.to_le_bytes()); // nwords
     assert_eq!(Frame::decode(&b).unwrap_err(), WireError::LengthMismatch);
+}
+
+#[test]
+fn a_calldata_or_replydata_that_claims_more_words_than_it_carries_is_refused_without_allocating_them() {
+    for c in [Command::CallData { entry: 1, args: vec![], data: vec![1, 2, 3] }, Command::ReplyData { status: 0, words: vec![], data: vec![1, 2, 3] }] {
+        let mut b = Frame { token: Token { slot: 0, incarnation: 0 }, command: c }.encode();
+        b[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(Frame::decode(&b).unwrap_err(), WireError::LengthMismatch);
+    }
 }

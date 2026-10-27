@@ -18,7 +18,9 @@
 //!   nothing the guest can observe (NAMED LIMIT: no client-memory aliasing of GPU storage).
 //!
 //! NAMED LIMITS (Phase 1): one context current at a time; `aglSetDrawable` takes the port's `portRect` for the size;
-//! no `aglSetFullScreen`, renderer queries, textures or lighting yet (all refused by name until their rows are switched on).
+//! no `aglSetFullScreen`, renderer queries, immediate mode (`glBegin`), display lists, evaluators, 3D textures or the rest of the
+//! GL 1.0-1.2 core (all refused by name until their rows are switched on: `heirloom_gl_abi::contract::core_tally` says how many).
+//! The state, texture and read-back calls the contract switches on are encoded in `gl_c/state.rs`.
 use crate::clib::arg;
 use crate::machine::MacPpc;
 use alloc::boxed::Box;
@@ -32,6 +34,9 @@ use heirloom_gl_abi::fence::FenceBook;
 use heirloom_gl_abi::snapshot::{Descriptor, ElemType, Role};
 use heirloom_gl_abi::{admit_call, derive, extensions_string, find, refusal_marker, version_string, Command, DrawCommand, Frame, Token, ENTRIES};
 use heirloom_cpu_ppc::Cpu;
+use heirloom_gl_abi::pixel::Store;
+
+mod state;
 
 const GL_INVALID_ENUM: u32 = 0x0500;
 const GL_INVALID_VALUE: u32 = 0x0501;
@@ -86,6 +91,9 @@ pub struct GlState {
     strings: BTreeMap<u32, (String, u32)>,
     /// `glGetString` queries in order, as `name=0x.. -> value` (the engine-side copy of the worker's ring lines).
     pub query_log: Vec<String>,
+    /// `GL_UNPACK_*` / `GL_PACK_*` pixel-storage state as the program set it (the worker also receives every `glPixelStorei`).
+    unpack: Store,
+    pack: Store,
     /// Bytes handed to the worker so far (a recorder reads this for the ring image).
     pub sent_bytes: u64,
 }
@@ -136,6 +144,9 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     fn gl_ctx_token(&self) -> Option<Token> { self.gl.ctxs.get(&self.gl.current).copied() }
+
+    /// Record a GL error the way GL does: the flag keeps the FIRST error until `glGetError` reads it (GL 1.2 §2.5).
+    fn gl_set_error(&mut self, e: u32) { if self.gl.gl_error == 0 { self.gl.gl_error = e; } }
 
     fn gl_note(&mut self, line: String) { self.mac.log.push(line); }
 
@@ -206,13 +217,13 @@ impl<U: GuestUi> MacPpc<U> {
                 let args: Vec<u64> = match name { "glViewport" => alloc::vec![u64::from(a0), u64::from(a1), u64::from(a2), u64::from(a3)], "glFinish" => Vec::new(), _ => alloc::vec![u64::from(a0)] };
                 match self.gl_ctx_token() {
                     Some(t) => { self.gl_queue(t, Command::Call { entry: f.0, args }); if name == "glFinish" { self.gl_flush(); } }
-                    None => self.gl.gl_error = GL_INVALID_OPERATION,
+                    None => self.gl_set_error(GL_INVALID_OPERATION),
                 }
             }
             "glLoadMatrixf" => {
                 let mut w = Vec::with_capacity(16);
                 for i in 0..16 { w.push(u64::from(self.mac.mem.read_u32(a0.wrapping_add(4 * i)).map_err(|_| format!("glLoadMatrixf: the matrix at {a0:#x} leaves guest RAM"))?)); }
-                match self.gl_ctx_token() { Some(t) => self.gl_queue(t, Command::Call { entry: f.0, args: w }), None => self.gl.gl_error = GL_INVALID_OPERATION }
+                match self.gl_ctx_token() { Some(t) => self.gl_queue(t, Command::Call { entry: f.0, args: w }), None => self.gl_set_error(GL_INVALID_OPERATION) }
             }
             // ---- client arrays: descriptors only, read at the draw ----------------------------------------------------
             "glEnableClientState" | "glDisableClientState" => match role_of(a0) {
@@ -222,7 +233,7 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 None => return Err(format!("{name}: client state {a0:#x} is not one of the vertex/normal/colour/texcoord arrays this engine serves")),
             },
-            "glClientActiveTextureARB" => { self.gl.client_unit = (a0.wrapping_sub(0x84C0)).min(255) as u8; if a0 < 0x84C0 || a0 > 0x84DF { self.gl.gl_error = GL_INVALID_ENUM; self.gl.client_unit = 0; } }
+            "glClientActiveTextureARB" => { self.gl.client_unit = (a0.wrapping_sub(0x84C0)).min(255) as u8; if a0 < 0x84C0 || a0 > 0x84DF { self.gl_set_error(GL_INVALID_ENUM); self.gl.client_unit = 0; } }
             "glVertexPointer" | "glColorPointer" | "glTexCoordPointer" | "glNormalPointer" => {
                 let (role, size, ty, stride, ptr) = match name {
                     "glVertexPointer" => (Role::Vertex, a0, a1, a2, a3),
@@ -236,21 +247,21 @@ impl<U: GuestUi> MacPpc<U> {
                         let unit = if role == Role::TexCoord { self.gl.client_unit } else { 0 };
                         self.gl.arrays.insert((role as u8, unit), Descriptor { role, unit, offset: self.mac.mem.strip(ptr) as usize, size: size as u8, ty: t, stride });
                     }
-                    Some(_) => self.gl.gl_error = GL_INVALID_VALUE,
-                    None => self.gl.gl_error = GL_INVALID_ENUM,
+                    Some(_) => self.gl_set_error(GL_INVALID_VALUE),
+                    None => self.gl_set_error(GL_INVALID_ENUM),
                 }
             }
             "glDrawElements" => {
                 let (mode, count, ty, ptr) = (a0, a1, a2, a3);
-                let Some(t) = self.gl_ctx_token() else { self.gl.gl_error = GL_INVALID_OPERATION; return self.gl_finish(cpu, 0); };
-                let it = match ElemType::from_gl(ty) { Some(t @ (ElemType::U8 | ElemType::U16 | ElemType::U32)) => t, _ => { self.gl.gl_error = GL_INVALID_ENUM; return self.gl_finish(cpu, 0); } };
+                let Some(t) = self.gl_ctx_token() else { self.gl_set_error(GL_INVALID_OPERATION); return self.gl_finish(cpu, 0); };
+                let it = match ElemType::from_gl(ty) { Some(t @ (ElemType::U8 | ElemType::U16 | ElemType::U32)) => t, _ => { self.gl_set_error(GL_INVALID_ENUM); return self.gl_finish(cpu, 0); } };
                 let descs: Vec<Descriptor> = self.gl.enabled.iter().filter_map(|k| self.gl.arrays.get(k).copied()).collect();
-                if descs.len() != self.gl.enabled.len() { self.gl.gl_error = GL_INVALID_OPERATION; return self.gl_finish(cpu, 0); } // enabled with no pointer set
+                if descs.len() != self.gl.enabled.len() { self.gl_set_error(GL_INVALID_OPERATION); return self.gl_finish(cpu, 0); } // enabled with no pointer set
                 let len = self.mac.mem.len().min(u32::MAX as usize) as u32;
                 let mem = self.mac.mem.span(0, len).and_then(|s| self.mac.mem.bytes(s)).map_err(|_| String::from("glDrawElements: guest RAM is not addressable"))?.to_vec();
                 match DrawCommand::capture(&mem, mode, self.mac.mem.strip(ptr) as usize, count, it, &descs) {
                     Ok(d) => self.gl_queue(t, Command::Draw(d)),
-                    Err(e) => { self.gl.gl_error = GL_INVALID_VALUE; self.gl_note(format!("[HEIRLOOM-GL] glDrawElements refused: {e:?}")); }
+                    Err(e) => { self.gl_set_error(GL_INVALID_VALUE); self.gl_note(format!("[HEIRLOOM-GL] glDrawElements refused: {e:?}")); }
                 }
             }
             "glLockArraysEXT" | "glUnlockArraysEXT" => { /* arrays are read at the draw; the lock's promise (no change) is honoured trivially */ }
@@ -262,7 +273,7 @@ impl<U: GuestUi> MacPpc<U> {
                 } else { 0 };
             }
             "glGetString" => {
-                let Some(t) = self.gl_ctx_token() else { self.gl.gl_error = GL_INVALID_OPERATION; return self.gl_finish(cpu, 0); };
+                let Some(t) = self.gl_ctx_token() else { self.gl_set_error(GL_INVALID_OPERATION); return self.gl_finish(cpu, 0); };
                 let worker_text = self.gl_ask(t, Command::Call { entry: f.0, args: alloc::vec![u64::from(a0)] }).map(|x| x.2);
                 let caps = derive(ENTRIES, heirloom_gl_abi::caps::ATTESTED_THROUGH);
                 let text = match a0 {
@@ -272,7 +283,7 @@ impl<U: GuestUi> MacPpc<U> {
                     _ => None,
                 };
                 match text {
-                    None => self.gl.gl_error = GL_INVALID_ENUM,
+                    None => self.gl_set_error(GL_INVALID_ENUM),
                     Some(s) => {
                         self.gl.query_log.push(format!("glGetString({a0:#x}) -> {s}"));
                         let p = match self.gl.strings.get(&a0) { Some((old, p)) if *old == s => *p, _ => {
@@ -303,7 +314,7 @@ impl<U: GuestUi> MacPpc<U> {
                 }
             }
             "glSetFenceAPPLE" => match self.gl.fence_names.get(&a0).copied() {
-                None => self.gl.gl_error = GL_INVALID_OPERATION,
+                None => self.gl_set_error(GL_INVALID_OPERATION),
                 Some(old) => {
                     if let Some(o) = old { let _ = self.gl.fences.delete(o); }
                     match self.gl.fences.set(self.gl.batch) {
@@ -315,21 +326,21 @@ impl<U: GuestUi> MacPpc<U> {
             "glIsFenceAPPLE" => { ret = u32::from(self.gl.fence_names.contains_key(&a0)); }
             "glTestFenceAPPLE" | "glFinishFenceAPPLE" | "glTestObjectAPPLE" | "glFinishObjectAPPLE" => {
                 let (object, fname) = if name.ends_with("ObjectAPPLE") { (a0, a1) } else { (0, a0) };
-                if name.ends_with("ObjectAPPLE") && object != GL_VERTEX_ARRAY_RANGE_APPLE { self.gl.gl_error = GL_INVALID_ENUM; return self.gl_finish(cpu, 0); }
+                if name.ends_with("ObjectAPPLE") && object != GL_VERTEX_ARRAY_RANGE_APPLE { self.gl_set_error(GL_INVALID_ENUM); return self.gl_finish(cpu, 0); }
                 let finish = name.starts_with("glFinish");
                 if finish { self.gl_flush(); }
                 match self.gl.fence_names.get(&fname).copied() {
                     Some(Some(id)) => ret = u32::from(self.gl.fences.is_complete(id).unwrap_or(false)),
-                    _ => { self.gl.gl_error = GL_INVALID_OPERATION; }
+                    _ => { self.gl_set_error(GL_INVALID_OPERATION); }
                 }
                 if name.ends_with("ObjectAPPLE") { /* the "object" is the vertex array range: its fence is the stream's */ }
             }
             // ---- APPLE_vertex_array_range ------------------------------------------------------------------------------
             "glVertexArrayRangeAPPLE" | "glFlushVertexArrayRangeAPPLE" => { /* validated hint: nothing observable (see the module doc) */ }
             "glVertexArrayParameteriAPPLE" => {
-                if a0 != GL_VERTEX_ARRAY_STORAGE_HINT_APPLE || !(a1 == GL_STORAGE_CACHED_APPLE || a1 == GL_STORAGE_SHARED_APPLE || a1 == 0x85BC /* GL_STORAGE_PRIVATE_APPLE */) { self.gl.gl_error = GL_INVALID_ENUM; }
+                if a0 != GL_VERTEX_ARRAY_STORAGE_HINT_APPLE || !(a1 == GL_STORAGE_CACHED_APPLE || a1 == GL_STORAGE_SHARED_APPLE || a1 == 0x85BC /* GL_STORAGE_PRIVATE_APPLE */) { self.gl_set_error(GL_INVALID_ENUM); }
             }
-            other => return Err(format!("{other}: marked implemented but has no encoder in this engine (a contract/engine skew)")),
+            other => ret = self.gl_state_call(other, f.0, cpu)?,
         }
         self.gl_finish(cpu, ret)
     }

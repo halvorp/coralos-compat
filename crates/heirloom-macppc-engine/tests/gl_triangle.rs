@@ -278,9 +278,9 @@ fn without_a_worker_there_is_no_pixel_format_and_the_refusal_is_named() {
 fn an_unimplemented_entry_is_refused_by_name_never_skipped() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     let mut regs = [0u32; 32];
-    assert!(!matches!(m.bind("glTexSubImage2D"), heirloom_macppc_engine::symbols::Binding::Unbound(_)), "bound, so the call is refused by name");
-    match m.glue_call("glTexSubImage2D", &mut regs) {
-        GlueOutcome::Refused(s) => assert_eq!(s, "[HEIRLOOM-GL REFUSED call=glTexSubImage2D]"),
+    assert!(!matches!(m.bind("glBegin"), heirloom_macppc_engine::symbols::Binding::Unbound(_)), "bound, so the call is refused by name");
+    match m.glue_call("glBegin", &mut regs) {
+        GlueOutcome::Refused(s) => assert_eq!(s, "[HEIRLOOM-GL REFUSED call=glBegin]"),
         other => panic!("a skipped call: {other:?}"),
     }
     m.bind("glDrawElements");
