@@ -4,7 +4,11 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     // Cross build for a bare-metal target (CoralOS user mode, x86_64-unknown-none): the host generator
     // still needs the HOST compiler, the Musashi objects need freestanding clang + the libc shim headers.
-    let bare = env::var("CARGO_CFG_TARGET_OS").map(|o| o == "none").unwrap_or(false);
+    let pic = env::var_os("CARGO_FEATURE_PIC").is_some();
+    // cpu-68k.library is a cdylib built for x86_64-unknown-linux-gnu (the CoralOS .library convention, like sexpr.library), yet it
+    // must stay freestanding: the CoralOS loader resolves no host libc. So the `pic` feature always takes the freestanding path
+    // (the libc shim, -nostdinc), whatever the target OS.
+    let bare = pic || env::var("CARGO_CFG_TARGET_OS").map(|o| o == "none").unwrap_or(false);
     let host = env::var("HOST").unwrap();
     let cc = cc::Build::new().target(&host).host(&host).opt_level(0).get_compiler();
     // Step 1: build and run Musashi's generator (m68kmake) to emit m68kops.{c,h}.
@@ -15,7 +19,6 @@ fn main() {
     assert!(st.success(), "running m68kmake failed");
     let mut b = cc::Build::new();
     // The `pic` feature builds the position-independent objects cpu-68k.library needs; the default stays -fno-pic -mcmodel=small.
-    let pic = env::var_os("CARGO_FEATURE_PIC").is_some();
     if bare {
         if pic { b.pic(true).flag("-fPIC"); } else { b.pic(false).flag("-fno-pic").flag("-mcmodel=small"); }
         b.compiler("clang").flag("--target=x86_64-unknown-none-elf").flag("-ffreestanding").flag("-nostdinc")
