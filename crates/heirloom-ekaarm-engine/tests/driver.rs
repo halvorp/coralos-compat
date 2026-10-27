@@ -6,6 +6,7 @@ use heirloom_volume::Tree;
 use std::path::Path;
 
 const DRIVE: &str = "/data/build/corpus-symbian/drive";
+const ROM: &str = "/data/build/corpus-symbian/sdk/sdk/Emulator/epoc32/release/winscw/udeb/z";
 
 fn fill(tree: &mut Tree, vol: usize, dir: &Path, guest: &[String]) {
     let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap()).collect();
@@ -26,7 +27,10 @@ fn fill(tree: &mut Tree, vol: usize, dir: &Path, guest: &[String]) {
 fn run_app(tree: &str, exe: &str, caption: &str, fault: &str) {
     let root = format!("{DRIVE}/{tree}");
     if !Path::new(&root).is_dir() { println!("SKIP: {root} absent"); return; }
-    let mut m: Box<dyn GuestMachine<Ui = RecordingGuestUi>> = Box::new(EkaArm::new(RecordingGuestUi::new(), ordinals()));
+    let Ok(rom) = heirloom_ekaarm_engine::hostdir::DirRom::new(Path::new(ROM)) else { println!("SKIP: {ROM} absent"); return };
+    let mut eka = EkaArm::new(RecordingGuestUi::new(), ordinals());
+    eka.set_rom(Box::new(rom));
+    let mut m: Box<dyn GuestMachine<Ui = RecordingGuestUi>> = Box::new(eka);
     let vol = m.volume().volume("Z").expect("a Z volume exists from new");
     fill(m.volume(), vol, Path::new(&root), &[]);
     let image = std::fs::read(format!("{root}/sys/bin/{exe}")).unwrap();
@@ -53,10 +57,10 @@ fn ordinals() -> heirloom_fmt_e32::OrdinalTable {
 }
 
 #[test]
-fn file_browser_through_the_trait() { run_app("nokiafilebrowser", "filebrowser.exe", "FileBrowser", "resource offset 0x8cc0000"); }
+fn file_browser_through_the_trait() { run_app("nokiafilebrowser", "filebrowser.exe", "FileBrowser", "CdlEngine11GetFunctionE4TUidi"); }
 
 #[test]
-fn hero_through_the_trait() { run_app("hero-of-sparta", "heroofsparta.exe", "HeroOfSparta", "CRepository::NewL(0x101f8798)"); }
+fn hero_through_the_trait() { run_app("hero-of-sparta", "heroofsparta.exe", "HeroOfSparta", "ws32/609"); }
 
 #[test]
 fn non_e32_bytes_are_a_named_refusal() {

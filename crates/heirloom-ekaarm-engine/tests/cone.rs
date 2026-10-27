@@ -12,6 +12,15 @@ use heirloom_ekaarm_engine::hostdir;
 const ORD_TSV: &str = include_str!("../../heirloom-fmt-e32/data/eka-ordinals.tsv");
 const E32: &str = "/data/build/corpus-symbian/e32";
 const DRIVE: &str = "/data/build/corpus-symbian/drive";
+/// The device ROM (`Z:`): the environment reads its colour list from the ROM's `eikpriv` resource file when it is made, so every run needs it.
+const ROM: &str = "/data/build/corpus-symbian/sdk/sdk/Emulator/epoc32/release/winscw/udeb/z";
+
+/// `drive` with the device ROM behind it; None (skip) when the ROM is absent.
+fn with_rom(mut drive: Drive) -> Option<Drive> {
+    let rom = hostdir::DirRom::new(std::path::Path::new(ROM)).ok().or_else(|| { println!("SKIP: {ROM} absent"); None })?;
+    drive.set_rom(Box::new(rom));
+    Some(drive)
+}
 
 struct App {
     exe: &'static str,
@@ -23,8 +32,8 @@ struct App {
     refusal: &'static str,
 }
 
-const FILE_BROWSER: App = App { exe: "FileBrowser.exe", tree: "nokiafilebrowser", loc_rsc: "resource/apps/filebrowser.rsc", loc_id: 0x3ec9_005d, caption: "FileBrowser", refusal: "resource offset 0x8cc0000" };
-const HERO: App = App { exe: "HeroOfSparta.exe", tree: "hero-of-sparta", loc_rsc: "resource/apps/heroofsparta.rsc", loc_id: 0x08f6_f004, caption: "HeroOfSparta", refusal: "CRepository::NewL(0x101f8798)" };
+const FILE_BROWSER: App = App { exe: "FileBrowser.exe", tree: "nokiafilebrowser", loc_rsc: "resource/apps/filebrowser.rsc", loc_id: 0x3ec9_005d, caption: "FileBrowser", refusal: "CdlEngine11GetFunctionE4TUidi" };
+const HERO: App = App { exe: "HeroOfSparta.exe", tree: "hero-of-sparta", loc_rsc: "resource/apps/heroofsparta.rsc", loc_id: 0x08f6_f004, caption: "HeroOfSparta", refusal: "ws32/609" };
 
 fn load(app: &App) -> Option<Process> {
     let path = format!("{E32}/{}", app.exe);
@@ -38,7 +47,7 @@ fn drive_of(app: &App) -> Option<Drive> {
         println!("SKIP: {dir} absent");
         return None;
     }
-    Some(hostdir::load_dir(std::path::Path::new(&dir)).unwrap().0)
+    with_rom(hostdir::load_dir(std::path::Path::new(&dir)).unwrap().0)
 }
 
 /// What the resource file itself says the caption is: LOCALISABLE_APP_INFO's `caption_and_icon.caption` (appinfo.rh:176-202).
@@ -51,9 +60,10 @@ fn caption_per_resource(app: &App) -> String {
 }
 
 fn windows(p: &Process) -> Vec<String> {
-    p.ui_as::<RecordingGuestUi>().unwrap().calls.iter().map(|c| match c {
-        UiCall::OpenWindow(m) => { assert_eq!(m.role, WindowRole::Document); format!("{}@{}x{}", m.title, m.rect.width, m.rect.height) }
-        other => panic!("only OpenWindow is expected, got {other:?}"),
+    // With the ROM behind the drive the run goes on past the window: the other UI calls are the apps' own controls (`listbox.rs` checks those).
+    p.ui_as::<RecordingGuestUi>().unwrap().calls.iter().filter_map(|c| match c {
+        UiCall::OpenWindow(m) => { assert_eq!(m.role, WindowRole::Document); Some(format!("{}@{}x{}", m.title, m.rect.width, m.rect.height)) }
+        _ => None,
     }).collect()
 }
 
@@ -105,7 +115,7 @@ fn negative_control_without_a_drive_baseconstructl_refuses_and_guesses_no_title(
     for app in [FILE_BROWSER, HERO] {
         let Some(m) = refused_without_window(app, None, true) else { return };
         println!("no drive: {m}");
-        assert!(m.starts_with("NEXT-NEEDED") && m.contains("BaseConstructL") && m.contains("no drive"), "{m}");
+        assert!(m.starts_with("NEXT-NEEDED") && m.contains("no drive"), "{m}");
     }
 }
 
@@ -113,6 +123,7 @@ fn negative_control_without_a_drive_baseconstructl_refuses_and_guesses_no_title(
 fn negative_control_a_drive_without_the_resource_files_refuses() {
     let mut empty = Drive::new();
     empty.put_file("\\sys\\bin\\readme.txt", b"no resources here".to_vec()).unwrap();
+    let Some(empty) = with_rom(empty) else { return };
     let Some(m) = refused_without_window(HERO, Some(empty), true) else { return };
     println!("empty drive: {m}");
     assert!(m.contains("BaseConstructL") && m.contains("registration"), "{m}");

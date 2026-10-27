@@ -27,6 +27,8 @@ pub struct EkaArm<U: GuestUi> {
     /// ships heirloom-fmt-e32's eka-ordinals.tsv in its bundle) and hands in: never baked into the engine (ASSETS-ARE-FILES).
     ordinals: OrdinalTable,
     tree: Tree,
+    /// The device ROM (`Z:`) the host hands in before `start_file` (a read-only source of resource files; never copied into the engine).
+    rom: Option<Box<dyn crate::drive::RomSource>>,
     process: Option<Process>,
     /// How the run ended once it has (Exited / Fault are terminal: a later `step` repeats it).
     done: Option<Step>,
@@ -42,7 +44,11 @@ impl<U: GuestUi> EkaArm<U> {
     pub fn new(ui: U, ordinals: OrdinalTable) -> Self {
         let mut tree = Tree::new(255);
         tree.add_volume("Z", false);
-        EkaArm { ui: Some(Box::new(ui)), ordinals, tree, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new() }
+        EkaArm { ui: Some(Box::new(ui)), ordinals, tree, rom: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new() }
+    }
+    /// Put the device ROM behind the volume before `start_file`: the environment reads its colour list from the ROM's `eikpriv` resource file.
+    pub fn set_rom(&mut self, rom: Box<dyn crate::drive::RomSource>) {
+        self.rom = Some(rom);
     }
     /// The running process, once started (tests and the runner read its log and registers).
     pub fn process(&self) -> Option<&Process> {
@@ -64,7 +70,11 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
             return Err(Refusal(String::from("ekaarm: only a fresh machine starts a program")));
         }
         let mut p = loader::load(file, &self.ordinals).map_err(|e| Refusal(format!("ekaarm: {name}: not a loadable E32 image: {e:?}")))?;
-        p.set_drive(Drive::from_tree(core::mem::replace(&mut self.tree, Tree::new(255))));
+        let mut drive = Drive::from_tree(core::mem::replace(&mut self.tree, Tree::new(255)));
+        if let Some(rom) = self.rom.take() {
+            drive.set_rom(rom);
+        }
+        p.set_drive(drive);
         self.log.push(format!("ekaarm: started {name} (UID3 {:#010x})", p.uid3));
         self.process = Some(p);
         self.apply_census();

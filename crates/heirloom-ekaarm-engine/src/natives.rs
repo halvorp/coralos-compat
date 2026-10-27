@@ -31,6 +31,8 @@ pub struct NativeState {
     pub cdl: crate::cdl::CdlState,
     /// The opaque `CFont` guest objects by logical font id (`listdata.rs`).
     pub fonts: BTreeMap<u32, u32>,
+    /// The icon library's guest constants (`icons.rs`).
+    pub icons: crate::icons::IconState,
 }
 
 /// A host extension to the natives: asked first with the import's mangled name; `Some` = handled. Used by tests to stand in
@@ -81,6 +83,10 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::listbox::native(proc, name) { return Some(o); }
     if let Some(o) = crate::listmodel::native(proc, name) { return Some(o); }
     if let Some(o) = crate::listdata::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::colorlist::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::icons::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::aeabimem::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::format::native(proc, name) { return Some(o); }
     None
 }
 

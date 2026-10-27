@@ -1,6 +1,7 @@
 //! Slice 4: the list box. The model the guest fills (a `CDesC16ArrayFlat` behind a `CTextListBoxModel`) reaches the host as one List
 //! control (synthetic fixture, no corpus), the engine-built vtables are guarded against calls past their end, and FileBrowser's own
 //! list (the owner's corpus; skipped when absent) shows the host what its model holds.
+mod support;
 use heirloom_cpu_arm::Memory;
 use heirloom_ekaarm_engine::control::{CTRL_I_POSITION, CTRL_I_SIZE};
 use heirloom_ekaarm_engine::natives::{self, NativeOutcome};
@@ -46,6 +47,7 @@ fn ptrc16(p: &mut Process, text: &str) -> u32 {
 
 /// A list box built the way FileBrowser builds it, with the application window open and the rectangle `SetRect` leaves in the control.
 fn list_box(p: &mut Process) -> u32 {
+    p.set_drive(support::drive_with_rom());
     p.set_ui(RecordingGuestUi::new());
     let model = WindowModel { title: "t".into(), rect: GuestRect { left: 0, top: 0, width: 360, height: 640 }, role: WindowRole::Document, closable: true, resizable: false, token: CallbackToken(1) };
     p.host.window = Some(p.host.ui.as_mut().unwrap().open_window(model).unwrap());
@@ -160,7 +162,7 @@ const EXE: &str = "/data/build/corpus-symbian/e32/FileBrowser.exe";
 const DRIVE: &str = "/data/build/corpus-symbian/drive/nokiafilebrowser";
 
 /// FileBrowser's list reaches the host: its control is added with the list's rectangle, and the rows the host holds are the strings
-/// its model holds (the model is empty at this frontier: FileBrowser has not yet appended its drive entries).
+/// its model holds: FileBrowser's own drive entries, built from the drive the engine answers (C: and Z:).
 #[test]
 fn file_browser_list_shows_the_host_what_its_model_holds() {
     use heirloom_ekaarm_engine::hostdir::{load_dir, DirRom};
@@ -189,4 +191,7 @@ fn file_browser_list_shows_the_host_what_its_model_holds() {
     let guest: Vec<Vec<String>> = p.test_list_items(lb).unwrap().iter().map(|i| i.split(|u| *u == 9).map(|c| String::from_utf16_lossy(c)).collect()).collect();
     let guest: Vec<Vec<String>> = guest.into_iter().map(|mut r| { r.resize(4, String::new()); r }).collect();
     assert_eq!(held, guest, "the host holds what the guest's model holds");
+    assert!(!held.is_empty(), "the model holds FileBrowser's drive entries, so the host shows rows");
+    let drives: Vec<&str> = held.iter().map(|r| r[1].as_str()).collect();
+    assert!(drives.iter().any(|d| d.starts_with("C:")) && drives.iter().any(|d| d.starts_with("Z:")), "one row per drive the engine answers to: {drives:?}");
 }

@@ -119,6 +119,11 @@ pub enum HostObj {
     /// A `CEikScrollBarFrame` (listdata.rs).
     ScrollFrame(crate::listdata::ScrollFrame),
     NaviDecorator(crate::navi::NaviDecorator),
+    /// A `CColorList` / `CColorArray` (colorlist.rs).
+    ColorList(crate::colorlist::ColorListState),
+    /// A bitmap made for an icon (icons.rs).
+    IconBitmap(crate::icons::IconBitmap),
+    ColorArray(crate::colorlist::ColorArrayState),
 }
 
 #[derive(Default)]

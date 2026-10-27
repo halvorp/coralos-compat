@@ -56,6 +56,10 @@ pub mod listmodel;
 pub mod listbox;
 pub mod listdata;
 pub mod listproject;
+pub mod colorlist;
+pub mod icons;
+pub mod aeabimem;
+pub mod format;
 pub mod machine;
 #[cfg(feature = "host")]
 pub mod hostdir;

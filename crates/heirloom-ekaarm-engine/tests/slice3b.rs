@@ -1,4 +1,5 @@
 //! Slice 3, second half: arrays, central repository, time, telephony, ROM fallback, control geometry and activation.
+mod support;
 use heirloom_cpu_arm::Memory;
 use heirloom_ekaarm_engine::cenrep;
 use heirloom_ekaarm_engine::drive::{Drive, RomSource};
@@ -239,6 +240,7 @@ fn the_app_ui_factory_reaches_the_status_pane_whose_title_text_becomes_the_windo
     use heirloom_ui_abi::{CallbackToken, GuestRect, GuestUi, RecordingGuestUi, UiCall, WindowModel, WindowRole};
     let names = ["_ZNK9CEikonEnv12AppUiFactoryEv", "CAknAppUiFactory::StatusPane", "_ZNK18CEikStatusPaneBase8ControlLE4TUid", "_ZN13CAknTitlePane8SetTextLERK7TDesC16", "_ZN18CEikStatusPaneBase12SwitchLayoutLEi", "_ZNK18CEikStatusPaneBase18CurrentLayoutResIdEv"];
     let mut p = proc(&names);
+    p.set_drive(support::drive_with_rom());
     let mut ui = RecordingGuestUi::new();
     let win = ui.open_window(WindowModel { title: "Caption".into(), rect: GuestRect { left: 0, top: 0, width: 360, height: 640 }, role: WindowRole::Document, closable: true, resizable: false, token: CallbackToken(0) }).unwrap();
     p.set_ui(ui);

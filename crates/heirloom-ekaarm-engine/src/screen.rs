@@ -37,11 +37,15 @@ const VTABLE_NAMED: &[(usize, &str)] = &[
     (12, "_ZNK15CWsScreenDevice10GetPaletteERP8CPalette"),
 ];
 
-/// Twips per pixel of the device. NOT measured: EKA2L1's table of approximate pixel-to-twips multipliers (services/window/common.cpp,
-/// facts only) gives 9 for EPOC 9.1-9.4 (S60 3rd FP / 5th edition); the Foundation SDK carries no `SizeInTwips` of a device. It only scales
-/// font heights, which FileBrowser turns into cell geometry that is recorded, not drawn (listdata.rs).
-/// DELETE WHEN the device profile carries the real physical size (then `SizeInTwips` and this derive from it).
-pub const TWIPS_PER_PIXEL: u32 = 9;
+/// The device's physical size in twips (1/1440 inch), portrait 360x640 pixels (`SCR_WIDTH1/HEIGHT1`, style QHDTOUCH): `SCR_TWIP_WIDTH1 2235`,
+/// `SCR_TWIP_HEIGHT1 3973` in the S60 SDK emulator's `epoc32/data/wsini.ini` (and `release/winscw/udeb/z/system/data/wsini.ini`), about 6.2
+/// twips per pixel on both axes.
+pub const SCREEN_TWIP_HEIGHT: u32 = 3973;
+
+/// A vertical distance in twips as device pixels (rounded to nearest), from the physical size above: `VerticalTwipsToPixels`.
+pub fn twips_to_pixels(twips: u32) -> u32 {
+    (twips * SCREEN_HEIGHT as u32 + SCREEN_TWIP_HEIGHT / 2) / SCREEN_TWIP_HEIGHT
+}
 
 /// The `MGraphicsDeviceMap` base at +4 (gdi.h:1015): ~D1 0, ~D0 1, HorizontalTwipsToPixels 2, VerticalTwipsToPixels 3,
 /// HorizontalPixelsToTwips 4, VerticalPixelsToTwips 5, GetNearestFontInTwips 6 (CONFIRMED: FileBrowser's list setup calls
@@ -52,7 +56,7 @@ const MAP_SLOTS: usize = 10;
 impl Process {
     /// A font for a spec: this engine has no glyphs (the host draws the text), so it is a guest object that remembers the height the
     /// guest asked for (`TFontSpec::iHeight`, twips, gdi.h; offset 56 as the app's own frame lays it out) and answers
-    /// `HeightInPixels` from it at [`TWIPS_PER_PIXEL`]. `aFont = font; return KErrNone`.
+    /// `HeightInPixels` from it at the device's twips-per-pixel (`twips_to_pixels`). `aFont = font; return KErrNone`.
     /// DELETE WHEN the guest measures or draws text itself (a `CFont` member other than `HeightInPixels` is the next refusal).
     fn nearest_font(&mut self, out: u32, spec: u32) -> Result<(), String> {
         let height = self.rd(spec + 56)?;
@@ -92,14 +96,14 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // TInt CFont::HeightInPixels() const: the requested height at the device's scale (rounded to nearest), for a font made by
         // GetNearestFontInTwips. A logical font (FontFromId) has no height here: refused by name.
         "_ZNK5CFont14HeightInPixelsEv" => match p.obj_get(p.cpu.regs[0]) {
-            Some(HostObj::Font(t)) => { let px = (*t + TWIPS_PER_PIXEL / 2) / TWIPS_PER_PIXEL; p.cpu.regs[0] = px; NativeOutcome::Return }
+            Some(HostObj::Font(t)) => { let px = twips_to_pixels(*t); p.cpu.regs[0] = px; NativeOutcome::Return }
             _ => NativeOutcome::Refused(format!("NEXT-NEEDED gdi {name}: the font at {:#x} is a logical font (AknLayoutUtils::FontFromId) whose height is in layout data this engine does not read", p.cpu.regs[0])),
         },
         // TInt CFont::BaselineOffsetInPixels() const: the ascent. Only `ascent + descent = height` is known here, so the whole height is
         // the ascent (descent 0): no glyph data, no invented proportion. Cell positions FileBrowser derives from it are recorded, not drawn.
         // DELETE WHEN the device profile carries a typeface's real metrics (OPEN DESIGN QUESTION: where they come from).
         "_ZNK5CFont22BaselineOffsetInPixelsEv" => match p.obj_get(p.cpu.regs[0]) {
-            Some(HostObj::Font(t)) => { let px = (*t + TWIPS_PER_PIXEL / 2) / TWIPS_PER_PIXEL; p.cpu.regs[0] = px; NativeOutcome::Return }
+            Some(HostObj::Font(t)) => { let px = twips_to_pixels(*t); p.cpu.regs[0] = px; NativeOutcome::Return }
             _ => NativeOutcome::Refused(format!("NEXT-NEEDED gdi {name}: the font at {:#x} is a logical font (AknLayoutUtils::FontFromId): no metrics", p.cpu.regs[0])),
         },
         _ => return None,

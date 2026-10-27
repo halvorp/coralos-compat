@@ -93,22 +93,33 @@ impl Process {
         if self.nat.rom_resources.is_none() {
             let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive"))?;
             let mut index = alloc::collections::BTreeMap::new();
-            for name in drive.list_rom("\\resource").unwrap_or_default() {
-                let lower = name.to_ascii_lowercase();
-                let Some(stem) = lower.strip_suffix(".rsc") else { continue };
-                let twin = format!("\\resource\\{stem}.{ROM_LANGUAGE_EXT}");
-                let path = if drive.exists_anywhere(&twin) { twin } else { format!("\\resource\\{name}") };
-                if let Ok(bytes) = drive.read_owned(&path) {
-                    if let Ok(f) = RscFile::parse(&bytes) {
-                        index.entry(f.id_offset).or_insert(path);
-                    }
-                }
-            }
+            index_rom_dir(drive, "\\resource", &mut index);
             self.nat.rom_resources = Some(index);
         }
         match self.nat.rom_resources.as_ref().and_then(|i| i.get(&offset)) {
             Some(p) => Ok(p.clone()),
             None => Err(format!("no resource file on the drive or in the ROM owns resource offset {offset:#x}")),
+        }
+    }
+}
+
+/// Index every `.rsc` under the ROM directory `dir` and its subdirectories (`\resource\uiklaf\eikpriv.rsc` owns the Eikon private
+/// resources, offset 0x19bd6000): id offset -> the file a device in [`ROM_LANGUAGE_EXT`] loads. The first file seen keeps an offset.
+fn index_rom_dir(drive: &Drive, dir: &str, index: &mut alloc::collections::BTreeMap<u32, String>) {
+    for name in drive.list_rom(dir).unwrap_or_default() {
+        let full = format!("{dir}\\{name}");
+        if drive.list_rom(&full).is_some() {
+            index_rom_dir(drive, &full, index);
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        let Some(stem) = lower.strip_suffix(".rsc") else { continue };
+        let twin = format!("{dir}\\{stem}.{ROM_LANGUAGE_EXT}");
+        let path = if drive.exists_anywhere(&twin) { twin } else { full };
+        if let Ok(bytes) = drive.read_owned(&path) {
+            if let Ok(f) = RscFile::parse(&bytes) {
+                index.entry(f.id_offset).or_insert(path);
+            }
         }
     }
 }

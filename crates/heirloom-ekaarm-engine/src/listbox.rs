@@ -171,6 +171,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZN11CEikListBox18SetListBoxObserverEP19MEikListBoxObserver" => { let r = p.wr(r0 + LB_I_OBSERVER, r1); ret(p, r.map(|_| 0)) }
         // CEikListBox::HandleItemAdditionL(): the model gained items.
         "_ZN11CEikListBox19HandleItemAdditionLEv" => { let r = p.list_sync(r0); ret(p, r.map(|_| 0)) }
+        // CEikListBox::UpdateScrollBarsL(): sizes the guest's scroll bar thumbs. The host keeps its own scroll bar over the List control, so this
+        // is a recorded no-op. DELETE WHEN the host's List control takes its scroll extent from the guest's scroll bar frame.
+        "_ZN11CEikListBox17UpdateScrollBarsLEv" => ret(p, Ok(0)),
         _ => return None,
     })
 }

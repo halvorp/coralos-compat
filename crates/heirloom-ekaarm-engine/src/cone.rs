@@ -67,6 +67,9 @@ impl Process {
         let fs_handle = self.fs_connect();
         // CCoeEnv::ConstructL connects the environment's file server session (coemain.h:204).
         self.mem.vm.write_u32(e.wrapping_add(crate::fs::COEENV_I_FS_SESSION), fs_handle).map_err(|_| String::from("the CEikonEnv is unwritable"))?;
+        // CEikonEnv::InitColorSchemeL (EIKENV.CPP:2966): the colour list the app's inline `ColorList()` reads.
+        let colors = self.make_color_list()?;
+        self.wr(e.wrapping_add(crate::colorlist::EIKENV_I_COLOR_LIST), colors)?;
         Ok(e)
     }
 
