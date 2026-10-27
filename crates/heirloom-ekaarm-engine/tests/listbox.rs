@@ -15,12 +15,13 @@ const SET_ARRAY: &str = "_ZN17CTextListBoxModel16SetItemTextArrayEP12MDesC16Arra
 const ARR_CTOR: &str = "_ZN16CDesC16ArrayFlatC1Ei";
 const APPEND: &str = "_ZN12CDesC16Array7AppendLERK7TDesC16";
 const ITEM_ADDED: &str = "_ZN11CEikListBox19HandleItemAdditionLEv";
+const OFFER_KEY: &str = "_ZN11CEikListBox14OfferKeyEventLERK9TKeyEvent10TEventCode";
 const ALLOC: &str = "_ZN4User6AllocZEi";
 const MDESC_COUNT: &str = "_ZThn24_NK12CDesC16Array9MdcaCountEv";
 const MDESC_POINT: &str = "_ZThn24_NK12CDesC16Array9MdcaPointEi";
 
 fn proc() -> Process {
-    loader::bare(&[LB_CTOR, CONSTRUCT_L, MODEL, SET_ARRAY, ARR_CTOR, APPEND, ITEM_ADDED, ALLOC, MDESC_COUNT, MDESC_POINT, "_ZN4User4FreeEPv"]).unwrap()
+    loader::bare(&[LB_CTOR, CONSTRUCT_L, MODEL, SET_ARRAY, ARR_CTOR, APPEND, ITEM_ADDED, ALLOC, MDESC_COUNT, MDESC_POINT, OFFER_KEY, "_ZN4User4FreeEPv"]).unwrap()
 }
 
 fn call(p: &mut Process, name: &str, args: &[u32]) -> (NativeOutcome, u32) {
@@ -105,6 +106,68 @@ fn the_guests_item_texts_reach_the_host_as_one_list_control_and_follow_the_model
     assert_eq!(items[2], "1\tK\u{f6}ln \u{1f600}".encode_utf16().collect::<Vec<u16>>());
 }
 
+/// `OfferKeyEventL(TKeyEvent{iCode, iScanCode, iModifiers, iRepeats}, type)`: the response (r0), or the refusal.
+fn offer(p: &mut Process, lb: u32, code: u32, scan: u32, ty: u32) -> Result<u32, String> {
+    let key = ok(p, ALLOC, &[16]);
+    for (i, v) in [code, scan, 0, 0].iter().enumerate() { p.mem.write_u32(key + 4 * i as u32, *v).unwrap(); }
+    match call(p, OFFER_KEY, &[lb, key, ty]) { (NativeOutcome::Return, r) => Ok(r), (NativeOutcome::Refused(m), _) => Err(m), (o, _) => panic!("{o:?}") }
+}
+
+fn selected_sent(p: &Process) -> Vec<Option<u32>> {
+    calls(p).iter().filter_map(|c| match c { UiCall::SetControl(_, _, ControlValue::Rows { selected, .. }) => Some(*selected), _ => None }).collect()
+}
+
+fn current(p: &Process, lb: u32) -> u32 {
+    let view = p.guest_word(lb + heirloom_ekaarm_engine::listbox::LB_I_VIEW).unwrap();
+    p.guest_word(view + heirloom_ekaarm_engine::listbox::VIEW_I_CURRENT).unwrap()
+}
+
+#[test]
+fn arrow_keys_move_the_current_item_clamped_and_other_keys_are_refused_by_name() {
+    use heirloom_ekaarm_engine::listbox::{LB_I_VIEW, VIEW_I_ITEM_HEIGHT, VIEW_I_TOP, VIEW_I_VIEW_RECT};
+    const DOWN: u32 = 0xf80a;
+    const UP: u32 = 0xf809;
+    const EEVENT_KEY: u32 = 1;
+    let mut p = proc();
+    let lb = list_box(&mut p);
+    let arr = ok(&mut p, ALLOC, &[28]);
+    ok(&mut p, ARR_CTOR, &[arr, 4]);
+    let model = ok(&mut p, MODEL, &[lb]);
+    ok(&mut p, SET_ARRAY, &[model, arr + 24]);
+    p.test_list_activate(lb).unwrap();
+    // An empty list eats every key but Yes, and tells nobody.
+    assert_eq!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY), Ok(1));
+    assert_eq!(offer(&mut p, lb, 0, 0xc4, EEVENT_KEY), Ok(0));
+    for t in ["0\tA\t1\t0", "0\tB\t2\t0", "0\tC\t3\t0"] {
+        let d = ptrc16(&mut p, t);
+        ok(&mut p, APPEND, &[arr, d]);
+    }
+    ok(&mut p, ITEM_ADDED, &[lb]);
+    let sent = selected_sent(&p).len();
+    // Two items fit the view: 2 x 100 high rows in 200.
+    let view = p.guest_word(lb + LB_I_VIEW).unwrap();
+    for (o, v) in [(VIEW_I_VIEW_RECT, 0), (VIEW_I_VIEW_RECT + 4, 0), (VIEW_I_VIEW_RECT + 8, 360), (VIEW_I_VIEW_RECT + 12, 200), (VIEW_I_ITEM_HEIGHT, 100)] { p.mem.write_u32(view + o, v).unwrap(); }
+    // Up on the first item stays and tells nobody.
+    assert_eq!(offer(&mut p, lb, UP, 0x10, EEVENT_KEY), Ok(1));
+    assert_eq!((current(&p, lb), selected_sent(&p).len()), (0, sent));
+    // Down moves and tells the host once each time; the top follows only when the current item would leave the view.
+    assert_eq!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY), Ok(1));
+    assert_eq!((current(&p, lb), p.guest_word(view + VIEW_I_TOP).unwrap()), (1, 0));
+    assert_eq!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY), Ok(1));
+    assert_eq!((current(&p, lb), p.guest_word(view + VIEW_I_TOP).unwrap()), (2, 1));
+    assert_eq!(selected_sent(&p)[sent..], [Some(1), Some(2)]);
+    // Down on the last item stays; a key-down / key-up event (code 0) changes nothing.
+    assert_eq!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY), Ok(1));
+    assert_eq!(offer(&mut p, lb, 0, 0x11, 3), Ok(1));
+    assert_eq!((current(&p, lb), selected_sent(&p).len()), (2, sent + 2));
+    // Enter is the next slice: a named refusal, not a guess.
+    let e = offer(&mut p, lb, 0x0d, 0x03, EEVENT_KEY).unwrap_err();
+    assert!(e.contains("key code 0xd") && e.contains("only the up and down arrows"), "{e}");
+    // A list in a mode the engine does not run refuses by name too.
+    p.mem.write_u32(lb + heirloom_ekaarm_engine::listbox::LB_I_FLAGS, 0x1000).unwrap();
+    assert!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY).unwrap_err().contains("loop and page-at-once"));
+}
+
 #[test]
 fn a_list_that_is_not_on_screen_tells_the_host_nothing() {
     let mut p = proc();
@@ -180,8 +243,7 @@ fn file_browser_list_shows_the_host_what_its_model_holds() {
     p.set_drive(drive);
     p.set_ui(RecordingGuestUi::new());
     p.set_cdl_data(text.as_bytes()).unwrap();
-    let m = match p.run(50_000_000) { Outcome::Refused(m) => m, o => panic!("{o:?}") };
-    println!("{m}");
+    match p.run(50_000_000) { Outcome::Blocked => {}, o => panic!("{o:?}") }
     let c = calls(&p);
     let (lb, model) = c.iter().find_map(|c| match c { UiCall::AddControl(_, m) if matches!(m.kind, ControlKind::List { .. }) => Some((m.token.0 as u32, m.clone())), _ => None }).expect("the list control was added");
     assert_eq!(model.rect, GuestRect { left: 0, top: 0, width: 360, height: 554 }, "the list fills the main pane");

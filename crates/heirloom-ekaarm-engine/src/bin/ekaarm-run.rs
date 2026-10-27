@@ -8,7 +8,7 @@ use heirloom_ekaarm_engine::hostdir;
 const ORD_TSV: &str = include_str!("../../../heirloom-fmt-e32/data/eka-ordinals.tsv");
 
 fn usage() -> ! {
-    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] [--rom DIR] [--trace] [--dump HEXADDR WORDS] [--dump-code FILE] [--drive DIR] [--cdl-data FILE] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
+    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] [--rom DIR] [--rom-manifest FILE] [--key SCAN]... [--trace] [--dump HEXADDR WORDS] [--dump-code FILE] [--drive DIR] [--cdl-data FILE] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
     std::process::exit(2)
 }
 
@@ -20,6 +20,9 @@ fn main() {
     let mut res_ids: Vec<u32> = Vec::new();
     let mut vtables: Vec<(u32, u32)> = Vec::new();
     let mut rom_dir: Option<String> = None;
+    let mut rom_manifest: Option<String> = None;
+    let mut keys: Vec<u32> = Vec::new();
+    let mut rom_log = None;
     let mut dumps: Vec<(u32, u32)> = Vec::new();
     let mut dump_code: Option<String> = None;
     let mut file = None;
@@ -37,6 +40,9 @@ fn main() {
                 let n = args.next().unwrap_or_else(|| usage());
                 vtables.push((u32::from_str_radix(a.trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()), n.parse().unwrap_or_else(|_| usage())));
             }
+            // `--key SCAN`: once the app waits (Blocked), press and release the key with TStdScanCode SCAN (hex), run on, repeat per key.
+            "--key" => keys.push(u32::from_str_radix(args.next().unwrap_or_else(|| usage()).trim_start_matches("0x"), 16).unwrap_or_else(|_| usage())),
+            "--rom-manifest" => rom_manifest = Some(args.next().unwrap_or_else(|| usage())),
             "--rom" => rom_dir = Some(args.next().unwrap_or_else(|| usage())),
             "--dump" => {
                 let a = args.next().unwrap_or_else(|| usage());
@@ -97,7 +103,7 @@ fn main() {
     }
     if let Some(dir) = &rom_dir {
         match heirloom_ekaarm_engine::hostdir::DirRom::new(std::path::Path::new(dir)) {
-            Ok(rom) => match proc.host.drive.as_mut() { Some(d) => d.set_rom(Box::new(rom)), None => { println!("OUTCOME RomRefused --rom needs --drive"); std::process::exit(1) } },
+            Ok(rom) => match proc.host.drive.as_mut() { Some(d) => { rom_log = Some(rom.access_log()); d.set_rom(Box::new(rom)) } None => { println!("OUTCOME RomRefused --rom needs --drive"); std::process::exit(1) } },
             Err(e) => { println!("OUTCOME RomRefused {dir}: {e}"); std::process::exit(1) }
         }
     }
@@ -109,7 +115,15 @@ fn main() {
     }
     if census { proc.census = Some(Vec::new()); }
     if trace { proc.trace = Some(Vec::new()); }
-    let outcome = proc.run(max_insns);
+    let mut outcome = proc.run(max_insns);
+    for scan in &keys {
+        if !matches!(outcome, Outcome::Blocked) { break; }
+        for down in [true, false] {
+            if let Err(m) = proc.deliver_key(*scan, "", heirloom_ui_abi::Modifiers::default(), down) { println!("OUTCOME KeyRefused {scan:#x}: {m}"); std::process::exit(1) }
+            outcome = proc.run(proc.insns.saturating_add(max_insns));
+            if !matches!(outcome, Outcome::Blocked) { break; }
+        }
+    }
     if let Some(seen) = &proc.census {
         let mut first = std::collections::BTreeMap::new();
         for (i, m) in seen.iter().enumerate() { first.entry(m.as_str()).or_insert(i); }
@@ -147,6 +161,12 @@ fn main() {
         }
         Outcome::BudgetSpent => println!("OUTCOME BudgetSpent after {} instructions", proc.insns),
         Outcome::Blocked => println!("OUTCOME Blocked after {} instructions", proc.insns),
+    }
+    if let Some(path) = &rom_manifest {
+        let Some(log) = &rom_log else { println!("OUTCOME RomManifestRefused --rom-manifest needs --rom"); std::process::exit(1) };
+        let mut text = log.paths().join("\n");
+        text.push('\n');
+        if let Err(e) = std::fs::write(path, text) { println!("OUTCOME RomManifestRefused {path}: {e}"); std::process::exit(1) }
     }
     std::process::exit(0)
 }

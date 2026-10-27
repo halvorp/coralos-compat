@@ -17,6 +17,14 @@ impl Process {
     pub fn run(&mut self, budget: u64) -> Outcome {
         // step() keeps the instruction count exact even when execution stops at an SVC or fault.
         loop {
+            // The thread is in `CActiveScheduler::Start` (a parked activation is the top frame): the scheduler runs, not the CPU.
+            if matches!(self.frames.last(), Some(crate::callback::Frame { cont: crate::callback::Continuation::SchedWait { .. }, .. })) {
+                match crate::schedrun::pump(self) {
+                    Ok(crate::schedrun::Pump::Continue) => continue,
+                    Ok(crate::schedrun::Pump::Blocked) => return Outcome::Blocked,
+                    Err(outcome) => return outcome,
+                }
+            }
             if self.insns >= budget {
                 return Outcome::BudgetSpent;
             }

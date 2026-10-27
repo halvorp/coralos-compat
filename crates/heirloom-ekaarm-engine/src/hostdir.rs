@@ -3,6 +3,7 @@
 //! name). The drive's lookup is case-insensitive.
 use crate::drive::Drive;
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use std::path::Path;
 
@@ -33,12 +34,39 @@ pub fn load_dir(dir: &Path) -> std::io::Result<(Drive, usize)> {
 /// A host directory as the device ROM: files are read on demand, names matched case-insensitively component by component.
 pub struct DirRom {
     root: std::path::PathBuf,
+    accessed: RomAccessLog,
+}
+
+/// The ROM paths a run touched (shared handle: the runner keeps one after the drive owns the `DirRom`). Each entry is the
+/// resolved path relative to the ROM root, `/` separated, in the spelling found on the host; a directory that was listed or
+/// tested carries a trailing `/`. A path that does not exist in the ROM is not recorded (there is nothing to ship for it).
+#[derive(Clone, Default)]
+pub struct RomAccessLog(std::rc::Rc<core::cell::RefCell<std::collections::BTreeSet<String>>>);
+
+impl RomAccessLog {
+    /// Sorted, unique.
+    pub fn paths(&self) -> Vec<String> {
+        self.0.borrow().iter().cloned().collect()
+    }
 }
 
 impl DirRom {
     pub fn new(root: &Path) -> std::io::Result<Self> {
         std::fs::read_dir(root)?;
-        Ok(DirRom { root: root.to_path_buf() })
+        Ok(DirRom { root: root.to_path_buf(), accessed: RomAccessLog::default() })
+    }
+
+    /// The handle onto this ROM's access record (`--rom-manifest`).
+    pub fn access_log(&self) -> RomAccessLog {
+        self.accessed.clone()
+    }
+
+    fn note(&self, p: &Path) {
+        if let Ok(rel) = p.strip_prefix(&self.root) {
+            let mut s = rel.to_string_lossy().replace('\\', "/");
+            if p.is_dir() { s.push('/'); }
+            self.accessed.0.borrow_mut().insert(s);
+        }
     }
 
     fn resolve(&self, path: &str) -> Option<std::path::PathBuf> {
@@ -60,13 +88,42 @@ impl DirRom {
 
 impl crate::drive::RomSource for DirRom {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
-        std::fs::read(self.resolve(path)?).ok()
+        let p = self.resolve(path)?;
+        let bytes = std::fs::read(&p).ok()?;
+        self.note(&p);
+        Some(bytes)
     }
     fn exists(&self, path: &str) -> bool {
-        self.resolve(path).is_some_and(|p| p.exists())
+        self.resolve(path).is_some_and(|p| { let e = p.exists(); if e { self.note(&p); } e })
     }
     fn list(&self, path: &str) -> Option<Vec<alloc::string::String>> {
-        let rd = std::fs::read_dir(self.resolve(path)?).ok()?;
+        let p = self.resolve(path)?;
+        let rd = std::fs::read_dir(&p).ok()?;
+        self.note(&p);
         Some(rd.filter_map(Result::ok).filter_map(|e| e.file_name().into_string().ok()).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drive::RomSource;
+
+    #[test]
+    fn rom_access_log_records_resolved_existing_paths_sorted_unique() {
+        let root = std::env::temp_dir().join(format!("heirloom-romlog-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("Resource/Apps")).unwrap();
+        std::fs::write(root.join("Resource/Apps/Avkon.RSC"), b"abc").unwrap();
+        std::fs::write(root.join("Resource/Other.txt"), b"x").unwrap();
+        let rom = DirRom::new(&root).unwrap();
+        let log = rom.access_log();
+        assert!(rom.read("z:\\resource\\apps\\avkon.rsc").is_some());
+        assert!(rom.read("\\resource\\apps\\avkon.rsc").is_some()); // twice: one entry
+        assert!(rom.exists("\\Resource\\Other.txt"));
+        assert!(!rom.exists("\\resource\\missing.bin"));
+        assert!(rom.read("\\resource\\missing2.bin").is_none());
+        assert!(rom.list("\\resource\\apps").is_some());
+        assert_eq!(log.paths(), ["Resource/Apps/", "Resource/Apps/Avkon.RSC", "Resource/Other.txt"]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

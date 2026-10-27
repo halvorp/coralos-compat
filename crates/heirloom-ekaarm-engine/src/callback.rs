@@ -44,6 +44,13 @@ pub enum Continuation {
     /// One step of `ActivateL` over a control's components (`control::comp_step`).
     Control { this: u32, step: crate::control::CompStep },
     Chain { rest: Vec<(u32, [u32; 4])>, result: u32 },
+    /// `CActiveScheduler::Start` parked its caller (`schedrun.rs`): this frame's `saved` CPU is where the guest resumes once the
+    /// activation is stopped; `stop` is set by `CActiveScheduler::Stop`. It is never popped by a callback return.
+    SchedWait { stop: bool },
+    /// The scheduler ran the active object `ao`'s `RunL` (`schedrun.rs`).
+    SchedRun { ao: u32 },
+    /// A key event being offered down the AppUi's control stack (`keyroute.rs`).
+    KeyOffer(crate::keyroute::Offer),
 }
 
 /// One interrupted call: the CPU as it was (resuming at the instruction after the SVC) and what to do on return.
@@ -104,6 +111,9 @@ impl Process {
             Continuation::Chain { rest, result } => self.chain_next(rest, result),
             Continuation::CleanupDestroy { left } => crate::cleanup::destroy_next(self, left),
             Continuation::ViewAdded { appui, view } => crate::viewappui::view_added(self, appui, view, r0),
+            Continuation::SchedRun { .. } => Ok(()),
+            Continuation::SchedWait { .. } => Err(Outcome::Fault(String::from("callback return reached a scheduler activation frame"))),
+            Continuation::KeyOffer(o) => crate::keyroute::offered(self, o, r0),
         }
     }
 

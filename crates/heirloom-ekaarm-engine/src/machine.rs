@@ -29,6 +29,8 @@ pub struct EkaArm<U: GuestUi> {
     tree: Tree,
     /// The device ROM (`Z:`) the host hands in before `start_file` (a read-only source of resource files; never copied into the engine).
     rom: Option<Box<dyn crate::drive::RomSource>>,
+    /// The layout data file the host extracted for this device (`cdlextract`), handed to the process at `start_file`.
+    cdl_data: Option<Vec<u8>>,
     process: Option<Process>,
     /// How the run ended once it has (Exited / Fault are terminal: a later `step` repeats it).
     done: Option<Step>,
@@ -44,11 +46,15 @@ impl<U: GuestUi> EkaArm<U> {
     pub fn new(ui: U, ordinals: OrdinalTable) -> Self {
         let mut tree = Tree::new(255);
         tree.add_volume("Z", false);
-        EkaArm { ui: Some(Box::new(ui)), ordinals, tree, rom: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new() }
+        EkaArm { ui: Some(Box::new(ui)), ordinals, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new() }
     }
     /// Put the device ROM behind the volume before `start_file`: the environment reads its colour list from the ROM's `eikpriv` resource file.
     pub fn set_rom(&mut self, rom: Box<dyn crate::drive::RomSource>) {
         self.rom = Some(rom);
+    }
+    /// The device's layout data (the text `cdlextract::extract` makes) before `start_file`: the CDL engine serves the layout queries from it.
+    pub fn set_cdl_data(&mut self, bytes: Vec<u8>) {
+        self.cdl_data = Some(bytes);
     }
     /// The running process, once started (tests and the runner read its log and registers).
     pub fn process(&self) -> Option<&Process> {
@@ -75,18 +81,32 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
             drive.set_rom(rom);
         }
         p.set_drive(drive);
+        if let Some(data) = self.cdl_data.take() {
+            p.set_cdl_data(&data).map_err(|e| Refusal(format!("ekaarm: {name}: the layout data is refused: {e}")))?;
+        }
         self.log.push(format!("ekaarm: started {name} (UID3 {:#010x})", p.uid3));
         self.process = Some(p);
         self.apply_census();
         Ok(())
     }
 
-    /// No input wiring yet: every event is accepted and dropped, by name.
-    /// DELETE WHEN slice 4 (key events through CCoeEnv::OfferKeyEventL, ruling consensus step 5) lands.
+    /// A host key press or release reaches the guest through the environment's own path (`wsevent.rs`, `keyroute.rs`): it becomes window
+    /// server events, completes the environment's outstanding event request and the scheduler runs it on the next `step`. The key's
+    /// `code` is its `TStdScanCode` (`keymap.rs`). Every other event kind is accepted and dropped, by name.
+    /// DELETE WHEN pointer, menu-command, close and resize events are routed (the slices after this one).
     fn deliver(&mut self, ev: GuestUiEvent) -> Result<Delivery, Refusal> {
-        let _ = ev;
-        self.log.push(String::from("ekaarm: deliver: a window event ignored (no input wiring in this engine yet)"));
-        Ok(Delivery::Ignored)
+        let GuestUiEvent::Key { win, code, text, modifiers, down } = ev else {
+            self.log.push(String::from("ekaarm: deliver: only key events are routed so far; this event was ignored"));
+            return Ok(Delivery::Ignored);
+        };
+        let Some(p) = self.process.as_mut() else {
+            return Err(Refusal(String::from("ekaarm: deliver: no program started (start_file first)")));
+        };
+        if p.host.window != Some(win) {
+            return Ok(Delivery::NotForGuestWindow);
+        }
+        p.deliver_key(code, &text, modifiers, down).map_err(|m| Refusal(format!("ekaarm: deliver: {m}")))?;
+        Ok(Delivery::Queued)
     }
 
     fn step(&mut self, budget: u64) -> (Step, RunStats) {
@@ -136,8 +156,8 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
         Ok(())
     }
 
-    /// Nothing in the engine waits on time: no Symbian timer (RTimer, CPeriodic) is implemented. DELETE WHEN the first one is
-    /// (slice 4, the active scheduler, ruling consensus step 5).
+    /// Nothing in the engine waits on time: no Symbian timer (RTimer, CPeriodic) is implemented, so a `Blocked` step has no deadline.
+    /// DELETE WHEN the first timer is (`RTimer::After` issuing a request on `request.rs`): then the nearest deadline is returned here.
     fn next_timer_deadline(&self) -> Option<u64> {
         None
     }

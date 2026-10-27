@@ -64,11 +64,12 @@ fn synthetic() -> Process {
 fn the_application_is_started_through_the_guests_own_code_up_to_construct_l() {
     let mut p = synthetic();
     match p.run(10_000) {
-        Outcome::Refused(m) => assert!(m.contains("CActiveScheduler::Start"), "{m}"),
+        // The thread reaches its scheduler and, with no request completed, waits (nothing polls).
+        Outcome::Blocked => {}
         o => panic!("{o:?}"),
     }
     let log = p.log.join("\n");
-    for want in ["factory -> CApaApplication", "AppDllUid 0x00000100 == UID3 0x00000100", "CreateDocumentL(process", "CreateAppUiL(doc", "ConstructL returned"] {
+    for want in ["CActiveScheduler::Start: the thread is in its scheduler", "factory -> CApaApplication", "AppDllUid 0x00000100 == UID3 0x00000100", "CreateDocumentL(process", "CreateAppUiL(doc", "ConstructL returned"] {
         assert!(log.contains(want), "{want} missing from:\n{log}");
     }
     // the inherited CEikApplication::CreateDocumentL (a native) ran the private one and set the document's fields
@@ -76,7 +77,10 @@ fn the_application_is_started_through_the_guests_own_code_up_to_construct_l() {
     assert_eq!(rd(&mut p, DOC + appstart::DOC_I_APPLICATION), APP);
     assert_eq!(rd(&mut p, DOC + appstart::DOC_I_APA_PROCESS), process);
     assert_eq!(rd(&mut p, process), 0, "the placeholder has no vtable pointer");
-    assert_eq!(p.callback_depth(), 0);
+    assert_eq!(p.callback_depth(), 1, "the one frame is the parked scheduler activation");
+    let before = p.insns;
+    assert!(matches!(p.run(10_000), Outcome::Blocked), "still waiting: nothing completed");
+    assert_eq!(p.insns, before, "and no instruction ran while it waited");
 }
 
 #[test]

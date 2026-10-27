@@ -130,7 +130,7 @@ fn decoded_panes_tile_the_screen() {
 }
 
 /// FileBrowser, given the layout data, gets past its first layout queries (the CDL meta data functions, the main and navigation pane
-/// rectangles, the container's SetRect, the navigation pane's label), constructs its list box (slice 4: tests/listbox.rs) and goes on.
+/// rectangles, the container's SetRect, the navigation pane's label), constructs its list box (tests/listbox.rs), activates its view and waits in its scheduler (tests/keys.rs).
 #[test]
 fn file_browser_runs_through_its_list_box_construction() {
     use heirloom_ekaarm_engine::hostdir::{load_dir, DirRom};
@@ -150,10 +150,8 @@ fn file_browser_runs_through_its_list_box_construction() {
     p.set_ui(heirloom_ui_abi::RecordingGuestUi::new());
     p.set_cdl_data(text.as_bytes()).unwrap();
     p.trace = Some(Vec::new());
-    let m = match p.run(50_000_000) { Outcome::Refused(m) => m, o => panic!("{o:?}") };
-    // Past the list box (its class is built by the engine now): the refusal is further on.
-    assert!(!m.contains("CAknDoubleGraphicStyleListBox"), "{m}");
-    assert!(m.starts_with("NEXT-NEEDED"), "{m}");
+    // Past the list box and every view activation: the application waits in its scheduler for its first event.
+    match p.run(50_000_000) { Outcome::Blocked => {}, o => panic!("{o:?}") }
     let trace = p.trace.as_ref().unwrap().join("\n");
     for needle in ["CdlEngine11GetFunctionE4TUidi", "cdl@", "LayoutMetricsRect", "CreateMessageLabelL", "5PushL"] {
         assert!(trace.contains(needle), "{needle} not called:\n{trace}");

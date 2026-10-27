@@ -16,9 +16,14 @@ const OPAQUE: &[(&str, &str)] = &[
     ("_ZN27CAknInfoPopupNoteController4NewLEv", "CAknInfoPopupNoteController"),
 ];
 
-const NOTE_SETTERS: &[&str] = &[
+/// The info popup note's operations: the GuestUi seam has no popup-note surface, so the note is never drawn and its settings, text,
+/// show and hide are accepted and dropped. DELETE WHEN the seam carries a popup note (then keep the settings and show / hide it).
+const NOTE_NOOPS: &[&str] = &[
     "_ZN27CAknInfoPopupNoteController18SetTimePopupInViewEi",
     "_ZN27CAknInfoPopupNoteController22SetTimeDelayBeforeShowEi",
+    "_ZN27CAknInfoPopupNoteController8SetTextLERK7TDesC16",
+    "_ZN27CAknInfoPopupNoteController17ShowInfoPopupNoteEv",
+    "_ZN27CAknInfoPopupNoteController17HideInfoPopupNoteEv",
 ];
 
 fn dtor(class: &str, kind: &str) -> String {
@@ -44,9 +49,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         if name.ends_with("D0Ev") { if let Some(h) = p.heap.as_mut() { let _ = h.free(r0); } }
         return Some(NativeOutcome::Return);
     }
-    // The tooltip's settings: it is never shown because the host has no pointer-hover source. DELETE WHEN hover events reach the guest
-    // (then store these and show the note).
-    if NOTE_SETTERS.contains(&name) {
+    if NOTE_NOOPS.contains(&name) {
         return Some(NativeOutcome::Return);
     }
     match name {

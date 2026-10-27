@@ -237,7 +237,8 @@ fn next_activation_or_idle(p: &mut Process, appui: u32) -> Result<(), Outcome> {
     if crate::viewappui::has_pending(p, appui) {
         return crate::viewappui::start_activation(p, appui, |block| Continuation::App(Step::ViewActivated { appui, block })).map_err(|m| if m.starts_with("NEXT-NEEDED") { Outcome::Refused(m) } else { fault(m) });
     }
-    Err(Outcome::Refused(String::from("NEXT-NEEDED cone CActiveScheduler::Start: the views are active, the application's event loop is the next slice")))
+    // `CEikonEnv::ExecuteD` -> `CActiveScheduler::Start()`: the thread enters its scheduler and stays there until `Stop`.
+    p.sched_start().map_err(fault)
 }
 
 /// The native `CEikApplication::CreateDocumentL(CApaProcess*)` (the slot the apps inherit): call the application's private

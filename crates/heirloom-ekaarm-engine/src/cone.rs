@@ -70,6 +70,8 @@ impl Process {
         // CEikonEnv::InitColorSchemeL (EIKENV.CPP:2966): the colour list the app's inline `ColorList()` reads.
         let colors = self.make_color_list()?;
         self.wr(e.wrapping_add(crate::colorlist::EIKENV_I_COLOR_LIST), colors)?;
+        // CCoeEnv is the window server's event active object: in the scheduler's queue with its first event request out (`wsevent.rs`).
+        self.env_as_active_object(e)?;
         Ok(e)
     }
 

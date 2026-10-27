@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::{CallbackToken, ControlKind, ControlModel, ControlValue, GuestRect};
 use crate::control::{CTRL_I_POSITION, CTRL_I_SIZE};
-use crate::listbox::LB_I_MODEL;
+use crate::listbox::{LB_I_MODEL, LB_I_VIEW, VIEW_I_CURRENT, VIEW_I_TOP};
 use crate::loader::Process;
 use crate::objects::{HostObj, ListState};
 
@@ -38,7 +38,9 @@ pub fn rows_of(items: &[Vec<u16>], width: usize) -> Result<Vec<Vec<String>>, Str
 impl Process {
     pub(crate) fn list_state(&mut self, lb: u32) -> Result<&mut ListState, String> {
         if !matches!(self.obj_get(lb), Some(HostObj::List(_))) {
-            self.obj_set(lb, HostObj::List(ListState::default()))?;
+            // A control state made before the list box existed as one (its `CCoeControl` constructor) is kept.
+            let ctrl = match self.obj_get(lb) { Some(HostObj::Control(c)) => core::mem::take(c), _ => Default::default() };
+            self.obj_set(lb, HostObj::List(ListState { ctrl, ..Default::default() }))?;
         }
         match self.obj_get(lb) { Some(HostObj::List(l)) => Ok(l), _ => Err(format!("{lb:#x}: host state is not a list box's")) }
     }
@@ -60,28 +62,30 @@ impl Process {
         let rect = (rd(self, CTRL_I_POSITION)?, rd(self, CTRL_I_POSITION + 4)?, rd(self, CTRL_I_SIZE)?, rd(self, CTRL_I_SIZE + 4)?);
         let win = self.host.window.ok_or_else(|| String::from("no application window yet: the list has nowhere to go"))?;
         let st = self.list_state(lb)?.clone();
+        let view = self.rd(lb + LB_I_VIEW)?;
+        let (current, top) = if view == 0 { (0, 0) } else { (self.rd(view + VIEW_I_CURRENT)?, self.rd(view + VIEW_I_TOP)?) };
         let g = GuestRect { left: rect.0, top: rect.1, width: rect.2, height: rect.3 };
-        let selected = if rows.is_empty() { None } else { Some(st.current.min(rows.len() as u32 - 1)) };
+        let selected = if rows.is_empty() { None } else { Some(current.min(rows.len() as u32 - 1)) };
         let columns = alloc::vec![String::new(); ITEM_CELLS];
         let ui = self.host.ui.as_mut().ok_or_else(|| String::from("no GuestUi"))?;
         let refused = |e: heirloom_ui_abi::UiRefusal| format!("the UI refused the list: {e}");
         let control = match st.control {
             None => {
-                let kind = ControlKind::List { columns, rows: rows.clone(), selected, top: st.top };
+                let kind = ControlKind::List { columns, rows: rows.clone(), selected, top };
                 let c = ui.add_control(win, ControlModel { kind, label: String::new(), rect: g, enabled: true, token: CallbackToken(lb as u64) }).map_err(refused)?;
                 self.log.push(format!("[list] {lb:#x}: {} row(s) at {}x{}+{}+{}", rows.len(), g.width, g.height, g.left, g.top));
                 c
             }
             Some(c) => {
-                if st.shown != rows || st.shown_current != st.current || st.shown_top != st.top {
-                    ui.set_control(win, c, ControlValue::Rows { rows: rows.clone(), selected, top: st.top }).map_err(refused)?;
+                if st.shown != rows || st.shown_current != current || st.shown_top != top {
+                    ui.set_control(win, c, ControlValue::Rows { rows: rows.clone(), selected, top }).map_err(refused)?;
                 }
                 if st.shown_rect != rect { ui.set_control_rect(win, c, g).map_err(refused)?; }
                 c
             }
         };
         let l = self.list_state(lb)?;
-        (l.control, l.shown, l.shown_current, l.shown_top, l.shown_rect) = (Some(control), rows, l.current, l.top, rect);
+        (l.control, l.shown, l.shown_current, l.shown_top, l.shown_rect) = (Some(control), rows, current, top, rect);
         Ok(())
     }
 }

@@ -21,6 +21,10 @@ pub struct NativeState {
     pub trap_handler: Option<u32>,
     /// The guest sentinel of the active scheduler's queue (`sched.rs`).
     pub sched_head: Option<u32>,
+    /// Outstanding requests and the thread's request semaphore (`request.rs`).
+    pub requests: crate::request::RequestState,
+    /// The window server's event queue for this process (`wsevent.rs`).
+    pub ws: crate::wsevent::WsState,
     /// ROM resource files by id offset (`resource.rs`), built on first need.
     pub rom_resources: Option<alloc::collections::BTreeMap<u32, String>>,
     /// The Avkon shell objects (`shell.rs`).
@@ -62,6 +66,10 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::cleanup::native(proc, name) { return Some(o); }
     if let Some(o) = crate::dictstore::native(proc, name) { return Some(o); }
     if let Some(o) = crate::sched::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::ctrlstack::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::schedrun::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::wsevent::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::keyroute::native(proc, name) { return Some(o); }
     if let Some(o) = crate::mixins::native(proc, name) { return Some(o); }
     if let Some(o) = crate::tz::native(proc, name) { return Some(o); }
     if let Some(o) = crate::timer::native(proc, name) { return Some(o); }
@@ -81,6 +89,8 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::fpeabi::native(proc, name) { return Some(o); }
     if let Some(o) = crate::hal::native(proc, name) { return Some(o); }
     if let Some(o) = crate::listbox::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::listkey::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::tchar::native(proc, name) { return Some(o); }
     if let Some(o) = crate::listmodel::native(proc, name) { return Some(o); }
     if let Some(o) = crate::listdata::native(proc, name) { return Some(o); }
     if let Some(o) = crate::colorlist::native(proc, name) { return Some(o); }

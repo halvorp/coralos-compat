@@ -28,6 +28,8 @@ pub const LB_I_OBSERVER: u32 = 128; // :1481 MEikListBoxObserver* iListBoxObserv
 /// iHScrollOffset 28, iCurrentItemIndex 32, iItemHeight 36, iWin 40, iGroupWin 44, iGc 48, iViewRect 52.
 pub const VIEW_I_DRAWER: u32 = 8;
 pub const VIEW_I_MODEL: u32 = 12;
+pub const VIEW_I_TOP: u32 = 20; // eiklbv.h iTopItemIndex
+pub const VIEW_I_CURRENT: u32 = 32;
 pub const VIEW_I_ITEM_HEIGHT: u32 = 36;
 pub const VIEW_I_VIEW_RECT: u32 = 52;
 /// `CListItemDrawer` (eiklbi.h:101-114): iItemCellSize 4 (iWidth, iHeight), iViewRect 20.
@@ -160,6 +162,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // set is empty and clearing it changes nothing.
         "_ZN11CEikListBox14ClearSelectionEv" => NativeOutcome::Return,
         // CListBoxView* CEikListBox::View() const; CListBoxView::SetListEmptyTextL(const TDesC&): the text shown when the list has no items.
+        // TInt CEikListBox::CurrentItemIndex() const (eiklbx.h:435): iView->CurrentItemIndex() (EIKLBX.CPP:2324), the view's iCurrentItemIndex
+        // (eiklbv.h:888). The list owns no copy: the guest's view is the one truth, and the host list is projected from it (listproject.rs).
+        "_ZNK11CEikListBox16CurrentItemIndexEv" => { let r = p.rd(r0 + LB_I_VIEW).and_then(|v| if v == 0 { Err(String::from("CurrentItemIndex before ConstructL: no view (EEikPanicListBoxNoView on a device)")) } else { p.rd(v + VIEW_I_CURRENT) }); ret(p, r) }
         "_ZNK11CEikListBox4ViewEv" => { let r = p.rd(r0 + LB_I_VIEW); ret(p, r) }
         "_ZN12CListBoxView17SetListEmptyTextLERK7TDesC16" => {
             let r = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).and_then(|t| { p.log.push(format!("[list] empty text: \"{t}\"")); p.obj_set(r0, HostObj::ListView(t)) });

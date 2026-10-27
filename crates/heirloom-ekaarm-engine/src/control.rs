@@ -29,7 +29,7 @@ pub const SLOT_HANDLE_RESOURCE_CHANGE: u32 = 15;
 const INH_HANDLE_RESOURCE_CHANGE: &[&str] = &["_ZN11CCoeControl20HandleResourceChangeEi", "_ZN24CEikFormattedCellListBox20HandleResourceChangeEi"];
 pub const SLOT_FOCUS_CHANGED: u32 = 26;
 const INH_FOCUS_CHANGED: &[&str] = &["_ZN11CCoeControl12FocusChangedE8TDrawNow", "_ZN24CEikFormattedCellListBox12FocusChangedE8TDrawNow"];
-const INH_ACTIVATE: &[&str] = &["_ZN11CCoeControl9ActivateLEv"];
+const INH_ACTIVATE: &[&str] = &["_ZN11CCoeControl9ActivateLEv", "_ZN11CEikListBox9ActivateLEv"];
 const INH_SIZE_CHANGED: &[&str] = &["_ZN11CCoeControl11SizeChangedEv", "_ZN29CAknDoubleGraphicStyleListBox11SizeChangedEv"];
 const INH_POSITION_CHANGED: &[&str] = &["_ZN11CCoeControl15PositionChangedEv"];
 const INH_COUNT: &[&str] = &["_ZNK11CCoeControl21CountComponentControlsEv", "_ZNK23AknListBoxLinesTemplateI24CEikFormattedCellListBoxE22CountComponentControlsEv"];
@@ -85,10 +85,14 @@ fn vcall(p: &Process, obj: u32, class: &'static str, method: &'static str, slot:
 
 impl Process {
     pub(crate) fn control_state(&mut self, addr: u32) -> Result<&mut ControlState, String> {
-        if !matches!(self.obj_get(addr), Some(HostObj::Control(_))) {
+        if !matches!(self.obj_get(addr), Some(HostObj::Control(_) | HostObj::List(_))) {
             self.obj_set(addr, HostObj::Control(ControlState::default()))?;
         }
-        match self.obj_get(addr) { Some(HostObj::Control(c)) => Ok(c), _ => Err(format!("{addr:#x}: host state is not a control's")) }
+        match self.obj_get(addr) {
+            Some(HostObj::Control(c)) => Ok(c),
+            Some(HostObj::List(l)) => Ok(&mut l.ctrl),
+            _ => Err(format!("{addr:#x}: host state is not a control's")),
+        }
     }
 
     /// `CCoeControl::CreateWindowL()` and friends: the control gets a window of its own, `iWin`.

@@ -23,6 +23,10 @@ impl Process {
     pub(crate) fn rd(&self, a: u32) -> Result<u32, String> {
         self.mem.vm.read_u32(a).map_err(|_| format!("{a:#x} is unreadable"))
     }
+    /// The guest word at `addr` (host diagnostics and tests: a read-only look at guest memory), or None when it is unreadable.
+    pub fn guest_word(&self, addr: u32) -> Option<u32> {
+        self.mem.vm.read_u32(addr).ok()
+    }
     pub(crate) fn wr(&mut self, a: u32, v: u32) -> Result<(), String> {
         self.mem.vm.write_u32(a, v).map_err(|_| format!("{a:#x} is unwritable"))
     }
@@ -41,7 +45,7 @@ impl Process {
 
     /// `CActiveScheduler::Add(CActive*)`: insert behind every item of equal or higher priority (`TPriQue::Add`). The list threads
     /// through the `iLink` members (`TDblQueLinkBase::iNext`/`iPrev` point at other links, not at objects).
-    fn sched_add(&mut self, ao: u32) -> Result<(), String> {
+    pub(crate) fn sched_add(&mut self, ao: u32) -> Result<(), String> {
         if ao == 0 {
             return Err(String::from("Add(NULL): E32USER-CBase 49 on a device"));
         }

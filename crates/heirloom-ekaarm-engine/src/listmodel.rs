@@ -80,7 +80,9 @@ impl Process {
     /// A `CTextListBoxModel` (`CTextListBoxModel::ConstructL(NULL, ELbmOwnsItemArray)`): no item array yet.
     pub(crate) fn make_text_model(&mut self) -> Result<u32, String> {
         let m = self.alloc_zeroed(MODEL_SIZE).ok_or_else(|| String::from("no guest heap for the list box model"))?;
-        let primary = self.build_vtable("CTextListBoxModel", &slots_with_gaps(BASE_SLOTS, &[(0, "_ZN17CTextListBoxModelD1Ev"), (1, "_ZN17CTextListBoxModelD0Ev"), (2, "_ZN5CBase10Extension_EjRPvS0_")]))?;
+        // Slot 3 is `NumberOfItems` (eiktxlbm.h:34): the class declares it virtual first among its own virtuals, so it is the primary
+        // table's first slot after CBase's. CONFIRMED by FileBrowser's container, which calls `[model->vptr + 0xc]` and tests the result > 0.
+        let primary = self.build_vtable("CTextListBoxModel", &slots_with_gaps(BASE_SLOTS + 1, &[(0, "_ZN17CTextListBoxModelD1Ev"), (1, "_ZN17CTextListBoxModelD0Ev"), (2, "_ZN5CBase10Extension_EjRPvS0_"), (3, "_ZNK17CTextListBoxModel13NumberOfItemsEv")]))?;
         let mtext = self.build_vtable("MTextListBoxModel", &[])?;
         self.wr(m, primary)?;
         self.wr(m + 4, mtext)?;
@@ -142,6 +144,11 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // CTextListBoxModel (eiktxlbm.h:55-60).
         "_ZN17CTextListBoxModel16SetItemTextArrayEP12MDesC16Array" => { let r = p.wr(r0 + MODEL_I_ARRAY, r1); ret(p, r.map(|_| 0)) }
         "_ZN17CTextListBoxModel16SetOwnershipTypeE31TListBoxModelItemArrayOwnership" => { let r = p.wr(r0 + MODEL_I_OWNERSHIP, r1); ret(p, r.map(|_| 0)) }
+        // TInt NumberOfItems() const: the items of the array the model was given (none = 0).
+        "_ZNK17CTextListBoxModel13NumberOfItemsEv" => {
+            let r = p.model_array(r0).and_then(|a| p.mdesc_items(a)).map(|i| i.len() as u32);
+            ret(p, r)
+        }
         "_ZNK17CTextListBoxModel13ItemTextArrayEv" => { let r = p.model_array(r0); ret(p, r) }
         _ => return None,
     })

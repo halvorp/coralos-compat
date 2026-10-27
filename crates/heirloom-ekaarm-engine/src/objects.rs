@@ -18,14 +18,15 @@ pub struct ViewState {
 /// control the host was told about and what was last projected to it, so an unchanged list costs no UI call (`listproject.rs`).
 #[derive(Debug, Clone, Default)]
 pub struct ListState {
+    /// The list box is a `CCoeControl` too: its control state (observer, focus, ...) lives here, not in a second map entry that would
+    /// replace this one (`control_state` finds it).
+    pub ctrl: ControlState,
     pub control: Option<UiObjectRef>,
     pub shown: Vec<Vec<String>>,
     /// `ActivateL` ran: the list is on screen, so the host is told about it.
     pub activated: bool,
-    /// `CurrentItemIndex` / `TopItemIndex` as the guest set them.
-    pub current: u32,
-    pub top: u32,
-    /// What was last sent for them and the rectangle, to send only changes.
+    /// What was last sent for the current / top item (the guest's own are the view's `iCurrentItemIndex` / `iTopItemIndex`, in guest
+    /// memory) and the rectangle, to send only changes.
     pub shown_current: u32,
     pub shown_top: u32,
     /// The rectangle last sent (left, top, width, height).
@@ -41,10 +42,12 @@ pub struct RemConSelector {
     pub target_open: bool,
 }
 
-/// The fixed toolbar a touch device's AppUi owns (akntoolbar.h): no items (the view's AVKON_VIEW names none), so what the guest
-/// sets on it is recorded and nothing is drawn.
+/// The fixed toolbar a touch device's AppUi owns (akntoolbar.h): its items are the buttons of the application's own toolbar resource
+/// (EIK_APP_INFO's extension, `toolbar.rs`); what the guest sets on it is recorded and nothing is drawn.
 #[derive(Debug, Clone, Default)]
 pub struct ToolbarState {
+    /// (item id, its `CAknButton` guest object) in resource order: the items of the toolbar resource (`toolbar.rs`).
+    pub items: Vec<(u32, u32)>,
     pub observer: u32,
     pub visible: bool,
     pub disabled: bool,
@@ -94,6 +97,19 @@ pub struct AppUiState {
     pub default_view: Option<u32>,
     /// The fixed toolbar (`CurrentFixedToolbar`), made on first ask.
     pub toolbar: Option<u32>,
+    /// The control stack (`CCoeAppUi::iStack`, coeaui.h:229): the controls offered key events, topmost first (`ctrlstack.rs`).
+    pub stack: Vec<StackItem>,
+}
+
+/// One entry of the control stack (`CCoeAppUi::AddToStackL`, coeaui.h:112-113).
+#[derive(Debug, Clone)]
+pub struct StackItem {
+    pub control: u32,
+    pub priority: i32,
+    /// `ECoeStackFlag*` (coeaui.h:75-86).
+    pub flags: u32,
+    /// The `MCoeView` the control was stacked for (coeaui.h:112), 0 for the application's own.
+    pub view: u32,
 }
 
 #[derive(Debug, Clone)]
