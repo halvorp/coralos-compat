@@ -279,13 +279,15 @@ fn mathlib_functions_take_doubles_in_f1_f2_and_answer_in_f1() {
     assert_eq!(r.math("fmod", 7.5, 2.0), 1.5);
     assert!(close(r.math("hypot", 3.0, 4.0), 5.0));
     assert!(r.math("sqrt", -1.0, 0.0).is_nan(), "sqrt of a negative is NaN");
-    // ldexp(x, int in r3); frexp(x, int* in r3); modf(x, double* in r3)
-    r.cpu.gpr[3] = 3;
+    // ldexp(x, int); frexp(x, int*); modf(x, double*): the double fills parameter words 0-1 (r3/r4), so the second argument is
+    // word 2, r5 (Mac OS Runtime Architectures, the PowerPC parameter area). r3 holds a decoy that must NOT be read.
+    r.cpu.gpr[3] = 99;
+    r.cpu.gpr[5] = 3;
     assert_eq!(r.math("ldexp", 1.5, 0.0), 12.0);
-    r.cpu.gpr[3] = OUT;
+    r.cpu.gpr[5] = OUT;
     assert_eq!(r.math("frexp", 48.0, 0.0), 0.75);
     assert_eq!(r.m.mac.mem.read_u32(OUT).unwrap(), 6, "48 = 0.75 * 2^6");
-    r.cpu.gpr[3] = OUT;
+    r.cpu.gpr[5] = OUT;
     assert_eq!(r.math("modf", -3.25, 0.0), -0.25);
     let bits = (u64::from(r.m.mac.mem.read_u32(OUT).unwrap()) << 32) | u64::from(r.m.mac.mem.read_u32(OUT + 4).unwrap());
     assert_eq!(f64::from_bits(bits), -3.0, "the integral part is stored big-endian through the pointer");

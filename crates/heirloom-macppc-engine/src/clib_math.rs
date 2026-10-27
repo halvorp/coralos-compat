@@ -1,5 +1,5 @@
 //! MathLib: the C math functions (`<math.h>`), natively over the host's `libm` (a pure-Rust port of musl's libm, so results do not depend on the
-//! host CPU). Arguments arrive in f1, f2 and the result goes back in f1 (Mac OS Runtime Architectures); `ldexp`/`frexp`/`modf` also use r3.
+//! host CPU). Arguments arrive in f1, f2 and the result goes back in f1 (Mac OS Runtime Architectures); `ldexp`/`frexp`/`modf` take an int or pointer as parameter word 2 (r5): the leading double also occupies words 0-1, r3/r4.
 //! Results are IEEE-754 doubles as the C standard defines them; MathLib's classic `-0` / NaN payload conventions are not reproduced.
 use crate::clib::arg;
 use crate::machine::MacPpc;
@@ -50,11 +50,11 @@ impl<U: GuestUi> MacPpc<U> {
             Log => libm::log(x), Log10 => libm::log10(x), Pow => libm::pow(x, y), Rint => libm::rint(x), Round => libm::round(x), Sin => libm::sin(x),
             Sinh => libm::sinh(x), Sqrt => libm::sqrt(x), Tan => libm::tan(x), Tanh => libm::tanh(x),
             Dec2num | Num2dec | Nan => unreachable!("handled above"),
-            Ldexp => libm::ldexp(x, arg(self, cpu, 0)? as i32),
-            Frexp => { let (m, e) = libm::frexp(x); let p = arg(self, cpu, 0)?; store(self, p, e as u32, "frexp")?; m }
+            Ldexp => libm::ldexp(x, arg(self, cpu, 2)? as i32),
+            Frexp => { let (m, e) = libm::frexp(x); let p = arg(self, cpu, 2)?; store(self, p, e as u32, "frexp")?; m }
             Modf => {
                 let (frac, int) = libm::modf(x);
-                let p = arg(self, cpu, 0)?;
+                let p = arg(self, cpu, 2)?;
                 self.mac.mem.write_u32(p, (int.to_bits() >> 32) as u32).and_then(|_| self.mac.mem.write_u32(p + 4, int.to_bits() as u32)).map_err(|_| format!("modf: result pointer {p:#x} leaves guest RAM"))?;
                 frac
             }
