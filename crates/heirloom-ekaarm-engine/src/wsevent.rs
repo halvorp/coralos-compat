@@ -77,18 +77,21 @@ impl Process {
         Ok(())
     }
 
-    /// The host's key press (`down`) or release: `scan` is the key's `TStdScanCode` (e32keys.h:140+), `text` what it types. A press is a
-    /// key-down event and, for a key with a code, a key event (w32std.h:283-297); a release is a key-up event.
+    /// Deliver a key event. `scan` carries the **host** key code (CoralOS Unicode
+    /// scalar or C0 key-wire byte). Internally translated to Symbian TStdScanCode /
+    /// TKeyCode via `keymap::host_key`; the translated scan is what reaches the
+    /// WsEvent queue.
     pub fn deliver_key(&mut self, scan: u32, text: &str, modifiers: Modifiers, down: bool) -> Result<(), String> {
         let env = self.host.env.ok_or_else(|| String::from("the application has no environment yet: nothing can receive a key"))?;
         let mods = key_modifiers(modifiers)?;
+        let (std_scan, key_code) = crate::keymap::host_key(scan, text)?;
         if down {
-            self.nat.ws.queue.push_back(WsEvent { ty: EEVENT_KEY_DOWN, code: 0, scan, modifiers: mods });
-            if let Some(code) = crate::keymap::key_code(scan, text)? {
-                self.nat.ws.queue.push_back(WsEvent { ty: EEVENT_KEY, code, scan, modifiers: mods });
+            self.nat.ws.queue.push_back(WsEvent { ty: EEVENT_KEY_DOWN, code: 0, scan: std_scan, modifiers: mods });
+            if let Some(code) = key_code {
+                self.nat.ws.queue.push_back(WsEvent { ty: EEVENT_KEY, code, scan: std_scan, modifiers: mods });
             }
         } else {
-            self.nat.ws.queue.push_back(WsEvent { ty: EEVENT_KEY_UP, code: 0, scan, modifiers: mods });
+            self.nat.ws.queue.push_back(WsEvent { ty: EEVENT_KEY_UP, code: 0, scan: std_scan, modifiers: mods });
         }
         // The server completes the outstanding notification once; a second queued event completes the next one the moment it is requested.
         if self.nat.requests.is_pending(env + ACTIVE_I_STATUS) {

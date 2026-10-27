@@ -13,9 +13,11 @@ const TREE: &str = "/data/refs/heirloom/symbian-uiresources/layouts/aknlayout2";
 const RSG: &str = "/data/build/corpus-symbian/sdk/sdk/CPP_API/epoc32/include/avkon.rsg";
 const UDEB: &str = "/data/build/corpus-symbian/sdk/sdk/Emulator/epoc32/release/winscw/udeb";
 const DRIVE: &str = "/data/build/corpus-symbian/drive/nokiafilebrowser";
-const ESTD_KEY_DOWN_ARROW: u32 = 0x11;
-const ESTD_KEY_UP_ARROW: u32 = 0x10;
-const ESTD_KEY_ENTER: u32 = 0x03;
+/// The HOST's key codes (GuestUiEvent::Key.code is the host's code, heirloom-ui-abi event.rs:64): CoralOS key-wire bytes,
+/// coral-keymap-abi lib.rs (WIRE_DOWN 0x0E, WIRE_UP 0x10) and Enter '\r'. The engine maps them to Symbian codes (keymap.rs).
+const HOST_KEY_DOWN: u32 = 0x0E;
+const HOST_KEY_UP: u32 = 0x10;
+const HOST_KEY_ENTER: u32 = 0x0D;
 
 fn fill(tree: &mut Tree, vol: usize, dir: &Path, guest: &[String]) {
     let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap()).collect();
@@ -106,7 +108,7 @@ fn down_arrow_moves_the_list_selection_once_and_the_app_waits_again() {
     let Some(mut app) = App::start() else { return };
     assert_eq!(app.current(), 0, "the app starts on its first drive");
     let before = app.selections();
-    assert_eq!(app.key(ESTD_KEY_DOWN_ARROW, true), Delivery::Queued);
+    assert_eq!(app.key(HOST_KEY_DOWN, true), Delivery::Queued);
     let stats = app.settle();
     assert!(stats.insns > 0, "the key ran guest code");
     assert_eq!(app.current(), 1, "the guest's own list box moved to the second drive");
@@ -114,7 +116,7 @@ fn down_arrow_moves_the_list_selection_once_and_the_app_waits_again() {
     assert_eq!(after.len(), before.len() + 1, "the host was told exactly once");
     assert_eq!(after.last(), Some(&Some(1)));
     // The key release is routed too, changes nothing and tells the host nothing.
-    assert_eq!(app.key(ESTD_KEY_DOWN_ARROW, false), Delivery::Queued);
+    assert_eq!(app.key(HOST_KEY_DOWN, false), Delivery::Queued);
     app.settle();
     assert_eq!(app.current(), 1);
     assert_eq!(app.selections(), after);
@@ -126,15 +128,15 @@ fn down_arrow_moves_the_list_selection_once_and_the_app_waits_again() {
 #[test]
 fn the_list_stops_at_its_ends_and_up_goes_back() {
     let Some(mut app) = App::start() else { return };
-    app.key(ESTD_KEY_UP_ARROW, true);
+    app.key(HOST_KEY_UP, true);
     app.settle();
     assert_eq!(app.current(), 0, "Up on the first item stays");
     for _ in 0..3 {
-        app.key(ESTD_KEY_DOWN_ARROW, true);
+        app.key(HOST_KEY_DOWN, true);
         app.settle();
     }
     assert_eq!(app.current(), 1, "Down on the last item stays");
-    app.key(ESTD_KEY_UP_ARROW, true);
+    app.key(HOST_KEY_UP, true);
     app.settle();
     assert_eq!(app.current(), 0);
     assert_eq!(app.selections().last(), Some(&Some(0)));
@@ -144,12 +146,12 @@ fn the_list_stops_at_its_ends_and_up_goes_back() {
 fn a_key_for_another_window_is_not_the_guests_and_an_unimplemented_path_is_a_named_terminal_fault() {
     let Some(mut app) = App::start() else { return };
     let stranger = UiObjectRef { id: app.win.id + 99, generation: 1 };
-    let ev = GuestUiEvent::Key { win: stranger, code: ESTD_KEY_DOWN_ARROW, text: String::new(), modifiers: Modifiers::default(), down: true };
+    let ev = GuestUiEvent::Key { win: stranger, code: HOST_KEY_DOWN, text: String::new(), modifiers: Modifiers::default(), down: true };
     assert_eq!(app.eka.deliver(ev).unwrap(), Delivery::NotForGuestWindow);
     assert_eq!(app.eka.step(1_000_000).0, Step::Blocked, "nothing was queued");
     assert_eq!(app.current(), 0);
     // Enter opens a drive: FileBrowser's own code goes on from here, into calls this engine has not implemented yet (named, terminal).
-    app.key(ESTD_KEY_ENTER, true);
+    app.key(HOST_KEY_ENTER, true);
     match app.eka.step(1_000_000).0 {
         Step::Fault(m) => assert!(m.starts_with("NEXT-NEEDED"), "{m}"),
         other => panic!("{other:?}"),
