@@ -92,6 +92,22 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
                 Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
             }
         }
+        // TPtrC16(const TUint16* aString) / (const TUint16*, TInt aLength) / (const TDesC16&): a pointer descriptor (type 1, e32des16.h):
+        // iLength | type << 28, then iPtr. The first form measures the zero-terminated string.
+        "_ZN7TPtrC16C1EPKt" | "_ZN7TPtrC16C1EPKti" | "_ZN7TPtrC16C1ERK7TDesC16" => {
+            let r2 = p.cpu.regs[2];
+            let (len, ptr) = if name.ends_with("RK7TDesC16") {
+                match locate(p, r1) { Ok(v) => (v.len, v.data), Err(m) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}"))) }
+            } else if name.ends_with("EPKti") {
+                (r2, r1)
+            } else {
+                let mut n = 0;
+                while p.mem.vm.read_u16(r1.wrapping_add(n * 2)).is_ok_and(|c| c != 0) { n += 1; }
+                (n, r1)
+            };
+            let ok = p.mem.vm.write_u32(this, len | DES_PTR_C << KSHIFT_DES_TYPE).is_ok() && p.mem.vm.write_u32(this.wrapping_add(4), ptr).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: descriptor at {this:#x} unwritable")) }
+        }
         _ => return None,
     })
 }

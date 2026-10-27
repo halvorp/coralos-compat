@@ -75,7 +75,7 @@ impl Process {
         if let Some(HostObj::View(v)) = self.obj_get(this) {
             v.resource_id = res_id;
         }
-        self.log.push(format!("[view] CAknView::BaseConstructL({res_id:#x}) on {this:#x}: menu {menu:#x} cba {cba:#x}"));
+        self.log.push(format!("[view] CAknView::BaseConstructL({res_id:#x}) on {this:#x}: menu {menu:#x} cba {cba:#x} toolbar {toolbar:#x} hotkeys {hot:#x} ext {ext:#x}"));
         Ok(())
     }
 }

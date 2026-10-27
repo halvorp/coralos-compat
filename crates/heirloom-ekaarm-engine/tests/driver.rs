@@ -53,10 +53,10 @@ fn ordinals() -> heirloom_fmt_e32::OrdinalTable {
 }
 
 #[test]
-fn file_browser_through_the_trait() { run_app("nokiafilebrowser", "filebrowser.exe", "FileBrowser", "CFileMan4NewL"); }
+fn file_browser_through_the_trait() { run_app("nokiafilebrowser", "filebrowser.exe", "FileBrowser", "CRepository::NewL(0x101f876d)"); }
 
 #[test]
-fn hero_through_the_trait() { run_app("hero-of-sparta", "heroofsparta.exe", "HeroOfSparta", "RLineC1Ev"); }
+fn hero_through_the_trait() { run_app("hero-of-sparta", "heroofsparta.exe", "HeroOfSparta", "CRepository::NewL(0x101f8798)"); }
 
 #[test]
 fn non_e32_bytes_are_a_named_refusal() {

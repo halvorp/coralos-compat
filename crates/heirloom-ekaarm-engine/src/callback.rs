@@ -39,6 +39,11 @@ pub enum Continuation {
     ViewAdded { appui: u32, view: u32 },
     /// `CleanupStack::PopAndDestroy(n)` ran a destructor / cleanup function; `left` more items to destroy.
     CleanupDestroy { left: u32 },
+    /// A native that makes several guest calls in order (a `SetRect` that notifies `SizeChanged` then `PositionChanged`): each
+    /// entry is (target, r0-r3); the native's own result (r0) is `result`.
+    /// One step of `ActivateL` over a control's components (`control::comp_step`).
+    Control { this: u32, step: crate::control::CompStep },
+    Chain { rest: Vec<(u32, [u32; 4])>, result: u32 },
 }
 
 /// One interrupted call: the CPU as it was (resuming at the instruction after the SVC) and what to do on return.
@@ -95,9 +100,29 @@ impl Process {
             }
             Continuation::App(step) => crate::appstart::step(self, step, r0),
             Continuation::EikCreateDocument { app, process } => crate::appstart::finish_create_document(self, app, process, r0),
+            Continuation::Control { this, step } => crate::control::comp_step(self, this, step, r0),
+            Continuation::Chain { rest, result } => self.chain_next(rest, result),
             Continuation::CleanupDestroy { left } => crate::cleanup::destroy_next(self, left),
             Continuation::ViewAdded { appui, view } => crate::viewappui::view_added(self, appui, view, r0),
         }
+    }
+
+    /// Run `calls` one after another, then resume the interrupted native with r0 = `result`.
+    pub fn call_chain(&mut self, mut calls: Vec<(u32, [u32; 4])>, result: u32) -> Result<(), String> {
+        self.cpu.regs[0] = result;
+        if calls.is_empty() {
+            return Ok(());
+        }
+        let (target, args) = calls.remove(0);
+        self.call_guest(target, &args, Continuation::Chain { rest: calls, result })
+    }
+
+    fn chain_next(&mut self, rest: Vec<(u32, [u32; 4])>, result: u32) -> Result<(), Outcome> {
+        self.cpu.regs[0] = result;
+        if rest.is_empty() {
+            return Ok(());
+        }
+        self.call_chain(rest, result).map_err(Outcome::Fault)
     }
 
     /// The number of guest calls currently in flight (frames on the callback stack).

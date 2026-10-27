@@ -31,6 +31,32 @@ pub struct RemConSelector {
     pub target_open: bool,
 }
 
+/// The fixed toolbar a touch device's AppUi owns (akntoolbar.h): no items (the view's AVKON_VIEW names none), so what the guest
+/// sets on it is recorded and nothing is drawn.
+#[derive(Debug, Clone, Default)]
+pub struct ToolbarState {
+    pub observer: u32,
+    pub visible: bool,
+    pub disabled: bool,
+    pub sliding: bool,
+    pub close_on_all: bool,
+}
+
+/// The host state of a `CCoeControl`: whether `ActivateL` ran (the guest's `iFlags` bits for it are private).
+#[derive(Debug, Clone, Default)]
+pub struct ControlState {
+    pub activated: bool,
+    pub observer: u32,
+    pub non_focusing: bool,
+    pub focused: bool,
+    pub blank: bool,
+    pub drag_events: bool,
+    /// `MakeVisible` has not been called: a control starts visible.
+    pub hidden: bool,
+    /// Set when the control is a `CAknToolbar` (`toolbar.rs`).
+    pub toolbar: Option<ToolbarState>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DictState {
     pub path: String,
@@ -56,10 +82,15 @@ pub struct AppUiState {
     pub active: Option<u32>,
     /// The view `SetDefaultViewL` named: activated when the application comes to the foreground with no view active.
     pub default_view: Option<u32>,
+    /// The fixed toolbar (`CurrentFixedToolbar`), made on first ask.
+    pub toolbar: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
 pub enum HostObj {
+    Control(ControlState),
+    /// A `CRepository`: its parsed keys.
+    Repo(BTreeMap<u32, crate::cenrep::CenValue>),
     /// A `CDictionaryFileStore`: the file it is the store of and the streams (by UID) it holds.
     Dict(DictState),
     AppUi(AppUiState),

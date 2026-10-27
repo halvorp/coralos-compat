@@ -20,10 +20,10 @@ pub const FLAG_ACTIVE: u32 = 1;
 const HEAD_BYTES: u32 = 12;
 
 impl Process {
-    fn rd(&self, a: u32) -> Result<u32, String> {
+    pub(crate) fn rd(&self, a: u32) -> Result<u32, String> {
         self.mem.vm.read_u32(a).map_err(|_| format!("{a:#x} is unreadable"))
     }
-    fn wr(&mut self, a: u32, v: u32) -> Result<(), String> {
+    pub(crate) fn wr(&mut self, a: u32, v: u32) -> Result<(), String> {
         self.mem.vm.write_u32(a, v).map_err(|_| format!("{a:#x} is unwritable"))
     }
 

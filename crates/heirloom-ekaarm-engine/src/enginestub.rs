@@ -68,3 +68,17 @@ pub fn slots_with_gaps<'a>(total: usize, named: &[(usize, &'a str)]) -> Vec<Opti
     }
     v
 }
+
+impl Process {
+    /// Diagnostic: the first `n` slots of the vtable of the guest object at `obj`, each as an address and, for a stub, its name.
+    pub fn describe_vtable(&self, obj: u32, n: u32) -> String {
+        let vptr = self.mem.vm.read_u32(obj).unwrap_or(0);
+        let mut s = format!("obj {obj:#x} vptr {vptr:#x}");
+        for i in 0..n {
+            let v = self.mem.vm.read_u32(vptr.wrapping_add(i * 4)).unwrap_or(0);
+            let name = if v >= STUB_BASE && v & 7 == 0 { self.stubs.get(((v - STUB_BASE) / 8) as usize).and_then(|x| x.name.clone()).unwrap_or_default() } else { String::new() };
+            s.push_str(&format!("\n  [{i}] {v:#x} {name}"));
+        }
+        s
+    }
+}

@@ -56,6 +56,13 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::tz::native(proc, name) { return Some(o); }
     if let Some(o) = crate::timer::native(proc, name) { return Some(o); }
     if let Some(o) = crate::control::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::etel::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::window::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::toolbar::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::time::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::array::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::fileman::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::cenrep::native(proc, name) { return Some(o); }
     None
 }
 

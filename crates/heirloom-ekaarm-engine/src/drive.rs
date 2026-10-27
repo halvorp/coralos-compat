@@ -16,9 +16,18 @@ pub enum DriveError {
     Put(VolErr),
 }
 
+/// The device ROM (`Z:` as shipped: the S60 SDK emulator's `z` tree, owner-local): read lazily and never copied into the engine.
+/// A package's own files win over it. Lookups are by Symbian path (case-insensitive, `\` separated, no drive letter).
+pub trait RomSource {
+    fn read(&self, path: &str) -> Option<Vec<u8>>;
+    fn exists(&self, path: &str) -> bool;
+    fn list(&self, path: &str) -> Option<Vec<String>>;
+}
+
 pub struct Drive {
     tree: Tree,
     vol: NodeId,
+    rom: Option<alloc::boxed::Box<dyn RomSource>>,
 }
 
 impl Default for Drive {
@@ -38,14 +47,28 @@ impl Drive {
     pub fn new() -> Self {
         let mut tree = Tree::new(255);
         let vol = tree.add_volume("Z", false);
-        Drive { tree, vol }
+        Drive { tree, vol, rom: None }
     }
 
     /// The drive over a tree the host filled through `GuestMachine::volume()`: its volume `Z` (the first volume when there is no
     /// `Z`; a volume `Z` is added when the tree has none).
     pub fn from_tree(mut tree: Tree) -> Self {
         let vol = tree.volume("Z").or_else(|| tree.children(heirloom_volume::ROOT).first().copied()).unwrap_or_else(|| tree.add_volume("Z", false));
-        Drive { tree, vol }
+        Drive { tree, vol, rom: None }
+    }
+
+    /// Put the device ROM behind the package's files.
+    pub fn set_rom(&mut self, rom: alloc::boxed::Box<dyn RomSource>) {
+        self.rom = Some(rom);
+    }
+
+    /// The file's bytes: the package's, else the ROM's (owned, because a ROM file is read on demand).
+    pub fn read_owned(&self, path: &str) -> Result<Vec<u8>, DriveError> {
+        match self.read(path) {
+            Ok(b) => Ok(b.to_vec()),
+            Err(DriveError::NotFound) => self.rom.as_ref().and_then(|r| r.read(path)).ok_or(DriveError::NotFound),
+            Err(e) => Err(e),
+        }
     }
 
     /// The tree behind the drive (the host stages files through it).
@@ -92,6 +115,11 @@ impl Drive {
     /// Does `path` name an existing file or directory?
     pub fn exists(&self, path: &str) -> bool {
         self.resolve(path).is_ok()
+    }
+
+    /// Does `path` exist in the package or in the ROM?
+    pub fn exists_anywhere(&self, path: &str) -> bool {
+        self.exists(path) || self.rom.as_ref().is_some_and(|r| r.exists(path))
     }
 
     /// The guest created the directory `path` (and any missing parents): in the in-memory tree only, never in the host directory

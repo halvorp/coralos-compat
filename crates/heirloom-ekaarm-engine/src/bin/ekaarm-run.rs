@@ -8,7 +8,7 @@ use heirloom_ekaarm_engine::hostdir;
 const ORD_TSV: &str = include_str!("../../../heirloom-fmt-e32/data/eka-ordinals.tsv");
 
 fn usage() -> ! {
-    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] [--trace] [--dump HEXADDR WORDS] [--dump-code FILE] [--drive DIR] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
+    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] [--rom DIR] [--trace] [--dump HEXADDR WORDS] [--dump-code FILE] [--drive DIR] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
     std::process::exit(2)
 }
 
@@ -17,6 +17,8 @@ fn main() {
     let mut census = false;
     let mut list_imports = false;
     let mut trace = false;
+    let mut vtables: Vec<(u32, u32)> = Vec::new();
+    let mut rom_dir: Option<String> = None;
     let mut dumps: Vec<(u32, u32)> = Vec::new();
     let mut dump_code: Option<String> = None;
     let mut file = None;
@@ -27,6 +29,12 @@ fn main() {
             "--census" => census = true,
             "--imports" => list_imports = true,
             "--trace" => trace = true,
+            "--vtable" => {
+                let a = args.next().unwrap_or_else(|| usage());
+                let n = args.next().unwrap_or_else(|| usage());
+                vtables.push((u32::from_str_radix(a.trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()), n.parse().unwrap_or_else(|_| usage())));
+            }
+            "--rom" => rom_dir = Some(args.next().unwrap_or_else(|| usage())),
             "--dump" => {
                 let a = args.next().unwrap_or_else(|| usage());
                 let n = args.next().unwrap_or_else(|| usage());
@@ -83,6 +91,12 @@ fn main() {
             Err(e) => { println!("OUTCOME DriveRefused {dir}: {e}"); std::process::exit(1) }
         }
     }
+    if let Some(dir) = &rom_dir {
+        match heirloom_ekaarm_engine::hostdir::DirRom::new(std::path::Path::new(dir)) {
+            Ok(rom) => match proc.host.drive.as_mut() { Some(d) => d.set_rom(Box::new(rom)), None => { println!("OUTCOME RomRefused --rom needs --drive"); std::process::exit(1) } },
+            Err(e) => { println!("OUTCOME RomRefused {dir}: {e}"); std::process::exit(1) }
+        }
+    }
     if census { proc.census = Some(Vec::new()); }
     if trace { proc.trace = Some(Vec::new()); }
     let outcome = proc.run(max_insns);
@@ -100,6 +114,7 @@ fn main() {
         println!("ui: {} recorded call(s)", ui.calls.len());
         for c in &ui.calls { println!("  {c:?}"); }
     }
+    for (a, n) in &vtables { println!("{}", proc.describe_vtable(*a, *n)); }
     for (a, n) in &dumps {
         for i in 0..*n { let at = a + i * 4; match heirloom_cpu_arm::Memory::read_u32(&mut proc.mem, at) { Ok(v) => println!("mem {at:#010x}: {v:#010x}"), Err(_) => println!("mem {at:#010x}: <unreadable>") } }
     }
