@@ -15,7 +15,14 @@ pub struct NativeState {
     /// The guest-resident `CApaProcess` placeholder (zeroed, vtable pointer 0), allocated on first use by the application start.
     pub apa_process: Option<u32>,
     /// `CleanupStack`: the pointers pushed and not yet popped (e32base.h:2944-2948 `PushL` x3, `Pop`, `Pop(TInt)`).
-    pub cleanup: Vec<u32>,
+    pub cleanup: Vec<crate::cleanup::CleanupItem>,
+    /// Cleanup-stack depths at each open TRAP bracket, and the guest block standing for the thread's `TTrapHandler` (`trap.rs`).
+    pub trap_marks: Vec<u32>,
+    pub trap_handler: Option<u32>,
+    /// The guest sentinel of the active scheduler's queue (`sched.rs`).
+    pub sched_head: Option<u32>,
+    /// Host-only state of guest objects, by address and allocation generation (`objects.rs`).
+    pub objs: crate::objects::Objects,
 }
 
 /// A host extension to the natives: asked first with the import's mangled name; `Some` = handled. Used by tests to stand in
@@ -29,6 +36,29 @@ pub enum NativeOutcome {
     Refused(String),
 }
 
+/// The natives of each module, asked in turn: the first that knows the mangled `name` answers.
+fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
+    if let Some(o) = crate::appstart::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::cone::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::appui::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::view::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::remcon::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::viewappui::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::trap::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::screen::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::desc::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::avkon::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::fs::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::cleanup::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::dictstore::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::sched::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::mixins::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::tz::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::timer::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::control::native(proc, name) { return Some(o); }
+    None
+}
+
 pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
     let stub = match proc.stubs.get(stub_index) {
         Some(stub) => stub,
@@ -38,6 +68,10 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
     let ordinal = stub.ordinal;
     let stub_name = stub.name.clone();
     let name = stub_name.as_deref().unwrap_or("");
+    if let Some(t) = proc.trace.as_mut() {
+        let r = &proc.cpu.regs;
+        t.push(format!("{} {}/{} {name} r0-r3={:#x} {:#x} {:#x} {:#x} lr={:#x}", t.len(), dll_base, ordinal, r[0], r[1], r[2], r[3], r[14]));
+    }
 
     // RAllocator / RHeap members need a guest-resident allocator object with a vtable, which this engine does not build
     // (User::Allocator is refused by name for the same reason), so they are refused before anything dereferences one.
@@ -55,7 +89,7 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             return outcome;
         }
     }
-    if let Some(outcome) = crate::appstart::native(proc, name).or_else(|| crate::cone::native(proc, name)) {
+    if let Some(outcome) = module_native(proc, name) {
         return outcome;
     }
 
@@ -75,21 +109,6 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
         "_ZN13RApaLsSessionC1Ev" => {
             let ok = proc.mem.vm.write_u32(r0, 0).is_ok() && proc.mem.vm.write_u32(r0.wrapping_add(4), 0).is_ok();
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED apgrfx/{name}: session object at {r0:#x} is unwritable")) }
-        }
-        // CleanupStack::PushL(TAny*) / PushL(CBase*) record the pointer; PushL(TCleanupItem) (two words r0, r1) records the object r1's
-        // owner would clean, as r0 (the item's function pointer is not run: PopAndDestroy is refused by name below).
-        "_ZN12CleanupStack5PushLEPv" | "_ZN12CleanupStack5PushLEP5CBase" => {
-            proc.nat.cleanup.push(r0);
-            NativeOutcome::Return
-        }
-        "_ZN12CleanupStack3PopEv" | "_ZN12CleanupStack3PopEi" => {
-            let n = if name.ends_with("Ev") { 1 } else { r0 as i32 as usize };
-            let have = proc.nat.cleanup.len();
-            if (r0 as i32) < 0 && !name.ends_with("Ev") || n > have {
-                return NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: pop of {} with {have} on the cleanup stack (a CBASE-STRAY panic on a device)", r0 as i32));
-            }
-            proc.nat.cleanup.truncate(have - n);
-            NativeOutcome::Return
         }
         // drtaeabi's exception-globals object: recorded, `this` returned. Unwinding itself is slice 1b (see the leaves below).
         "_ZN23TCppRTExceptionsGlobalsC1Ev" => {
@@ -230,50 +249,13 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             }
         }
         "_ZN4User4ExitEi" => NativeOutcome::Exit(r0 as i32),
-        "_ZN4User5PanicERK7TDesC16i" => {
-            let word0 = match proc.mem.vm.read_u32(r0) {
-                Ok(word) => word,
-                Err(_) => return NativeOutcome::Refused(format!(
-                    "NEXT-NEEDED {}/{} _ZN4User5PanicE (TDesC16 read fault at 0x{:08X})",
-                    dll_base, ordinal, r0
-                )),
-            };
-            let len = word0 & 0x0FFF_FFFF;
-            let typ = (word0 >> 28) & 0xF;
-            let data_ptr = if typ == 0 {
-                r0.wrapping_add(4)
-            } else if typ == 1 {
-                match proc.mem.vm.read_u32(r0.wrapping_add(4)) {
-                    Ok(ptr) => ptr,
-                    Err(_) => return NativeOutcome::Refused(format!(
-                        "NEXT-NEEDED {}/{} _ZN4User5PanicE (TDesC16 pointer read fault)",
-                        dll_base, ordinal
-                    )),
-                }
-            } else {
-                return NativeOutcome::Refused(format!(
-                    "NEXT-NEEDED {}/{} _ZN4User5PanicE (TDesC16 type {} unsupported)",
-                    dll_base, ordinal, typ
-                ));
-            };
-
-            let mut panic = String::new();
-            for i in 0..core::cmp::min(len, 64) {
-                let addr = data_ptr.wrapping_add(i.wrapping_mul(2));
-                let ch = match proc.mem.vm.read_u16(addr) {
-                    Ok(ch) => ch,
-                    Err(_) => return NativeOutcome::Refused(format!(
-                        "NEXT-NEEDED {}/{} _ZN4User5PanicE (TDesC16 data read fault at 0x{:08X})",
-                        dll_base, ordinal, addr
-                    )),
-                };
-                panic.push(core::char::from_u32(ch as u32).unwrap_or('\u{FFFD}'));
-            }
-            NativeOutcome::Refused(format!(
+        "_ZN4User5PanicERK7TDesC16i" => match crate::desc::read16(proc, r0) {
+            Ok(units) => NativeOutcome::Refused(format!(
                 "NEXT-NEEDED {}/{} _ZN4User5PanicE (panic=\"{}\" reason={})",
-                dll_base, ordinal, panic, r1 as i32
-            ))
-        }
+                dll_base, ordinal, crate::desc::to_utf8(&units[..units.len().min(64)]), r1 as i32
+            )),
+            Err(e) => NativeOutcome::Refused(format!("NEXT-NEEDED {}/{} _ZN4User5PanicE ({e})", dll_base, ordinal)),
+        },
         "" => NativeOutcome::Refused(format!(
             "NEXT-NEEDED {}/{} <unnamed-ordinal>", dll_base, ordinal
         )),

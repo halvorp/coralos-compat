@@ -35,6 +35,10 @@ pub enum Continuation {
     /// `CEikApplication::CreateDocumentL(CApaProcess*)` called the application's private `CreateDocumentL()`; r0 is the new
     /// document, which gets its `iApplication` / `iApaProcess` (see `appstart::finish_create_document`).
     EikCreateDocument { app: u32, process: u32 },
+    /// `CAknViewAppUi::AddViewL` called the view's `Id()`; r0 is its UID (see `viewappui::view_added`).
+    ViewAdded { appui: u32, view: u32 },
+    /// `CleanupStack::PopAndDestroy(n)` ran a destructor / cleanup function; `left` more items to destroy.
+    CleanupDestroy { left: u32 },
 }
 
 /// One interrupted call: the CPU as it was (resuming at the instruction after the SVC) and what to do on return.
@@ -91,6 +95,8 @@ impl Process {
             }
             Continuation::App(step) => crate::appstart::step(self, step, r0),
             Continuation::EikCreateDocument { app, process } => crate::appstart::finish_create_document(self, app, process, r0),
+            Continuation::CleanupDestroy { left } => crate::cleanup::destroy_next(self, left),
+            Continuation::ViewAdded { appui, view } => crate::viewappui::view_added(self, appui, view, r0),
         }
     }
 

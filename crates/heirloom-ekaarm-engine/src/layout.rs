@@ -11,6 +11,10 @@ pub const STUB_SVC_BASE: u32 = 0x00F0_0000;
 /// The SVC of the stub the entry point returns into (LR at start): the process returns from its entry with r0.
 pub const EXIT_SVC: u32 = 0x00FF_0000;
 
+/// Import-stub slots reserved after the image's own imports for the stubs the engine hands out itself (`Process::engine_stub`):
+/// the virtual-table entries of library objects the engine builds (a screen device, a list box, ...).
+pub const ENGINE_STUB_SLOTS: u32 = 1024;
+
 pub fn pru(n: u32) -> u32 {
     n.saturating_add(PAGE - 1) & !(PAGE - 1)
 }

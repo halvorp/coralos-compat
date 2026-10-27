@@ -8,7 +8,7 @@ use heirloom_ekaarm_engine::hostdir;
 const ORD_TSV: &str = include_str!("../../../heirloom-fmt-e32/data/eka-ordinals.tsv");
 
 fn usage() -> ! {
-    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] [--drive DIR] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
+    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] [--trace] [--dump HEXADDR WORDS] [--dump-code FILE] [--drive DIR] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
     std::process::exit(2)
 }
 
@@ -16,6 +16,9 @@ fn main() {
     let mut max_insns = 50_000_000u64;
     let mut census = false;
     let mut list_imports = false;
+    let mut trace = false;
+    let mut dumps: Vec<(u32, u32)> = Vec::new();
+    let mut dump_code: Option<String> = None;
     let mut file = None;
     let mut drive_dir: Option<String> = None;
     let mut args = std::env::args().skip(1);
@@ -23,6 +26,13 @@ fn main() {
         match arg.as_str() {
             "--census" => census = true,
             "--imports" => list_imports = true,
+            "--trace" => trace = true,
+            "--dump" => {
+                let a = args.next().unwrap_or_else(|| usage());
+                let n = args.next().unwrap_or_else(|| usage());
+                dumps.push((u32::from_str_radix(a.trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()), n.parse().unwrap_or_else(|_| usage())));
+            }
+            "--dump-code" => dump_code = Some(args.next().unwrap_or_else(|| usage())),
             "--drive" => drive_dir = Some(args.next().unwrap_or_else(|| usage())),
             "--max-insns" => {
                 let value = args.next().unwrap_or_else(|| usage());
@@ -40,6 +50,7 @@ fn main() {
     let bytes = std::fs::read(&file).expect("read file");
     let table = OrdinalTable::parse(ORD_TSV).expect("parse ordinals");
     let image = E32Image::parse(&bytes).expect("parse layout");
+    if let Some(path) = &dump_code { std::fs::write(path, &image.code).expect("write code dump"); }
     let code_len = image.code.len() as u32;
     let data_len = image.data.len() as u32;
     let bss_len = image.header.bss_size;
@@ -73,6 +84,7 @@ fn main() {
         }
     }
     if census { proc.census = Some(Vec::new()); }
+    if trace { proc.trace = Some(Vec::new()); }
     let outcome = proc.run(max_insns);
     if let Some(seen) = &proc.census {
         let mut first = std::collections::BTreeMap::new();
@@ -83,10 +95,15 @@ fn main() {
         for (m, _) in order { println!("  {m}"); }
     }
     for line in &proc.log { println!("{line}"); }
+    if let Some(t) = &proc.trace { for line in t { println!("trace {line}"); } }
     if let Some(ui) = proc.ui_as::<RecordingGuestUi>() {
         println!("ui: {} recorded call(s)", ui.calls.len());
         for c in &ui.calls { println!("  {c:?}"); }
     }
+    for (a, n) in &dumps {
+        for i in 0..*n { let at = a + i * 4; match heirloom_cpu_arm::Memory::read_u32(&mut proc.mem, at) { Ok(v) => println!("mem {at:#010x}: {v:#010x}"), Err(_) => println!("mem {at:#010x}: <unreadable>") } }
+    }
+    println!("cpu: pc={:#x} lr={:#x} sp={:#x} r0-r3={:#x} {:#x} {:#x} {:#x} (code base {:#x}: caller = lr - base is the offset into --dump-code)", proc.cpu.pc(), proc.cpu.regs[14], proc.cpu.regs[13], proc.cpu.regs[0], proc.cpu.regs[1], proc.cpu.regs[2], proc.cpu.regs[3], layout::CODE_BASE);
     match outcome {
         Outcome::Exited(code) => println!("OUTCOME Exited({}) after {} instructions", code, proc.insns),
         Outcome::Refused(msg) => {

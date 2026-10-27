@@ -29,7 +29,16 @@ pub const DOC_I_CONTAINER: u32 = 4; // apparc.h:384 CApaDocument::iContainer (af
 pub const DOC_I_APPLICATION: u32 = 8; // apparc.h:386 CApaDocument::iApplication
 pub const DOC_I_APA_PROCESS: u32 = 12; // apparc.h:387 CApaDocument::iApaProcess
 pub const DOC_I_SPARE: u32 = 16; // apparc.h:388 CApaDocument::iSpare
-pub const CAPA_DOCUMENT_SIZE: u32 = 20; // end of iSpare; the MSaveObserver subobject starts here (the `_ZThn20_` thunks in the imports)
+pub const CAPA_DOCUMENT_SIZE: u32 = 20;
+/// CEikDocument adds MSaveObserver (vptr at 20, savenotf.h:20; the `_ZThn20_` thunks) then `iAppUi` (eikdoc.h:84) at 24.
+pub const EIKDOC_I_APP_UI: u32 = 24;
+/// CEikAppUi: CCoeAppUi is 24 bytes (vptr, iCoeEnv 4, iViewManager 8, iStack 12, iExtra 16, reserved 20; coeaui.h:~221-227), then
+/// MEikMenuObserver at 24 (vptr, MEikCommandObserver reserved word, iMEikMenuObserver_Spare1: 12 bytes, eikcmobs.h/eikmobs.h; the
+/// import `_ZThn24_N13CAknViewAppUi15ProcessCommandLEi` confirms 24), MCoeMessageObserver at 36 (vptr only), MObjectProvider at 40
+/// (vptr + iMObjectProvider_Reserved1, coemop.h:167; `_ZThn40_N13CAknAppUiBase15MopSupplyObject` confirms 40), then the members
+/// of eikappui.h:147-163.
+pub const EIKAPPUI_I_DOCUMENT: u32 = 48; // eikappui.h:147
+pub const EIKAPPUI_I_CONTAINER_APPUI: u32 = 52; // eikappui.h:150 // end of iSpare; the MSaveObserver subobject starts here (the `_ZThn20_` thunks in the imports)
 /// CApaProcess: vptr + iAppList, iDocList, iMainDoc, iMainDocFileName, iFsSession (RFs, one handle word), iApplicationRemover,
 /// iMonitor, iCApaProcess_Reserved1 = 9 words (apparc.h:435 class, members at the lines of its `private:` block).
 pub const CAPA_PROCESS_SIZE: u32 = 36;
@@ -129,7 +138,9 @@ pub enum Step {
     /// `doc->CreateAppUiL()` returned.
     CreateAppUi { app: u32, doc: u32 },
     /// `appui->ConstructL()` returned.
-    ConstructL,
+    ConstructL { appui: u32 },
+    /// A queued view activation returned (`viewappui::start_activation`); its scratch block is freed.
+    ViewActivated { appui: u32, block: u32 },
 }
 
 fn fault(msg: String) -> Outcome {
@@ -202,14 +213,31 @@ pub(crate) fn step(p: &mut Process, s: Step, r0: u32) -> Result<(), Outcome> {
                 return Err(Outcome::Refused(String::from("CreateAppUiL returned no AppUi")));
             }
             p.log.push(format!("[appstart] CreateAppUiL(doc {doc:#x}) -> CEikAppUi at {r0:#x}"));
+            // CEikDocument::ConstructAppUiL: iAppUi = the new AppUi, and the AppUi's SetDocument(doc) (eikappui.h:63) sets its iDocument.
+            for (obj, off, val) in [(doc, EIKDOC_I_APP_UI, r0), (r0, EIKAPPUI_I_DOCUMENT, doc)] {
+                p.mem.vm.write_u32(obj.wrapping_add(off), val).map_err(|_| fault(format!("CreateAppUiL: the object at {obj:#x} is unwritable")))?;
+            }
             let spec = SlotSpec { class: "CEikAppUi", method: "ConstructL", slot: slots.appui_construct_l, inherited: INHERITED_APPUI_CONSTRUCT_L };
-            virtual_call(p, r0, &spec, &[r0], Continuation::App(Step::ConstructL))
+            virtual_call(p, r0, &spec, &[r0], Continuation::App(Step::ConstructL { appui: r0 }))
         }
-        Step::ConstructL => {
+        Step::ConstructL { appui } => {
             p.log.push(String::from("[appstart] AppUi::ConstructL returned"));
-            Err(Outcome::Refused(String::from("NEXT-NEEDED cone CActiveScheduler::Start: AppUi::ConstructL returned, the application's event loop is the next slice")))
+            next_activation_or_idle(p, appui)
+        }
+        Step::ViewActivated { appui, block } => {
+            crate::viewappui::finish_activation(p, block);
+            p.log.push(String::from("[appstart] view activation returned"));
+            next_activation_or_idle(p, appui)
         }
     }
+}
+
+/// The thread is back in its scheduler: the view server delivers the queued activations, then the event loop would start.
+fn next_activation_or_idle(p: &mut Process, appui: u32) -> Result<(), Outcome> {
+    if crate::viewappui::has_pending(p, appui) {
+        return crate::viewappui::start_activation(p, appui, |block| Continuation::App(Step::ViewActivated { appui, block })).map_err(|m| if m.starts_with("NEXT-NEEDED") { Outcome::Refused(m) } else { fault(m) });
+    }
+    Err(Outcome::Refused(String::from("NEXT-NEEDED cone CActiveScheduler::Start: the views are active, the application's event loop is the next slice")))
 }
 
 /// The native `CEikApplication::CreateDocumentL(CApaProcess*)` (the slot the apps inherit): call the application's private
@@ -264,11 +292,6 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZN12CAknDocumentC2ER15CEikApplication" => {
             let app = p.cpu.regs[1];
             let r = zero(p, this, DOC_I_CONTAINER, CAPA_DOCUMENT_SIZE).and_then(|_| p.mem.vm.write_u32(this.wrapping_add(DOC_I_APPLICATION), app).map_err(|_| format!("document at {this:#x} is unwritable")));
-            ctor(p, r)
-        }
-        // MCoeViewDeactivationObserver() (coeview.h): an interface with one data word, iMCoeViewDeactivationObserver_Reserved1, after its vptr.
-        "_ZN28MCoeViewDeactivationObserverC2Ev" => {
-            let r = p.mem.vm.write_u32(this.wrapping_add(4), 0).map_err(|_| format!("object at {this:#x} is unwritable"));
             ctor(p, r)
         }
         // Nothing the derived code may read is set by these (iCoeEnv stays 0: there is no CCoeEnv yet, a read through it is a named null fault).

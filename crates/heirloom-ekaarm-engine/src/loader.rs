@@ -13,6 +13,8 @@ pub struct Process {
     pub insns: u64,
     pub heap: Option<crate::heap::Heap>,
     pub heap_chunk_id: ChunkId,
+    /// The stub chunk (imports, then the engine's own stubs): read-execute except while a stub is being written.
+    pub stub_chunk_id: ChunkId,
     /// Census mode (`Some`): an unimplemented import returns 0 to the guest and is recorded here in call order, so one run
     /// lists the whole sequence a program reaches. `None` (the default) stops at the first one.
     pub census: Option<Vec<alloc::string::String>>,
@@ -32,6 +34,8 @@ pub struct Process {
     pub log: Vec<alloc::string::String>,
     /// The host's objects: the guest's file view and its UI (`ui.rs`).
     pub host: crate::ui::Host,
+    /// Trace mode (`Some`): every import call is recorded (name, r0-r3, caller) in call order; `None` (the default) records nothing.
+    pub trace: Option<Vec<alloc::string::String>>,
 }
 
 #[derive(Debug)]
@@ -56,7 +60,7 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
     let uid3 = header.uid3;
 
     let stub_list = stubs::build(&img.imports, table);
-    let stub_total = stub_list.len() as u32 * 8;
+    let stub_total = (stub_list.len() as u32 + layout::ENGINE_STUB_SLOTS) * 8;
     layout::check_overlap(code_len, data_len + bss_len, heap_max, stack_sz, stub_total)
         .map_err(LoadError::Overlap)?;
 
@@ -152,6 +156,7 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         insns: 0,
         heap: None,
         heap_chunk_id: heap_id,
+        stub_chunk_id: stub_id,
         census: None,
         uid3,
         code_len,
@@ -161,6 +166,7 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         native_hook: None,
         log: Vec::new(),
         host: Default::default(),
+        trace: None,
     };
 
     // EKA2 entry state: kernel places SStdEpocThreadCreateInfo (0x40 bytes)
@@ -234,7 +240,7 @@ pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
     let stubs: Vec<Stub> = stub_names.iter().enumerate().map(|(i, n)| Stub {
         dll_base: "test".into(), dll: "test".into(), ordinal: i as u16, name: Some((*n).into()),
     }).collect();
-    let stub_total = (stubs.len() as u32 * 8).max(8);
+    let stub_total = (stubs.len() as u32 + layout::ENGINE_STUB_SLOTS) * 8;
     let stub_id = mem.vm.create_chunk(STUB_BASE, layout::pru(stub_total), Prot::RW)
         .map_err(|err| LoadError::Vm { chunk: "stubs create", err })?;
     mem.vm.commit(stub_id, 0, layout::pru(stub_total)).map_err(|err| LoadError::Vm { chunk: "stubs commit", err })?;
@@ -249,8 +255,8 @@ pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
     Ok(Process {
         cpu, mem, stubs, insns: 0,
         heap: Some(crate::heap::Heap::new(heap_id, HEAP_BASE, heap_sz, heap_sz)),
-        heap_chunk_id: heap_id, census: None, uid3: 0, code_len: 0,
-        frames: Vec::new(), slots: crate::appstart::Slots::default(), nat: Default::default(), native_hook: None, log: Vec::new(), host: Default::default(),
+        heap_chunk_id: heap_id, stub_chunk_id: stub_id, census: None, uid3: 0, code_len: 0,
+        frames: Vec::new(), slots: crate::appstart::Slots::default(), nat: Default::default(), native_hook: None, log: Vec::new(), host: Default::default(), trace: None,
     })
 }
 

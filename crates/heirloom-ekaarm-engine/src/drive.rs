@@ -89,6 +89,22 @@ impl Drive {
         Ok(self.tree.children(id).iter().map(|&c| String::from(self.tree.name(c))).collect())
     }
 
+    /// Does `path` name an existing file or directory?
+    pub fn exists(&self, path: &str) -> bool {
+        self.resolve(path).is_ok()
+    }
+
+    /// The guest created the directory `path` (and any missing parents): in the in-memory tree only, never in the host directory
+    /// the tree was read from. `Ok(true)` = created, `Ok(false)` = it already existed.
+    pub fn make_dirs(&mut self, path: &str) -> Result<bool, DriveError> {
+        if self.exists(path) {
+            return Ok(false);
+        }
+        let (_, comps) = split(path);
+        self.tree.mkdirs(self.vol, comps).map_err(DriveError::Put)?;
+        Ok(true)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.tree.children(self.vol).is_empty()
     }

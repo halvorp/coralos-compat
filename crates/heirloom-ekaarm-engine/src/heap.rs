@@ -17,6 +17,10 @@ pub struct Heap {
     max: u32,
     committed_end: u32,
     live: BTreeMap<u32, u32>,
+    /// The allocation generation of each live block: a counter that never repeats, so a host side table keyed by address can tell
+    /// a block from a later one that reused the address (`generation_of`).
+    gens: BTreeMap<u32, u32>,
+    next_gen: u32,
     free_list: Vec<(u32, u32)>, // sorted by addr
 }
 
@@ -34,6 +38,8 @@ impl Heap {
             max,
             committed_end: base + already_committed,
             live: BTreeMap::new(),
+            gens: BTreeMap::new(),
+            next_gen: 1,
             free_list,
         }
     }
@@ -99,6 +105,8 @@ impl Heap {
         let (addr, hole_len) = self.free_list[idx];
         self.ensure_committed(addr.checked_add(len)?, mem).ok()?;
         self.live.insert(addr, len);
+        self.gens.insert(addr, self.next_gen);
+        self.next_gen = self.next_gen.wrapping_add(1).max(1);
         if hole_len > len {
             self.free_list[idx] = (addr + len, hole_len - len);
         } else {
@@ -109,6 +117,7 @@ impl Heap {
 
     pub fn free(&mut self, addr: u32) -> Result<(), HeapError> {
         let len = self.live.remove(&addr).ok_or(HeapError::UnknownAddress(addr))?;
+        self.gens.remove(&addr);
         self.insert_free(addr, len);
         Ok(())
     }
@@ -138,6 +147,18 @@ impl Heap {
         }
         let _ = self.free(addr);
         Some(new_addr)
+    }
+
+    /// The generation of the live block at `addr` (0 is never a generation), `None` when nothing is allocated there.
+    pub fn generation_of(&self, addr: u32) -> Option<u32> {
+        self.gens.get(&addr).copied()
+    }
+
+    /// The generation of the live block that contains `addr` (the block's start or any byte inside it): an object embedded in a
+    /// bigger allocation (a member `RFs` of the environment) is tied to the block it lives in.
+    pub fn generation_containing(&self, addr: u32) -> Option<u32> {
+        let (&base, &len) = self.live.range(..=addr).next_back()?;
+        if addr < base.checked_add(len)? { self.gens.get(&base).copied() } else { None }
     }
 
     pub fn len_of(&self, addr: u32) -> Option<u32> {
