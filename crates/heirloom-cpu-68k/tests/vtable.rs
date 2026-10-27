@@ -117,12 +117,12 @@ fn vtable_executes_traps_and_enforces_the_single_instance() {
     let table = vtable();
 
     assert!(check(table, 1, ARCH_M68K).is_ok());
-    assert!(matches!(check(table, 2, ARCH_M68K), Err(OpenRefusal::VersionTooOld { found: 1, required: 2 })));
+    assert!(matches!(check(table, 3, ARCH_M68K), Err(OpenRefusal::VersionTooOld { found: 2, required: 3 })));
 
     let inst = (table.create)(4, &bus);
     assert!(!inst.is_null());
     (table.reset)(inst);
-    let mut stop = CpuStop { kind: 0, pc: 0, detail: 0, insns: 0 };
+    let mut stop = CpuStop { kind: 0, pc: 0, detail: 0, bus_faults: 0, insns: 0 };
     assert_eq!((table.run)(inst, 100, &mut stop), 0);
     assert_eq!(stop.kind, STOP_HALT);
     let mut d0 = 0;

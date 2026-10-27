@@ -183,6 +183,11 @@ impl CpuContext {
             m68k_get_context(self.0.as_mut_ptr());
         }
     }
+
+    /// The saved bytes, for the table's save_context / load_context (crate-private: the public API stays opaque).
+    pub(crate) fn bytes(&self) -> &[u8] { &self.0 }
+    pub(crate) fn from_bytes(b: &[u8]) -> CpuContext { CpuContext(b.to_vec()) }
+    pub(crate) fn bytes_mut(&mut self) -> &mut [u8] { &mut self.0 }
 }
 
 /// Read a Cpu field the callbacks may have written during the last m68k_execute (see `activate`).

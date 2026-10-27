@@ -1,6 +1,9 @@
 #![no_std]
 
-pub const CPU_ABI_VERSION: u32 = 1;
+/// 2 (2026-10-27): [`CpuStop`] carries the bus-fault count in its own field and a stall is its own kind
+/// ([`STOP_STALL`]), and the table gains the context and diagnostics entries an engine needs to drive the CPU
+/// through the table alone (one saved context per guest task; the recent-PC ring). Version 1 had no consumer.
+pub const CPU_ABI_VERSION: u32 = 2;
 pub const ARCH_M68K: u32 = 1;
 pub const ARCH_PPC: u32 = 2;
 pub const ARCH_ARM: u32 = 3;
@@ -9,6 +12,8 @@ pub const STOP_BUDGET: u32 = 1;
 pub const STOP_TRAP: u32 = 2;
 pub const STOP_FAULT: u32 = 3;
 pub const STOP_HALT: u32 = 4;
+/// The CPU stopped making progress: a slice retired no instruction (68k STOP, or a double-fault halt). `pc` is where.
+pub const STOP_STALL: u32 = 5;
 
 /// Bus callbacks supplied to a CPU library.
 ///
@@ -35,7 +40,11 @@ pub struct CpuInstance {
 pub struct CpuStop {
     pub kind: u32,
     pub pc: u32,
+    /// STOP_TRAP: 1 = the guest blocked mid-call (the trap callback returned 3). Otherwise 0.
     pub detail: u32,
+    /// Accesses the bus callbacks refused during this run (each read as 0 / dropped). Reported with ANY kind; a run
+    /// that ended for another reason and also faulted says both.
+    pub bus_faults: u32,
     pub insns: u64,
 }
 
@@ -53,6 +62,16 @@ pub struct CpuVTable {
     pub get_reg: extern "C" fn(*mut CpuInstance, reg: u32, out: *mut u64) -> i32,
     pub set_reg: extern "C" fn(*mut CpuInstance, reg: u32, value: u64) -> i32,
     pub invalidate_code: extern "C" fn(*mut CpuInstance, addr: u32, len: u32),
+    /// Bytes one saved CPU context takes (the buffer size for `save_context` / `load_context`). 0 = not supported.
+    pub context_size: extern "C" fn(*mut CpuInstance) -> u32,
+    /// Copy the instance's current registers into `dst` (`len` >= `context_size`): 0, or -1 (bad instance, short or null
+    /// buffer, no context yet). The bytes are opaque and valid only for the same library.
+    pub save_context: extern "C" fn(*mut CpuInstance, dst: *mut u8, len: u32) -> i32,
+    /// Make `src` (a buffer `save_context` filled) the instance's current registers: 0, or -1. The next `run` continues from it.
+    pub load_context: extern "C" fn(*mut CpuInstance, src: *const u8, len: u32) -> i32,
+    /// The addresses of the most recently executed instructions, oldest first, into `out` (at most `cap`): how many were
+    /// written. Diagnostics only; 0 when the library keeps no ring.
+    pub recent_pcs: extern "C" fn(*mut CpuInstance, out: *mut u32, cap: u32) -> u32,
 }
 
 pub enum OpenRefusal {
@@ -138,6 +157,7 @@ pub enum StopKind {
     Trap,
     Fault,
     Halt,
+    Stall,
 }
 
 impl StopKind {
@@ -147,6 +167,7 @@ impl StopKind {
             STOP_TRAP => Some(StopKind::Trap),
             STOP_FAULT => Some(StopKind::Fault),
             STOP_HALT => Some(StopKind::Halt),
+            STOP_STALL => Some(StopKind::Stall),
             _ => None,
         }
     }

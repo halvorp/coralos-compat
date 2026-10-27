@@ -34,6 +34,22 @@ extern "C" fn dummy_set_reg(_instance: *mut CpuInstance, _reg: u32, _value: u64)
 
 extern "C" fn dummy_invalidate_code(_instance: *mut CpuInstance, _addr: u32, _len: u32) {}
 
+extern "C" fn dummy_context_size(_instance: *mut CpuInstance) -> u32 {
+    0
+}
+
+extern "C" fn dummy_save_context(_instance: *mut CpuInstance, _dst: *mut u8, _len: u32) -> i32 {
+    -1
+}
+
+extern "C" fn dummy_load_context(_instance: *mut CpuInstance, _src: *const u8, _len: u32) -> i32 {
+    -1
+}
+
+extern "C" fn dummy_recent_pcs(_instance: *mut CpuInstance, _out: *mut u32, _cap: u32) -> u32 {
+    0
+}
+
 fn vtable(version: u32, size: u32, arch_id: u32) -> CpuVTable {
     CpuVTable {
         version,
@@ -47,6 +63,10 @@ fn vtable(version: u32, size: u32, arch_id: u32) -> CpuVTable {
         get_reg: dummy_get_reg,
         set_reg: dummy_set_reg,
         invalidate_code: dummy_invalidate_code,
+        context_size: dummy_context_size,
+        save_context: dummy_save_context,
+        load_context: dummy_load_context,
+        recent_pcs: dummy_recent_pcs,
     }
 }
 
@@ -76,7 +96,7 @@ fn bus_callbacks_layout() {
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn vtable_layout() {
-    assert_eq!(size_of::<CpuVTable>(), 80);
+    assert_eq!(size_of::<CpuVTable>(), 112);
     assert_eq!(align_of::<CpuVTable>(), 8);
     assert_eq!(offset_of!(CpuVTable, version), 0);
     assert_eq!(offset_of!(CpuVTable, size), 4);
@@ -89,6 +109,10 @@ fn vtable_layout() {
     assert_eq!(offset_of!(CpuVTable, get_reg), 56);
     assert_eq!(offset_of!(CpuVTable, set_reg), 64);
     assert_eq!(offset_of!(CpuVTable, invalidate_code), 72);
+    assert_eq!(offset_of!(CpuVTable, context_size), 80);
+    assert_eq!(offset_of!(CpuVTable, save_context), 88);
+    assert_eq!(offset_of!(CpuVTable, load_context), 96);
+    assert_eq!(offset_of!(CpuVTable, recent_pcs), 104);
 }
 
 #[cfg(target_pointer_width = "64")]
@@ -99,6 +123,7 @@ fn stop_layout() {
     assert_eq!(offset_of!(CpuStop, kind), 0);
     assert_eq!(offset_of!(CpuStop, pc), 4);
     assert_eq!(offset_of!(CpuStop, detail), 8);
+    assert_eq!(offset_of!(CpuStop, bus_faults), 12);
     assert_eq!(offset_of!(CpuStop, insns), 16);
 }
 
