@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
 use core::fmt;
+use core::alloc::Layout;
 
 /// Default guest RAM size (16 MiB, the 24-bit 68000 address space).
 pub const DEFAULT_SIZE: usize = 16 << 20;
@@ -53,6 +54,28 @@ impl fmt::Display for GuestRamExhausted {
 }
 impl core::error::Error for GuestRamExhausted {}
 
+/// Obtain `len` zero bytes from the global allocator's `alloc_zeroed` and
+/// nothing else. The returned buffer's tail is never written by this crate;
+/// on CoralOS, pages the guest has not touched are therefore never committed.
+/// Returns `None` only when the allocator refuses or `len` has no valid layout.
+fn zeroed_ram(len: usize) -> Option<Vec<u8>> {
+    if len == 0 {
+        return Some(Vec::new());
+    }
+    let layout = Layout::array::<u8>(len).ok()?;
+    // SAFETY: `layout` is for `len` bytes of `u8` (align 1). `alloc_zeroed`
+    // returns either null or a valid, size-`layout.size()` block whose bytes
+    // are all zero by contract.
+    let ptr = unsafe { alloc::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: `ptr` came from `alloc_zeroed(layout)` with the same layout;
+    // `len` bytes are initialised (to zero) and `len` == capacity, matching
+    // `Vec<u8>`'s layout invariants so the deallocator uses the same layout.
+    Some(unsafe { Vec::from_raw_parts(ptr, len, len) })
+}
+
 pub struct GuestMem { ram: Vec<u8>, mask: u32, hooks: watch::Hooks }
 
 impl GuestMem {
@@ -63,15 +86,31 @@ impl GuestMem {
     /// `addr` as the bus sees it (StripAddress).
     pub fn strip(&self, addr: u32) -> u32 { addr & self.mask }
     pub fn len(&self) -> usize { self.ram.len() }
-    /// Make the address space `new_len` bytes (zero-filled); never shrinks. For machines whose personality has more RAM than the default.
-    pub fn grow_to(&mut self, new_len: usize) { if new_len > self.ram.len() { self.ram.resize(new_len, 0); } }
-    /// As [`GuestMem::grow_to`], but a host that cannot supply the memory is a named refusal and nothing changes.
+    /// Grow the address space to `new_len` bytes. New RAM is obtained from the
+    /// global allocator's `alloc_zeroed`; only the previously-live bytes are
+    /// copied into it, so on CoralOS untouched pages in the new tail are never
+    /// committed. Never shrinks. Aborts on allocation failure (infallible).
+    pub fn grow_to(&mut self, new_len: usize) {
+        if self.try_grow_to(new_len).is_ok() {
+            return;
+        }
+        // Mirror Vec's own failure mode: abort via handle_alloc_error so the
+        // infallible contract of `grow_to` is preserved exactly.
+        let layout = Layout::array::<u8>(new_len)
+            .unwrap_or_else(|_| Layout::new::<u8>());
+        alloc::alloc::handle_alloc_error(layout);
+    }
+
+    /// As [`GuestMem::grow_to`], but a host that cannot supply the memory is a
+    /// named refusal (`GuestRamExhausted`) and nothing about `self` changes.
     pub fn try_grow_to(&mut self, new_len: usize) -> Result<(), GuestRamExhausted> {
         let len = self.ram.len();
-        if new_len > len {
-            self.ram.try_reserve_exact(new_len - len).map_err(|_| GuestRamExhausted { requested: new_len })?;
-            self.ram.resize(new_len, 0);
+        if new_len <= len {
+            return Ok(());
         }
+        let mut ram = zeroed_ram(new_len).ok_or(GuestRamExhausted { requested: new_len })?;
+        ram[..len].copy_from_slice(&self.ram); // only old bytes are written
+        self.ram = ram;                        // old Vec dropped; tail never touched
         Ok(())
     }
     pub fn is_empty(&self) -> bool { self.ram.is_empty() }
