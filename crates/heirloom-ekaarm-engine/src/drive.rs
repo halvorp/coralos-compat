@@ -41,6 +41,18 @@ impl Drive {
         Drive { tree, vol }
     }
 
+    /// The drive over a tree the host filled through `GuestMachine::volume()`: its volume `Z` (the first volume when there is no
+    /// `Z`; a volume `Z` is added when the tree has none).
+    pub fn from_tree(mut tree: Tree) -> Self {
+        let vol = tree.volume("Z").or_else(|| tree.children(heirloom_volume::ROOT).first().copied()).unwrap_or_else(|| tree.add_volume("Z", false));
+        Drive { tree, vol }
+    }
+
+    /// The tree behind the drive (the host stages files through it).
+    pub fn tree_mut(&mut self) -> &mut Tree {
+        &mut self.tree
+    }
+
     /// Host-side: put a file (creating its directories) at `path`.
     pub fn put_file(&mut self, path: &str, bytes: Vec<u8>) -> Result<(), DriveError> {
         let (_, mut comps) = split(path);

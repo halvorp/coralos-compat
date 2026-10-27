@@ -12,6 +12,7 @@ heirloom-mem-paged32 = { path = "../heirloom-mem-paged32" }
 heirloom-fmt-rsc = { path = "../heirloom-fmt-rsc" }
 heirloom-volume = { path = "../heirloom-volume" }
 heirloom-ui-abi = { path = "../heirloom-ui-abi" }
+heirloom-common = { path = "../heirloom-common" }
 
 [features]
 # The test hooks (loader::bare, Process::map_code / map_data) map arbitrary guest code and widen the range the vtable-anchor

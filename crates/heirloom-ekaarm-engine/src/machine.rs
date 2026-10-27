@@ -1,0 +1,161 @@
+//! [`GuestMachine`]: the one surface a host drives this engine through, like the Amiga and Mac engines.
+//!
+//! **UI ownership.** `EkaArm` owns the UI (`Box<U>`) at all times a host can see it, so `ui()` / `ui_mut()` are plain
+//! borrows. The process holds its UI as `Box<dyn EngineUi>`; `step` lends the box to the process for the slice and takes it
+//! back afterwards (`into_any` + a downcast to the `Box<U>` that was lent, so nothing moves or allocates per slice).
+//!
+//! **Volume.** Before `start_file` the host fills `volume()` (a `Z` volume exists from `new`); `start_file` moves the tree
+//! into the process's [`Drive`] and `volume()` then borrows it from there (no copy of the files).
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use heirloom_common::{Delivery, GuestMachine, Refusal, RunStats, Step};
+use heirloom_fmt_e32::OrdinalTable;
+use heirloom_ui_abi::{GuestUi, GuestUiEvent};
+use heirloom_volume::Tree;
+use crate::drive::Drive;
+use crate::loader::{self, Process};
+use crate::Outcome;
+
+/// Seconds from 0 AD (the Symbian `TTime` epoch) to 1970-01-01.
+const SECS_0AD_TO_1970: i64 = 62_167_219_200;
+
+pub struct EkaArm<U: GuestUi> {
+    ui: Option<Box<U>>,
+    /// The S60 export names (dll, ordinal) -> mangled name the imports are bound by. A data FILE the host reads (Heirloom.app
+    /// ships heirloom-fmt-e32's eka-ordinals.tsv in its bundle) and hands in: never baked into the engine (ASSETS-ARE-FILES).
+    ordinals: OrdinalTable,
+    tree: Tree,
+    process: Option<Process>,
+    /// How the run ended once it has (Exited / Fault are terminal: a later `step` repeats it).
+    done: Option<Step>,
+    stop_on_unimplemented: bool,
+    clock_us: u64,
+    /// Local wall time at virtual time 0, microseconds since 0 AD (set by `set_wall_clock`; no guest call reads it yet).
+    wall_us_since_0ad: Option<i64>,
+    log: Vec<String>,
+    refused: Vec<String>,
+}
+
+impl<U: GuestUi> EkaArm<U> {
+    pub fn new(ui: U, ordinals: OrdinalTable) -> Self {
+        let mut tree = Tree::new(255);
+        tree.add_volume("Z", false);
+        EkaArm { ui: Some(Box::new(ui)), ordinals, tree, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new() }
+    }
+    /// The running process, once started (tests and the runner read its log and registers).
+    pub fn process(&self) -> Option<&Process> {
+        self.process.as_ref()
+    }
+    fn apply_census(&mut self) {
+        if let Some(p) = self.process.as_mut() {
+            p.census = if self.stop_on_unimplemented { None } else { Some(p.census.take().unwrap_or_default()) };
+        }
+    }
+}
+
+impl<U: GuestUi> GuestMachine for EkaArm<U> {
+    type Ui = U;
+
+    /// A Symbian E32 executable (an EXE image, as `sys\bin\<app>.exe`). `name` is only logged: the image carries its own UIDs.
+    fn start_file(&mut self, file: &[u8], name: &str) -> Result<(), Refusal> {
+        if self.process.is_some() {
+            return Err(Refusal(String::from("ekaarm: only a fresh machine starts a program")));
+        }
+        let mut p = loader::load(file, &self.ordinals).map_err(|e| Refusal(format!("ekaarm: {name}: not a loadable E32 image: {e:?}")))?;
+        p.set_drive(Drive::from_tree(core::mem::replace(&mut self.tree, Tree::new(255))));
+        self.log.push(format!("ekaarm: started {name} (UID3 {:#010x})", p.uid3));
+        self.process = Some(p);
+        self.apply_census();
+        Ok(())
+    }
+
+    /// No input wiring yet: every event is accepted and dropped, by name.
+    /// DELETE WHEN slice 4 (key events through CCoeEnv::OfferKeyEventL, ruling consensus step 5) lands.
+    fn deliver(&mut self, ev: GuestUiEvent) -> Result<Delivery, Refusal> {
+        let _ = ev;
+        self.log.push(String::from("ekaarm: deliver: a window event ignored (no input wiring in this engine yet)"));
+        Ok(Delivery::Ignored)
+    }
+
+    fn step(&mut self, budget: u64) -> (Step, RunStats) {
+        if let Some(d) = &self.done {
+            return (d.clone(), RunStats::default());
+        }
+        let (Some(p), Some(ui)) = (self.process.as_mut(), self.ui.take()) else {
+            return (Step::Fault(String::from("ekaarm: step: no program started (start_file first)")), RunStats::default());
+        };
+        let before = p.insns;
+        p.set_ui_boxed(ui);
+        let outcome = p.run(before.saturating_add(budget));
+        let insns = p.insns - before;
+        self.ui = p.take_ui().and_then(|b| b.into_any().downcast::<U>().ok());
+        p.census.as_mut().map(|c| self.refused.append(c));
+        p.host.ui = None;
+        self.log.append(&mut p.log);
+        let step = match outcome {
+            Outcome::Exited(_) => Step::Exited,
+            Outcome::BudgetSpent => Step::BudgetSpent,
+            Outcome::Blocked => Step::Blocked,
+            Outcome::Refused(m) => { self.refused.push(m.clone()); Step::Fault(m) }
+            Outcome::Fault(m) => { self.log.push(m.clone()); Step::Fault(m) }
+        };
+        if matches!(step, Step::Exited | Step::Fault(_)) {
+            self.done = Some(step.clone());
+        }
+        (step, RunStats { insns, bus_faults: 0 })
+    }
+
+    fn advance_clock_to(&mut self, virtual_us: u64) -> Result<(), Refusal> {
+        if virtual_us < self.clock_us {
+            return Err(Refusal(format!("ekaarm: the clock does not run backwards ({virtual_us} us < {} us)", self.clock_us)));
+        }
+        self.clock_us = virtual_us;
+        Ok(())
+    }
+
+    fn set_wall_clock(&mut self, local_unix_secs: i64) -> Result<(), Refusal> {
+        if local_unix_secs < 0 {
+            return Err(Refusal(format!("ekaarm: wall clock {local_unix_secs} s is before 1970: this engine takes only dates from the Unix epoch on")));
+        }
+        let us = local_unix_secs.checked_add(SECS_0AD_TO_1970).and_then(|s| s.checked_mul(1_000_000));
+        let us = us.ok_or_else(|| Refusal(format!("ekaarm: wall clock {local_unix_secs} s is past the range of a Symbian TTime")))?;
+        self.wall_us_since_0ad = Some(us);
+        self.log.push(format!("ekaarm: wall clock set ({us} us since 0 AD); no guest call reads it yet"));
+        Ok(())
+    }
+
+    /// Nothing in the engine waits on time: no Symbian timer (RTimer, CPeriodic) is implemented. DELETE WHEN the first one is
+    /// (slice 4, the active scheduler, ruling consensus step 5).
+    fn next_timer_deadline(&self) -> Option<u64> {
+        None
+    }
+
+    fn ui(&self) -> &U {
+        match &self.ui { Some(u) => u, None => unreachable!("EkaArm lends its UI only inside step, which restores it") }
+    }
+    fn ui_mut(&mut self) -> &mut U {
+        match &mut self.ui { Some(u) => u, None => unreachable!("EkaArm lends its UI only inside step, which restores it") }
+    }
+
+    fn volume(&mut self) -> &mut Tree {
+        if self.process.as_ref().is_some_and(|p| p.host.drive.is_some()) {
+            if let Some(d) = self.process.as_mut().and_then(|p| p.host.drive.as_mut()) {
+                return d.tree_mut();
+            }
+        }
+        &mut self.tree
+    }
+
+    fn set_stop_on_unimplemented(&mut self, on: bool) {
+        self.stop_on_unimplemented = on;
+        self.apply_census();
+    }
+    fn drain_log(&mut self) -> Vec<String> {
+        core::mem::take(&mut self.log)
+    }
+    fn drain_refused(&mut self) -> Vec<String> {
+        core::mem::take(&mut self.refused)
+    }
+}

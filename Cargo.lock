@@ -80,6 +80,7 @@ dependencies = [
 name = "heirloom-ekaarm-engine"
 version = "0.1.0"
 dependencies = [
+ "heirloom-common",
  "heirloom-cpu-arm",
  "heirloom-ekaarm-engine",
  "heirloom-fmt-e32",

@@ -16,8 +16,10 @@ pub mod appstart;
 pub mod drive;
 pub mod ui;
 pub mod cone;
+pub mod machine;
 #[cfg(feature = "host")]
 pub mod hostdir;
 
 pub use loader::{Process, LoadError};
 pub use run::Outcome;
+pub use machine::EkaArm;
