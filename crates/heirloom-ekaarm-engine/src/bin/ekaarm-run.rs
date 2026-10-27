@@ -17,6 +17,7 @@ fn main() {
     let mut census = false;
     let mut list_imports = false;
     let mut trace = false;
+    let mut res_ids: Vec<u32> = Vec::new();
     let mut vtables: Vec<(u32, u32)> = Vec::new();
     let mut rom_dir: Option<String> = None;
     let mut dumps: Vec<(u32, u32)> = Vec::new();
@@ -29,6 +30,7 @@ fn main() {
             "--census" => census = true,
             "--imports" => list_imports = true,
             "--trace" => trace = true,
+            "--res" => res_ids.push(u32::from_str_radix(args.next().unwrap_or_else(|| usage()).trim_start_matches("0x"), 16).unwrap_or_else(|_| usage())),
             "--vtable" => {
                 let a = args.next().unwrap_or_else(|| usage());
                 let n = args.next().unwrap_or_else(|| usage());
@@ -113,6 +115,12 @@ fn main() {
     if let Some(ui) = proc.ui_as::<RecordingGuestUi>() {
         println!("ui: {} recorded call(s)", ui.calls.len());
         for c in &ui.calls { println!("  {c:?}"); }
+    }
+    for id in &res_ids {
+        match proc.resource(*id) {
+            Ok(b) => println!("res {id:#x} ({} bytes): {}", b.len(), b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" ")),
+            Err(e) => println!("res {id:#x}: {e}"),
+        }
     }
     for (a, n) in &vtables { println!("{}", proc.describe_vtable(*a, *n)); }
     for (a, n) in &dumps {

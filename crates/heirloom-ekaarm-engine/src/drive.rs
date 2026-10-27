@@ -71,6 +71,11 @@ impl Drive {
         }
     }
 
+    /// The names in the ROM directory `path` (None = no ROM or no such directory).
+    pub fn list_rom(&self, path: &str) -> Option<Vec<String>> {
+        self.rom.as_ref()?.list(path)
+    }
+
     /// The tree behind the drive (the host stages files through it).
     pub fn tree_mut(&mut self) -> &mut Tree {
         &mut self.tree

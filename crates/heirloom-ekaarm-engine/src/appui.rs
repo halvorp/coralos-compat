@@ -14,8 +14,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             Err(_) => NativeOutcome::Refused(format!("NEXT-NEEDED eikcore {name}: the AppUi at {this:#x} is unreadable")),
         },
         // TRect CEikAppUi::ClientRect() const (eikappui.h): the application rect less the status pane and the CBA, returned through the
-        // hidden pointer in r0 (this in r1). No status pane or CBA is constructed (view.rs), so it is the whole application rect.
-        // DELETE WHEN the status pane / CBA are built (then subtract their rectangles).
+        // hidden pointer in r0 (this in r1). The status pane and CBA exist now (shell.rs) but have no rectangles: the S60 layout
+        // numbers (pane heights for 360x640) are compiled into the CDL layout DLLs (ARM, device ROM), which the SDK does not ship (only x86
+        // emulator builds), and the app's own reads (CdlEngine/55) are the next refusal. So: the whole screen. DELETE WHEN layout data is available.
         // TRect CAknView::ClientRect() const (aknview.h): the view's area is the AppUi's client rect (no toolbar is built either).
         "_ZNK9CEikAppUi10ClientRectEv" | "_ZNK13CAknAppUiBase15ApplicationRectEv" | "_ZNK8CAknView10ClientRectEv" => {
             let r = crate::cone::S60_5TH_APP_RECT;

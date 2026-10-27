@@ -53,7 +53,7 @@ fn ordinals() -> heirloom_fmt_e32::OrdinalTable {
 }
 
 #[test]
-fn file_browser_through_the_trait() { run_app("nokiafilebrowser", "filebrowser.exe", "FileBrowser", "CRepository::NewL(0x101f876d)"); }
+fn file_browser_through_the_trait() { run_app("nokiafilebrowser", "filebrowser.exe", "FileBrowser", "resource offset 0x8cc0000"); }
 
 #[test]
 fn hero_through_the_trait() { run_app("hero-of-sparta", "heroofsparta.exe", "HeroOfSparta", "CRepository::NewL(0x101f8798)"); }

@@ -25,6 +25,8 @@ pub const SLOT_POSITION_CHANGED: u32 = 28;
 pub const SLOT_COUNT_COMPONENTS: u32 = 29;
 pub const SLOT_COMPONENT_CONTROL: u32 = 30;
 pub const SLOT_DRAW: u32 = 41;
+pub const SLOT_HANDLE_RESOURCE_CHANGE: u32 = 15;
+const INH_HANDLE_RESOURCE_CHANGE: &[&str] = &["_ZN11CCoeControl20HandleResourceChangeEi"];
 pub const SLOT_FOCUS_CHANGED: u32 = 26;
 const INH_FOCUS_CHANGED: &[&str] = &["_ZN11CCoeControl12FocusChangedE8TDrawNow"];
 const INH_ACTIVATE: &[&str] = &["_ZN11CCoeControl9ActivateLEv"];
@@ -46,17 +48,28 @@ pub const CTRL_I_DATA: u32 = 44; // :377 RCoeDynamicDataStorage* iData
 pub const CTRL_I_MOP_PARENT: u32 = 48; // :378 MObjectProvider* iMopParent
 pub const CCOE_CONTROL_SIZE: u32 = 52;
 
-/// The phases of `ActivateL` over a control's components: ask how many, ask for each, activate each (virtual `ActivateL`).
+/// What is done to each component of a control: its virtual `ActivateL`, or its virtual `HandleResourceChange(aType)`.
+#[derive(Debug, Clone, Copy)]
+pub enum CompKind {
+    Activate,
+    ResourceChange(u32),
+}
+
+/// The phases of a walk over a control's components: ask how many, ask for each, act on each.
 #[derive(Debug, Clone, Copy)]
 pub enum CompStep {
-    Counted,
-    Fetched { index: u32, count: u32 },
-    Activated { index: u32, count: u32 },
+    Counted { kind: CompKind },
+    Fetched { index: u32, count: u32, kind: CompKind },
+    Done { index: u32, count: u32, kind: CompKind },
 }
 
 impl Process {
     /// `CCoeControl::CCoeControl()` / `CCoeControl(CCoeEnv*)`: everything after the vptrs cleared, `iCoeEnv` set (a null argument is
     /// `CCoeEnv::Static()`), so a control that reads `iCoeEnv`, `iPosition`, `iSize`, `iWin` inline finds the constructed state.
+    pub(crate) fn control_init_fields(&mut self, this: u32) -> Result<(), String> {
+        self.control_construct(this, None)
+    }
+
     fn control_construct(&mut self, this: u32, env: Option<u32>) -> Result<(), String> {
         let env = match env { Some(e) if e != 0 => e, _ => self.coe_env()? };
         for off in (CTRL_MOBJECT_PROVIDER + 4..CCOE_CONTROL_SIZE).step_by(4) {
@@ -104,31 +117,39 @@ impl Process {
     /// `CCoeControl::ActivateL()`: the control is activated, then each component control is (the virtual `ActivateL` of each).
     fn control_activate(&mut self, this: u32) -> Result<(), String> {
         self.control_state(this)?.activated = true;
+        self.walk_components(this, CompKind::Activate)
+    }
+
+    /// Start a walk over `this`'s components doing `kind` to each.
+    pub(crate) fn walk_components(&mut self, this: u32, kind: CompKind) -> Result<(), String> {
         let t = vcall(self, this, "CCoeControl", "CountComponentControls", SLOT_COUNT_COMPONENTS, INH_COUNT)?;
-        self.call_guest(t, &[this], Continuation::Control { this, step: CompStep::Counted })
+        self.call_guest(t, &[this], Continuation::Control { this, step: CompStep::Counted { kind } })
     }
 }
 
 /// A component-activation call returned with `r0`.
 pub(crate) fn comp_step(p: &mut Process, this: u32, step: CompStep, r0: u32) -> Result<(), Outcome> {
     let fault = |m: String| Outcome::Fault(m);
-    let next = |p: &mut Process, index: u32, count: u32| -> Result<(), Outcome> {
+    let next = |p: &mut Process, index: u32, count: u32, kind: CompKind| -> Result<(), Outcome> {
         if index >= count {
             return Ok(());
         }
         let t = vcall(p, this, "CCoeControl", "ComponentControl", SLOT_COMPONENT_CONTROL, INH_COMPONENT).map_err(fault)?;
-        p.call_guest(t, &[this, index], Continuation::Control { this, step: CompStep::Fetched { index, count } }).map_err(fault)
+        p.call_guest(t, &[this, index], Continuation::Control { this, step: CompStep::Fetched { index, count, kind } }).map_err(fault)
     };
     match step {
-        CompStep::Counted => next(p, 0, r0),
-        CompStep::Fetched { index, count } => {
+        CompStep::Counted { kind } => next(p, 0, r0, kind),
+        CompStep::Fetched { index, count, kind } => {
             if r0 == 0 {
-                return Err(Outcome::Refused(format!("NEXT-NEEDED cone ActivateL: ComponentControl({index}) of {this:#x} returned NULL")));
+                return Err(Outcome::Refused(format!("NEXT-NEEDED cone component walk: ComponentControl({index}) of {this:#x} returned NULL")));
             }
-            let t = vcall(p, r0, "CCoeControl", "ActivateL", SLOT_ACTIVATE_L, INH_ACTIVATE).map_err(fault)?;
-            p.call_guest(t, &[r0], Continuation::Control { this, step: CompStep::Activated { index, count } }).map_err(fault)
+            let (t, arg1) = match kind {
+                CompKind::Activate => (vcall(p, r0, "CCoeControl", "ActivateL", SLOT_ACTIVATE_L, INH_ACTIVATE).map_err(fault)?, 0),
+                CompKind::ResourceChange(ty) => (vcall(p, r0, "CCoeControl", "HandleResourceChange", SLOT_HANDLE_RESOURCE_CHANGE, INH_HANDLE_RESOURCE_CHANGE).map_err(fault)?, ty),
+            };
+            p.call_guest(t, &[r0, arg1], Continuation::Control { this, step: CompStep::Done { index, count, kind } }).map_err(fault)
         }
-        CompStep::Activated { index, count } => next(p, index + 1, count),
+        CompStep::Done { index, count, kind } => next(p, index + 1, count, kind),
     }
 }
 
@@ -164,6 +185,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let r = p.control_set_extent(this, v[0], v[1], v[2] - v[0], v[3] - v[1]);
             match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) }
         }
+        // void CCoeControl::HandleResourceChange(TInt aType): tell every component control (CCoeControl's own work for a layout or skin change).
+        "_ZN11CCoeControl20HandleResourceChangeEi" => match p.walk_components(this, CompKind::ResourceChange(r1)) { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) },
         "_ZN11CCoeControl9ActivateLEv" => match p.control_activate(this) { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) },
         "_ZN11CCoeControl11SetObserverEP19MCoeControlObserver" => { let r = p.control_state(this).map(|c| c.observer = r1); done(p, r) }
         "_ZNK11CCoeControl8ObserverEv" => match p.control_state(this) { Ok(c) => { let o = c.observer; p.cpu.regs[0] = o; NativeOutcome::Return } Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) },

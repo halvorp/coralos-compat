@@ -47,15 +47,14 @@ impl Process {
         self.obj_set(this, HostObj::View(ViewState::default()))
     }
 
-    /// `CAknView::BaseConstructL(TInt aResId)`: read the view's `AVKON_VIEW` resource into `iViewInfo`. The menu bar and the
-    /// button group it names are NOT constructed here.
-    // DELETE WHEN a view's menu bar or CBA is shown on the host (then build `iMenu` / `iCba` from `iViewInfo.iMenu` / `.iCba`).
+    /// `CAknView::BaseConstructL(TInt aResId)`: read the view's `AVKON_VIEW` resource into `iViewInfo`, then build `iMenu` and
+    /// `iCba` from the MENU_BAR and CBA resources it names (shell.rs: recorded, not yet shown on the host).
     fn view_base_construct(&mut self, this: u32, res_id: u32) -> Result<(), String> {
         // iAppUi = the environment's AppUi (`iCoeEnv->AppUi()`, coemain.h:55), the view's owner.
         let env = self.coe_env()?;
         let appui = self.mem.vm.read_u32(env.wrapping_add(crate::cone::COEENV_I_APPUI)).map_err(|_| format!("the CEikonEnv at {env:#x} is unreadable"))?;
         self.write_words(this, &[(VIEW_I_APP_UI, appui)])?;
-        let info = if res_id == 0 { None } else { Some(self.app_resource(res_id)?) };
+        let info = if res_id == 0 { None } else { Some(self.resource(res_id)?) };
         let (mut version, mut hot, mut menu, mut cba, mut toolbar, mut ext) = (0, 0, 0, 0, 0, 0);
         if let Some(bytes) = &info {
             let mut r = Reader::new(bytes);
@@ -72,6 +71,24 @@ impl Process {
             }
         }
         self.write_words(this, &[(VIEWINFO_VERSION, version), (VIEWINFO_HOT_KEYS, hot), (VIEWINFO_MENU, menu), (VIEWINFO_CBA, cba), (VIEWINFO_TOOLBAR, toolbar), (VIEWINFO_EXTENSION, ext)])?;
+        // ConstructMenuAndCbaL: the menu bar and the CBA the view names, built from their resources and recorded (shell.rs); the guest
+        // sees `iMenu` and `iCba` as objects. DELETE WHEN slice 4 projects them as native kit menus and buttons.
+        if menu != 0 {
+            let titles = self.read_menu_bar(menu)?;
+            let bar = self.make_control("CEikMenuBar", 0x80, &[])?;
+            let summary: alloc::vec::Vec<String> = titles.iter().map(|t| format!("{}[{}]", t.text, t.items.iter().map(|i| i.text.as_str()).collect::<alloc::vec::Vec<_>>().join(","))).collect();
+            self.log.push(format!("[shell] menu bar: {}", summary.join(" ")));
+            self.nat.shell.menu = titles;
+            self.nat.shell.menu_bar = Some(bar);
+            self.write_words(this, &[(VIEW_I_MENU, bar)])?;
+        }
+        if cba != 0 {
+            let buttons = self.read_cba(cba)?;
+            let group = self.shell_cba()?;
+            self.log.push(format!("[shell] cba: {}", buttons.iter().map(|b| format!("{}={}", b.id, b.text)).collect::<alloc::vec::Vec<_>>().join(" | ")));
+            self.nat.shell.cba_buttons = buttons;
+            self.write_words(this, &[(VIEW_I_CBA, group)])?;
+        }
         if let Some(HostObj::View(v)) = self.obj_get(this) {
             v.resource_id = res_id;
         }

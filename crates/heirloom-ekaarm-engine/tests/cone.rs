@@ -23,7 +23,7 @@ struct App {
     refusal: &'static str,
 }
 
-const FILE_BROWSER: App = App { exe: "FileBrowser.exe", tree: "nokiafilebrowser", loc_rsc: "resource/apps/filebrowser.rsc", loc_id: 0x3ec9_005d, caption: "FileBrowser", refusal: "CRepository::NewL(0x101f876d)" };
+const FILE_BROWSER: App = App { exe: "FileBrowser.exe", tree: "nokiafilebrowser", loc_rsc: "resource/apps/filebrowser.rsc", loc_id: 0x3ec9_005d, caption: "FileBrowser", refusal: "resource offset 0x8cc0000" };
 const HERO: App = App { exe: "HeroOfSparta.exe", tree: "hero-of-sparta", loc_rsc: "resource/apps/heroofsparta.rsc", loc_id: 0x08f6_f004, caption: "HeroOfSparta", refusal: "CRepository::NewL(0x101f8798)" };
 
 fn load(app: &App) -> Option<Process> {

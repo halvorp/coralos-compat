@@ -57,11 +57,58 @@ pub fn app_resource_path(drive: &Drive, uid3: u32) -> Result<String, String> {
 
 impl Process {
     /// Resource `id` of the application's own resource file, decoded.
-    pub(crate) fn app_resource(&self, id: u32) -> Result<Vec<u8>, String> {
+    pub fn app_resource(&self, id: u32) -> Result<Vec<u8>, String> {
         let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive: the application's resource file cannot be read (run with --drive)"))?;
         let path = app_resource_path(drive, self.uid3)?;
         let bytes = drive.read(&path).map_err(|e| format!("{path}: {e:?}"))?;
         let file = RscFile::parse(bytes).map_err(|e| format!("{path}: {e:?}"))?;
         file.resource(id).map_err(|e| format!("{path}: resource {id:#x}: {e:?}"))
+    }
+}
+
+/// The language the device runs in: British English (`.r01`), the project's default locale. A ROM resource file `name.rsc` has its
+/// localised twin `name.r01`; the twin is the one a device in this language loads.
+const ROM_LANGUAGE_EXT: &str = "r01";
+
+impl Process {
+    /// Resource `id` wherever it lives: the application's own file when `id`'s offset (its high 20 bits) is that file's, else the
+    /// ROM file under `\resource` that owns the offset. Each failure says what was missing.
+    pub fn resource(&mut self, id: u32) -> Result<Vec<u8>, String> {
+        let offset = id & 0xFFFF_F000;
+        if offset == 0 {
+            return self.app_resource(id);
+        }
+        if let Ok(r) = self.app_resource(id) {
+            return Ok(r);
+        }
+        let path = self.rom_resource_for(offset)?;
+        let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive"))?;
+        let bytes = drive.read_owned(&path).map_err(|e| format!("{path}: {e:?}"))?;
+        let file = RscFile::parse(&bytes).map_err(|e| format!("{path}: {e:?}"))?;
+        file.resource(id).map_err(|e| format!("{path}: resource {id:#x}: {e:?}"))
+    }
+
+    /// The ROM resource file whose id offset is `offset`, found by reading the signature record of each `\resource\*.rsc` once.
+    fn rom_resource_for(&mut self, offset: u32) -> Result<String, String> {
+        if self.nat.rom_resources.is_none() {
+            let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive"))?;
+            let mut index = alloc::collections::BTreeMap::new();
+            for name in drive.list_rom("\\resource").unwrap_or_default() {
+                let lower = name.to_ascii_lowercase();
+                let Some(stem) = lower.strip_suffix(".rsc") else { continue };
+                let twin = format!("\\resource\\{stem}.{ROM_LANGUAGE_EXT}");
+                let path = if drive.exists_anywhere(&twin) { twin } else { format!("\\resource\\{name}") };
+                if let Ok(bytes) = drive.read_owned(&path) {
+                    if let Ok(f) = RscFile::parse(&bytes) {
+                        index.entry(f.id_offset).or_insert(path);
+                    }
+                }
+            }
+            self.nat.rom_resources = Some(index);
+        }
+        match self.nat.rom_resources.as_ref().and_then(|i| i.get(&offset)) {
+            Some(p) => Ok(p.clone()),
+            None => Err(format!("no resource file on the drive or in the ROM owns resource offset {offset:#x}")),
+        }
     }
 }

@@ -233,3 +233,84 @@ fn a_rom_path_cannot_walk_out_of_the_rom_root() {
     assert!(!rom.exists("Z:\\sys\\..\\..\\secret.txt"));
     std::fs::remove_dir_all(&base).unwrap();
 }
+
+#[test]
+fn the_app_ui_factory_reaches_the_status_pane_whose_title_text_becomes_the_window_title() {
+    use heirloom_ui_abi::{CallbackToken, GuestRect, GuestUi, RecordingGuestUi, UiCall, WindowModel, WindowRole};
+    let names = ["_ZNK9CEikonEnv12AppUiFactoryEv", "CAknAppUiFactory::StatusPane", "_ZNK18CEikStatusPaneBase8ControlLE4TUid", "_ZN13CAknTitlePane8SetTextLERK7TDesC16", "_ZN18CEikStatusPaneBase12SwitchLayoutLEi", "_ZNK18CEikStatusPaneBase18CurrentLayoutResIdEv"];
+    let mut p = proc(&names);
+    let mut ui = RecordingGuestUi::new();
+    let win = ui.open_window(WindowModel { title: "Caption".into(), rect: GuestRect { left: 0, top: 0, width: 360, height: 640 }, role: WindowRole::Document, closable: true, resizable: false, token: CallbackToken(0) }).unwrap();
+    p.set_ui(ui);
+    p.host.window = Some(win);
+    let factory = ok(&mut p, names[0], &[]);
+    assert_eq!(ok(&mut p, names[0], &[]), factory, "one factory per process");
+    // MEikAppUiFactory::StatusPane is virtual slot 20 (confirmed against FileBrowser's `ldr r1,[vtbl,#0x50]`)
+    let vptr = rd(&mut p, factory);
+    let slot20 = rd(&mut p, vptr + 20 * 4);
+    assert_eq!(p.stubs[((slot20 - heirloom_ekaarm_engine::layout::STUB_BASE) / 8) as usize].name.as_deref(), Some("CAknAppUiFactory::StatusPane"));
+    let pane = ok(&mut p, names[1], &[factory]);
+    // the pane's own vtable has SwitchLayoutL at slot 3 (FileBrowser calls `[vtbl,#0xc]`)
+    let pv = rd(&mut p, pane);
+    let s3 = rd(&mut p, pv + 12);
+    assert_eq!(p.stubs[((s3 - heirloom_ekaarm_engine::layout::STUB_BASE) / 8) as usize].name.as_deref(), Some("_ZN18CEikStatusPaneBase12SwitchLayoutLEi"));
+    assert!(refused(&mut p, names[5], &[pane]).contains("no layout was switched"));
+    ok(&mut p, names[4], &[pane, 0x08cc0167]);
+    assert_eq!(ok(&mut p, names[5], &[pane]), 0x08cc0167);
+    let title = ok(&mut p, names[2], &[pane, 0x1000_59BC]);
+    assert_eq!(ok(&mut p, names[2], &[pane, 0x1000_59BC]), title);
+    assert!(refused(&mut p, names[2], &[pane, 0x1234]).contains("no control implemented"));
+    // SetTextL(const TDesC16&) shows as the window title, through the seam, UTF-8 at the boundary
+    let text = {
+        let units: Vec<u16> = "Přehled".encode_utf16().collect();
+        let data = alloc(&mut p, 32);
+        for (i, u) in units.iter().enumerate() { p.mem.write_u16(data + i as u32 * 2, *u).unwrap(); }
+        let d = alloc(&mut p, 8);
+        wr(&mut p, d, units.len() as u32 | 1 << 28);
+        wr(&mut p, d + 4, data);
+        d
+    };
+    ok(&mut p, names[3], &[title, text]);
+    let ui = p.ui_as::<RecordingGuestUi>().unwrap();
+    assert!(ui.calls.iter().any(|c| matches!(c, UiCall::SetWindowTitle(_, t) if t == "Přehled")), "{:?}", ui.calls);
+}
+
+#[test]
+fn rect_constructors_write_corners() {
+    let names = ["_ZN5TRectC1Ev", "_ZN5TRectC1ERK6TPointRK5TSize"];
+    let mut p = proc(&names);
+    let r = alloc(&mut p, 16);
+    for i in 0..4 { wr(&mut p, r + i * 4, 0xffff); }
+    ok(&mut p, names[0], &[r]);
+    assert_eq!([rd(&mut p, r), rd(&mut p, r + 4), rd(&mut p, r + 8), rd(&mut p, r + 12)], [0; 4]);
+    let (pt, sz) = (alloc(&mut p, 8), alloc(&mut p, 8));
+    for (a, v) in [(pt, 10u32), (pt + 4, 20), (sz, 100), (sz + 4, 200)] { wr(&mut p, a, v); }
+    ok(&mut p, names[1], &[r, pt, sz]);
+    assert_eq!([rd(&mut p, r), rd(&mut p, r + 4), rd(&mut p, r + 8), rd(&mut p, r + 12)], [10, 20, 110, 220]);
+}
+
+/// The corpus run: FileBrowser against its own package and the SDK emulator's ROM builds its menu bar and CBA from resource files
+/// (the CBA resource is in the ROM's avkon file) and stops at the layout engine. Skipped when the owner's corpus is absent.
+#[test]
+fn file_browser_builds_its_menu_bar_and_cba_from_the_rom_and_stops_at_the_layout_engine() {
+    use heirloom_ekaarm_engine::hostdir::{load_dir, DirRom};
+    use heirloom_fmt_e32::OrdinalTable;
+    const ORD_TSV: &str = include_str!("../../heirloom-fmt-e32/data/eka-ordinals.tsv");
+    let exe = "/data/build/corpus-symbian/e32/FileBrowser.exe";
+    let tree = "/data/build/corpus-symbian/drive/nokiafilebrowser";
+    let rom = "/data/build/corpus-symbian/sdk/sdk/Emulator/epoc32/release/winscw/udeb/z";
+    let Ok(bytes) = std::fs::read(exe) else { println!("SKIP: {exe} absent"); return };
+    if !std::path::Path::new(tree).is_dir() || !std::path::Path::new(rom).is_dir() { println!("SKIP: corpus absent"); return; }
+    let mut p = loader::load(&bytes, &OrdinalTable::parse(ORD_TSV).unwrap()).unwrap();
+    let (mut drive, _) = load_dir(std::path::Path::new(tree)).unwrap();
+    drive.set_rom(Box::new(DirRom::new(std::path::Path::new(rom)).unwrap()));
+    p.set_drive(drive);
+    p.set_ui(heirloom_ui_abi::RecordingGuestUi::new());
+    let m = match p.run(50_000_000) { Outcome::Refused(m) => m, o => panic!("{o:?}") };
+    println!("{m}");
+    assert!(m.contains("CdlEngine/55"), "{m}");
+    let log = p.log.join("\n");
+    assert!(log.contains("[shell] menu bar: App[] View[File,Edit,View,Disk admin,Tools,Settings,About,Exit]"), "{log}");
+    assert!(log.contains("[shell] cba: 3000=Options | 3009=Exit"), "{log}");
+    assert!(log.contains("[viewappui] activating view"), "{log}");
+}

@@ -21,6 +21,10 @@ pub struct NativeState {
     pub trap_handler: Option<u32>,
     /// The guest sentinel of the active scheduler's queue (`sched.rs`).
     pub sched_head: Option<u32>,
+    /// ROM resource files by id offset (`resource.rs`), built on first need.
+    pub rom_resources: Option<alloc::collections::BTreeMap<u32, String>>,
+    /// The Avkon shell objects (`shell.rs`).
+    pub shell: crate::shell::ShellState,
     /// Host-only state of guest objects, by address and allocation generation (`objects.rs`).
     pub objs: crate::objects::Objects,
 }
@@ -57,6 +61,8 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::timer::native(proc, name) { return Some(o); }
     if let Some(o) = crate::control::native(proc, name) { return Some(o); }
     if let Some(o) = crate::etel::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::geom::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::shell::native(proc, name) { return Some(o); }
     if let Some(o) = crate::window::native(proc, name) { return Some(o); }
     if let Some(o) = crate::toolbar::native(proc, name) { return Some(o); }
     if let Some(o) = crate::time::native(proc, name) { return Some(o); }
