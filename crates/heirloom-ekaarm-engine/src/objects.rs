@@ -15,11 +15,21 @@ pub struct ViewState {
 }
 
 /// The host state of a list box: the model the guest filled (`CTextListBoxModel::iItemTextArray`) is in guest memory; this is the
-/// control the host was told about and the rows last projected, so an unchanged model costs no UI call.
+/// control the host was told about and what was last projected to it, so an unchanged list costs no UI call (`listproject.rs`).
 #[derive(Debug, Clone, Default)]
 pub struct ListState {
     pub control: Option<UiObjectRef>,
     pub shown: Vec<Vec<String>>,
+    /// `ActivateL` ran: the list is on screen, so the host is told about it.
+    pub activated: bool,
+    /// `CurrentItemIndex` / `TopItemIndex` as the guest set them.
+    pub current: u32,
+    pub top: u32,
+    /// What was last sent for them and the rectangle, to send only changes.
+    pub shown_current: u32,
+    pub shown_top: u32,
+    /// The rectangle last sent (left, top, width, height).
+    pub shown_rect: (i32, i32, i32, i32),
 }
 
 /// A `CRemConInterfaceSelector`: the interface objects registered with it (owned by it, remconinterfaceselector.h) and whether a
@@ -97,6 +107,17 @@ pub enum HostObj {
     RemCon(RemConSelector),
     View(ViewState),
     List(ListState),
+    /// A `CFormattedCellListBoxData` (listdata.rs).
+    CellData(crate::listdata::CellData),
+    /// A `CAknsBasicBackgroundControlContext`: the rectangle the guest set (listdata.rs).
+    SkinContext([i32; 4]),
+    /// A `CFont` made by `GetNearestFontInTwips`: the height (twips) the guest asked for (screen.rs).
+    Font(u32),
+    /// A `CListBoxView`: the text shown when the list has no items (`SetListEmptyTextL`), recorded.
+    /// DELETE WHEN the GuestUi List control carries an empty-list text (then project it).
+    ListView(String),
+    /// A `CEikScrollBarFrame` (listdata.rs).
+    ScrollFrame(crate::listdata::ScrollFrame),
     NaviDecorator(crate::navi::NaviDecorator),
 }
 

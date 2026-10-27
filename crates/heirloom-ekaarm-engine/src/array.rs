@@ -34,7 +34,7 @@ impl Process {
         Ok(b)
     }
 
-    fn array_construct(&mut self, this: u32, rep: u32, reclen: u32, gran: u32) -> Result<(), String> {
+    pub(crate) fn array_construct(&mut self, this: u32, rep: u32, reclen: u32, gran: u32) -> Result<(), String> {
         let idx = (rep.wrapping_sub(crate::layout::STUB_BASE) / 8) as usize;
         let name = if rep & 7 == 0 { self.stubs.get(idx).and_then(|s| s.name.clone()) } else { None };
         if name.as_deref() != Some(REP_FLAT) && name.as_deref() != Some(REP_SEG) {
@@ -55,7 +55,7 @@ impl Process {
         rep & 7 == 0 && self.stubs.get((rep.wrapping_sub(crate::layout::STUB_BASE) / 8) as usize).and_then(|s| s.name.as_deref()) == Some(REP_SEG)
     }
 
-    fn array_at(&self, this: u32, i: i32) -> Result<u32, String> {
+    pub(crate) fn array_at(&self, this: u32, i: i32) -> Result<u32, String> {
         let (count, len, base) = (self.rd(this + ARR_I_COUNT)?, self.rd(this + ARR_I_LENGTH)?, self.rd(this + ARR_I_BASE)?);
         if i < 0 || i as u32 >= count {
             return Err(format!("index {i} outside an array of {count} (E32USER-CBase 21 on a device)"));
@@ -66,6 +66,14 @@ impl Process {
 
     /// `InsertL(index, record)`: grow the cell if needed, shift the tail up, copy the record in.
     fn array_insert(&mut self, this: u32, index: i32, src: u32) -> Result<(), String> {
+        let rec_len = self.rd(this + ARR_I_LENGTH)?;
+        let mut record = alloc::vec![0u8; rec_len as usize];
+        self.mem.vm.read_bytes(src, &mut record).map_err(|_| format!("the record at {src:#x} is unreadable"))?;
+        self.array_insert_record(this, index, record)
+    }
+
+    /// `InsertL` of a record the engine holds (`record.len()` = the array's record length).
+    pub(crate) fn array_insert_record(&mut self, this: u32, index: i32, mut record: alloc::vec::Vec<u8>) -> Result<(), String> {
         let (count, rec_len, base) = (self.rd(this + ARR_I_COUNT)?, self.rd(this + ARR_I_LENGTH)?, self.rd(this + ARR_I_BASE)?);
         let seg = self.array_is_seg(this);
         let len = if seg { 4 } else { rec_len };
@@ -73,8 +81,6 @@ impl Process {
             return Err(format!("insert at {index} into an array of {count} (E32USER-CBase 21 on a device)"));
         }
         let (size, max, ptr) = (self.rd(base + BUF_I_SIZE)?, self.rd(base + BUF_I_MAX_SIZE)?, self.rd(base + BUF_I_PTR)?);
-        let mut record = alloc::vec![0u8; rec_len as usize];
-        self.mem.vm.read_bytes(src, &mut record).map_err(|_| format!("the record at {src:#x} is unreadable"))?;
         if seg {
             let cell = self.alloc_zeroed(rec_len.max(1)).ok_or_else(|| String::from("out of memory for a record (leaves KErrNoMemory: EHABI unwinding is slice 1b)"))?;
             self.mem.vm.write_bytes(cell, &record).map_err(|_| String::from("record cell unwritable"))?;
@@ -99,7 +105,7 @@ impl Process {
         self.wr(this + ARR_I_COUNT, count + 1)
     }
 
-    fn array_reset(&mut self, this: u32) -> Result<(), String> {
+    pub(crate) fn array_reset(&mut self, this: u32) -> Result<(), String> {
         let base = self.rd(this + ARR_I_BASE)?;
         let ptr = self.rd(base + BUF_I_PTR)?;
         if self.array_is_seg(this) {
@@ -114,7 +120,7 @@ impl Process {
     }
 
     /// Free an array's storage and buffer object (`~CArrayFixBase`).
-    fn array_destroy(&mut self, this: u32) -> Result<(), String> {
+    pub(crate) fn array_destroy(&mut self, this: u32) -> Result<(), String> {
         let base = self.rd(this + ARR_I_BASE)?;
         if base != 0 {
             self.array_reset(this)?;

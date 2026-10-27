@@ -85,6 +85,10 @@ impl Heap {
         }
     }
 
+    /// The heap's whole capacity in bytes, and the bytes of the live allocations (as the allocator rounded them).
+    pub fn capacity(&self) -> u32 { self.max }
+    pub fn live_bytes(&self) -> u32 { self.live.values().sum() }
+
     pub fn alloc(&mut self, len: u32, mem: &mut GuestMem) -> Option<u32> {
         // Guard against guest passing huge/negative lengths.
         let len = Self::align_up(len)?;

@@ -26,14 +26,14 @@ pub const SLOT_COUNT_COMPONENTS: u32 = 29;
 pub const SLOT_COMPONENT_CONTROL: u32 = 30;
 pub const SLOT_DRAW: u32 = 41;
 pub const SLOT_HANDLE_RESOURCE_CHANGE: u32 = 15;
-const INH_HANDLE_RESOURCE_CHANGE: &[&str] = &["_ZN11CCoeControl20HandleResourceChangeEi"];
+const INH_HANDLE_RESOURCE_CHANGE: &[&str] = &["_ZN11CCoeControl20HandleResourceChangeEi", "_ZN24CEikFormattedCellListBox20HandleResourceChangeEi"];
 pub const SLOT_FOCUS_CHANGED: u32 = 26;
-const INH_FOCUS_CHANGED: &[&str] = &["_ZN11CCoeControl12FocusChangedE8TDrawNow"];
+const INH_FOCUS_CHANGED: &[&str] = &["_ZN11CCoeControl12FocusChangedE8TDrawNow", "_ZN24CEikFormattedCellListBox12FocusChangedE8TDrawNow"];
 const INH_ACTIVATE: &[&str] = &["_ZN11CCoeControl9ActivateLEv"];
-const INH_SIZE_CHANGED: &[&str] = &["_ZN11CCoeControl11SizeChangedEv"];
+const INH_SIZE_CHANGED: &[&str] = &["_ZN11CCoeControl11SizeChangedEv", "_ZN29CAknDoubleGraphicStyleListBox11SizeChangedEv"];
 const INH_POSITION_CHANGED: &[&str] = &["_ZN11CCoeControl15PositionChangedEv"];
-const INH_COUNT: &[&str] = &["_ZNK11CCoeControl21CountComponentControlsEv"];
-const INH_COMPONENT: &[&str] = &["_ZNK11CCoeControl16ComponentControlEi"];
+const INH_COUNT: &[&str] = &["_ZNK11CCoeControl21CountComponentControlsEv", "_ZNK23AknListBoxLinesTemplateI24CEikFormattedCellListBoxE22CountComponentControlsEv"];
+const INH_COMPONENT: &[&str] = &["_ZNK11CCoeControl16ComponentControlEi", "_ZNK23AknListBoxLinesTemplateI24CEikFormattedCellListBoxE16ComponentControlEi"];
 /// Bytes of the guest block standing for an `RWindow` (`iWin`): the guest passes it back to `RWindow` members and reads no field.
 const RWINDOW_BYTES: u32 = 32;
 
@@ -171,6 +171,19 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             }
         }
         "_ZN11CCoeControl13CreateWindowLEv" | "_ZN11CCoeControl13CreateWindowLEPKS_" => { let r = p.control_create_window(this); done(p, r) }
+        // void CCoeControl::SetContainerWindowL(const CCoeControl& aContainer) (coecntrl.cpp, the Foundation source, consulted for facts):
+        // iWin = the container's window, iContext = the container's if none was set, the Mop parent = the container's `MObjectProvider`
+        // base (+4). The window-owning and EBackedUpWindow cases and `SetParent` (a virtual whose base only records the parent) are not
+        // modelled: this control owns no window, and nothing reads a parent. DELETE WHEN a guest calls `CCoeControl::Parent`.
+        "_ZN11CCoeControl19SetContainerWindowLERKS_" => {
+            let r = (|| {
+                let win = p.rd(r1 + CTRL_I_WIN)?;
+                p.wr(this + CTRL_I_WIN, win)?;
+                if p.rd(this + CTRL_I_CONTEXT)? == 0 { let c = p.rd(r1 + CTRL_I_CONTEXT)?; p.wr(this + CTRL_I_CONTEXT, c)?; }
+                p.wr(this + CTRL_I_MOP_PARENT, r1 + CTRL_MOBJECT_PROVIDER)
+            })();
+            done(p, r)
+        }
         // RWindow& CCoeControl::Window() const: iWin.
         "_ZNK11CCoeControl6WindowEv" => match p.mem.vm.read_u32(this.wrapping_add(CTRL_I_WIN)) {
             Ok(w) if w != 0 => { p.cpu.regs[0] = w; NativeOutcome::Return }

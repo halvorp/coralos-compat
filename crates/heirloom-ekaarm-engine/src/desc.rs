@@ -74,6 +74,20 @@ pub fn write16(p: &mut Process, addr: u32, text: &[u16]) -> Result<(), String> {
     p.mem.vm.write_u32(addr, (w0 & !LENGTH_MASK) | text.len() as u32).map_err(|_| format!("descriptor at {addr:#x}: length word is unwritable"))
 }
 
+/// `TDes8::Copy`-style write of bytes (the 8-bit counterpart of [`write16`]).
+pub fn write8(p: &mut Process, addr: u32, bytes: &[u8]) -> Result<(), String> {
+    let v = locate(p, addr)?;
+    let max = v.max.ok_or_else(|| format!("descriptor at {addr:#x} is not modifiable"))?;
+    if bytes.len() as u32 > max {
+        return Err(format!("descriptor at {addr:#x}: {} bytes into a maximum length of {max}", bytes.len()));
+    }
+    for (i, b) in bytes.iter().enumerate() {
+        p.mem.vm.write_u8(v.data.wrapping_add(i as u32), *b).map_err(|_| format!("descriptor at {addr:#x}: byte {i} is unwritable"))?;
+    }
+    let w0 = word(p, addr, "its length word")?;
+    p.mem.vm.write_u32(addr, (w0 & !LENGTH_MASK) | bytes.len() as u32).map_err(|_| format!("descriptor at {addr:#x}: length word is unwritable"))
+}
+
 /// Convert UTF-16 elements to UTF-8 (lossy on unpaired surrogates): the GuestUi boundary.
 pub fn to_utf8(units: &[u16]) -> String {
     char::decode_utf16(units.iter().copied()).map(|r| r.unwrap_or('\u{FFFD}')).collect()
@@ -92,6 +106,28 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
                 Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
             }
         }
+        // void TDes16::Append(const TDesC16& aDes): the elements of `aDes` after those of this; past the maximum length is USER 11 on a device.
+        "_ZN6TDes166AppendERK7TDesC16" => {
+            let r = read16(p, this).and_then(|mut a| { a.extend(read16(p, r1)?); write16(p, this, &a) });
+            match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
+        }
+        // const TUint8& TDesC8::AtC(TInt) / const TUint16& TDesC16::AtC(TInt) (the `operator []`): the address of the element; an index outside
+        // the descriptor is a USER 21 panic on a device (refused by name).
+        "_ZNK6TDesC83AtCEi" | "_ZNK7TDesC163AtCEi" => match locate(p, this) {
+            Ok(v) if (r1 as i32) >= 0 && r1 < v.len => { let w = if name.contains("TDesC16") { 2 } else { 1 }; p.cpu.regs[0] = v.data.wrapping_add(r1 * w); NativeOutcome::Return }
+            Ok(v) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: index {} outside a descriptor of length {} (USER 21 on a device)", r1 as i32, v.len)),
+            Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+        },
+        // TInt TDesC16::Compare(const TDesC16& aDes) const: element by element over the shorter, the difference of the first pair that
+        // differs (this - other), else the difference of the lengths (e32des16.h).
+        "_ZNK7TDesC167CompareERKS_" => match (read16(p, this), read16(p, r1)) {
+            (Ok(a), Ok(b)) => {
+                let d = a.iter().zip(&b).find(|(x, y)| x != y).map_or(a.len() as i32 - b.len() as i32, |(x, y)| i32::from(*x) - i32::from(*y));
+                p.cpu.regs[0] = d as u32;
+                NativeOutcome::Return
+            }
+            (Err(m), _) | (_, Err(m)) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+        },
         // TPtrC16(const TUint16* aString) / (const TUint16*, TInt aLength) / (const TDesC16&): a pointer descriptor (type 1, e32des16.h):
         // iLength | type << 28, then iPtr. The first form measures the zero-terminated string.
         "_ZN7TPtrC16C1EPKt" | "_ZN7TPtrC16C1EPKti" | "_ZN7TPtrC16C1ERK7TDesC16" => {

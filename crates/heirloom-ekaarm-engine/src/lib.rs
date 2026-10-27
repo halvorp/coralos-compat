@@ -50,6 +50,12 @@ pub mod navi;
 pub mod layoutdecode;
 pub mod layoutmath;
 pub mod avkonlayout;
+pub mod fpeabi;
+pub mod hal;
+pub mod listmodel;
+pub mod listbox;
+pub mod listdata;
+pub mod listproject;
 pub mod machine;
 #[cfg(feature = "host")]
 pub mod hostdir;

@@ -29,6 +29,8 @@ pub struct NativeState {
     pub objs: crate::objects::Objects,
     /// The CDL engine's data and customisation stacks (`cdl.rs`).
     pub cdl: crate::cdl::CdlState,
+    /// The opaque `CFont` guest objects by logical font id (`listdata.rs`).
+    pub fonts: BTreeMap<u32, u32>,
 }
 
 /// A host extension to the natives: asked first with the import's mangled name; `Some` = handled. Used by tests to stand in
@@ -74,6 +76,11 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::cdl::native(proc, name) { return Some(o); }
     if let Some(o) = crate::navi::native(proc, name) { return Some(o); }
     if let Some(o) = crate::avkonlayout::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::fpeabi::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::hal::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::listbox::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::listmodel::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::listdata::native(proc, name) { return Some(o); }
     None
 }
 
@@ -100,6 +107,11 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
         ));
     }
 
+    // A guest call past the end of an engine-built vtable (enginestub.rs guard slot): named, never a jump into the next table.
+    if name.starts_with(crate::enginestub::VTABLE_OVERRUN) {
+        return NativeOutcome::Refused(format!("NEXT-NEEDED {name}"));
+    }
+
     if let Some(mut hook) = proc.native_hook.take() {
         let handled = hook(proc, name);
         proc.native_hook = Some(hook);
@@ -121,6 +133,14 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             const DES_TYPE_EBUF: u32 = 3;
             const KSHIFT_DES_TYPE: u32 = 28; // e32des16.h:16
             let ok = proc.mem.vm.write_u32(r0, DES_TYPE_EBUF << KSHIFT_DES_TYPE).is_ok() && proc.mem.vm.write_u32(r0.wrapping_add(4), r1).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: descriptor at {r0:#x} is unwritable")) }
+        }
+        // TBufBase16(TInt aLength, TInt aMaxLength) / TBufBase8(TInt, TInt): `TDes(EBuf, aLength, aMaxLength)` (e32des16.h:332): the same two words with the length set.
+        "_ZN10TBufBase16C1Eii" | "_ZN10TBufBase16C2Eii" | "_ZN9TBufBase8C1Eii" | "_ZN9TBufBase8C2Eii" => {
+            const DES_TYPE_EBUF: u32 = 3;
+            const KSHIFT_DES_TYPE: u32 = 28; // e32des16.h:16
+            let r2 = proc.cpu.regs[2];
+            let ok = proc.mem.vm.write_u32(r0, r1 | DES_TYPE_EBUF << KSHIFT_DES_TYPE).is_ok() && proc.mem.vm.write_u32(r0.wrapping_add(4), r2).is_ok();
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: descriptor at {r0:#x} is unwritable")) }
         }
         // RApaLsSession(): RSessionBase -> RHandleBase { iHandle } = 0 (e32std.h:3153, :4100), then apgcli.h:224 iExtension = 0: two zero words.

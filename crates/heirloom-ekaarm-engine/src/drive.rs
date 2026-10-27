@@ -76,6 +76,9 @@ impl Drive {
         self.rom.as_ref()?.list(path)
     }
 
+    /// The drive letters this drive answers to (`resolve`): the package tree is `C:` (its install tree) and the ROM-style `Z:`.
+    pub const LETTERS: [char; 2] = ['C', 'Z'];
+
     /// The tree behind the drive (the host stages files through it).
     pub fn tree_mut(&mut self) -> &mut Tree {
         &mut self.tree
@@ -136,6 +139,16 @@ impl Drive {
         let (_, comps) = split(path);
         self.tree.mkdirs(self.vol, comps).map_err(DriveError::Put)?;
         Ok(true)
+    }
+
+    /// The bytes of every file in the package tree (the volume's used space; the drive is read-only, so it has no free space).
+    pub fn used_bytes(&self) -> u64 {
+        let mut total = 0u64;
+        let mut stack = alloc::vec![self.vol];
+        while let Some(n) = stack.pop() {
+            match self.tree.file_data(n) { Some(d) => total += d.len() as u64, None => stack.extend_from_slice(self.tree.children(n)) }
+        }
+        total
     }
 
     pub fn is_empty(&self) -> bool {

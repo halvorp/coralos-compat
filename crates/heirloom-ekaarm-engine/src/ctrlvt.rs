@@ -65,11 +65,19 @@ impl Process {
     /// `_ZN<len><class>D1Ev` / `D0Ev`.
     pub(crate) fn make_control(&mut self, class: &str, bytes: u32, overrides: &[(usize, &str)]) -> Result<u32, String> {
         let obj = self.alloc_zeroed(bytes.max(CCOE_CONTROL_SIZE)).ok_or_else(|| format!("no guest heap for a {class}"))?;
+        self.attach_control(obj, class, 0, overrides)?;
+        Ok(obj)
+    }
+
+    /// The same for a control the GUEST allocated (`new (ELeave) CAknDoubleGraphicStyleListBox`: the library constructor builds the
+    /// vtables): `tail` slots past CCoeControl's 44 are added (unnamed until a guest call confirms one: `<class>::vslotN`).
+    pub(crate) fn attach_control(&mut self, obj: u32, class: &str, tail: usize, overrides: &[(usize, &str)]) -> Result<(), String> {
         let (d1, d0) = (mangled_dtor(class, "D1"), mangled_dtor(class, "D0"));
         let mut names: Vec<Option<&str>> = Vec::new();
         names.push(Some(d1.as_str()));
         names.push(Some(d0.as_str()));
         names.extend(CCOE_SLOTS.iter().map(|n| Some(*n)));
+        names.resize(names.len() + tail, None);
         for &(slot, name) in overrides {
             if slot >= names.len() { names.resize(slot + 1, None); }
             names[slot] = Some(name);
@@ -78,7 +86,6 @@ impl Process {
         let mop = self.build_vtable("MObjectProvider", &MOP_SLOTS.map(Some))?;
         self.mem.vm.write_u32(obj, vptr).map_err(|_| format!("{class} unwritable"))?;
         self.mem.vm.write_u32(obj + 4, mop).map_err(|_| format!("{class} unwritable"))?;
-        self.control_init_fields(obj)?;
-        Ok(obj)
+        self.control_init_fields(obj)
     }
 }

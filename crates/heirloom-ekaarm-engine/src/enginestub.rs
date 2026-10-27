@@ -13,6 +13,8 @@ use crate::stubs::{encode_stub, stub_addr, Stub};
 
 /// The `dll_base` the stubs the engine hands out are filed under in the stub table.
 pub const ENGINE_DLL: &str = "engine";
+/// The name prefix of a vtable's guard stub (`natives::call` refuses it by name).
+pub const VTABLE_OVERRUN: &str = "vtable overrun";
 
 impl Process {
     /// The address of a stub dispatching to the native named `name`: the image's own import of that name if it has one, else a new
@@ -45,15 +47,20 @@ impl Process {
 
     /// Build a virtual table in guest memory: `slots[i]` is the mangled name of the native for slot `i`; `None` is a slot nobody
     /// verified, which dispatches to a stub named `<class>::vslot<i>` (a named refusal when called). The two words before the vptr
-    /// (offset-to-top, typeinfo) are zero: nothing here is thrown or `dynamic_cast`. Returns the vptr.
+    /// (offset-to-top, typeinfo) are zero: nothing here is thrown or `dynamic_cast`. One guard slot follows the last: tables sit back
+    /// to back in the heap, so a call past the end would land in the next table's first slot; it lands on a stub named
+    /// `vtable overrun <class> slot <N>` instead (`N` = the slot the guest called). Returns the vptr.
     pub fn build_vtable(&mut self, class: &str, slots: &[Option<&str>]) -> Result<u32, String> {
-        let base = self.alloc_zeroed(8 + slots.len() as u32 * 4).ok_or_else(|| format!("no guest heap for the {class} virtual table"))?;
+        let base = self.alloc_zeroed(8 + (slots.len() as u32 + 1) * 4).ok_or_else(|| format!("no guest heap for the {class} virtual table"))?;
         let vptr = base + 8;
         for (i, slot) in slots.iter().enumerate() {
             let name: String = slot.map(String::from).unwrap_or_else(|| format!("{class}::vslot{i}"));
             let addr = self.engine_stub(&name)?;
             self.mem.vm.write_u32(vptr + i as u32 * 4, addr).map_err(|_| format!("{class} virtual table is unwritable"))?;
         }
+        let n = slots.len();
+        let guard = self.engine_stub(&format!("{VTABLE_OVERRUN} {class} slot {n}"))?;
+        self.mem.vm.write_u32(vptr + n as u32 * 4, guard).map_err(|_| format!("{class} virtual table is unwritable"))?;
         Ok(vptr)
     }
 }
