@@ -30,6 +30,8 @@ pub struct Process {
     pub native_hook: Option<crate::natives::NativeHook>,
     /// What the application start did, in order (one line per step).
     pub log: Vec<alloc::string::String>,
+    /// The host's objects: the guest's file view and its UI (`ui.rs`).
+    pub host: crate::ui::Host,
 }
 
 #[derive(Debug)]
@@ -158,6 +160,7 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         nat: Default::default(),
         native_hook: None,
         log: Vec::new(),
+        host: Default::default(),
     };
 
     // EKA2 entry state: kernel places SStdEpocThreadCreateInfo (0x40 bytes)
@@ -247,7 +250,7 @@ pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
         cpu, mem, stubs, insns: 0,
         heap: Some(crate::heap::Heap::new(heap_id, HEAP_BASE, heap_sz, heap_sz)),
         heap_chunk_id: heap_id, census: None, uid3: 0, code_len: 0,
-        frames: Vec::new(), slots: crate::appstart::Slots::default(), nat: Default::default(), native_hook: None, log: Vec::new(),
+        frames: Vec::new(), slots: crate::appstart::Slots::default(), nat: Default::default(), native_hook: None, log: Vec::new(), host: Default::default(),
     })
 }
 

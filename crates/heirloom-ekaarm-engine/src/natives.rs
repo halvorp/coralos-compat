@@ -55,7 +55,7 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             return outcome;
         }
     }
-    if let Some(outcome) = crate::appstart::native(proc, name) {
+    if let Some(outcome) = crate::appstart::native(proc, name).or_else(|| crate::cone::native(proc, name)) {
         return outcome;
     }
 

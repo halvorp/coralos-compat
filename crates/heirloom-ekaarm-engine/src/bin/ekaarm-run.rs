@@ -1,11 +1,14 @@
 use std::collections::BTreeSet;
 use heirloom_ekaarm_engine::{layout, loader, Outcome};
 use heirloom_fmt_e32::{E32Image, OrdinalTable};
+use heirloom_ui_abi::RecordingGuestUi;
+
+use heirloom_ekaarm_engine::hostdir;
 
 const ORD_TSV: &str = include_str!("../../../heirloom-fmt-e32/data/eka-ordinals.tsv");
 
 fn usage() -> ! {
-    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
+    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] [--drive DIR] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
     std::process::exit(2)
 }
 
@@ -14,11 +17,13 @@ fn main() {
     let mut census = false;
     let mut list_imports = false;
     let mut file = None;
+    let mut drive_dir: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--census" => census = true,
             "--imports" => list_imports = true,
+            "--drive" => drive_dir = Some(args.next().unwrap_or_else(|| usage())),
             "--max-insns" => {
                 let value = args.next().unwrap_or_else(|| usage());
                 max_insns = value.parse().unwrap_or_else(|_| usage());
@@ -60,6 +65,13 @@ fn main() {
     if list_imports {
         for s in &proc.stubs { println!("import {}/{} {}", s.dll_base, s.ordinal, s.name.as_deref().unwrap_or("?")); }
     }
+    proc.set_ui(RecordingGuestUi::new());
+    if let Some(dir) = &drive_dir {
+        match hostdir::load_dir(std::path::Path::new(dir)) {
+            Ok((drive, files)) => { println!("drive: {dir} ({files} files)"); proc.set_drive(drive); }
+            Err(e) => { println!("OUTCOME DriveRefused {dir}: {e}"); std::process::exit(1) }
+        }
+    }
     if census { proc.census = Some(Vec::new()); }
     let outcome = proc.run(max_insns);
     if let Some(seen) = &proc.census {
@@ -71,6 +83,10 @@ fn main() {
         for (m, _) in order { println!("  {m}"); }
     }
     for line in &proc.log { println!("{line}"); }
+    if let Some(ui) = proc.ui_as::<RecordingGuestUi>() {
+        println!("ui: {} recorded call(s)", ui.calls.len());
+        for c in &ui.calls { println!("  {c:?}"); }
+    }
     match outcome {
         Outcome::Exited(code) => println!("OUTCOME Exited({}) after {} instructions", code, proc.insns),
         Outcome::Refused(msg) => {

@@ -83,7 +83,10 @@ dependencies = [
  "heirloom-cpu-arm",
  "heirloom-ekaarm-engine",
  "heirloom-fmt-e32",
+ "heirloom-fmt-rsc",
  "heirloom-mem-paged32",
+ "heirloom-ui-abi",
+ "heirloom-volume",
 ]
 
 [[package]]
@@ -111,6 +114,10 @@ version = "0.1.0"
 dependencies = [
  "heirloom-common",
 ]
+
+[[package]]
+name = "heirloom-fmt-rsc"
+version = "0.1.0"
 
 [[package]]
 name = "heirloom-fmt-sis"

@@ -170,7 +170,7 @@ fn file_browser_starts_its_application_and_stops_at_a_named_call() {
     let log = p.log.join("\n");
     assert!(log.contains("AppDllUid 0x102828d6 == UID3 0x102828d6"), "{log}");
     match outcome {
-        // today: its document constructor needs the CCoeEnv singleton (cone _ZN7CCoeEnv6StaticEv = CCoeEnv::Static), not yet built
+        // with no drive (this test gives none) it reaches BaseConstructL and is refused there (tests/cone.rs has the drive and the window)
         Outcome::Refused(m) => assert!(m.starts_with("NEXT-NEEDED") && (m.contains("BaseConstructL") || m.contains("_ZN7CCoeEnv6StaticEv")), "{m}"),
         o => panic!("expected a named refusal: {o:?}"),
     }

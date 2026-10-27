@@ -1,0 +1,8 @@
+[package]
+name = "heirloom-fmt-rsc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Symbian resource-file (.rsc) reader: header, resource index, the unicode run-length layer, and a field reader over a resource's bytes (no_std)"
+
+[dependencies]
