@@ -57,6 +57,7 @@ name = "heirloom-cpu-68k"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "heirloom-cpu-abi",
  "heirloom-mem-flat32",
 ]
 

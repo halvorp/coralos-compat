@@ -6,8 +6,13 @@ license.workspace = true
 description = "Safe Rust wrapper over the vendored Musashi 68k core"
 build = "build.rs"
 
+[features]
+default = []
+pic = []
+
 [dependencies]
 heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
+heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }
 
 [build-dependencies]
 cc = "1"

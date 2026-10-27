@@ -18,6 +18,9 @@ use heirloom_mem_flat32::GuestMem;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+mod vtable;
+pub use vtable::{vtable, CPU_68K_VTABLE};
+
 // no_std: a spin lock replaces std::sync::Mutex (Musashi is one process-wide CPU anyway).
 static CPU_LOCK: AtomicBool = AtomicBool::new(false);
 struct Guard;
@@ -37,6 +40,7 @@ extern "C" {
     fn m68k_end_timeslice();
     fn m68k_get_reg(ctx: *mut u8, r: u32) -> u32;
     fn m68k_set_reg(r: u32, v: u32);
+    fn m68k_set_irq(level: u32);
     fn m68k_context_size() -> u32;
     fn m68k_get_context(dst: *mut u8) -> u32;
     fn m68k_set_context(src: *mut u8);
@@ -64,6 +68,27 @@ pub enum CpuModel {
 /// The guest side the CPU runs against.
 pub trait Host {
     fn mem(&mut self) -> &mut GuestMem;
+    /// Read a guest access of 1, 2 or 4 bytes. Hosts backed by a bus rather than a
+    /// `GuestMem` override this; the default preserves the original memory behaviour.
+    fn read(&mut self, addr: u32, len: u32) -> Result<u32, ()> {
+        let m = self.mem();
+        match len {
+            1 => m.read_u8(addr).map(u32::from).map_err(|_| ()),
+            2 => m.read_u16(addr).map(u32::from).map_err(|_| ()),
+            4 => m.read_u32(addr).map_err(|_| ()),
+            _ => Err(()),
+        }
+    }
+    /// Write a guest access of 1, 2 or 4 bytes.
+    fn write(&mut self, addr: u32, len: u32, v: u32) -> Result<(), ()> {
+        let m = self.mem();
+        match len {
+            1 => m.write_u8(addr, v as u8).map_err(|_| ()),
+            2 => m.write_u16(addr, v as u16).map_err(|_| ()),
+            4 => m.write_u32(addr, v).map_err(|_| ()),
+            _ => Err(()),
+        }
+    }
     /// Called on every ILLEGAL ($4AFC). `pc` is the address of that opcode. Return true if
     /// handled (execution continues at the next word); false lets Musashi raise the
     /// illegal-instruction exception.
@@ -271,17 +296,11 @@ pub fn recent_pcs() -> alloc::vec::Vec<u32> {
     })
 }
 fn rdm(addr: u32, len: u32) -> u32 {
-    with(|h, c| {
-        let m = h.mem();
-        let r = match len { 1 => m.read_u8(addr).map(u32::from), 2 => m.read_u16(addr).map(u32::from), _ => m.read_u32(addr) };
-        r.unwrap_or_else(|_| { c.bus_faults += 1; 0 })
-    })
+    with(|h, c| h.read(addr, len).unwrap_or_else(|_| { c.bus_faults += 1; 0 }))
 }
 fn wrm(addr: u32, len: u32, v: u32) {
     with(|h, c| {
-        let m = h.mem();
-        let r = match len { 1 => m.write_u8(addr, v as u8), 2 => m.write_u16(addr, v as u16), _ => m.write_u32(addr, v) };
-        if r.is_err() { c.bus_faults += 1 }
+        if h.write(addr, len, v).is_err() { c.bus_faults += 1 }
     })
 }
 #[no_mangle] pub extern "C" fn m68k_read_memory_8(a: u32) -> u32 { rdm(a, 1) }

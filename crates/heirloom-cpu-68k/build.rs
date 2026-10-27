@@ -14,9 +14,12 @@ fn main() {
     let st = Command::new(&gen).arg(&out).arg(v.join("m68k_in.c")).status().unwrap();
     assert!(st.success(), "running m68kmake failed");
     let mut b = cc::Build::new();
+    // The `pic` feature builds the position-independent objects cpu-68k.library needs; the default stays -fno-pic -mcmodel=small.
+    let pic = env::var_os("CARGO_FEATURE_PIC").is_some();
     if bare {
+        if pic { b.pic(true).flag("-fPIC"); } else { b.pic(false).flag("-fno-pic").flag("-mcmodel=small"); }
         b.compiler("clang").flag("--target=x86_64-unknown-none-elf").flag("-ffreestanding").flag("-nostdinc")
-            .flag("-mno-red-zone").flag("-fno-stack-protector").flag("-fno-pic").flag("-mcmodel=small")
+            .flag("-mno-red-zone").flag("-fno-stack-protector")
             .include(v.join("shim")).file(v.join("shim/shim.c"));
         let ri = Command::new("clang").arg("-print-resource-dir").output().unwrap();
         b.flag("-isystem").flag(&format!("{}/include", String::from_utf8(ri.stdout).unwrap().trim()));
