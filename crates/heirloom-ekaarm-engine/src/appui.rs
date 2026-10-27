@@ -14,14 +14,20 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             Err(_) => NativeOutcome::Refused(format!("NEXT-NEEDED eikcore {name}: the AppUi at {this:#x} is unreadable")),
         },
         // TRect CEikAppUi::ClientRect() const (eikappui.h): the application rect less the status pane and the CBA, returned through the
-        // hidden pointer in r0 (this in r1). The status pane and CBA exist now (shell.rs) but have no rectangles: the S60 layout
-        // numbers (pane heights for 360x640) are compiled into the CDL layout DLLs (ARM, device ROM), which the SDK does not ship (only x86
-        // emulator builds), and the app's own reads (CdlEngine/55) are the next refusal. So: the whole screen. DELETE WHEN layout data is available.
-        // TRect CAknView::ClientRect() const (aknview.h): the view's area is the AppUi's client rect (no toolbar is built either).
+        // hidden pointer in r0 (this in r1). Once the layout data is loaded and the app switched its status pane layout this is the
+        // main pane of that layout (avkonlayout.rs), from the CDL data. Before that the status pane layout is the application's core
+        // resource, which is not read, so the whole screen. DELETE WHEN the core resource's STATUS_PANE_LAYOUT is read (then the
+        // initial layout is known and this always answers from the data).
+        // (`ApplicationRect()` stays the whole application window.) TRect CAknView::ClientRect() const (aknview.h): the view's area is the AppUi's client rect (no toolbar is built either).
         "_ZNK9CEikAppUi10ClientRectEv" | "_ZNK13CAknAppUiBase15ApplicationRectEv" | "_ZNK8CAknView10ClientRectEv" => {
-            let r = crate::cone::S60_5TH_APP_RECT;
-            let tl = (r.left, r.top);
-            let br = (r.left + r.width, r.top + r.height);
+            let (tl, br) = match crate::avkonlayout::client_rect(p, name.contains("ApplicationRect")) {
+                Some(Ok(r)) => ((r.x0, r.y0), (r.x1, r.y1)),
+                Some(Err(m)) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED avkon {name}: {m}"))),
+                None => {
+                    let r = crate::cone::S60_5TH_APP_RECT;
+                    ((r.left, r.top), (r.left + r.width, r.top + r.height))
+                }
+            };
             let ok = [tl.0, tl.1, br.0, br.1].iter().enumerate().all(|(i, v)| p.mem.vm.write_u32(this.wrapping_add(i as u32 * 4), *v as u32).is_ok());
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED eikcore {name}: result at {this:#x} unwritable")) }
         }

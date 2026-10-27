@@ -215,6 +215,18 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let ok = [x, y, x + w, y + h].iter().enumerate().all(|(i, v)| p.mem.vm.write_u32(this + i as u32 * 4, *v as u32).is_ok());
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: the result at {this:#x} is unwritable")) }
         }
+        // MObjectProvider* CCoeControl::MopNext(): iMopParent (the next provider up the chain). The `Thn4` form is the MObjectProvider
+        // sub-object's thunk: its `this` is the control + 4.
+        "_ZN11CCoeControl7MopNextEv" | "_ZThn4_N11CCoeControl7MopNextEv" => {
+            let ctrl = if name.starts_with("_ZThn4") { this.wrapping_sub(4) } else { this };
+            match p.mem.vm.read_u32(ctrl.wrapping_add(CTRL_I_MOP_PARENT)) {
+                Ok(v) => { p.cpu.regs[0] = v; NativeOutcome::Return }
+                Err(_) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: the control at {ctrl:#x} is unreadable")),
+            }
+        }
+        // The base implementations of SizeChanged() and PositionChanged() are empty (coecntrl.cpp): a control that does not override them
+        // has nothing to update. (Deliberate no-op: it is the library's own behaviour, not a stand-in.)
+        "_ZN11CCoeControl11SizeChangedEv" | "_ZN11CCoeControl15PositionChangedEv" => NativeOutcome::Return,
         // A control with no components (the base implementations of the two virtuals).
         "_ZNK11CCoeControl21CountComponentControlsEv" => { p.cpu.regs[0] = 0; NativeOutcome::Return }
         _ => return None,

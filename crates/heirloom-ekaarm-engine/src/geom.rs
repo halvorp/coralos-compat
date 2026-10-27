@@ -6,6 +6,13 @@ use crate::natives::NativeOutcome;
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let this = p.cpu.regs[0];
     let rd = |p: &Process, a: u32| p.mem.vm.read_u32(a).map(|v| v as i32);
+    // TInt TRect::Width() const / Height() const (e32std.h): iBr - iTl along the axis.
+    if name == "_ZNK5TRect5WidthEv" || name == "_ZNK5TRect6HeightEv" {
+        let axis = if name.ends_with("HeightEv") { 1 } else { 0 };
+        let (Ok(tl), Ok(br)) = (rd(p, this + axis * 4), rd(p, this + 8 + axis * 4)) else { return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: the TRect at {this:#x} is unreadable"))) };
+        p.cpu.regs[0] = br.wrapping_sub(tl) as u32;
+        return Some(NativeOutcome::Return);
+    }
     let words: [i32; 4] = match name {
         // TRect::TRect(): zeroed.
         "_ZN5TRectC1Ev" => [0; 4],

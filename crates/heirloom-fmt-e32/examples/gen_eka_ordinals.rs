@@ -8,15 +8,31 @@ use heirloom_fmt_e32::{DsoExport, E32Image};
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: gen_eka_ordinals <sdk_lib_dir> <out.tsv> [--only <e32_image>...]");
+        eprintln!("Usage: gen_eka_ordinals <sdk_lib_dir> <out.tsv> [--def <dll-full-name> <file.def>]... [--only <e32_image>...]");
         process::exit(2);
     }
     let sdk_dir = &args[1];
     let out_path = &args[2];
 
+    // Parse --def: an EABI .def file (`\tmangled @ ordinal NONAME`) naming a DLL the SDK ships no import library for (the full
+    // name as the importing image spells it, e.g. `CdlEngine{000a0000}[101f8243].dll`). Symbian Foundation sources are the usual owner.
+    let mut def_rows: Vec<DsoExport> = Vec::new();
+    let mut i = 3;
+    while i + 2 < args.len() + 0 && args[i] == "--def" {
+        let text = fs::read_to_string(&args[i + 2]).expect("read def");
+        for line in text.lines() {
+            let line = line.split(';').next().unwrap_or("").trim();
+            let Some((name, rest)) = line.split_once('@') else { continue };
+            let ord = rest.split_whitespace().next().and_then(|t| t.parse::<u16>().ok());
+            if let (Some(ordinal), false) = (ord, name.trim().is_empty()) {
+                def_rows.push(DsoExport { dll: args[i + 1].clone(), ordinal, name: name.trim().to_string() });
+            }
+        }
+        i += 3;
+    }
+
     // Parse --only
     let mut only_dlls: Option<HashSet<String>> = None;
-    let mut i = 3;
     if i < args.len() && args[i] == "--only" {
         i += 1;
         let mut set = HashSet::new();
@@ -57,6 +73,8 @@ fn main() {
             }
         }
     }
+
+    all_exports.extend(def_rows);
 
     // Dedupe + conflict detection
     let mut map: HashMap<(String, u16), String> = HashMap::new();

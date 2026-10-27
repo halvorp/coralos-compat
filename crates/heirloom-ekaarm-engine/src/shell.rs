@@ -52,6 +52,8 @@ pub struct ShellState {
     /// The menu of the last view constructed: titles with their items.
     pub menu: Vec<MenuTitle>,
     pub cba_buttons: Vec<CbaButton>,
+    /// The decorators pushed on the navigation pane, bottom first (`navi.rs`).
+    pub navi_stack: Vec<u32>,
 }
 
 // ---- MEikAppUiFactory's primary vtable (eikaufty.h): MObjectProvider's four slots, then the factory's virtuals in declaration order.
@@ -60,6 +62,17 @@ const FACTORY_METHODS: &[(usize, &str)] = &[
     (5, "ClientRect"), (13, "MenuBar"), (16, "ToolBar"), (18, "ToolBand"), (19, "TitleBand"), (20, "StatusPane"), (21, "Cba"),
 ];
 const FACTORY_SLOTS: usize = 27;
+/// CAknNavigationControlContainer's virtuals past CCoeControl's 44 slots. CONFIRMED by the application's own calls through the primary
+/// vtable (`[vptr + 184]` with a descriptor, `[vptr + 188]` with a decorator): CAknControl adds ExtensionInterface (44), then the
+/// container's overrides of MAknNavigationContainerInterface (aknnavi.h:45-48) in the order aknnavi.h declares them (CreateTabGroupL()
+/// :112, CreateMessageLabelL(const TDesC&) :207, PushL :264, Pop() :274).
+const NAVI_OVERRIDES: &[(usize, &str)] = &[
+    (44, "_ZN11CAknControl18ExtensionInterfaceE4TUid"),
+    (45, "_ZN30CAknNavigationControlContainer15CreateTabGroupLEv"),
+    (46, "_ZN30CAknNavigationControlContainer19CreateMessageLabelLERK7TDesC16"),
+    (47, "_ZN30CAknNavigationControlContainer5PushLER23CAknNavigationDecorator"),
+    (48, "_ZN30CAknNavigationControlContainer3PopEv"),
+];
 /// CEikStatusPaneBase (eikspane.h): ~ 0,1, Extension_ 2, SwitchLayoutL 3 (CONFIRMED: the app calls `[vtbl,#0xc]`), MakeVisible 4,
 /// SetDimmed 5, SetFaded 6, HandleResourceChange 7, OkToChangeStatusPaneNow 8, then the protected pure CreateModelL 9 and IsApp 10.
 const STATUS_PANE_SLOTS: &[(usize, &str)] = &[
@@ -177,7 +190,7 @@ impl Process {
             }
             PANE_NAVI => {
                 if let Some(n) = self.nat.shell.navi { return Ok(n); }
-                let n = self.make_control("CAknNavigationControlContainer", 0x80, &[])?;
+                let n = self.make_control("CAknNavigationControlContainer", 0x80, NAVI_OVERRIDES)?;
                 self.nat.shell.navi = Some(n);
                 Ok(n)
             }

@@ -27,6 +27,8 @@ pub struct NativeState {
     pub shell: crate::shell::ShellState,
     /// Host-only state of guest objects, by address and allocation generation (`objects.rs`).
     pub objs: crate::objects::Objects,
+    /// The CDL engine's data and customisation stacks (`cdl.rs`).
+    pub cdl: crate::cdl::CdlState,
 }
 
 /// A host extension to the natives: asked first with the import's mangled name; `Some` = handled. Used by tests to stand in
@@ -69,6 +71,9 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::array::native(proc, name) { return Some(o); }
     if let Some(o) = crate::fileman::native(proc, name) { return Some(o); }
     if let Some(o) = crate::cenrep::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::cdl::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::navi::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::avkonlayout::native(proc, name) { return Some(o); }
     None
 }
 

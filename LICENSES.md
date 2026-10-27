@@ -19,3 +19,8 @@
   binary that links it GPL as a whole, and a CoralOS engine statically links CoralOS libraries: GPL parts must
   then sit behind a process boundary (IPC), not in the same binary.
 - No Amiga ROM, AROS (except the APL font data above), Workbench, Kickstart or Apple code is included.
+- `crates/heirloom-ekaarm-engine` (Symbian): original MIT code. The Symbian Foundation UI-resources and classic-UI sources
+  (Nokia, EPL-1.0; github.com/SymbianSource) were consulted read-only for facts — export ordinals (`.def`), structure layouts,
+  API semantics and the layout byte-code format; no source was copied. The S60 layout DATA the engine serves is never in this
+  repository: `examples/gen_cdl_layout` extracts it from the owner's local SDK into a file handed to the engine at run time,
+  the same model as the device ROM and the ordinal table.

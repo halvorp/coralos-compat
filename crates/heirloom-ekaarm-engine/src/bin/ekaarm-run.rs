@@ -8,7 +8,7 @@ use heirloom_ekaarm_engine::hostdir;
 const ORD_TSV: &str = include_str!("../../../heirloom-fmt-e32/data/eka-ordinals.tsv");
 
 fn usage() -> ! {
-    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] [--rom DIR] [--trace] [--dump HEXADDR WORDS] [--dump-code FILE] [--drive DIR] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
+    eprintln!("usage: ekaarm-run [--census] [--imports] [--max-insns N] [--rom DIR] [--trace] [--dump HEXADDR WORDS] [--dump-code FILE] [--drive DIR] [--cdl-data FILE] <e32 file>   (--census: unimplemented calls return 0 and are listed in order)");
     std::process::exit(2)
 }
 
@@ -24,6 +24,7 @@ fn main() {
     let mut dump_code: Option<String> = None;
     let mut file = None;
     let mut drive_dir: Option<String> = None;
+    let mut cdl_data: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -44,6 +45,7 @@ fn main() {
             }
             "--dump-code" => dump_code = Some(args.next().unwrap_or_else(|| usage())),
             "--drive" => drive_dir = Some(args.next().unwrap_or_else(|| usage())),
+            "--cdl-data" => cdl_data = Some(args.next().unwrap_or_else(|| usage())),
             "--max-insns" => {
                 let value = args.next().unwrap_or_else(|| usage());
                 max_insns = value.parse().unwrap_or_else(|_| usage());
@@ -97,6 +99,12 @@ fn main() {
         match heirloom_ekaarm_engine::hostdir::DirRom::new(std::path::Path::new(dir)) {
             Ok(rom) => match proc.host.drive.as_mut() { Some(d) => d.set_rom(Box::new(rom)), None => { println!("OUTCOME RomRefused --rom needs --drive"); std::process::exit(1) } },
             Err(e) => { println!("OUTCOME RomRefused {dir}: {e}"); std::process::exit(1) }
+        }
+    }
+    if let Some(path) = &cdl_data {
+        match std::fs::read(path).map_err(|e| e.to_string()).and_then(|b| proc.set_cdl_data(&b)) {
+            Ok(pack) => println!("cdl data: {path} (pack {pack})"),
+            Err(e) => { println!("OUTCOME CdlDataRefused {path}: {e}"); std::process::exit(1) }
         }
     }
     if census { proc.census = Some(Vec::new()); }

@@ -45,9 +45,18 @@ pub mod viewappui;
 pub mod resource;
 pub mod view;
 pub mod remcon;
+pub mod cdl;
+pub mod navi;
+pub mod layoutdecode;
+pub mod layoutmath;
+pub mod avkonlayout;
 pub mod machine;
 #[cfg(feature = "host")]
 pub mod hostdir;
+#[cfg(feature = "host")]
+pub mod cdlextract;
+#[cfg(feature = "host")]
+pub mod cdlpe;
 
 pub use loader::{Process, LoadError};
 pub use run::Outcome;

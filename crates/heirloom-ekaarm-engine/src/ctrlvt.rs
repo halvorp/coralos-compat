@@ -71,7 +71,8 @@ impl Process {
         names.push(Some(d0.as_str()));
         names.extend(CCOE_SLOTS.iter().map(|n| Some(*n)));
         for &(slot, name) in overrides {
-            if slot < names.len() { names[slot] = Some(name); }
+            if slot >= names.len() { names.resize(slot + 1, None); }
+            names[slot] = Some(name);
         }
         let vptr = self.build_vtable(class, &names)?;
         let mop = self.build_vtable("MObjectProvider", &MOP_SLOTS.map(Some))?;

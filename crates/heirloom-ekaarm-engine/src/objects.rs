@@ -97,6 +97,7 @@ pub enum HostObj {
     RemCon(RemConSelector),
     View(ViewState),
     List(ListState),
+    NaviDecorator(crate::navi::NaviDecorator),
 }
 
 #[derive(Default)]
