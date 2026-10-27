@@ -14,6 +14,8 @@ pub enum ElemType {
     I32 = 0x1404,
     U32 = 0x1405,
     F32 = 0x1406,
+    /// `GL_DOUBLE`: the array types of GL 1.1 include doubles for vertices, normals, colours and texture coordinates.
+    F64 = 0x140A,
 }
 
 impl ElemType {
@@ -26,6 +28,7 @@ impl ElemType {
             0x1404 => ElemType::I32,
             0x1405 => ElemType::U32,
             0x1406 => ElemType::F32,
+            0x140A => ElemType::F64,
             _ => return None,
         })
     }
@@ -34,6 +37,7 @@ impl ElemType {
             ElemType::I8 | ElemType::U8 => 1,
             ElemType::I16 | ElemType::U16 => 2,
             ElemType::I32 | ElemType::U32 | ElemType::F32 => 4,
+            ElemType::F64 => 8,
         }
     }
 }

@@ -203,10 +203,11 @@ fn lighting_and_material_vectors_are_sized_by_their_pname() {
     let (_, seen, _) = run(|d| {
         let v = d.f32s(&[1.0, 2.0, 3.0, 4.0]);
         let l = d.f32s(&[0.5]);
+        let cut = d.f32s(&[180.0]); // a spot cutoff other than 180 is refused by name (gaps::VALUE_GAPS)
         vec![
             call("glLightfv", vec![I::V(0x4001), I::V(0x1203), I::P(v)], vec![]), // GL_POSITION: 4
             call("glLightfv", vec![I::V(0x4001), I::V(0x1204), I::P(v)], vec![]), // GL_SPOT_DIRECTION: 3
-            call("glLightfv", vec![I::V(0x4001), I::V(0x1206), I::P(l)], vec![]), // GL_SPOT_CUTOFF: 1
+            call("glLightfv", vec![I::V(0x4001), I::V(0x1206), I::P(cut)], vec![]), // GL_SPOT_CUTOFF: 1
             call("glLightf", ints(&[0x4000, 0x1207]), vec![Fl::S(l)]),
             call("glLightModelfv", vec![I::V(0x0B53), I::P(v)], vec![]),
             call("glMaterialfv", vec![I::V(0x0408), I::V(0x1601), I::P(l)], vec![]), // GL_SHININESS: 1
@@ -217,7 +218,7 @@ fn lighting_and_material_vectors_are_sized_by_their_pname() {
     let one = |n: &str, k: usize| saw(&seen, n)[k].0.clone();
     assert_eq!(one("glLightfv", 0), [0x4001, 0x1203, bits(1.0), bits(2.0), bits(3.0), bits(4.0)]);
     assert_eq!(one("glLightfv", 1), [0x4001, 0x1204, bits(1.0), bits(2.0), bits(3.0)]);
-    assert_eq!(one("glLightfv", 2), [0x4001, 0x1206, bits(0.5)]);
+    assert_eq!(one("glLightfv", 2), [0x4001, 0x1206, bits(180.0)]);
     assert_eq!(one("glLightf", 0), [0x4000, 0x1207, bits(0.5)]);
     assert_eq!(one("glLightModelfv", 0), [0x0B53, bits(1.0), bits(2.0), bits(3.0), bits(4.0)]);
     assert_eq!(one("glMaterialfv", 0), [0x0408, 0x1601, bits(0.5)]);
@@ -346,23 +347,4 @@ fn read_pixels_lands_in_guest_memory_in_the_guests_layout() {
     // the worker answered bytes 1..=8 (two little-endian packed words): the guest sees them as big-endian words
     let g: Vec<u8> = (0..9).map(|k| m.mac.mem.read_u8(d + at.get() as u32 + k).unwrap()).collect();
     assert_eq!(g, [4, 3, 2, 1, 8, 7, 6, 5, 0xEE], "converted to big-endian, and the byte after the image is untouched");
-}
-
-#[test]
-fn a_query_gl4es_cannot_answer_is_refused_by_name_and_stops_the_program_it_is_never_answered_with_a_guess() {
-    let p = [run_expect_fault("glGetIntegerv", 0x0B01), run_expect_fault("glIsEnabled", 0x0B41)];
-    assert_eq!(p[0], "[HEIRLOOM-GL REFUSED call=glGetIntegerv pname=0x0b01 reason=gl4es-keeps-no-such-state]");
-    assert_eq!(p[1], "[HEIRLOOM-GL REFUSED call=glIsEnabled pname=0x0b41 reason=gl4es-keeps-no-such-state]");
-}
-
-fn run_expect_fault(name: &'static str, pname: u32) -> String {
-    let (calls, d) = layout(&|d: &mut Data| { let out = d.put(&[0; 16]); vec![Call { name, ints: vec![I::V(pname), I::P(out)], fl: vec![], keep: None }] });
-    let (bytes, seen) = assemble(&calls, &d, true);
-    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
-    m.gl_attach(Box::new(Mock(TokenTable::default(), seen.clone())));
-    let frag = m.instantiate("st", &Pef::parse(&bytes).unwrap()).unwrap();
-    m.start(&frag).unwrap();
-    assert_ne!(m.step(5_000_000).0, Step::Exited, "a refused call must stop the program");
-    assert!(saw(&seen, name).is_empty(), "and nothing reached the worker");
-    m.fault().expect("a named fault").to_string()
 }

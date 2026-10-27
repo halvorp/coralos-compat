@@ -27,15 +27,20 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// Record a `glPixelStorei` the way GL does; false = an invalid enum or value (the error is already set).
-    fn gl_pixel_store(&mut self, pname: u32, v: i32) -> bool {
+    pub(super) fn gl_pixel_store(&mut self, pname: u32, v: i32) -> bool {
+        // GL 1.2's image parameters (SKIP_IMAGES, IMAGE_HEIGHT) only matter to 3D images, which are refused by name: validated, kept by the worker
+        if matches!(pname, 0x806B..=0x806E) {
+            if v < 0 { self.gl_set_error(GL_INVALID_VALUE); return false; }
+            return true;
+        }
         let (st, which) = match pname { UNPACK_SWAP_BYTES..=UNPACK_ALIGNMENT => (&mut self.gl.unpack, pname - UNPACK_SWAP_BYTES), PACK_SWAP_BYTES..=PACK_ALIGNMENT => (&mut self.gl.pack, pname - PACK_SWAP_BYTES), _ => { self.gl_set_error(GL_INVALID_ENUM); return false; } };
         if v < 0 || (which == 5 && !matches!(v, 1 | 2 | 4 | 8)) { self.gl_set_error(GL_INVALID_VALUE); return false; }
-        match which { 0 => st.swap_bytes = v != 0, 1 => {} /* LSB_FIRST only changes bitmaps, which this engine does not yet serve */ 2 => st.row_length = v as u32, 3 => st.skip_rows = v as u32, 4 => st.skip_pixels = v as u32, _ => st.alignment = v as u32 }
+        match which { 0 => st.swap_bytes = v != 0, 1 => st.lsb_first = v != 0, 2 => st.row_length = v as u32, 3 => st.skip_rows = v as u32, 4 => st.skip_pixels = v as u32, _ => st.alignment = v as u32 }
         true
     }
 
     /// The result of a call served by the worker, or the refusal it sent (noted, and `GL_INVALID_OPERATION` set).
-    fn gl_reply_words(&mut self, who: &str, r: Option<(u32, Vec<u64>, String)>) -> Option<Vec<u64>> {
+    pub(super) fn gl_reply_words(&mut self, who: &str, r: Option<(u32, Vec<u64>, String)>) -> Option<Vec<u64>> {
         match r {
             Some((0, w, _)) => Some(w),
             Some((_, _, text)) => { self.gl_note(text); self.gl_set_error(GL_INVALID_OPERATION); None }
@@ -44,7 +49,7 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// The pixels `[x y w h]` of a texture image: `ptr` null means no client data (an allocation only).
-    fn gl_pixels(&self, ptr: u32, w: i32, h: i32, format: u32, ty: u32) -> Result<Vec<u8>, u32> {
+    pub(super) fn gl_pixels(&self, ptr: u32, w: i32, h: i32, format: u32, ty: u32) -> Result<Vec<u8>, u32> {
         if ptr == 0 { return Ok(Vec::new()); }
         let len = self.mac.mem.len().min(u32::MAX as usize) as u32;
         let mem = self.mac.mem.span(0, len).and_then(|s| self.mac.mem.bytes(s)).map_err(|_| GL_INVALID_OPERATION)?;
@@ -55,6 +60,10 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     pub(super) fn gl_state_call(&mut self, name: &str, entry: u16, cpu: &mut Cpu) -> Result<u32, String> {
+        if let Some(sig) = heirloom_gl_abi::family::lookup(name) { return self.gl_generic_call(sig, entry, cpu); }
+        if heirloom_gl_abi::family::lookup_bulk(name).is_some() { return self.gl_bulk_call(name, entry, cpu); }
+        if let Some(r) = self.gl_array_call(name, entry, cpu)? { return Ok(r); }
+        if let Some(r) = self.gl_image_call(name, entry, cpu)? { return Ok(r); }
         let i = |m: &Self, k: usize| arg(m, cpu, k);
         if name == "glPixelStorei" {
             let (p, v) = (i(self, 0)?, i(self, 1)? as i32);
@@ -65,7 +74,7 @@ impl<U: GuestUi> MacPpc<U> {
             "glAlphaFunc" => vec![u64::from(i(self, 0)?), Self::fl(cpu, 0)],
             "glBindTexture" | "glBlendFunc" | "glColorMaterial" | "glFogi" | "glPixelStorei" => vec![u64::from(i(self, 0)?), u64::from(i(self, 1)?)],
             "glClearColor" => (0..4).map(|k| Self::fl(cpu, k)).collect(),
-            "glDepthFunc" | "glDrawBuffer" | "glReadBuffer" => vec![u64::from(i(self, 0)?)],
+            "glDepthFunc" => vec![u64::from(i(self, 0)?)],
             "glDepthMask" => vec![u64::from(i(self, 0)? & 0xFF)],
             "glDepthRange" => vec![cpu.fpr[1], cpu.fpr[2]],
             "glFogf" => vec![u64::from(i(self, 0)?), Self::fl(cpu, 0)],
@@ -97,22 +106,6 @@ impl<U: GuestUi> MacPpc<U> {
                 if names.len() != n as usize { return Err(format!("glGenTextures: the worker answered {} names for {n}", names.len())); }
                 let p = i(self, 1)?;
                 for (k, v) in names.iter().enumerate() { self.mac.mem.write_u32(p.wrapping_add(4 * k as u32), *v as u32).map_err(|_| String::from("glGenTextures: the name array leaves guest RAM"))?; }
-                return Ok(0);
-            }
-            "glIsEnabled" => {
-                if let Some(m) = sig::refused_query(name, i(self, 0)?) { self.gl_note(m.clone()); return Err(m); }
-                let r = self.gl_ask(token, Command::Call { entry, args: vec![u64::from(i(self, 0)?)] });
-                return Ok(self.gl_reply_words(name, r).and_then(|w| w.first().copied()).map_or(0, |v| v as u32 & 1));
-            }
-            "glGetIntegerv" => {
-                let pname = i(self, 0)?;
-                let Some(n) = sig::integer_count(pname) else { self.gl_set_error(GL_INVALID_ENUM); return Ok(0); };
-                if let Some(m) = sig::refused_query(name, pname) { self.gl_note(m.clone()); return Err(m); }
-                let r = self.gl_ask(token, Command::Call { entry, args: vec![u64::from(pname)] });
-                let Some(w) = self.gl_reply_words(name, r) else { return Ok(0); };
-                if w.len() != n { return Err(format!("glGetIntegerv({pname:#x}): the worker answered {} values, the contract says {n}", w.len())); }
-                let p = i(self, 1)?;
-                for (k, v) in w.iter().enumerate() { self.mac.mem.write_u32(p.wrapping_add(4 * k as u32), *v as u32).map_err(|_| String::from("glGetIntegerv: the result leaves guest RAM"))?; }
                 return Ok(0);
             }
             "glTexImage2D" | "glTexSubImage2D" => {
@@ -155,6 +148,10 @@ impl<U: GuestUi> MacPpc<U> {
             }
             other => return Err(format!("{other}: marked implemented but has no encoder in this engine (a contract/engine skew)")),
         };
+        if let Some(m) = heirloom_gl_abi::gaps::refused_value(name, &words) {
+            self.gl_note(m.clone());
+            return Err(m);
+        }
         self.gl_queue(token, Command::Call { entry, args: words });
         Ok(0)
     }

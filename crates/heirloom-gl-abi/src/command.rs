@@ -19,6 +19,26 @@ pub struct DrawCommand {
 }
 
 impl DrawCommand {
+    /// Capture a `glDrawArrays(mode, first, count)` NOW: the indices are `first .. first + count`, so the draw is the `glDrawElements` of
+    /// those indices (GL 1.2 §2.8 defines it that way), each enabled array snapshotted over exactly that range.
+    pub fn capture_arrays(mem: &[u8], mode: u32, first: u32, count: u32, arrays: &[Descriptor]) -> Result<DrawCommand, SnapshotError> {
+        let last = first.checked_add(count.saturating_sub(1)).ok_or(SnapshotError::Overflow)?;
+        let mut data = Vec::new();
+        data.try_reserve_exact((count as usize).checked_mul(4).ok_or(SnapshotError::Overflow)?).map_err(|_| SnapshotError::Overflow)?;
+        for i in 0..count {
+            data.extend_from_slice(&(first + i).to_le_bytes());
+        }
+        let indices = crate::snapshot::IndexSnapshot { ty: ElemType::U32, count, data, range: (count > 0).then_some((first, last)) };
+        let mut snaps = Vec::new();
+        if let Some((lo, hi)) = indices.range {
+            let n = (hi - lo).checked_add(1).ok_or(SnapshotError::Overflow)?;
+            for d in arrays {
+                snaps.push(snapshot_array(mem, d, lo, n)?);
+            }
+        }
+        Ok(DrawCommand { mode, indices, arrays: snaps })
+    }
+
     /// Capture a `glDrawElements` NOW: indices converted, arrays snapshotted over exactly `min..=max` index.
     pub fn capture(mem: &[u8], mode: u32, index_off: usize, count: u32, ty: ElemType, arrays: &[Descriptor]) -> Result<DrawCommand, SnapshotError> {
         let indices = snapshot_indices(mem, index_off, count, ty)?;

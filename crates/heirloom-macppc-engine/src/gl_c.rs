@@ -17,10 +17,12 @@
 //! * `APPLE_vertex_array_range` is accepted and validated; because arrays are snapshotted at draw time the hint changes
 //!   nothing the guest can observe (NAMED LIMIT: no client-memory aliasing of GPU storage).
 //!
-//! NAMED LIMITS (Phase 1): one context current at a time; `aglSetDrawable` takes the port's `portRect` for the size;
-//! no `aglSetFullScreen`, renderer queries, immediate mode (`glBegin`), display lists, evaluators, 3D textures or the rest of the
-//! GL 1.0-1.2 core (all refused by name until their rows are switched on: `heirloom_gl_abi::contract::core_tally` says how many).
-//! The state, texture and read-back calls the contract switches on are encoded in `gl_c/state.rs`.
+//! NAMED LIMITS: one context current at a time; `aglSetDrawable` takes the port's `portRect` for the size; no `aglSetFullScreen` or
+//! renderer queries. The GL 1.0-1.2 core is served in families: the regular calls (`gl_c/generic.rs`, from the generated
+//! `heirloom_gl_abi::family_table`), the bulk-data calls (`bulk.rs`), client arrays and client state (`arrays.rs`, `client.rs`), client
+//! images and bitmaps (`image.rs`), the glBegin/glEnd and glNewList/glEndList state machines (`begin_end.rs`) and the hand-written state
+//! calls (`state.rs`). What the specification defines and the stack under the worker cannot render is refused by name
+//! (`heirloom_gl_abi::gaps`); `heirloom_gl_abi::contract::core_tally` says how many entries are complete.
 use crate::clib::arg;
 use crate::machine::MacPpc;
 use alloc::boxed::Box;
@@ -36,6 +38,12 @@ use heirloom_gl_abi::{admit_call, derive, extensions_string, find, refusal_marke
 use heirloom_cpu_ppc::Cpu;
 use heirloom_gl_abi::pixel::Store;
 
+mod arrays;
+mod begin_end;
+mod bulk;
+mod client;
+mod generic;
+mod image;
 mod state;
 
 const GL_INVALID_ENUM: u32 = 0x0500;
@@ -71,6 +79,16 @@ impl GlFn {
     pub fn by_name(name: &str) -> Option<GlFn> { find(ENTRIES, name).map(|i| GlFn(i as u16)) }
 }
 
+/// The (type, stride, enabled) of an index or edge-flag array.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct IndexArray {
+    ty: u32,
+    stride: u32,
+    enabled: bool,
+    /// The program's pointer (what `glGetPointerv` returns).
+    ptr: u32,
+}
+
 #[derive(Default)]
 pub struct GlState {
     worker: Option<Box<dyn GlWorker>>,
@@ -87,6 +105,18 @@ pub struct GlState {
     enabled: BTreeSet<(u8, u8)>,
     client_unit: u8,
     gl_error: u32,
+    /// The context (its AGL handle) that is between a glBegin and its glEnd.
+    begin_ctx: Option<u32>,
+    /// `glPushClientAttrib` stack.
+    client_stack: Vec<arrays::ClientSave>,
+    /// The program's selection and feedback buffers (`glSelectBuffer` / `glFeedbackBuffer`): what `glGetPointerv` returns.
+    select_ptr: u32,
+    feedback_ptr: u32,
+    /// `glIndexPointer` / `glEdgeFlagPointer`: type and stride as the program set them, and whether the array is enabled.
+    index_array: Option<IndexArray>,
+    edge_array: Option<IndexArray>,
+    /// The context (its AGL handle) that is compiling a display list (between glNewList and glEndList).
+    list_ctx: Option<u32>,
     agl_error: u32,
     strings: BTreeMap<u32, (String, u32)>,
     /// `glGetString` queries in order, as `name=0x.. -> value` (the engine-side copy of the worker's ring lines).
@@ -161,6 +191,7 @@ impl<U: GuestUi> MacPpc<U> {
         let (a0, a1, a2, a3) = (a(self, 0)?, a(self, 1).unwrap_or(0), a(self, 2).unwrap_or(0), a(self, 3).unwrap_or(0));
         let none = Token { slot: 0, incarnation: 0 };
         let mut ret: u32 = 0;
+        if self.gl_ctx_token().is_some() && !self.gl_begin_end_gate(name, a0 <= 9, a0, a1)? { return self.gl_finish(cpu, 0); }
         match name {
             // ---- AGL ------------------------------------------------------------------------------------------------
             "aglChoosePixelFormat" => {
@@ -214,6 +245,7 @@ impl<U: GuestUi> MacPpc<U> {
             "aglGetError" => { ret = core::mem::take(&mut self.gl.agl_error); }
             // ---- GL state forwarded as calls ------------------------------------------------------------------------
             "glViewport" | "glClear" | "glMatrixMode" | "glEnable" | "glDisable" | "glActiveTextureARB" | "glFinish" => {
+                if let Some(m) = heirloom_gl_abi::gaps::refused_value(name, &[u64::from(a0)]) { self.gl_note(m.clone()); return Err(m); }
                 let args: Vec<u64> = match name { "glViewport" => alloc::vec![u64::from(a0), u64::from(a1), u64::from(a2), u64::from(a3)], "glFinish" => Vec::new(), _ => alloc::vec![u64::from(a0)] };
                 match self.gl_ctx_token() {
                     Some(t) => { self.gl_queue(t, Command::Call { entry: f.0, args }); if name == "glFinish" { self.gl_flush(); } }
@@ -226,6 +258,12 @@ impl<U: GuestUi> MacPpc<U> {
                 match self.gl_ctx_token() { Some(t) => self.gl_queue(t, Command::Call { entry: f.0, args: w }), None => self.gl_set_error(GL_INVALID_OPERATION) }
             }
             // ---- client arrays: descriptors only, read at the draw ----------------------------------------------------
+            "glEnableClientState" | "glDisableClientState" if matches!(a0, 0x8077 | 0x8079) => {
+                let enable = name == "glEnableClientState";
+                if let Some(m) = heirloom_gl_abi::gaps::refused_value(name, &[u64::from(a0)]).filter(|_| enable) { self.gl_note(m.clone()); return Err(m); }
+                let slot = if a0 == 0x8077 { &mut self.gl.index_array } else { &mut self.gl.edge_array };
+                slot.get_or_insert(IndexArray { ty: 0x1406, stride: 0, enabled: false, ptr: 0 }).enabled = enable;
+            }
             "glEnableClientState" | "glDisableClientState" => match role_of(a0) {
                 Some(r) => {
                     let key = (r as u8, if r == Role::TexCoord { self.gl.client_unit } else { 0 });
@@ -242,7 +280,7 @@ impl<U: GuestUi> MacPpc<U> {
                     _ => (Role::Normal, 3, a0, a1, a2),
                 };
                 let ok_size = match role { Role::Vertex => (2..=4).contains(&size), Role::Color => size == 3 || size == 4, Role::TexCoord => (1..=4).contains(&size), Role::Normal => true };
-                match ElemType::from_gl(ty) {
+                match ElemType::from_gl(ty).filter(|_| arrays::type_ok(role, ty)) {
                     Some(t) if ok_size && (stride as i32) >= 0 => {
                         let unit = if role == Role::TexCoord { self.gl.client_unit } else { 0 };
                         self.gl.arrays.insert((role as u8, unit), Descriptor { role, unit, offset: self.mac.mem.strip(ptr) as usize, size: size as u8, ty: t, stride });
@@ -254,15 +292,12 @@ impl<U: GuestUi> MacPpc<U> {
             "glDrawElements" => {
                 let (mode, count, ty, ptr) = (a0, a1, a2, a3);
                 let Some(t) = self.gl_ctx_token() else { self.gl_set_error(GL_INVALID_OPERATION); return self.gl_finish(cpu, 0); };
+                if mode > 9 || (count as i32) < 0 { self.gl_set_error(if mode > 9 { GL_INVALID_ENUM } else { GL_INVALID_VALUE }); return self.gl_finish(cpu, 0); }
                 let it = match ElemType::from_gl(ty) { Some(t @ (ElemType::U8 | ElemType::U16 | ElemType::U32)) => t, _ => { self.gl_set_error(GL_INVALID_ENUM); return self.gl_finish(cpu, 0); } };
                 let descs: Vec<Descriptor> = self.gl.enabled.iter().filter_map(|k| self.gl.arrays.get(k).copied()).collect();
                 if descs.len() != self.gl.enabled.len() { self.gl_set_error(GL_INVALID_OPERATION); return self.gl_finish(cpu, 0); } // enabled with no pointer set
-                let len = self.mac.mem.len().min(u32::MAX as usize) as u32;
-                let mem = self.mac.mem.span(0, len).and_then(|s| self.mac.mem.bytes(s)).map_err(|_| String::from("glDrawElements: guest RAM is not addressable"))?.to_vec();
-                match DrawCommand::capture(&mem, mode, self.mac.mem.strip(ptr) as usize, count, it, &descs) {
-                    Ok(d) => self.gl_queue(t, Command::Draw(d)),
-                    Err(e) => { self.gl_set_error(GL_INVALID_VALUE); self.gl_note(format!("[HEIRLOOM-GL] glDrawElements refused: {e:?}")); }
-                }
+                let off = self.mac.mem.strip(ptr) as usize;
+                self.gl_queue_draw(t, "glDrawElements", |mem| DrawCommand::capture(mem, mode, off, count, it, &descs))?;
             }
             "glLockArraysEXT" | "glUnlockArraysEXT" => { /* arrays are read at the draw; the lock's promise (no change) is honoured trivially */ }
             // ---- queries --------------------------------------------------------------------------------------------

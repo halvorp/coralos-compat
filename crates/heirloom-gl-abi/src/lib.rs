@@ -13,15 +13,26 @@
 //! * A context/drawable token carries an incarnation; a token from an earlier life of its slot is refused ([`token`]).
 //! * Every frame starts with its ABI version and is little-endian on the wire ([`wire`], [`command`]).
 //! * Nothing here has a fixed capacity: tables grow, and the decoder sizes allocations from bytes actually present.
+//! * The regular call families (`glVertex*`, `glColor*`, `glLight*`, the Get* parameter queries, ...) are ONE mechanism ([`family`]): the
+//!   table [`family_table`] is generated from the Khronos registry by `tools/gen-gl-sigs.py` (which also writes the worker's typed gl4es
+//!   calls), and the hand-written bulk-data calls are [`bulk_table`]. What the stack under the worker cannot do is refused by name with
+//!   the value or the situation named ([`gaps`]), the engine's own argument checks are [`checks`], and [`coverage`] says which entries
+//!   the engine's tests (rather than the worker's GPU tests) grade.
 //!
 //! Pure `no_std + alloc`: no host, GPU, UI or Mesa reach, so a guest engine may depend on it (seam check).
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 
 pub mod caps;
+pub mod checks;
 pub mod command;
+pub mod coverage;
 pub mod contract;
+pub mod family;
+pub mod bulk_table;
+pub mod family_table;
 pub mod fence;
+pub mod gaps;
 pub mod pixel;
 pub mod refusal;
 pub mod ring;

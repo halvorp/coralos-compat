@@ -24,6 +24,19 @@ pub enum VecKind {
     LightModel,
     Light,
     Material,
+    /// `glGetMaterial*`: the setter's table without `GL_AMBIENT_AND_DIFFUSE` (GL 1.2 §6.1.3).
+    MaterialGet,
+    TexEnv,
+    TexGen,
+    TexParam,
+    /// `glGetTexParameter*`: the setter's table plus `GL_TEXTURE_RESIDENT`.
+    TexParamGet,
+    /// `glGetTexLevelParameter*`: one value for every parameter GL 1.2 defines.
+    TexLevel,
+    /// The four coefficients of a clip plane.
+    Four,
+    /// The `GetPName` table ([`integer_count`]): `glGetBooleanv`, `glGetIntegerv`, `glGetFloatv`, `glGetDoublev`.
+    State,
 }
 
 /// How the call is answered.
@@ -41,7 +54,7 @@ pub fn shape(name: &str) -> Option<(Shape, Answer)> {
     Some(match name {
         "glAlphaFunc" | "glBindTexture" | "glBlendFunc" | "glColorMaterial" | "glDepthRange" | "glFogf" | "glFogi" | "glPixelStorei" | "glPolygonOffset" => (Words(2), Answer::None),
         "glClearColor" | "glScissor" => (Words(4), Answer::None),
-        "glDepthFunc" | "glDepthMask" | "glDrawBuffer" | "glReadBuffer" => (Words(1), Answer::None),
+        "glDepthFunc" | "glDepthMask" => (Words(1), Answer::None),
         "glLightf" | "glTexEnvi" | "glTexGeni" | "glTexParameteri" => (Words(3), Answer::None),
         "glNormal3fv" => (Words(3), Answer::None),
         "glDeleteTextures" => (Names, Answer::None),
@@ -49,7 +62,7 @@ pub fn shape(name: &str) -> Option<(Shape, Answer)> {
         "glLightModelfv" => (Vector { lead: 1, pname_at: 0, kind: VecKind::LightModel }, Answer::None),
         "glLightfv" => (Vector { lead: 2, pname_at: 1, kind: VecKind::Light }, Answer::None),
         "glMaterialfv" => (Vector { lead: 2, pname_at: 1, kind: VecKind::Material }, Answer::None),
-        "glGenTextures" | "glGetIntegerv" | "glIsEnabled" => (Words(1), Answer::Reply),
+        "glGenTextures" => (Words(1), Answer::Reply),
         _ => return None,
     })
 }
@@ -72,6 +85,26 @@ pub fn vec_len(kind: VecKind, pname: u32) -> Option<usize> {
         (VecKind::Material, 0x1200..=0x1202 | 0x1600 | 0x1602) => 4,
         (VecKind::Material, 0x1601) => 1,
         (VecKind::Material, 0x1603) => 3,
+        (VecKind::MaterialGet, 0x1200..=0x1202 | 0x1600) => 4,
+        (VecKind::MaterialGet, 0x1601) => 1,
+        (VecKind::MaterialGet, 0x1603) => 3,
+        // GL_TEXTURE_ENV_MODE 0x2200, GL_TEXTURE_ENV_COLOR 0x2201
+        (VecKind::TexEnv, 0x2200) => 1,
+        (VecKind::TexEnv, 0x2201) => 4,
+        // GL_TEXTURE_GEN_MODE 0x2500, GL_OBJECT_PLANE 0x2501, GL_EYE_PLANE 0x2502
+        (VecKind::TexGen, 0x2500) => 1,
+        (VecKind::TexGen, 0x2501 | 0x2502) => 4,
+        // GL_TEXTURE_MAG_FILTER 0x2800, _MIN_FILTER 0x2801, _WRAP_S 0x2802, _WRAP_T 0x2803, GL_TEXTURE_BORDER_COLOR 0x1004,
+        // GL_TEXTURE_PRIORITY 0x8066, GL_TEXTURE_WRAP_R 0x8072, GL_TEXTURE_MIN_LOD 0x813A, _MAX_LOD 0x813B, _BASE_LEVEL 0x813C, _MAX_LEVEL 0x813D
+        (VecKind::TexParam | VecKind::TexParamGet, 0x2800..=0x2803 | 0x8066 | 0x8072 | 0x813A..=0x813D) => 1,
+        (VecKind::TexParam | VecKind::TexParamGet, 0x1004) => 4,
+        // GL_TEXTURE_RESIDENT 0x8067 (a query only)
+        (VecKind::TexParamGet, 0x8067) => 1,
+        // GL_TEXTURE_WIDTH 0x1000, _HEIGHT 0x1001, GL_TEXTURE_INTERNAL_FORMAT 0x1003, GL_TEXTURE_BORDER 0x1005, the component sizes
+        // GL_TEXTURE_RED_SIZE 0x805C .. GL_TEXTURE_INTENSITY_SIZE 0x8061, GL_TEXTURE_DEPTH 0x8071 (1.2)
+        (VecKind::TexLevel, 0x1000 | 0x1001 | 0x1003 | 0x1005 | 0x805C..=0x8061 | 0x8071) => 1,
+        (VecKind::Four, _) => 4,
+        (VecKind::State, p) => return integer_count(p),
         _ => return None,
     })
 }
@@ -117,29 +150,11 @@ pub fn integer_count(pname: u32) -> Option<usize> {
     })
 }
 
-/// `GetPName` values (of the 249) that gl4es keeps no state for, so the worker REFUSES the query by name rather than answer
-/// a GL error gl4es invents or a zero it does not know. Measured against the pinned gl4es (2037865590d4) by the worker's
-/// host test `every GetPName ... answers`, which fails if this list and gl4es's behaviour ever disagree. Includes index
-/// mode (`GL_CURRENT_INDEX`...), the accumulation buffer, evaluators' grids, selection/feedback, line/point/polygon
-/// details, and client-array size/type/stride.
-pub const INTEGER_PNAMES_UNANSWERED: &[u32] = &[
-    0x0B01, 0x0B04, 0x0B05, 0x0B06, 0x0B07, 0x0B08, 0x0B09, 0x0B13, 0x0B22, 0x0B23, 0x0B25, 0x0B26, 0x0B30, 0x0B32, 0x0B33, 0x0B40, 0x0B41, 0x0B51,
-    0x0B80, 0x0BF1, 0x0C20, 0x0C21, 0x0C30, 0x0C31, 0x0C33, 0x0C53, 0x0D11, 0x0D1E, 0x0D1F, 0x0D30, 0x0D35, 0x0D3B, 0x0D51, 0x0D58, 0x0D59, 0x0D5A,
-    0x0D5B, 0x0DD0, 0x0DD1, 0x0DD2, 0x0DD3, 0x0DF1, 0x0DF2, 0x0DF4, 0x2A01, 0x2A02, 0x806B, 0x807A, 0x807B, 0x807C, 0x807E, 0x807F, 0x8081, 0x8082,
-    0x8083, 0x8085, 0x8086, 0x8088, 0x8089, 0x808A, 0x808C, 0x81F8,
-];
-
-/// Capabilities `glIsEnabled` cannot answer on gl4es (it raises a GL error): refused by name.
-pub const CAPABILITIES_UNANSWERED: &[u32] = &[0x0BF1, 0x2A01, 0x2A02, 0x0B41, 0x8077, 0x8079];
-
-/// The named refusal for a query the worker cannot answer, or `None` when it can.
-pub fn refused_query(name: &str, pname: u32) -> Option<alloc::string::String> {
-    let no = match name {
-        "glGetIntegerv" => INTEGER_PNAMES_UNANSWERED.contains(&pname),
-        "glIsEnabled" => CAPABILITIES_UNANSWERED.contains(&pname),
-        _ => false,
-    };
-    no.then(|| alloc::format!("[HEIRLOOM-GL REFUSED call={name} pname={pname:#06x} reason=gl4es-keeps-no-such-state]"))
+/// The client-array state (`GL_VERTEX_ARRAY` .. `GL_EDGE_FLAG_ARRAY_STRIDE`) is held by the ENGINE - the program's pointers and
+/// enables never leave guest memory except as a draw's snapshot - so the engine answers these queries itself and never asks the
+/// worker (whose arrays are enabled only for the length of one draw).
+pub fn engine_answers(pname: u32) -> bool {
+    matches!(pname, 0x8074..=0x8079 | 0x807A..=0x807C | 0x807E | 0x807F | 0x8081..=0x8083 | 0x8085 | 0x8086 | 0x8088..=0x808A | 0x808C)
 }
 
 /// The `GetPName` values that are also `glEnable` capabilities: their value is `glIsEnabled`'s (0 or 1).
@@ -164,14 +179,10 @@ mod tests {
     }
 
     #[test]
-    fn the_unanswered_lists_are_inside_the_spec_tables_and_sorted_and_the_refusal_names_the_pname() {
-        assert!(INTEGER_PNAMES_UNANSWERED.iter().all(|p| integer_count(*p).is_some()), "every refused pname is a real GetPName");
-        assert!(INTEGER_PNAMES_UNANSWERED.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(INTEGER_PNAMES_UNANSWERED.len(), 62);
-        assert_eq!(refused_query("glGetIntegerv", 0x0B01).as_deref(), Some("[HEIRLOOM-GL REFUSED call=glGetIntegerv pname=0x0b01 reason=gl4es-keeps-no-such-state]"));
-        assert_eq!(refused_query("glGetIntegerv", 0x0BA2), None);
-        assert!(refused_query("glIsEnabled", 0x0B41).is_some());
-        assert_eq!(refused_query("glIsEnabled", 0x0DE1), None);
+    fn the_engine_answers_only_client_array_state_and_every_such_value_is_a_real_pname() {
+        assert!((0u32..0x9000).filter(|p| engine_answers(*p)).all(|p| integer_count(p).is_some()));
+        assert_eq!((0u32..0x9000).filter(|p| engine_answers(*p)).count(), 20);
+        assert!(!engine_answers(0x0BA2) && !engine_answers(0x0B01));
     }
 
     #[test]

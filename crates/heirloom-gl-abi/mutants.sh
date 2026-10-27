@@ -34,4 +34,10 @@ mutant "a gap does not withdraw a version" src/caps.rs   's/\|e\| !e\.complete\(
 mutant "a gap does not withdraw an extension" src/caps.rs 's/it\.all\(\|e\| e\.complete\(\)\)/it.all(|e| e.implemented)/'     a_gap_withdraws_the_claim_but_not_the_call
 mutant "pixel rows are not made tight"   src/pixel.rs    's/let stride = if l\.elem >= a \{ raw \}/let stride = if true { raw }/'                rgba_bytes_are_untouched_and_rows_are_tight
 mutant "packed words are not converted"  src/pixel.rs    's/if elem > 1 \&\& guest_is_big_endian \{/if false \&\& guest_is_big_endian {/' multi_byte_elements_become_little_endian_and_swap_bytes_cancels_it
+mutant "a signed byte is zero-extended"   src/family.rs   's/Ty::Byte => \(raw as u8 as i8 as i32 as u32\) as u64,/Ty::Byte => (raw as u8) as u64,/' narrow_integers_are_sign_or_zero_extended_by_their_type
+mutant "a negative size is not an error"  src/checks.rs   's/if t == Ty::Sizei \&\& v < 0 \{/if t == Ty::Sizei \&\& v < -1_000_000_000 {/' an_argument_outside_its_domain_is_invalid_enum
+mutant "a refused value is served"        src/gaps.rs     's/g\.eq0\.map_or_else\(\|\| \(g\.refuses\)\(args\), \|v\| args\.first\(\) == Some\(&v\)\)/false/' a_refused_value_is_named_and_every_other_value_is_served
+mutant "a bitmap is read LSB first"       src/pixel.rs    's/if s\.lsb_first \{ 1 << within \} else \{ 0x80 >> within \}/if true { 1 << within } else { 0x80 >> within }/' a_bitmap_is_read_msb_first_by_default
+mutant "a data count adds its operands"   src/family.rs   's/n = n\.checked_mul\(v\)\?;/n = n.checked_add(v)?;/' check_words_follows_the_layout_of_scalars_vectors_and_data
+mutant "a gap does not make an entry partial" src/contract.rs 's/self\.implemented \&\& self\.gap\.is_none\(\)/self.implemented/' the_tally_is_what_the_implemented_flags_say
 exit $bad

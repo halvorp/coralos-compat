@@ -11,13 +11,16 @@ use alloc::vec::Vec;
 /// (worker-executed, no gap), AND each family has a semantic test that ran through the worker on a GPU
 /// (`userland/coral-heirloom-gl/tests/gpu_state.rs`, tools/check-heirloom-gl-host.sh step 5).
 ///
-/// `None` today: the lists are complete but 295 of the 340 core entries are still refused by name and 2 more run with a gap
-/// (`contract::core_tally`: 45 run, 43 of them without a gap; 13 of the refused ones are gl4es no-op STUBS:
-/// glAccum, glClearAccum, glClearIndex, glCopyPixels,
-/// glDrawBuffer, glFeedbackBuffer, glGetPolygonStipple, glIndexf, glIndexMask, glPassThrough, glPolygonStipple,
-/// glPrioritizeTextures, glReadBuffer), so no core version may be advertised. Set to `Some(Version::V1_2)` in the change
-/// that brings `core_tally` to `complete == listed` for all three versions and adds the family tests for the rest;
-/// the test `attested_through_never_exceeds_what_is_complete` fails the build if it is set before that.
+/// `None` today, and it stays `None`: `contract::core_tally` says 306 / 30 / 1 of the 306 / 30 / 4 core commands are callable and 268 / 28 / 1
+/// are COMPLETE (callable with nothing refused). What stands between each version and a claim is named on the entries
+/// (`cargo run -q -p heirloom-gl-abi --example tally` prints it): for 1.0 and 1.1 the values gl4es over GLES 2 cannot render and the
+/// worker refuses by name (`gaps::VALUE_GAPS`: flat shading, spot cutoffs, the GL_BLEND texture function, logic operations, smooth and
+/// stippled primitives, polygon offset of points and lines, front buffers, selection and feedback, depth and colour-index pixels), the
+/// calls the worker cannot record into a display list (`gaps::IN_LIST_GAPS`) and a few named deviations (nested list deletion, evaluators
+/// inside a list, `glGetTexImage` of a level other than 0); for 1.2 the three 3D-texture calls (gl4es treats a 3D texture as a 2D one).
+/// Set to `Some(Version::V1_1)` or `Some(Version::V1_2)` in the change that brings `core_tally` to `complete == listed` up to that version
+/// and has a graded scenario for every entry (the worker's `gpu_families` coverage rule); the test
+/// `attested_through_never_exceeds_what_is_complete` fails the build if it is set before that.
 pub const ATTESTED_THROUGH: Option<Version> = None;
 
 /// What the worker may truthfully tell the guest.

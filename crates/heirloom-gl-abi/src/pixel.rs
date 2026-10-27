@@ -25,12 +25,14 @@ pub struct Store {
     pub skip_rows: u32,
     pub skip_pixels: u32,
     pub swap_bytes: bool,
+    /// `GL_*_LSB_FIRST`: the bit order within a byte of a BITMAP (the first pixel is bit 0 rather than bit 7).
+    pub lsb_first: bool,
 }
 
 impl Default for Store {
     /// GL's initial state: alignment 4, everything else off.
     fn default() -> Self {
-        Store { alignment: 4, row_length: 0, skip_rows: 0, skip_pixels: 0, swap_bytes: false }
+        Store { alignment: 4, row_length: 0, skip_rows: 0, skip_pixels: 0, swap_bytes: false, lsb_first: false }
     }
 }
 
@@ -158,9 +160,108 @@ pub fn pack(data: &[u8], width: u32, height: u32, format: u32, ty: u32, store: &
     Ok(())
 }
 
+/// Where the bit rows of a BITMAP are: the row stride in bytes (the row's bits rounded up to bytes, then to the alignment).
+fn bitmap_stride(width: u32, s: &Store) -> Result<usize, PixelError> {
+    let a = s.alignment as usize;
+    if !matches!(a, 1 | 2 | 4 | 8) {
+        return Err(PixelError::BadAlignment(s.alignment));
+    }
+    let bits = if s.row_length > 0 { s.row_length } else { width } as usize;
+    let bytes = bits.checked_add(7).ok_or(PixelError::Overflow)? / 8;
+    Ok(bytes.checked_add(a - 1).ok_or(PixelError::Overflow)? / a * a)
+}
+
+/// The bit of pixel `x` of row `r` as the guest's storage state addresses it: the byte offset from the pointer and the mask.
+fn bitmap_bit(r: usize, x: usize, stride: usize, s: &Store) -> Result<(usize, u8), PixelError> {
+    let bit = (r.checked_add(s.skip_rows as usize).ok_or(PixelError::Overflow)?)
+        .checked_mul(stride)
+        .and_then(|b| b.checked_mul(8))
+        .and_then(|b| b.checked_add(s.skip_pixels as usize))
+        .and_then(|b| b.checked_add(x))
+        .ok_or(PixelError::Overflow)?;
+    let within = bit % 8;
+    Ok((bit / 8, if s.lsb_first { 1 << within } else { 0x80 >> within }))
+}
+
+/// A `width x height` BITMAP at `mem[start..]` as TIGHT rows of `ceil(width / 8)` bytes, the first pixel the most significant bit,
+/// padding bits zero: the one layout the wire carries whatever the guest's `GL_UNPACK_*` state (alignment, row length, skips, bit order).
+pub fn unpack_bitmap(mem: &[u8], start: usize, width: u32, height: u32, store: &Store) -> Result<Vec<u8>, PixelError> {
+    let stride = bitmap_stride(width, store)?;
+    let row_bytes = (width as usize).checked_add(7).ok_or(PixelError::Overflow)? / 8;
+    let total = row_bytes.checked_mul(height as usize).ok_or(PixelError::Overflow)?;
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+    // the last bit read must be inside memory before anything is allocated
+    let (last_byte, _) = bitmap_bit(height as usize - 1, width as usize - 1, stride, store)?;
+    if start.checked_add(last_byte).ok_or(PixelError::Overflow)? >= mem.len() {
+        return Err(PixelError::OutOfRange);
+    }
+    let mut out = alloc::vec![0u8; total];
+    for r in 0..height as usize {
+        for x in 0..width as usize {
+            let (byte, mask) = bitmap_bit(r, x, stride, store)?;
+            if mem[start + byte] & mask != 0 {
+                out[r * row_bytes + x / 8] |= 0x80 >> (x % 8);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The inverse of [`unpack_bitmap`]: tight MSB-first `data` written through `put(offset, byte_mask_and_value)`... as read-modify-write
+/// of single bytes: `put(offset, mask, value)` must set the masked bits of the guest byte at `offset` (from the pointer) to `value`.
+pub fn pack_bitmap(data: &[u8], width: u32, height: u32, store: &Store, mut put: impl FnMut(usize, u8, u8) -> bool) -> Result<(), PixelError> {
+    let stride = bitmap_stride(width, store)?;
+    let row_bytes = (width as usize).checked_add(7).ok_or(PixelError::Overflow)? / 8;
+    if row_bytes.checked_mul(height as usize).ok_or(PixelError::Overflow)? != data.len() {
+        return Err(PixelError::OutOfRange);
+    }
+    for r in 0..height as usize {
+        for x in 0..width as usize {
+            let (byte, mask) = bitmap_bit(r, x, stride, store)?;
+            let on = data[r * row_bytes + x / 8] & (0x80 >> (x % 8)) != 0;
+            if !put(byte, mask, if on { mask } else { 0 }) {
+                return Err(PixelError::OutOfRange);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bitmap_is_read_msb_first_by_default_lsb_first_on_request_with_rows_aligned_and_skips_in_bits() {
+        // 10 x 2 bitmap, alignment 4: two bytes per row, rows 4 bytes apart; row 0 = 1000000011, row 1 = 0000000101
+        let mem = [0b1000_0000, 0b1100_0000, 0, 0, 0b0000_0001, 0b0100_0000, 0, 0];
+        let t = unpack_bitmap(&mem, 0, 10, 2, &Store::default()).unwrap();
+        assert_eq!(t, [0b1000_0000, 0b1100_0000, 0b0000_0001, 0b0100_0000]);
+        // LSB first: bit 0 of the first byte is the first pixel
+        let lsb = [0b0000_0001, 0b0000_0011];
+        let t = unpack_bitmap(&lsb, 0, 10, 1, &Store { lsb_first: true, ..Store::default() }).unwrap();
+        assert_eq!(t, [0b1000_0000, 0b1100_0000]);
+        // skip_pixels is a count of BITS: skipping 3 starts at pixel 3 of the first byte
+        let t = unpack_bitmap(&[0b0001_1000], 0, 2, 1, &Store { alignment: 1, skip_pixels: 3, ..Store::default() }).unwrap();
+        assert_eq!(t, [0b1100_0000]);
+        // a bitmap outside memory is refused, and so is a bad alignment
+        assert_eq!(unpack_bitmap(&[0], 0, 16, 2, &Store::default()), Err(PixelError::OutOfRange));
+        assert_eq!(unpack_bitmap(&[0; 8], 0, 8, 1, &Store { alignment: 3, ..Store::default() }), Err(PixelError::BadAlignment(3)));
+    }
+
+    #[test]
+    fn pack_bitmap_is_the_inverse_of_unpack_bitmap() {
+        for lsb in [false, true] {
+            let s = Store { alignment: 2, row_length: 21, skip_rows: 1, skip_pixels: 5, lsb_first: lsb, ..Store::default() };
+            let mem: Vec<u8> = (0..64u8).map(|b| b.wrapping_mul(37).wrapping_add(11)).collect();
+            let t = unpack_bitmap(&mem, 0, 9, 3, &s).unwrap();
+            let mut out = vec![0u8; 64];
+            pack_bitmap(&t, 9, 3, &s, |at, mask, v| { out[at] = out[at] & !mask | v; true }).unwrap();
+            assert_eq!(unpack_bitmap(&out, 0, 9, 3, &s).unwrap(), t, "lsb {lsb}");
+        }
+    }
 
     #[test]
     fn rgba_bytes_are_untouched_and_rows_are_tight() {
@@ -176,7 +277,7 @@ mod tests {
     #[test]
     fn alignment_one_has_no_padding_and_row_length_and_skips_move_the_window() {
         let mem: Vec<u8> = (0..64).collect();
-        let s = Store { alignment: 1, row_length: 8, skip_rows: 1, skip_pixels: 2, swap_bytes: false };
+        let s = Store { alignment: 1, row_length: 8, skip_rows: 1, skip_pixels: 2, ..Store::default() };
         // one component, 3x2 window starting at row 1, pixel 2 of an 8-wide image
         let t = unpack(&mem, 0, 3, 2, 0x1903, 0x1401, &s).unwrap();
         assert_eq!(t, [10, 11, 12, 18, 19, 20]);
@@ -223,7 +324,7 @@ mod tests {
     fn pack_is_the_inverse_of_unpack() {
         let mem: Vec<u8> = (0..48).collect();
         for (fmt, ty) in [(GL_RGBA, 0x1401u32), (GL_RGB, 0x8363), (GL_BGRA, 0x8367), (0x1909, 0x1403)] {
-            let s = Store { alignment: 4, row_length: 5, skip_rows: 0, skip_pixels: 1, swap_bytes: false };
+            let s = Store { alignment: 4, row_length: 5, skip_rows: 0, skip_pixels: 1, ..Store::default() };
             let t = unpack(&mem, 0, 2, 2, fmt, ty, &s).unwrap();
             let mut out = vec![0u8; 48];
             pack(&t, 2, 2, fmt, ty, &s, |at, b| { out[at..at + b.len()].copy_from_slice(b); true }).unwrap();
