@@ -70,6 +70,7 @@ fn main() {
         order.sort_by_key(|&(_, i)| i);
         for (m, _) in order { println!("  {m}"); }
     }
+    for line in &proc.log { println!("{line}"); }
     match outcome {
         Outcome::Exited(code) => println!("OUTCOME Exited({}) after {} instructions", code, proc.insns),
         Outcome::Refused(msg) => {

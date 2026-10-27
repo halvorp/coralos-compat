@@ -30,9 +30,10 @@ fn the_address_map_has_no_overlap_and_a_too_large_heap_is_refused_by_name() {
 fn hero_of_sparta_binds_every_import_starts_and_stops_at_its_next_os_call_by_name() {
     let Some(mut p) = hero() else { return };
     assert_eq!(p.stubs.len(), 704);
-    // past the process start (create info on the stack, SetupThreadHeap): the next call it needs is refused by name
+    // past the process start and the S60 application start (factory, document, AppUi, its own ConstructL): the first base-class
+    // call the AppUi makes is refused by name
     match p.run(1_000_000) {
-        Outcome::Refused(why) => assert!(why.contains("euser/") && why.contains("DllSetTls"), "{why}"),
+        Outcome::Refused(why) => assert!(why.contains("BaseConstructL"), "{why}"),
         _ => panic!("expected the next euser call to be refused by name"),
     }
 }

@@ -10,6 +10,14 @@ heirloom-cpu-arm = { path = "../heirloom-cpu-arm" }
 heirloom-fmt-e32 = { path = "../heirloom-fmt-e32" }
 heirloom-mem-paged32 = { path = "../heirloom-mem-paged32" }
 
+[features]
+# The test hooks (loader::bare, Process::map_code / map_data) map arbitrary guest code and widen the range the vtable-anchor
+# check accepts: only this crate's own tests turn them on (the dev-dependency below), never a consumer.
+test-hooks = []
+
+[dev-dependencies]
+heirloom-ekaarm-engine = { path = ".", features = ["test-hooks"] }
+
 [[bin]]
 name = "ekaarm-run"
 path = "src/bin/ekaarm-run.rs"

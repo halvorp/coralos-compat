@@ -27,6 +27,12 @@ impl Process {
                     if n == crate::layout::EXIT_SVC {
                         return Outcome::Exited(self.cpu.regs[0] as i32);
                     }
+                    if n == crate::callback::CALLBACK_SVC {
+                        match self.callback_return() {
+                            Ok(()) => continue,
+                            Err(outcome) => return outcome,
+                        }
+                    }
                     if n >= STUB_SVC_BASE {
                         let idx = (n - STUB_SVC_BASE) as usize;
                         match natives::call(self, idx) {
@@ -50,10 +56,18 @@ impl Process {
                     "TRAP pc=0x{:08X} insn=0x{:08X} thumb={} kind={:?}",
                     t.pc, t.insn, t.thumb, t.kind
                 )),
-                Exit::Fault { pc, fault } => return Outcome::Fault(format!(
-                    "FAULT pc=0x{:08X} addr=0x{:08X} access={:?}",
-                    pc, fault.addr, fault.access
-                )),
+                Exit::Fault { pc, fault } => {
+                    // The CApaProcess placeholder has vtable pointer 0, so a virtual call through it reads near address 0.
+                    let note = match self.nat.apa_process {
+                        Some(a) if fault.addr < 0x1000 => format!(
+                            " (null/low address: a virtual call through a vtable-less object, e.g. the CApaProcess placeholder at 0x{:08X})", a),
+                        _ => alloc::string::String::new(),
+                    };
+                    return Outcome::Fault(format!(
+                        "FAULT pc=0x{:08X} addr=0x{:08X} access={:?}{}",
+                        pc, fault.addr, fault.access, note
+                    ));
+                }
                 Exit::Wait => return Outcome::Blocked,
                 // step() reports one retired instruction as a spent budget of one
                 Exit::BudgetSpent => continue,

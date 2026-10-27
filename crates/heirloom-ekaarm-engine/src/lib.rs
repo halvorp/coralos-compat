@@ -9,6 +9,8 @@ pub mod heap;
 pub mod stubs;
 pub mod natives;
 pub mod run;
+pub mod callback;
+pub mod appstart;
 
 pub use loader::{Process, LoadError};
 pub use run::Outcome;

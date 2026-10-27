@@ -1,7 +1,28 @@
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 use crate::loader::Process;
 
+/// The host-side state of the natives (no globals: it lives in the `Process`).
+#[derive(Default)]
+pub struct NativeState {
+    /// `UserSvr::DllSetTls` / `DllTls`: (handle, DLL UID) -> pointer.
+    pub tls: BTreeMap<(u32, u32), u32>,
+    /// The `TCppRTExceptionsGlobals` objects the guest constructed, in order.
+    pub exception_globals: Vec<u32>,
+    /// The guest-resident `CApaProcess` placeholder (zeroed, vtable pointer 0), allocated on first use by the application start.
+    pub apa_process: Option<u32>,
+    /// `CleanupStack`: the pointers pushed and not yet popped (e32base.h:2944-2948 `PushL` x3, `Pop`, `Pop(TInt)`).
+    pub cleanup: Vec<u32>,
+}
+
+/// A host extension to the natives: asked first with the import's mangled name; `Some` = handled. Used by tests to stand in
+/// for an OS call that calls guest code; the engine itself leaves it `None`.
+pub type NativeHook = Box<dyn FnMut(&mut Process, &str) -> Option<NativeOutcome>>;
+
+#[derive(Debug)]
 pub enum NativeOutcome {
     Return,
     Exit(i32),
@@ -27,9 +48,88 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
         ));
     }
 
+    if let Some(mut hook) = proc.native_hook.take() {
+        let handled = hook(proc, name);
+        proc.native_hook = Some(hook);
+        if let Some(outcome) = handled {
+            return outcome;
+        }
+    }
+    if let Some(outcome) = crate::appstart::native(proc, name) {
+        return outcome;
+    }
+
     let r0 = proc.cpu.regs[0];
     let r1 = proc.cpu.regs[1];
     match name {
+        // TBufBase16(TInt aMaxLength) / TBufBase8(TInt): `TDes(EBuf, 0, aMaxLength)` (e32des16.h:332 TDes16(aType, aLength, aMaxLength)). A
+        // descriptor has no vptr: word 0 is iLength | type << KShiftDesType16 (e32des16.h:16 = 28), word 1 is iMaxLength (:341).
+        // DES_TYPE_EBUF: the TType enum is internal to the SDK; EKA2L1 utils/des.h:50-55 (facts) lists buf_const 0, ptr_const 1, ptr 2, buf 3.
+        "_ZN10TBufBase16C1Ei" | "_ZN10TBufBase16C2Ei" | "_ZN9TBufBase8C1Ei" | "_ZN9TBufBase8C2Ei" => {
+            const DES_TYPE_EBUF: u32 = 3;
+            const KSHIFT_DES_TYPE: u32 = 28; // e32des16.h:16
+            let ok = proc.mem.vm.write_u32(r0, DES_TYPE_EBUF << KSHIFT_DES_TYPE).is_ok() && proc.mem.vm.write_u32(r0.wrapping_add(4), r1).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: descriptor at {r0:#x} is unwritable")) }
+        }
+        // RApaLsSession(): RSessionBase -> RHandleBase { iHandle } = 0 (e32std.h:3153, :4100), then apgcli.h:224 iExtension = 0: two zero words.
+        "_ZN13RApaLsSessionC1Ev" => {
+            let ok = proc.mem.vm.write_u32(r0, 0).is_ok() && proc.mem.vm.write_u32(r0.wrapping_add(4), 0).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED apgrfx/{name}: session object at {r0:#x} is unwritable")) }
+        }
+        // CleanupStack::PushL(TAny*) / PushL(CBase*) record the pointer; PushL(TCleanupItem) (two words r0, r1) records the object r1's
+        // owner would clean, as r0 (the item's function pointer is not run: PopAndDestroy is refused by name below).
+        "_ZN12CleanupStack5PushLEPv" | "_ZN12CleanupStack5PushLEP5CBase" => {
+            proc.nat.cleanup.push(r0);
+            NativeOutcome::Return
+        }
+        "_ZN12CleanupStack3PopEv" | "_ZN12CleanupStack3PopEi" => {
+            let n = if name.ends_with("Ev") { 1 } else { r0 as i32 as usize };
+            let have = proc.nat.cleanup.len();
+            if (r0 as i32) < 0 && !name.ends_with("Ev") || n > have {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: pop of {} with {have} on the cleanup stack (a CBASE-STRAY panic on a device)", r0 as i32));
+            }
+            proc.nat.cleanup.truncate(have - n);
+            NativeOutcome::Return
+        }
+        // drtaeabi's exception-globals object: recorded, `this` returned. Unwinding itself is slice 1b (see the leaves below).
+        "_ZN23TCppRTExceptionsGlobalsC1Ev" => {
+            proc.nat.exception_globals.push(r0);
+            NativeOutcome::Return
+        }
+        // Per-process initialisation of the EKA2 user side: nothing in this engine needs initialising, so it returns.
+        "_ZN4User11InitProcessEv" => {
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        // UserSvr::DllSetTls(aHandle, aDllUid, aPtr) -> KErrNone; UserSvr::DllTls(aHandle, aDllUid) -> the pointer (0 = none).
+        "_ZN7UserSvr9DllSetTlsEiiPv" => {
+            let ptr = proc.cpu.regs[2];
+            proc.nat.tls.insert((r0, r1), ptr);
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZN7UserSvr6DllTlsEii" => {
+            proc.cpu.regs[0] = proc.nat.tls.get(&(r0, r1)).copied().unwrap_or(0);
+            NativeOutcome::Return
+        }
+        // Leaves: EHABI unwinding is slice 1b, so every way into one is refused by name, never ignored. DELETE WHEN the EHABI unwinder lands
+        // (18-SYMBIAN-EKA2L1.md slice 1b; ruling coral_handoffs/consult-2026-10-26-symbian-runapplication.md step 2).
+        "_ZN4User5LeaveEi" => NativeOutcome::Refused(format!("NEXT-NEEDED leave User::Leave({}): EHABI unwinding is slice 1b", r0 as i32)),
+        "_ZN4User12LeaveIfErrorEi" if (r0 as i32) < 0 => NativeOutcome::Refused(format!("NEXT-NEEDED leave User::LeaveIfError({}): EHABI unwinding is slice 1b", r0 as i32)),
+        "_ZN4User12LeaveIfErrorEi" => NativeOutcome::Return, // a non-negative value is returned as it is (r0 unchanged)
+        "__cxa_throw" => NativeOutcome::Refused(String::from("NEXT-NEEDED leave __cxa_throw: EHABI unwinding is slice 1b")),
+        "__cxa_allocate_exception" => NativeOutcome::Refused(String::from("NEXT-NEEDED leave __cxa_allocate_exception: EHABI unwinding is slice 1b")),
+        // CBase::operator new (inline in e32base.inl) is User::AllocZ / AllocZL: zero-filled. The L forms leave on failure.
+        "_ZN4User7AllocZLEi" | "_ZN4User6AllocLEi" => {
+            let len = proc.cpu.regs[0] as i32 as u32;
+            if proc.heap.is_none() {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name} before heap setup"));
+            }
+            match proc.alloc_zeroed(len) {
+                Some(a) => { proc.cpu.regs[0] = a; NativeOutcome::Return }
+                None => NativeOutcome::Refused(format!("NEXT-NEEDED leave {name}({len}): out of memory leaves KErrNoMemory (EHABI unwinding is slice 1b)")),
+            }
+        }
         "_ZN8UserHeap15SetupThreadHeapEiR24SStdEpocThreadCreateInfo" => {
             let info_ptr = proc.cpu.regs[1];
             let allocator = match proc.mem.vm.read_u32(info_ptr + 0x30) {
@@ -72,26 +172,11 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
         }
         "_ZN4User6AllocZEi" => {
             let len = proc.cpu.regs[0] as i32 as u32;
-            match proc.heap.as_mut() {
-                Some(h) => {
-                    let addr = match h.alloc(len, &mut proc.mem) {
-                        Some(a) => a,
-                        None => {
-                            proc.cpu.regs[0] = 0;
-                            return NativeOutcome::Return;
-                        }
-                    };
-                    let total = h.len_of(addr).unwrap_or(0);
-                    for i in 0..total {
-                        let _ = proc.mem.vm.write_u8(addr + i, 0);
-                    }
-                    proc.cpu.regs[0] = addr;
-                    NativeOutcome::Return
-                }
-                None => NativeOutcome::Refused(
-                    "NEXT-NEEDED euser/User::AllocZ before heap setup".into()
-                ),
+            if proc.heap.is_none() {
+                return NativeOutcome::Refused("NEXT-NEEDED euser/User::AllocZ before heap setup".into());
             }
+            proc.cpu.regs[0] = proc.alloc_zeroed(len).unwrap_or(0);
+            NativeOutcome::Return
         }
         "_ZN4User4FreeEPv" => {
             let addr = proc.cpu.regs[0];
@@ -195,5 +280,17 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
         _ => NativeOutcome::Refused(format!(
             "NEXT-NEEDED {}/{} {}", dll_base, ordinal, name
         )),
+    }
+}
+impl Process {
+    /// Allocate `len` bytes from the guest heap, all of them zero (the whole block, as `AllocLen` reports it).
+    pub(crate) fn alloc_zeroed(&mut self, len: u32) -> Option<u32> {
+        let h = self.heap.as_mut()?;
+        let addr = h.alloc(len, &mut self.mem)?;
+        let total = h.len_of(addr).unwrap_or(0);
+        for i in 0..total {
+            let _ = self.mem.vm.write_u8(addr + i, 0);
+        }
+        Some(addr)
     }
 }

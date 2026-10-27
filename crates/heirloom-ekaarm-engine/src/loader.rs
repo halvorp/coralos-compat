@@ -16,6 +16,20 @@ pub struct Process {
     /// Census mode (`Some`): an unimplemented import returns 0 to the guest and is recorded here in call order, so one run
     /// lists the whole sequence a program reaches. `None` (the default) stops at the first one.
     pub census: Option<Vec<alloc::string::String>>,
+    /// The image's UID3 (E32 header): the application start checks `AppDllUid()` against it.
+    pub uid3: u32,
+    /// Length of the loaded code chunk from `CODE_BASE`: a virtual-table slot inside it is a guest override.
+    pub code_len: u32,
+    /// Guest calls in flight (the callback machine, `callback.rs`).
+    pub frames: crate::callback::Frames,
+    /// The virtual-table slot numbers the application start uses (header-derived defaults; a test may change one).
+    pub slots: crate::appstart::Slots,
+    /// Host state of the natives.
+    pub nat: crate::natives::NativeState,
+    /// A host extension asked before the natives (tests); `None` in the engine.
+    pub native_hook: Option<crate::natives::NativeHook>,
+    /// What the application start did, in order (one line per step).
+    pub log: Vec<alloc::string::String>,
 }
 
 #[derive(Debug)]
@@ -37,6 +51,7 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
     let heap_max = header.heap_max;
     let heap_min = header.heap_min;
     let entry_point = header.entry_point;
+    let uid3 = header.uid3;
 
     let stub_list = stubs::build(&img.imports, table);
     let stub_total = stub_list.len() as u32 * 8;
@@ -103,6 +118,7 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         .map_err(|err| LoadError::Vm { chunk: "exit write", err })?;
     mem.vm.set_prot(exit_id, Prot::RX)
         .map_err(|err| LoadError::Vm { chunk: "exit protect", err })?;
+    map_callback_page(&mut mem)?;
 
     mem.vm.set_prot(code_id, Prot::RW)
         .map_err(|err| LoadError::Vm { chunk: "imports unprotect", err })?;
@@ -135,6 +151,13 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         heap: None,
         heap_chunk_id: heap_id,
         census: None,
+        uid3,
+        code_len,
+        frames: Vec::new(),
+        slots: crate::appstart::Slots::default(),
+        nat: Default::default(),
+        native_hook: None,
+        log: Vec::new(),
     };
 
     // EKA2 entry state: kernel places SStdEpocThreadCreateInfo (0x40 bytes)
@@ -179,4 +202,80 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
 
     proc.cpu.set_pc_interworking(entry);
     Ok(proc)
+}
+/// Map the callback return stub's page (`callback::CALLBACK_STUB`): `SVC #CALLBACK_SVC`, read-execute.
+fn map_callback_page(mem: &mut GuestMem) -> Result<(), LoadError> {
+    let id = mem.vm.create_chunk(crate::callback::CALLBACK_STUB, PAGE, Prot::RW)
+        .map_err(|err| LoadError::Vm { chunk: "callback create", err })?;
+    mem.vm.commit(id, 0, PAGE).map_err(|err| LoadError::Vm { chunk: "callback commit", err })?;
+    mem.vm.write_bytes(crate::callback::CALLBACK_STUB, &crate::callback::return_stub_code())
+        .map_err(|err| LoadError::Vm { chunk: "callback write", err })?;
+    mem.vm.set_prot(id, Prot::RX).map_err(|err| LoadError::Vm { chunk: "callback protect", err })
+}
+
+/// TEST HOOK: a process with no image: a 64 KiB stack, a 1 MiB heap (set up), the callback page, and one import stub per
+/// name in `stub_names` (stub `i` is `SVC #(STUB_SVC_BASE + i)`, named as given, DLL `test`). Code is added with
+/// [`Process::map_code`]. Lets the callback machine and the application start run without the owner's corpus.
+#[cfg(feature = "test-hooks")]
+pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
+    let mut mem = GuestMem::new();
+    mem.vm.set_budget(u64::MAX);
+    let stack_sz = 0x1_0000u32;
+    let stack_id = mem.vm.create_chunk(STACK_TOP - stack_sz, stack_sz, Prot::RW)
+        .map_err(|err| LoadError::Vm { chunk: "stack create", err })?;
+    mem.vm.commit(stack_id, 0, stack_sz).map_err(|err| LoadError::Vm { chunk: "stack commit", err })?;
+    let heap_sz = 0x10_0000u32;
+    let heap_id = mem.vm.create_chunk(HEAP_BASE, heap_sz, Prot::RW)
+        .map_err(|err| LoadError::Vm { chunk: "heap create", err })?;
+    mem.vm.commit(heap_id, 0, heap_sz).map_err(|err| LoadError::Vm { chunk: "heap commit", err })?;
+    let stubs: Vec<Stub> = stub_names.iter().enumerate().map(|(i, n)| Stub {
+        dll_base: "test".into(), dll: "test".into(), ordinal: i as u16, name: Some((*n).into()),
+    }).collect();
+    let stub_total = (stubs.len() as u32 * 8).max(8);
+    let stub_id = mem.vm.create_chunk(STUB_BASE, layout::pru(stub_total), Prot::RW)
+        .map_err(|err| LoadError::Vm { chunk: "stubs create", err })?;
+    mem.vm.commit(stub_id, 0, layout::pru(stub_total)).map_err(|err| LoadError::Vm { chunk: "stubs commit", err })?;
+    for i in 0..stubs.len() {
+        mem.vm.write_bytes(stubs::stub_addr(i), &stubs::encode_stub(i)).map_err(|err| LoadError::Vm { chunk: "stubs write", err })?;
+    }
+    mem.vm.set_prot(stub_id, Prot::RX).map_err(|err| LoadError::Vm { chunk: "stubs protect", err })?;
+    map_callback_page(&mut mem)?;
+    let mut cpu = Cpu::new(Config { unaligned: Unaligned::Armv6, vfp: true });
+    cpu.regs[13] = STACK_TOP - 0x40;
+    cpu.regs[14] = EXIT_STUB;
+    Ok(Process {
+        cpu, mem, stubs, insns: 0,
+        heap: Some(crate::heap::Heap::new(heap_id, HEAP_BASE, heap_sz, heap_sz)),
+        heap_chunk_id: heap_id, census: None, uid3: 0, code_len: 0,
+        frames: Vec::new(), slots: crate::appstart::Slots::default(), nat: Default::default(), native_hook: None, log: Vec::new(),
+    })
+}
+
+impl Process {
+    /// TEST HOOK: map `bytes` as read-execute code at the page-aligned `base` (anything at or above `CODE_BASE` extends the
+    /// loaded-code range the vtable-anchor check accepts) and return the chunk.
+    #[cfg(feature = "test-hooks")]
+    pub fn map_code(&mut self, base: u32, bytes: &[u8]) -> Result<(), LoadError> {
+        let len = layout::pru(bytes.len() as u32).max(PAGE);
+        let id = self.mem.vm.create_chunk(base, len, Prot::RW).map_err(|err| LoadError::Vm { chunk: "test code create", err })?;
+        self.mem.vm.commit(id, 0, len).map_err(|err| LoadError::Vm { chunk: "test code commit", err })?;
+        self.mem.vm.write_bytes(base, bytes).map_err(|err| LoadError::Vm { chunk: "test code write", err })?;
+        self.mem.vm.set_prot(id, Prot::RX).map_err(|err| LoadError::Vm { chunk: "test code protect", err })?;
+        if base >= CODE_BASE {
+            self.code_len = self.code_len.max(base - CODE_BASE + len);
+        }
+        Ok(())
+    }
+
+    /// TEST HOOK: map zeroed read-write data at the page-aligned `base` holding `words`, return nothing.
+    #[cfg(feature = "test-hooks")]
+    pub fn map_data(&mut self, base: u32, words: &[u32]) -> Result<(), LoadError> {
+        let len = layout::pru(words.len() as u32 * 4).max(PAGE);
+        let id = self.mem.vm.create_chunk(base, len, Prot::RW).map_err(|err| LoadError::Vm { chunk: "test data create", err })?;
+        self.mem.vm.commit(id, 0, len).map_err(|err| LoadError::Vm { chunk: "test data commit", err })?;
+        for (i, w) in words.iter().enumerate() {
+            self.mem.vm.write_u32(base + i as u32 * 4, *w).map_err(|err| LoadError::Vm { chunk: "test data write", err })?;
+        }
+        Ok(())
+    }
 }
