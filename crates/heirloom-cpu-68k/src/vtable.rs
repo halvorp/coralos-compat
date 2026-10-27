@@ -196,6 +196,11 @@ extern "C" fn run_impl(inst: *mut CpuInstance, budget: u64, stop: *mut CpuStop) 
         } else if let Some(stalled_at) = stats.stalled_at {
             stop.kind = STOP_FAULT;
             stop.detail = stalled_at.into();
+        } else if stats.bus_faults > 0 {
+            // A callback refused an access (the core read it as 0 / dropped the write and went on). The engine owns the
+            // memory map, so it must hear about it: detail = how many accesses faulted in this run.
+            stop.kind = STOP_FAULT;
+            stop.detail = stats.bus_faults;
         } else {
             stop.kind = STOP_BUDGET;
         }
