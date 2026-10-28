@@ -183,6 +183,7 @@ def write_mesa_worker(path, rows, digest, cmds, core):
         o.write("//! Every GL 1.0-1.2 core command (%d of them) and the worker's framebuffer entries as typed pointers resolved by name from\n" % len(core))
         o.write("//! Mesa (eglGetProcAddress); `call` runs the regular ones from `heirloom_gl_abi::family`'s argument words.\n")
         o.write("use alloc::vec::Vec;\nuse core::ffi::{c_void, CStr};\nuse heirloom_gl_abi::family::var_len;\nuse heirloom_gl_abi::sig::VecKind;\n\n")
+        o.write(f"/// How many entries [`GlFns`] resolves: the {len(core)} core commands and the worker's extra entries.\npub const ENTRY_COUNT: usize = {len(names)};\n\n")
         o.write("/// One resolved entry point per command; `None` = Mesa did not export it (a named refusal, never a call through null).\n")
         o.write("/// Field = the command in snake case without `gl` (glTexImage2D -> `tex_image2_d`); each resolves the exact GL name.\npub struct GlFns {\n")
         for n in names:
