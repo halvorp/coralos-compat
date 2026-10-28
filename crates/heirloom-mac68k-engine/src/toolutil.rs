@@ -8,7 +8,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9E0, &[Arg::P, Arg::L, Arg::P, Arg::L, Arg::P, Arg::L], Some(Arg::L), munger::<U>)?;

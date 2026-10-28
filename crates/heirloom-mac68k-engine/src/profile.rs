@@ -10,7 +10,7 @@
 //! Codes: `'mach'` (Gestalt machine type, Inside Macintosh VI 3-15), `'cput'` (0 = 68000, 1 = 68010, 2 = 68020), the
 //! SysEnvRec `machineType` (envMacPlus 2, envSE 3, envMacII 4) and `processor` (env68000 1, env68020 3).
 use crate::addrmode::AddrMode;
-use heirloom_cpu_68k::CpuModel;
+use crate::cpu::CpuModel;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MachineProfile {

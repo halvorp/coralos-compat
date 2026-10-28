@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::format;
 use crate::{idcmp::{self, WD_IDCMP, WD_USERPORT}, machine::Amiga, screen, tags, Refusal};
 use heirloom_ui_abi::{CallbackToken, GuestRect, GuestUi, WindowModel, WindowRole};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_OPEN_WINDOW: i32 = -204;
 pub const LVO_CLOSE_WINDOW: i32 = -72;

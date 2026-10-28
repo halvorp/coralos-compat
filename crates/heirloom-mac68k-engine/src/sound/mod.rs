@@ -32,7 +32,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::{AudioFormat, AudioStreamModel, AudioStreamRef, GuestUi, UiRefusal, AUDIO_UNITY};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use snd::Cmd;
 
 pub const NO_ERR: i16 = 0;

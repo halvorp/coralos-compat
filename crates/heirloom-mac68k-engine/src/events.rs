@@ -29,7 +29,7 @@ use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::{GuestUi, GuestUiEvent};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const MOUSE_DOWN: u16 = 1;
 pub const MOUSE_UP: u16 = 2;

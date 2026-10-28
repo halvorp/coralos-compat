@@ -15,7 +15,7 @@ use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::{MASK_24, MASK_32};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddrMode { Bit24, Bit32 }

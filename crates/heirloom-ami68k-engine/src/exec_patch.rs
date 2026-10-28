@@ -18,7 +18,7 @@ use crate::libtable::{write_slot, ILLEGAL};
 use crate::machine::Amiga;
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_SET_FUNCTION: i32 = -420;
 pub const LVO_SUM_LIBRARY: i32 = -426;

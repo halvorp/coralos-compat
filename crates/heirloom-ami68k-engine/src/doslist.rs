@@ -25,7 +25,7 @@ use crate::libtable::LibraryBuilder;
 use crate::volume::ROOT;
 use crate::{machine::Amiga, machine::DOS_BASE, semaphores, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const DOS_ROOT: u32 = 0x5080;
 pub const DOS_INFO: u32 = 0x5100;

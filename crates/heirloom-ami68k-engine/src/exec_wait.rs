@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::format;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_SIGNAL: i32 = -324;
 pub const LVO_WAIT: i32 = -318;

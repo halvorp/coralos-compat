@@ -24,7 +24,7 @@ use crate::guest_call::Frame;
 use crate::machine::{Amiga, EXEC_BASE};
 use crate::{execlists, Refusal, Step};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::{CpuContext, RunStats, REG_D0};
+use crate::cpu::{CpuContext, RunStats, REG_D0};
 
 /// Instructions a task may run before an equal-priority peer gets the CPU.
 pub const QUANTUM_INSNS: u64 = 20_000;
@@ -152,7 +152,7 @@ impl<U: GuestUi> Amiga<U> {
     }
 
     /// After a library call: end the running task's slice if a READY task outranks it and switching is allowed.
-    pub(crate) fn preempt_check(&mut self, cpu: &mut heirloom_cpu_68k::Cpu) {
+    pub(crate) fn preempt_check(&mut self, cpu: &mut crate::cpu::Cpu) {
         if self.sched.tasks.len() < 2 { return; }
         let cur = self.sched.cur;
         let Some(c) = self.sched.tasks.get(&cur) else { return };
@@ -205,7 +205,7 @@ impl<U: GuestUi> Amiga<U> {
         }
         let start = self.sched.tasks.get_mut(&t).expect("task").start.take();
         let mut ctx = match start {
-            Some(s) => heirloom_cpu_68k::start_with(self, s.pc, s.sp, &s.regs),
+            Some(s) => crate::cpu::start_with(self, s.pc, s.sp, &s.regs),
             None => self.sched.tasks.get_mut(&t).expect("task").ctx.take().expect("a task that is not running has a context"),
         };
         if let Some(v) = d0 { ctx.set_reg(REG_D0, v); }
@@ -224,7 +224,7 @@ impl<U: GuestUi> Amiga<U> {
             self.sync_task_lists()
         })();
         if let Err(Refusal(e)) = sw { return Outcome::Fault(e); }
-        let stats = heirloom_cpu_68k::resume(self, &mut ctx, slice);
+        let stats = crate::cpu::resume(self, &mut ctx, slice);
         crate::graphics::content::flush(self);
         tot.insns += stats.insns;
         tot.bus_faults += stats.bus_faults;

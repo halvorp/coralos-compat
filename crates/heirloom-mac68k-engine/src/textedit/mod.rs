@@ -34,7 +34,7 @@ use alloc::format;
 use alloc::vec::Vec;
 use draw::{Geo, Mark};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const T_DEST: u32 = 0;
 pub const T_VIEW: u32 = 8;

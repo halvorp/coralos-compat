@@ -13,7 +13,7 @@ use crate::libtable::LibraryBuilder;
 use crate::machine::Amiga;
 use crate::{tags, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const AI_BASE: u32 = tags::TAG_USER;
 const AI_BASE_A: u32 = AI_BASE + 0x10000;

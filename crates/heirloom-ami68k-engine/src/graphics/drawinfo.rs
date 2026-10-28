@@ -8,7 +8,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::{paint::{self, Brush, JAM2}, Rect};
 
 const CUSTOMIMAGEDEPTH: i32 = -1;

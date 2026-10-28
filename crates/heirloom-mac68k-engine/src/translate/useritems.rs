@@ -26,7 +26,7 @@ use crate::Refusal;
 use alloc::collections::VecDeque;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::Region;
 
 /// The program's state while the procedures run.

@@ -16,7 +16,7 @@ use crate::pascal::Arg;
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const PRIVATES: u32 = 76;
 pub const PUBLICS: u32 = 130;

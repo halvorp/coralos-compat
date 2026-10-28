@@ -5,7 +5,7 @@
 //! tests D0 so the program can `bne` straight after the trap; [`set_flags`] does that (a `tst.w d0`: N and Z from
 //! the low word, V and C cleared, X kept). Which registers a particular call uses is that call's own business; the
 //! handler sees them in [`Regs`] and writes its results back into the same struct.
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const NO_ERR: i16 = 0;
 /// paramErr: a handler refused the call (the refusal text is in `Mac::refused`).

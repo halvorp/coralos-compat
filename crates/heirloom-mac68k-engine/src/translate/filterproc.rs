@@ -23,7 +23,7 @@ use crate::machine::Mac;
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// A filter call waiting to start (`pending`) or running (the [`Frame`]).
 #[derive(Debug, Clone)]

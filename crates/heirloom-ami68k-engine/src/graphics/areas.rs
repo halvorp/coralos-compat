@@ -13,7 +13,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const AI_VCTR_TBL: u32 = 0;
 const AI_VCTR_PTR: u32 = 4;

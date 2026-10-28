@@ -11,7 +11,7 @@ use crate::machine::{Amiga, EXEC_BASE};
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_ADD_LIBRARY: i32 = -396;
 pub const LVO_REM_LIBRARY: i32 = -402;

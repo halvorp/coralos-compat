@@ -17,7 +17,7 @@ use crate::guest_call::{self, Next};
 use crate::idcmp::IDCMP_GADGETUP;
 use crate::{machine::Amiga, memory, Delivered, Refusal};
 use heirloom_ui_abi::{GuestUi, PointerPhase};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const SCRATCH: u32 = 96;
 const IE_OFF: u32 = 32; // InputEvent (22 bytes) in the scratch block
@@ -214,11 +214,11 @@ pub fn redirect<U: GuestUi>(a: &mut Amiga<U>, t: u32) -> bool {
     let Some(task) = a.sched.tasks.get_mut(&t) else { return false };
     let (Some(w), Some(ctx)) = (task.waiting, task.ctx.as_mut()) else { return false };
     match w {
-        Waiting::Signals(set) => ctx.set_reg(heirloom_cpu_68k::REG_D0, set),
-        Waiting::Port(p) => ctx.set_reg(heirloom_cpu_68k::REG_A0, p),
+        Waiting::Signals(set) => ctx.set_reg(crate::cpu::REG_D0, set),
+        Waiting::Port(p) => ctx.set_reg(crate::cpu::REG_A0, p),
         _ => return false,
     }
-    ctx.set_reg(heirloom_cpu_68k::REG_PC, trap);
+    ctx.set_reg(crate::cpu::REG_PC, trap);
     task.waiting = None;
     true
 }

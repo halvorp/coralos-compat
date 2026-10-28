@@ -42,7 +42,7 @@ use crate::machine::Mac;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// `resCompressed`: the resource attribute bit that says the data is compressed.
 pub const RES_COMPRESSED: u8 = 0x01;

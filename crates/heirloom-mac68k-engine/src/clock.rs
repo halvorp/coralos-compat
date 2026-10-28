@@ -18,7 +18,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// 2026-10-19 00:00:00, in Mac seconds (1904 epoch).
 pub const DEFAULT_BOOT_SECS: u32 = 3_875_212_800;

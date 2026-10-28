@@ -23,7 +23,7 @@ use crate::locale_tables::{CTYPE, TO_UPPER};
 use crate::machine::Amiga;
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const H_ENTRY: u32 = 8;
 const MAX_INPUT: usize = 1024;

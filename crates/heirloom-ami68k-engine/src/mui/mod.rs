@@ -46,7 +46,7 @@ use crate::guest_call;
 use crate::libtable::LibraryBuilder;
 use crate::{machine::Amiga, run::Delivered, tags, Refusal};
 use heirloom_ui_abi::{GuestUi, GuestUiEvent};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub use ids_gen::*;
 pub use methods::{method, OM_ADDMEMBER, OM_REMMEMBER};

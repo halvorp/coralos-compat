@@ -22,7 +22,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// The built-in `itl0` / `itl1` handles once made (system-owned, locked).
 pub type IntlHandles = [Option<u32>; 2];

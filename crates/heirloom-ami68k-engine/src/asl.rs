@@ -14,7 +14,7 @@ use crate::libtable::LibraryBuilder;
 use crate::machine::Amiga;
 use crate::{tags, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const ASL_TB: u32 = tags::TAG_USER + 0x80000;
 const FR_SIZE: u32 = 56;

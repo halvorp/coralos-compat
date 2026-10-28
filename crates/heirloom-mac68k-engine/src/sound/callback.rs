@@ -35,7 +35,7 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// At a trap boundary: if a completion routine is due, enter it (and run the trap at `retry` afterwards). True = entered.
-    pub(crate) fn enter_sound_callback(&mut self, cpu: &mut heirloom_cpu_68k::Cpu, retry: u32) -> bool {
+    pub(crate) fn enter_sound_callback(&mut self, cpu: &mut crate::cpu::Cpu, retry: u32) -> bool {
         if self.snd.pending.is_empty() || self.snd.in_callback { return false; }
         let mut due = None;
         for i in 0..self.snd.pending.len() {
@@ -60,7 +60,7 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// The routine returned into the trampoline: the program's registers come back, the command record is freed.
-    pub(crate) fn finish_sound_callback(&mut self, cpu: &mut heirloom_cpu_68k::Cpu, done: VblDone, cmd: u32) {
+    pub(crate) fn finish_sound_callback(&mut self, cpu: &mut crate::cpu::Cpu, done: VblDone, cmd: u32) {
         for (i, v) in done.regs.iter().enumerate() { if i < 8 { cpu.set_dreg(i as u32, *v) } else { cpu.set_areg(i as u32 - 8, *v) } }
         cpu.set_sr(done.sr);
         let _ = self.mm.dispose_ptr(&mut self.heap, cmd);

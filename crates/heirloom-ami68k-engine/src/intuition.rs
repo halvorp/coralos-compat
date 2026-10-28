@@ -7,7 +7,7 @@ use alloc::string::String;
 use alloc::format;
 use crate::{machine::Amiga, menu, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_SET_MENU_STRIP: i32 = -264;
 pub const LVO_CLEAR_MENU_STRIP: i32 = -54;

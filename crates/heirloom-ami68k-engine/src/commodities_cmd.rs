@@ -15,7 +15,7 @@ use crate::libtable::LibraryBuilder;
 use crate::machine::Amiga;
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const CXMSG_SIZE: u32 = 162;
 pub(crate) const CXM_ID: u32 = 24;

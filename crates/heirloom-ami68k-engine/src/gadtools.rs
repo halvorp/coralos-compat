@@ -12,7 +12,7 @@ use alloc::string::{String, ToString};
 use alloc::format;
 use crate::{gt_kinds, gt_kinds_rows, machine::Amiga, tags, Refusal};
 use heirloom_ui_abi::{GuestRect, GuestUi, UiObjectRef};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_CREATE_GADGET_A: i32 = -30;
 pub const LVO_FREE_GADGETS: i32 = -36;

@@ -20,7 +20,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::{CallbackToken, GuestRect, GuestUi, WindowModel, WindowRole};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// sizeof(WindowRecord) (a GrafPort's 108 bytes + the window fields), Inside Macintosh.
 pub const WINDOW_RECORD_SIZE: u32 = 156;

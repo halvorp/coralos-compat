@@ -23,7 +23,7 @@ use crate::boopsi_ids::CL_H_ENTRY;
 use crate::guest_call::Next;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::{GuestRect, GuestUi};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// `MADF_` bits the engine sets (classes/area.h): drawn completely / setup done / may draw / shown.
 pub const MADF_DRAWOBJECT: u32 = 1 << 0;

@@ -26,7 +26,7 @@ use crate::pattern::{tokenised_len, Pattern};
 use crate::volume::{Kind, NodeId};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const ERROR_BAD_NUMBER: DosErr = DosErr(115);
 const ERROR_BUFFER_OVERFLOW: DosErr = DosErr(303);

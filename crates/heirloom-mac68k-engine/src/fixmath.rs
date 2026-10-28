@@ -8,7 +8,7 @@ use crate::quickdraw::OFF_RAND_SEED;
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const POS_OVERFLOW: i32 = 0x7FFF_FFFF;
 pub const NEG_OVERFLOW: i32 = i32::MIN;

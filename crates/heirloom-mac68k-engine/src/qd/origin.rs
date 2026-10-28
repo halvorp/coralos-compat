@@ -10,7 +10,7 @@ use crate::pascal::Arg;
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> { super::reg(m, 0xA878, "SetOrigin", &[Arg::W, Arg::W], None, set_origin::<U>) }
 

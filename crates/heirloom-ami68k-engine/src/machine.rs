@@ -9,7 +9,7 @@ use crate::{devices, dos, exec, exec_wait, lists, memheader, semaphores, gadtool
 use heirloom_ui_abi::{GuestUi, UiObjectRef};
 use heirloom_mem_flat32::{GuestMem, DEFAULT_SIZE};
 use heirloom_fmt_hunk::Loaded;
-use heirloom_cpu_68k::{Cpu, Host, RunStats};
+use crate::cpu::{Cpu, Host, RunStats};
 
 pub const EXEC_BASE: u32 = 0x1000;
 pub const INTUITION_BASE: u32 = 0x2000;
@@ -342,7 +342,7 @@ impl<U: GuestUi> Host for Amiga<U> {
 
     fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool {
         if pc == EXIT_SLOT {
-            if self.sched.cur != process::PROCESS { let t = self.sched.cur; let n = self.sched.tasks.get(&t).map(|k| k.name.clone()).unwrap_or_default(); self.log.push(format!("[sched] task {t:#x} \"{n}\" jumped to the program exit slot (it returned through the wrong stack?) recent pcs: {}", { let r = heirloom_cpu_68k::recent_pcs(); let k = r.iter().rposition(|&p| p >= 0x1000 && p < 0x200000).unwrap_or(0); r[k.saturating_sub(60)..=k].iter().map(|p| format!("{p:#x}")).collect::<Vec<_>>().join(" ") })); }
+            if self.sched.cur != process::PROCESS { let t = self.sched.cur; let n = self.sched.tasks.get(&t).map(|k| k.name.clone()).unwrap_or_default(); self.log.push(format!("[sched] task {t:#x} \"{n}\" jumped to the program exit slot (it returned through the wrong stack?) recent pcs: {}", { let r = crate::cpu::recent_pcs(); let k = r.iter().rposition(|&p| p >= 0x1000 && p < 0x200000).unwrap_or(0); r[k.saturating_sub(60)..=k].iter().map(|p| format!("{p:#x}")).collect::<Vec<_>>().join(" ") })); }
             cpu.halt();
             return true;
         }

@@ -58,7 +58,7 @@ const NO_HANDLE: u32 = u32::MAX;
 /// muimaster `MUI_AddClipRegion(a0 = RenderInfo, a1 = region)` -> a handle for `MUI_RemoveClipRegion`. The region is installed as the clip of
 /// the window's layer (intersected with the one installed before it: Zune does `AndRegionRegion(previous, new)`), and owned by the stack until
 /// removed. A window-less RenderInfo or a NULL region disposes the region and answers -1, as mui_addclipregion.c does.
-pub fn add_clip_region<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut heirloom_cpu_68k::Cpu) -> Result<alloc::string::String, Refusal> {
+pub fn add_clip_region<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut crate::cpu::Cpu) -> Result<alloc::string::String, Refusal> {
     let (mri, region) = (cpu.areg(0), cpu.areg(1));
     let win = a.mem.read_u32(mri + MRI_WINDOW).map_err(Refusal::mem("mri_Window"))?;
     let layer = if win != 0 { a.mem.read_u32(win + WD_WLAYER).map_err(Refusal::mem("Window.WLayer"))? } else { 0 };
@@ -78,7 +78,7 @@ pub fn add_clip_region<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut heirloom_cpu_68k:
 }
 
 /// muimaster `MUI_RemoveClipRegion(a0 = RenderInfo, a1 = handle)`: the region below the handle is installed again and the handle's is disposed.
-pub fn remove_clip_region<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut heirloom_cpu_68k::Cpu) -> Result<alloc::string::String, Refusal> {
+pub fn remove_clip_region<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut crate::cpu::Cpu) -> Result<alloc::string::String, Refusal> {
     let (mri, handle) = (cpu.areg(0), cpu.areg(1));
     if handle == NO_HANDLE { return Ok("[muimaster] MUI_RemoveClipRegion -1".into()); }
     let win = a.mem.read_u32(mri + MRI_WINDOW).map_err(Refusal::mem("mri_Window"))?;

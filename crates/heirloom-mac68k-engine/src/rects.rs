@@ -9,7 +9,7 @@ use crate::qd::port::write_rect;
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 impl Rect {
     pub fn is_empty(&self) -> bool { self.bottom <= self.top || self.right <= self.left }

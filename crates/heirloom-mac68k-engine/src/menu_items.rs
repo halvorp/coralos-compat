@@ -10,7 +10,7 @@ use crate::pascal::Arg;
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 type Field = fn(&mut Item) -> &mut u8;
 const FIELDS: [(&str, &str, u16, u16, Field); 4] = [

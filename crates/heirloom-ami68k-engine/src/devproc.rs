@@ -13,7 +13,7 @@ use crate::fs::*;
 use crate::libtable::LibraryBuilder;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const DEVPROC_SIZE: u32 = 16;
 const DVPF_ASSIGN: u32 = 1 << 1;

@@ -16,7 +16,7 @@ use crate::pascal::Arg;
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// sizeof(Cursor): `data` 32 bytes, `mask` 32 bytes, `hotSpot` Point 4 bytes.
 pub const CURSOR_SIZE: u32 = 68;

@@ -10,7 +10,7 @@ use alloc::string::String;
 use crate::graphics::{layout::RP_MASK, record::Prim, target};
 use crate::{machine::Amiga, tags, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::Rect;
 
 pub const LVO_DRAW_BEVEL_BOX_A: i32 = -120;

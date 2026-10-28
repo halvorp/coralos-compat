@@ -18,7 +18,7 @@ use crate::libtable::LibraryBuilder;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const KCF_SHIFT: u8 = 1;
 pub const KCF_ALT: u8 = 2;

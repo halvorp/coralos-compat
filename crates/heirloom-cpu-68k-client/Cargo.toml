@@ -1,0 +1,19 @@
+[package]
+name = "heirloom-cpu-68k-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The heirloom-cpu-68k API driven through cpu-68k.library's CpuVTable (no Musashi linked)"
+
+[features]
+default = []
+# HOST tests and tools only (refused on target_os = "none", src/lib.rs): bind the static core's table when nothing was bound.
+bind-static = ["dep:heirloom-cpu-68k"]
+
+[dependencies]
+heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
+heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }
+heirloom-cpu-68k = { path = "../heirloom-cpu-68k", optional = true }
+
+[dev-dependencies]
+heirloom-cpu-68k = { path = "../heirloom-cpu-68k" }

@@ -16,7 +16,7 @@ use crate::pascal::{read_rect, Arg, Rect};
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const DITL_RECT: u32 = 4;
 const DITL_TYPE: u32 = 12;

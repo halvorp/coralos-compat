@@ -12,7 +12,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const NO_TYPE_ERR: i32 = -102;
 

@@ -10,7 +10,7 @@ use alloc::format;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_LOCK_PUB_SCREEN: i32 = -510;
 pub const LVO_UNLOCK_PUB_SCREEN: i32 = -516;

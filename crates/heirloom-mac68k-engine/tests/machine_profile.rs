@@ -79,7 +79,7 @@ fn reaches_its_trap_4_handler(profile: &str) -> Option<bool> {
     for _ in 0..400 {
         let (step, _) = m.step(500);
         let h = m.mem.read_u32(36 * 4).unwrap_or(0);
-        if h != 0 && heirloom_cpu_68k::recent_pcs().contains(&h) { return Some(true); }
+        if h != 0 && heirloom_mac68k_engine::cpu::recent_pcs().contains(&h) { return Some(true); }
         if step != heirloom_mac68k_engine::Step::BudgetSpent { break; }
     }
     Some(false)

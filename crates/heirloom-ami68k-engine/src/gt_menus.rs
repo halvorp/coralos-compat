@@ -22,7 +22,7 @@ use alloc::format;
 use crate::{graphics::TOPAZ8_WIDTH, machine::Amiga, memory, tags, Refusal};
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_CREATE_MENUS_A: i32 = -48;
 pub const LVO_FREE_MENUS: i32 = -54;

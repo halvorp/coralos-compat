@@ -7,7 +7,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::{blit::blit_within, paint::{self, Brush, Clip, Pattern, JAM2}, Rect, Region};
 
 /// The AreaPtrn as rows, if the RastPort has a single-plane one (AreaPtSz > 0: 2^AreaPtSz words).

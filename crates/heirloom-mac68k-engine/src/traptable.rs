@@ -18,7 +18,7 @@ use crate::osconv::Regs;
 use crate::traps::trap_key;
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// Toolbox traps' stubs: TOOL_STUBS + 4 * number (10-bit); OS traps': OS_STUBS + 4 * number (8-bit). Free low memory.
 pub const TOOL_STUBS: u32 = 0x4000;

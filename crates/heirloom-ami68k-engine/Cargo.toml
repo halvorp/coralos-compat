@@ -9,10 +9,17 @@ description = "AmigaOS 68k personality: fake ExecBase, LVO trap bridge, Intuitio
 heirloom-common = { path = "../heirloom-common" }
 heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
 heirloom-volume = { path = "../heirloom-volume" }
-heirloom-cpu-68k = { path = "../heirloom-cpu-68k" }
+heirloom-cpu-68k = { path = "../heirloom-cpu-68k", optional = true }
+heirloom-cpu-68k-client = { path = "../heirloom-cpu-68k-client", optional = true }
 heirloom-fmt-hunk = { path = "../heirloom-fmt-hunk" }
 heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-raster = { path = "../heirloom-raster" }
 heirloom-present = { path = "../heirloom-present" }
 heirloom-translate = { path = "../heirloom-translate" }
 heirloom-theme = { path = "../heirloom-theme" }
+
+[features]
+# The CPU backend (src/cpu.rs): the static core by default; `cpu-library` drives cpu-68k.library through its table.
+default = ["cpu-static"]
+cpu-static = ["dep:heirloom-cpu-68k"]
+cpu-library = ["dep:heirloom-cpu-68k-client"]

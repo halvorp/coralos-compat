@@ -17,7 +17,7 @@ use crate::machine::EXEC_BASE;
 use crate::machine::Amiga;
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
     b.named("AddPort", add_port::<U>).named("RemPort", rem_port::<U>).named("FindPort", find_port::<U>)

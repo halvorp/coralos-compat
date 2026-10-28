@@ -22,7 +22,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::{GuestUi, RequestKind, RequestModel, UiObjectRef, UiRefusal};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// Bytes of the Pascal frame after the trap: alertID (2), filterProc (4); the INTEGER result slot lies just above.
 const ARGS: u32 = 6;

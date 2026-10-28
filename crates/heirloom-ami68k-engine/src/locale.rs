@@ -24,7 +24,7 @@ use crate::locale_tables::*;
 use crate::machine::Amiga;
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// english.language strings by id (libraries/localestd.h: DAY_1 = 1, ABDAY_1 = 8, MON_1 = 15, ABMON_1 = 27, YESSTR = 39,
 /// NOSTR 40, AM_STR 41, PM_STR 42, SOFTHYPHEN 43 ... FUTURESTR 50).

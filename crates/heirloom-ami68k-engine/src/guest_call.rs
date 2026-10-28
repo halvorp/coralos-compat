@@ -31,7 +31,7 @@ use crate::libtable::{write_slot, RTS};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// The callee's return trap, and the register-restore stub. (0x500 is the exit slot; both are free low memory.)
 pub const RET_SLOT: u32 = 0x510;

@@ -16,7 +16,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const CT_SEED: u32 = 0;
 pub const CT_FLAGS: u32 = 4;

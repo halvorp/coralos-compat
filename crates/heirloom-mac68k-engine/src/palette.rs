@@ -18,7 +18,7 @@ use crate::Refusal;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const HEADER: u32 = 16;
 const ENTRY: u32 = 16;

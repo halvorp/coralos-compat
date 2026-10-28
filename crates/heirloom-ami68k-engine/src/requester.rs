@@ -26,7 +26,7 @@ use crate::idcmp::{self, IDCMP_GADGETUP, INTUIMESSAGE_SIZE};
 use crate::libtable::LibraryBuilder;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::{GuestUi, GuestUiEvent, RequestModel, RequestRef};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 // struct EasyStruct (intuition/intuition.h; m68k gcc -mno-align-int, 2026-10-19): es_Title 8, es_TextFormat 12, es_GadgetFormat 16.
 const ES_TITLE: u32 = 8;

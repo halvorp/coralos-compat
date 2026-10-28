@@ -10,7 +10,7 @@ use crate::fs::*;
 use crate::volume::{Kind, NodeId};
 use crate::{dos, machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// dos/dos.h MODE_*; OFFSET_*.
 const MODE_READWRITE: u32 = 1004;

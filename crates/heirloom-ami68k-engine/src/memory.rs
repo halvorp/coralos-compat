@@ -10,7 +10,7 @@ use alloc::format;
 use crate::{machine::Amiga, Refusal};
 pub use heirloom_mem_flat32::heap::Heap;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_FORBID: i32 = -132;
 pub const LVO_PERMIT: i32 = -138;

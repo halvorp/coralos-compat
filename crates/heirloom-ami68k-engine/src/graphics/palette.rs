@@ -7,7 +7,7 @@ use crate::{machine::Amiga, tags, Refusal};
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::Rect;
 
 const PENF_EXCLUSIVE: u32 = 1;

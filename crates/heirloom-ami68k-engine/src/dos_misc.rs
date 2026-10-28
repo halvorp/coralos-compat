@@ -14,7 +14,7 @@ use crate::dos_io::{handle, write_bytes_to};
 use crate::fs::*;
 use crate::{dos, machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const TICKS_PER_SEC: u64 = 50;
 const SECS_PER_DAY: u64 = 86_400;

@@ -13,7 +13,7 @@ use crate::boopsi_send::{make_msg, MSG_BLOCK};
 use crate::guest_call::{self, Next};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// The class of `obj` when it is an instance of a guest class (a program's or a disk class), whose dispatcher is guest code.
 fn guest_class<U: GuestUi>(a: &Amiga<U>, obj: u32) -> Option<u32> {

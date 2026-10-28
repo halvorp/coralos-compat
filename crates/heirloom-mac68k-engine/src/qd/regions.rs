@@ -14,7 +14,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::{Rect, Region};
 
 const END: u16 = 0x7FFF;

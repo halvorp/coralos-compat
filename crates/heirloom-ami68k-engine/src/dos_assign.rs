@@ -6,7 +6,7 @@ use alloc::format;
 use crate::fs::*;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 fn take_lock<U: GuestUi>(a: &mut Amiga<U>, b: u32, call: &str) -> Result<Option<String>, Refusal> {
     if b == 0 { return Ok(None); }

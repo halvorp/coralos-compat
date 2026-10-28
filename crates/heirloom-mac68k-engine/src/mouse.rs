@@ -15,7 +15,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// A port's `portBits.bounds` top-left (v, h): GrafPort offset 2 is the BitMap, whose bounds start 6 bytes in.
 const PORT_BOUNDS: u32 = 2 + 6;

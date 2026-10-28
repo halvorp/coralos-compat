@@ -12,7 +12,7 @@ use crate::fs::*;
 use crate::libtable::LibraryBuilder;
 use crate::{dos, machine::Amiga, process, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const PR_CIS: u32 = 156;
 const PR_COS: u32 = 160;

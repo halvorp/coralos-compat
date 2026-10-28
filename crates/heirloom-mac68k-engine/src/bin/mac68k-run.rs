@@ -55,7 +55,7 @@ fn main() {
             if !r.stats.blocked || r.stats.insns >= insns { break; }
             m.advance_ticks(1);
             let more = m.run_loop(insns - r.stats.insns)?;
-            r = heirloom_mac68k_engine::run::RunReport { stats: heirloom_cpu_68k::RunStats { insns: r.stats.insns + more.stats.insns, bus_faults: r.stats.bus_faults + more.stats.bus_faults, ..more.stats } };
+            r = heirloom_mac68k_engine::run::RunReport { stats: heirloom_mac68k_engine::cpu::RunStats { insns: r.stats.insns + more.stats.insns, bus_faults: r.stats.bus_faults + more.stats.bus_faults, ..more.stats } };
         }
         Ok::<_, String>(r)
     })();
@@ -63,7 +63,7 @@ fn main() {
         Ok(r) => println!("ran {} instructions, halted={}, blocked={}, bus_faults={}", r.stats.insns, r.stats.halted, r.stats.blocked, r.stats.bus_faults),
         Err(e) => { eprintln!("run failed: {e}"); std::process::exit(1) }
     }
-    if pcs > 0 { let r = heirloom_cpu_68k::recent_pcs(); println!("recent pcs: {:x?}", &r[r.len().saturating_sub(pcs)..]); }
+    if pcs > 0 { let r = heirloom_mac68k_engine::cpu::recent_pcs(); println!("recent pcs: {:x?}", &r[r.len().saturating_sub(pcs)..]); }
     if let Some((a, n)) = dump { if let Ok(sp) = m.mem.span(a, n) { if let Ok(b) = m.mem.bytes(sp) { println!("dump {a:#x}: {}", b.iter().map(|x| format!("{x:02x}")).collect::<String>()); } } }
     for l in &m.log { println!("{l}"); }
     for c in &m.ui.calls { println!("ui: {c:?}"); }

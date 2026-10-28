@@ -10,7 +10,7 @@ use alloc::vec;
 use alloc::format;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_READ_ARGS: i32 = -798;
 pub const LVO_FREE_ARGS: i32 = -858;

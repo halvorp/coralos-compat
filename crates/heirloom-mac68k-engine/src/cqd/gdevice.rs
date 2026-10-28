@@ -20,7 +20,7 @@ use crate::pascal::{read_rect, Arg, Rect};
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const GD_TYPE: u32 = 4;
 pub const GD_FLAGS: u32 = 20;

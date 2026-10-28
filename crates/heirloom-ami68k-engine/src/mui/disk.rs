@@ -20,7 +20,7 @@ use crate::boopsi_send::{make_msg, MSG_BLOCK};
 use crate::guest_call::{self, Cont, Next};
 use crate::{disklib, machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const MCC_CLASS: u32 = 24;
 const MCC_MODULE: u32 = 28;

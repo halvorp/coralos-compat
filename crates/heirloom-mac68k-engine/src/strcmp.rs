@@ -11,7 +11,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register_os(0xA03C, cmp_string::<U>)?;

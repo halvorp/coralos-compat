@@ -10,7 +10,7 @@ use super::layout::{SCREEN_DEPTH, SCREEN_HEIGHT, SCREEN_WIDTH};
 use super::modes::{record, INVALID_MODE, WORKBENCH_MODE};
 use crate::{machine::Amiga, tags, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const BIDTAG_DIPF_MUST_HAVE: u32 = 0x8000_0001;
 const BIDTAG_DIPF_MUST_NOT_HAVE: u32 = 0x8000_0002;

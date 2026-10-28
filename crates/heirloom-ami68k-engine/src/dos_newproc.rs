@@ -25,7 +25,7 @@ use crate::machine::Amiga;
 use crate::sched::{LN_PRI, Start};
 use crate::{execlists, tags, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const NP_DUMMY: u32 = tags::TAG_USER + 1000;
 const NP_SEGLIST: u32 = NP_DUMMY + 1;
@@ -241,7 +241,7 @@ fn build<U: GuestUi>(a: &mut Amiga<U>, own: &mut ProcOwn, s: &Spec) -> Result<u3
     let sp = upper - 4;
     a.mem.write_u32(sp, crate::exec_task::TASK_END).map_err(m("process stack"))?;
     a.mem.write_u32(p + 54, sp).map_err(m("tc_SPReg"))?;
-    let regs = alloc::vec![(heirloom_cpu_68k::REG_A0, args), (heirloom_cpu_68k::REG_D0, arglen)];
+    let regs = alloc::vec![(crate::cpu::REG_A0, args), (crate::cpu::REG_D0, arglen)];
     let owned = core::mem::take(own);
     a.add_sched_task(p, s.name.clone(), false, Start { pc: entry, sp, regs }, Some(owned));
     // NP_CopyVars: the child starts with copies of the parent's local variables.

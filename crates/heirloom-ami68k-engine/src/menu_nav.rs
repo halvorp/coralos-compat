@@ -11,7 +11,7 @@ use alloc::format;
 use crate::{idcmp::{self, IDCMP_MENUPICK, MENUNULL}, machine::Amiga, menu, run::Delivered, Refusal};
 use heirloom_ui_abi::{CallbackToken, GuestUi};
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_ITEM_ADDRESS: i32 = -144;
 pub const LVO_OFF_MENU: i32 = -180;

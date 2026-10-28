@@ -14,7 +14,7 @@ use alloc::collections::BTreeMap;
 use alloc::{format, string::String, vec::Vec};
 use crate::{boopsi_glist, graphics::{drawinfo, layout}, idcmp, machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 // struct Requester (intuition/intuition.h, m68k -mno-align-int): OlderRequest 0, LeftEdge 4, TopEdge 6, Width 8, Height 10, RelLeft 12,
 // RelTop 14, ReqGadget 16, ReqBorder 20, ReqText 24, Flags 28, BackFill 30, ReqLayer 32, ImageBMap 68, RWindow 72, ReqImage 76; 112 bytes.

@@ -6,7 +6,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::{font::draw_text, Rect};
 
 const FS_ALGO: u8 = 0x07; // FSF_UNDERLINED | FSF_BOLD | FSF_ITALIC

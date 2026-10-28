@@ -13,7 +13,7 @@ use crate::libtable::LibraryBuilder;
 use crate::machine::Amiga;
 use crate::{doslist, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> { b.named("DoPkt", do_pkt::<U>) }
 

@@ -11,7 +11,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::{paint::{self, Brush, Clip, COMPLEMENT, JAM1, JAM2}, Rect};
 
 /// BltPattern(a1 = rp, a0 = mask, d0..d3 = xMin yMin xMax yMax, d4 = byteCnt).

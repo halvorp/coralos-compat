@@ -8,7 +8,7 @@ use alloc::string::String;
 use alloc::format;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_OPEN_DEVICE: i32 = -444;
 pub const LVO_CLOSE_DEVICE: i32 = -450;

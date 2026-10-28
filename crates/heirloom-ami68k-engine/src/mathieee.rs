@@ -12,7 +12,7 @@ use crate::libtable::LibraryBuilder;
 use crate::machine::Amiga;
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 fn sp(cpu: &Cpu, n: u32) -> f32 { f32::from_bits(cpu.dreg(n)) }
 fn dp(cpu: &Cpu, n: u32) -> f64 { f64::from_bits(((cpu.dreg(n) as u64) << 32) | cpu.dreg(n + 1) as u64) }

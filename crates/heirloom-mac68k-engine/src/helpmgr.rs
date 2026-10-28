@@ -11,7 +11,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 fn pack14<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, r: &mut Regs) -> Result<String, Refusal> {
     let sel = (r.d0 & 0xFFFF) as u16;

@@ -13,7 +13,7 @@ use crate::libtable::LibraryBuilder;
 use crate::machine::Amiga;
 use crate::{fs, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const NR_NAME: u32 = 0;
 const NR_FULL_NAME: u32 = 4;

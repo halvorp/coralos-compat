@@ -10,7 +10,7 @@ use crate::{machine::Amiga, process, Refusal};
 use crate::fs::{DOSTRUE, FH_SIZE};
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_READ: i32 = -42;
 pub const LVO_WRITE: i32 = -48;

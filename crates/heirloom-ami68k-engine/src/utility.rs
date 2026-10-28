@@ -12,7 +12,7 @@ use crate::libtable::LibraryBuilder;
 use crate::tags::{TAG_DONE, TAG_IGNORE, TAG_MORE, TAG_SKIP};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// The next real item at or after `*state`: (address, tag, data); `*state` moves past it. None at TAG_DONE / NULL.
 pub(crate) fn next_item<U: GuestUi>(a: &Amiga<U>, state: &mut u32) -> Result<Option<(u32, u32, u32)>, Refusal> {

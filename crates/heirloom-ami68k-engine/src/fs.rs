@@ -13,7 +13,7 @@ use crate::dos_err::{set_ioerr, DosErr, ERROR_INVALID_LOCK};
 use crate::volume::{NodeId, Volume};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// dos/dos.h DOSTRUE.
 pub const DOSTRUE: u32 = 0xFFFF_FFFF;

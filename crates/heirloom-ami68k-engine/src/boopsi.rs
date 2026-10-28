@@ -13,7 +13,7 @@ use crate::libtable::{Dispatch, LibraryBuilder};
 use crate::{machine::Amiga, tags, Refusal};
 use heirloom_ui_abi::{GuestUi, UiObjectRef};
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_NEW_OBJECT_A: i32 = -636;
 pub const LVO_DISPOSE_OBJECT: i32 = -642;

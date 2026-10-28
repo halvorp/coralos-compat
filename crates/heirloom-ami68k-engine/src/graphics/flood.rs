@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use super::{layout::*, rastport, target};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::{paint, Rect};
 
 pub fn flood<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {

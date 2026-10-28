@@ -26,7 +26,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// The first ID `UniqueID` hands out: the IDs below are reserved for the System (Inside Macintosh: "Resource IDs").
 const FIRST_UNIQUE_ID: i16 = 128;

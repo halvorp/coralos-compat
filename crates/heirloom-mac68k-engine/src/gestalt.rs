@@ -14,7 +14,7 @@ use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::DEFAULT_SIZE;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const UNDEF_SELECTOR_ERR: i16 = -5551;
 

@@ -10,7 +10,7 @@ use crate::tags::{TAG_DONE, TAG_IGNORE};
 use crate::utility::next_item;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const TAGFILTER_AND: u32 = 0;
 const TAGFILTER_NOT: u32 = 1;

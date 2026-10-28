@@ -6,7 +6,7 @@ use alloc::format;
 use alloc::string::String;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// What a stubbed call returns a pointer to: zeroed, big enough for the structs programs poke right after (TextFont,
 /// DrawInfo, ...).

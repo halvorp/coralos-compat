@@ -15,6 +15,7 @@
 //! licence-checked source before they are relied on (see NOTICE).
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+pub mod cpu; // the 68k this engine runs on: cpu-68k.library through its table, or the static core
 pub mod addrmode;
 pub mod appleevents;
 pub mod clock;

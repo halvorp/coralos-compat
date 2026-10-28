@@ -17,7 +17,7 @@ use crate::{events, lowmem, memtraps, menu, qd, quickdraw, rects, resmgr, segmen
 use heirloom_ui_abi::{GuestUi, UiObjectRef};
 use heirloom_mem_flat32::heap::Heap;
 use heirloom_mem_flat32::{GuestMem, DEFAULT_SIZE};
-use heirloom_cpu_68k::{Cpu, Host};
+use crate::cpu::{Cpu, Host};
 
 /// Where the exit stub lives: one `_ExitToShell` word, the return address of the program's own RTS.
 pub const EXIT_STUB: u32 = 0x500;
@@ -119,7 +119,7 @@ pub struct Mac<U: GuestUi> {
     pub(crate) in_trap: bool,
     /// Trap patches (`_SetTrapAddress`): trap key -> the guest routine that replaces it.
     pub patches: BTreeMap<u16, u32>,
-    pub(crate) ctx: Option<heirloom_cpu_68k::CpuContext>,
+    pub(crate) ctx: Option<crate::cpu::CpuContext>,
     /// The cursor the program set and its hide level (cursor.rs).
     pub cursor: crate::cursor::CursorState,
     pub clock: crate::clock::Clock,

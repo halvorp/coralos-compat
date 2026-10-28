@@ -15,7 +15,7 @@ use alloc::string::String;
 use super::layout::{SCREEN_DEPTH, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const INVALID_MODE: u32 = 0xFFFF_FFFF;
 pub const WORKBENCH_MODE: u32 = 0x29000;

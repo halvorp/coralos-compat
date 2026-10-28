@@ -15,7 +15,7 @@ use crate::boopsi_send::make_msg;
 use crate::guest_call::{self, Next};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const WD_FIRST_GADGET: u32 = 62;
 

@@ -93,7 +93,7 @@ mod tests {
 
 use crate::machine::{Call, Done, Mac};
 use crate::pascal::Arg;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use crate::pascal::Rect;
 use heirloom_ui_abi::GuestUi;
 

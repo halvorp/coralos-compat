@@ -21,7 +21,7 @@ use crate::libtable::LibraryBuilder;
 use crate::machine::Amiga;
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const CX_FILTER: u32 = 1;
 const CX_TYPEFILTER: u32 = 2;

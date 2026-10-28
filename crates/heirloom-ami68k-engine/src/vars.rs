@@ -22,7 +22,7 @@ use crate::guest_str::{read_bytes_z, write_z};
 use crate::libtable::LibraryBuilder;
 use crate::{exec_wait, lists, machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const PR_LOCAL_VARS: u32 = 208;
 const LV_SIZE: u32 = 24;

@@ -25,7 +25,7 @@ use super::roles::strip_format;
 use crate::requester;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const MAX_BUTTONS: usize = 32;
 const MAX_STRING: usize = 8192;

@@ -18,7 +18,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_raster::font::{draw_text, FSF_BOLD, FSF_ITALIC, FSF_UNDERLINED};
 
 fn style_of(face: u8) -> u8 {

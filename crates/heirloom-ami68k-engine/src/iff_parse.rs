@@ -16,7 +16,7 @@ use crate::iff_lci::{self, IFFLCI_ENTRYHANDLER, IFFLCI_EXITHANDLER};
 use crate::libtable::LibraryBuilder;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const IFFPARSE_SCAN: i32 = 0;
 const IFFPARSE_STEP: i32 = 1;

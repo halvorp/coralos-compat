@@ -5,7 +5,7 @@ use alloc::string::String;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// One vector slot: `ILLEGAL; RTS`.
 pub const SLOT_LEN: u32 = 6;

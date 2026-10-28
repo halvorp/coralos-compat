@@ -20,7 +20,7 @@ use crate::iff::*;
 use crate::libtable::LibraryBuilder;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const IFFLCI_PROP: u32 = u32::from_be_bytes(*b"prop");
 pub const IFFLCI_COLLECTION: u32 = u32::from_be_bytes(*b"coll");

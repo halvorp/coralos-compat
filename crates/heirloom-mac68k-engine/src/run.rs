@@ -12,7 +12,7 @@ use alloc::string::{String, ToString};
 use crate::machine::{Mac, CODE_BASE, EXIT_STUB, STACK_TOP};
 use crate::{Step};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::RunStats;
+use crate::cpu::RunStats;
 
 pub struct RunReport { pub stats: RunStats }
 
@@ -25,7 +25,7 @@ impl<U: GuestUi> Mac<U> {
         self.tr.dlg.modal = None; // ... and its blocked ModalDialog
         self.tr.dlg.filter_wait = None;
         if let Some(a) = self.tr.dlg.asked.take() { let _ = self.ui.close_request(a.req); } // ... and an alert it asked and nobody answered
-        self.ctx = Some(heirloom_cpu_68k::start_model(self, CODE_BASE + entry, STACK_TOP - 4, &[], self.profile.cpu));
+        self.ctx = Some(crate::cpu::start_model(self, CODE_BASE + entry, STACK_TOP - 4, &[], self.profile.cpu));
         Ok(())
     }
 
@@ -35,7 +35,7 @@ impl<U: GuestUi> Mac<U> {
         if self.ctx.is_none() { return (Step::Exited, RunStats { blocked: false, halted: true, ..idle }); }
         if !self.complete_wait() { return (Step::Blocked, idle); }
         let Some(mut ctx) = self.ctx.take() else { return (Step::Exited, RunStats { blocked: false, halted: true, ..idle }) };
-        let stats = heirloom_cpu_68k::resume(self, &mut ctx, budget);
+        let stats = crate::cpu::resume(self, &mut ctx, budget);
         crate::qd::flush(self);
         let step = if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked }
             else if let Some(pc) = stats.stalled_at { Step::Fault(format!("the 68k stopped making progress at pc={pc:#x} (STOP, or halted after a double fault)")) }

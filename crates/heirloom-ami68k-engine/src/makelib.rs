@@ -17,7 +17,7 @@ use crate::guest_call::{self, Next};
 use crate::machine::{Amiga, EXEC_BASE};
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_INIT_STRUCT: i32 = -78;
 pub const LVO_MAKE_LIBRARY: i32 = -84;

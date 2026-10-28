@@ -10,7 +10,7 @@ use crate::graphics::layout::{DRI_NUM_PENS, DRI_PENS};
 use crate::graphics::palette;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const MRI_DRAW_INFO: u32 = 8;
 const MRI_PENS: u32 = 12;

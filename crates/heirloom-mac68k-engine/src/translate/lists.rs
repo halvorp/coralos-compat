@@ -49,7 +49,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::{CallbackToken, ControlKind, ControlModel, GuestUi, Intent};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const RECORD_SIZE: u32 = 88;
 pub const L_RVIEW: u32 = 0;

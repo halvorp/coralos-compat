@@ -9,7 +9,7 @@
 //! original by `JMP`ing to the stub `GetTrapAddress` gave it.
 use crate::machine::Mac;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// The completion trampoline: `ILLEGAL` (handled by the host) then `RTS`.
 pub const TRAMPOLINE: u32 = 0x510;

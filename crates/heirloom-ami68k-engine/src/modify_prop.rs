@@ -12,7 +12,7 @@ use crate::boopsi_ids::*;
 use crate::native_gadgets::{self, PI_FLAGS, PI_HBODY, PI_HPOT, PI_VBODY, PI_VPOT};
 use crate::{boopsi_glist, machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// Store the five PropInfo words, then bring the native controls of the first `num` gadgets from the prop gadget up to date and
 /// refresh the BOOPSI ones among them (RefreshGList's job).

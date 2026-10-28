@@ -11,7 +11,7 @@ use crate::libtable::LibraryBuilder;
 use crate::machine::Amiga;
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const CACRF_ENABLE_I: u32 = 1 << 0;
 pub const CACRF_FREEZE_I: u32 = 1 << 1;

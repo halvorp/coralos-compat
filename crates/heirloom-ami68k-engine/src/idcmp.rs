@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::format;
 use crate::{exec_wait, machine::Amiga, memory, menu_nav, ports, run::Delivered, Refusal};
 use heirloom_ui_abi::{GuestUi, GuestUiEvent, PointerButton};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_MODIFY_IDCMP: i32 = -150;
 

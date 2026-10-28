@@ -13,7 +13,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// The newest SysEnvRec version this engine fills in (SysEnvirons version 2).
 pub const VERSION: i16 = 2;

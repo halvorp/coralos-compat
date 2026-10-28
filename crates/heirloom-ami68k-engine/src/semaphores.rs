@@ -11,7 +11,7 @@ use alloc::string::String;
 use alloc::format;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_INIT_SEMAPHORE: i32 = -558;
 pub const LVO_OBTAIN_SEMAPHORE: i32 = -564;

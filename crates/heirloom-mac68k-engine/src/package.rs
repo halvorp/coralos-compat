@@ -13,7 +13,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// One package routine: its Pascal signature and handler.
 pub struct Routine<U: GuestUi> { pub name: &'static str, pub args: &'static [Arg], pub result: Option<Arg>, pub run: Handler<U> }

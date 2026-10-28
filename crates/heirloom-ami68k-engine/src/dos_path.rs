@@ -5,7 +5,7 @@ use alloc::format;
 use crate::fs::DOSTRUE;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// Offset of the last component of `p` (after the last '/' or ':').
 pub fn file_part(p: &str) -> usize { p.rfind(|c| c == '/' || c == ':').map_or(0, |i| i + 1) }

@@ -10,7 +10,7 @@ use crate::pascal::{read_pstring_bytes, Arg};
 use crate::Refusal;
 use alloc::format;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 use heirloom_fmt_resfork::{writer::ForkBuilder, ResFork};
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {

@@ -17,7 +17,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const VISIBLE_LENGTH: u32 = 0x8408_0028;
 const NAMES: [&str; 18] = ["FontScript", "IntlScript", "KeyScript", "FontToScript", "GetScriptManagerVariable", "SetScriptManagerVariable", "GetScriptVariable",

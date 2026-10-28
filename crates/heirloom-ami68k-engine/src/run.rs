@@ -16,7 +16,7 @@ use crate::machine::{Amiga, RunReport, EMPTY_ARGS, EXEC_BASE, EXIT_SLOT, LOAD_BA
 use crate::{dos, exec_wait, process, screen, Refusal, Step};
 use heirloom_ui_abi::{GuestUi, GuestUiEvent};
 use heirloom_fmt_hunk::Loaded;
-use heirloom_cpu_68k::RunStats;
+use crate::cpu::RunStats;
 
 /// What [`Amiga::deliver`] did with an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +47,7 @@ impl<U: GuestUi> Amiga<U> {
         // `CurrentDir(0)` + `DupLock(old)` at startup (SAS/C's startup code does) treat a NULL old lock as failure and quit.
         let root = crate::fs::new_lock_in(self, self.fs.vol.boot_device(), false, true).map_err(|r| r.0)?.ok_or("no memory for the current-directory lock")?;
         self.mem.write_u32(process::PROCESS + 152, root >> 2).map_err(|e| e.to_string())?; // pr_CurrentDir
-        let regs = [(heirloom_cpu_68k::REG_A0, process::ARGS), (heirloom_cpu_68k::REG_D0, EMPTY_ARGS.len() as u32)];
+        let regs = [(crate::cpu::REG_A0, process::ARGS), (crate::cpu::REG_D0, EMPTY_ARGS.len() as u32)];
         // The main program is the first task; its registers are created at its first dispatch (sched.rs).
         self.sched = Default::default();
         self.add_sched_task(process::PROCESS, name.into(), true, crate::sched::Start { pc: loaded.entry, sp: STACK_TOP - 4, regs: regs.to_vec() }, None);

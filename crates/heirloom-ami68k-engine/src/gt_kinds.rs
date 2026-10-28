@@ -24,7 +24,7 @@ use alloc::format;
 use crate::{gadtools::{GadgetInfo, BUTTON_KIND, TEXT_KIND}, gt_kinds_rows::{self as rows, RowState}, idcmp, machine::Amiga, memory, run::Delivered, tags, translate::{self, gadtools}, Refusal};
 use crate::boopsi_ids::SI_MAX_CHARS;
 use heirloom_ui_abi::{CallbackToken, ControlKind, ControlModel, ControlValue, GuestUi, Intent};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_GT_GET_GADGET_ATTRS_A: i32 = -174;
 

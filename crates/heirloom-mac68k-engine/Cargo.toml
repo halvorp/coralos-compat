@@ -8,7 +8,8 @@ description = "Classic Mac OS 68k personality (skeleton): A-line trap bridge, Pa
 [dependencies]
 heirloom-common = { path = "../heirloom-common" }
 heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
-heirloom-cpu-68k = { path = "../heirloom-cpu-68k" }
+heirloom-cpu-68k = { path = "../heirloom-cpu-68k", optional = true }
+heirloom-cpu-68k-client = { path = "../heirloom-cpu-68k-client", optional = true }
 heirloom-fmt-resfork = { path = "../heirloom-fmt-resfork" }
 heirloom-volume = { path = "../heirloom-volume" }
 heirloom-ui-abi = { path = "../heirloom-ui-abi" }
@@ -20,6 +21,10 @@ heirloom-translate = { path = "../heirloom-translate" }
 heirloom-mac68k-engine = { path = ".", features = ["fixtures"] }
 
 [features]
+# The CPU backend (src/cpu.rs): the static core by default; `cpu-library` drives cpu-68k.library through its table.
+default = ["cpu-static"]
+cpu-static = ["dep:heirloom-cpu-68k"]
+cpu-library = ["dep:heirloom-cpu-68k-client"]
 # The built-in fixture applications and the dialog test script. Off for the product library (CoralOS user mode); the
 # tests and the `mac68k-run` / `mac68k-oracle` CLIs turn it on (the same split as heirloom-macppc-engine).
 fixtures = []

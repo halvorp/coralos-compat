@@ -18,7 +18,7 @@ use alloc::format;
 use crate::libtable::LibraryBuilder;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const NAME: &str = "task.resource";
 const LVO_INIT_TASK_HOOKS: i32 = -54;

@@ -33,7 +33,7 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const ERR_AE_HANDLER_NOT_FOUND: i16 = -1717;
 const PARAM_ERR: i16 = -50;

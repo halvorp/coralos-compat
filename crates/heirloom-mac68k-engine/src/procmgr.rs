@@ -18,7 +18,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const PROC_NOT_FOUND: i16 = -600;
 pub const NO_OUTSTANDING_HLE: i16 = -607;

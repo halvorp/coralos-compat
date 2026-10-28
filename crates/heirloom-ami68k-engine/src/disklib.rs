@@ -21,7 +21,7 @@ use crate::machine::{Amiga, EXEC_BASE};
 use crate::makelib::{self, LIB_VERSION};
 use crate::Refusal;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const RTC_MATCHWORD: u16 = 0x4AFC;
 const RTF_AUTOINIT: u8 = 0x80;

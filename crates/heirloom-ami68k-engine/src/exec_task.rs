@@ -16,7 +16,7 @@ use crate::machine::Amiga;
 use crate::sched::LN_PRI;
 use crate::{execlists, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// Where a task's entry function returns to when it has no finalPC: RemTask(0).
 pub const TASK_END: u32 = 0x530;

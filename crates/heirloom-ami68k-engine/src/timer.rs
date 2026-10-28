@@ -10,7 +10,7 @@ use alloc::string::String;
 use alloc::format;
 use crate::{exec_wait, machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_DO_IO: i32 = -456;
 pub const LVO_SEND_IO: i32 = -462;

@@ -24,7 +24,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use heirloom_ui_abi::{CallbackToken, GuestUi, Menu, MenuItem, MenuModel};
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const HEADER: usize = 14;
 /// The key byte that marks a hierarchical item.

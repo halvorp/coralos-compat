@@ -13,7 +13,7 @@ use crate::fs::{cur_dir, fail, ok, str_arg, DOSTRUE};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
 use heirloom_fmt_hunk::HunkError;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// Room before every hunk: its length word and its next-segment link.
 const HEADER: u32 = 8;

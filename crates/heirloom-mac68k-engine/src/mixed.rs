@@ -20,7 +20,7 @@ use crate::trap_names::TRAPS;
 use crate::traps::{trap_key, trap_name};
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// What came back from a by-value call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

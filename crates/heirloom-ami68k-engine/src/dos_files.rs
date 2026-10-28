@@ -13,7 +13,7 @@ use crate::fs::*;
 use crate::volume::{Kind, NodeId};
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const FIB_DIR_ENTRY_TYPE: u32 = 4;
 const FIB_FILE_NAME: u32 = 8;

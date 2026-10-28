@@ -8,7 +8,7 @@ use alloc::format;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const LVO_ALLOCATE: i32 = -186;
 pub const LVO_DEALLOCATE: i32 = -192;

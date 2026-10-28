@@ -8,7 +8,7 @@
 use alloc::{format, string::String};
 use crate::{machine::Amiga, memory, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// A stand-in for AROS's `struct IntScreenNotify` (node, port, sigbit, sigtask, flags, userdata, hook, pubname).
 const NOTIFY_SIZE: u32 = 64;

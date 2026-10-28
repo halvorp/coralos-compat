@@ -23,7 +23,7 @@ use crate::pattern::{plain_text, tokenize, tokenised_len, Pattern};
 use crate::volume::NodeId;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const ERROR_BAD_TEMPLATE: DosErr = DosErr(114);
 const ERROR_BUFFER_OVERFLOW: DosErr = DosErr(303);

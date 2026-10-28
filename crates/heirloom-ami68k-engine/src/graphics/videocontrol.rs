@@ -10,7 +10,7 @@ use alloc::format;
 use alloc::string::String;
 use crate::{machine::Amiga, utility, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const CM_FLAGS: u32 = 0;
 const CM_VPE: u32 = 8;

@@ -16,7 +16,7 @@ use crate::guest_call::{self, Next};
 use crate::iclass::Native;
 use crate::{machine::Amiga, tags, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const MCC_SIZE: u32 = 40;
 const MCC_SUPER: u32 = 20;

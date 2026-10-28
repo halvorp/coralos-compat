@@ -30,7 +30,7 @@ use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::{String, ToString};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::{Cpu, REG_A0};
+use crate::cpu::{Cpu, REG_A0};
 use heirloom_fmt_resfork::ResFork;
 
 const APP_PARAMS: u32 = 32;
@@ -99,7 +99,7 @@ impl<U: GuestUi> Mac<U> {
         self.mem.write_u32(lowmem::APP_PARM_HANDLE, parms).map_err(|e| e.to_string())?;
         self.seg = SegLoader { a5, jt_offset: c.jt_offset, jt_size: c.jt_size, loaded: BTreeSet::new() };
         self.mem.write_u32(STACK_TOP - 4, EXIT_STUB).map_err(|e| e.to_string())?;
-        self.ctx = Some(heirloom_cpu_68k::start_model(self, a5 + c.jt_offset + 2, STACK_TOP - 4, &[(REG_A0 + 5, a5)], self.profile.cpu));
+        self.ctx = Some(crate::cpu::start_model(self, a5 + c.jt_offset + 2, STACK_TOP - 4, &[(REG_A0 + 5, a5)], self.profile.cpu));
         self.log.push(format!("[segment] launch: A5 {a5:#x}, jump table {} entries at A5+{}", c.jt_size / 8, c.jt_offset));
         Ok(())
     }

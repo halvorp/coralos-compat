@@ -16,7 +16,7 @@ use crate::Refusal;
 use alloc::format;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 /// GrafPort.picSave.
 pub const P_PIC_SAVE: u32 = 92;

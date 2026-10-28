@@ -21,7 +21,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 const V_TYPE: u16 = 1;
 const VTYP_ERR: i16 = -2;

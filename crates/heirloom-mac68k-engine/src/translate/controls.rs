@@ -44,7 +44,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use heirloom_ui_abi::{CallbackToken, ChoiceStyle, ControlKind, ControlModel, ControlValue, GuestUi, Intent, CHOICE_NONE};
 use heirloom_translate::{row, On, Role};
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const RECORD_SIZE: u32 = 296;
 const C_NEXT: u32 = 0;

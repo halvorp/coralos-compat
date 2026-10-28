@@ -15,7 +15,7 @@ use crate::guest_call::{self, Cont, Next};
 use crate::iclass::Native;
 use crate::{machine::Amiga, memory, Refusal};
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_68k::Cpu;
+use crate::cpu::Cpu;
 
 pub const MSG_BLOCK: u32 = 32;
 
