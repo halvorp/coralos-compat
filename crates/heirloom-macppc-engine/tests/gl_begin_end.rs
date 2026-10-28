@@ -101,7 +101,7 @@ fn a_negative_size_is_invalid_value_and_is_never_sent() {
 }
 
 #[test]
-fn a_call_the_worker_keeps_itself_is_refused_by_name_inside_a_display_list_and_served_outside_one() {
+fn a_data_call_inside_a_display_list_is_sent_to_the_worker_whose_list_records_it() {
     for (name, ints_) in [("glDrawPixels", vec![1u32, 1, 0x1908, 0x1401, 0x4000]), ("glPixelMapfv", vec![0x0C76, 1, 0x4000]), ("glPrioritizeTextures", vec![1, 0x4000, 0x4000]), ("glPolygonStipple", vec![0x4000])] {
         let build = |data: &mut Data| { let _ = data.put(&[0u8; 256]); vec![call("glNewList", ints(&[7, 0x1300]), vec![]), call(name, ints(&ints_), vec![])] };
         let (calls, d) = layout(&build);
@@ -110,7 +110,6 @@ fn a_call_the_worker_keeps_itself_is_refused_by_name_inside_a_display_list_and_s
         m.gl_attach(Box::new(Mock(heirloom_gl_abi::TokenTable::default(), Default::default())));
         let frag = m.instantiate("il", &heirloom_fmt_pef::Pef::parse(&bytes).unwrap()).unwrap();
         m.start(&frag).unwrap();
-        assert_ne!(m.step(5_000_000).0, heirloom_macppc_engine::Step::Exited, "{name}");
-        assert!(m.fault().expect("a named fault").to_string().contains("inside-a-display-list"), "{name}");
+        assert_eq!(m.step(5_000_000).0, heirloom_macppc_engine::Step::Exited, "{name}: {:?}", m.fault());
     }
 }

@@ -4,7 +4,8 @@
 //! swap bytes); `glReadPixels` writes the same way under `GL_PACK_*`. The ring carries neither the guest's state nor its
 //! byte order: [`unpack`] copies exactly the `width x height` pixels out of guest memory into TIGHT rows (no padding, no
 //! skips) with every multi-byte element converted to little-endian, and the worker uploads them with a tight pixel-store
-//! state; [`pack`] is the inverse for a read back. Packed types (`GL_UNSIGNED_SHORT_5_6_5`, `GL_UNSIGNED_INT_8_8_8_8`,
+//! state; [`pack`] is the inverse for a read back, and [`unpack3d`]/[`pack3d`] apply the same conversion to a stack of 3D
+//! images. Packed types (`GL_UNSIGNED_SHORT_5_6_5`, `GL_UNSIGNED_INT_8_8_8_8`,
 //! ...) are one multi-byte WORD whose bit layout is defined on its value, so converting the word's byte order is the whole
 //! conversion. Every length uses checked arithmetic and nothing is allocated before the range is proven to lie inside memory.
 use alloc::vec::Vec;
@@ -24,6 +25,10 @@ pub struct Store {
     pub row_length: u32,
     pub skip_rows: u32,
     pub skip_pixels: u32,
+    /// GL_*_SKIP_IMAGES: whole images skipped before the first (3D images only).
+    pub skip_images: u32,
+    /// GL_*_IMAGE_HEIGHT: rows per image in client memory; 0 = the image's height (3D images only).
+    pub image_height: u32,
     pub swap_bytes: bool,
     /// `GL_*_LSB_FIRST`: the bit order within a byte of a BITMAP (the first pixel is bit 0 rather than bit 7).
     pub lsb_first: bool,
@@ -32,7 +37,16 @@ pub struct Store {
 impl Default for Store {
     /// GL's initial state: alignment 4, everything else off.
     fn default() -> Self {
-        Store { alignment: 4, row_length: 0, skip_rows: 0, skip_pixels: 0, swap_bytes: false, lsb_first: false }
+        Store {
+            alignment: 4,
+            row_length: 0,
+            skip_rows: 0,
+            skip_pixels: 0,
+            skip_images: 0,
+            image_height: 0,
+            swap_bytes: false,
+            lsb_first: false,
+        }
     }
 }
 
@@ -104,6 +118,16 @@ fn geometry(l: Layout, width: u32, s: &Store) -> Result<(usize, usize), PixelErr
     Ok((first, stride))
 }
 
+fn image_stride(l: Layout, width: u32, height: u32, s: &Store) -> Result<usize, PixelError> {
+    let (_, stride) = geometry(l, width, s)?;
+    let rows = if s.image_height > 0 { s.image_height } else { height } as usize;
+    rows.checked_mul(stride).ok_or(PixelError::Overflow)
+}
+
+fn image_start(start: usize, skip: usize, k: usize, stride: usize) -> Result<usize, PixelError> {
+    k.checked_mul(stride).and_then(|at| at.checked_add(skip)).and_then(|at| at.checked_add(start)).ok_or(PixelError::Overflow)
+}
+
 fn convert(chunk: &mut [u8], elem: usize, guest_is_big_endian: bool) {
     if elem > 1 && guest_is_big_endian {
         chunk.reverse();
@@ -135,6 +159,24 @@ pub fn unpack(mem: &[u8], start: usize, width: u32, height: u32, format: u32, ty
     Ok(out)
 }
 
+/// `depth` `width x height` images at `mem[start..]` as tight little-endian pixels, with the image stride and skipped
+/// images described by `store`; row length, alignment and the in-image skips apply independently to every image.
+pub fn unpack3d(mem: &[u8], start: usize, width: u32, height: u32, depth: u32, format: u32, ty: u32, store: &Store) -> Result<Vec<u8>, PixelError> {
+    let l = layout(format, ty)?;
+    let stride = image_stride(l, width, height, store)?;
+    let image_bytes = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(l.pixel)).ok_or(PixelError::Overflow)?;
+    if depth == 0 || image_bytes == 0 {
+        return Ok(Vec::new());
+    }
+    let skip = (store.skip_images as usize).checked_mul(stride).ok_or(PixelError::Overflow)?;
+    let mut out = Vec::new();
+    for k in 0..depth as usize {
+        let at = image_start(start, skip, k, stride)?;
+        out.extend_from_slice(&unpack(mem, at, width, height, format, ty, store)?);
+    }
+    Ok(out)
+}
+
 /// The inverse of [`unpack`] for a read back: tight little-endian `data` written, row by row, through `put(offset, bytes)`
 /// at the guest layout `store` describes (offsets are from the pointer). `put` returns false when the guest range is invalid.
 pub fn pack(data: &[u8], width: u32, height: u32, format: u32, ty: u32, store: &Store, mut put: impl FnMut(usize, &[u8]) -> bool) -> Result<(), PixelError> {
@@ -156,6 +198,30 @@ pub fn pack(data: &[u8], width: u32, height: u32, format: u32, ty: u32, store: &
         if !put(at, &row) {
             return Err(PixelError::OutOfRange);
         }
+    }
+    Ok(())
+}
+
+/// The inverse of [`unpack3d`]: exactly `depth` tight little-endian images written through `put`, whose offsets are from
+/// the pointer and include the skipped images and the client image stride.
+pub fn pack3d(data: &[u8], width: u32, height: u32, depth: u32, format: u32, ty: u32, store: &Store, mut put: impl FnMut(usize, &[u8]) -> bool) -> Result<(), PixelError> {
+    let l = layout(format, ty)?;
+    let stride = image_stride(l, width, height, store)?;
+    let image_bytes = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(l.pixel)).ok_or(PixelError::Overflow)?;
+    if image_bytes.checked_mul(depth as usize).ok_or(PixelError::Overflow)? != data.len() {
+        return Err(PixelError::OutOfRange);
+    }
+    if data.is_empty() {
+        return Ok(());
+    }
+    let skip = (store.skip_images as usize).checked_mul(stride).ok_or(PixelError::Overflow)?;
+    for k in 0..depth as usize {
+        let base = image_start(0, skip, k, stride)?;
+        let begin = k.checked_mul(image_bytes).ok_or(PixelError::Overflow)?;
+        let end = begin.checked_add(image_bytes).ok_or(PixelError::Overflow)?;
+        pack(&data[begin..end], width, height, format, ty, store, |at, bytes| {
+            base.checked_add(at).is_some_and(|at| put(at, bytes))
+        })?;
     }
     Ok(())
 }
@@ -330,5 +396,46 @@ mod tests {
             pack(&t, 2, 2, fmt, ty, &s, |at, b| { out[at..at + b.len()].copy_from_slice(b); true }).unwrap();
             assert_eq!(unpack(&out, 0, 2, 2, fmt, ty, &s).unwrap(), t, "{fmt:#x} {ty:#x}");
         }
+    }
+
+    #[test]
+    fn unpack3d_reads_each_image_at_the_image_stride_and_skips_whole_images() {
+        let mut mem = vec![0u8; 36];
+        mem[12..16].copy_from_slice(&[1, 2, 3, 4]);
+        mem[24..28].copy_from_slice(&[5, 6, 7, 8]);
+        let s = Store { alignment: 1, image_height: 3, skip_images: 1, ..Store::default() };
+        let t = unpack3d(&mem, 0, 1, 1, 2, GL_RGBA, 0x1401, &s).unwrap();
+        assert_eq!(t, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn unpack3d_with_default_store_equals_stacked_unpack() {
+        let mem: Vec<u8> = (0..72).collect();
+        let s = Store::default();
+        let mut expected = Vec::new();
+        for k in 0..3 {
+            expected.extend_from_slice(&unpack(&mem, k * 24, 2, 2, GL_RGB, 0x1403, &s).unwrap());
+        }
+        assert_eq!(unpack3d(&mem, 0, 2, 2, 3, GL_RGB, 0x1403, &s).unwrap(), expected);
+    }
+
+    #[test]
+    fn pack3d_inverts_unpack3d() {
+        let s = Store { alignment: 2, row_length: 3, skip_pixels: 1, skip_rows: 1, image_height: 4, skip_images: 1, ..Store::default() };
+        let data: Vec<u8> = (0..16).collect();
+        let mut out = vec![0u8; 96];
+        pack3d(&data, 2, 2, 2, 0x1909, 0x1403, &s, |at, b| {
+            out[at..at + b.len()].copy_from_slice(b);
+            true
+        })
+        .unwrap();
+        assert_eq!(unpack3d(&out, 0, 2, 2, 2, 0x1909, 0x1403, &s).unwrap(), data);
+    }
+
+    #[test]
+    fn unpack3d_refuses_a_last_image_beyond_memory() {
+        assert_eq!(unpack3d(&[0u8; 7], 0, 1, 1, 2, GL_RGBA, 0x1401, &Store::default()), Err(PixelError::OutOfRange));
+        let s = Store { image_height: u32::MAX, ..Store::default() };
+        assert!(matches!(unpack3d(&[], 0, 1, 1, u32::MAX, GL_RGBA, 0x1401, &s), Err(PixelError::Overflow) | Err(PixelError::OutOfRange)));
     }
 }

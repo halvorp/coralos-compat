@@ -62,6 +62,8 @@ pub enum Role {
     Normal = 1,
     Color = 2,
     TexCoord = 3,
+    /// `glEdgeFlagPointer`: one GLboolean (U8) per vertex, the edge flag of polygon mode GL_LINE/GL_POINT (GL 1.2 §2.6.2).
+    EdgeFlag = 4,
 }
 
 impl Role {
@@ -71,6 +73,7 @@ impl Role {
             1 => Role::Normal,
             2 => Role::Color,
             3 => Role::TexCoord,
+            4 => Role::EdgeFlag,
             _ => return None,
         })
     }

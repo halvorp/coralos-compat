@@ -65,14 +65,19 @@ pub(super) fn type_ok(role: Role, ty: u32) -> bool {
         Role::Vertex | Role::TexCoord => matches!(ty, 0x1402 | 0x1404 | 0x1406 | 0x140A),
         Role::Normal => matches!(ty, 0x1400 | 0x1402 | 0x1404 | 0x1406 | 0x140A),
         Role::Color => matches!(ty, 0x1400..=0x1406 | 0x140A),
+        Role::EdgeFlag => ty == 0x1401,
     }
 }
 
 impl<U: GuestUi> MacPpc<U> {
     /// Snapshot the enabled arrays' descriptors (an enabled array with no pointer set is GL_INVALID_OPERATION).
     fn gl_enabled_descriptors(&mut self) -> Option<Vec<Descriptor>> {
-        let descs: Vec<Descriptor> = self.gl.enabled.iter().filter_map(|k| self.gl.arrays.get(k).copied()).collect();
+        let mut descs: Vec<Descriptor> = self.gl.enabled.iter().filter_map(|k| self.gl.arrays.get(k).copied()).collect();
         if descs.len() != self.gl.enabled.len() { self.gl_set_error(GL_INVALID_OPERATION); return None; }
+        // the edge-flag array (§2.8): one GLboolean per vertex, carried with the draw like the other arrays
+        if let Some(x) = self.gl.edge_array.filter(|x| x.enabled) {
+            descs.push(Descriptor { role: Role::EdgeFlag, unit: 0, offset: self.mac.mem.strip(x.ptr) as usize, size: 1, ty: ElemType::U8, stride: x.stride });
+        }
         Some(descs)
     }
 
@@ -226,8 +231,14 @@ impl<U: GuestUi> MacPpc<U> {
                 Role::Color => format!("glColor{}{sfx}v", d.size),
                 Role::Normal => format!("glNormal3{sfx}v"),
                 Role::Vertex => format!("glVertex{}{sfx}v", d.size),
+                Role::EdgeFlag => String::from("glEdgeFlagv"), // not in `order`: the edge-flag array is read below
             };
             calls.push((name, words));
+        }
+        if let Some(x) = self.gl.edge_array.filter(|x| x.enabled) {
+            let stride = if x.stride == 0 { 1 } else { x.stride };
+            let at = self.mac.mem.strip(x.ptr).wrapping_add((i as u32).wrapping_mul(stride));
+            calls.push((String::from("glEdgeFlagv"), self.gl_elements(at, 1, Ty::Bool, "glArrayElement")?));
         }
         if self.gl.index_array.is_some_and(|x| x.enabled) {
             let x = self.gl.index_array.unwrap();

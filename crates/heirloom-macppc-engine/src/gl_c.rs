@@ -1,5 +1,5 @@
 //! Guest OpenGL (`OpenGLLibrary`, `OpenGLMemory`) as ENCODING ONLY: this module turns the program's AGL/GL calls into
-//! `heirloom-gl-abi` frames and hands them to a [`GlWorker`]. It links no Mesa, no gl4es and no GPU API (HEIRLOOM-GL-IS-A-GL4ES-WORKER,
+//! `heirloom-gl-abi` frames and hands them to a [`GlWorker`]. It links no Mesa and no GPU API (CORAL-GL-IS-ONE-MESA-WORKER,
 //! HEIRLOOM-UI-HAS-ONE-SEAM): the worker is `heirloom-gl.engine`, behind the host's transport.
 //!
 //! Guarantees (each pinned by `tests/gl_triangle.rs`):
@@ -11,7 +11,7 @@
 //! * With no worker attached (no GPU acceleration) `aglChoosePixelFormat` returns no format and says
 //!   `[HEIRLOOM-GL REFUSED reason=no-gpu-accel]`: the game shows its own "needs OpenGL" alert.
 //! * `GL_VERSION` / `GL_EXTENSIONS` are answered HERE from `heirloom_gl_abi::derive` over the same table, never from the
-//!   worker's own (gl4es) strings; every `glGetString` is also forwarded so the worker logs it on its ring
+//!   worker's own (Mesa) strings; every `glGetString` is also forwarded so the worker logs it on its ring
 //!   (`[HEIRLOOM-GL-GETSTRING name=.. ]`): the first real run tells us which tokens the game asks for.
 //! * `APPLE_fence` is real: a fence is complete only after the worker reports the batch it was set in retired.
 //! * `APPLE_vertex_array_range` is accepted and validated; because arrays are snapshotted at draw time the hint changes
@@ -112,6 +112,9 @@ pub struct GlState {
     /// The program's selection and feedback buffers (`glSelectBuffer` / `glFeedbackBuffer`): what `glGetPointerv` returns.
     select_ptr: u32,
     feedback_ptr: u32,
+    /// The render mode the program is in (§5: `glRenderMode`); 0 before the first call = GL_RENDER. Leaving GL_SELECT or
+    /// GL_FEEDBACK copies the worker's buffer into the program's.
+    render_mode: u32,
     /// `glIndexPointer` / `glEdgeFlagPointer`: type and stride as the program set them, and whether the array is enabled.
     index_array: Option<IndexArray>,
     edge_array: Option<IndexArray>,
@@ -279,7 +282,7 @@ impl<U: GuestUi> MacPpc<U> {
                     "glTexCoordPointer" => (Role::TexCoord, a0, a1, a2, a3),
                     _ => (Role::Normal, 3, a0, a1, a2),
                 };
-                let ok_size = match role { Role::Vertex => (2..=4).contains(&size), Role::Color => size == 3 || size == 4, Role::TexCoord => (1..=4).contains(&size), Role::Normal => true };
+                let ok_size = match role { Role::Vertex => (2..=4).contains(&size), Role::Color => size == 3 || size == 4, Role::TexCoord => (1..=4).contains(&size), Role::Normal => true, Role::EdgeFlag => false };
                 match ElemType::from_gl(ty).filter(|_| arrays::type_ok(role, ty)) {
                     Some(t) if ok_size && (stride as i32) >= 0 => {
                         let unit = if role == Role::TexCoord { self.gl.client_unit } else { 0 };

@@ -1,4 +1,4 @@
-//! The state calls the worker executes through gl4es, encoded from the program's registers and big-endian memory:
+//! The state calls the worker executes on Mesa, encoded from the program's registers and big-endian memory:
 //! blend / depth / scissor / fog / lighting / material / texture-parameter state, texture names, texture images and
 //! read-backs. The argument-word layout of each is `heirloom_gl_abi::sig` (the worker decodes with the same table); pixels
 //! are converted by `heirloom_gl_abi::pixel` to tight little-endian rows before they enter the ring, so the worker never
@@ -28,9 +28,11 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// Record a `glPixelStorei` the way GL does; false = an invalid enum or value (the error is already set).
     pub(super) fn gl_pixel_store(&mut self, pname: u32, v: i32) -> bool {
-        // GL 1.2's image parameters (SKIP_IMAGES, IMAGE_HEIGHT) only matter to 3D images, which are refused by name: validated, kept by the worker
+        // GL 1.2's image parameters (§3.8.1): SKIP_IMAGES and IMAGE_HEIGHT lay out the images of a 3D texture in client memory
         if matches!(pname, 0x806B..=0x806E) {
             if v < 0 { self.gl_set_error(GL_INVALID_VALUE); return false; }
+            let st = if pname >= 0x806D { &mut self.gl.unpack } else { &mut self.gl.pack };
+            if pname & 1 == 1 { st.skip_images = v as u32 } else { st.image_height = v as u32 }
             return true;
         }
         let (st, which) = match pname { UNPACK_SWAP_BYTES..=UNPACK_ALIGNMENT => (&mut self.gl.unpack, pname - UNPACK_SWAP_BYTES), PACK_SWAP_BYTES..=PACK_ALIGNMENT => (&mut self.gl.pack, pname - PACK_SWAP_BYTES), _ => { self.gl_set_error(GL_INVALID_ENUM); return false; } };

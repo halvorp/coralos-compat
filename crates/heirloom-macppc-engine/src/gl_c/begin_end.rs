@@ -18,7 +18,7 @@ impl<U: GuestUi> MacPpc<U> {
     /// `mode_ok`: for glBegin, whether its argument is a valid primitive type.
     pub(super) fn gl_begin_end_gate(&mut self, name: &str, mode_ok: bool, a0: u32, a1: u32) -> Result<bool, String> {
         if !name.starts_with("gl") { return Ok(true); }
-        // a call the worker keeps itself cannot be recorded into a gl4es display list: refused by name while one is compiled
+        // a call the worker cannot record into a display list is refused by name while one is compiled (gaps::IN_LIST_GAPS, empty on Mesa)
         if self.gl.list_ctx == Some(self.gl.current) {
             if let Some(m) = heirloom_gl_abi::gaps::refused_in_list(name) { self.gl_note(m.clone()); return Err(m); }
         }

@@ -11,17 +11,11 @@ use alloc::vec::Vec;
 /// (worker-executed, no gap), AND each family has a semantic test that ran through the worker on a GPU
 /// (`userland/coral-heirloom-gl/tests/gpu_state.rs`, tools/check-heirloom-gl-host.sh step 5).
 ///
-/// `None` today, and it stays `None`: `contract::core_tally` says 306 / 30 / 1 of the 306 / 30 / 4 core commands are callable and 268 / 28 / 1
-/// are COMPLETE (callable with nothing refused). What stands between each version and a claim is named on the entries
-/// (`cargo run -q -p heirloom-gl-abi --example tally` prints it): for 1.0 and 1.1 the values gl4es over GLES 2 cannot render and the
-/// worker refuses by name (`gaps::VALUE_GAPS`: flat shading, spot cutoffs, the GL_BLEND texture function, logic operations, smooth and
-/// stippled primitives, polygon offset of points and lines, front buffers, selection and feedback, depth and colour-index pixels), the
-/// calls the worker cannot record into a display list (`gaps::IN_LIST_GAPS`) and a few named deviations (nested list deletion, evaluators
-/// inside a list, `glGetTexImage` of a level other than 0); for 1.2 the three 3D-texture calls (gl4es treats a 3D texture as a 2D one).
-/// Set to `Some(Version::V1_1)` or `Some(Version::V1_2)` in the change that brings `core_tally` to `complete == listed` up to that version
-/// and has a graded scenario for every entry (the worker's `gpu_families` coverage rule); the test
-/// `attested_through_never_exceeds_what_is_complete` fails the build if it is set before that.
-pub const ATTESTED_THROUGH: Option<Version> = None;
+/// `Some(V1_2)` since the worker runs on Mesa's own desktop OpenGL (2026-10-28): `contract::core_tally` says all 306 / 30 / 4 core
+/// commands are COMPLETE (callable with nothing refused, `gaps` empty), and the worker's `gpu_families` scenarios grade every family
+/// on a GPU, 3D textures, edge-flag arrays, the front buffer and the values gl4es used to refuse included. The test
+/// `attested_through_never_exceeds_what_is_complete` fails the build if a row loses `complete` while this claims its version.
+pub const ATTESTED_THROUGH: Option<Version> = Some(Version::V1_2);
 
 /// What the worker may truthfully tell the guest.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,16 +96,15 @@ mod tests {
         assert_eq!(extensions_string(&c), "GL_ARB_multitexture GL_EXT_compiled_vertex_array GL_APPLE_fence GL_APPLE_vertex_array_range");
     }
 
-    /// The Phase 1 table: every extension row is switched on, no core version is (the core lists are the census, not the
-    /// full per-version sets), so the guest is told its four extensions and NO version.
+    /// The table as it stands: every GL 1.0-1.2 core command and every extension row is complete, so the guest is told
+    /// GL 1.2 and its four extensions; without the attestation it is told no version at all.
     #[test]
-    fn the_phase_1_table_claims_four_extensions_and_no_version() {
+    fn the_table_claims_gl_1_2_and_four_extensions() {
         let c = derive(ENTRIES, ATTESTED_THROUGH);
-        assert_eq!(c.version, None);
-        assert_eq!(version_string(&c), Err(Refusal::NoClaimableVersion));
+        assert_eq!(c.version, Some(Version::V1_2));
+        assert_eq!(version_string(&c).as_deref(), Ok("1.2 CoralOS Heirloom GL"));
         assert_eq!(extensions_string(&c), "GL_ARB_multitexture GL_EXT_compiled_vertex_array GL_APPLE_fence GL_APPLE_vertex_array_range");
-        // and the same table attested through 1.2 still claims no version: glTexSubImage2D etc. are not implemented
-        assert_eq!(derive(ENTRIES, Some(Version::V1_2)).version, None);
+        assert_eq!(derive(ENTRIES, None).version, None);
     }
 
     /// An entry that runs but refuses some argument values (`gap`) is callable and never claimable: one gap withdraws the
@@ -135,6 +128,6 @@ mod tests {
 
     #[test]
     fn the_unattested_table_claims_no_version_even_when_all_on() {
-        assert_eq!(derive(&all_on(), ATTESTED_THROUGH).version, None);
+        assert_eq!(derive(&all_on(), None).version, None);
     }
 }

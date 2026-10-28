@@ -26,13 +26,13 @@ glEnable glFinish glFogf glFogfv glFogi glGenTextures glGetError glGetString glL
 glLightfv glLoadMatrixf glMaterialfv glMatrixMode glNormal3fv glPixelStorei glPolygonOffset glReadPixels glScissor glTexEnvi
 glTexGeni glTexImage2D glTexParameteri glTexSubImage2D glViewport glDeleteTextures glColorPointer glDrawElements
 glEnableClientState glDisableClientState glNormalPointer glTexCoordPointer glVertexPointer""".split())
-# gl4es defines these as no-op stubs and they carry bulk data or need real work: hand-written families. (The scalar stubs
+# These carry bulk data or need work the generic encoder cannot do: hand-written families. (The scalar stubs
 # glAccum, glClearAccum, glClearIndex, glIndexf, glIndexMask, glPassThrough, glDrawBuffer, glReadBuffer are generated: the engine
 # and the worker decide each from the specification.)
 STUBS = set("""glFeedbackBuffer glGetPolygonStipple glPolygonStipple glPrioritizeTextures""".split())
 # Calls whose semantics live partly in the engine (client state, pixel store) or need bulk data: hand-written families.
 BESPOKE = set("""glPixelStoref glPushClientAttrib glPopClientAttrib glArrayElement glDrawArrays glDrawRangeElements glGetPointerv
-glInterleavedArrays glIndexPointer glEdgeFlagPointer glRenderMode glCopyTexSubImage3D""".split())
+glInterleavedArrays glIndexPointer glEdgeFlagPointer glRenderMode""".split())
 
 TY = {"GLenum": "Enum", "GLint": "Int", "GLuint": "Uint", "GLsizei": "Sizei", "GLshort": "Short", "GLushort": "Ushort",
       "GLbyte": "Byte", "GLubyte": "Ubyte", "GLboolean": "Bool", "GLbitfield": "Bitfield", "GLfloat": "Float", "GLclampf": "Float",
@@ -147,7 +147,7 @@ def to_word(ty, expr):
 
 EXTRA = """glGenFramebuffers glDeleteFramebuffers glBindFramebuffer glFramebufferTexture2D glFramebufferRenderbuffer
 glCheckFramebufferStatus glGenRenderbuffers glDeleteRenderbuffers glBindRenderbuffer glRenderbufferStorage glActiveTexture
-glClientActiveTexture glClearDepthf""".split()
+glClientActiveTexture glClearDepthf glDrawBuffers""".split()
 PT = {"GLenum": "u32", "GLbitfield": "u32", "GLuint": "u32", "GLint": "i32", "GLsizei": "i32", "GLshort": "i16", "GLushort": "u16",
       "GLbyte": "i8", "GLubyte": "u8", "GLboolean": "u8", "GLfloat": "f32", "GLclampf": "f32", "GLdouble": "f64", "GLclampd": "f64",
       "void": "c_void", "GLvoid": "c_void"}

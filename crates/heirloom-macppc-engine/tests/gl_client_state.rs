@@ -37,23 +37,18 @@ fn client_array_queries_are_answered_by_the_engine_in_every_type() {
 }
 
 #[test]
-fn the_index_array_can_be_enabled_and_the_edge_flag_array_is_refused_by_name() {
+fn the_index_and_edge_flag_arrays_are_client_state_the_engine_keeps() {
     let at = Cell::new(0);
     let (m, _, d) = run(|data| {
         at.set(data.put(&[0xEE; 16]));
         vec![
             call("glEnableClientState", ints(&[0x8077]), vec![]),
             Call { name: "glIsEnabled", ints: ints(&[0x8077]), fl: vec![], keep: Some(at.get()) },
+            call("glEnableClientState", ints(&[0x8079]), vec![]),
+            Call { name: "glIsEnabled", ints: ints(&[0x8079]), fl: vec![], keep: Some(at.get() + 4) },
         ]
     }, true);
     assert_eq!(m.mac.mem.read_u32(d + at.get() as u32).unwrap(), 1, "GL_INDEX_ARRAY has no effect in RGBA mode but it is real state");
-    // the edge-flag array stops the program with the refusal
-    let (calls, dd) = layout(&|_: &mut Data| vec![call("glEnableClientState", ints(&[0x8079]), vec![])]);
-    let (bytes, _) = assemble(&calls, &dd, true);
-    let mut m = ppc_gl::M::new(heirloom_ui_abi::RecordingGuestUi::new()).unwrap();
-    m.gl_attach(Box::new(Mock(heirloom_gl_abi::TokenTable::default(), Default::default())));
-    let frag = m.instantiate("ca", &heirloom_fmt_pef::Pef::parse(&bytes).unwrap()).unwrap();
-    m.start(&frag).unwrap();
-    assert_ne!(m.step(5_000_000).0, heirloom_macppc_engine::Step::Exited);
-    assert!(m.fault().expect("a named fault").to_string().contains("GL_EDGE_FLAG_ARRAY"));
+    assert_eq!(m.mac.mem.read_u32(d + at.get() as u32 + 4).unwrap(), 1, "GL_EDGE_FLAG_ARRAY is enabled (a draw carries it)");
+    assert!(m.fault().is_none());
 }

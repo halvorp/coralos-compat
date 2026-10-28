@@ -274,7 +274,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(crate::family_table::GENERATED.len(), 258);
+        assert_eq!(crate::family_table::GENERATED.len(), 259);
     }
 
     #[test]

@@ -177,35 +177,34 @@ fn texture_priorities_and_residence_go_through_the_worker() {
 }
 
 #[test]
-fn selection_and_feedback_buffers_are_validated_and_render_mode_serves_only_render() {
+fn selection_and_feedback_buffers_are_validated_and_leaving_a_render_mode_stores_the_workers_buffer() {
     let at = Cell::new(0);
+    let bufc = Cell::new(0);
     let (m, seen, d) = run(|data| {
         at.set(data.put(&[0xEE; 32]));
         let buf = data.put(&[0; 64]);
+        bufc.set(buf);
         let a = at.get();
         vec![
             call("glSelectBuffer", vec![I::V(16), I::P(buf)], vec![]),
             call("glFeedbackBuffer", vec![I::V(16), I::V(0x0602), I::P(buf)], vec![]),
             call("glFeedbackBuffer", vec![I::V(16), I::V(0x0700), I::P(buf)], vec![]), keep("glGetError", a),
             call("glSelectBuffer", vec![I::V(0xFFFF_FFFF), I::P(buf)], vec![]), keep("glGetError", a + 4),
-            Call { name: "glRenderMode", ints: ints(&[0x1C00]), fl: vec![], keep: Some(a + 8) },
-            call("glRenderMode", ints(&[0x1234]), vec![]), keep("glGetError", a + 12),
+            call("glRenderMode", ints(&[0x1234]), vec![]), keep("glGetError", a + 8),
+            call("glRenderMode", ints(&[0x1C02]), vec![]),
+            Call { name: "glRenderMode", ints: ints(&[0x1C00]), fl: vec![], keep: Some(a + 12) },
         ]
     }, true);
     assert_eq!(saw(&seen, "glSelectBuffer")[0].0, [16]);
     assert_eq!(saw(&seen, "glFeedbackBuffer")[0].0, [16, 0x0602]);
     assert_eq!(saw(&seen, "glFeedbackBuffer").len(), 1, "an invalid type is not sent");
-    assert!(saw(&seen, "glRenderMode").is_empty(), "render mode is the engine's");
+    let modes: Vec<Vec<u64>> = saw(&seen, "glRenderMode").into_iter().map(|c| c.0).collect();
+    assert_eq!(modes, [vec![0x1C02], vec![0x1C00]], "an invalid mode is not sent; GL_SELECT and GL_RENDER are Mesa's");
     let base = d + at.get() as u32;
     let rd = |o: u32| m.mac.mem.read_u32(base + o).unwrap();
-    assert_eq!([rd(0), rd(4), rd(8), rd(12)], [0x0500, 0x0501, 0, 0x0500]);
-    // GL_SELECT stops the program with a named refusal
-    let (calls, dd) = layout(&|_: &mut Data| vec![call("glRenderMode", ints(&[0x1C02]), vec![])]);
-    let (bytes, _) = assemble(&calls, &dd, true);
-    let mut m = ppc_gl::M::new(heirloom_ui_abi::RecordingGuestUi::new()).unwrap();
-    m.gl_attach(Box::new(Mock(heirloom_gl_abi::TokenTable::default(), Default::default())));
-    let frag = m.instantiate("rm", &heirloom_fmt_pef::Pef::parse(&bytes).unwrap()).unwrap();
-    m.start(&frag).unwrap();
-    assert_ne!(m.step(5_000_000).0, heirloom_macppc_engine::Step::Exited);
-    assert!(m.fault().expect("a named fault").to_string().contains("GL_SELECT"));
+    assert_eq!([rd(0), rd(4), rd(8)], [0x0500, 0x0501, 0x0500]);
+    assert_eq!(rd(12), 2, "leaving GL_SELECT returns the worker's hit count");
+    // the worker's selection words are stored into the program's buffer (big-endian), and nothing past them
+    let buf = d + bufc.get() as u32;
+    assert_eq!([m.mac.mem.read_u32(buf).unwrap(), m.mac.mem.read_u32(buf + 4).unwrap(), m.mac.mem.read_u32(buf + 8).unwrap()], [0xA, 0xB, 0]);
 }

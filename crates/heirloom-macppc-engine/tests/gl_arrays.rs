@@ -194,3 +194,25 @@ fn pixelstoref_rounds_and_getpointerv_returns_what_the_program_set() {
     assert_eq!(saw(&seen, "glPixelStorei")[0].0, [0x0CF2, 3], "2.5 rounds to 3 and is forwarded as an integer");
     assert_eq!((rd(&m, base, 0), rd(&m, base, 4), rd(&m, base, 8), rd(&m, base, 12), rd(&m, base, 16), rd(&m, base, 20)), (0x0501, 0x4000, 0x5000, 0x6000, 0xEEEE_EEEE, 0x0500));
 }
+
+#[test]
+fn an_enabled_edge_flag_array_rides_the_draw_and_a_disabled_one_does_not() {
+    let (_, seen, _) = run(|d| {
+        let v = d.put(&be(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        // edge flags with a stride of 2: vertex 0 = 1, vertex 1 = 0, vertex 2 = 1 (the bytes between are not flags)
+        let e = d.put(&[1, 0xEE, 0, 0xEE, 1, 0xEE]);
+        vec![
+            call("glEnableClientState", ints(&[0x8074]), vec![]),
+            call("glVertexPointer", vec![I::V(2), I::V(0x1406), I::V(0), I::P(v)], vec![]),
+            call("glEdgeFlagPointer", vec![I::V(2), I::P(e)], vec![]),
+            call("glDrawArrays", ints(&[4, 0, 3]), vec![]),
+            call("glEnableClientState", ints(&[0x8079]), vec![]),
+            call("glDrawArrays", ints(&[4, 0, 3]), vec![]),
+        ]
+    }, true);
+    let s = seen.lock().unwrap();
+    assert_eq!(s.draws[0].arrays.len(), 1, "NEGATIVE: a disabled edge-flag array is not carried");
+    let edge = s.draws[1].arrays.iter().find(|a| a.role == Role::EdgeFlag).expect("the edge-flag array rides the draw");
+    assert_eq!((edge.size, edge.ty, edge.first, edge.count), (1, ElemType::U8, 0, 3));
+    assert_eq!(edge.data, [1, 0, 1], "one byte per vertex, the stride removed");
+}

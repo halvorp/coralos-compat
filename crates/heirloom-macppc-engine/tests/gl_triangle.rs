@@ -256,7 +256,7 @@ fn the_pef_triangle_program_draws_through_the_ring_and_the_snapshot_survives_the
     let ext = m.mac.mem.read_u32(data + l.ext_ptr as u32).unwrap();
     assert_eq!(m.cstr(ext, "t").unwrap(), b"GL_ARB_multitexture GL_EXT_compiled_vertex_array GL_APPLE_fence GL_APPLE_vertex_array_range");
     let ver = m.mac.mem.read_u32(data + l.ver_ptr as u32).unwrap();
-    assert!(String::from_utf8(m.cstr(ver, "t").unwrap()).unwrap().starts_with("0.0 "), "no GL version is claimed on the Phase 1 table");
+    assert!(String::from_utf8(m.cstr(ver, "t").unwrap()).unwrap().starts_with("1.2 "), "the table attests GL 1.2");
     // every glGetString query reached the worker (it logs them on its ring) and the engine
     assert_eq!(s.queries, vec![0x1F03, 0x1F02]);
     assert_eq!(m.gl.query_log.len(), 2);
@@ -278,9 +278,9 @@ fn without_a_worker_there_is_no_pixel_format_and_the_refusal_is_named() {
 fn an_unimplemented_entry_is_refused_by_name_never_skipped() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     let mut regs = [0u32; 32];
-    assert!(!matches!(m.bind("glTexImage3D"), heirloom_macppc_engine::symbols::Binding::Unbound(_)), "bound, so the call is refused by name");
-    match m.glue_call("glTexImage3D", &mut regs) {
-        GlueOutcome::Refused(s) => assert_eq!(s, "[HEIRLOOM-GL REFUSED call=glTexImage3D]"),
+    assert!(!matches!(m.bind("aglSetFullScreen"), heirloom_macppc_engine::symbols::Binding::Unbound(_)), "bound, so the call is refused by name");
+    match m.glue_call("aglSetFullScreen", &mut regs) {
+        GlueOutcome::Refused(s) => assert_eq!(s, "[HEIRLOOM-GL REFUSED call=aglSetFullScreen]"),
         other => panic!("a skipped call: {other:?}"),
     }
     m.bind("glDrawElements");

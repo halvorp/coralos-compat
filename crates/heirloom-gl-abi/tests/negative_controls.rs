@@ -124,14 +124,14 @@ fn tokens_grow_without_a_fixed_cap() {
 // ---- control 5: an unsupported call is refused by NAME, never skipped ------------------------------------------------
 #[test]
 fn nc_unsupported_call_is_refused_by_name() {
-    // glTexImage3D is core GL 1.2, listed in the contract, and refused by name (gl4es treats a 3D texture as a 2D one).
-    let i = find(ENTRIES, "glTexImage3D").unwrap() as u16;
+    // aglSetFullScreen is imported by all four Warcraft III binaries, listed in the contract, and not implemented.
+    let i = find(ENTRIES, "aglSetFullScreen").unwrap() as u16;
     let r = admit_call(ENTRIES, i).unwrap_err();
-    assert_eq!(r, Refusal::Unsupported { name: "glTexImage3D".into() });
-    assert_eq!(refusal_marker(&r), "[HEIRLOOM-GL REFUSED call=glTexImage3D]");
+    assert_eq!(r, Refusal::Unsupported { name: "aglSetFullScreen".into() });
+    assert_eq!(refusal_marker(&r), "[HEIRLOOM-GL REFUSED call=aglSetFullScreen]");
     let mut on: Vec<Entry> = ENTRIES.to_vec();
     on[i as usize].implemented = true;
-    assert_eq!(admit_call(&on, i).unwrap().name, "glTexImage3D");
+    assert_eq!(admit_call(&on, i).unwrap().name, "aglSetFullScreen");
     assert!(admit_call(ENTRIES, find(ENTRIES, "glDrawElements").unwrap() as u16).is_ok(), "an implemented row passes");
     assert_eq!(admit_call(&on, u16::MAX).unwrap_err(), Refusal::UnknownEntry { index: u16::MAX });
 }

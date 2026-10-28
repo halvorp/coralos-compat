@@ -39,12 +39,23 @@ impl<U: GuestUi> MacPpc<U> {
             "glAreTexturesResident" => self.gl_are_resident(entry, token, cpu),
             "glSelectBuffer" | "glFeedbackBuffer" => self.gl_select_feedback_buffer(name, entry, token, cpu),
             "glRenderMode" => {
-                // §5.2: GL_RENDER is the only mode this engine serves (selection and feedback are refused by name): leaving it
-                // returns 0, and any other value is GL_INVALID_ENUM
+                // §5.2 / §5.3: Mesa selects and feeds back into the worker's copy of the buffer; leaving GL_SELECT or GL_FEEDBACK
+                // answers [count, buffer words...] and the words are stored into the program's buffer (each a u32: a name or
+                // depth, or a feedback float's bits). count is -1 when the buffer overflowed (GL), so every word sent is stored.
                 let mode = arg(self, cpu, 0)?;
-                if let Some(m) = heirloom_gl_abi::gaps::refused_value(name, &[u64::from(mode)]) { self.gl_note(m.clone()); return Err(m); }
-                if mode != 0x1C00 { self.gl_set_error(0x0500); }
-                Ok(0)
+                if !matches!(mode, 0x1C00..=0x1C02) { self.gl_set_error(0x0500); return Ok(0); }
+                let r = self.gl_ask(token, Command::Call { entry, args: vec![u64::from(mode)] });
+                let Some(reply) = self.gl_reply_words("glRenderMode", r) else { return Ok(0); };
+                let Some((ret, rest)) = reply.split_first() else { return Err(String::from("glRenderMode: the worker answered nothing")) };
+                let left = core::mem::replace(&mut self.gl.render_mode, mode);
+                let to = match left { 0x1C02 => self.gl.select_ptr, 0x1C01 => self.gl.feedback_ptr, _ => 0 };
+                if to != 0 {
+                    let base = self.mac.mem.strip(to);
+                    for (k, w) in rest.iter().enumerate() {
+                        self.mac.mem.write_u32(base.wrapping_add(4 * k as u32), *w as u32).map_err(|_| String::from("glRenderMode: the selection/feedback buffer leaves guest RAM"))?;
+                    }
+                }
+                Ok(*ret as u32)
             }
             other => Err(format!("{other}: marked implemented but has no bulk encoder in this engine (a contract/engine skew)")),
         }

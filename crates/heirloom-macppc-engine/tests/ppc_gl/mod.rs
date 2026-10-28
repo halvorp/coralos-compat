@@ -56,6 +56,8 @@ impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
                         "glGetPixelMapuiv" => reply(&mut out, vec![1, 2, 3, 0xFFFF_FFFF]),
                         "glGetPixelMapusv" => reply(&mut out, vec![1, 2, 3, 0xFFFF]),
                         "glAreTexturesResident" => reply(&mut out, vec![0, 1, 1, 0]),
+                        // leaving a render mode: two hit-record words (the count is the worker's first word)
+                        "glRenderMode" => reply(&mut out, vec![2, 0xA, 0xB]),
                         "glGetIntegerv" => reply(&mut out, (0..sig::integer_count(args[0] as u32).unwrap() as u64).map(|k| 0xFFFF_FFF0 + k).collect()),
                         "glReadPixels" => {
                             let l = heirloom_gl_abi::pixel::layout(args[4] as u32, args[5] as u32).unwrap();

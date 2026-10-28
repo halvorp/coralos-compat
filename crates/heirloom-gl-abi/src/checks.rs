@@ -1,5 +1,5 @@
-//! ARGUMENT CHECKS the engine makes before a call reaches the worker, for the argument domains GL 1.2 defines and gl4es does not
-//! enforce (gl4es answers an out-of-range `glBegin` mode with no error at all). A failed check is the GL error the specification
+//! ARGUMENT CHECKS the engine makes before a call reaches the worker, for the argument domains GL 1.2 defines, answered in the
+//! guest's own call (the engine needs the error before the worker's reply would arrive). A failed check is the GL error the specification
 //! names, raised exactly as GL does: the call has no other effect and is never sent (GL 1.2 §2.5).
 use alloc::format;
 use alloc::string::String;
