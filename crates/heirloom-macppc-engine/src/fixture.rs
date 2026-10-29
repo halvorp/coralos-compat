@@ -132,3 +132,85 @@ pub fn macbinary_app(pef: &[u8]) -> Vec<u8> { macbinary("Startup", b"APPL", b"ST
 
 /// AppleDouble header file (the data fork is a separate file).
 pub fn appledouble_app() -> Vec<u8> { appledouble("Startup", &cfrg_fork()) }
+
+/// What [`gl_spinner_app`] imports from `InterfaceLib` (TOC words first) and `OpenGLLibrary` (after them), in TOC order.
+pub const SPINNER_TOOLBOX: &[(&str, SymbolClass, bool)] = &[
+    ("qd", SymbolClass::Data, false),
+    ("InitGraf", SymbolClass::TVector, false), ("InitFonts", SymbolClass::TVector, false), ("InitWindows", SymbolClass::TVector, false),
+    ("InitMenus", SymbolClass::TVector, false), ("TEInit", SymbolClass::TVector, false), ("InitDialogs", SymbolClass::TVector, false),
+    ("InitCursor", SymbolClass::TVector, false), ("NewWindow", SymbolClass::TVector, false), ("SetPort", SymbolClass::TVector, false),
+    ("WaitNextEvent", SymbolClass::TVector, false), ("FindWindow", SymbolClass::TVector, false), ("TrackGoAway", SymbolClass::TVector, false),
+    ("ExitToShell", SymbolClass::TVector, false),
+];
+pub const SPINNER_GL: &[(&str, SymbolClass, bool)] = &[
+    ("aglChoosePixelFormat", SymbolClass::TVector, false), ("aglCreateContext", SymbolClass::TVector, false),
+    ("aglSetCurrentContext", SymbolClass::TVector, false), ("aglSetDrawable", SymbolClass::TVector, false),
+    ("aglSwapBuffers", SymbolClass::TVector, false), ("glViewport", SymbolClass::TVector, false),
+    ("glEnableClientState", SymbolClass::TVector, false), ("glVertexPointer", SymbolClass::TVector, false),
+    ("glColorPointer", SymbolClass::TVector, false), ("glClear", SymbolClass::TVector, false), ("glDrawElements", SymbolClass::TVector, false),
+];
+/// The spinner window's content rectangle (top, left, bottom, right) in global coordinates: 192 x 128.
+pub const SPINNER_RECT: [i16; 4] = [80, 60, 208, 252];
+
+/// A REAL PowerPC OpenGL application (guest-GL on-screen slice 5's witness on the Z83): the classic startup, ONE window, an AGL
+/// context whose drawable is that window, then a loop that draws one vertex-coloured triangle from big-endian arrays, changes
+/// the first vertex's red/green bytes every frame (a picture that visibly changes), swaps, and waits in `WaitNextEvent` (sleep 1
+/// tick) - until a click in the window's go-away box. Every instruction runs on heirloom-cpu-ppc; every GL call goes through
+/// the engine's GL glue to the worker.
+pub fn gl_spinner_app() -> Vec<u8> {
+    let n_tb = SPINNER_TOOLBOX.len();
+    let toc = |name: &str| -> i32 {
+        let i = SPINNER_TOOLBOX.iter().position(|s| s.0 == name).or_else(|| SPINNER_GL.iter().position(|s| s.0 == name).map(|i| i + n_tb));
+        (TOC_FIRST + 4 * i.unwrap_or_else(|| panic!("spinner: {name} is not imported")) as u32) as i32
+    };
+    let tail_at = (TOC_FIRST + 4 * (n_tb + SPINNER_GL.len()) as u32) as i32;
+    let mut tail = Vec::new();
+    let mut put = |b: &[u8], tail: &mut Vec<u8>| -> i32 {
+        while tail.len() % 4 != 0 { tail.push(0); }
+        let at = tail_at + tail.len() as i32;
+        tail.extend_from_slice(b);
+        at
+    };
+    let rect: Vec<u8> = SPINNER_RECT.iter().flat_map(|v| v.to_be_bytes()).collect();
+    let rect_at = put(&rect, &mut tail);
+    let mut title = Vec::new();
+    pstring("GL Spinner", &mut title);
+    let title_at = put(&title, &mut tail);
+    let verts: Vec<u8> = [-0.8f32, -0.7, 0.0, 0.8, -0.7, 0.0, 0.0, 0.8, 0.0].iter().flat_map(|v| v.to_be_bytes()).collect();
+    let verts_at = put(&verts, &mut tail);
+    let cols_at = put(&[255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255], &mut tail);
+    let idx: Vec<u8> = [0u16, 1, 2].iter().flat_map(|v| v.to_be_bytes()).collect();
+    let idx_at = put(&idx, &mut tail);
+    let (w, h) = (i32::from(SPINNER_RECT[3] - SPINNER_RECT[1]), i32::from(SPINNER_RECT[2] - SPINNER_RECT[0]));
+
+    let mut a = Asm::new();
+    // prologue: LR in the caller's frame, a 112-byte frame (event record at 30, window found at 48, r28..r31 at 96..108)
+    a.mflr(0).stw(0, 8, 1).stwu(1, -112, 1).stw(31, 108, 1).stw(30, 104, 1).stw(29, 100, 1).stw(28, 96, 1);
+    a.lwz(3, toc("qd"), 2).addi(3, 3, super::machine::QD_GLOBALS_SIZE as i32 - 4).call_toc(toc("InitGraf"));
+    for init in ["InitFonts", "InitWindows", "InitMenus", "TEInit"] { a.call_toc(toc(init)); }
+    a.li(3, 0).call_toc(toc("InitDialogs")).call_toc(toc("InitCursor"));
+    a.li(3, 0).addi(4, 2, rect_at).addi(5, 2, title_at).li(6, 1).li(7, 0).li(8, -1).li(9, 1).li(10, 0).call_toc(toc("NewWindow"));
+    a.mr(30, 3).call_toc(toc("SetPort"));
+    a.li(3, 0).li(4, 0).li(5, 0).call_toc(toc("aglChoosePixelFormat")).mr(29, 3);
+    a.mr(3, 29).li(4, 0).call_toc(toc("aglCreateContext")).mr(28, 3);
+    a.mr(3, 28).call_toc(toc("aglSetCurrentContext"));
+    a.mr(3, 28).mr(4, 30).call_toc(toc("aglSetDrawable"));
+    a.li(3, 0).li(4, 0).li(5, w).li(6, h).call_toc(toc("glViewport"));
+    a.lis(3, 0).ori(3, 3, 0x8074).call_toc(toc("glEnableClientState")); // GL_VERTEX_ARRAY
+    a.lis(3, 0).ori(3, 3, 0x8076).call_toc(toc("glEnableClientState")); // GL_COLOR_ARRAY
+    a.li(3, 3).li(4, 0x1406).li(5, 0).addi(6, 2, verts_at).call_toc(toc("glVertexPointer"));
+    a.li(3, 4).li(4, 0x1401).li(5, 0).addi(6, 2, cols_at).call_toc(toc("glColorPointer"));
+    a.li(31, 0);
+    a.label("frame").addi(31, 31, 5).sth(31, cols_at, 2); // vertex 0's red, green = the frame counter's two low bytes
+    a.li(3, 0x4000).call_toc(toc("glClear")); // GL_COLOR_BUFFER_BIT
+    a.li(3, 4).li(4, 3).li(5, 0x1403).addi(6, 2, idx_at).call_toc(toc("glDrawElements"));
+    a.mr(3, 28).call_toc(toc("aglSwapBuffers"));
+    a.label("wait").li(3, -1).addi(4, 1, 30).li(5, 1).li(6, 0).call_toc(toc("WaitNextEvent"));
+    a.cmpwi(3, 0).beq("frame").lhz(0, 30, 1).cmpwi(0, 1).bne("frame");
+    a.lwz(3, 40, 1).addi(4, 1, 48).call_toc(toc("FindWindow")).cmpwi(3, 6).bne("frame");
+    a.lwz(3, 48, 1).lwz(4, 40, 1).call_toc(toc("TrackGoAway")).cmpwi(3, 0).beq("frame");
+    a.call_toc(toc("ExitToShell"));
+    a.lwz(28, 96, 1).lwz(29, 100, 1).lwz(30, 104, 1).lwz(31, 108, 1).addi(1, 1, 112).lwz(0, 8, 1).mtlr(0).blr();
+    let pef = app_with(&[("InterfaceLib", false, SPINNER_TOOLBOX), ("OpenGLLibrary", false, SPINNER_GL)], &a.finish(), &tail);
+    macbinary("GL Spinner", b"APPL", b"GLSP", &pef, &cfrg_fork())
+}

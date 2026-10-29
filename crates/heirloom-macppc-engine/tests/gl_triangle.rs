@@ -301,3 +301,33 @@ fn a_destroyed_context_handle_is_bad_context_not_a_stale_use() {
     assert_eq!(e[3], 10000, "AGL_BAD_CONTEXT");
     assert_eq!(seen.lock().unwrap().bad_tokens, 0, "and nothing reached the worker with a dead token");
 }
+
+/// The GL spinner (slice 5's on-screen witness, `fixture::gl_spinner_app`): a REAL PowerPC application opens a window, makes its
+/// AGL drawable that window, and swaps a changing triangle frame after frame - each frame waits in WaitNextEvent, so the
+/// frames come at the host's pace. `HEIRLOOM_GL_SPINNER_OUT=<file>` writes the MacBinary for a Z83 test bundle.
+#[test]
+fn the_gl_spinner_swaps_frame_after_frame_into_its_own_window() {
+    use heirloom_common::GuestMachine;
+    let app = heirloom_macppc_engine::fixture::gl_spinner_app();
+    if let Ok(path) = std::env::var("HEIRLOOM_GL_SPINNER_OUT") {
+        std::fs::write(path, &app).unwrap();
+    }
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
+    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true }));
+    m.start_file(&app, "GL Spinner").unwrap();
+    let mut t = 0u64;
+    for _ in 0..12 {
+        let (st, _) = GuestMachine::step(&mut m, 2_000_000);
+        assert!(!matches!(st, Step::Fault(_) | Step::Exited), "{st:?} {:?}", m.fault());
+        t += 20_000;
+        GuestMachine::advance_clock_to(&mut m, t).unwrap();
+    }
+    let s = seen.lock().unwrap();
+    let swaps = s.kinds.iter().filter(|k| *k == "Swap").count();
+    assert!(swaps >= 3, "frame after frame: {swaps} swaps, {:?}", &s.kinds[..s.kinds.len().min(40)]);
+    assert!(s.kinds.iter().any(|k| k == "Call aglSetDrawable"), "the window is the drawable");
+    assert!(s.draws.len() >= swaps, "every frame draws its triangle");
+    let firsts: Vec<u8> = s.draws.iter().filter_map(|d| d.arrays.iter().find(|a| a.size == 4).map(|a| a.data[1])).collect();
+    assert!(firsts.windows(2).any(|w| w[0] != w[1]), "the first vertex's colour changes from frame to frame: {firsts:?}");
+}
