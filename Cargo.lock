@@ -79,6 +79,17 @@ version = "0.1.0"
 [[package]]
 name = "heirloom-cpu-arm"
 version = "0.1.0"
+dependencies = [
+ "heirloom-cpu-abi",
+]
+
+[[package]]
+name = "heirloom-cpu-arm-client"
+version = "0.1.0"
+dependencies = [
+ "heirloom-cpu-abi",
+ "heirloom-cpu-arm",
+]
 
 [[package]]
 name = "heirloom-cpu-ppc"
@@ -94,6 +105,7 @@ version = "0.1.0"
 dependencies = [
  "heirloom-common",
  "heirloom-cpu-arm",
+ "heirloom-cpu-arm-client",
  "heirloom-ekaarm-engine",
  "heirloom-fmt-e32",
  "heirloom-fmt-rsc",

@@ -12,7 +12,7 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use heirloom_cpu_arm::Cpu;
+use crate::cpu::Cpu;
 use crate::layout::{PAGE, STUB_BASE};
 use crate::loader::Process;
 use crate::run::Outcome;

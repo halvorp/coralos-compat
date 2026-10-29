@@ -1,7 +1,8 @@
 //! Data accesses: the ARMv6 alignment rules of [`Unaligned`] and CPSR.E byte order, on top of the host's
 //! [`Memory`]. Every guest load and store goes through here.
 
-use crate::cpu::{Cpu, Unaligned};
+use crate::cpu::Cpu;
+use crate::Unaligned;
 use crate::{Exit, Fault, Memory, TrapKind};
 
 /// Which alignment rule an access follows.

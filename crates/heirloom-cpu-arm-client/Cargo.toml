@@ -1,0 +1,18 @@
+[package]
+name = "heirloom-cpu-arm-client"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "The heirloom-cpu-arm API (Cpu, Exit, Memory, ...) driven through cpu-arm.library's CpuVTable: no ARM core linked"
+
+[features]
+default = []
+# HOST tests and tools only (refused on target_os = "none", src/lib.rs): bind the static core's table when nothing was bound.
+bind-static = ["dep:heirloom-cpu-arm"]
+
+[dependencies]
+heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }
+heirloom-cpu-arm = { path = "../heirloom-cpu-arm", optional = true }
+
+[dev-dependencies]
+heirloom-cpu-arm = { path = "../heirloom-cpu-arm" }
