@@ -5,6 +5,9 @@ extern crate alloc;
 extern crate std;
 
 pub mod cpu;
+pub mod romtree;
+#[cfg(feature = "os-library")]
+pub mod os_face;
 pub mod mem;
 pub mod layout;
 pub mod loader;

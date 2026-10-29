@@ -17,6 +17,7 @@ fn controls() -> Vec<Control> {
         Control::StopOnUnimplemented(true),
         Control::Advance { virtual_us: 1 << 40 },
         Control::Step { budget: 200_000 },
+        Control::Input { name: "eka-ordinals".into(), offset: 2, total: 5, chunk: vec![7, 8, 9] },
     ]
 }
 
@@ -96,6 +97,9 @@ fn a_chunk_reaching_past_its_blob_is_refused() {
     let mut b = Vec::new();
     encode_control(&Control::Program { offset: 5, total: 6, chunk: vec![0, 0] }, &mut b).unwrap();
     assert!(matches!(decode(&b), Err(WireError::TooLong { what: "blob chunk past its total", .. })));
+    let mut b = Vec::new();
+    encode_control(&Control::Input { name: "rom".into(), offset: 5, total: 6, chunk: vec![0, 0] }, &mut b).unwrap();
+    assert!(matches!(decode(&b), Err(WireError::TooLong { what: "blob chunk past its total", .. })), "a named input is a blob too");
 }
 
 #[test]

@@ -49,6 +49,11 @@ pub trait OsFamily: 'static {
     fn cpu_bound() -> bool;
     /// A machine of profile `profile` ("" = the family's default) drawing on `ui`.
     fn create(profile: &str, ui: LibUi) -> Result<Self::Machine, Refusal>;
+    /// One named input file ([`Control::Input`], whole once its chunks have arrived) for the machine before `StartFile`. A family
+    /// that takes none refuses it by name.
+    fn input(_m: &mut Self::Machine, name: &str, _bytes: Vec<u8>) -> Result<(), String> {
+        Err(format!("input {name:?}: this guest OS takes no named input"))
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -79,12 +84,20 @@ impl Blob {
     }
 }
 
+fn no_input<M>(_m: &mut M, name: &str, _bytes: Vec<u8>) -> Result<(), String> {
+    Err(format!("input {name:?}: this guest OS takes no named input"))
+}
+
 /// One guest machine and the session state around it.
 pub struct Session<M: GuestMachine<Ui = LibUi>> {
     machine: M,
     volume: Blob,
     program: Blob,
     staged_program: Option<Vec<u8>>,
+    /// The named input arriving now (inputs arrive one after another, each in order).
+    input: Option<(String, Blob)>,
+    /// Where a whole named input goes: the family's [`OsFamily::input`] (a session made with [`Session::new`] refuses them all).
+    take_input: fn(&mut M, &str, Vec<u8>) -> Result<(), String>,
     /// A named failure that ends the guest: the next Step reports it instead of running.
     fault: Option<String>,
     undelivered: Vec<String>,
@@ -93,7 +106,12 @@ pub struct Session<M: GuestMachine<Ui = LibUi>> {
 
 impl<M: GuestMachine<Ui = LibUi>> Session<M> {
     pub fn new(machine: M) -> Self {
-        Session { machine, volume: Blob::default(), program: Blob::default(), staged_program: None, fault: None, undelivered: Vec::new(), host_refused: Vec::new() }
+        Session { machine, volume: Blob::default(), program: Blob::default(), staged_program: None, input: None, take_input: no_input::<M>, fault: None, undelivered: Vec::new(), host_refused: Vec::new() }
+    }
+
+    /// The session for family `F`'s machine: its named inputs go to `F::input`.
+    pub fn for_family<F: OsFamily<Machine = M>>(machine: M) -> Self {
+        Session { take_input: F::input, ..Session::new(machine) }
     }
 
     pub fn machine(&mut self) -> &mut M {
@@ -154,6 +172,28 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
                 Ok(None) => {}
                 Err(e) => self.fail(e),
             },
+            Control::Input { name, offset, total, chunk } => {
+                if let Some((other, _)) = self.input.as_ref().filter(|(n, b)| *n != name && !b.bytes.is_empty()) {
+                    let why = format!("input {name:?}: input {other:?} was still arriving (inputs are sent one after another)");
+                    self.input = None;
+                    self.fail(why);
+                    return;
+                }
+                let blob = match &mut self.input {
+                    Some((n, b)) if *n == name => b,
+                    _ => &mut self.input.insert((name.clone(), Blob::default())).1,
+                };
+                match blob.take(&format!("input {name:?}"), offset, total, &chunk) {
+                    Ok(Some(bytes)) => {
+                        self.input = None;
+                        if let Err(e) = (self.take_input)(&mut self.machine, &name, bytes) {
+                            self.fail(e);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => self.fail(e),
+                }
+            }
             Control::StartFile { name } => {
                 let r = match (self.staged_program.take(), &self.fault) {
                     (_, Some(f)) => Err(f.clone()),
@@ -247,7 +287,7 @@ extern "C" fn create_impl<F: OsFamily>(profile: *const u8, len: usize, host: *co
     // SAFETY: `host` is non-null and points to an OsHost the caller filled; it is copied here.
     let ui = ProxyUi::new(HostTransport { host: unsafe { *host } });
     match F::create(profile, ui) {
-        Ok(machine) => Box::into_raw(Box::new(Session::new(machine))) as *mut OsInstance,
+        Ok(machine) => Box::into_raw(Box::new(Session::for_family::<F>(machine))) as *mut OsInstance,
         Err(r) => {
             write_why(&r.0, why, why_cap, why_len);
             core::ptr::null_mut()
