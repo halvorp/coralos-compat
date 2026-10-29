@@ -54,6 +54,7 @@ pub mod tsm_c;
 pub mod gworld;
 pub mod invoke_c;
 pub mod isp_c;
+pub mod qt_c; // the Movie Toolbox calls with no movie decoder: every movie refused by name
 pub mod keys_c;
 pub mod menu_c;
 pub mod toolbox_c;

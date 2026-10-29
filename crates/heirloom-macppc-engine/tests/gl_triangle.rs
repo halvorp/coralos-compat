@@ -331,3 +331,45 @@ fn the_gl_spinner_swaps_frame_after_frame_into_its_own_window() {
     let firsts: Vec<u8> = s.draws.iter().filter_map(|d| d.arrays.iter().find(|a| a.size == 4).map(|a| a.data[1])).collect();
     assert!(firsts.windows(2).any(|w| w[0] != w[1]), "the first vertex's colour changes from frame to frame: {firsts:?}");
 }
+
+/// A HOST RUN of Warcraft III (the owner's disc, never committed: /data/build/corpus-bin) WITH a GL worker, the way the Z83 runs it
+/// since guest-GL slice 5: how far it gets, its last log lines and UI calls. Diagnostic, not a gate: `cargo test --features fixtures
+/// --test gl_triangle wc3 -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn wc3_host_run_with_a_gl_worker() {
+    use heirloom_common::GuestMachine;
+    let Ok(app) = std::fs::read("/data/build/corpus-bin/mac/warcraft3/apps/roc-Warcraft_III.bin") else {
+        eprintln!("SKIPPED: the WC3 corpus file is absent");
+        return;
+    };
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
+    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true }));
+    m.start_file(&app, "Warcraft III").unwrap();
+    let mut t = 0u64;
+    let slices: u32 = std::env::var("WC3_SLICES").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
+    for i in 0..slices {
+        let (st, stats) = GuestMachine::step(&mut m, 5_000_000);
+        if matches!(st, Step::Fault(_) | Step::Exited) {
+            eprintln!("slice {i}: {st:?} {:?}", m.fault());
+            break;
+        }
+        let _ = stats;
+        t += 20_000;
+        GuestMachine::advance_clock_to(&mut m, t).unwrap();
+        if m.ui().calls.iter().any(|c| format!("{c:?}").starts_with("Request")) {
+            eprintln!("slice {i}: the program raised a request");
+            break;
+        }
+    }
+    let log = &m.mac.log;
+    for l in log.iter().skip(log.len().saturating_sub(80)) {
+        eprintln!("LOG {l}");
+    }
+    for c in m.ui().calls.iter().rev().take(10) {
+        eprintln!("UI {}", format!("{c:?}").chars().take(300).collect::<String>());
+    }
+    let s = seen.lock().unwrap();
+    eprintln!("GL kinds: {:?}", s.kinds.iter().take(60).collect::<Vec<_>>());
+}

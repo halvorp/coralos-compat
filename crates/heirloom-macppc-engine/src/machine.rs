@@ -91,6 +91,7 @@ pub struct MacPpc<U: GuestUi> {
     pub gl: crate::gl_c::GlState,
     pub(crate) qa: crate::qdacc_c::QaState,
     pub(crate) isp: crate::isp_c::IspState,
+    pub(crate) qt: crate::qt_c::QtState,
     /// Everything the program wrote with `printf`/`puts`/`putchar`: there is no console device, so the bytes are kept here (and logged).
     pub console: Vec<u8>,
     /// PEF libraries supplied by name (the application's own `cfrg` import-library members, files beside it): loaded on first import.
@@ -136,7 +137,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(heirloom_mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
     }
 
     /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.
@@ -266,6 +267,14 @@ impl<U: GuestUi> MacPpc<U> {
                 Some(f) => { let b = Binding::Native(crate::symbols::Native::Gl(f)); self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
                 None => {
                     let b = Binding::Unbound(alloc::format!("{name} is not in the contract table of {l} (heirloom-gl-abi)"));
+                    self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
+                    b
+                }
+            },
+            l if crate::qt_c::provided(l) => match crate::qt_c::QtFn::by_name(name) {
+                Some(f) => { let b = Binding::Native(crate::symbols::Native::Qt(f)); self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
+                None => {
+                    let b = Binding::Unbound(alloc::format!("{name} is not in the part of the QuickTime Movie Toolbox this engine provides"));
                     self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
                     b
                 }

@@ -80,6 +80,8 @@ pub enum Native { StandardAlert, GetSharedLibrary, FindSymbol, CloseConnection, 
     Qa(crate::qdacc_c::QaFn),
     /// InputSprocket over the host's keyboard and mouse ([`crate::isp_c`]).
     Isp(crate::isp_c::IspFn),
+    /// The QuickTime Movie Toolbox, no decoder ([`crate::qt_c`]).
+    Qt(crate::qt_c::QtFn),
     /// An `Invoke<Name>UPP` call of the program's own UPP ([`crate::invoke_c`]): served by the run loop through the callback machine.
     Invoke(crate::invoke_c::InvokeFn),
     /// A Text Services Manager document call, no input method ([`crate::tsm_c`]).

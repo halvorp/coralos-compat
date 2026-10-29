@@ -22,6 +22,8 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
         // personality; every call the engine lacks is a per-call NAMED refusal. `gestaltSystemVersion` 0x0921 and `gestaltCarbonVersion` 0x0140 (CarbonLib 1.4, as on the 9.2.1 CD).
         b"sysv" => 0x0921,
         b"cbon" => 0x0140,
+        // gestaltQuickTimeVersion: the API level of the Movie Toolbox calls qt_c.rs serves (4.0); it has no decoder, every movie is refused by name
+        b"qtim" => crate::qt_c::QUICKTIME_4,
         // gestaltThreadMgrAttr: bit 0 gestaltThreadMgrPresent, bit 2 gestaltThreadsLibraryPresent (ThreadsLib is provided); bit 1 (exact-match support) is not claimed
         b"thds" => 0b101,
         _ => return None,

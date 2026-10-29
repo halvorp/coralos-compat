@@ -203,6 +203,11 @@ impl<U: GuestUi> MacPpc<U> {
                 cpu.gpr = *regs;
                 match self.isp_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::Qt(f) => {
+                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                cpu.gpr = *regs;
+                match self.qt_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
             Native::Tsm(f) => {
                 let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
