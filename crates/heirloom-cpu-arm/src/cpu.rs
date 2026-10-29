@@ -3,39 +3,8 @@
 //
 //! The user-mode register file, the CPSR, and the fetch/execute loop.
 
-use crate::vfp::Vfp;
-use crate::{Exit, Memory, Trap, TrapKind};
-
-/// How unaligned data accesses behave (ARMv6 SCTLR.U and SCTLR.A).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Unaligned {
-    /// U=1, A=0 (EKA2's setting): LDR/STR/LDRH/STRH/LDRSH of any alignment are performed as unaligned
-    /// accesses; LDM/STM, LDRD/STRD, SWP, VFP loads/stores and the exclusives must be word-aligned (the
-    /// exclusives naturally aligned) or they trap.
-    Armv6,
-    /// U=0, A=0 (the ARMv5 model): an unaligned LDR loads the aligned word rotated, STR and the multiples
-    /// ignore address bits [1:0], a halfword access ignores bit 0.
-    Legacy,
-    /// A=1: every access must be naturally aligned (LDRD/STRD and the multiples word-aligned).
-    Strict,
-}
-
-/// Static CPU configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Config {
-    pub unaligned: Unaligned,
-    /// VFPv2 present and enabled (CPACR + FPEXC.EN set by the OS). When false, cp10/cp11 trap.
-    pub vfp: bool,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config { unaligned: Unaligned::Armv6, vfp: true }
-    }
-}
-
-/// The CPSR's user-visible mode field: always User.
-pub const MODE_USR: u32 = 0x10;
+use crate::{Config, Exit, Memory, Trap, TrapKind, Unaligned, Vfp};
+use heirloom_cpu_abi::arm::{ArmContext, ArmExit, Psr};
 
 /// One ARMv6 hardware thread in user mode.
 #[derive(Clone, Debug)]
@@ -111,22 +80,15 @@ impl Cpu {
 
     /// The CPSR as MRS reads it in user mode (mode bits = User, I/F/A clear).
     pub fn cpsr(&self) -> u32 {
-        (self.n as u32) << 31
-            | (self.z as u32) << 30
-            | (self.c as u32) << 29
-            | (self.v as u32) << 28
-            | (self.q as u32) << 27
-            | (self.ge as u32 & 0xF) << 16
-            | (self.big_endian as u32) << 9
-            | (self.thumb as u32) << 5
-            | MODE_USR
+        Psr { n: self.n, z: self.z, c: self.c, v: self.v, q: self.q, ge: self.ge, big_endian: self.big_endian, thumb: self.thumb }.pack()
     }
 
     /// Host-side CPSR write: flags, GE, E and T (the mode field is ignored; this core is user mode only).
     pub fn set_cpsr(&mut self, value: u32) {
-        self.set_apsr(value, true, true);
-        self.big_endian = value & (1 << 9) != 0;
-        self.thumb = value & (1 << 5) != 0;
+        let p = Psr::unpack(value);
+        (self.n, self.z, self.c, self.v, self.q, self.ge) = (p.n, p.z, p.c, p.v, p.q, p.ge);
+        self.big_endian = p.big_endian;
+        self.thumb = p.thumb;
     }
 
     /// Write the APSR fields MSR may change from user mode: NZCVQ (`flags`) and GE (`ge`).
@@ -165,6 +127,58 @@ impl Cpu {
             }
         }
         Exit::BudgetSpent
+    }
+
+    /// [`run`](Self::run), also saying how many instructions it retired: every instruction that completed, plus the one that
+    /// stopped the run unless it was refused (a Fault, Trap or Bkpt leaves the PC on it). An engine counting one per
+    /// [`step`](Self::step) gets the same total from one call.
+    pub fn run_counted<M: Memory>(&mut self, mem: &mut M, budget: u64) -> (Exit, u64) {
+        for done in 0..budget {
+            if let Err(exit) = self.execute_one(mem) {
+                let stopped_on = match exit { Exit::Svc(_) | Exit::Wait => 1, _ => 0 };
+                return (exit, done + stopped_on);
+            }
+        }
+        (Exit::BudgetSpent, budget)
+    }
+
+    /// The thread's whole state as the CPU contract publishes it (heirloom-cpu-abi::arm::ArmContext), with `exit` as the
+    /// record of why it last stopped.
+    pub fn to_context(&self, exit: &Exit) -> ArmContext {
+        let (exclusive_addr, exclusive_size) = match self.exclusive { Some((a, s)) => (a, s as u32), None => (0, 0) };
+        ArmContext {
+            regs: self.regs,
+            cpsr: self.cpsr(),
+            vfp_s: self.vfp.s,
+            fpscr: self.vfp.fpscr,
+            tpidrurw: self.tpidrurw,
+            tpidruro: self.tpidruro,
+            unaligned: self.config.unaligned.to_raw(),
+            vfp: self.config.vfp as u32,
+            exclusive_addr,
+            exclusive_size,
+            exit: ArmExit::encode(exit),
+        }
+    }
+
+    /// A CPU in the state `ctx` names; `None` when it names a configuration or reservation no core has (refused, not guessed).
+    pub fn from_context(ctx: &ArmContext) -> Option<Cpu> {
+        let unaligned = Unaligned::from_raw(ctx.unaligned)?;
+        let vfp = match ctx.vfp { 0 => false, 1 => true, _ => return None };
+        let exclusive = match ctx.exclusive_size {
+            0 => None,
+            s @ (1 | 2 | 4 | 8) => Some((ctx.exclusive_addr, s as u8)),
+            _ => return None,
+        };
+        let mut cpu = Cpu::new(Config { unaligned, vfp });
+        cpu.regs = ctx.regs;
+        cpu.set_cpsr(ctx.cpsr);
+        cpu.vfp.s = ctx.vfp_s;
+        cpu.vfp.fpscr = ctx.fpscr;
+        cpu.tpidrurw = ctx.tpidrurw;
+        cpu.tpidruro = ctx.tpidruro;
+        cpu.exclusive = exclusive;
+        Some(cpu)
     }
 
     /// Execute one instruction: `run(mem, 1)`. A normally completed instruction returns `BudgetSpent`.

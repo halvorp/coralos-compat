@@ -1,5 +1,8 @@
 #![no_std]
 
+/// The ARM face of the contract (cpu-arm.library): its bus, context and exit records and the types they decode to.
+pub mod arm;
+
 /// 2 (2026-10-27): [`CpuStop`] carries the bus-fault count in its own field and a stall is its own kind
 /// ([`STOP_STALL`]), and the table gains the context and diagnostics entries an engine needs to drive the CPU
 /// through the table alone (one saved context per guest task; the recent-PC ring). Version 1 had no consumer.

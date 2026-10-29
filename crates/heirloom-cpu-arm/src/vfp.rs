@@ -9,7 +9,7 @@
 use crate::a32::{bit, bits};
 use crate::cpu::{Cpu, Step};
 use crate::softfloat::{Env, Fmt, F32, F64};
-use crate::TrapKind;
+use crate::{TrapKind, Vfp};
 
 /// FPSID as VFP11 (ARM1176JZF-S) reports it.
 pub const FPSID: u32 = 0x4101_20B5;
@@ -18,24 +18,14 @@ pub const FPSID: u32 = 0x4101_20B5;
 /// cumulative flags.
 pub(crate) const FPSCR_MASK: u32 = 0xF3F7_9F9F;
 
-/// The VFPv2 register file: S0-S31, aliased as D0-D15 (D[i] = S[2i+1]:S[2i]), and FPSCR.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Vfp {
-    pub s: [u32; 32],
-    pub fpscr: u32,
+/// A VFP register operand: a single (`S<r>`) or, with `double`, a D register (`D<r>` = S[2r+1]:S[2r]).
+pub(crate) trait VfpOperand {
+    fn get(&self, double: bool, r: u32) -> u64;
+    fn put(&mut self, double: bool, r: u32, v: u64);
 }
 
-impl Vfp {
-    pub fn d(&self, i: usize) -> u64 {
-        self.s[2 * i] as u64 | (self.s[2 * i + 1] as u64) << 32
-    }
-
-    pub fn set_d(&mut self, i: usize, v: u64) {
-        self.s[2 * i] = v as u32;
-        self.s[2 * i + 1] = (v >> 32) as u32;
-    }
-
-    pub(crate) fn get(&self, double: bool, r: u32) -> u64 {
+impl VfpOperand for Vfp {
+    fn get(&self, double: bool, r: u32) -> u64 {
         if double {
             self.d(r as usize)
         } else {
@@ -43,7 +33,7 @@ impl Vfp {
         }
     }
 
-    pub(crate) fn put(&mut self, double: bool, r: u32, v: u64) {
+    fn put(&mut self, double: bool, r: u32, v: u64) {
         if double {
             self.set_d(r as usize, v)
         } else {

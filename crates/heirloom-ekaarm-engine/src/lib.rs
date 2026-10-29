@@ -4,6 +4,7 @@ extern crate alloc;
 #[cfg(feature = "host")]
 extern crate std;
 
+pub mod cpu;
 pub mod mem;
 pub mod layout;
 pub mod loader;

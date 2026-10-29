@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use heirloom_cpu_arm::{Config, Cpu, Memory, Unaligned};
+use crate::cpu::{Config, Cpu, Memory, Unaligned};
 use heirloom_fmt_e32::{E32Error, E32Image, OrdinalTable};
 use heirloom_mem_paged32::{ChunkId, Prot, VmError};
 use crate::layout::{self, CODE_BASE, DATA_BASE, EXIT_STUB, HEAP_BASE, PAGE, STACK_TOP, STUB_BASE};
