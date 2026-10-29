@@ -12,6 +12,17 @@ use super::*;
 /// The largest chunk a blob is split into: well inside [`MAX_FRAME`] with the header and fields around it.
 pub const BLOB_CHUNK: usize = 512 * 1024;
 
+/// The named inputs ([`Control::Input`]) a family takes. The names are the contract between the host that sends a file and the
+/// family library that takes it; one home here, beside the frame.
+pub mod inputs {
+    /// Symbian (ekaarm): heirloom-fmt-e32's eka-ordinals.tsv, the S60 export names every import binds by.
+    pub const EKA_ORDINALS: &str = "eka-ordinals";
+    /// Symbian (ekaarm): the device's layout data (the text `cdlextract` makes).
+    pub const EKA_LAYOUT: &str = "s60-layout";
+    /// Symbian (ekaarm): the device ROM (`Z:`'s read-only files) as a heirloom-volume snapshot of exactly one volume.
+    pub const EKA_ROM: &str = "rom";
+}
+
 /// A host -> engine call on the guest machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Control {
@@ -38,6 +49,10 @@ pub enum Control {
     /// The host's control metrics a guest toolkit lays its windows out for (doc 23 Phase 3, MUI's HostProfile). Numbers only:
     /// the host's text measurer cannot cross a process, so the engine sizes text by the guest's own font (the named fallback).
     HostProfile(HostProfile),
+    /// One chunk of a named input file the family's machine takes before `StartFile` (`total` bytes in all): data the guest OS
+    /// reads that is neither the program nor a volume - Symbian's ordinal table, its layout data and its device ROM. The family
+    /// names what it takes; any other name is refused by name.
+    Input { name: String, offset: u32, total: u32, chunk: Vec<u8> },
 }
 
 /// The host's measured control metrics, in window pixels (the kit's tokens on CoralOS). A field of 0 / None = the toolkit's own.
@@ -86,6 +101,10 @@ pub enum Report {
 
 fn put_blob(out: &mut Vec<u8>, tag: u8, offset: u32, total: u32, chunk: &[u8]) {
     out.push(tag);
+    put_blob_body(out, offset, total, chunk);
+}
+
+fn put_blob_body(out: &mut Vec<u8>, offset: u32, total: u32, chunk: &[u8]) {
     put_u32(out, offset);
     put_u32(out, total);
     put_len(out, chunk.len());
@@ -152,6 +171,11 @@ pub(super) fn put_machine_control(out: &mut Vec<u8>, c: &Control) {
             }
             put_option(out, &p.label_right, |o, v| put_u32(o, *v as u32));
         }
+        Control::Input { name, offset, total, chunk } => {
+            out.push(12);
+            put_string(out, name);
+            put_blob_body(out, *offset, *total, chunk);
+        }
     }
 }
 
@@ -201,6 +225,11 @@ pub(super) fn get_machine_control(r: &mut Reader<'_>) -> Result<Control, WireErr
                 win_pad: v[9],
                 label_right: r.option(|r| r.u32().map(|x| x as i32))?,
             })
+        }
+        12 => {
+            let name = r.string()?;
+            let (offset, total, chunk) = get_blob(r)?;
+            Control::Input { name, offset, total, chunk }
         }
         tag => return Err(WireError::UnknownTag { what: "Control", tag }),
     })

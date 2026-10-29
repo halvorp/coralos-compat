@@ -25,7 +25,8 @@ pub struct EkaArm<U: GuestUi> {
     ui: Option<Box<U>>,
     /// The S60 export names (dll, ordinal) -> mangled name the imports are bound by. A data FILE the host reads (Heirloom.app
     /// ships heirloom-fmt-e32's eka-ordinals.tsv in its bundle) and hands in: never baked into the engine (ASSETS-ARE-FILES).
-    ordinals: OrdinalTable,
+    /// None until the host hands one in (an engine process receives it as a named input; see [`EkaArm::without_ordinals`]).
+    ordinals: Option<OrdinalTable>,
     tree: Tree,
     /// The device ROM (`Z:`) the host hands in before `start_file` (a read-only source of resource files; never copied into the engine).
     rom: Option<Box<dyn crate::drive::RomSource>>,
@@ -44,9 +45,20 @@ pub struct EkaArm<U: GuestUi> {
 
 impl<U: GuestUi> EkaArm<U> {
     pub fn new(ui: U, ordinals: OrdinalTable) -> Self {
+        let mut m = Self::without_ordinals(ui);
+        m.ordinals = Some(ordinals);
+        m
+    }
+    /// A machine whose ordinal table arrives later ([`set_ordinals`](Self::set_ordinals), before `start_file`; until then
+    /// `start_file` refuses by name). os-eka.library makes its machines this way: the table is a file the host sends.
+    pub fn without_ordinals(ui: U) -> Self {
         let mut tree = Tree::new(255);
         tree.add_volume("Z", false);
-        EkaArm { ui: Some(Box::new(ui)), ordinals, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new() }
+        EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new() }
+    }
+    /// The S60 export names the imports are bound by (heirloom-fmt-e32's eka-ordinals.tsv), before `start_file`.
+    pub fn set_ordinals(&mut self, ordinals: OrdinalTable) {
+        self.ordinals = Some(ordinals);
     }
     /// Put the device ROM behind the volume before `start_file`: the environment reads its colour list from the ROM's `eikpriv` resource file.
     pub fn set_rom(&mut self, rom: Box<dyn crate::drive::RomSource>) {
@@ -75,7 +87,10 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
         if self.process.is_some() {
             return Err(Refusal(String::from("ekaarm: only a fresh machine starts a program")));
         }
-        let mut p = loader::load(file, &self.ordinals).map_err(|e| Refusal(format!("ekaarm: {name}: not a loadable E32 image: {e:?}")))?;
+        let Some(ordinals) = self.ordinals.as_ref() else {
+            return Err(Refusal(format!("ekaarm: {name}: no ordinal table was handed in (the S60 export names every import binds by; eka-ordinals.tsv)")));
+        };
+        let mut p = loader::load(file, ordinals).map_err(|e| Refusal(format!("ekaarm: {name}: not a loadable E32 image: {e:?}")))?;
         let mut drive = Drive::from_tree(core::mem::replace(&mut self.tree, Tree::new(255)));
         if let Some(rom) = self.rom.take() {
             drive.set_rom(rom);

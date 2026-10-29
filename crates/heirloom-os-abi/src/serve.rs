@@ -65,6 +65,11 @@ pub trait OsFamily: 'static {
     fn host_profile(_m: &mut Self::Machine, _p: &HostProfile) -> Result<(), String> {
         Err(String::from("host profile: this guest OS lays out no window for host metrics"))
     }
+    /// One named input file ([`Control::Input`], whole once its chunks have arrived) for the machine before `StartFile`. A family
+    /// that takes none refuses it by name.
+    fn input(_m: &mut Self::Machine, name: &str, _bytes: Vec<u8>) -> Result<(), String> {
+        Err(format!("input {name:?}: this guest OS takes no named input"))
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -103,6 +108,8 @@ pub struct Session<M: GuestMachine<Ui = LibUi>> {
     volume: Blob,
     program: Blob,
     staged_program: Option<Vec<u8>>,
+    /// The named input arriving now (inputs arrive one after another, each in order).
+    input: Option<(String, Blob)>,
     /// A named failure that ends the guest: the next Step reports it instead of running.
     fault: Option<String>,
     undelivered: Vec<String>,
@@ -113,18 +120,19 @@ pub struct Session<M: GuestMachine<Ui = LibUi>> {
 pub struct FamilyHooks<M> {
     pub assign: fn(&mut M, &str, &str, bool) -> Result<(), String>,
     pub host_profile: fn(&mut M, &HostProfile) -> Result<(), String>,
+    pub input: fn(&mut M, &str, Vec<u8>) -> Result<(), String>,
 }
 
 impl<M> FamilyHooks<M> {
     /// The hooks of family `F`.
     pub fn of<F: OsFamily<Machine = M>>() -> Self {
-        FamilyHooks { assign: F::assign, host_profile: F::host_profile }
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input }
     }
 }
 
 impl<M: GuestMachine<Ui = LibUi>> Session<M> {
     pub fn new(machine: M, hooks: FamilyHooks<M>) -> Self {
-        Session { machine, hooks, volume: Blob::default(), program: Blob::default(), staged_program: None, fault: None, undelivered: Vec::new(), host_refused: Vec::new() }
+        Session { machine, hooks, volume: Blob::default(), program: Blob::default(), staged_program: None, input: None, fault: None, undelivered: Vec::new(), host_refused: Vec::new() }
     }
 
     pub fn machine(&mut self) -> &mut M {
@@ -185,6 +193,28 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
                 Ok(None) => {}
                 Err(e) => self.fail(e),
             },
+            Control::Input { name, offset, total, chunk } => {
+                if let Some((other, _)) = self.input.as_ref().filter(|(n, b)| *n != name && !b.bytes.is_empty()) {
+                    let why = format!("input {name:?}: input {other:?} was still arriving (inputs are sent one after another)");
+                    self.input = None;
+                    self.fail(why);
+                    return;
+                }
+                let blob = match &mut self.input {
+                    Some((n, b)) if *n == name => b,
+                    _ => &mut self.input.insert((name.clone(), Blob::default())).1,
+                };
+                match blob.take(&format!("input {name:?}"), offset, total, &chunk) {
+                    Ok(Some(bytes)) => {
+                        self.input = None;
+                        if let Err(e) = (self.hooks.input)(&mut self.machine, &name, bytes) {
+                            self.fail(e);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => self.fail(e),
+                }
+            }
             Control::StartFile { name } => {
                 let r = match (self.staged_program.take(), &self.fault) {
                     (_, Some(f)) => Err(f.clone()),
