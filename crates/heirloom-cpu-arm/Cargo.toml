@@ -6,3 +6,5 @@ license = "MIT"
 description = "User-mode ARMv6 (ARM11) interpreter for Heirloom: A32, Thumb-1 and VFPv2. Ported in part from HexRaysSA/rax (MIT, commit 526acfa); see README.md (THIRD_PARTY)."
 
 [dependencies]
+# The CPU contract: the ARM types (heirloom_cpu_abi::arm) are defined there once, and src/table.rs serves the CpuVTable.
+heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }

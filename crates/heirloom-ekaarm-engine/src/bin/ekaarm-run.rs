@@ -146,7 +146,7 @@ fn main() {
     }
     for (a, n) in &vtables { println!("{}", proc.describe_vtable(*a, *n)); }
     for (a, n) in &dumps {
-        for i in 0..*n { let at = a + i * 4; match heirloom_cpu_arm::Memory::read_u32(&mut proc.mem, at) { Ok(v) => println!("mem {at:#010x}: {v:#010x}"), Err(_) => println!("mem {at:#010x}: <unreadable>") } }
+        for i in 0..*n { let at = a + i * 4; match heirloom_ekaarm_engine::cpu::Memory::read_u32(&mut proc.mem, at) { Ok(v) => println!("mem {at:#010x}: {v:#010x}"), Err(_) => println!("mem {at:#010x}: <unreadable>") } }
     }
     println!("cpu: pc={:#x} lr={:#x} sp={:#x} r0-r3={:#x} {:#x} {:#x} {:#x} (code base {:#x}: caller = lr - base is the offset into --dump-code)", proc.cpu.pc(), proc.cpu.regs[14], proc.cpu.regs[13], proc.cpu.regs[0], proc.cpu.regs[1], proc.cpu.regs[2], proc.cpu.regs[3], layout::CODE_BASE);
     match outcome {

@@ -1,6 +1,6 @@
 //! The environment's colour list, read from the ROM's `eikpriv` resource file (synthetic in `support`), and the descriptor formatter.
 mod support;
-use heirloom_cpu_arm::Memory;
+use heirloom_ekaarm_engine::cpu::Memory;
 use heirloom_ekaarm_engine::natives::{self, NativeOutcome};
 use heirloom_ekaarm_engine::{loader, Process};
 use heirloom_ui_abi::RecordingGuestUi;

@@ -1,7 +1,7 @@
 #![cfg_attr(test, allow(unused))] // for unit tests
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use heirloom_cpu_arm::Memory;
+use crate::cpu::Memory;
 use heirloom_mem_paged32::{ChunkId, VmError};
 use crate::layout;
 use crate::mem::GuestMem;

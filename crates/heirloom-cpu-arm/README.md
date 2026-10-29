@@ -1,7 +1,7 @@
 # heirloom-cpu-arm
 
 A user-mode ARMv6 interpreter (ARM1136/ARM1176, ARMv6K) for Heirloom's Symbian engine: the target is
-S60 5th edition code such as Hero of Sparta. `#![no_std]`, no dependencies. The CPU knows nothing about
+S60 5th edition code such as Hero of Sparta. `#![no_std]`; its one dependency is the CPU contract (`heirloom-cpu-abi`, whose `arm` module defines the shared types). `vtable()` serves the core behind the flat `CpuVTable` (cpu-arm.library). The CPU knows nothing about
 an OS or a memory layout: the host implements `Memory` and drives `Cpu::run(&mut mem, budget)` /
 `Cpu::step(&mut mem)`.
 

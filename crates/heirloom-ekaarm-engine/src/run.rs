@@ -1,5 +1,5 @@
 use alloc::format;
-use heirloom_cpu_arm::Exit;
+use crate::cpu::Exit;
 use crate::layout::STUB_SVC_BASE;
 use crate::loader::Process;
 use crate::natives::{self, NativeOutcome};
@@ -15,7 +15,8 @@ pub enum Outcome {
 
 impl Process {
     pub fn run(&mut self, budget: u64) -> Outcome {
-        // step() keeps the instruction count exact even when execution stops at an SVC or fault.
+        // run_counted() keeps the instruction count exact (it says how many retired) and runs the slice up to the next SVC in one
+        // call - one CPU-table crossing per exec call, not per instruction, when the CPU is cpu-arm.library.
         loop {
             // The thread is in `CActiveScheduler::Start` (a parked activation is the top frame): the scheduler runs, not the CPU.
             if matches!(self.frames.last(), Some(crate::callback::Frame { cont: crate::callback::Continuation::SchedWait { .. }, .. })) {
@@ -28,8 +29,10 @@ impl Process {
             if self.insns >= budget {
                 return Outcome::BudgetSpent;
             }
-            let exit = self.cpu.step(&mut self.mem);
-            self.insns += 1;
+            let (exit, retired) = self.cpu.run_counted(&mut self.mem, budget - self.insns);
+            // A refused instruction (fault, trap, BKPT) is not retired, but the count has always charged it: kept, so a stop's
+            // instruction number is unchanged.
+            self.insns += retired + matches!(exit, Exit::Fault { .. } | Exit::Trap(_) | Exit::Bkpt(_)) as u64;
             match exit {
                 Exit::Svc(n) => {
                     if n == crate::layout::EXIT_SVC {
@@ -77,7 +80,7 @@ impl Process {
                     ));
                 }
                 Exit::Wait => return Outcome::Blocked,
-                // step() reports one retired instruction as a spent budget of one
+                // the slice is spent: the loop head returns BudgetSpent
                 Exit::BudgetSpent => continue,
             }
         }

@@ -2,7 +2,7 @@
 //! control (synthetic fixture, no corpus), the engine-built vtables are guarded against calls past their end, and FileBrowser's own
 //! list (the owner's corpus; skipped when absent) shows the host what its model holds.
 mod support;
-use heirloom_cpu_arm::Memory;
+use heirloom_ekaarm_engine::cpu::Memory;
 use heirloom_ekaarm_engine::control::{CTRL_I_POSITION, CTRL_I_SIZE};
 use heirloom_ekaarm_engine::natives::{self, NativeOutcome};
 use heirloom_ekaarm_engine::{loader, Process};

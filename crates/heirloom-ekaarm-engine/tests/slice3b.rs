@@ -1,6 +1,6 @@
 //! Slice 3, second half: arrays, central repository, time, telephony, ROM fallback, control geometry and activation.
 mod support;
-use heirloom_cpu_arm::Memory;
+use heirloom_ekaarm_engine::cpu::Memory;
 use heirloom_ekaarm_engine::cenrep;
 use heirloom_ekaarm_engine::drive::{Drive, RomSource};
 use heirloom_ekaarm_engine::layout::{CODE_BASE, EXIT_SVC, STUB_SVC_BASE};

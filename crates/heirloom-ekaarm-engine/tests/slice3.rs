@@ -1,6 +1,6 @@
 //! The CONE / Avkon / file server / store / active object natives of slice 3, on synthetic processes (no corpus): each native is
 //! called by name through the same dispatch the guest's import stubs use, with its arguments in guest memory.
-use heirloom_cpu_arm::Memory;
+use heirloom_ekaarm_engine::cpu::Memory;
 use heirloom_ekaarm_engine::layout::{CODE_BASE, EXIT_SVC, STUB_BASE, STUB_SVC_BASE};
 use heirloom_ekaarm_engine::natives::{self, NativeOutcome};
 use heirloom_ekaarm_engine::{loader, Outcome, Process};
@@ -53,7 +53,7 @@ fn rd(p: &mut Process, a: u32) -> u32 {
 }
 
 fn wr(p: &mut Process, a: u32, v: u32) {
-    use heirloom_cpu_arm::Memory;
+    use heirloom_ekaarm_engine::cpu::Memory;
     p.mem.write_u32(a, v).unwrap();
 }
 
@@ -62,7 +62,7 @@ fn tptrc16(p: &mut Process, text: &str) -> u32 {
     let units: Vec<u16> = text.encode_utf16().collect();
     let data = alloc(p, units.len() as u32 * 2 + 2);
     for (i, u) in units.iter().enumerate() {
-        use heirloom_cpu_arm::Memory;
+        use heirloom_ekaarm_engine::cpu::Memory;
         p.mem.write_u16(data + i as u32 * 2, *u).unwrap();
     }
     let d = alloc(p, 8);
@@ -157,7 +157,7 @@ fn descriptor_copy_is_bounded_by_the_maximum_length_and_text_stays_utf16() {
     ok(&mut p, "_ZN10TBufBase16C1Ei", &[buf, 10]); // a TBuf16<10>: iMaxLength 10, data at +8
     ok(&mut p, copy, &[buf, src]);
     assert_eq!(rd(&mut p, buf) & 0x0FFF_FFFF, 7, "iLength");
-    use heirloom_cpu_arm::Memory;
+    use heirloom_ekaarm_engine::cpu::Memory;
     assert_eq!(p.mem.read_u16(buf + 8 + 2).unwrap(), 'ř' as u16, "elements are UTF-16 in guest memory");
     let long = tptrc16(&mut p, "01234567890");
     assert!(refused(&mut p, copy, &[buf, long]).contains("11 elements into a maximum length of 10"));

@@ -1,4 +1,4 @@
-use heirloom_cpu_arm::{Access, Fault, Memory};
+use crate::cpu::{Access, Fault, Memory};
 use heirloom_mem_paged32::{Vm, VmError};
 
 pub struct GuestMem {

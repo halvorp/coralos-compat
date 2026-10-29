@@ -1,6 +1,6 @@
 //! The application start (`EikStart::RunApplication` as a state machine over the callback machine) and its vtable-anchor
 //! check. The synthetic tests run without the corpus; the FileBrowser / HeroOfSparta ones are skipped when the images are absent.
-use heirloom_cpu_arm::Memory;
+use heirloom_ekaarm_engine::cpu::Memory;
 use heirloom_ekaarm_engine::appstart::{self, SlotSpec, Slots};
 use heirloom_ekaarm_engine::layout::{CODE_BASE, EXIT_SVC, STUB_BASE, STUB_SVC_BASE};
 use heirloom_ekaarm_engine::{loader, Outcome, Process};

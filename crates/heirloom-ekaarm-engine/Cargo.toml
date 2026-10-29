@@ -6,7 +6,8 @@ license.workspace = true
 description = "Heirloom's Symbian EKA2 (ARM) engine: loads an E32 executable, binds its imports to named native calls and runs it on heirloom-cpu-arm"
 
 [dependencies]
-heirloom-cpu-arm = { path = "../heirloom-cpu-arm" }
+heirloom-cpu-arm = { path = "../heirloom-cpu-arm", optional = true }
+heirloom-cpu-arm-client = { path = "../heirloom-cpu-arm-client", optional = true }
 heirloom-fmt-e32 = { path = "../heirloom-fmt-e32" }
 heirloom-mem-paged32 = { path = "../heirloom-mem-paged32" }
 heirloom-fmt-rsc = { path = "../heirloom-fmt-rsc" }
@@ -15,6 +16,10 @@ heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-common = { path = "../heirloom-common" }
 
 [features]
+# The CPU backend (src/cpu.rs): the static core by default; `cpu-library` drives cpu-arm.library through its table.
+default = ["cpu-static"]
+cpu-static = ["dep:heirloom-cpu-arm"]
+cpu-library = ["dep:heirloom-cpu-arm-client"]
 # The test hooks (loader::bare, Process::map_code / map_data) map arbitrary guest code and widen the range the vtable-anchor
 # check accepts: only this crate's own tests turn them on (the dev-dependency below), never a consumer.
 test-hooks = []
