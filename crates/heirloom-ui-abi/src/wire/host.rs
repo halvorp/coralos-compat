@@ -61,6 +61,9 @@ impl<G: GuestUi> WireHost<G> {
             }
             Frame::Event(_) => Err(WireError::UnknownKind(2)),
             Frame::Refused { .. } => Err(WireError::UnknownKind(3)),
+            // The machine session is the engine's and its host driver's, never a UI call.
+            Frame::Control(_) => Err(WireError::UnknownKind(6)),
+            Frame::Report(_) => Err(WireError::UnknownKind(7)),
         }
     }
 
@@ -75,11 +78,21 @@ impl<G: GuestUi> WireHost<G> {
         out
     }
 
+    /// ONE native event of the host's UI (host ids) as the frame the engine reads (engine ids): for a host driver that polls
+    /// its UI itself and forwards each event, where [`pump_events`](Self::pump_events) would drain the UI on its own.
+    pub fn encode_host_event(&self, event: GuestUiEvent) -> Vec<u8> {
+        let mut frame = Vec::new();
+        let _ = encode_event(&self.translate_event(event), &mut frame);
+        frame
+    }
+
     pub fn take_refused(&mut self) -> Vec<Vec<u8>> {
         core::mem::take(&mut self.refused)
     }
 
-    pub(crate) fn store_canvas(&mut self, region: u32, pixels: Vec<u32>) {
+    /// The pixels the engine leased as `region` (read by the host from the shared canvas region; they never ride the ring):
+    /// the next `PresentContent` after that region's Lease frame shows them.
+    pub fn store_canvas(&mut self, region: u32, pixels: Vec<u32>) {
         self.canvas_pixels.insert(region, pixels);
     }
 

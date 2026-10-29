@@ -149,9 +149,11 @@ dependencies = [
  "heirloom-common",
  "heirloom-cpu-68k",
  "heirloom-cpu-68k-client",
+ "heirloom-cpu-abi",
  "heirloom-fmt-resfork",
  "heirloom-mac68k-engine",
  "heirloom-mem-flat32",
+ "heirloom-os-abi",
  "heirloom-present",
  "heirloom-raster",
  "heirloom-translate",
@@ -184,6 +186,16 @@ version = "0.1.0"
 [[package]]
 name = "heirloom-mem-paged32"
 version = "0.1.0"
+
+[[package]]
+name = "heirloom-os-abi"
+version = "0.1.0"
+dependencies = [
+ "heirloom-common",
+ "heirloom-cpu-abi",
+ "heirloom-ui-abi",
+ "heirloom-volume",
+]
 
 [[package]]
 name = "heirloom-present"

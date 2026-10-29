@@ -16,15 +16,22 @@ heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-present = { path = "../heirloom-present" }
 heirloom-raster = { path = "../heirloom-raster" }
 heirloom-translate = { path = "../heirloom-translate" }
+# `os-library`: the os-mac.library table (src/os_face.rs) - heirloom-os-abi's machine session over this machine.
+heirloom-os-abi = { path = "../heirloom-os-abi", features = ["serve"], optional = true }
 
 [dev-dependencies]
 heirloom-mac68k-engine = { path = ".", features = ["fixtures"] }
+# tests/os_face.rs binds the static core's table as the CPU os-mac.library runs on (a host test; the product binds cpu-68k.library).
+heirloom-cpu-68k = { path = "../heirloom-cpu-68k" }
+heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }
 
 [features]
 # The CPU backend (src/cpu.rs): the static core by default; `cpu-library` drives cpu-68k.library through its table.
 default = ["cpu-static"]
 cpu-static = ["dep:heirloom-cpu-68k"]
 cpu-library = ["dep:heirloom-cpu-68k-client"]
+# os-mac.library: this machine behind heirloom-os-abi's OsVTable, on cpu-68k.library (never the static core).
+os-library = ["cpu-library", "dep:heirloom-os-abi"]
 # The built-in fixture applications and the dialog test script. Off for the product library (CoralOS user mode); the
 # tests and the `mac68k-run` / `mac68k-oracle` CLIs turn it on (the same split as heirloom-macppc-engine).
 fixtures = []

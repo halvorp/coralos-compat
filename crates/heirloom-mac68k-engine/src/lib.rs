@@ -16,6 +16,10 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 pub mod cpu; // the 68k this engine runs on: cpu-68k.library through its table, or the static core
+#[cfg(feature = "os-library")]
+pub mod os_face; // os-mac.library: this machine behind heirloom-os-abi's OsVTable
+#[cfg(feature = "os-library")]
+pub use os_face::os_vtable;
 pub mod addrmode;
 pub mod appleevents;
 pub mod clock;

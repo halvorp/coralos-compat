@@ -1,0 +1,17 @@
+[package]
+name = "heirloom-os-abi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The one C-ABI boundary between a Heirloom family engine process and an os-*.library (os-mac, os-ami, os-eka): a version-first repr(C) vtable over the guest machine, fed with heirloom-ui-abi wire frames"
+
+[dependencies]
+heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }
+# `serve`: the library side - the machine session every os-*.library runs behind the table (decode frames, drive the machine, emit).
+heirloom-ui-abi = { path = "../heirloom-ui-abi", optional = true }
+heirloom-common = { path = "../heirloom-common", optional = true }
+heirloom-volume = { path = "../heirloom-volume", optional = true }
+
+[features]
+default = []
+serve = ["dep:heirloom-ui-abi", "dep:heirloom-common", "dep:heirloom-volume"]

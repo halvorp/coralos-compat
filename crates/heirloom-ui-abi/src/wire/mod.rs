@@ -23,6 +23,8 @@ const KIND_EVENT: u8 = 2;
 const KIND_REFUSED: u8 = 3;
 const KIND_LEASE: u8 = 4;
 // Kind 5 is reserved for the later host-profile frame.
+const KIND_CONTROL: u8 = 6;
+const KIND_REPORT: u8 = 7;
 
 // Structs carry a type tag; an enum's variant tag identifies its value and shape.
 const T_OBJECT: u8 = 0x01;
@@ -47,6 +49,10 @@ pub enum Frame {
     /// data, never a `&'static str` this side would have to leak to hold); the proxy maps it onto a `UiRefusal` and logs it.
     Refused { token: CallbackToken, why: WireRefusal },
     Lease { window: UiObjectRef, region: u32, generation: u32 },
+    /// A host -> engine machine-session call ([`session`]).
+    Control(Control),
+    /// An engine -> host machine-session answer ([`session`]).
+    Report(Report),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +149,11 @@ fn put_option<T>(
 mod call;
 mod model;
 mod reader;
+pub mod session;
+pub mod canvas; // the shared canvas arena layout (pixels beside the ring, never on it)
 use call::*;
+pub use session::{Control, Report, WireStep, BLOB_CHUNK};
+use session::*;
 pub use model::WireRefusal;
 use model::*;
 use reader::*;
@@ -188,6 +198,18 @@ pub fn encode_lease(window: UiObjectRef, region: u32, generation: u32, out: &mut
     emit(out, KIND_LEASE, payload)
 }
 
+pub fn encode_control(control: &Control, out: &mut Vec<u8>) -> Result<(), WireError> {
+    let mut payload = Vec::new();
+    put_machine_control(&mut payload, control);
+    emit(out, KIND_CONTROL, payload)
+}
+
+pub fn encode_report(report: &Report, out: &mut Vec<u8>) -> Result<(), WireError> {
+    let mut payload = Vec::new();
+    put_machine_report(&mut payload, report);
+    emit(out, KIND_REPORT, payload)
+}
+
 pub fn decode(bytes: &[u8]) -> Result<(Frame, usize), WireError> {
     if bytes.len() < HEADER {
         return Err(WireError::Truncated("frame header"));
@@ -220,6 +242,8 @@ pub fn decode(bytes: &[u8]) -> Result<(Frame, usize), WireError> {
             region: reader.u32()?,
             generation: reader.u32()?,
         },
+        KIND_CONTROL => Frame::Control(get_machine_control(&mut reader)?),
+        KIND_REPORT => Frame::Report(get_machine_report(&mut reader)?),
         _ => return Err(WireError::UnknownKind(kind)),
     };
     if reader.remaining() != 0 {

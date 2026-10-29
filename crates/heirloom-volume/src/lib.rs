@@ -12,6 +12,8 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+pub mod snapshot; // the whole tree as bytes and back (an engine in another process gets the volume the host staged)
+
 pub type NodeId = usize;
 /// The pseudo-root that holds the volumes.
 pub const ROOT: NodeId = 0;
