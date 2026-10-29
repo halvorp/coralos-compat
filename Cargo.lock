@@ -33,6 +33,7 @@ dependencies = [
  "heirloom-cpu-68k-client",
  "heirloom-fmt-hunk",
  "heirloom-mem-flat32",
+ "heirloom-os-abi",
  "heirloom-present",
  "heirloom-raster",
  "heirloom-theme",

@@ -152,7 +152,7 @@ mod reader;
 pub mod session;
 pub mod canvas; // the shared canvas arena layout (pixels beside the ring, never on it)
 use call::*;
-pub use session::{Control, Report, WireStep, BLOB_CHUNK};
+pub use session::{Control, HostProfile, Report, WireStep, BLOB_CHUNK};
 use session::*;
 pub use model::WireRefusal;
 use model::*;

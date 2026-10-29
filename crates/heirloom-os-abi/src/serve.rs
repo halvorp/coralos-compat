@@ -11,13 +11,20 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_common::{Delivery, GuestMachine, Refusal, Step};
 use heirloom_ui_abi::wire::proxy::{ProxyUi, WireTransport};
-use heirloom_ui_abi::wire::{decode, encode_report, Control, Frame, Report, WireStep};
+use heirloom_ui_abi::wire::{decode, encode_report, Control, Frame, HostProfile, Report, WireStep};
 use heirloom_ui_abi::UiObjectRef;
 
 /// The engine's [`OsHost`] as a wire transport: frames go out through `emit`, canvases through `lease_canvas`. Nothing comes
 /// back through it (the host's frames arrive through [`Session::apply`]), so `recv` is empty and `ask` has no answer.
 pub struct HostTransport {
     host: OsHost,
+}
+
+impl HostTransport {
+    /// The transport over an engine's `host` (a family's own tests make a session around a machine with it).
+    pub fn new(host: OsHost) -> HostTransport {
+        HostTransport { host }
+    }
 }
 
 impl WireTransport for HostTransport {
@@ -49,6 +56,15 @@ pub trait OsFamily: 'static {
     fn cpu_bound() -> bool;
     /// A machine of profile `profile` ("" = the family's default) drawing on `ui`.
     fn create(profile: &str, ui: LibUi) -> Result<Self::Machine, Refusal>;
+    /// A guest-OS path alias from the host's manifest ([`Control::Assign`]). A family whose OS has none refuses it by name.
+    fn assign(_m: &mut Self::Machine, name: &str, _target: &str, _add: bool) -> Result<(), String> {
+        Err(format!("assign {name}: this guest OS has no assigns"))
+    }
+    /// The host's control metrics ([`Control::HostProfile`]) for the guest toolkit's layout. A family that lays nothing out for the
+    /// host refuses it by name.
+    fn host_profile(_m: &mut Self::Machine, _p: &HostProfile) -> Result<(), String> {
+        Err(String::from("host profile: this guest OS lays out no window for host metrics"))
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -82,6 +98,8 @@ impl Blob {
 /// One guest machine and the session state around it.
 pub struct Session<M: GuestMachine<Ui = LibUi>> {
     machine: M,
+    /// The family's own controls (OsFamily::assign / host_profile), captured when the session is made.
+    hooks: FamilyHooks<M>,
     volume: Blob,
     program: Blob,
     staged_program: Option<Vec<u8>>,
@@ -91,9 +109,22 @@ pub struct Session<M: GuestMachine<Ui = LibUi>> {
     host_refused: Vec<String>,
 }
 
+/// The family-specific controls a session forwards (see [`OsFamily`]).
+pub struct FamilyHooks<M> {
+    pub assign: fn(&mut M, &str, &str, bool) -> Result<(), String>,
+    pub host_profile: fn(&mut M, &HostProfile) -> Result<(), String>,
+}
+
+impl<M> FamilyHooks<M> {
+    /// The hooks of family `F`.
+    pub fn of<F: OsFamily<Machine = M>>() -> Self {
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile }
+    }
+}
+
 impl<M: GuestMachine<Ui = LibUi>> Session<M> {
-    pub fn new(machine: M) -> Self {
-        Session { machine, volume: Blob::default(), program: Blob::default(), staged_program: None, fault: None, undelivered: Vec::new(), host_refused: Vec::new() }
+    pub fn new(machine: M, hooks: FamilyHooks<M>) -> Self {
+        Session { machine, hooks, volume: Blob::default(), program: Blob::default(), staged_program: None, fault: None, undelivered: Vec::new(), host_refused: Vec::new() }
     }
 
     pub fn machine(&mut self) -> &mut M {
@@ -167,6 +198,18 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
                 self.report(&Report::WallClock(r));
             }
             Control::StopOnUnimplemented(on) => self.machine.set_stop_on_unimplemented(on),
+            // A refused family control ends the guest by name before it starts: a guest run without its assigns or its layout
+            // metrics would fail later and further from the cause.
+            Control::Assign { name, target, add } => {
+                if let Err(e) = (self.hooks.assign)(&mut self.machine, &name, &target, add) {
+                    self.fail(e);
+                }
+            }
+            Control::HostProfile(p) => {
+                if let Err(e) = (self.hooks.host_profile)(&mut self.machine, &p) {
+                    self.fail(e);
+                }
+            }
             Control::Advance { virtual_us } => {
                 if let Err(r) = self.machine.advance_clock_to(virtual_us) {
                     self.fail(r.0);
@@ -247,7 +290,7 @@ extern "C" fn create_impl<F: OsFamily>(profile: *const u8, len: usize, host: *co
     // SAFETY: `host` is non-null and points to an OsHost the caller filled; it is copied here.
     let ui = ProxyUi::new(HostTransport { host: unsafe { *host } });
     match F::create(profile, ui) {
-        Ok(machine) => Box::into_raw(Box::new(Session::new(machine))) as *mut OsInstance,
+        Ok(machine) => Box::into_raw(Box::new(Session::new(machine, FamilyHooks::of::<F>()))) as *mut OsInstance,
         Err(r) => {
             write_why(&r.0, why, why_cap, why_len);
             core::ptr::null_mut()
