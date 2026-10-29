@@ -32,6 +32,35 @@ pub enum Control {
     Advance { virtual_us: u64 },
     /// `GuestMachine::step`; answered by [`Report::Stepped`].
     Step { budget: u64 },
+    /// A guest-OS path alias the host's manifest set up before the program starts (AmigaDOS `Assign NAME: target`, `add` = the
+    /// `ADD` form of a multi-directory assign). Only a family whose OS has assigns takes it; another refuses it by name.
+    Assign { name: String, target: String, add: bool },
+    /// The host's control metrics a guest toolkit lays its windows out for (doc 23 Phase 3, MUI's HostProfile). Numbers only:
+    /// the host's text measurer cannot cross a process, so the engine sizes text by the guest's own font (the named fallback).
+    HostProfile(HostProfile),
+}
+
+/// The host's measured control metrics, in window pixels (the kit's tokens on CoralOS). A field of 0 / None = the toolkit's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HostProfile {
+    /// Smallest check box / toggle (width, height).
+    pub toggle: (i32, i32),
+    /// Smallest height of a button, field, cycle, slider and gauge.
+    pub control_h: i32,
+    /// Extra width the host adds to a button, field and cycle (its inset on both sides).
+    pub pad_w: i32,
+    /// The host draws a check box's label this far to the RIGHT of its toggle (None = in the toolkit's label column).
+    pub label_right: Option<i32>,
+    /// The title band the host draws above a group's panel.
+    pub group_head: i32,
+    /// The host panel's padding around a group's contents.
+    pub group_inset: i32,
+    /// Room the host keeps between a label and the control it labels.
+    pub label_gap: i32,
+    /// The host's gap between neighbouring objects (horizontal, vertical).
+    pub spacing: (i32, i32),
+    /// The host's inset of a window's contents.
+    pub win_pad: i32,
 }
 
 /// heirloom-common's `Step` as it crosses the wire.
@@ -110,6 +139,19 @@ pub(super) fn put_machine_control(out: &mut Vec<u8>, c: &Control) {
             out.push(9);
             put_string(out, profile);
         }
+        Control::Assign { name, target, add } => {
+            out.push(10);
+            put_string(out, name);
+            put_string(out, target);
+            put_bool(out, *add);
+        }
+        Control::HostProfile(p) => {
+            out.push(11);
+            for v in [p.toggle.0, p.toggle.1, p.control_h, p.pad_w, p.group_head, p.group_inset, p.label_gap, p.spacing.0, p.spacing.1, p.win_pad] {
+                put_u32(out, v as u32);
+            }
+            put_option(out, &p.label_right, |o, v| put_u32(o, *v as u32));
+        }
     }
 }
 
@@ -142,6 +184,24 @@ pub(super) fn get_machine_control(r: &mut Reader<'_>) -> Result<Control, WireErr
         7 => Control::Advance { virtual_us: r.u64()? },
         8 => Control::Step { budget: r.u64()? },
         9 => Control::Machine { profile: r.string()? },
+        10 => Control::Assign { name: r.string()?, target: r.string()?, add: r.boolean()? },
+        11 => {
+            let mut v = [0i32; 10];
+            for x in v.iter_mut() {
+                *x = r.u32()? as i32;
+            }
+            Control::HostProfile(HostProfile {
+                toggle: (v[0], v[1]),
+                control_h: v[2],
+                pad_w: v[3],
+                group_head: v[4],
+                group_inset: v[5],
+                label_gap: v[6],
+                spacing: (v[7], v[8]),
+                win_pad: v[9],
+                label_right: r.option(|r| r.u32().map(|x| x as i32))?,
+            })
+        }
         tag => return Err(WireError::UnknownTag { what: "Control", tag }),
     })
 }

@@ -3,7 +3,7 @@
 //! forwards its UI's events one by one sends engine ids.
 
 use heirloom_ui_abi::wire::host::WireHost;
-use heirloom_ui_abi::wire::{decode, encode_control, encode_report, Control, Frame, Report, WireError, WireStep};
+use heirloom_ui_abi::wire::{decode, encode_control, encode_report, Control, Frame, HostProfile, Report, WireError, WireStep};
 use heirloom_ui_abi::*;
 
 fn controls() -> Vec<Control> {
@@ -17,6 +17,10 @@ fn controls() -> Vec<Control> {
         Control::StopOnUnimplemented(true),
         Control::Advance { virtual_us: 1 << 40 },
         Control::Step { budget: 200_000 },
+        Control::Assign { name: "DOPUS5".into(), target: "DOpus5:".into(), add: false },
+        Control::Assign { name: "LIBS".into(), target: "DOpus5:Libs".into(), add: true },
+        Control::HostProfile(HostProfile { toggle: (20, 20), control_h: 28, pad_w: 16, label_right: Some(8), group_head: 28, group_inset: 12, label_gap: 12, spacing: (8, -4), win_pad: 12 }),
+        Control::HostProfile(HostProfile::default()),
     ]
 }
 
