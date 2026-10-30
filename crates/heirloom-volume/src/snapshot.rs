@@ -191,6 +191,46 @@ pub fn merge(dst: &mut Tree, src: &Tree) -> Result<(), crate::VolErr> {
     Ok(())
 }
 
+/// [`merge`], consuming `src`: every file's bytes and resource fork MOVE into `dst` instead of being copied, so a staged tree the
+/// size of an install (Hero of Sparta's is 76 MB) is held once, not twice, while it is merged.
+pub fn merge_owned(dst: &mut Tree, mut src: Tree) -> Result<(), crate::VolErr> {
+    let mut stack: Vec<(NodeId, NodeId)> = Vec::new();
+    for &v in src.children(ROOT).iter().rev() {
+        stack.push((v, ROOT));
+    }
+    while let Some((id, parent)) = stack.pop() {
+        let is_dir = src.is_dir(id);
+        let name: String = String::from(src.name(id));
+        let target = if parent == ROOT {
+            dst.add_volume(&name, src.get(id).writable)
+        } else {
+            match (is_dir, dst.find_child(parent, &name)) {
+                (true, Some(d)) if dst.is_dir(d) => d,
+                (true, None) => dst.create(parent, &name, Kind::Dir(Vec::new()))?,
+                (false, _) => {
+                    let data = src.file_data_mut(id).map(core::mem::take).unwrap_or_default();
+                    dst.put_file(parent, &name, data)?
+                }
+                (true, Some(_)) => return Err(crate::VolErr::WrongType),
+            }
+        };
+        let n = src.get_mut(id);
+        let (attrs, comment, created_ms, modified_ms, finfo, rsrc) =
+            (n.attrs, core::mem::take(&mut n.comment), n.created_ms, n.modified_ms, n.finfo, core::mem::take(&mut n.rsrc));
+        let t = dst.get_mut(target);
+        t.attrs = attrs;
+        t.comment = comment;
+        t.created_ms = created_ms;
+        t.modified_ms = modified_ms;
+        t.finfo = finfo;
+        t.rsrc = rsrc;
+        for &c in src.children(id).iter().rev() {
+            stack.push((c, target));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +296,24 @@ mod tests {
         let v = clash.add_volume("System", false);
         clash.put_file(v, "Fonts", alloc::vec![]).unwrap();
         assert_eq!(merge(&mut clash, &sample()), Err(crate::VolErr::WrongType));
+    }
+
+    #[test]
+    fn an_owned_merge_gives_the_same_tree_as_a_copying_one() {
+        let fresh = || {
+            let mut dst = Tree::new(31);
+            let own = dst.add_volume("Engine", false);
+            dst.put_file(own, "System", alloc::vec![7]).unwrap();
+            dst
+        };
+        let (mut copied, mut moved) = (fresh(), fresh());
+        merge(&mut copied, &sample()).unwrap();
+        merge_owned(&mut moved, sample()).unwrap();
+        assert_eq!(census(&moved), census(&copied), "names, kinds, bytes, forks and metadata all arrive");
+        let mut clash = Tree::new(31);
+        let v = clash.add_volume("System", false);
+        clash.put_file(v, "Fonts", alloc::vec![]).unwrap();
+        assert_eq!(merge_owned(&mut clash, sample()), Err(crate::VolErr::WrongType));
     }
 
     #[test]
