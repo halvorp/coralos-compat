@@ -31,11 +31,93 @@ pub enum Rec {
 
 impl Rec {
     pub fn bbox(&self) -> Rect { match self { Rec::Op { bbox, .. } => *bbox, Rec::Hole(r) => *r } }
-    /// Does this rec paint every pixel of its box opaquely (so anything under it is dead)? A fill, a hole, and a text run that
+    /// Does this rec paint every pixel of its box opaquely (so anything under it is dead)? A fill (a theme role or a Swatch in the guest's exact colour), a hole, and a text run that
     /// paints its cell first (`bg_role` Some: JAM2) do; a JAM1 run, a line, a bevel edge or an icon leave pixels under them.
     pub fn opaque(&self) -> bool {
-        matches!(self, Rec::Hole(_) | Rec::Op { op: DrawOp::Fill { .. } | DrawOp::Text { bg_role: Some(_), .. }, .. })
+        matches!(self, Rec::Hole(_) | Rec::Op { op: DrawOp::Fill { .. } | DrawOp::Swatch { .. } | DrawOp::Text { bg_role: Some(_), .. }, .. })
     }
+}
+
+fn rects_intersect(a: Rect, b: Rect) -> bool {
+    !a.intersect(&b).is_empty()
+}
+
+/// Push a rec, folding a shadow/emboss text pass into its foreground.
+///
+/// Programs draw embossed labels as two text passes at a 1-2px offset
+/// (shadow then foreground). The kit draws each run in its own typography,
+/// so replaying both would print the label twice, slightly offset. When `rec` is a transparent (`bg_role: None`)
+/// `DrawOp::Text` run, this walks backwards over at most the last 8 recs
+/// looking for a matching text run (same `string`, `font_role`, `px`,
+/// `bg_role: None`) whose `at` is within 2px on both axes (not both 0).
+/// If found, the earlier (shadow) rec is removed and the new (foreground)
+/// rec is pushed — the foreground's `pen_role` wins. An exact same-position
+/// repeat is left to `prune_recs`. The walk stops at the first rec whose
+/// bbox intersects the new rec's bbox and is not a transparent text run
+/// (something was drawn in between: do not merge across it).
+pub fn push_rec(v: &mut Vec<Rec>, rec: Rec) {
+    let merge_index: Option<usize> = {
+        let new_bbox = rec.bbox();
+        match &rec {
+            Rec::Op {
+                op: DrawOp::Text {
+                    string: new_string,
+                    font_role: new_font_role,
+                    px: new_px,
+                    at: new_at,
+                    bg_role: None,
+                    ..
+                },
+                ..
+            } => {
+                let start = v.len().saturating_sub(8);
+                let mut found = None;
+                for i in (start..v.len()).rev() {
+                    let candidate = &v[i];
+                    let is_transp_text = matches!(
+                        candidate,
+                        Rec::Op {
+                            op: DrawOp::Text { bg_role: None, .. },
+                            ..
+                        }
+                    );
+                    if !is_transp_text && rects_intersect(candidate.bbox(), new_bbox) {
+                        break;
+                    }
+                    if let Rec::Op {
+                        op: DrawOp::Text {
+                            string,
+                            font_role,
+                            px,
+                            at,
+                            bg_role: None,
+                            ..
+                        },
+                        ..
+                    } = candidate
+                    {
+                        if string == new_string
+                            && font_role == new_font_role
+                            && px == new_px
+                        {
+                            let dx = at.x - new_at.x;
+                            let dy = at.y - new_at.y;
+                            if dx.abs() <= 2 && dy.abs() <= 2 && (dx != 0 || dy != 0) {
+                                found = Some(i);
+                                break;
+                            }
+                        }
+                    }
+                }
+                found
+            }
+            _ => None,
+        }
+    };
+    if let Some(i) = merge_index {
+        v.remove(i);
+    }
+    v.push(rec);
 }
 
 /// Drop every rec an opaque later rec fully covers; collapse a list still over [`MAX_RECS`] into one hole over `canvas`. Shared by
@@ -74,6 +156,7 @@ pub fn moved(op: &DrawOp, (dx, dy): (i32, i32)) -> DrawOp {
         DrawOp::Bevel { rect, raised } => DrawOp::Bevel { rect: r(rect), raised: *raised },
         DrawOp::Icon { rect, role } => DrawOp::Icon { rect: r(rect), role: *role },
         DrawOp::Pixels { rect, rgb } => DrawOp::Pixels { rect: r(rect), rgb: rgb.clone() },
+        DrawOp::Swatch { rect, rgb } => DrawOp::Swatch { rect: r(rect), rgb: *rgb },
     }
 }
 
@@ -115,9 +198,9 @@ impl Presenter {
     pub fn plane_route(&self) -> bool { self.plane_route }
 
     /// Record a named op over `bbox` (canvas coordinates) for window `win`.
-    pub fn record(&mut self, win: u32, op: DrawOp, bbox: Rect) { if !bbox.is_empty() { self.recs.entry(win).or_default().push(Rec::Op { op, bbox }); } }
+    pub fn record(&mut self, win: u32, op: DrawOp, bbox: Rect) { if !bbox.is_empty() { push_rec(self.recs.entry(win).or_default(), Rec::Op { op, bbox }); } }
     /// Record drawing the engine cannot name over `r`.
-    pub fn record_hole(&mut self, win: u32, r: Rect) { if !r.is_empty() { self.recs.entry(win).or_default().push(Rec::Hole(r)); } }
+    pub fn record_hole(&mut self, win: u32, r: Rect) { if !r.is_empty() { push_rec(self.recs.entry(win).or_default(), Rec::Hole(r)); } }
     /// The display list of a window (diagnostics, tests).
     pub fn recs(&self, win: u32) -> &[Rec] { self.recs.get(&win).map_or(&[], |v| v.as_slice()) }
 
@@ -280,5 +363,93 @@ mod tests {
         q.record(1, DrawOp::Fill { rect: grect(&Rect::new(0, 0, 5, 5)), pen_role: PenRole::Fill }, Rect::new(0, 0, 5, 5));
         q.prune(1, Rect::new(0, 0, 10, 10));
         assert_eq!(q.recs(1).len(), 2);
+    }
+
+    fn make_text(s: &str, x: i32, y: i32, pen_role: PenRole, bg_role: Option<PenRole>) -> Rec {
+        Rec::Op {
+            op: DrawOp::Text {
+                at: GuestPoint { x, y },
+                string: s.into(),
+                font_role: heirloom_ui_abi::FontRole::Ui,
+                px: 8,
+                width: 24,
+                pen_role,
+                bg_role,
+            },
+            bbox: Rect::new(x, y, x + 24, y + 8),
+        }
+    }
+
+    fn make_fill_covering_text_box() -> Rec {
+        let bbox = Rect::new(0, 0, 50, 50);
+        Rec::Op {
+            op: DrawOp::Fill { rect: grect(&bbox), pen_role: PenRole::Background },
+            bbox,
+        }
+    }
+
+    #[test]
+    fn shadow_merge_basic() {
+        // Positive: shadow at (11,11) then same string at (10,10) → 1 rec at (10,10) with second pen_role
+        let mut v = Vec::new();
+        push_rec(&mut v, make_text("RAM", 11, 11, PenRole::Shadow, None));
+        push_rec(&mut v, make_text("RAM", 10, 10, PenRole::Text, None));
+        assert_eq!(v.len(), 1);
+        if let Rec::Op { op: DrawOp::Text { at, pen_role, .. }, .. } = &v[0] {
+            assert_eq!((at.x, at.y), (10, 10));
+            assert_eq!(*pen_role, PenRole::Text);
+        } else { panic!("expected Text rec"); }
+
+        // Negative control: 3px apart → 2 recs
+        let mut v2 = Vec::new();
+        push_rec(&mut v2, make_text("RAM", 13, 13, PenRole::Shadow, None));
+        push_rec(&mut v2, make_text("RAM", 10, 10, PenRole::Text, None));
+        assert_eq!(v2.len(), 2);
+    }
+
+    #[test]
+    fn shadow_merge_different_strings() {
+        // Positive: different strings at 1px → 2 recs
+        let mut v = Vec::new();
+        push_rec(&mut v, make_text("RAM", 11, 11, PenRole::Shadow, None));
+        push_rec(&mut v, make_text("SYS", 10, 10, PenRole::Text, None));
+        assert_eq!(v.len(), 2);
+
+        // Negative control: same string at 1px → 1 rec
+        let mut v2 = Vec::new();
+        push_rec(&mut v2, make_text("RAM", 11, 11, PenRole::Shadow, None));
+        push_rec(&mut v2, make_text("RAM", 10, 10, PenRole::Text, None));
+        assert_eq!(v2.len(), 1);
+    }
+
+    #[test]
+    fn shadow_merge_opaque_not_merged() {
+        // Positive: opaque first run (bg_role: Some) → 2 recs
+        let mut v = Vec::new();
+        push_rec(&mut v, make_text("RAM", 11, 11, PenRole::Shadow, Some(PenRole::Background)));
+        push_rec(&mut v, make_text("RAM", 10, 10, PenRole::Text, None));
+        assert_eq!(v.len(), 2);
+
+        // Negative control: both transparent → 1 rec
+        let mut v2 = Vec::new();
+        push_rec(&mut v2, make_text("RAM", 11, 11, PenRole::Shadow, None));
+        push_rec(&mut v2, make_text("RAM", 10, 10, PenRole::Text, None));
+        assert_eq!(v2.len(), 1);
+    }
+
+    #[test]
+    fn shadow_merge_fill_blocks() {
+        // Positive: Fill between passes → 3 recs
+        let mut v = Vec::new();
+        push_rec(&mut v, make_text("RAM", 11, 11, PenRole::Shadow, None));
+        push_rec(&mut v, make_fill_covering_text_box());
+        push_rec(&mut v, make_text("RAM", 10, 10, PenRole::Text, None));
+        assert_eq!(v.len(), 3);
+
+        // Negative control: no fill → 1 rec
+        let mut v2 = Vec::new();
+        push_rec(&mut v2, make_text("RAM", 11, 11, PenRole::Shadow, None));
+        push_rec(&mut v2, make_text("RAM", 10, 10, PenRole::Text, None));
+        assert_eq!(v2.len(), 1);
     }
 }

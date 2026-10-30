@@ -24,7 +24,7 @@ fn planes(g: &G) -> Vec<Plane> { g.a.ui.calls.iter().filter_map(|c| if let UiCal
 fn content_frames(g: &G) -> usize { g.a.ui.calls.iter().filter(|c| matches!(c, UiCall::PresentContent { .. })).count() }
 
 #[test]
-fn drawing_is_one_plane_per_step_with_roles_from_the_pen_table_and_holes_for_what_has_no_role() {
+fn drawing_is_one_plane_per_step_with_roles_from_the_pen_table_and_swatches_for_what_has_no_role() {
     let mut g = G::new_plane();
     g.shine_pen = Some(2); // distinct SHINE (pen 2) and SHADOW (pen 4): the Gute Form flat edge has one pen for both
     let (win, native) = open(&mut g, 0, 0);
@@ -50,12 +50,13 @@ fn drawing_is_one_plane_per_step_with_roles_from_the_pen_table_and_holes_for_wha
         "a TEXTPEN run in JAM2 over the BACKGROUNDPEN, the proportional face as Ui: {ops:?}");
     assert!(ops.contains(&DrawOp::Bevel { rect: GuestRect { left: 10, top: 20, width: 41, height: 21 }, raised: true }), "SHINE then SHADOW edges of one box are one bevel: {ops:?}");
     assert!(!ops.iter().any(|o| matches!(o, DrawOp::Line { pen_role: PenRole::Shine | PenRole::Shadow, .. })), "the edge lines were merged: {ops:?}");
-    // NEGATIVE CONTROL (HEIRLOOM-ROLES-REQUIRE-A-CONTRACT): pen 100 is in no DrawInfo slot, so its fill has NO role; it is pixels.
-    let holes: Vec<_> = ops.iter().filter(|o| matches!(o, DrawOp::Pixels { .. })).collect();
-    assert!(holes.iter().any(|o| matches!(o, DrawOp::Pixels { rect, .. } if *rect == GuestRect { left: 150, top: 70, width: 10, height: 10 })), "{ops:?}");
+    // NEGATIVE CONTROL (HEIRLOOM-ROLES-REQUIRE-A-CONTRACT): pen 100 is in no DrawInfo slot, so its fill has NO role; it is a
+    // Swatch in the guest's exact colour, never a guessed role and no longer a hole of pixels.
+    assert!(ops.iter().any(|o| matches!(o, DrawOp::Swatch { rect, .. } if *rect == GuestRect { left: 150, top: 70, width: 10, height: 10 })), "{ops:?}");
     assert!(!ops.iter().any(|o| matches!(o, DrawOp::Fill { rect, .. } if rect.left == 150)), "a pen without a role is never guessed into one");
-    // The census counts the Pixels hole as raw; the window has no native control.
-    assert_eq!(g.a.ui.route_census(native), RouteCensus { native: 0, replayed: 0, raw: 1 });
+    assert!(!ops.iter().any(|o| matches!(o, DrawOp::Pixels { .. })), "nothing in this step is a hole: {ops:?}");
+    // With no hole the plane is replayed, not raw; the window has no native control.
+    assert_eq!(g.a.ui.route_census(native), RouteCensus { native: 0, replayed: 1, raw: 0 });
     // A step that draws nothing publishes nothing; one that draws a little publishes only its damage, with only the ops that touch it.
     g.run(&[gfx(SET_APEN, &[a(1, rp), d(0, 3)]), gfx(RECT_FILL, &[a(1, rp), d(0, 100), d(1, 5), d(2, 109), d(3, 9)])]);
     let p = planes(&g);

@@ -34,6 +34,9 @@ pub enum DrawOp {
     Icon { rect: GuestRect, role: IconRole },
     /// Guest pixels the engine could not name (`0x00RRGGBB`, exactly `rect.width * rect.height`, row-major): the raw route.
     Pixels { rect: GuestRect, rgb: Vec<u32> },
+    /// A solid fill in an EXACT guest colour (`0x00RRGGBB`) the theme has no role for: the user's own configuration (Directory
+    /// Opus's coloured button bank). The kit paints it as a plain surface; it is named, not raw, so text and edges on it replay.
+    Swatch { rect: GuestRect, rgb: u32 },
 }
 
 impl DrawOp {
@@ -41,7 +44,7 @@ impl DrawOp {
     pub fn validate(&self) -> Result<(), UiRefusal> {
         let bad = |r: &GuestRect| r.width < 0 || r.height < 0;
         match self {
-            DrawOp::Fill { rect, .. } | DrawOp::Bevel { rect, .. } | DrawOp::Icon { rect, .. } if bad(rect) =>
+            DrawOp::Fill { rect, .. } | DrawOp::Bevel { rect, .. } | DrawOp::Icon { rect, .. } | DrawOp::Swatch { rect, .. } if bad(rect) =>
                 Err(UiRefusal::InvalidGeometry("draw op with a negative size")),
             DrawOp::Pixels { rect, rgb } if bad(rect) || rgb.len() != (rect.width as usize) * (rect.height as usize) =>
                 Err(UiRefusal::InvalidGeometry("pixel op: count is not the rect's area")),

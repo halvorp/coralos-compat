@@ -1,10 +1,10 @@
-//! Off-screen BitMap display lists (the plane route for double-buffered programs, e.g. Directory Opus's button bank and lister):
+//! Off-screen BitMap display lists (the plane route for double-buffered programs: a button bank or a file lister drawn off screen, then copied in):
 //! the named ops and holes drawn into a bitmap that is NOT a window canvas, in BITMAP coordinates, pruned by the same rule as a
 //! window's list (`heirloom_present::plane::prune_recs`). A copy blit into a window splices them (blits.rs); anything the engine
 //! cannot vouch for (an unnamed draw, a guest write to the planes behind its back: `sum`) is a hole.
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use heirloom_present::plane::{prune_recs, Rec};
+use heirloom_present::plane::{prune_recs, push_rec, Rec};
 use heirloom_raster::Rect;
 
 #[derive(Default)]
@@ -42,7 +42,7 @@ impl Surfaces {
 
 impl Surface {
     pub fn new(bitmap_rect: Rect) -> Self { Self { bitmap_rect, ..Self::default() } }
-    pub fn add_rect(&mut self, rec: Rec) { self.rec.push(rec); self.prune(); }
+    pub fn add_rect(&mut self, rec: Rec) { push_rec(&mut self.rec, rec); self.prune(); }
     pub fn prune(&mut self) { prune_recs(&mut self.rec, self.bitmap_rect); }
 }
 

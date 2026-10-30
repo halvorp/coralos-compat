@@ -299,7 +299,7 @@ fn as_shipped_directory_opus_draws_in_gute_form_colours_and_the_gute_form_face()
 fn op_box(o: &DrawOp) -> Option<GuestRect> {
     let line = |a: &GuestPoint, b: &GuestPoint| GuestRect { left: a.x.min(b.x), top: a.y.min(b.y), width: (a.x - b.x).abs() + 1, height: (a.y - b.y).abs() + 1 };
     match o {
-        DrawOp::Fill { rect, .. } | DrawOp::Bevel { rect, .. } | DrawOp::Icon { rect, .. } | DrawOp::Pixels { rect, .. } => Some(*rect),
+        DrawOp::Fill { rect, .. } | DrawOp::Bevel { rect, .. } | DrawOp::Icon { rect, .. } | DrawOp::Pixels { rect, .. } | DrawOp::Swatch { rect, .. } => Some(*rect),
         DrawOp::Line { a, b, .. } => Some(line(a, b)),
         DrawOp::Text { .. } => None,
     }
