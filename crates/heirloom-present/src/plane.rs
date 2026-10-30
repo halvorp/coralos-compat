@@ -215,8 +215,10 @@ impl Presenter {
 
     /// Flush every damaged window as one `present_plane` carrying the display list for the damage rectangle. A host that
     /// answers `Unsupported` gets the same frame as `present_content` (the canvas route) instead. `source` resolves a window
-    /// key as in [`Presenter::flush`], plus how its canvas sits in the window.
-    pub fn flush_planes<'a, U: GuestUi>(&mut self, ui: &mut U, tag: &str, log: &mut Vec<String>, refused: &mut Vec<String>, mut source: impl FnMut(u32) -> Option<(Source<'a>, Layout)>) {
+    /// key as in [`Presenter::flush`], plus how its canvas sits in the window. `bind` sees each window's gathered ops (window
+    /// coordinates) before they become its plane: an engine's explicit bindings (doctrine HEIRLOOM-APP-CHROME-NEEDS-A-BINDING)
+    /// rewrite them there; an engine with none passes `|_, _| {}`.
+    pub fn flush_planes<'a, U: GuestUi>(&mut self, ui: &mut U, tag: &str, log: &mut Vec<String>, refused: &mut Vec<String>, mut source: impl FnMut(u32) -> Option<(Source<'a>, Layout)>, mut bind: impl FnMut(u32, &mut Vec<DrawOp>)) {
         for (win, mut r) in core::mem::take(&mut self.damage) {
             let Some((s, layout)) = source(win) else { continue };
             let canvas = s.canvas.rect();
@@ -240,6 +242,7 @@ impl Presenter {
                     _ => {}
                 }
             }
+            bind(win, &mut ops);
             let window_rect = r.translate(layout.offset.0, layout.offset.1);
             let plane = Plane { id: CONTENT_PLANE, rect: grect(&window_rect), ops };
             match ui.present_plane(s.native, plane) {
@@ -337,7 +340,7 @@ mod tests {
         p.add_damage(7, Rect::new(0, 0, 8, 6));
         let (mut log, mut refused) = (Vec::new(), Vec::new());
         let layout = Layout { offset: (3, 2), exclude: alloc::vec![Rect::new(5, 0, 8, 2)] };
-        p.flush_planes(&mut ui, "[t]", &mut log, &mut refused, |_| Some((Source { native: n, canvas: &bm, palette: &pal }, layout.clone())));
+        p.flush_planes(&mut ui, "[t]", &mut log, &mut refused, |_| Some((Source { native: n, canvas: &bm, palette: &pal }, layout.clone())), |_, _| {});
         let planes: Vec<&Plane> = ui.calls.iter().filter_map(|c| if let UiCall::PresentPlane(_, pl) = c { Some(pl) } else { None }).collect();
         assert_eq!(planes.len(), 1, "one present_plane per flush");
         assert_eq!(planes[0].rect, GuestRect { left: 3, top: 2, width: 8, height: 6 }, "window coordinates");
@@ -348,9 +351,30 @@ mod tests {
         assert_eq!(rgb[6], 0x112233, "the hole's pixels are read from the canvas at flush time");
         assert!(ui.calls.iter().all(|c| !matches!(c, UiCall::PresentContent { .. })));
         // negative control: no damage, no plane
-        p.flush_planes(&mut ui, "[t]", &mut log, &mut refused, |_| Some((Source { native: n, canvas: &bm, palette: &pal }, layout.clone())));
+        p.flush_planes(&mut ui, "[t]", &mut log, &mut refused, |_| Some((Source { native: n, canvas: &bm, palette: &pal }, layout.clone())), |_, _| {});
         assert_eq!(ui.calls.iter().filter(|c| matches!(c, UiCall::PresentPlane(..))).count(), 1);
         assert!(refused.is_empty(), "{refused:?}");
+    }
+
+    /// An engine's bind hook sees the window's gathered ops in WINDOW coordinates and what it leaves is exactly what the host gets.
+    #[test]
+    fn the_bind_hook_sees_window_coordinates_and_its_rewrite_is_what_the_host_receives() {
+        let (mut ui, mut p) = (RecordingGuestUi::new(), Presenter::default());
+        p.set_plane_route(true);
+        let (n, bm, pal) = (window(&mut ui), Bitmap::new(8, 6, 1).unwrap(), [0xFFFFFF, 0x112233]);
+        p.record(7, DrawOp::Fill { rect: grect(&Rect::new(0, 0, 4, 2)), pen_role: PenRole::Background }, Rect::new(0, 0, 4, 2));
+        p.add_damage(7, Rect::new(0, 0, 8, 6));
+        let (mut log, mut refused, mut seen) = (Vec::new(), Vec::new(), Vec::new());
+        let layout = Layout { offset: (3, 2), exclude: Vec::new() };
+        let face = DrawOp::Face { rect: GuestRect { left: 3, top: 2, width: 4, height: 2 }, label: "x".into(), pressed: false, accent: None };
+        p.flush_planes(&mut ui, "[t]", &mut log, &mut refused, |_| Some((Source { native: n, canvas: &bm, palette: &pal }, layout.clone())), |win, ops| {
+            seen.push((win, ops.clone()));
+            *ops = alloc::vec![face.clone()];
+        });
+        assert_eq!(seen.len(), 1, "once per flushed window");
+        assert!(matches!(&seen[0].1[..], [DrawOp::Fill { rect, .. }] if *rect == GuestRect { left: 3, top: 2, width: 4, height: 2 }), "{seen:?}");
+        let planes: Vec<&Plane> = ui.calls.iter().filter_map(|c| if let UiCall::PresentPlane(_, pl) = c { Some(pl) } else { None }).collect();
+        assert_eq!(planes[0].ops, alloc::vec![face], "the rewrite is what is published");
     }
 
     #[test]

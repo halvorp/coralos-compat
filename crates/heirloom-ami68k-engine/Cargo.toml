@@ -15,6 +15,7 @@ heirloom-fmt-hunk = { path = "../heirloom-fmt-hunk" }
 heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-raster = { path = "../heirloom-raster" }
 heirloom-present = { path = "../heirloom-present" }
+heirloom-bind = { path = "../heirloom-bind" }
 heirloom-translate = { path = "../heirloom-translate" }
 heirloom-theme = { path = "../heirloom-theme" }
 # `os-library`: the os-ami.library table (src/os_face.rs) - heirloom-os-abi's machine session over this machine.

@@ -34,10 +34,12 @@ pub fn flush<U: GuestUi>(a: &mut Amiga<U>) {
         Some(Source { native, canvas: &bitmaps.get(&canvas)?.bm, palette: &palette })
     };
     if presenter.plane_route() {
+        let binds = &mut a.binds;
         presenter.flush_planes(&mut a.ui, "[graphics]", &mut a.log, &mut a.refused, |win| {
             let layout = layouts.iter().find(|(w, _)| *w == win)?.1.clone();
             Some((resolve(win)?, layout))
-        });
+        }, |win, ops| binds.bind_window(win, ops));
+        a.log.extend(a.binds.take_log());
     } else {
         presenter.flush(&mut a.ui, "[graphics]", &mut a.log, &mut a.refused, resolve);
     }

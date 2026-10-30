@@ -106,6 +106,9 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal>
     };
     let native = a.ui.open_window(model).map_err(Refusal::ui)?;
     a.windows.insert(win, native);
+    // A binding anchors to a window by the program's own data: its title (only when the program gave one: with none the engine
+    // shows the program's name, which is not the program's title) or the exact box it opened the window at.
+    a.binds.on_window(win, (s.title != 0).then_some(title.as_str()), (s.left, s.top, width, height));
     crate::graphics::open_window_surface(a, win, (s.left, s.top), (width - bl - br, height - bt - bb), (bl, bt), s.flags & WFLG_GIMMEZEROZERO != 0)?;
     if s.gadgets != 0 {
         crate::gadtools::attach(a, win, native, s.gadgets)?;
@@ -177,6 +180,7 @@ pub fn close_window<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     let port = a.mem.read_u32(win + WD_USERPORT).map_err(Refusal::mem("Window.UserPort"))?;
     if port != 0 { a.drop_window_msgs(win, port)?; }
     a.windows.remove(&win);
+    a.binds.on_close(win);
     crate::graphics::release_damage(a, win)?; // a DamageList left by mark_damaged that the program never refreshed
     crate::graphics::close_window_surface(a, win)?;
     a.ui.close_window(native).map_err(Refusal::ui)?;

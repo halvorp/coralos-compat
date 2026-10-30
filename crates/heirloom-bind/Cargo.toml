@@ -1,0 +1,9 @@
+[package]
+name = "heirloom-bind"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The one generic binding interpreter (ruling 17): version-bound binding data turns a program's own chrome into named seam ops"
+
+[dependencies]
+heirloom-ui-abi = { path = "../heirloom-ui-abi" }

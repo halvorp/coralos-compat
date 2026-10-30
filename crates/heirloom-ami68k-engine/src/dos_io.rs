@@ -58,6 +58,11 @@ pub fn open<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     let Some(fh) = alloc_zeroed(a, FH_SIZE)? else { return fail(a, cpu, ERROR_NO_FREE_STORE, 0, what) };
     if mode == MODE_NEWFILE { if let Some(d) = a.fs.vol.file_data_mut(node) { d.clear(); } }
     a.fs.files.insert(fh, OpenFile { node, pos: 0, read: true, write, exclusive: excl, nil: false });
+    // The binding interpreter sees the bytes of a file the program opens to read (heirloom-bind; a file of no known form costs one
+    // header comparison per loaded binding, and with no binding loaded nothing).
+    if mode == MODE_OLDFILE {
+        if let Some(bytes) = a.fs.vol.file_data(node) { a.binds.on_file(&name, bytes); }
+    }
     ok(a, cpu, fh >> 2, format!("{what} -> {fh:#x}"))
 }
 
