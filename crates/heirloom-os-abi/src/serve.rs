@@ -83,7 +83,13 @@ impl Blob {
     /// Take one chunk; `Some(bytes)` once the blob is whole. A chunk of another total, or out of order, is a named refusal.
     fn take(&mut self, what: &str, offset: u32, total: u32, chunk: &[u8]) -> Result<Option<Vec<u8>>, String> {
         if offset == 0 {
-            self.bytes.clear();
+            // The whole blob is reserved once (its total is in every chunk): growing by doubling would touch up to twice a large
+            // staged tree's size in a demand-zero heap that never gives pages back.
+            self.bytes = Vec::new();
+            if self.bytes.try_reserve_exact(total as usize).is_err() {
+                *self = Blob::default();
+                return Err(format!("{what}: {total} bytes do not fit this engine's memory"));
+            }
             self.total = Some(total);
         }
         if self.total != Some(total) || offset as usize != self.bytes.len() {
@@ -179,7 +185,7 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
             Control::Volume { offset, total, chunk } => match self.volume.take("volume", offset, total, &chunk) {
                 Ok(Some(bytes)) => match heirloom_volume::snapshot::decode(&bytes) {
                     Ok(tree) => {
-                        if let Err(e) = heirloom_volume::snapshot::merge(self.machine.volume(), &tree) {
+                        if let Err(e) = heirloom_volume::snapshot::merge_owned(self.machine.volume(), tree) {
                             self.fail(format!("volume: the staged tree does not fit the machine's ({e:?})"));
                         }
                     }
