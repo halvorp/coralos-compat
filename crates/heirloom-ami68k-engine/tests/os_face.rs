@@ -112,7 +112,7 @@ fn the_table_is_the_ami_68k_family_at_the_frozen_version() {
     let t = os_vtable();
     assert_eq!((t.version, t.family, t.size as usize), (OS_ABI_VERSION, FAMILY_AMI68K, core::mem::size_of::<OsVTable>()));
     assert_eq!(unsafe { check_ptr(t, OS_ABI_VERSION, FAMILY_AMI68K) }, Ok(()));
-    assert_eq!(unsafe { check_ptr(t, OS_ABI_VERSION, FAMILY_MAC68K) }, Err(OpenRefusal::WrongFamily { found: FAMILY_AMI68K, required: FAMILY_MAC68K }));
+    assert_eq!(unsafe { check_ptr(t, OS_ABI_VERSION, FAMILY_MAC68K) }, Err(OpenRefusal::FamilyNotServed { header: FAMILY_AMI68K, required: FAMILY_MAC68K }));
 }
 
 #[test]

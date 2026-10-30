@@ -203,6 +203,7 @@ dependencies = [
  "heirloom-mac68k-engine",
  "heirloom-macppc-engine",
  "heirloom-mem-flat32",
+ "heirloom-os-abi",
  "heirloom-raster",
  "heirloom-ui-abi",
  "heirloom-volume",

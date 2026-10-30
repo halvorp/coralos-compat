@@ -102,23 +102,37 @@ pub struct MacPpc<U: GuestUi> {
     pub import_slots: BTreeMap<u32, (String, String, bool)>,
 }
 
+/// Grow `mac`'s guest RAM to `ram` bytes (no-op when it already has that much): the extra memory joins the Memory Manager's heap
+/// and MemTop names the new top.
+fn grow_ram<U: GuestUi>(mac: &mut Mac<U>, ram: usize) -> Result<(), CfmError> {
+    let base = mac.mem.len();
+    if ram > base {
+        mac.mem.try_grow_to(ram).map_err(|_| CfmError::NoMemory {
+            what: "guest RAM",
+            bytes: ram.min(u32::MAX as usize) as u32,
+        })?;
+        mac.heap.add_region(base as u32, (ram - base) as u32);
+        let _ = mac.mem.write_u32(
+            heirloom_mac68k_engine::lowmem::MEM_TOP,
+            ram.min(u32::MAX as usize) as u32,
+        ); // MemTop: the top of the (larger) RAM
+    }
+    Ok(())
+}
+
 impl<U: GuestUi> MacPpc<U> {
+    /// The RAM `program`'s SIZE partition asks for (the Process Manager's sizing, as [`MacPpc::for_program`]), grown now: a machine
+    /// made before its program arrived (an engine process's, from os-mac.library) sizes itself at `start_file`. Never shrinks.
+    pub fn size_for_program(&mut self, program: &[u8]) -> Result<(), CfmError> {
+        let ram = ram_for_program(heirloom_mem_flat32::DEFAULT_SIZE, program);
+        grow_ram(&mut self.mac, ram)
+    }
+
     /// Private helper: own the fallible growth path. Takes an already-
     /// constructed `Mac` so callers that need the base (new, for_program)
     /// can construct `Mac::new(ui)` exactly once.
     fn from_mac(mut mac: Mac<U>, ram: usize) -> Result<Self, CfmError> {
-        let base = mac.mem.len();
-        if ram > base {
-            mac.mem.try_grow_to(ram).map_err(|_| CfmError::NoMemory {
-                what: "guest RAM",
-                bytes: ram.min(u32::MAX as usize) as u32,
-            })?;
-            mac.heap.add_region(base as u32, (ram - base) as u32);
-            let _ = mac.mem.write_u32(
-                heirloom_mac68k_engine::lowmem::MEM_TOP,
-                ram.min(u32::MAX as usize) as u32,
-            ); // MemTop: the top of the (larger) RAM
-        }
+        grow_ram(&mut mac, ram)?;
         let caps = heirloom_gl_abi::caps::derive(
             heirloom_gl_abi::ENTRIES,
             heirloom_gl_abi::caps::ATTESTED_THROUGH,

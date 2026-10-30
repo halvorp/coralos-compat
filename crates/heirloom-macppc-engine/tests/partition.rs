@@ -104,3 +104,17 @@ fn no_size_uses_the_finder_default_partition() {
 fn gestalt_lram_uses_logical_ram_constant() {
     assert_eq!(heirloom_macppc_engine::osroutines::LOGICAL_RAM, 512 << 20);
 }
+#[test]
+fn a_machine_made_before_its_program_grows_to_the_programs_partition_and_never_shrinks() {
+    use heirloom_macppc_engine::MacPpc;
+    use heirloom_ui_abi::RecordingGuestUi;
+    // os-mac.library makes the PowerPC machine before its program arrives (macppc.engine); start_file sizes it, as for_program does.
+    let prog = resource_fork(*b"SIZE", &[(0, size_resource(0, 156 << 20, 156 << 20))]);
+    let sized = MacPpc::for_program(RecordingGuestUi::new(), &prog).unwrap();
+    let mut late = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    assert!(late.mac.mem.len() < sized.mac.mem.len());
+    late.size_for_program(&prog).unwrap();
+    assert_eq!(late.mac.mem.len(), sized.mac.mem.len());
+    late.size_for_program(&[]).unwrap();
+    assert_eq!(late.mac.mem.len(), sized.mac.mem.len(), "a smaller ask never shrinks guest RAM");
+}

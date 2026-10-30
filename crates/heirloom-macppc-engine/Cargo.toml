@@ -16,6 +16,8 @@ heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-gl-abi = { path = "../heirloom-gl-abi" }
 heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc", optional = true }
 heirloom-cpu-ppc-client = { path = "../heirloom-cpu-ppc-client", optional = true }
+# `os-library`: os-mac.library's table (src/os_face.rs) - both Mac families behind heirloom-os-abi's OsVTable v2.
+heirloom-os-abi = { path = "../heirloom-os-abi", features = ["serve"], optional = true }
 libm = "0.2"
 
 [dev-dependencies]
@@ -31,6 +33,9 @@ heirloom-mac68k-engine = { path = "../heirloom-mac68k-engine", features = ["fixt
 default = ["cpu-static"]
 cpu-static = ["dep:heirloom-cpu-ppc"]
 cpu-library = ["dep:heirloom-cpu-ppc-client"]
+# os-mac.library: the 68k Mac (heirloom-mac68k-engine `os-library`, on cpu-68k.library) and this PowerPC Mac (on cpu-ppc.library)
+# behind one OsVTable v2 - never a static core.
+os-library = ["cpu-library", "dep:heirloom-os-abi", "heirloom-mac68k-engine/os-library"]
 # The test-only PowerPC assembler and the built-in fixture applications. Off for the product library (CoralOS user mode);
 # the tests and the `macppc-run` CLI turn it on.
 fixtures = ["dep:heirloom-cpu-ppc"]

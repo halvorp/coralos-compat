@@ -55,6 +55,12 @@ pub fn bind(table: &'static PpcVTable) -> Result<(), BindRefusal> {
     }
 }
 
+/// Whether a table is bound (with `bind-static`, always: the static core's is bound on first use). os-mac.library's PowerPC family
+/// refuses to make a machine before this is true, so no guest reaches an unbound CPU.
+pub fn is_bound() -> bool {
+    table().is_some()
+}
+
 /// The bound table (with `bind-static`, the static core's when nothing was bound).
 fn table() -> Option<&'static PpcVTable> {
     #[cfg(feature = "bind-static")]

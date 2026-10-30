@@ -3,7 +3,8 @@
 //! the guest makes leaves as a wire frame the moment it is made, and the session's Reports follow in the same stream.
 //!
 //! A family library is three lines: an [`OsFamily`] impl (its family number, how it binds its CPU, how it builds a machine) and
-//! `static TABLE: OsVTable = vtable::<Family>();`.
+//! `static TABLE: OsVTable = vtable::<Family>();`. A library that serves two families of one OS (os-mac.library: the 68k and the
+//! PowerPC Mac on one Toolbox) states both: `static TABLE: OsVTable = vtable2::<First, Second>();` (OS ABI v2).
 use crate::*;
 use alloc::boxed::Box;
 use alloc::format;
@@ -49,9 +50,18 @@ pub type LibUi = ProxyUi<HostTransport>;
 /// One guest family behind the table.
 pub trait OsFamily: 'static {
     const FAMILY: u32;
+    /// The CPU contract this family's machines run on: [`CPU_CONTRACT_V2`] (a [`CpuVTable`], `bind_cpu`) or [`CPU_CONTRACT_PPC`]
+    /// (a [`ppc::PpcVTable`], `bind_cpu_ppc`).
+    const CPU_CONTRACT: u32 = CPU_CONTRACT_V2;
     type Machine: GuestMachine<Ui = LibUi> + 'static;
-    /// Bind `cpu` as the CPU this library's machines run on (see BIND_*).
-    fn bind_cpu(cpu: &'static CpuVTable) -> i32;
+    /// Bind `cpu` as the CPU this library's machines run on (see BIND_*). A family on another contract refuses it.
+    fn bind_cpu(_cpu: &'static CpuVTable) -> i32 {
+        BIND_REFUSED
+    }
+    /// Bind a cpu-ppc.library table (a CPU_CONTRACT_PPC family; any other refuses it).
+    fn bind_cpu_ppc(_cpu: &'static ppc::PpcVTable) -> i32 {
+        BIND_REFUSED
+    }
     /// Whether a CPU is bound: `create` refuses by name before it, so no guest can reach an unbound CPU.
     fn cpu_bound() -> bool;
     /// A machine of profile `profile` ("" = the family's default) drawing on `ui`.
@@ -277,13 +287,82 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
     }
 }
 
-extern "C" fn bind_cpu_impl<F: OsFamily>(cpu: *const CpuVTable) -> i32 {
+/// A session of any family behind one instance pointer: `destroy` and `apply` serve every family a table names.
+trait AnySession {
+    fn apply(&mut self, frames: &[u8]) -> Result<(), String>;
+}
+
+impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
+    fn apply(&mut self, frames: &[u8]) -> Result<(), String> {
+        Session::apply(self, frames)
+    }
+}
+
+/// What an instance pointer points at (a thin box around the fat one).
+type Instance = Box<dyn AnySession>;
+
+/// Bind a v2 CPU table into family `F` when `F` runs on that contract and the table is its architecture's: `None` = not `F`'s.
+fn bind_v2_into<F: OsFamily>(cpu: *const CpuVTable) -> Option<i32> {
+    if F::CPU_CONTRACT != CPU_CONTRACT_V2 {
+        return None;
+    }
     // SAFETY: the engine passes the table its cpu-*.library's coral_lib_open returned (or null); its header is readable.
-    if unsafe { heirloom_cpu_abi::check_ptr(cpu, heirloom_cpu_abi::CPU_ABI_VERSION, cpu_arch_of(F::FAMILY)) }.is_err() {
+    unsafe { heirloom_cpu_abi::check_ptr(cpu, heirloom_cpu_abi::CPU_ABI_VERSION, cpu_arch_of(F::FAMILY)) }.ok()?;
+    // SAFETY: checked above; a library's table is a static that lives as long as the library stays open (the engine's life).
+    Some(F::bind_cpu(unsafe { &*cpu }))
+}
+
+/// Every family of the table that took the binding answered; none took it = refused; the first refusal wins.
+fn bound(answers: [Option<i32>; 2]) -> i32 {
+    let mut took = false;
+    for a in answers.into_iter().flatten() {
+        if a != BIND_OK {
+            return a;
+        }
+        took = true;
+    }
+    if took { BIND_OK } else { BIND_REFUSED }
+}
+
+extern "C" fn bind_cpu_impl<F: OsFamily, G: OsFamily>(cpu: *const CpuVTable) -> i32 {
+    let second = if G::FAMILY == F::FAMILY { None } else { bind_v2_into::<G>(cpu) };
+    bound([bind_v2_into::<F>(cpu), second])
+}
+
+extern "C" fn bind_cpu_ppc_impl<F: OsFamily, G: OsFamily>(cpu: *const ppc::PpcVTable) -> i32 {
+    // SAFETY: as bind_cpu_impl: the library's coral_lib_open result (or null), its 16 header bytes readable.
+    if unsafe { ppc::check_ppc(cpu, ppc::PPC_ABI_VERSION) }.is_err() {
         return BIND_REFUSED;
     }
-    // SAFETY: checked above; a library's table is a static that lives as long as the library stays open (the engine's life).
-    F::bind_cpu(unsafe { &*cpu })
+    // SAFETY: checked above; a static of a library open for the engine's life.
+    let table: &'static ppc::PpcVTable = unsafe { &*cpu };
+    let first = (F::CPU_CONTRACT == CPU_CONTRACT_PPC).then(|| F::bind_cpu_ppc(table));
+    let second = (G::FAMILY != F::FAMILY && G::CPU_CONTRACT == CPU_CONTRACT_PPC).then(|| G::bind_cpu_ppc(table));
+    bound([first, second])
+}
+
+/// The lowest table version a CPU contract's tables must have.
+const fn min_version_of(contract: u32) -> u32 {
+    if contract == CPU_CONTRACT_PPC { ppc::PPC_ABI_VERSION } else { heirloom_cpu_abi::CPU_ABI_VERSION }
+}
+
+extern "C" fn cpu_abi_for_family_impl<F: OsFamily, G: OsFamily>(family: u32, contract: *mut u32, min_version: *mut u32) -> i32 {
+    let c = if family == F::FAMILY {
+        F::CPU_CONTRACT
+    } else if family == G::FAMILY {
+        G::CPU_CONTRACT
+    } else {
+        return FAMILY_NOT_SERVED;
+    };
+    if !contract.is_null() {
+        // SAFETY: the caller lends one writable u32 at `contract`.
+        unsafe { *contract = c };
+    }
+    if !min_version.is_null() {
+        // SAFETY: as above, at `min_version`.
+        unsafe { *min_version = min_version_of(c) };
+    }
+    FAMILY_SERVED
 }
 
 /// The CPU architecture a family's machines run on.
@@ -326,7 +405,10 @@ extern "C" fn create_impl<F: OsFamily>(profile: *const u8, len: usize, host: *co
     // SAFETY: `host` is non-null and points to an OsHost the caller filled; it is copied here.
     let ui = ProxyUi::new(HostTransport { host: unsafe { *host } });
     match F::create(profile, ui) {
-        Ok(machine) => Box::into_raw(Box::new(Session::new(machine, FamilyHooks::of::<F>()))) as *mut OsInstance,
+        Ok(machine) => {
+            let session: Instance = Box::new(Session::new(machine, FamilyHooks::of::<F>()));
+            Box::into_raw(Box::new(session)) as *mut OsInstance
+        }
         Err(r) => {
             write_why(&r.0, why, why_cap, why_len);
             core::ptr::null_mut()
@@ -334,19 +416,30 @@ extern "C" fn create_impl<F: OsFamily>(profile: *const u8, len: usize, host: *co
     }
 }
 
-extern "C" fn destroy_impl<F: OsFamily>(inst: *mut OsInstance) {
-    if !inst.is_null() {
-        // SAFETY: a non-null instance is one create_impl::<F> boxed; the engine destroys it once.
-        drop(unsafe { Box::from_raw(inst as *mut Session<F::Machine>) });
+extern "C" fn create_for_family_impl<F: OsFamily, G: OsFamily>(family: u32, profile: *const u8, len: usize, host: *const OsHost, why: *mut u8, why_cap: usize, why_len: *mut usize) -> *mut OsInstance {
+    if family == F::FAMILY {
+        create_impl::<F>(profile, len, host, why, why_cap, why_len)
+    } else if family == G::FAMILY {
+        create_impl::<G>(profile, len, host, why, why_cap, why_len)
+    } else {
+        write_why(&format!("create: this library serves no family {family} (it serves {} and {})", F::FAMILY, G::FAMILY), why, why_cap, why_len);
+        core::ptr::null_mut()
     }
 }
 
-extern "C" fn apply_impl<F: OsFamily>(inst: *mut OsInstance, frames: *const u8, len: usize) -> i32 {
+extern "C" fn destroy_impl(inst: *mut OsInstance) {
+    if !inst.is_null() {
+        // SAFETY: a non-null instance is one create_impl boxed (an Instance in a Box); the engine destroys it once.
+        drop(unsafe { Box::from_raw(inst as *mut Instance) });
+    }
+}
+
+extern "C" fn apply_impl(inst: *mut OsInstance, frames: *const u8, len: usize) -> i32 {
     if inst.is_null() || (frames.is_null() && len != 0) {
         return APPLY_BAD_ARGS;
     }
-    // SAFETY: a non-null instance is one create_impl::<F> boxed and not yet destroyed; the engine calls it from one thread.
-    let session = unsafe { &mut *(inst as *mut Session<F::Machine>) };
+    // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed; the engine calls it from one thread.
+    let session = unsafe { &mut **(inst as *mut Instance) };
     // SAFETY: the caller lends `len` readable bytes at `frames`.
     let bytes = if len == 0 { &[][..] } else { unsafe { core::slice::from_raw_parts(frames, len) } };
     match session.apply(bytes) {
@@ -357,13 +450,22 @@ extern "C" fn apply_impl<F: OsFamily>(inst: *mut OsInstance, frames: *const u8, 
 
 /// The table for family `F`: `static TABLE: OsVTable = heirloom_os_abi::serve::vtable::<MyFamily>();`.
 pub const fn vtable<F: OsFamily>() -> OsVTable {
+    vtable2::<F, F>()
+}
+
+/// The table of a library that serves two families of one OS: `F` is the header's (v1 `create` makes one), `G` the second, reached
+/// through `create_for_family`. Each family binds the CPU contract it names.
+pub const fn vtable2<F: OsFamily, G: OsFamily>() -> OsVTable {
     OsVTable {
         version: OS_ABI_VERSION,
         size: core::mem::size_of::<OsVTable>() as u32,
         family: F::FAMILY,
-        bind_cpu: bind_cpu_impl::<F>,
+        bind_cpu: bind_cpu_impl::<F, G>,
         create: create_impl::<F>,
-        destroy: destroy_impl::<F>,
-        apply: apply_impl::<F>,
+        destroy: destroy_impl,
+        apply: apply_impl,
+        cpu_abi_for_family: cpu_abi_for_family_impl::<F, G>,
+        bind_cpu_ppc: bind_cpu_ppc_impl::<F, G>,
+        create_for_family: create_for_family_impl::<F, G>,
     }
 }

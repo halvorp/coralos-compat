@@ -27,11 +27,15 @@ pub mod cpu {
     pub use heirloom_cpu_ppc_client::{resume, Cpu, Exec, Host, Reg, RunStats, Tier, Trap};
     /// What a product that opened cpu-ppc.library binds before the first run (Heirloom.app while this engine runs in it).
     #[cfg(feature = "cpu-library")]
-    pub use heirloom_cpu_ppc_client::{bind, BindRefusal};
+    pub use heirloom_cpu_ppc_client::{bind, is_bound, BindRefusal};
     #[cfg(feature = "cpu-library")]
     pub use heirloom_cpu_ppc_client::{PpcVTable, PPC_ABI_VERSION};
 }
 pub mod census;
+#[cfg(feature = "os-library")]
+pub mod os_face; // os-mac.library's table: both Mac families behind OS ABI v2
+#[cfg(feature = "os-library")]
+pub use os_face::os_mac_vtable;
 pub mod cfm;
 pub mod cfrg;
 pub mod driver;
