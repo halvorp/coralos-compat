@@ -54,6 +54,8 @@ pub struct Runtime {
     pub(crate) fm_pb: Option<u32>,
     /// `rand`'s state and the last `errno` a native set.
     pub(crate) rand: u32,
+    /// Asynchronous File Manager calls done, whose completion routine is still to run: (parameter block, routine), oldest first ([`crate::pb`]).
+    pub(crate) io_done: alloc::collections::VecDeque<(u32, u32)>,
     /// `atexit` handlers (TVectors), in registration order.
     pub(crate) atexit: alloc::vec::Vec<u32>,
     /// Open `FILE` streams by the FILE block's guest address ([`crate::stdio`]).
@@ -266,6 +268,11 @@ impl<U: GuestUi> Host for MacPpc<U> {
         self.note_call(cpu, yielding);
         // a Time Manager task that has come due runs now: this glue call is a safepoint (named limit: not interrupt time)
         if symbol != crate::callback::CALLBACK_RETURN {
+            match self.io_safepoint(cpu, addr) {
+                Ok(true) => { self.sync_natives(cpu); return true; }
+                Ok(false) => {}
+                Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
+            }
             match self.tm_safepoint(cpu, addr) {
                 Ok(true) => { self.sync_natives(cpu); return true; }
                 Ok(false) => {}

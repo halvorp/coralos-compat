@@ -54,6 +54,7 @@ pub(crate) fn fill_fib<U: GuestUi>(a: &mut Amiga<U>, fib: u32, node: NodeId) -> 
     let (ty, size) = match &v.get(node).kind {
         Kind::Dir(_) => (if v.is_device(node) { ST_ROOT } else { ST_USERDIR }, 0),
         Kind::File(d) => (ST_FILE, d.len()),
+        Kind::Stream(s) => (ST_FILE, usize::try_from(s.len).unwrap_or(usize::MAX)),
     };
     let (name, comment, prot, date) = (String::from(v.name(node)), v.get(node).comment.clone(), v.get(node).attrs, v.get(node).date());
     a.mem.write_u32(fib, node as u32).map_err(m("fib_DiskKey"))?;

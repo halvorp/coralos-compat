@@ -258,6 +258,7 @@ fn get_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool, cat: bool) -> Result<
         m.fm.locate(vref, dir_id, name.as_deref())?.node.ok_or(err::FNF_ERR)?
     };
     let info = m.fm.cat_info(node);
+    m.log.push(format!("[file]   info of {} \"{}\" (id {}, parent {})", if info.is_dir { "folder" } else { "file" }, super::name_of(&info.name), info.id, info.parent_id));
     if info.is_dir && !cat && !hfs { return Err(err::FNF_ERR); }
     if index != 0 { put_name(m, np, &info.name)?; }
     let ref_num = m.fm.open_forks().find(|(_, f)| f.node == node && !f.rsrc).map_or(0, |(&r, _)| r);
@@ -303,6 +304,7 @@ fn get_vol_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool) -> Result<(), i16
     let name = if np == 0 || index >= 0 { None } else { Some(read_name(m, np)?) };
     let vol = m.fm.pick_volume(index, vref, name.as_deref())?;
     let i = m.fm.vol_info(vol);
+    m.log.push(format!("[file]   volume \"{}\" vRef {} attrib {:#x} free {} blocks", super::name_of(&i.name), i.vref, i.attrib, i.free_blocks));
     put_name(m, np, &i.name)?;
     let mm = &mut m.mem;
     pb.put_i16(mm, IO_VREF_NUM, i.vref).map_err(&g)?;

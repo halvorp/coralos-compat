@@ -3,7 +3,7 @@
 use super::names::Located;
 use super::{err, FileMgr, OpenFork, Perm};
 use alloc::vec::Vec;
-use heirloom_volume::{Kind, NodeId};
+use heirloom_volume::NodeId;
 
 /// ioPermssn (Files.h).
 pub const FS_CUR_PERM: u8 = 0;
@@ -24,20 +24,25 @@ const NEWLINE_BIT: u16 = 0x80;
 pub struct ReadOut { pub data: Vec<u8>, pub result: i16 }
 
 impl FileMgr {
-    fn fork_bytes(&self, f: &OpenFork) -> &[u8] {
-        if f.rsrc { &self.tree.get(f.node).rsrc } else { self.tree.file_data(f.node).unwrap_or(&[]) }
+    /// The fork's logical length. A data fork may be a STREAM (heirloom-volume `Kind::Stream`: bytes in the host's storage, read on
+    /// demand), so lengths and reads go through the tree, never a slice of the whole fork; a fork over 4 GiB cannot be opened.
+    fn fork_len(&self, f: &OpenFork) -> u32 {
+        if f.rsrc { self.tree.get(f.node).rsrc.len() as u32 } else { self.tree.file_len(f.node).map_or(0, |l| l as u32) }
     }
-    fn fork_bytes_mut(&mut self, f: &OpenFork) -> &mut Vec<u8> {
-        if f.rsrc { &mut self.tree.get_mut(f.node).rsrc } else { self.tree.file_data_mut(f.node).expect("an open fork is a file") }
+    /// An in-memory fork, for writing. A stream fork is never open for write ([`FileMgr::open`] refuses it), so `None` there.
+    fn fork_bytes_mut(&mut self, f: &OpenFork) -> Option<&mut Vec<u8>> {
+        if f.rsrc { Some(&mut self.tree.get_mut(f.node).rsrc) } else { self.tree.file_data_mut(f.node) }
     }
     fn fork_of(&self, refnum: i16) -> Result<OpenFork, i16> { self.forks.get(&refnum).cloned().ok_or(err::RF_NUM_ERR) }
 
     /// Open the data (or resource) fork of the file `loc` names. `perm` is ioPermssn.
     pub fn open(&mut self, loc: &Located, rsrc: bool, perm: u8) -> Result<i16, i16> {
         let node = loc.node.ok_or(err::FNF_ERR)?;
-        if loc.leaf.is_none() || !matches!(self.tree.get(node).kind, Kind::File(_)) { return Err(err::FNF_ERR); }
+        if loc.leaf.is_none() || !self.tree.is_file(node) { return Err(err::FNF_ERR); }
+        if self.tree.file_len(node).is_some_and(|l| l > u64::from(u32::MAX)) && !rsrc { return Err(err::PARAM_ERR); }
         let locked = self.tree.get(node).attrs & 1 != 0;
-        let vol_writable = self.tree.is_writable(node);
+        // a stream's data fork is read-only: its bytes stay in the host's storage
+        let vol_writable = self.tree.is_writable(node) && !(self.tree.is_stream(node) && !rsrc);
         let can_write = vol_writable && !locked;
         let want = match perm {
             FS_CUR_PERM => Perm { read: true, write: can_write },
@@ -70,6 +75,8 @@ impl FileMgr {
     /// The running application's own file: it lives on the default volume under its name (an existing file of that name is
     /// kept as it is) and its resource fork is OPEN, read-only, under `refnum` (the Resource Manager's number for it), so the
     /// program can find itself the way a real one does: `CurApName`, `PBGetFCBInfo(CurApRefNum)`, `OpenRF` of its own name.
+    /// The node is remembered as [`FileMgr::app`] (the Process Manager's `processAppSpec`); the directory is the default one, which
+    /// the launcher may first point at the application's own folder ([`FileMgr::set_home`]).
     pub fn install_app(&mut self, name: &str, data: &[u8], rsrc: &[u8], file_type: [u8; 4], creator: [u8; 4], refnum: i16) -> Result<(), i16> {
         let dir = self.def_dir;
         let node = match self.tree.find_child(dir, name) {
@@ -84,11 +91,12 @@ impl FileMgr {
             }
         };
         self.forks.insert(refnum, OpenFork { node, rsrc: true, perm: Perm { read: true, write: false }, mark: 0 });
+        self.app = Some(node);
         Ok(())
     }
 
     pub fn close(&mut self, refnum: i16) -> Result<(), i16> { self.forks.remove(&refnum).map(|_| ()).ok_or(err::RF_NUM_ERR) }
-    pub fn eof(&self, refnum: i16) -> Result<u32, i16> { let f = self.fork_of(refnum)?; Ok(self.fork_bytes(&f).len() as u32) }
+    pub fn eof(&self, refnum: i16) -> Result<u32, i16> { let f = self.fork_of(refnum)?; Ok(self.fork_len(&f)) }
     pub fn mark(&self, refnum: i16) -> Result<u32, i16> { self.fork_of(refnum).map(|f| f.mark) }
     pub fn fork_node(&self, refnum: i16) -> Result<(NodeId, bool), i16> { self.fork_of(refnum).map(|f| (f.node, f.rsrc)) }
 
@@ -104,14 +112,18 @@ impl FileMgr {
     pub fn read(&mut self, refnum: i16, mode: u16, off: i32, count: u32) -> Result<ReadOut, i16> {
         let f = self.fork_of(refnum)?;
         if !f.perm.read { return Err(err::PERM_ERR); }
-        let len = self.fork_bytes(&f).len() as u32;
+        let len = self.fork_len(&f);
         let start = Self::start_pos(&f, len, mode, off)?;
         let newline = (mode & NEWLINE_BIT != 0).then(|| (mode >> 8) as u8);
-        let data = self.fork_bytes(&f);
         let avail = len.saturating_sub(start).min(count) as usize;
-        let mut got = &data[(start.min(len)) as usize..start.min(len) as usize + avail];
-        if let Some(nl) = newline { if let Some(i) = got.iter().position(|&b| b == nl) { got = &got[..=i]; } }
-        let out = got.to_vec();
+        let mut out = alloc::vec![0u8; avail];
+        let at = start.min(len);
+        if f.rsrc {
+            out.copy_from_slice(&self.tree.get(f.node).rsrc[at as usize..at as usize + avail]);
+        } else if self.tree.read_at(f.node, u64::from(at), &mut out) != Some(avail) {
+            return Err(err::IO_ERR); // a stream the host's storage did not deliver in full: an I/O error, never invented bytes
+        }
+        if let Some(nl) = newline { if let Some(i) = out.iter().position(|&b| b == nl) { out.truncate(i + 1); } }
         let end = start.min(len) + out.len() as u32;
         let hit_nl = newline.is_some_and(|nl| out.last() == Some(&nl));
         self.forks.get_mut(&refnum).expect("checked").mark = end;
@@ -123,10 +135,10 @@ impl FileMgr {
     pub fn write(&mut self, refnum: i16, mode: u16, off: i32, data: &[u8]) -> Result<u32, i16> {
         let f = self.fork_of(refnum)?;
         if !f.perm.write { return Err(err::WR_PERM_ERR); }
-        let len = self.fork_bytes(&f).len() as u32;
+        let len = self.fork_len(&f);
         let start = Self::start_pos(&f, len, mode, off)?;
         let end = start.checked_add(data.len() as u32).ok_or(err::DSK_FUL_ERR)?;
-        let buf = self.fork_bytes_mut(&f);
+        let buf = self.fork_bytes_mut(&f).ok_or(err::W_PR_ERR)?;
         if buf.len() < end as usize { buf.resize(end as usize, 0); }
         buf[start as usize..end as usize].copy_from_slice(data);
         self.touch(f.node);
@@ -138,7 +150,7 @@ impl FileMgr {
     pub fn set_eof(&mut self, refnum: i16, new_len: u32) -> Result<(), i16> {
         let f = self.fork_of(refnum)?;
         if !f.perm.write { return Err(err::WR_PERM_ERR); }
-        self.fork_bytes_mut(&f).resize(new_len as usize, 0);
+        self.fork_bytes_mut(&f).ok_or(err::W_PR_ERR)?.resize(new_len as usize, 0);
         self.touch(f.node);
         let m = self.forks.get_mut(&refnum).expect("checked");
         m.mark = m.mark.min(new_len);
@@ -148,7 +160,7 @@ impl FileMgr {
     /// SetFPos: a mark past the EOF is put AT the EOF and reported as eofErr.
     pub fn set_mark(&mut self, refnum: i16, mode: u16, off: i32) -> Result<(), i16> {
         let f = self.fork_of(refnum)?;
-        let len = self.fork_bytes(&f).len() as u32;
+        let len = self.fork_len(&f);
         let p = Self::start_pos(&f, len, mode, off)?;
         let m = self.forks.get_mut(&refnum).expect("checked");
         if p > len { m.mark = len; return Err(err::EOF_ERR); }
@@ -193,6 +205,52 @@ mod tests {
         fm.close(r).unwrap();
         assert_eq!(fm.close(r), Err(err::RF_NUM_ERR));
         assert_eq!(fm.read(r, 0, 0, 1), Err(err::RF_NUM_ERR));
+    }
+
+    /// Stream key 0 holds `offset as u8` for 10 000 bytes; key 1 always fails.
+    struct Counting;
+    impl heirloom_volume::StreamSource for Counting {
+        fn read_at(&self, key: u32, offset: u64, dst: &mut [u8]) -> Option<usize> {
+            if key == 1 { return None; }
+            let n = dst.len().min(10_000usize.saturating_sub(offset as usize));
+            for (i, b) in dst[..n].iter_mut().enumerate() { *b = (offset as usize + i) as u8; }
+            Some(n)
+        }
+    }
+
+    #[test]
+    fn a_stream_data_fork_reads_through_the_tree_and_never_opens_for_write() {
+        let mut fm = FileMgr::new();
+        let game = fm.add_volume("Game", true);
+        fm.tree.set_stream_source(alloc::boxed::Box::new(Counting));
+        let n = fm.tree.put_stream(game, "War3.mpq", heirloom_volume::Stream { len: 10_000, key: 0 }).unwrap();
+        let loc = Located { vol: game, parent: game, leaf: Some("War3.mpq".into()), node: Some(n) };
+        let r = fm.open(&loc, false, FS_RD_PERM).unwrap();
+        assert_eq!(fm.eof(r), Ok(10_000));
+        assert_eq!(fm.read(r, FS_FROM_START, 300, 3).unwrap(), ReadOut { data: alloc::vec![44, 45, 46], result: 0 }, "bytes 300.. of the stream");
+        assert_eq!(fm.read(r, FS_FROM_START, 9_998, 8).unwrap(), ReadOut { data: alloc::vec![14, 15], result: err::EOF_ERR }, "clamped at the stream's end");
+        assert_eq!(fm.open(&loc, false, FS_RD_WR_PERM), Err(err::W_PR_ERR), "a stream's data fork is read-only even on a writable volume");
+        assert!(fm.open(&loc, true, FS_RD_WR_PERM).is_ok(), "NEGATIVE CONTROL: its resource fork is in memory and writable");
+        assert_eq!(fm.cat_info(n).name, b"War3.mpq");
+        let bad = fm.tree.put_stream(game, "Bad", heirloom_volume::Stream { len: 4, key: 1 }).unwrap();
+        let rb = fm.open(&Located { vol: game, parent: game, leaf: Some("Bad".into()), node: Some(bad) }, false, FS_RD_PERM).unwrap();
+        assert_eq!(fm.read(rb, FS_FROM_START, 0, 4), Err(err::IO_ERR), "a source that fails is ioErr, never zeros");
+    }
+
+    #[test]
+    fn set_home_moves_the_default_directory_and_install_app_records_the_file() {
+        let mut fm = FileMgr::new();
+        let game = fm.add_volume("Warcraft III", true);
+        let sub = fm.tree.create_dir(game, "Data").unwrap();
+        assert_eq!(fm.set_home(&["Nowhere"]), Err(err::NSV_ERR));
+        assert_eq!(fm.set_home(&["Warcraft III", "Missing"]), Err(err::DIR_NF_ERR));
+        assert_eq!((fm.def_vol, fm.def_dir), (fm.tree.volume(super::super::BOOT_VOLUME).unwrap(), fm.tree.volume(super::super::BOOT_VOLUME).unwrap()), "a refusal changes nothing");
+        fm.set_home(&["Warcraft III", "Data"]).unwrap();
+        assert_eq!((fm.def_vol, fm.def_dir), (game, sub));
+        assert_eq!(fm.app, None);
+        fm.install_app("Warcraft III", b"pef", b"", *b"APPL", *b"W3!!", crate::resmgr::APP_REF_NUM).unwrap();
+        let app = fm.app.expect("the installed file is recorded");
+        assert_eq!((fm.tree.parent(app), fm.tree.name(app)), (sub, "Warcraft III"), "installed in the home folder");
     }
 
     #[test]

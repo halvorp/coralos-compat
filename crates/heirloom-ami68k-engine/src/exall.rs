@@ -49,7 +49,7 @@ fn build<U: GuestUi>(a: &mut Amiga<U>, r: &Run, node: NodeId) -> Result<Option<u
     let m = Refusal::mem("ExAllData");
     let n = a.fs.vol.get(node);
     let (name, comment, prot, date) = (String::from(&n.name), n.comment.clone(), n.attrs, n.date());
-    let (ty, size) = match &n.kind { Kind::Dir(_) => (ST_USERDIR, 0), Kind::File(d) => (ST_FILE, d.len() as u32) };
+    let (ty, size) = match &n.kind { Kind::Dir(_) => (ST_USERDIR, 0), Kind::File(d) => (ST_FILE, d.len() as u32), Kind::Stream(s) => (ST_FILE, u32::try_from(s.len).unwrap_or(u32::MAX)) };
     let rec = RECORD_SIZE[r.data as usize];
     let name_at = r.cur + rec;
     let comment_at = name_at + name.len() as u32 + 1;

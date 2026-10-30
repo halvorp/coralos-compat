@@ -346,6 +346,27 @@ fn wc3_host_run_with_a_gl_worker() {
     let seen = Arc::new(Mutex::new(Seen::default()));
     let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
     m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true }));
+    // The installed game folder: War3.mpq (the disc's MacBinary file, its data fork) as a STREAM beside the application.
+    let mpq = "/data/build/corpus-bin/mac/warcraft3/roc-fs/Support_War3.mpq.bin";
+    if let Ok(f) = std::fs::File::open(mpq) {
+        use std::io::Read;
+        let mut hdr = [0u8; 128];
+        (&f).read_exact(&mut hdr).unwrap();
+        let len = u32::from_be_bytes(hdr[83..87].try_into().unwrap()) as u64;
+        struct HostFile(std::fs::File);
+        impl heirloom_volume::StreamSource for HostFile {
+            fn read_at(&self, _key: u32, offset: u64, dst: &mut [u8]) -> Option<usize> {
+                if std::env::var("WC3_TRACE_READS").is_ok() { eprintln!("MPQ read {offset:#x} +{:#x}", dst.len()); }
+                std::os::unix::fs::FileExt::read_at(&self.0, dst, 128 + offset).ok()
+            }
+        }
+        let vol = GuestMachine::volume(&mut m);
+        let game = vol.add_volume("Warcraft III", true);
+        vol.set_stream_source(Box::new(HostFile(f)));
+        vol.put_stream(game, "War3.mpq", heirloom_volume::Stream { len, key: 0 }).unwrap();
+        GuestMachine::set_home(&mut m, &["Warcraft III"]).unwrap();
+        eprintln!("staged War3.mpq ({len} bytes) as a stream in Warcraft III:");
+    }
     m.start_file(&app, "Warcraft III").unwrap();
     let mut t = 0u64;
     let slices: u32 = std::env::var("WC3_SLICES").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
@@ -364,7 +385,8 @@ fn wc3_host_run_with_a_gl_worker() {
         }
     }
     let log = &m.mac.log;
-    for l in log.iter().skip(log.len().saturating_sub(80)) {
+    let keep: usize = std::env::var("WC3_LOG_LINES").ok().and_then(|s| s.parse().ok()).unwrap_or(80);
+    for l in log.iter().skip(log.len().saturating_sub(keep)) {
         eprintln!("LOG {l}");
     }
     for c in m.ui().calls.iter().rev().take(10) {

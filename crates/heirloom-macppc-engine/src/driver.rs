@@ -39,6 +39,9 @@ impl<U: GuestUi> GuestMachine for MacPpc<U> {
         if !Pef::has_magic(file) {
             if let Err(why) = self.attach_resources(file) { self.mac.log.push(format!("[cfm] no resource fork attached: {why}")); }
         }
+        // The application's own file on the default volume (the folder set_home named, else the boot volume), as the 68k launch
+        // does: GetProcessInformation's processAppSpec names it and the program finds the files beside it.
+        self.install_app_file(file, &frag_name).map_err(|e| Refusal(format!("{name}: {e}")))?;
         let frag = self.instantiate(&frag_name, &pef).map_err(|e| Refusal(format!("{name}: {e}")))?;
         MacPpc::start(self, &frag).map_err(|e| Refusal(format!("{name}: {e}")))
     }
@@ -53,6 +56,9 @@ impl<U: GuestUi> GuestMachine for MacPpc<U> {
     fn ui(&self) -> &U { &self.mac.ui }
     fn ui_mut(&mut self) -> &mut U { &mut self.mac.ui }
     fn volume(&mut self) -> &mut Tree { &mut self.mac.fm.tree }
+    fn set_home(&mut self, path: &[&str]) -> Result<(), Refusal> {
+        self.mac.fm.set_home(path).map_err(|e| Refusal(format!("the application folder {} is not on the staged volumes (OSErr {e})", path.join(":"))))
+    }
     fn set_stop_on_unimplemented(&mut self, on: bool) { self.mac.stop_on_unimplemented = on; }
     fn drain_log(&mut self) -> Vec<String> { core::mem::take(&mut self.mac.log) }
     fn drain_refused(&mut self) -> Vec<String> { core::mem::take(&mut self.mac.refused) }

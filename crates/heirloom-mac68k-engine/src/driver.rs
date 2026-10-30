@@ -41,6 +41,9 @@ impl<U: GuestUi> GuestMachine for Mac<U> {
     fn ui(&self) -> &U { &self.ui }
     fn ui_mut(&mut self) -> &mut U { &mut self.ui }
     fn volume(&mut self) -> &mut Tree { &mut self.fm.tree }
+    fn set_home(&mut self, path: &[&str]) -> Result<(), Refusal> {
+        self.fm.set_home(path).map_err(|e| Refusal(alloc::format!("the application folder {} is not on the staged volumes (OSErr {e})", path.join(":"))))
+    }
     fn set_stop_on_unimplemented(&mut self, on: bool) { self.stop_on_unimplemented = on; }
     fn drain_log(&mut self) -> Vec<String> { core::mem::take(&mut self.log) }
     fn drain_refused(&mut self) -> Vec<String> { core::mem::take(&mut self.refused) }

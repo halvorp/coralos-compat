@@ -51,6 +51,14 @@ pub trait GuestMachine {
     /// run (wrong container, no code, a data fork the single file does not hold) is a named refusal.
     fn start_file(&mut self, file: &[u8], name: &str) -> Result<(), Refusal>;
 
+    /// The program's own folder on the staged volumes, volume first (`["Warcraft III"]`), set BEFORE [`start_file`](Self::start_file):
+    /// the program is launched from there (a Mac application's file is installed in it and it is the default directory, so the
+    /// program finds the files beside it). A family with no application folder, or a folder that is not on the volumes, is a
+    /// named refusal; the default is the former.
+    fn set_home(&mut self, path: &[&str]) -> Result<(), Refusal> {
+        Err(Refusal(alloc::format!("this engine has no application folder to set (asked for {})", path.join(":"))))
+    }
+
     /// A native event for the guest. It never runs guest code: the next [`step`](Self::step) does.
     fn deliver(&mut self, ev: GuestUiEvent) -> Result<Delivery, Refusal>;
 

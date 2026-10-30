@@ -6,7 +6,7 @@
 //! `WakeUpProcess` on it succeed (it is already in front and awake). `GetProcessInformation` fills the `ProcessInfoRec` (60 bytes):
 //! the name from `CurApName`, type 'APPL', the launch mode from the application's `SIZE` resource (ID 0, else -1) and the heap
 //! sizes; the creator signature is '????' (the file's creator is not kept by the launcher) and the `FSSpec` (`processAppSpec`)
-//! is not filled (named in the log). Temporary Memory is the application heap (there is no second pool): `TempNewHandle` is
+//! names the application's own file (the File Manager's `app`, installed at launch; unfilled and named in the log without one). Temporary Memory is the application heap (there is no second pool): `TempNewHandle` is
 //! `NewHandle`, `TempFreeMem`/`TempMaxMem` the free bytes, `TempTopMem` the top of RAM. High-level events never arrive:
 //! `AcceptHighLevelEvent` answers `noOutstandingHLE` (-607). Any other selector halts the guest with a named refusal.
 use crate::lowmem::{CUR_AP_NAME, MEM_TOP, TICKS};
@@ -111,7 +111,14 @@ fn get_info<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, R
         m.mem.write_u32(info + off, v).map_err(&e)?;
     }
     let spec = m.mem.read_u32(info + 56).map_err(&e)?;
-    let note = if spec != 0 { "; processAppSpec is not filled (no FSSpec of the launched file is kept)" } else { "" };
+    let note = match spec {
+        0 => "",
+        p => match crate::fm::fsspec::write_app_spec(m, p) {
+            Ok(true) => "; processAppSpec = the application's file",
+            Ok(false) => "; processAppSpec is not filled (no application file was installed)",
+            Err(_) => return Err(Refusal(format!("GetProcessInformation: processAppSpec {p:#x} is not writable guest memory"))),
+        },
+    };
     Ok(Done { result: 0, log: format!("[process] GetProcessInformation -> mode {mode:#x}, size {size}, free {free}{note}") })
 }
 

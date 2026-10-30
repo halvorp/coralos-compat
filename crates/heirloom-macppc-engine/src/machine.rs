@@ -196,6 +196,21 @@ impl<U: GuestUi> MacPpc<U> {
     /// Open the application's resource fork (from a MacBinary / AppleSingle / AppleDouble file, or a raw fork) as the
     /// current resource file, so `GetResource`, menus, windows and dialogs find the application's resources. A file with
     /// no resource fork is an error the caller may ignore (a bare PEF has none).
+    /// Install the application's own file in the File Manager's default directory (the 68k launch's `install_app`): the
+    /// container's data and resource forks, type and creator, under the container's own name (else `fallback_name`). A bare PEF
+    /// is its data fork alone. Its resource fork is the open FCB `APP_REF_NUM`, and `processAppSpec` names it.
+    pub fn install_app_file(&mut self, file: &[u8], fallback_name: &str) -> Result<(), String> {
+        let (name, data, rsrc, ft, cr) = if heirloom_fmt_pef::Pef::has_magic(file) {
+            (String::from(fallback_name), file, &[][..], *b"APPL", *b"????")
+        } else {
+            let o = heirloom_fmt_resfork::open(file).map_err(|e| e.to_string())?;
+            let data = o.data.clone().map_or(&[][..], |r| &file[r]);
+            (o.name.clone().unwrap_or_else(|| String::from(fallback_name)), data, &file[o.rsrc.clone()], o.file_type.unwrap_or(*b"APPL"), o.creator.unwrap_or(*b"????"))
+        };
+        self.mac.fm.install_app(&name, data, rsrc, ft, cr, heirloom_mac68k_engine::resmgr::APP_REF_NUM)
+            .map_err(|e| alloc::format!("the application's own file could not be installed on its volume (OSErr {e})"))
+    }
+
     pub fn attach_resources(&mut self, file: &[u8]) -> Result<usize, String> {
         let opened = heirloom_fmt_resfork::open(file).map_err(|e| e.to_string())?;
         let fork = heirloom_fmt_resfork::ResFork::parse(file[opened.rsrc.clone()].to_vec()).map_err(|e| e.to_string())?;

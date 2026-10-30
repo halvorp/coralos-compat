@@ -89,6 +89,8 @@ pub struct FileMgr {
     pub def_dir: NodeId,
     /// The clock: seconds since 1904-01-01 (the host sets it; creation and modification dates come from it).
     pub now_secs: u32,
+    /// The running application's own file ([`FileMgr::install_app`]): the Process Manager's `processAppSpec`.
+    pub app: Option<NodeId>,
 }
 
 impl Default for FileMgr { fn default() -> Self { Self::new() } }
@@ -98,7 +100,24 @@ impl FileMgr {
     pub fn new() -> FileMgr {
         let mut tree = Tree::new(MAX_NAME);
         let boot = tree.add_volume(BOOT_VOLUME, true);
-        FileMgr { tree, forks: BTreeMap::new(), next_ref: 0, wds: BTreeMap::new(), next_wd: 0, def_vol: boot, def_dir: boot, now_secs: 3_600_000_000 }
+        // every data fork is read through Tree::read_at / file_len (forks.rs, catalog.rs), so a host may stage stream files
+        tree.enable_streams();
+        FileMgr { tree, forks: BTreeMap::new(), next_ref: 0, wds: BTreeMap::new(), next_wd: 0, def_vol: boot, def_dir: boot, now_secs: 3_600_000_000, app: None }
+    }
+
+    /// Host-side, before the launch: the application's own folder, as volume-first names (`["Warcraft III"]`, `["Games", "WC3"]`).
+    /// It becomes the default volume and directory, so the application's file is installed THERE ([`FileMgr::install_app`]) and the
+    /// program finds the files beside it, as the Finder launches it on a real Mac. An unknown volume or folder is `nsvErr` / `dirNFErr`.
+    pub fn set_home(&mut self, path: &[&str]) -> Result<(), i16> {
+        let (vol, rest) = path.split_first().ok_or(err::BD_NAM_ERR)?;
+        let v = self.tree.volume(vol).ok_or(err::NSV_ERR)?;
+        let mut dir = v;
+        for c in rest {
+            dir = self.tree.find_child(dir, c).filter(|&d| self.tree.is_dir(d)).ok_or(err::DIR_NF_ERR)?;
+        }
+        self.def_vol = v;
+        self.def_dir = dir;
+        Ok(())
     }
 
     /// Host-side: add a volume the guest can see.

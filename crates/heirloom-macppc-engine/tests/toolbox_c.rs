@@ -137,11 +137,80 @@ fn parameter_block_calls_run_the_file_manager_traps_on_the_callers_block() {
     m.mac.mem.write_u32(PB + 18, A).unwrap();
     assert_eq!(call(&mut m, "PBGetCatInfoSync", &[PB]) as i32, 0);
     assert_eq!(m.mac.mem.read_u32(PB + 54).unwrap(), 10, "ioFlLgLen of the data fork");
-    // NEGATIVE CONTROLS: a refnum that is open nowhere is rfNumErr; an Async call with a completion routine is refused BY NAME; an unmodelled PB call stays unbound
+    // NEGATIVE CONTROLS: a refnum that is open nowhere is rfNumErr; an unmodelled PB call stays unbound
     m.mac.mem.zero(PB, 128).unwrap();
     m.mac.mem.write_u16(PB + 24, 0x3FFE).unwrap();
     assert_eq!(call(&mut m, "PBGetEOFSync", &[PB]) as i32, -51);
-    m.mac.mem.write_u32(PB + 12, 0x1234).unwrap();
-    assert!(refused(&mut m, "PBReadAsync", &[PB]).contains("completion routine"));
     assert!(matches!(m.bind("PBCatSearchSync"), Binding::Unbound(_)));
+    let _ = refused;
+}
+
+/// `PBReadAsync` with a completion routine (Warcraft III's MPQ reads): the read is done when the call returns (ioResult final), and the routine runs with the block in
+/// r3 at the NEXT glue call, never inside the issuing one; the interrupted call is entered again when it returns.
+#[test]
+fn an_async_completion_routine_runs_at_the_next_safepoint_with_the_block_in_r3() {
+    use heirloom_cpu_ppc::{Cpu, Host};
+    use heirloom_mac68k_engine::mixed_mode::{new_routine_descriptor, ISA_PPC};
+    const TV: u32 = 0x0003_0000;
+    const CODE: u32 = 0x0003_1000;
+    const TOC: u32 = 0x0003_8000;
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let root = m.mac.fm.def_vol;
+    m.mac.fm.tree.put_file(root, "Data", b"0123456789".to_vec()).unwrap();
+    pstr(&mut m, A, "Data");
+    assert_eq!(call(&mut m, "FSOpen", &[A, 0, PB + 0x100]) as i32, 0);
+    let r = m.mac.mem.read_u16(PB + 0x100).unwrap();
+    m.mac.mem.write_u32(TV, CODE).unwrap();
+    m.mac.mem.write_u32(TV + 4, TOC).unwrap();
+    let upp = new_routine_descriptor(&mut m.mac, TV, 0xC0, ISA_PPC).unwrap();
+    m.mac.mem.zero(PB, 128).unwrap();
+    m.mac.mem.write_u32(PB + 12, upp).unwrap(); // ioCompletion
+    m.mac.mem.write_u16(PB + 24, r).unwrap();
+    m.mac.mem.write_u32(PB + 32, B).unwrap();
+    m.mac.mem.write_u32(PB + 36, 3).unwrap();
+    assert_eq!(call(&mut m, "PBReadAsync", &[PB]) as i32, 0);
+    assert_eq!((m.mac.mem.read_u16(PB + 16).unwrap(), m.get_bytes(B, 3, "t").unwrap()), (0, b"012".to_vec()), "done (ioResult final) when the call returns");
+    assert_eq!(m.callback_depth(), 0, "the routine did NOT run inside the issuing call");
+    m.bind("TickCount");
+    let id = m.glue.intern(&mut m.mac, "CFM", "TickCount").unwrap();
+    let stub = m.glue.entry(id).unwrap().stub;
+    let mut cpu = Cpu::new(0x5000, 0x0004_0000);
+    cpu.gpr[2] = 0x6000; cpu.gpr[3] = 0x77;
+    assert!(m.native(&mut cpu, stub));
+    assert_eq!((cpu.pc, cpu.gpr[3], cpu.gpr[2]), (CODE, PB, TOC), "the next glue call enters the routine with r3 = the block");
+    assert_eq!(m.callback_depth(), 1);
+    let ret = cpu.lr;
+    assert!(m.native(&mut cpu, ret));
+    assert_eq!((cpu.pc, cpu.gpr[3]), (stub, 0x77), "the interrupted call is entered again, its registers restored");
+    // NEGATIVE CONTROL: it runs once - the next glue call is just the call
+    let mut cpu = Cpu::new(0x5000, 0x0004_0000);
+    m.native(&mut cpu, stub);
+    assert_ne!(cpu.pc, CODE);
+    assert_eq!(m.callback_depth(), 0);
+}
+
+/// The launch installs the application's own file in the folder the launcher named (`set_home`), and `GetProcessInformation`'s processAppSpec names it - Warcraft III
+/// finds its War3.mpq beside it that way (it stopped at "not properly installed" while processAppSpec was left unfilled).
+#[test]
+fn the_application_file_lives_in_its_home_folder_and_process_app_spec_names_it() {
+    use heirloom_common::GuestMachine;
+    let app = heirloom_macppc_engine::fixture::macbinary_app(&heirloom_macppc_engine::fixture::startup_app());
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let game = GuestMachine::volume(&mut m).add_volume("Game", false);
+    assert!(GuestMachine::set_home(&mut m, &["Elsewhere"]).is_err(), "NEGATIVE CONTROL: a folder not on the volumes is refused by name");
+    GuestMachine::set_home(&mut m, &["Game"]).unwrap();
+    GuestMachine::start_file(&mut m, &app, "Startup").unwrap();
+    let node = m.mac.fm.app.expect("the launch recorded the application's file");
+    assert_eq!(m.mac.fm.tree.parent(node), game);
+    // ProcessInfoRec: processInfoLength 60, processName NULL, processAppSpec -> B
+    m.mac.mem.zero(PB, 64).unwrap();
+    m.mac.mem.write_u32(PB, 60).unwrap();
+    m.mac.mem.write_u32(PB + 56, B).unwrap();
+    m.mac.mem.zero(B, 70).unwrap();
+    m.mac.mem.write_u32(A, 0).unwrap(); m.mac.mem.write_u32(A + 4, 2).unwrap(); // kCurrentProcess
+    assert_eq!(call(&mut m, "GetProcessInformation", &[A, PB]) as i32, 0);
+    let vref = m.mac.mem.read_u16(B).unwrap() as i16;
+    assert_eq!(vref, m.mac.fm.vref_of(game), "vRefNum = the home volume");
+    assert_eq!(m.mac.mem.read_u32(B + 2).unwrap(), 2, "parID = the folder it is in: the volume root (fsRtDirID)");
+    assert_eq!(rd_p(&m, B + 6), m.mac.fm.tree.name(node));
 }

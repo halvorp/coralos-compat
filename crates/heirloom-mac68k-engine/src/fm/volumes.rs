@@ -29,7 +29,10 @@ impl FileMgr {
     fn used(&self, dir: NodeId) -> u64 {
         self.tree.children(dir).iter().map(|&c| match &self.tree.get(c).kind {
             Kind::Dir(_) => self.used(c),
-            Kind::File(d) => u64::from((d.len() as u32).div_ceil(ALLOC_BLOCK) + (self.tree.get(c).rsrc.len() as u32).div_ceil(ALLOC_BLOCK)) * u64::from(ALLOC_BLOCK),
+            Kind::File(_) | Kind::Stream(_) => {
+                let data = self.tree.file_len(c).unwrap_or(0).div_ceil(u64::from(ALLOC_BLOCK));
+                (data + (self.tree.get(c).rsrc.len() as u64).div_ceil(u64::from(ALLOC_BLOCK))) * u64::from(ALLOC_BLOCK)
+            }
         }).sum()
     }
     fn count(&self, dir: NodeId, dirs: bool) -> u32 {

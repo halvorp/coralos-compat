@@ -18,7 +18,26 @@ pub type NodeId = usize;
 /// The pseudo-root that holds the volumes.
 pub const ROOT: NodeId = 0;
 
-pub enum Kind { Dir(Vec<NodeId>), File(Vec<u8>) }
+pub enum Kind { Dir(Vec<NodeId>), File(Vec<u8>), Stream(Stream) }
+
+/// A READ-ONLY file whose data fork stays in the host's storage and is read on demand through the tree's [`StreamSource`]
+/// (a 401 MB game archive is never copied into the engine's memory). Only a tree whose engine has called
+/// [`Tree::enable_streams`] (its file layer reads through [`Tree::read_at`] / [`Tree::file_len`]) accepts one; on any other
+/// tree [`Tree::put_stream`] is refused and the host reads the file in full, as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stream {
+    /// The data fork's length in bytes.
+    pub len: u64,
+    /// The host's name for the bytes, passed back to [`StreamSource::read_at`].
+    pub key: u32,
+}
+
+/// Where a tree's [`Stream`] files are read from: the host's storage (CoralFS in Heirloom.app, a host directory in tests).
+pub trait StreamSource {
+    /// Up to `dst.len()` bytes of stream `key` from `offset`: how many were read (fewer only at the end), `None` when the
+    /// storage refused or failed (the file layer reports an I/O error; nothing is invented).
+    fn read_at(&self, key: u32, offset: u64, dst: &mut [u8]) -> Option<usize>;
+}
 
 /// The Finder-style file info of a file (HFS FInfo): the four-character type and creator, the flag word and the icon position.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -47,6 +66,9 @@ pub enum VolErr { NotFound, Exists, WrongType, ReadOnly, InvalidName, NotEmpty, 
 pub struct Tree {
     nodes: Vec<Option<Node>>,
     max_name: usize,
+    /// The engine's file layer reads data forks through [`Tree::read_at`]: [`Kind::Stream`] files are accepted.
+    streams_enabled: bool,
+    streams: Option<alloc::boxed::Box<dyn StreamSource>>,
 }
 
 fn same(a: &str, b: &str) -> bool { a.eq_ignore_ascii_case(b) }
@@ -55,7 +77,7 @@ impl Tree {
     /// An empty tree (only the root). `max_name` is the longest component the platform allows (Amiga 107, HFS 31).
     pub fn new(max_name: usize) -> Tree {
         let root = Node::new(String::new(), ROOT, Kind::Dir(Vec::new()), false);
-        Tree { nodes: alloc::vec![Some(root)], max_name }
+        Tree { nodes: alloc::vec![Some(root)], max_name, streams_enabled: false, streams: None }
     }
 
     fn node(&self, id: NodeId) -> &Node { self.nodes[id].as_ref().expect("live node id") }
@@ -68,9 +90,48 @@ impl Tree {
     pub fn is_dir(&self, id: NodeId) -> bool { matches!(self.node(id).kind, Kind::Dir(_)) }
     /// A volume is a direct child of the root.
     pub fn is_volume(&self, id: NodeId) -> bool { id != ROOT && self.node(id).parent == ROOT }
-    pub fn children(&self, id: NodeId) -> &[NodeId] { match &self.node(id).kind { Kind::Dir(c) => c, Kind::File(_) => &[] } }
-    pub fn file_data(&self, id: NodeId) -> Option<&[u8]> { match &self.node(id).kind { Kind::File(d) => Some(d), Kind::Dir(_) => None } }
-    pub fn file_data_mut(&mut self, id: NodeId) -> Option<&mut Vec<u8>> { match &mut self.node_mut(id).kind { Kind::File(d) => Some(d), Kind::Dir(_) => None } }
+    pub fn children(&self, id: NodeId) -> &[NodeId] { match &self.node(id).kind { Kind::Dir(c) => c, Kind::File(_) | Kind::Stream(_) => &[] } }
+    /// The in-memory data fork of a file; `None` for a directory AND for a [`Kind::Stream`] file (read that with [`Tree::read_at`]).
+    pub fn file_data(&self, id: NodeId) -> Option<&[u8]> { match &self.node(id).kind { Kind::File(d) => Some(d), Kind::Dir(_) | Kind::Stream(_) => None } }
+    pub fn file_data_mut(&mut self, id: NodeId) -> Option<&mut Vec<u8>> { match &mut self.node_mut(id).kind { Kind::File(d) => Some(d), Kind::Dir(_) | Kind::Stream(_) => None } }
+    /// A file of either kind (in memory or a stream).
+    pub fn is_file(&self, id: NodeId) -> bool { !self.is_dir(id) }
+    pub fn is_stream(&self, id: NodeId) -> bool { matches!(self.node(id).kind, Kind::Stream(_)) }
+    /// The data fork's length of a file of either kind; `None` for a directory.
+    pub fn file_len(&self, id: NodeId) -> Option<u64> {
+        match &self.node(id).kind { Kind::File(d) => Some(d.len() as u64), Kind::Stream(s) => Some(s.len), Kind::Dir(_) => None }
+    }
+    /// Up to `dst.len()` bytes of the data fork of file `id` from `offset` (fewer at the end, 0 at or past it). `None` for a
+    /// directory, and for a stream whose source is missing or failed.
+    pub fn read_at(&self, id: NodeId, offset: u64, dst: &mut [u8]) -> Option<usize> {
+        match &self.node(id).kind {
+            Kind::Dir(_) => None,
+            Kind::File(d) => {
+                let start = usize::try_from(offset).ok().filter(|&o| o < d.len()).unwrap_or(d.len());
+                let n = dst.len().min(d.len() - start);
+                dst[..n].copy_from_slice(&d[start..start + n]);
+                Some(n)
+            }
+            Kind::Stream(s) => {
+                if offset >= s.len { return Some(0); }
+                let n = dst.len().min(usize::try_from(s.len - offset).unwrap_or(usize::MAX));
+                let got = self.streams.as_deref()?.read_at(s.key, offset, &mut dst[..n])?;
+                Some(got.min(n))
+            }
+        }
+    }
+    /// The engine side: this tree's file layer reads every data fork through [`Tree::read_at`] / [`Tree::file_len`], so the host
+    /// may put [`Kind::Stream`] files in it.
+    pub fn enable_streams(&mut self) { self.streams_enabled = true; }
+    pub fn streams_enabled(&self) -> bool { self.streams_enabled }
+    /// The host side: where this tree's stream files are read from.
+    pub fn set_stream_source(&mut self, src: alloc::boxed::Box<dyn StreamSource>) { self.streams = Some(src); }
+    /// Host-side: put a stream file named `leaf` in `dir` (a new name; an existing entry is [`VolErr::Exists`]). Refused with
+    /// [`VolErr::WrongType`] when the engine has not called [`Tree::enable_streams`]: its file layer would not see the bytes.
+    pub fn put_stream(&mut self, dir: NodeId, leaf: &str, stream: Stream) -> Result<NodeId, VolErr> {
+        if !self.streams_enabled { return Err(VolErr::WrongType); }
+        self.create(dir, leaf, Kind::Stream(stream))
+    }
 
     /// The volume `id` lives on (the root for the root).
     pub fn volume_of(&self, mut id: NodeId) -> NodeId {
@@ -251,5 +312,79 @@ mod tests {
         assert!(t.create_file(rw, &"a".repeat(31)).is_ok());
         assert_eq!(t.check_name("a:b", &[':']), Err(VolErr::InvalidName));
         assert_eq!(t.check_name("a:b", &['/']), Ok(()));
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use core::cell::Cell;
+    use alloc::rc::Rc;
+
+    /// Stream key k holds the bytes `(offset + k) as u8`; counts the reads it served.
+    struct Pattern { len: u64, reads: Rc<Cell<u32>> }
+    impl StreamSource for Pattern {
+        fn read_at(&self, key: u32, offset: u64, dst: &mut [u8]) -> Option<usize> {
+            if key == 99 { return None; }
+            self.reads.set(self.reads.get() + 1);
+            let n = dst.len().min(self.len.saturating_sub(offset) as usize);
+            for (i, b) in dst[..n].iter_mut().enumerate() { *b = (offset as usize + i + key as usize) as u8; }
+            Some(n)
+        }
+    }
+
+    #[test]
+    fn a_stream_is_read_on_demand_and_clamped_to_its_length() {
+        let mut t = Tree::new(31);
+        let v = t.add_volume("Game", false);
+        let reads = Rc::new(Cell::new(0));
+        t.enable_streams();
+        t.set_stream_source(alloc::boxed::Box::new(Pattern { len: 1 << 30, reads: reads.clone() }));
+        let f = t.put_stream(v, "War3.mpq", Stream { len: 1000, key: 1 }).unwrap();
+        assert_eq!(reads.get(), 0, "staging reads nothing");
+        assert_eq!((t.file_len(f), t.is_file(f), t.is_stream(f), t.file_data(f)), (Some(1000), true, true, None));
+        let mut buf = [0u8; 8];
+        assert_eq!(t.read_at(f, 996, &mut buf), Some(4), "clamped to the stream's own length, not the source's");
+        assert_eq!(&buf[..4], &[(996u32 + 1) as u8, (997u32 + 1) as u8, (998u32 + 1) as u8, (999u32 + 1) as u8]);
+        assert_eq!(t.read_at(f, 1000, &mut buf), Some(0), "at the end: nothing, and the source is not asked");
+        assert_eq!(reads.get(), 1);
+        let bad = t.put_stream(v, "Broken", Stream { len: 10, key: 99 }).unwrap();
+        assert_eq!(t.read_at(bad, 0, &mut buf), None, "a failing source is an error, never zeros");
+    }
+
+    #[test]
+    fn a_tree_whose_engine_reads_in_memory_only_refuses_a_stream() {
+        let mut t = Tree::new(31);
+        let v = t.add_volume("Game", false);
+        assert_eq!(t.put_stream(v, "War3.mpq", Stream { len: 1, key: 0 }), Err(VolErr::WrongType));
+        t.enable_streams();
+        let f = t.put_stream(v, "War3.mpq", Stream { len: 1, key: 0 }).unwrap();
+        let mut b = [0u8; 1];
+        assert_eq!(t.read_at(f, 0, &mut b), None, "NEGATIVE CONTROL: no source set, so no bytes");
+        assert_eq!(t.put_file(v, "War3.mpq", alloc::vec![1]), Err(VolErr::WrongType), "a stream is not overwritten with memory bytes");
+    }
+
+    #[test]
+    fn read_at_serves_in_memory_files_too() {
+        let mut t = Tree::new(31);
+        let v = t.add_volume("W", true);
+        let f = t.put_file(v, "a", b"hello".to_vec()).unwrap();
+        let mut b = [0u8; 8];
+        assert_eq!((t.read_at(f, 3, &mut b), &b[..2]), (Some(2), &b"lo"[..]));
+        assert_eq!(t.read_at(f, 9, &mut b), Some(0));
+        assert_eq!(t.read_at(v, 0, &mut b), None, "a directory has no data fork");
+    }
+
+    #[test]
+    fn a_snapshot_or_merge_of_a_stream_is_refused_by_name() {
+        let mut t = Tree::new(31);
+        let v = t.add_volume("Game", false);
+        t.enable_streams();
+        t.put_stream(v, "War3.mpq", Stream { len: 5, key: 0 }).unwrap();
+        assert_eq!(crate::snapshot::decode(&crate::snapshot::encode(&t)).err(), Some(crate::snapshot::SnapErr::Stream { record: 1 }));
+        let mut dst = Tree::new(31);
+        dst.enable_streams();
+        assert_eq!(crate::snapshot::merge(&mut dst, &t), Err(VolErr::WrongType));
+        assert_eq!(crate::snapshot::merge_owned(&mut dst, t), Err(VolErr::WrongType));
     }
 }

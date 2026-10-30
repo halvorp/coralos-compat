@@ -165,6 +165,10 @@ impl<U: GuestUi> Mac<U> {
         Ok((regs, Return { value: regs.d0, halted: cpu.is_halted(), blocked: cpu.is_blocked() }))
     }
 
+    /// Forget the 68k completion call a File Manager `...Async` trap queued (`ioCompletion` != 0, D0 = result, A0 = block): a
+    /// PowerPC caller runs the routine itself, with the block in r3, at its next safepoint. True if one was queued.
+    pub fn take_async_completion(&mut self) -> bool { self.pending_call.take().is_some() }
+
     /// `MemError()`: the last Memory Manager result (a read of the low-memory word, not a trap on any CPU).
     pub fn mem_error(&self) -> i16 { self.mem.read_u16(crate::lowmem::MEM_ERR).unwrap_or(0) as i16 }
 }

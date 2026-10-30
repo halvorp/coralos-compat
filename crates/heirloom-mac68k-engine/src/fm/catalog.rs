@@ -44,7 +44,7 @@ impl FileMgr {
         let mut attrib = (n.attrs & 1) as u8;
         if is_dir { attrib |= super::pb::ATTR_DIR; }
         for (_, f) in self.open_forks().filter(|(_, f)| f.node == node) { attrib |= super::pb::ATTR_OPEN | if f.rsrc { super::pb::ATTR_RSRC_OPEN } else { 0x08 }; }
-        let lg = self.tree.file_data(node).map_or(0, |d| d.len() as u32);
+        let lg = self.tree.file_len(node).map_or(0, |l| u32::try_from(l).unwrap_or(u32::MAX));
         let rlg = n.rsrc.len() as u32;
         CatInfo {
             is_dir, name: bytes_of(&n.name), id: if is_dir { self.dir_id(node) } else { self.file_id(node) }, parent_id, attrib, finfo: n.finfo,

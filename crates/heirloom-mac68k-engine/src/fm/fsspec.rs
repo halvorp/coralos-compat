@@ -79,6 +79,14 @@ pub(super) fn write_spec<U: GuestUi>(m: &mut Mac<U>, p: u32, loc: &Located) -> R
     m.mem.write_u8(p + FSS_NAME, name.len().min(63) as u8).and_then(|_| m.mem.write_bytes(p + FSS_NAME + 1, &name[..name.len().min(63)])).map_err(&g)
 }
 
+/// The running application's own file as an FSSpec at `p` (the Process Manager's `processAppSpec`): `Ok(false)` when no
+/// application file was installed (nothing is written).
+pub fn write_app_spec<U: GuestUi>(m: &mut Mac<U>, p: u32) -> Result<bool, i16> {
+    let Some(app) = m.fm.app else { return Ok(false) };
+    let loc = Located { vol: m.fm.tree.volume_of(app), parent: m.fm.tree.parent(app), leaf: None, node: Some(app) };
+    write_spec(m, p, &loc).map(|()| true)
+}
+
 fn dispatch<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> Result<String, Refusal> {
     let selector = c.dreg(0) as u16;
     let Some((lay, func)) = layout(selector) else { return Err(Refusal(format!("HighLevelFSDispatch selector {selector} is not modelled"))) };

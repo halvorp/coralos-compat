@@ -229,7 +229,7 @@ fn get_disk_object_new<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<St
                 Kind::Dir(_) if a.fs.vol.is_device(node) => WBDISK,
                 Kind::Dir(_) => WBDRAWER,
                 Kind::File(d) if d.starts_with(&[0, 0, 3, 0xF3]) => WBTOOL, // HUNK_HEADER: an executable
-                Kind::File(_) => WBPROJECT,
+                Kind::File(_) | Kind::Stream(_) => WBPROJECT, // a stream's header is not read just to pick an icon
             };
             { let (i, note, role) = default_for(a, ty); deliver_default(a, cpu, &i, role, format!("{what} (no .info: default){note}")) }
         }
