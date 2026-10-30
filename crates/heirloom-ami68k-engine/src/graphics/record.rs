@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_present::plane::Rec;
 use heirloom_ui_abi::{DrawOp, FontRole, GuestPoint, GuestRect, GuestUi, IconRole, PenRole};
-use heirloom_raster::Rect;
+use heirloom_raster::{Rect, Region};
 
 /// Pen number -> theme role, from `dri_Pens` (graphics/layout.rs `SCREEN_DRAWINFO`). One pen number can serve several DrawInfo
 /// slots; the guest's own table then says those roles are ONE colour, so the order below only decides which of the equal-coloured
@@ -125,9 +125,12 @@ impl Prim {
                 alloc::vec![(DrawOp::Text { at: GuestPoint { x: r.x0, y: r.y0 }, string: text.clone(), font_role: *font, px: (*h).max(1) as u16, width: *w, pen_role: roles.ink(*fg), bg_role }, r)]
             }
             Prim::Fills { rects, pen } => {
-                let role = roles.role(*pen)?;
+                let (role, rgb) = (roles.role(*pen), roles.rgb(*pen));
                 rects.iter().map(|r| r.translate(-ox, -oy).intersect(&hit)).filter(|r| !r.is_empty())
-                    .map(|r| (DrawOp::Fill { rect: GuestRect { left: r.x0, top: r.y0, width: r.width(), height: r.height() }, pen_role: role }, r)).collect()
+                    .map(|r| {
+                        let rect = GuestRect { left: r.x0, top: r.y0, width: r.width(), height: r.height() };
+                        (match role { Some(pen_role) => DrawOp::Fill { rect, pen_role }, None => DrawOp::Swatch { rect, rgb } }, r)
+                    }).collect()
             }
             Prim::Icon { rect, role } => alloc::vec![(DrawOp::Icon { rect: g(rect), role: *role }, rect.translate(-ox, -oy))],
             Prim::Bevel { rect, raised } => alloc::vec![(DrawOp::Bevel { rect: g(rect), raised: *raised }, rect.translate(-ox, -oy))],
@@ -170,19 +173,41 @@ pub(crate) fn emit<U: GuestUi>(a: &mut Amiga<U>, sink: Sink, rec: Rec) {
     }
 }
 
-/// Record one drawing call whose effect (bitmap/canvas coordinates) is `hit`: the named ops of `prim`, or a hole
-/// when there is no prim, a pen has no role, or the DrawInfo cannot be read.
-pub fn note<U: GuestUi>(a: &mut Amiga<U>, sink: Sink, prim: Option<Prim>, hit: Rect, origin: (i32, i32)) {
+/// Record one drawing call (`what`, its name) whose effect (bitmap/canvas coordinates) is `hit`: the named ops of `prim`, or a hole
+/// when there is no prim (`Err` says why), a pen has no role, or the DrawInfo cannot be read. A hole is counted under its reason
+/// (`heirloom_present::Presenter::why_hole`).
+pub fn note<U: GuestUi>(a: &mut Amiga<U>, sink: Sink, what: &str, prim: Result<Prim, &'static str>, region: Option<&Region>, hit: Rect, origin: (i32, i32)) {
     if hit.is_empty() || !a.gfx.present.plane_route() { return; }
-    let ops = prim.and_then(|p| PenRoles::read(a).ok().and_then(|roles| p.ops(&roles, origin, hit)));
-    match ops {
-        Some(v) => for (op, bbox) in v {
-            let sink = match sink { Sink::Window(win) => Sink::Window(win), Sink::Surface(bm) => Sink::Surface(bm) };
-            emit(a, sink, Rec::Op { op, bbox });
+    let ops = match prim {
+        Err(why) => Err(why),
+        Ok(p) => match PenRoles::read(a) {
+            Err(_) => Err("the DrawInfo pens cannot be read"),
+            Ok(roles) => clipped(p, region, origin).ops(&roles, origin, hit).ok_or("a pen with no theme role")
+                .and_then(|v| if region.is_none_or(|g| v.iter().all(|(_, b)| inside(g, b))) { Ok(v) } else { Err("a clip region cuts the op") }),
         },
-        None => emit(a, sink, Rec::Hole(hit)),
+    };
+    match ops {
+        Ok(v) => for (op, bbox) in v { emit(a, sink, Rec::Op { op, bbox }); },
+        Err(why) => {
+            let place = match sink { Sink::Window(_) => "", Sink::Surface(_) => "off-screen " };
+            a.gfx.present.why_hole(&alloc::format!("{place}{what}: {why}"), hit);
+            emit(a, sink, Rec::Hole(hit));
+        }
     }
 }
+
+/// A fill under an installed clip region (`region`: bitmap coordinates, as the ops) paints exactly its pen over each of the region's
+/// rectangles: it becomes [`Prim::Fills`] over them (in RastPort coordinates, so `origin` is added back). Any other prim is unchanged,
+/// and [`note`] keeps it only when the region does not cut it.
+fn clipped(p: Prim, region: Option<&Region>, (ox, oy): (i32, i32)) -> Prim {
+    match (p, region) {
+        (Prim::Fill { pen }, Some(g)) => Prim::Fills { rects: g.rects().iter().map(|r| r.translate(ox, oy)).collect(), pen },
+        (p, _) => p,
+    }
+}
+
+/// Does `b` lie wholly inside one rectangle of `g` (so the region leaves the op as drawn)?
+fn inside(g: &Region, b: &Rect) -> bool { b.is_empty() || g.rects().iter().any(|r| r.intersect(b) == *b) }
 
 #[cfg(test)]
 mod tests {

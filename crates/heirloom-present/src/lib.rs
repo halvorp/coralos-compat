@@ -32,9 +32,20 @@ pub struct Presenter {
     /// Plane route on: damaged windows go out as `present_plane` (canvas pixels only where a `Rec::Hole` says so).
     pub(crate) plane_route: bool,
     pub(crate) plane_refused_once: bool,
+    /// Every hole recorded, by WHY the engine could not name it: (count, canvas pixels). Native is a measured claim
+    /// (HEIRLOOM-NATIVE-IS-A-MEASURED-CLAIM): this is the measure of what is still raw, read by census tests and diagnostics.
+    pub hole_why: BTreeMap<String, (u32, i64)>,
 }
 
 impl Presenter {
+    /// Count one hole over `r` under `why` (see [`Presenter::hole_why`]); an empty rectangle is no hole.
+    pub fn why_hole(&mut self, why: &str, r: Rect) {
+        if r.is_empty() { return; }
+        let e = self.hole_why.entry(String::from(why)).or_default();
+        e.0 += 1;
+        e.1 += i64::from(r.width()) * i64::from(r.height());
+    }
+
     /// Union `r` into the window's pending damage (an empty rectangle is no damage).
     pub fn add_damage(&mut self, win: u32, r: Rect) {
         if r.is_empty() { return; }

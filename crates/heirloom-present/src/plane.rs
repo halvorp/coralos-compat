@@ -122,7 +122,8 @@ pub fn push_rec(v: &mut Vec<Rec>, rec: Rec) {
 
 /// Drop every rec an opaque later rec fully covers; collapse a list still over [`MAX_RECS`] into one hole over `canvas`. Shared by
 /// the window lists here and an engine's off-screen bitmap lists (ami68k graphics/surface.rs).
-pub fn prune_recs(v: &mut Vec<Rec>, canvas: Rect) {
+/// Returns the hole a collapse made, if one did.
+pub fn prune_recs(v: &mut Vec<Rec>, canvas: Rect) -> Option<Rect> {
     let mut keep = alloc::vec![true; v.len()];
     let mut covers: Vec<Rect> = Vec::new();
     for (i, r) in v.iter().enumerate().rev() {
@@ -135,8 +136,9 @@ pub fn prune_recs(v: &mut Vec<Rec>, canvas: Rect) {
     if v.len() > MAX_RECS {
         let old: Vec<Rec> = v.drain(..v.len() - MAX_RECS / 2).collect();
         let hole = old.iter().fold(Rect::default(), |u, r| u.union(&r.bbox())).intersect(&canvas);
-        if !hole.is_empty() { v.insert(0, Rec::Hole(hole)); }
+        if !hole.is_empty() { v.insert(0, Rec::Hole(hole)); return Some(hole); }
     }
+    None
 }
 
 /// How a window's canvas sits in its window: the canvas -> window offset, and the canvas rectangles native controls cover.
@@ -206,7 +208,7 @@ impl Presenter {
 
     /// Drop every rec an opaque later rec fully covers; collapse a list still over the cap into one hole over `canvas`.
     fn prune(&mut self, win: u32, canvas: Rect) {
-        if let Some(v) = self.recs.get_mut(&win) { prune_recs(v, canvas); }
+        if let Some(hole) = self.recs.get_mut(&win).and_then(|v| prune_recs(v, canvas)) { self.why_hole("window list over its cap: the oldest half collapsed", hole); }
     }
 
     /// Flush every damaged window as one `present_plane` carrying the display list for the damage rectangle. A host that

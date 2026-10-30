@@ -56,7 +56,7 @@ pub fn ensure_source<U: GuestUi>(a: &mut Amiga<U>, bm: u32) -> Result<(), Refusa
     let rect = g.bm.rect();
     let sum = super::surface::fnv1a(0xcbf29ce484222325, &bytes);
     let old = a.gfx.surfaces.get(bm).map(|s| s.sum).unwrap_or(0);
-    if old != 0 && old != sum { a.gfx.surfaces.invalidate(bm, rect); }
+    if old != 0 && old != sum { a.gfx.present.why_hole("off-screen bitmap: its planes were written outside a graphics call", rect); a.gfx.surfaces.invalidate(bm, rect); }
     let s = a.gfx.surfaces.entry(bm);
     s.sum = sum;
     s.bitmap_rect = rect;

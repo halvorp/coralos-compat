@@ -11,6 +11,9 @@ use alloc::vec::Vec;
 use heirloom_present::plane::{moved, Rec};
 use heirloom_ui_abi::GuestUi;
 use crate::cpu::Cpu;
+
+/// The minterm of a plain copy (D = S): the only blit whose result is the source's own drawing.
+const MINTERM_COPY: u8 = 0xC0;
 use heirloom_raster::{blit::{blit, blit_within, MaskFn}, paint::{stencil, Clip}, Rect};
 
 /// One blit from the bitmap `src` at (sx, sy) into `dst` at RastPort coordinates (dx, dy).
@@ -38,11 +41,18 @@ fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: 
     bitmaps::ensure_source(a, src)?;
     let depth = a.gfx.bitmaps.get(&src).map(|g| g.bm.depth()).unwrap_or(8);
     let covered = if depth >= 8 { 0xFF } else { (1u16 << depth) as u8 - 1 };
-    let can_splice = mt == 0xC0 && mask.is_none() && planes & covered == covered && region.is_none() && src != bm && a.gfx.present.plane_route();
+    // Why the copy cannot be spliced (its pixels are then a hole), or `None`: a plain copy of every plane between two bitmaps.
+    let refused = if !a.gfx.present.plane_route() { Some("copy blit: no plane route") }
+        else if src == bm { Some("copy blit: within one bitmap (a scroll)") }
+        else if mt != MINTERM_COPY { Some("copy blit: a minterm other than a plain copy") }
+        else if mask.is_some() { Some("copy blit: through a mask") }
+        else if region.is_some() { Some("copy blit: a clip region is installed") }
+        else if planes & covered != covered { Some("copy blit: only some bitplanes") }
+        else { None };
     let src_rect = Rect::from_size(sxx, syy, w, h);
     let dst_rect = Rect::from_size(bx, by, w, h);
     let sink = match window { Some(win) => Sink::Window(win), None => Sink::Surface(bm) };
-    if can_splice {
+    if refused.is_none() {
         // The source's own list stands in for the copied pixels: its ops move to the destination, its holes stay holes, and a
         // pixel no rec covers is background exactly as in a window list. A rec straddling the source rect becomes a hole over
         // the part that was copied (text is never clipped).
@@ -54,7 +64,12 @@ fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: 
             if part.is_empty() { continue; }
             let rec = match rec {
                 Rec::Op { op, .. } if part == bbox => { ops += 1; Rec::Op { op: moved(&op, delta), bbox: bbox.translate(delta.0, delta.1) } }
-                _ => { holes += 1; Rec::Hole(part.translate(delta.0, delta.1)) }
+                _ => {
+                    holes += 1;
+                    let why = if matches!(rec, Rec::Hole(_)) { "copy blit: a hole of the source bitmap's own list" } else { "copy blit: a source op straddles the copied rectangle" };
+                    a.gfx.present.why_hole(why, part.translate(delta.0, delta.1));
+                    Rec::Hole(part.translate(delta.0, delta.1))
+                }
             };
             record::emit(a, sink, rec);
         }
@@ -64,6 +79,7 @@ fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: 
             }
         }
     } else {
+        if let Some(why) = refused { a.gfx.present.why_hole(why, dst_rect); }
         record::emit(a, sink, Rec::Hole(dst_rect));
     }
     bitmaps::export_planes(a, bm)?;

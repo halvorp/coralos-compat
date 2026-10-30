@@ -41,8 +41,11 @@ pub fn paint<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, f: impl FnOnce(&
     paint_as(a, rp, what, None, f)
 }
 
+/// Why a call with no prim is a hole: its draw mode, write mask or pattern has no named form, or it writes pixels (a blit, a pixel array).
+const NO_FORM: &str = "no named form (draw mode, write mask, pattern, or a pixel call)";
+
 /// [`paint`] for a call the plane route can NAME (`prim`: what was drawn, in RastPort coordinates and guest pens); `None`, a pen
-/// without a role, or an installed clip region record the damage as a hole of canvas pixels instead (record.rs).
+/// without a role, or an op an installed clip region cuts record the damage as a hole of canvas pixels instead (record.rs).
 pub fn paint_as<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, prim: Option<Prim>, f: impl FnOnce(&mut Bitmap, &Clip, (i32, i32)) -> Rect) -> Result<Rect, Refusal> {
     match resolve(a, rp)? {
         Dest::Dropped(why) => { a.log.push(format!("[graphics] {what} on {rp:#x} dropped: {why}")); Ok(Rect::default()) }
@@ -53,7 +56,7 @@ pub fn paint_as<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, prim: Option<
             let r = f(&mut g.bm, &clip, origin);
             if let Some(w) = window { a.gfx.add_damage(w, r); }
             let sink = match window { Some(w) => Sink::Window(w), None => Sink::Surface(bm) };
-            super::record::note(a, sink, if region.is_some() { None } else { prim }, r, origin);
+            super::record::note(a, sink, what, prim.ok_or(NO_FORM), region.as_ref(), r, origin);
             super::bitmaps::export_planes(a, bm)?;
             Ok(r)
         }
@@ -73,7 +76,7 @@ pub fn note_native<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, prim: Prim
             let hit = rect.translate(-origin.0, -origin.1).intersect(&a.gfx.bitmaps[&bm].bm.rect());
             if let Some(w) = window { a.gfx.add_damage(w, hit); }
             let sink = match window { Some(w) => Sink::Window(w), None => Sink::Surface(bm) };
-            super::record::note(a, sink, Some(prim), hit, origin);
+            super::record::note(a, sink, what, Ok(prim), None, hit, origin);
             Ok(())
         }
     }

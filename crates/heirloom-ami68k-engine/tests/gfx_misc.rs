@@ -165,3 +165,44 @@ fn images_borders_and_intuitext_draw_with_their_own_pens() {
     let (px, py) = (6 + f.kern.as_ref().unwrap()[f.slot(b'H')] as i32 + ix, 13 + iy);
     assert_eq!((g.px(bm, px, py), g.px(bm, px, py - 1 - iy), g.px(bm, 30, py)), (Some(6), Some(0), Some(0)), "ink in FrontPen 6, JAM1 leaves the paper (and nothing above the box)");
 }
+
+/// The plane route under an installed clip region: a fill is named over each of the region's rectangles (what it really painted), a
+/// text run inside one rectangle is named as drawn, and only a run the region cuts is a hole, counted under that reason.
+#[test]
+fn a_fill_under_a_clip_region_is_named_per_rectangle_and_only_a_cut_op_is_a_hole() {
+    use heirloom_present::plane::Rec;
+    use heirloom_ui_abi::DrawOp;
+    let mut g = G::new_plane();
+    let nw = g.zeroed(48);
+    for (o, v) in [(0u32, 0u16), (2, 0), (4, 120), (6, 40)] { g.a.mem.write_u16(nw + o, v).unwrap(); }
+    g.a.mem.write_u32(nw + 14, 0x800).unwrap();
+    let all = rect(&mut g, 0, 0, 119, 39);
+    let gap = rect(&mut g, 50, 0, 59, 39); // the region is the window minus a 10 px column: two rectangles side by side
+    g.run(&[intu(OPEN_WINDOW, &[a(0, nw)]), gfx(NEW_REGION, &[]), gfx(OR_RECT_REGION, &[a_res(0, 1), a(1, all)]), gfx(CLEAR_RECT_REGION, &[a_res(0, 1), a(1, gap)])]);
+    let (win, rg) = (g.result(0), g.result(1));
+    let (rp, layer) = (g.r32(win + 50), g.r32(win + 124));
+    let lname = g.s("layers.library");
+    g.run(&[(EXEC_BASE, OPEN_LIBRARY, vec![a(1, lname), d(0, 0)])]);
+    let layers = g.result(0);
+    let (inside, cut) = (g.s("ab"), g.s("abcdefghijkl"));
+    g.run(&[(layers, INSTALL_CLIP_REGION, vec![a(0, layer), a(1, rg)]), gfx(SET_APEN, &[a(1, rp), d(0, 2)]),
+        gfx(RECT_FILL, &[a(1, rp), d(0, 0), d(1, 0), d(2, 119), d(3, 39)])]);
+    let fills: Vec<(i32, i32, i32, i32)> = g.a.gfx.present.recs(win).iter().filter_map(|r| match r { Rec::Op { op: DrawOp::Fill { rect, .. }, .. } => Some((rect.left, rect.top, rect.width, rect.height)), _ => None }).collect();
+    assert!(g.a.gfx.present.recs(win).iter().all(|r| !matches!(r, Rec::Hole(_))), "a fill under a region is no hole: {:?}", g.a.gfx.present.recs(win));
+    let painted: i32 = fills.iter().map(|f| f.2 * f.3).sum();
+    assert!(fills.iter().all(|f| f.0 + f.2 <= 50 || f.0 >= 60), "no fill reaches into the excluded column: {fills:?}");
+    assert_eq!(painted, (120 - 10) * 40, "the fills cover exactly the region's part of the rectangle: {fills:?}");
+    // A run inside one rectangle is named as drawn; one the region cuts (it crosses the excluded column) is a hole, by name.
+    g.run(&[gfx(MOVE, &[a(1, rp), d(0, 4), d(1, 20)]), gfx(TEXT, &[a(1, rp), a(0, inside), d(0, 2)]),
+        gfx(MOVE, &[a(1, rp), d(0, 30), d(1, 30)]), gfx(TEXT, &[a(1, rp), a(0, cut), d(0, 12)])]);
+    let recs = g.a.gfx.present.recs(win);
+    assert!(recs.iter().any(|r| matches!(r, Rec::Op { op: DrawOp::Text { string, .. }, .. } if string == "ab")), "{recs:?}");
+    assert!(!recs.iter().any(|r| matches!(r, Rec::Op { op: DrawOp::Text { string, .. }, .. } if string == "abcdefghijkl")), "a cut run is not named as if whole");
+    assert_eq!(recs.iter().filter(|r| matches!(r, Rec::Hole(_))).count(), 1, "the cut run is the one hole: {recs:?}");
+    assert!(g.a.gfx.present.hole_why.keys().any(|k| k == "Text: a clip region cuts the op"), "{:?}", g.a.gfx.present.hole_why);
+    // NEGATIVE CONTROL: with the region removed the same text is named, and no new hole appears.
+    g.run(&[(layers, INSTALL_CLIP_REGION, vec![a(0, layer), a(1, 0)]), gfx(MOVE, &[a(1, rp), d(0, 30), d(1, 10)]), gfx(TEXT, &[a(1, rp), a(0, cut), d(0, 12)])]);
+    let recs = g.a.gfx.present.recs(win);
+    assert!(recs.iter().any(|r| matches!(r, Rec::Op { op: DrawOp::Text { string, .. }, .. } if string == "abcdefghijkl")));
+    assert_eq!(recs.iter().filter(|r| matches!(r, Rec::Hole(_))).count(), 1);
+}
