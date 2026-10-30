@@ -56,7 +56,7 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// At a safepoint (`call_pc` is the glue call about to run): the oldest queued I/O completion routine is entered with its parameter block; the interrupted call runs again
     /// when it returns. `Ok(true)` = the CPU now runs the routine.
-    pub(crate) fn io_safepoint(&mut self, cpu: &mut heirloom_cpu_ppc::Cpu, call_pc: u32) -> Result<bool, String> {
+    pub(crate) fn io_safepoint(&mut self, cpu: &mut crate::cpu::Cpu, call_pc: u32) -> Result<bool, String> {
         if !self.rt.callbacks.is_empty() { return Ok(false); }
         let Some((pb, upp)) = self.rt.io_done.pop_front() else { return Ok(false) };
         let saved = crate::callback::Saved::of(cpu, call_pc);

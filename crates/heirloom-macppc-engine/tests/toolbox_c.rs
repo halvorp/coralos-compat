@@ -149,7 +149,7 @@ fn parameter_block_calls_run_the_file_manager_traps_on_the_callers_block() {
 /// r3 at the NEXT glue call, never inside the issuing one; the interrupted call is entered again when it returns.
 #[test]
 fn an_async_completion_routine_runs_at_the_next_safepoint_with_the_block_in_r3() {
-    use heirloom_cpu_ppc::{Cpu, Host};
+    use heirloom_macppc_engine::cpu::{Cpu, Host};
     use heirloom_mac68k_engine::mixed_mode::{new_routine_descriptor, ISA_PPC};
     const TV: u32 = 0x0003_0000;
     const CODE: u32 = 0x0003_1000;

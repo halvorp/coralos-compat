@@ -15,7 +15,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::pascal::Rect;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 /// Control Manager / Window Manager bookkeeping with no home in the 68k records.
 #[derive(Default)]

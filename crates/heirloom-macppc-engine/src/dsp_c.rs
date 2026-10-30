@@ -21,7 +21,7 @@ use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::pascal::Rect;
 use heirloom_mac68k_engine::toolbox::WindowSpec;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 const NOT_INITIALIZED: i32 = -30440;
 const INVALID_CONTEXT: i32 = -30442;

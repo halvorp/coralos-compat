@@ -9,6 +9,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
+name = "heirloom-cpu-abi"
+version = "0.1.0"
+dependencies = [
+ "heirloom-mem-abi",
+]
+
+[[package]]
+name = "heirloom-cpu-ppc"
+version = "0.1.0"
+dependencies = [
+ "heirloom-cpu-abi",
+ "heirloom-mem-flat32",
+ "libm",
+]
+
+[[package]]
+name = "heirloom-cpu-ppc-oracle"
+version = "0.1.0"
+dependencies = [
+ "heirloom-cpu-ppc",
+ "heirloom-mem-flat32",
+ "ppc",
+]
+
+[[package]]
+name = "heirloom-mem-abi"
+version = "0.1.0"
+
+[[package]]
+name = "heirloom-mem-flat32"
+version = "0.1.0"
+dependencies = [
+ "heirloom-mem-abi",
+]
+
+[[package]]
 name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -21,27 +57,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8cf2781f9ce9aabc2a1eb6c2459197c6d9954d213d157fbfc91c4eb0f1b14dfb"
 dependencies = [
  "rustc_apfloat",
-]
-
-[[package]]
-name = "heirloom-mem-flat32"
-version = "0.1.0"
-
-[[package]]
-name = "heirloom-cpu-ppc"
-version = "0.1.0"
-dependencies = [
- "libm",
- "heirloom-mem-flat32",
-]
-
-[[package]]
-name = "heirloom-cpu-ppc-oracle"
-version = "0.1.0"
-dependencies = [
- "ppc",
- "heirloom-mem-flat32",
- "heirloom-cpu-ppc",
 ]
 
 [[package]]

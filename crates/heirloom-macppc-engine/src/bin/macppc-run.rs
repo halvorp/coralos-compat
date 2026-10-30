@@ -163,8 +163,11 @@ fn main() {
             println!();
         }
         if prof { let t = m.exec().tier; println!("{}", m.exec().prof.line(elapsed_us, t)); }
+        #[cfg(not(feature = "cpu-library"))]
         if let Some(d) = m.exec().divergence() { println!("LOCKSTEP DIVERGENCE: tier 1 and tier 0 differ in the block at {:#x}: {}", d.block, d.what.join(", ")); }
         else if m.exec().tier == heirloom_cpu_ppc::Tier::Lockstep { println!("lockstep: no divergence ({:?})", m.exec().lockstep_stats()); }
+        #[cfg(feature = "cpu-library")]
+        if m.exec().lockstep_refused() { println!("lockstep: REFUSED - cpu-ppc.library serves tiers 0 and 1 only (the run used tier 1); lockstep is the static core's (default features)"); }
         if pcs > 0 {
             if let Some(c) = m.cpu() {
                 println!("recent pcs (oldest first): {}", c.recent_pcs().map(|p| format!("{p:#x}")).collect::<Vec<_>>().join(" "));

@@ -14,18 +14,26 @@ heirloom-fmt-resfork = { path = "../heirloom-fmt-resfork" }
 heirloom-mac68k-engine = { path = "../heirloom-mac68k-engine" }
 heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-gl-abi = { path = "../heirloom-gl-abi" }
-heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc" }
+heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc", optional = true }
+heirloom-cpu-ppc-client = { path = "../heirloom-cpu-ppc-client", optional = true }
 libm = "0.2"
 
 [dev-dependencies]
+# tests and the macppc-run CLI drive the static core directly (lockstep, census)
+heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc" }
 heirloom-raster = { path = "../heirloom-raster" }
-heirloom-macppc-engine = { path = ".", features = ["fixtures"] }
+heirloom-macppc-engine = { path = ".", default-features = false, features = ["fixtures"] }
 heirloom-mac68k-engine = { path = "../heirloom-mac68k-engine", features = ["fixtures"] }
 
 [features]
+# The CPU backend (src/lib.rs `cpu`): the static core by default; `cpu-library` drives cpu-ppc.library through its PpcVTable
+# (the same split as heirloom-mac68k-engine's cpu-static / cpu-library).
+default = ["cpu-static"]
+cpu-static = ["dep:heirloom-cpu-ppc"]
+cpu-library = ["dep:heirloom-cpu-ppc-client"]
 # The test-only PowerPC assembler and the built-in fixture applications. Off for the product library (CoralOS user mode);
 # the tests and the `macppc-run` CLI turn it on.
-fixtures = []
+fixtures = ["dep:heirloom-cpu-ppc"]
 
 [[bin]]
 name = "macppc-run"

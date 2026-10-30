@@ -2,7 +2,7 @@
 use heirloom_ui_abi::RecordingGuestUi;
 use heirloom_macppc_engine::{MacPpc, PpcHost};
 use heirloom_mac68k_engine::mixed_mode::{new_routine_descriptor, ISA_M68K, ISA_PPC};
-use heirloom_cpu_ppc::{Cpu, Host};
+use heirloom_macppc_engine::cpu::{Cpu, Host};
 
 type M = MacPpc<RecordingGuestUi>;
 const TV: u32 = 0x0003_0000;

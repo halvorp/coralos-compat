@@ -35,7 +35,7 @@ use heirloom_gl_abi::command::peek_len;
 use heirloom_gl_abi::fence::FenceBook;
 use heirloom_gl_abi::snapshot::{Descriptor, ElemType, Role};
 use heirloom_gl_abi::{admit_call, derive, extensions_string, find, refusal_marker, version_string, Command, DrawCommand, Frame, Token, ENTRIES};
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 use heirloom_gl_abi::pixel::Store;
 
 mod arrays;

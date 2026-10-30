@@ -6,6 +6,8 @@ license.workspace = true
 description = "PowerPC 32-bit user-mode interpreter (601/603/G3 user instruction set) for heirloom-compat engines"
 
 [dependencies]
+# The CPU contract: Trap and the cpu-ppc.library records (heirloom_cpu_abi::ppc) are defined there once; src/table.rs serves the table.
+heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }
 heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
 # MIT/Apache-2.0: correctly rounded fma and sqrt for no_std (core has neither on stable).
 libm = "0.2"

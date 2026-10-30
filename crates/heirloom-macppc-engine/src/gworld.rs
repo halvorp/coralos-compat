@@ -9,7 +9,7 @@ use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::pascal::Rect;
 use heirloom_mac68k_engine::qd::port::P_RECT;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GwFn {

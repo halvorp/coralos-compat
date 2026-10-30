@@ -13,7 +13,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 /// A StdCLib function served natively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

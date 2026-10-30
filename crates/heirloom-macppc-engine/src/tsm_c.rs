@@ -8,7 +8,7 @@ use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 const TSM_INVALID_DOC_ID: i32 = -2505;
 const ID_BASE: u32 = 0x5453_4D00; // 'TSM\0' + n: easy to recognise in a dump

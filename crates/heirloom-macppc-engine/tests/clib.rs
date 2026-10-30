@@ -6,7 +6,7 @@ use heirloom_macppc_engine::fixture::{self, TOC_FIRST};
 use heirloom_macppc_engine::MacPpc;
 use heirloom_fmt_pef::loader::SymbolClass;
 use heirloom_fmt_pef::Pef;
-use heirloom_cpu_ppc::{Cpu, Host};
+use heirloom_macppc_engine::cpu::{Cpu, Host};
 
 type M = MacPpc<RecordingGuestUi>;
 const F: SymbolClass = SymbolClass::TVector;

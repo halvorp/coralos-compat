@@ -141,6 +141,7 @@ impl Pair {
                 Trap::Alignment { .. } => Tr::Align,
                 Trap::Syscall { .. } => Tr::Sys,
                 Trap::TrapWord { .. } => Tr::TrapWord,
+                Trap::Refused { why } => panic!("the static core refused to run: {why}"),
             };
         }
         let (mut pt, mut pn) = (Tr::None, String::new());

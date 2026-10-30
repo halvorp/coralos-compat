@@ -1,0 +1,8 @@
+[package]
+name = "heirloom-mem-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The guest-RAM records an engine publishes and a CPU library borrows (FlatRam, CodeWatch): the memory layer's repr(C) contract"
+
+[dependencies]

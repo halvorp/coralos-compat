@@ -10,7 +10,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CfFn { MakeConstantString, CreateWithCString, CreateWithPascalString, Retain, Release, GetLength, GetCString, GetPascalString, GetCStringPtr, GetCharacterAtIndex, NoBundle, CreateWithFormat }

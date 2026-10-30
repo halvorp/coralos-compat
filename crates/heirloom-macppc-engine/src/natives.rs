@@ -154,77 +154,77 @@ impl<U: GuestUi> MacPpc<U> {
             }
             Native::Tb(f) => {
                 // these need arguments and a result in registers only: run them on a scratch register file
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.tb_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Cf(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.cf_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Cfx(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.cfx_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Mn(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.mn_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Sys(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.sys_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Dsp(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.dsp_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Gl(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.gl_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Tm(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.tm_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Qa(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.qa_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Isp(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.isp_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Qt(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.qt_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Tsm(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.tsm_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Sc(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.sc_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Cx(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.cx_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Gw(f) => {
-                let mut cpu = heirloom_cpu_ppc::Cpu::new(0, regs[1]);
+                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.gw_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }

@@ -7,7 +7,7 @@ use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 #[derive(Default)]
 pub struct ScriptState { vars: alloc::collections::BTreeMap<i16, u32> }

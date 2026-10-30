@@ -3,106 +3,113 @@
 //!
 //! Every byte of guest RAM is written through [`GuestMem::write_bytes`], [`GuestMem::zero`] or the sized
 //! `write_u8/u16/u32` (the guest CPU's stores, the native Toolbox, resource loads, BlockMove: there is no other path,
-//! `ram` is private). Each calls [`Hooks::before_write`] once with the stripped range, so a watcher sees ALL of them.
-//! With no page watched and no journal open the cost is one predictable branch on a bool.
+//! the bytes are private). Each calls [`Hooks::before_write`] once with the stripped range, so a watcher sees ALL of them.
+//! With no page watched and no journal open the cost is one predictable branch.
 //!
 //! The watch is a per-4-KiB-page GENERATION: [`GuestMem::watch_code_page`] marks a page as holding decoded code and
 //! returns its generation; the first write to a marked page (or [`GuestMem::invalidate_code`], the guest's `icbi`)
 //! bumps the generation and unmarks it, so further writes to that page cost nothing until code there is decoded again.
 //! A cache entry is valid exactly while the page's generation equals the one it was decoded at.
-use alloc::boxed::Box;
+//!
+//! The watch's state is a `#[repr(C)]` [`CodeWatch`] (heirloom-mem-abi; CPU ABI v3 borrows it): the RAM's OWNER allocates its arrays,
+//! sized to cover every page of RAM, and a BORROWED view (cpu-ppc.library, [`GuestMem::view`]) reads and writes the same
+//! elements in place - so a write from either side invalidates code decoded on either side. Nobody but the owner resizes them.
 use alloc::vec::Vec;
+use heirloom_mem_abi::CodeWatch;
 
 /// log2 of the watched page size (4 KiB, the PowerPC page).
-pub const CODE_PAGE_SHIFT: u32 = 12;
+pub const CODE_PAGE_SHIFT: u32 = heirloom_mem_abi::CODE_PAGE_SHIFT;
 
-#[derive(Default)]
-struct Watch {
-    /// One bit per page: code was decoded from it since its last write.
-    marked: Vec<u64>,
-    /// Per page: bumped by every first write after a mark.
-    gen: Vec<u64>,
-    /// How many generation bumps happened (all pages): a cheap "did any code page change" probe.
-    bumps: u64,
-}
-
-impl Watch {
-    fn ensure(&mut self, page: usize) {
-        if page >= self.gen.len() { self.gen.resize(page + 1, 0); }
-        if page / 64 >= self.marked.len() { self.marked.resize(page / 64 + 1, 0); }
-    }
-    fn hit(&mut self, page: usize) {
-        if let Some(w) = self.marked.get_mut(page / 64) {
-            let bit = 1u64 << (page % 64);
-            if *w & bit != 0 {
-                *w &= !bit;
-                self.gen[page] = self.gen[page].wrapping_add(1);
-                self.bumps = self.bumps.wrapping_add(1);
-            }
-        }
-    }
-}
-
-#[derive(Default)]
 pub(crate) struct Hooks {
-    /// `watch.is_some() || journal.is_some()`: the only thing a write tests when nothing is hooked.
-    active: bool,
-    watch: Option<Box<Watch>>,
+    /// The shared watch record (the owner's boxed one, or the one a view borrowed). Never null.
+    pub(crate) watch: *mut CodeWatch,
     /// (stripped address, byte before the write), in write order.
     journal: Option<Vec<(u32, u8)>>,
 }
 
 impl Hooks {
+    pub(crate) fn new(watch: *mut CodeWatch) -> Hooks { Hooks { watch, journal: None } }
+
+    fn w(&self) -> &CodeWatch {
+        // SAFETY: `watch` points at the live CodeWatch of this RAM (GuestMem keeps the owner's Box alive as long as itself; a
+        // view's creator guarantees the descriptor outlives the view - GuestMem::view's contract).
+        unsafe { &*self.watch }
+    }
+    fn w_mut(&mut self) -> &mut CodeWatch {
+        // SAFETY: as in `w`; `&mut self` is the only path to the record through this GuestMem.
+        unsafe { &mut *self.watch }
+    }
+
+    #[inline(always)]
+    fn marked(&self, page: usize) -> bool {
+        let w = self.w();
+        if page / 64 >= w.marked_words as usize { return false; }
+        // SAFETY: page / 64 < marked_words, the length of the owner-allocated `marked` array.
+        unsafe { *w.marked.add(page / 64) & (1u64 << (page % 64)) != 0 }
+    }
+
+    /// Unmark `page` and bump its generation, if it is marked.
+    fn hit(&mut self, page: usize) {
+        if !self.marked(page) { return; }
+        let w = self.w_mut();
+        // SAFETY: `marked` checked page / 64 < marked_words; the owner sizes gen_pages >= marked pages (64 per word), checked here too.
+        unsafe {
+            *w.marked.add(page / 64) &= !(1u64 << (page % 64));
+            if page < w.gen_pages as usize { *w.gen.add(page) = (*w.gen.add(page)).wrapping_add(1); }
+        }
+        w.bumps = w.bumps.wrapping_add(1);
+    }
+
     #[inline(always)]
     pub(crate) fn before_write(&mut self, ram: &[u8], addr: u32, len: u32) {
-        if !self.active || len == 0 { return; }
+        if len == 0 || (self.w().active == 0 && self.journal.is_none()) { return; }
         // the common case inline: no journal, one page, and that page not marked
-        if self.journal.is_none() && (addr & ((1 << CODE_PAGE_SHIFT) - 1)) + len <= 1 << CODE_PAGE_SHIFT {
-            if let Some(w) = self.watch.as_deref() {
-                let page = (addr >> CODE_PAGE_SHIFT) as usize;
-                if w.marked.get(page / 64).is_none_or(|m| m & (1 << (page % 64)) == 0) { return; }
-            }
+        if self.journal.is_none() && (addr & ((1 << CODE_PAGE_SHIFT) - 1)) + len <= 1 << CODE_PAGE_SHIFT
+            && !self.marked((addr >> CODE_PAGE_SHIFT) as usize) {
+            return;
         }
         self.slow(ram, addr, len);
     }
     #[cold]
     fn slow(&mut self, ram: &[u8], addr: u32, len: u32) {
-        if let Some(w) = self.watch.as_deref_mut() {
-            let (first, last) = ((addr >> CODE_PAGE_SHIFT) as usize, ((addr + (len - 1)) >> CODE_PAGE_SHIFT) as usize);
-            for p in first..=last { w.hit(p); }
-        }
+        let (first, last) = ((addr >> CODE_PAGE_SHIFT) as usize, ((addr + (len - 1)) >> CODE_PAGE_SHIFT) as usize);
+        for p in first..=last { self.hit(p); }
         if let Some(j) = self.journal.as_mut() {
             j.extend((addr..addr + len).map(|a| (a, ram[a as usize])));
         }
     }
-    fn refresh(&mut self) { self.active = self.watch.is_some() || self.journal.is_some(); }
 }
 
 impl crate::GuestMem {
     /// Mark the page holding `addr` as holding decoded code; returns its generation. The generation changes at the
     /// next write to any byte of the page (from anyone) or [`invalidate_code`](Self::invalidate_code) there.
+    /// A page outside the watch's coverage (only possible past the end of RAM, where nothing can be decoded) is not marked.
     pub fn watch_code_page(&mut self, addr: u32) -> u64 {
         let page = (self.strip(addr) >> CODE_PAGE_SHIFT) as usize;
-        let h = &mut self.hooks;
-        let w = h.watch.get_or_insert_with(Box::default);
-        w.ensure(page);
-        w.marked[page / 64] |= 1 << (page % 64);
-        h.active = true;
-        w.gen[page]
+        let w = self.hooks.w_mut();
+        if page >= w.gen_pages as usize || page / 64 >= w.marked_words as usize { return 0; }
+        // SAFETY: both indices are inside the owner-allocated arrays (checked above).
+        unsafe {
+            *w.marked.add(page / 64) |= 1 << (page % 64);
+            w.active = 1;
+            *w.gen.add(page)
+        }
     }
-    /// The generation of the page holding `addr` (0 for a page never watched).
+    /// The generation of the page holding `addr` (0 for a page outside the watch).
     #[inline]
     pub fn code_gen(&self, addr: u32) -> u64 {
         let page = (self.strip(addr) >> CODE_PAGE_SHIFT) as usize;
-        self.hooks.watch.as_deref().and_then(|w| w.gen.get(page).copied()).unwrap_or(0)
+        let w = self.hooks.w();
+        // SAFETY: index checked against gen_pages, the length of the owner-allocated `gen` array.
+        if page < w.gen_pages as usize { unsafe { *w.gen.add(page) } } else { 0 }
     }
     /// The total number of generation bumps so far: unchanged means no watched page was written.
     #[inline]
-    pub fn code_bumps(&self) -> u64 { self.hooks.watch.as_deref().map_or(0, |w| w.bumps) }
+    pub fn code_bumps(&self) -> u64 { self.hooks.w().bumps }
     /// The guest's `icbi`: code decoded from the page holding `addr` is stale from now on (if the page is watched).
     pub fn invalidate_code(&mut self, addr: u32) {
         let page = (self.strip(addr) >> CODE_PAGE_SHIFT) as usize;
-        if let Some(w) = self.hooks.watch.as_deref_mut() { w.hit(page); }
+        self.hooks.hit(page);
     }
 
     /// Start recording the old value of every byte written (a lockstep comparison's undo log). Restarts an open one.
@@ -110,14 +117,9 @@ impl crate::GuestMem {
         let mut j = self.hooks.journal.take().unwrap_or_default();
         j.clear();
         self.hooks.journal = Some(j);
-        self.hooks.refresh();
     }
     /// Stop recording; the (address, old byte) pairs in write order (empty if no journal was open).
-    pub fn journal_end(&mut self) -> Vec<(u32, u8)> {
-        let j = self.hooks.journal.take().unwrap_or_default();
-        self.hooks.refresh();
-        j
-    }
+    pub fn journal_end(&mut self) -> Vec<(u32, u8)> { self.hooks.journal.take().unwrap_or_default() }
     /// Put back the bytes a journal recorded, newest first: memory is as it was at `journal_begin`. The writes go
     /// through the normal path, so watched pages they touch change generation like any other write.
     pub fn journal_undo(&mut self, j: &[(u32, u8)]) {

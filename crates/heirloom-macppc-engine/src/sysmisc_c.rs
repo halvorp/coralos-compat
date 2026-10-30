@@ -10,7 +10,7 @@ use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 const GD_FLAGS: u32 = 0x14;
 const SCREEN_DEVICE: u16 = 1 << 15;

@@ -17,6 +17,20 @@
 extern crate alloc;
 #[cfg(feature = "fixtures")]
 pub mod asm;
+/// The PowerPC CPU this engine runs on, named in ONE place (doctrine ONE-NAME-ONE-CONCERN-LOADED): the static core
+/// (`cpu-static`, the default: host tests, the macppc-run CLI) or cpu-ppc.library through heirloom-cpu-ppc-client (`cpu-library`:
+/// the CoralOS product, which links no PowerPC core). The two expose the same Cpu / Host / Exec / RunStats / Trap / Tier.
+pub mod cpu {
+    #[cfg(not(feature = "cpu-library"))]
+    pub use heirloom_cpu_ppc::{resume, Cpu, Exec, Host, Reg, RunStats, Tier, Trap};
+    #[cfg(feature = "cpu-library")]
+    pub use heirloom_cpu_ppc_client::{resume, Cpu, Exec, Host, Reg, RunStats, Tier, Trap};
+    /// What a product that opened cpu-ppc.library binds before the first run (Heirloom.app while this engine runs in it).
+    #[cfg(feature = "cpu-library")]
+    pub use heirloom_cpu_ppc_client::{bind, BindRefusal};
+    #[cfg(feature = "cpu-library")]
+    pub use heirloom_cpu_ppc_client::{PpcVTable, PPC_ABI_VERSION};
+}
 pub mod census;
 pub mod cfm;
 pub mod cfrg;

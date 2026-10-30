@@ -75,6 +75,9 @@ dependencies = [
 [[package]]
 name = "heirloom-cpu-abi"
 version = "0.1.0"
+dependencies = [
+ "heirloom-mem-abi",
+]
 
 [[package]]
 name = "heirloom-cpu-arm"
@@ -95,8 +98,19 @@ dependencies = [
 name = "heirloom-cpu-ppc"
 version = "0.1.0"
 dependencies = [
+ "heirloom-cpu-abi",
  "heirloom-mem-flat32",
  "libm",
+]
+
+[[package]]
+name = "heirloom-cpu-ppc-client"
+version = "0.1.0"
+dependencies = [
+ "heirloom-cpu-abi",
+ "heirloom-cpu-ppc",
+ "heirloom-cpu-ppc-client",
+ "heirloom-mem-flat32",
 ]
 
 [[package]]
@@ -182,6 +196,7 @@ version = "0.1.0"
 dependencies = [
  "heirloom-common",
  "heirloom-cpu-ppc",
+ "heirloom-cpu-ppc-client",
  "heirloom-fmt-pef",
  "heirloom-fmt-resfork",
  "heirloom-gl-abi",
@@ -195,8 +210,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-mem-abi"
+version = "0.1.0"
+
+[[package]]
 name = "heirloom-mem-flat32"
 version = "0.1.0"
+dependencies = [
+ "heirloom-mem-abi",
+]
 
 [[package]]
 name = "heirloom-mem-paged32"

@@ -18,7 +18,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 pub const NAME: &str = "InputSprocketLib";
 const KEYBOARD_DEVICE: u32 = 0x4000_2000;

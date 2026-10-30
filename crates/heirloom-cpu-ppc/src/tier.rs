@@ -10,48 +10,7 @@ use crate::{exec, Host};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 
-/// Which interpreter [`Exec::resume`] runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tier {
-    /// Tier 0: the reference, one instruction at a time.
-    Interp,
-    /// Tier 1: pre-decoded blocks, invalidated by code-page write generations ([`crate::t1cache`]).
-    Blocks,
-    /// Tier 1 checked against tier 0 on every block (slow; for gates and triage). Stops at the first divergence,
-    /// which [`Exec::divergence`] then names.
-    Lockstep,
-}
-
-impl Tier {
-    /// The number a `[PPC-PROF ... tier=]` line prints.
-    pub fn number(self) -> u32 { match self { Tier::Interp => 0, Tier::Blocks | Tier::Lockstep => 1 } }
-    /// Parse `0` / `interp`, `1` / `blocks`, `lockstep`; None for anything else.
-    pub fn parse(s: &str) -> Option<Tier> {
-        match s { "0" | "interp" => Some(Tier::Interp), "1" | "blocks" => Some(Tier::Blocks), "lockstep" => Some(Tier::Lockstep), _ => None }
-    }
-}
-
-/// Cheap counters, kept by every tier (none costs anything per instruction).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Prof {
-    /// Guest instructions retired (a native hook counts as one, as in [`RunStats::insns`]).
-    pub insns: u64,
-    /// Native hooks entered (Toolbox / library callouts).
-    pub natives: u64,
-    /// Time spent inside native hooks, in the clock's units (only with [`Exec::profile_natives`]).
-    pub native_time: u64,
-    /// Tier 1: blocks run.
-    pub blocks: u64,
-}
-
-impl Prof {
-    /// The profile line: `[PPC-PROF insns=<n> native_calls=<n> elapsed_us=<n> mips=<n.nn> tier=<t>]`. Elapsed time is
-    /// the caller's (this crate has no clock).
-    pub fn line(&self, elapsed_us: u64, tier: Tier) -> alloc::string::String {
-        let mips = if elapsed_us == 0 { 0.0 } else { self.insns as f64 / elapsed_us as f64 };
-        alloc::format!("[PPC-PROF insns={} native_calls={} elapsed_us={elapsed_us} mips={mips:.2} tier={}]", self.insns, self.natives, tier.number())
-    }
-}
+pub use heirloom_cpu_abi::ppc::{Prof, Tier};
 
 /// A runner: the selected tier, its counters, and (opt-in) a census. One per guest machine; it is not part of the
 /// architectural state, so swapping [`Cpu`] contexts under it (threads, Mixed Mode) is fine.

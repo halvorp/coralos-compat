@@ -5,6 +5,7 @@ extern crate alloc;
 pub mod heap;
 mod watch;
 pub use watch::CODE_PAGE_SHIFT;
+use heirloom_mem_abi::{CodeWatch, FlatRam};
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
@@ -59,33 +60,121 @@ impl core::error::Error for GuestRamExhausted {}
 /// on CoralOS, pages the guest has not touched are therefore never committed.
 /// Returns `None` only when the allocator refuses or `len` has no valid layout.
 fn zeroed_ram(len: usize) -> Option<Vec<u8>> {
-    if len == 0 {
+    zeroed::<u8>(len)
+}
+
+/// `n` zeroed elements of a zero-valid plain integer type from `alloc_zeroed` (never a plain alloc, never a realloc).
+fn zeroed<T: Copy>(n: usize) -> Option<Vec<T>> {
+    if n == 0 {
         return Some(Vec::new());
     }
-    let layout = Layout::array::<u8>(len).ok()?;
-    // SAFETY: `layout` is for `len` bytes of `u8` (align 1). `alloc_zeroed`
-    // returns either null or a valid, size-`layout.size()` block whose bytes
-    // are all zero by contract.
+    let layout = Layout::array::<T>(n).ok()?;
+    // SAFETY: `layout` is for `n` elements of `T` (only u8 / u64 here, for which all-zero bytes are a valid value).
+    // `alloc_zeroed` returns either null or a valid, size-`layout.size()` block whose bytes are all zero by contract.
     let ptr = unsafe { alloc::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         return None;
     }
-    // SAFETY: `ptr` came from `alloc_zeroed(layout)` with the same layout;
-    // `len` bytes are initialised (to zero) and `len` == capacity, matching
-    // `Vec<u8>`'s layout invariants so the deallocator uses the same layout.
-    Some(unsafe { Vec::from_raw_parts(ptr, len, len) })
+    // SAFETY: `ptr` came from `alloc_zeroed(layout)` with the same layout; `n` elements are initialised (to zero) and
+    // `n` == capacity, matching `Vec<T>`'s layout invariants so the deallocator uses the same layout.
+    Some(unsafe { Vec::from_raw_parts(ptr.cast::<T>(), n, n) })
 }
 
-pub struct GuestMem { ram: Vec<u8>, mask: u32, hooks: watch::Hooks }
+/// The pages a RAM of `len` bytes has, and the bitmap words that cover them.
+fn watch_extent(len: usize) -> (usize, usize) {
+    let pages = len.div_ceil(1 << CODE_PAGE_SHIFT);
+    (pages, pages.div_ceil(64))
+}
+
+/// What the OWNER of guest RAM holds (a [`GuestMem::view`] holds none of it): the bytes, the watch arrays, and the two
+/// `#[repr(C)]` records that describe them to cpu-ppc.library. Boxed, so the records' addresses never move while RAM grows.
+struct Owned {
+    ram: Vec<u8>,
+    marked: Vec<u64>,
+    gen: Vec<u64>,
+    watch: CodeWatch,
+    desc: FlatRam,
+}
+
+/// Checked big-endian guest RAM. The OWNER (the engine: [`GuestMem::new`]) allocates the bytes and the code watch and publishes
+/// both as a [`FlatRam`] descriptor ([`GuestMem::flat_ram`]); a BORROWED VIEW of that descriptor ([`GuestMem::view`],
+/// cpu-ppc.library during a run) reads and writes the same bytes and the same watch. Only the owner grows.
+pub struct GuestMem {
+    base: *mut u8,
+    len: usize,
+    mask: u32,
+    hooks: watch::Hooks,
+    owned: Option<alloc::boxed::Box<Owned>>,
+}
+
+// SAFETY: an owning GuestMem's raw pointers all point into its own Box<Owned> (moved with it, freed with it), so sending it to
+// another thread is sending sole ownership. A view is made by cpu-ppc.library inside one run on the run's thread and never sent.
+unsafe impl Send for GuestMem {}
 
 impl GuestMem {
-    pub fn new(size: usize) -> Self { GuestMem { ram: vec![0; size], mask: MASK_32, hooks: watch::Hooks::default() } }
+    pub fn new(size: usize) -> Self {
+        let (pages, words) = watch_extent(size);
+        let mut o = alloc::boxed::Box::new(Owned {
+            ram: vec![0; size],
+            marked: vec![0; words],
+            gen: vec![0; pages],
+            watch: CodeWatch { marked: core::ptr::null_mut(), marked_words: 0, gen_pages: 0, gen: core::ptr::null_mut(), bumps: 0, active: 0, reserved: 0 },
+            desc: FlatRam { size: core::mem::size_of::<FlatRam>() as u32, flags: 0, base: core::ptr::null_mut(), len: 0, mask: MASK_32, epoch: 0, watch: core::ptr::null_mut() },
+        });
+        Self::publish(&mut o);
+        let (base, watch) = (o.desc.base, o.desc.watch);
+        GuestMem { base, len: size, mask: MASK_32, hooks: watch::Hooks::new(watch), owned: Some(o) }
+    }
+
+    /// Point the owner's records at its current arrays (after `new` or a growth).
+    fn publish(o: &mut Owned) {
+        o.watch.marked = o.marked.as_mut_ptr();
+        o.watch.marked_words = o.marked.len() as u32;
+        o.watch.gen = o.gen.as_mut_ptr();
+        o.watch.gen_pages = o.gen.len() as u32;
+        o.desc.base = o.ram.as_mut_ptr();
+        o.desc.len = o.ram.len() as u64;
+        o.desc.watch = &mut o.watch;
+    }
+
+    /// A BORROWED view of an engine's RAM: the same bytes, mask and code watch as the descriptor names; it owns nothing and
+    /// cannot grow ([`GuestMem::try_grow_to`] refuses). cpu-ppc.library makes one per run and again after every host callback.
+    ///
+    /// # Safety
+    /// `desc` must point at a live [`FlatRam`] whose `base` holds `len` readable and writable bytes and whose `watch` is a live
+    /// [`CodeWatch`] with arrays of the lengths it states, and all of them must outlive the view and stay where they are while it
+    /// is used (the owner grows only when no view is in use: between runs or inside a callback, after which the view is remade).
+    pub unsafe fn view(desc: *const FlatRam) -> GuestMem {
+        // SAFETY: the caller guarantees `desc` is a live descriptor.
+        let d = unsafe { &*desc };
+        GuestMem { base: d.base, len: d.len as usize, mask: d.mask, hooks: watch::Hooks::new(d.watch), owned: None }
+    }
+
+    /// The owner's descriptor of this RAM for cpu-ppc.library (stable while this GuestMem lives; its fields follow growth and
+    /// [`set_addr_mask`](Self::set_addr_mask)). `None` for a view.
+    pub fn flat_ram(&self) -> Option<*const FlatRam> { self.owned.as_ref().map(|o| &o.desc as *const FlatRam) }
+
+    /// The bytes as a slice (empty RAM: an empty slice).
+    fn ram(&self) -> &[u8] {
+        if self.len == 0 { return &[]; }
+        // SAFETY: `base` holds `len` initialised bytes (the owner's Vec, or the view's descriptor - GuestMem::view's contract).
+        unsafe { core::slice::from_raw_parts(self.base, self.len) }
+    }
+    fn ram_mut(&mut self) -> &mut [u8] {
+        if self.len == 0 { return &mut []; }
+        // SAFETY: as in `ram`; `&mut self` is the only path to the bytes through this GuestMem.
+        unsafe { core::slice::from_raw_parts_mut(self.base, self.len) }
+    }
+
     /// Select the address bus width: every access (guest CPU and host handlers alike) drops the bits outside `mask`.
-    pub fn set_addr_mask(&mut self, mask: u32) { self.mask = mask; }
+    pub fn set_addr_mask(&mut self, mask: u32) {
+        self.mask = mask;
+        if let Some(o) = self.owned.as_mut() { o.desc.mask = mask; }
+    }
     pub fn addr_mask(&self) -> u32 { self.mask }
     /// `addr` as the bus sees it (StripAddress).
     pub fn strip(&self, addr: u32) -> u32 { addr & self.mask }
-    pub fn len(&self) -> usize { self.ram.len() }
+    pub fn len(&self) -> usize { self.len }
     /// Grow the address space to `new_len` bytes. New RAM is obtained from the
     /// global allocator's `alloc_zeroed`; only the previously-live bytes are
     /// copied into it, so on CoralOS untouched pages in the new tail are never
@@ -102,22 +191,34 @@ impl GuestMem {
     }
 
     /// As [`GuestMem::grow_to`], but a host that cannot supply the memory is a
-    /// named refusal (`GuestRamExhausted`) and nothing about `self` changes.
+    /// named refusal (`GuestRamExhausted`) and nothing about `self` changes. A view cannot grow: refused the same way.
+    /// The watch arrays grow first (so its coverage is never short of the RAM), then the bytes; the descriptor is republished and
+    /// its `epoch` bumped only once both succeeded.
     pub fn try_grow_to(&mut self, new_len: usize) -> Result<(), GuestRamExhausted> {
-        let len = self.ram.len();
+        let len = self.len;
         if new_len <= len {
             return Ok(());
         }
-        let mut ram = zeroed_ram(new_len).ok_or(GuestRamExhausted { requested: new_len })?;
-        ram[..len].copy_from_slice(&self.ram); // only old bytes are written
-        self.ram = ram;                        // old Vec dropped; tail never touched
+        let refused = GuestRamExhausted { requested: new_len };
+        let o = self.owned.as_mut().ok_or(refused)?;
+        let (pages, words) = watch_extent(new_len);
+        let mut gen = zeroed::<u64>(pages).ok_or(refused)?;
+        let mut marked = zeroed::<u64>(words).ok_or(refused)?;
+        let mut ram = zeroed_ram(new_len).ok_or(refused)?;
+        gen[..o.gen.len()].copy_from_slice(&o.gen);
+        marked[..o.marked.len()].copy_from_slice(&o.marked);
+        ram[..len].copy_from_slice(&o.ram); // only old bytes are written
+        (o.ram, o.gen, o.marked) = (ram, gen, marked); // old Vecs dropped; tail never touched
+        Self::publish(o);
+        o.desc.epoch = o.desc.epoch.wrapping_add(1);
+        (self.base, self.len) = (o.desc.base, new_len);
         Ok(())
     }
-    pub fn is_empty(&self) -> bool { self.ram.is_empty() }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
 
     pub fn contains(&self, addr: u32, len: u32) -> bool {
         let addr = self.strip(addr);
-        (addr as u64) + (len as u64) <= self.ram.len() as u64
+        (addr as u64) + (len as u64) <= self.len as u64
     }
     pub fn check(&self, addr: u32, len: u32) -> Result<(), MemError> {
         if self.contains(addr, len) { Ok(()) } else { Err(MemError::OutOfRange { addr, len }) }
@@ -128,35 +229,43 @@ impl GuestMem {
     pub fn bytes(&self, s: Span) -> Result<&[u8], MemError> {
         self.check(s.addr, s.len)?;
         let a = self.strip(s.addr);
-        Ok(&self.ram[a as usize..(a + s.len) as usize])
+        Ok(&self.ram()[a as usize..(a + s.len) as usize])
     }
     pub fn write_bytes(&mut self, addr: u32, src: &[u8]) -> Result<(), MemError> {
         let len = u32::try_from(src.len()).map_err(|_| MemError::OutOfRange { addr, len: u32::MAX })?;
         self.check(addr, len)?;
         let addr = self.strip(addr);
-        self.hooks.before_write(&self.ram, addr, len);
-        self.ram[addr as usize..addr as usize + src.len()].copy_from_slice(src);
+        self.before_write(addr, len);
+        self.ram_mut()[addr as usize..addr as usize + src.len()].copy_from_slice(src);
         Ok(())
     }
     pub fn zero(&mut self, addr: u32, len: u32) -> Result<(), MemError> {
         self.check(addr, len)?;
         let addr = self.strip(addr);
-        self.hooks.before_write(&self.ram, addr, len);
-        self.ram[addr as usize..(addr + len) as usize].fill(0);
+        self.before_write(addr, len);
+        self.ram_mut()[addr as usize..(addr + len) as usize].fill(0);
         Ok(())
+    }
+
+    #[inline(always)]
+    fn before_write(&mut self, addr: u32, len: u32) {
+        // SAFETY: as in `ram`: `base` holds `len` initialised bytes; the hooks only read them (the journal's old bytes).
+        let ram = if self.len == 0 { &[][..] } else { unsafe { core::slice::from_raw_parts(self.base, self.len) } };
+        self.hooks.before_write(ram, addr, len);
     }
 
     fn read_be(&self, addr: u32, len: u32) -> Result<u32, MemError> {
         self.check(addr, len)?;
         let a = self.strip(addr) as usize;
-        Ok(self.ram[a..a + len as usize].iter().fold(0u32, |v, b| (v << 8) | *b as u32))
+        Ok(self.ram()[a..a + len as usize].iter().fold(0u32, |v, b| (v << 8) | *b as u32))
     }
     fn write_be(&mut self, addr: u32, len: u32, val: u32) -> Result<(), MemError> {
         self.check(addr, len)?;
         let addr = self.strip(addr);
-        self.hooks.before_write(&self.ram, addr, len);
+        self.before_write(addr, len);
+        let ram = self.ram_mut();
         for i in 0..len {
-            self.ram[(addr + i) as usize] = (val >> (8 * (len - 1 - i))) as u8;
+            ram[(addr + i) as usize] = (val >> (8 * (len - 1 - i))) as u8;
         }
         Ok(())
     }
@@ -208,6 +317,36 @@ mod tests {
         assert_eq!(m.read_cstr(10), Err(MemError::Unterminated { addr: 10, max: MAX_CSTR }), "the bounded read keeps its limit");
         m.write_bytes(900, &[b'y'; 124]).unwrap();
         assert_eq!(m.read_cstr_long(900), Err(MemError::Unterminated { addr: 900, max: 124 }), "NEGATIVE CONTROL: no NUL before the end of RAM");
+    }
+
+    /// CPU ABI v3: a view of the owner's descriptor is the SAME bytes and the SAME code watch; growth republishes the descriptor.
+    #[test]
+    fn a_view_shares_bytes_and_watch_with_its_owner_and_growth_republishes_the_descriptor() {
+        let mut m = GuestMem::new(0x3000);
+        let d = m.flat_ram().expect("the owner publishes a descriptor");
+        // SAFETY: `d` is m's live descriptor and m is not grown while `v` is used.
+        let mut v = unsafe { GuestMem::view(d) };
+        assert!(v.flat_ram().is_none(), "a view owns nothing");
+        v.write_u32(0x10, 0xA1B2_C3D4).unwrap();
+        assert_eq!(m.read_u32(0x10), Ok(0xA1B2_C3D4), "the view's store is the owner's byte");
+        let g = v.watch_code_page(0x1000);
+        m.write_u8(0x1004, 9).unwrap();
+        assert_eq!(v.code_gen(0x1000), g + 1, "an OWNER write invalidates code the VIEW decoded");
+        assert_eq!(v.try_grow_to(0x10000).map_err(|e| e.requested), Err(0x10000), "NEGATIVE CONTROL: a view cannot grow");
+        drop(v);
+        // SAFETY: `d` is m's live descriptor.
+        let (base0, epoch0) = unsafe { ((*d).base, (*d).epoch) };
+        m.try_grow_to(0x40_0000).unwrap();
+        // SAFETY: as above; the descriptor's address is stable (boxed) across growth.
+        let (base1, len1, epoch1, pages) = unsafe { ((*d).base, (*d).len, (*d).epoch, (*(*d).watch).gen_pages) };
+        assert_eq!((len1, epoch1, pages), (0x40_0000, epoch0 + 1, 0x400), "len, epoch and a watch covering every page follow the growth");
+        assert_ne!(base1, base0, "the bytes moved (a library must reload base after a callback)");
+        // SAFETY: as above.
+        let mut v = unsafe { GuestMem::view(d) };
+        assert_eq!(v.read_u32(0x10), Ok(0xA1B2_C3D4), "old bytes survive the move");
+        let g2 = v.watch_code_page(0x3F_F000);
+        v.write_u8(0x3F_F000, 1).unwrap();
+        assert_eq!(m.code_gen(0x3F_F000), g2 + 1, "the new tail is watched too");
     }
 
     #[test]

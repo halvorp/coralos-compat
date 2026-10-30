@@ -4,69 +4,11 @@
 //! rest of the crate can quote the manual's numbers.
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
-use core::fmt;
 
-pub const XER_SO: u32 = 0x8000_0000;
-pub const XER_OV: u32 = 0x4000_0000;
-pub const XER_CA: u32 = 0x2000_0000;
-/// XER bits a program can write: SO, OV, CA and the 7-bit string byte count (PEM 2.1.3).
-pub const XER_MASK: u32 = 0xE000_007F;
 
-/// Why the interpreter stopped (other than [`Cpu::halt`] / [`Cpu::block`] / the instruction budget). Every variant
-/// leaves `pc` AT the faulting instruction, so a host can inspect, patch and resume.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Trap {
-    /// An instruction this interpreter does not execute. `what` names the family (never "unknown").
-    Unimplemented { pc: u32, word: u32, what: &'static str },
-    /// A defined opcode used in a form the architecture marks invalid (e.g. `lwzu` with RA=RT).
-    InvalidForm { pc: u32, word: u32, why: &'static str },
-    /// A supervisor-only instruction or SPR in user mode.
-    Privileged { pc: u32, word: u32, what: &'static str },
-    /// A load, store or instruction fetch outside guest RAM.
-    BusFault { pc: u32, addr: u32, write: bool },
-    /// An access the architecture requires to be aligned (lwarx, stwcx., lmw, stmw) was not.
-    Alignment { pc: u32, addr: u32, what: &'static str },
-    /// `sc` and the host did not handle it.
-    Syscall { pc: u32 },
-    /// A `tw`/`twi` whose condition held.
-    TrapWord { pc: u32, word: u32 },
-    /// Execution reached a bound native address and the host declined it.
-    NativeUnhandled { addr: u32 },
-}
-
-impl fmt::Display for Trap {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Trap::Unimplemented { pc, word, what } => write!(f, "unimplemented {what} ({word:#010x}) at {pc:#010x}"),
-            Trap::InvalidForm { pc, word, why } => write!(f, "invalid form: {why} ({word:#010x}) at {pc:#010x}"),
-            Trap::Privileged { pc, word, what } => write!(f, "privileged {what} ({word:#010x}) at {pc:#010x}"),
-            Trap::BusFault { pc, addr, write } => {
-                write!(f, "bus fault: {} {addr:#010x} at {pc:#010x}", if write { "store to" } else { "load from" })
-            }
-            Trap::Alignment { pc, addr, what } => write!(f, "alignment: {what} at {addr:#010x} (pc {pc:#010x})"),
-            Trap::Syscall { pc } => write!(f, "unhandled sc at {pc:#010x}"),
-            Trap::TrapWord { pc, word } => write!(f, "trap word taken ({word:#010x}) at {pc:#010x}"),
-            Trap::NativeUnhandled { addr } => write!(f, "native glue at {addr:#010x} not handled by the host"),
-        }
-    }
-}
-impl core::error::Error for Trap {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RunStats {
-    /// Instructions retired by this call (a native hook counts as one).
-    pub insns: u64,
-    /// True if stopped by [`Cpu::halt`].
-    pub halted: bool,
-    /// True if stopped by [`Cpu::block`]; the next resume continues the guest.
-    pub blocked: bool,
-    /// Why execution stopped on a fault; `None` for halt, block or budget exhaustion.
-    pub trap: Option<Trap>,
-}
-
-/// A register, for [`Cpu::set_reg`] / [`Cpu::reg`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reg { Gpr(u8), Pc, Lr, Ctr, Xer, Cr, Fpscr }
+/// Why the interpreter stopped: heirloom-cpu-abi::ppc's [`Trap`] (moved there so the engine side, which links no core, has the
+/// same type; the PpcExit codec carries it across cpu-ppc.library's table).
+pub use heirloom_cpu_abi::ppc::{Reg, RunStats, Trap, XER_CA, XER_MASK, XER_OV, XER_SO};
 
 /// One PowerPC hardware thread. It is also the saved context: the interpreter has no global state, so any number of
 /// guests can run in one process (unlike heirloom-cpu-68k's Musashi).
@@ -168,19 +110,15 @@ impl Cpu {
     pub(crate) fn halted(&self) -> bool { self.halted }
     pub(crate) fn blocked(&self) -> bool { self.blocked }
     pub(crate) fn clear_blocked(&mut self) { self.blocked = false }
+    /// A fresh run on this register file (cpu-ppc.library reuses one core Cpu for every context it is handed).
+    pub(crate) fn clear_halted(&mut self) { self.halted = false }
 
     /// CR field `n` (0 = most significant nibble: CR0).
-    pub fn cr_field(&self, n: u32) -> u32 { (self.cr >> (28 - 4 * (n & 7))) & 0xF }
-    pub fn set_cr_field(&mut self, n: u32, v: u32) {
-        let sh = 28 - 4 * (n & 7);
-        self.cr = (self.cr & !(0xF << sh)) | ((v & 0xF) << sh);
-    }
+    pub fn cr_field(&self, n: u32) -> u32 { heirloom_cpu_abi::ppc::cr_field(self.cr, n) }
+    pub fn set_cr_field(&mut self, n: u32, v: u32) { heirloom_cpu_abi::ppc::set_cr_field(&mut self.cr, n, v) }
     /// CR bit `i` in manual numbering (0 = CR0[LT]).
-    pub fn cr_bit(&self, i: u32) -> bool { (self.cr >> (31 - (i & 31))) & 1 != 0 }
-    pub fn set_cr_bit(&mut self, i: u32, v: bool) {
-        let m = 1u32 << (31 - (i & 31));
-        if v { self.cr |= m } else { self.cr &= !m }
-    }
+    pub fn cr_bit(&self, i: u32) -> bool { heirloom_cpu_abi::ppc::cr_bit(self.cr, i) }
+    pub fn set_cr_bit(&mut self, i: u32, v: bool) { heirloom_cpu_abi::ppc::set_cr_bit(&mut self.cr, i, v) }
     /// CR0 = LT/GT/EQ of `result` read as signed, plus XER[SO] (what every Rc=1 integer instruction does).
     pub(crate) fn set_cr0(&mut self, result: u32) {
         self.set_cr_compare(0, (result as i32).cmp(&0));

@@ -1,0 +1,20 @@
+[package]
+name = "heirloom-cpu-ppc-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The heirloom-cpu-ppc API (Cpu, Host, Exec, Trap, ...) driven through cpu-ppc.library's PpcVTable (CPU ABI v3): no PowerPC core linked"
+
+[features]
+default = []
+# HOST tests and tools only (refused on target_os = "none", src/lib.rs): bind the static core's table when nothing was bound.
+bind-static = ["dep:heirloom-cpu-ppc"]
+
+[dependencies]
+heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }
+heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
+heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc", optional = true }
+
+[dev-dependencies]
+heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc" }
+heirloom-cpu-ppc-client = { path = ".", features = ["bind-static"] }

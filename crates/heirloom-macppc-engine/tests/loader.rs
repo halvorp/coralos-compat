@@ -104,7 +104,7 @@ fn upp_constructors_are_bound_in_every_library_even_an_absent_one_and_build_a_po
     m.bind_from("CarbonLib", "NewThreadTerminationUPP");
     let tv = 0x5000u32;
     m.mac.mem.write_u32(tv, 0x6000).unwrap(); m.mac.mem.write_u32(tv + 4, 0x7000).unwrap();
-    let mut cpu = heirloom_cpu_ppc::Cpu::new(0, 0x8000);
+    let mut cpu = heirloom_macppc_engine::cpu::Cpu::new(0, 0x8000);
     let (app_frag, stub) = {
         let frag = m.instantiate("x", &Pef::parse(&{ let mut b = PefBuilder::new(); b.code(&[0; 4]); let d = b.data(&[0; 8], 8); b.import_library("CarbonLib", false, &[("NewThreadTerminationUPP", F, false)]); b.reloc(d as u16, &[0x4A00]); b.main(d as i32, 0); b.build() }).unwrap()).unwrap();
         let data = frag.section_bases[1].unwrap();
@@ -113,7 +113,7 @@ fn upp_constructors_are_bound_in_every_library_even_an_absent_one_and_build_a_po
     };
     let _ = app_frag;
     cpu.gpr[3] = tv;
-    assert!(heirloom_cpu_ppc::Host::native(&mut m, &mut cpu, stub));
+    assert!(heirloom_macppc_engine::cpu::Host::native(&mut m, &mut cpu, stub));
     let upp = cpu.gpr[3];
     let parsed = heirloom_mac68k_engine::mixed_mode::parse(&m.mac.mem, upp).and_then(|d| heirloom_mac68k_engine::mixed_mode::ppc_record(&d)).unwrap();
     assert_eq!(parsed.proc_descriptor, tv);

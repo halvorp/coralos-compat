@@ -49,6 +49,10 @@ mod t1;
 mod t1cache;
 mod t1op;
 mod t1run;
+/// cpu-ppc.library's flat table (heirloom-cpu-abi::ppc): what its coral_lib_open returns.
+pub mod table;
+#[cfg(test)]
+mod table_tests;
 pub use t1::{Divergence, LockstepStats};
 pub use t1cache::CacheStats;
 pub use tier::{Exec, Prof, Tier};

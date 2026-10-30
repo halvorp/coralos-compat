@@ -6,7 +6,7 @@ use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MathFn { Acos, Asin, Atan, Atan2, Ceil, Cos, Cosh, Exp, Fabs, Floor, Fmod, Frexp, Hypot, Ldexp, Log, Log10, Modf, Pow, Rint, Round, Sin, Sinh, Sqrt, Tan, Tanh, Dec2num, Num2dec, Nan }

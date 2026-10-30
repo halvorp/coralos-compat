@@ -21,7 +21,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::fm::err;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 /// Bytes of one `FILE` and of the three-element `_iob`.
 pub const FILE_BYTES: u32 = 16;

@@ -3,7 +3,7 @@
 //!
 //! WHAT IS HONEST: there is one processor (`MPProcessors()` is 1) and a task runs until it yields, waits, or ends -- there is NO preemption. A
 //! program that spins on a flag another task sets (legal on real MP hardware) never lets the setter run and the run ends only by the instruction
-//! budget. Preemption needs the scheduler to cut a task off in `resume` (`heirloom_cpu_ppc::resume(host, cpu, slice)`) and switch at the slice boundary,
+//! budget. Preemption needs the scheduler to cut a task off in `resume` (`crate::cpu::resume(host, cpu, slice)`) and switch at the slice boundary,
 //! with the interrupted task's registers saved exactly as a yield saves them; the primitive for that (`switch_to`) exists, the slice policy and a
 //! fairness rule do not. Gestalt `'mpsv'`/`'mpsc'` therefore stay unanswered (gestalt_ppc).
 //! WAITING: a task that waits (queue, semaphore, critical region) is Waiting until signalled or until its `Duration` runs out. Time is the machine's
@@ -22,7 +22,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 pub const NAME: &str = "MPLibrary";
 pub const MP_DELETED_ERR: i32 = -29295;

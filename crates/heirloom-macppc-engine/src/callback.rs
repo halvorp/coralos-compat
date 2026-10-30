@@ -16,7 +16,7 @@ use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::mixed_mode::{parse, ppc_record};
 use heirloom_mac68k_engine::translate::useritems::UserItemDraw;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 /// The pseudo-symbol a callback returns to.
 pub const CALLBACK_RETURN: &str = "$CallbackReturn";

@@ -7,7 +7,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 #[derive(Default, Clone, Copy)]
 struct Spec { minus: bool, plus: bool, space: bool, alt: bool, zero: bool, width: usize, prec: Option<usize> }

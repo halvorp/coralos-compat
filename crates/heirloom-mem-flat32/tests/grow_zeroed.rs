@@ -60,6 +60,10 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static A: Counting = Counting;
 
+/// The counters and the refusal threshold are process-global and the test harness runs tests on several threads: every test holds
+/// this lock for its whole body, or one test's reset re-enables an allocation another test is refusing.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn reset_counters() {
     ALLOC_COUNT.store(0, Ordering::Relaxed);
     ZEROED_COUNT.store(0, Ordering::Relaxed);
@@ -72,6 +76,7 @@ fn reset_counters() {
 
 #[test]
 fn grow_preserves_old_and_zeroes_tail_via_alloc_zeroed() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     reset_counters();
 
     let mut g = GuestMem::new(K4);
@@ -107,6 +112,7 @@ fn grow_preserves_old_and_zeroes_tail_via_alloc_zeroed() {
 
 #[test]
 fn try_grow_to_refusal_leaves_len_unchanged() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     reset_counters();
     // Refuse anything >= 64 MiB. Set immediately before the call, clear
     // before any assertion so a failing assert doesn't abort the process.
@@ -124,6 +130,7 @@ fn try_grow_to_refusal_leaves_len_unchanged() {
 
 #[test]
 fn grow_to_smaller_or_equal_is_noop() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     reset_counters();
     let mut g = GuestMem::new(K4);
     let snap: Vec<u8> = (0..K4).map(|i| (i & 0xff) as u8).collect();

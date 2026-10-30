@@ -12,7 +12,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 #[derive(Default)]
 pub struct MenuState { props: BTreeMap<(u32, u16, u32, u32), Vec<u8>> }

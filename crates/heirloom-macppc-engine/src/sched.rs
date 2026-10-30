@@ -1,4 +1,4 @@
-//! The scheduler: any number of saved PowerPC register files (`heirloom_cpu_ppc::Cpu` is a plain value), of which exactly one is the live CPU the run loop
+//! The scheduler: any number of saved PowerPC register files (`crate::cpu::Cpu` is a plain value), of which exactly one is the live CPU the run loop
 //! drives. Switching is a native's act: the live CPU is cloned into the current task's slot, the target's saved CPU is assigned into the live one,
 //! and the callbacks in progress (`Runtime::callbacks`, host work in flight for the interrupted call) travel with their task. Nothing else changes;
 //! the native "returns" into the other task. Both the Thread Manager ([`crate::threads`], cooperative: switches only when a task asks) and
@@ -15,7 +15,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 /// A turn (from a task getting the CPU to its yield) that retires more instructions than this is computing, not polling,
 /// so it counts as progress in an idle sweep (ruling docs/consults/2026-10-26-macppc-thread-idle.md, step 4: a flag poller

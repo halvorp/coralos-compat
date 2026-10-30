@@ -23,7 +23,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::mixed_mode::{parse, ppc_record};
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 pub const NAME: &str = "ThreadsLib";
 /// The pseudo-symbol a thread's entry routine returns to.

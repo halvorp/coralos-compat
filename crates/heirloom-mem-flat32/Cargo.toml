@@ -4,3 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Checked big-endian guest RAM for heirloom-compat engines"
+
+[dependencies]
+# The RAM descriptor records (FlatRam, CodeWatch) this crate allocates and publishes: heirloom-mem-abi defines them once.
+heirloom-mem-abi = { path = "../heirloom-mem-abi" }

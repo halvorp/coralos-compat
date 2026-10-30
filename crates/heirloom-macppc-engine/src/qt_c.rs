@@ -13,7 +13,7 @@ use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 /// The library names a program imports the Movie Toolbox from.
 pub fn provided(lib: &str) -> bool {

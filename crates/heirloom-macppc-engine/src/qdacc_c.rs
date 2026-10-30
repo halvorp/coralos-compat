@@ -12,7 +12,7 @@ use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::quickdraw::{OFF_ARROW, OFF_BLACK, OFF_DK_GRAY, OFF_GRAY, OFF_LT_GRAY, OFF_RAND_SEED, OFF_SCREEN_BITS, OFF_WHITE};
 use heirloom_mac68k_engine::qd::port::{P_CLIP, P_PN_LOC};
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 #[derive(Default)]
 pub struct QaState { a5: u32 }

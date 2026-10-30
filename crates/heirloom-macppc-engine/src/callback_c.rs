@@ -14,7 +14,7 @@ use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Sort { base: u32, n: u32, size: u32, cmp: u32, scratch: u32, i: u32, lo: u32, hi: u32, mid: u32 }

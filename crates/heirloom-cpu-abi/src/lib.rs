@@ -1,7 +1,11 @@
 #![no_std]
+// Prof::line (the PowerPC profile line) formats a String.
+extern crate alloc;
 
 /// The ARM face of the contract (cpu-arm.library): its bus, context and exit records and the types they decode to.
 pub mod arm;
+/// The PowerPC flat face (cpu-ppc.library, CPU ABI v3): engine-owned RAM + register records, a table of its own.
+pub mod ppc;
 
 /// 2 (2026-10-27): [`CpuStop`] carries the bus-fault count in its own field and a stall is its own kind
 /// ([`STOP_STALL`]), and the table gains the context and diagnostics entries an engine needs to drive the CPU

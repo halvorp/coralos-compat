@@ -6,3 +6,5 @@ license = "MIT OR Apache-2.0"
 description = "The one C-ABI boundary between a Heirloom family engine and a cpu-*.library (68k, PowerPC, ARM): a version-first repr(C) vtable"
 
 [dependencies]
+# The guest-RAM records the PowerPC face borrows (FlatRam, CodeWatch): the memory layer defines them.
+heirloom-mem-abi = { path = "../heirloom-mem-abi" }

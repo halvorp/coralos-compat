@@ -33,7 +33,7 @@ use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::mixed::trap_opcode;
 use heirloom_mac68k_engine::toolbox::WindowSpec;
 use heirloom_mac68k_engine::pascal::Rect;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 pub const APP_TARGET: u32 = 3;
 pub const DISPATCHER_TARGET: u32 = 4;

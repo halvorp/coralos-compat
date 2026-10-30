@@ -25,7 +25,7 @@ use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use heirloom_common::Step;
 use heirloom_mem_flat32::GuestMem;
-use heirloom_cpu_ppc::{Cpu, Host, RunStats};
+use crate::cpu::{Cpu, Host, RunStats};
 
 /// The pseudo-symbol an init routine returns to.
 pub const INIT_DONE: &str = "$InitDone";
@@ -65,8 +65,8 @@ pub struct Runtime {
     pub(crate) cf: crate::cf::CfState,
     pub(crate) cfx: crate::cf_more::CfxState,
     pub(crate) carbon: crate::carbon::CarbonState,
-    /// The PowerPC execution tier and its counters ([`heirloom_cpu_ppc::Exec`]); outlives CPU context switches.
-    pub(crate) exec: heirloom_cpu_ppc::Exec,
+    /// The PowerPC execution tier and its counters ([`crate::cpu::Exec`]); outlives CPU context switches.
+    pub(crate) exec: crate::cpu::Exec,
     pub(crate) ae: crate::ae_c::AeState,
     pub(crate) streams: alloc::collections::BTreeMap<u32, crate::stdio::Stream>,
     pub(crate) rand_seeded: bool,
@@ -128,8 +128,8 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn cpu(&self) -> Option<&Cpu> { self.rt.cpu.as_ref() }
     /// Record the program counters of the last `n` instructions (0 = off), read back with `cpu().recent_pcs()` after a stop.
     pub fn trace_pcs(&mut self, n: usize) { if let Some(c) = self.rt.cpu.as_mut() { c.trace_pcs(n); } }
-    /// The PowerPC execution tier, its profile counters and census ([`heirloom_cpu_ppc::Exec`]).
-    pub fn exec(&mut self) -> &mut heirloom_cpu_ppc::Exec { &mut self.rt.exec }
+    /// The PowerPC execution tier, its profile counters and census ([`crate::cpu::Exec`]).
+    pub fn exec(&mut self) -> &mut crate::cpu::Exec { &mut self.rt.exec }
     /// The refusal or trap that ended the program, if one did.
     pub fn fault(&self) -> Option<&str> { self.rt.fault.as_deref() }
 
@@ -175,13 +175,13 @@ impl<U: GuestUi> MacPpc<U> {
         heirloom_mac68k_engine::qd::flush(&mut self.mac);
         if let Some(t) = stats.trap {
             let mut why = format!("PowerPC fault: {t}");
-            if let heirloom_cpu_ppc::Trap::BusFault { addr, .. } = t {
+            if let crate::cpu::Trap::BusFault { addr, .. } = t {
                 if addr >= UNBOUND_DATA && addr - UNBOUND_DATA < 0x1000 && !self.unbound_data.is_empty() {
                     why = format!("{why} -- the placeholder address of an unbound DATA import; unbound data imports of this fragment: {}", self.unbound_data.join(", "));
                 }
             }
             // a branch to address 0 is, almost always, a call through a weak import that is absent: name it
-            if matches!(t, heirloom_cpu_ppc::Trap::Unimplemented { pc: 0, .. } | heirloom_cpu_ppc::Trap::BusFault { pc: 0, .. }) { if let Some(n) = self.null_call_import(&cpu) { why = format!("{why} -- {n}"); } }
+            if matches!(t, crate::cpu::Trap::Unimplemented { pc: 0, .. } | crate::cpu::Trap::BusFault { pc: 0, .. }) { if let Some(n) = self.null_call_import(&cpu) { why = format!("{why} -- {n}"); } }
             self.rt.fault = Some(why);
         }
         let step = if let Some(f) = &self.rt.fault { Step::Fault(f.clone()) }

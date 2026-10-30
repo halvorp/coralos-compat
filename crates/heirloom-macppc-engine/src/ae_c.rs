@@ -12,7 +12,7 @@ use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::events::MacEvent;
-use heirloom_cpu_ppc::Cpu;
+use crate::cpu::Cpu;
 
 pub const ERR_AE_DESC_NOT_FOUND: i32 = -1701;
 pub const ERR_AE_NOT_A_LIST: i32 = -1704;
