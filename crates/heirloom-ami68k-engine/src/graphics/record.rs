@@ -4,12 +4,13 @@
 //! number is TEXTPEN, SHINEPEN, ...); a pen number outside the table has no role, so a fill/line/background in it is recorded as a HOLE (pixels). A TEXT pen is the exception
 //! ([`PenRoles::ink`]): text replays in the kit's ink, so the pen is classified by COLOUR in the screen palette the guest sees.
 //! Nothing is inferred from how the picture looks. A call whose effect is not exactly a named op (a write mask, COMPLEMENT /
-//! INVERSVID, an AreaPtrn, soft styles, an installed clip region) is a hole too.
+//! INVERSVID, an AreaPtrn, soft styles, an installed clip region) is a hole too. Off-screen BitMaps keep the same list for a later plain-copy splice.
 use super::layout::*;
 use super::rastport::Rp;
 use crate::{machine::Amiga, Refusal};
 use alloc::string::String;
 use alloc::vec::Vec;
+use heirloom_present::plane::Rec;
 use heirloom_ui_abi::{DrawOp, FontRole, GuestPoint, GuestRect, GuestUi, IconRole, PenRole};
 use heirloom_raster::Rect;
 
@@ -143,14 +144,31 @@ pub fn text(st: &Rp, font: &heirloom_raster::font::Font, bytes: &[u8], (x, y): (
     Some(Prim::Text { x, top: y - font.baseline as i32, w: font.text_length(bytes), h: font.y_size as i32, text: bytes.iter().map(|&b| b as char).collect(), fg: st.fg, bg: (st.mode == JAM2).then_some(st.bg), font: role })
 }
 
-/// Record one drawing call of window `win` whose effect (canvas coordinates) is `hit`: the named ops of `prim`, or a hole
+/// Where a recorded call goes: a window's display list, or an off-screen bitmap's (surface.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sink { Window(u32), Surface(u32) }
+
+pub(crate) fn emit<U: GuestUi>(a: &mut Amiga<U>, sink: Sink, rec: Rec) {
+    match sink {
+        Sink::Window(win) => match rec {
+            Rec::Op { op, bbox } => a.gfx.present.record(win, op, bbox),
+            Rec::Hole(hit) => a.gfx.present.record_hole(win, hit),
+        },
+        Sink::Surface(bm) => if a.gfx.present.plane_route() { a.gfx.surfaces.entry(bm).add_rect(rec); },
+    }
+}
+
+/// Record one drawing call whose effect (bitmap/canvas coordinates) is `hit`: the named ops of `prim`, or a hole
 /// when there is no prim, a pen has no role, or the DrawInfo cannot be read.
-pub fn note<U: GuestUi>(a: &mut Amiga<U>, win: u32, prim: Option<Prim>, hit: Rect, origin: (i32, i32)) {
+pub fn note<U: GuestUi>(a: &mut Amiga<U>, sink: Sink, prim: Option<Prim>, hit: Rect, origin: (i32, i32)) {
     if hit.is_empty() || !a.gfx.present.plane_route() { return; }
     let ops = prim.and_then(|p| PenRoles::read(a).ok().and_then(|roles| p.ops(&roles, origin, hit)));
     match ops {
-        Some(v) => for (op, bbox) in v { a.gfx.present.record(win, op, bbox); },
-        None => a.gfx.present.record_hole(win, hit),
+        Some(v) => for (op, bbox) in v {
+            let sink = match sink { Sink::Window(win) => Sink::Window(win), Sink::Surface(bm) => Sink::Surface(bm) };
+            emit(a, sink, Rec::Op { op, bbox });
+        },
+        None => emit(a, sink, Rec::Hole(hit)),
     }
 }
 

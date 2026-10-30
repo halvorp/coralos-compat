@@ -40,17 +40,26 @@ pub fn ensure_source<U: GuestUi>(a: &mut Amiga<U>, bm: u32) -> Result<(), Refusa
     if !planes.iter().any(|&p| p != 0 && p != u32::MAX) { return Ok(()); }
     let (bpr, rows) = (a.mem.read_u16(bm + BM_BYTES_PER_ROW).map_err(&m)? as u32, a.mem.read_u16(bm + BM_ROWS).map_err(&m)? as u32);
     let mut pens = alloc::vec![0u8; (bpr * 8 * rows) as usize];
+    let mut bytes = alloc::vec::Vec::new();
     for (i, &p) in planes.iter().enumerate() {
         if p == 0 { continue; }
         for y in 0..rows {
             for xb in 0..bpr {
                 let byte = if p == u32::MAX { 0xFF } else { a.mem.read_u8(p + y * bpr + xb).map_err(&m)? };
+                if p != u32::MAX { bytes.push(byte); }
                 for bit in 0..8u32 { if byte & (0x80 >> bit) != 0 { pens[(y * bpr * 8 + xb * 8 + bit) as usize] |= 1 << i; } }
             }
         }
     }
     let g = a.gfx.bitmaps.get_mut(&bm).expect("ensured");
     for y in 0..rows as i32 { for x in 0..(bpr * 8) as i32 { g.bm.set(x, y, pens[(y as u32 * bpr * 8 + x as u32) as usize]); } }
+    let rect = g.bm.rect();
+    let sum = super::surface::fnv1a(0xcbf29ce484222325, &bytes);
+    let old = a.gfx.surfaces.get(bm).map(|s| s.sum).unwrap_or(0);
+    if old != 0 && old != sum { a.gfx.surfaces.invalidate(bm, rect); }
+    let s = a.gfx.surfaces.entry(bm);
+    s.sum = sum;
+    s.bitmap_rect = rect;
     Ok(())
 }
 
@@ -65,16 +74,22 @@ pub fn export_planes<U: GuestUi>(a: &mut Amiga<U>, bm: u32) -> Result<(), Refusa
     if !planes.iter().any(|&p| p != 0 && p != u32::MAX) { return Ok(()); }
     let (bpr, rows) = (a.mem.read_u16(bm + BM_BYTES_PER_ROW).map_err(&m)? as u32, a.mem.read_u16(bm + BM_ROWS).map_err(&m)? as u32);
     let Some(g) = a.gfx.bitmaps.get(&bm) else { return Ok(()) };
-    let mut bytes = alloc::vec![0u8; (bpr * rows) as usize];
+    let rect = g.bm.rect();
+    let mut all = alloc::vec::Vec::new();
     for (i, &p) in planes.iter().enumerate() {
         if p == 0 || p == u32::MAX { continue; }
+        let mut bytes = alloc::vec![0u8; (bpr * rows) as usize];
         for y in 0..rows as i32 { for xb in 0..bpr as i32 {
             let mut byte = 0u8;
             for bit in 0..8 { if g.bm.get(xb * 8 + bit, y).unwrap_or(0) & (1 << i) != 0 { byte |= 0x80 >> bit; } }
             bytes[(y as u32 * bpr + xb as u32) as usize] = byte;
         } }
         a.mem.write_bytes(p, &bytes).map_err(&m)?;
+        all.extend_from_slice(&bytes);
     }
+    let s = a.gfx.surfaces.entry(bm);
+    s.sum = super::surface::fnv1a(0xcbf29ce484222325, &all);
+    s.bitmap_rect = rect;
     Ok(())
 }
 
@@ -83,6 +98,7 @@ pub fn create<U: GuestUi>(a: &mut Amiga<U>, w: i32, h: i32, depth: u8, window: O
     let host = Bitmap::new(w, h, depth).ok_or_else(|| Refusal(format!("BitMap {w}x{h}x{depth}: unsupported size or depth (chunky 1..=8 bits)")))?;
     let bm = memory::alloc_zeroed(a, BM_SIZE, "BitMap struct")?;
     write_struct(a, bm, w, h, depth)?;
+    if window.is_some() { a.gfx.surfaces.remove(bm); } else { a.gfx.surfaces.entry(bm).bitmap_rect = host.rect(); }
     a.gfx.bitmaps.insert(bm, GBitmap { bm: host, window });
     Ok(bm)
 }
@@ -93,6 +109,7 @@ pub fn ensure<U: GuestUi>(a: &mut Amiga<U>, bm: u32) -> Result<(), Refusal> {
     let m = Refusal::mem("BitMap");
     let (bpr, rows, depth) = (a.mem.read_u16(bm + BM_BYTES_PER_ROW).map_err(&m)? as i32, a.mem.read_u16(bm + BM_ROWS).map_err(&m)? as i32, a.mem.read_u8(bm + BM_DEPTH).map_err(&m)?);
     let host = Bitmap::new(bpr * 8, rows, depth).ok_or_else(|| Refusal(format!("BitMap {bm:#x}: BytesPerRow {bpr} Rows {rows} Depth {depth} is not a usable bitmap (chunky 1..=8 bits)")))?;
+    a.gfx.surfaces.entry(bm).bitmap_rect = host.rect();
     a.gfx.bitmaps.insert(bm, GBitmap { bm: host, window: None });
     Ok(())
 }
@@ -114,6 +131,7 @@ pub fn free_bit_map<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     if bm == 0 { return Ok("[graphics] FreeBitMap NULL".into()); }
     if a.gfx.bitmaps.get(&bm).map_or(false, |g| g.window.is_some()) { return Err(Refusal(format!("FreeBitMap {bm:#x}: it is a window's canvas"))); }
     if a.gfx.bitmaps.remove(&bm).is_none() { return Err(Refusal(format!("FreeBitMap {bm:#x}: not a bitmap AllocBitMap returned"))); }
+    a.gfx.surfaces.remove(bm);
     a.heap.free(bm, BM_SIZE).map_err(|e| Refusal(format!("FreeBitMap: {e}")))?;
     Ok(format!("[graphics] FreeBitMap {bm:#x}"))
 }

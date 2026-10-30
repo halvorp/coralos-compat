@@ -51,6 +51,10 @@ pub struct State {
     pub present: heirloom_present::Presenter,
     /// Images (guest addresses) of default icons that carry the host's artwork for a role: a draw of one is an `Icon` op.
     pub icon_images: BTreeMap<u32, heirloom_ui_abi::IconRole>,
+    /// Named display lists for off-screen bitmaps, keyed by their guest BitMap struct address.
+    pub surfaces: super::surface::Surfaces,
+    /// Windows whose first off-screen splice has already been logged.
+    pub splice_logged: alloc::collections::BTreeSet<u32>,
 }
 
 impl State {

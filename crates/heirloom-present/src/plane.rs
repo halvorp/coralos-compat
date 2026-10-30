@@ -30,11 +30,30 @@ pub enum Rec {
 }
 
 impl Rec {
-    fn bbox(&self) -> Rect { match self { Rec::Op { bbox, .. } => *bbox, Rec::Hole(r) => *r } }
+    pub fn bbox(&self) -> Rect { match self { Rec::Op { bbox, .. } => *bbox, Rec::Hole(r) => *r } }
     /// Does this rec paint every pixel of its box opaquely (so anything under it is dead)? A fill, a hole, and a text run that
     /// paints its cell first (`bg_role` Some: JAM2) do; a JAM1 run, a line, a bevel edge or an icon leave pixels under them.
-    fn opaque(&self) -> bool {
+    pub fn opaque(&self) -> bool {
         matches!(self, Rec::Hole(_) | Rec::Op { op: DrawOp::Fill { .. } | DrawOp::Text { bg_role: Some(_), .. }, .. })
+    }
+}
+
+/// Drop every rec an opaque later rec fully covers; collapse a list still over [`MAX_RECS`] into one hole over `canvas`. Shared by
+/// the window lists here and an engine's off-screen bitmap lists (ami68k graphics/surface.rs).
+pub fn prune_recs(v: &mut Vec<Rec>, canvas: Rect) {
+    let mut keep = alloc::vec![true; v.len()];
+    let mut covers: Vec<Rect> = Vec::new();
+    for (i, r) in v.iter().enumerate().rev() {
+        let b = r.bbox();
+        if covers.iter().any(|c| c.intersect(&b) == b) { keep[i] = false; continue }
+        if r.opaque() { covers.push(b); }
+    }
+    let mut it = keep.iter();
+    v.retain(|_| *it.next().unwrap());
+    if v.len() > MAX_RECS {
+        let old: Vec<Rec> = v.drain(..v.len() - MAX_RECS / 2).collect();
+        let hole = old.iter().fold(Rect::default(), |u, r| u.union(&r.bbox())).intersect(&canvas);
+        if !hole.is_empty() { v.insert(0, Rec::Hole(hole)); }
     }
 }
 
@@ -44,7 +63,8 @@ pub struct Layout { pub offset: (i32, i32), pub exclude: Vec<Rect> }
 
 fn grect(r: &Rect) -> GuestRect { GuestRect { left: r.x0, top: r.y0, width: r.width(), height: r.height() } }
 
-fn moved(op: &DrawOp, (dx, dy): (i32, i32)) -> DrawOp {
+/// `op` moved by (dx, dy): a display list spliced from one surface into another (ami68k graphics/surface.rs).
+pub fn moved(op: &DrawOp, (dx, dy): (i32, i32)) -> DrawOp {
     let r = |g: &GuestRect| GuestRect { left: g.left + dx, top: g.top + dy, ..*g };
     let p = |g: &GuestPoint| GuestPoint { x: g.x + dx, y: g.y + dy };
     match op {
@@ -103,21 +123,7 @@ impl Presenter {
 
     /// Drop every rec an opaque later rec fully covers; collapse a list still over the cap into one hole over `canvas`.
     fn prune(&mut self, win: u32, canvas: Rect) {
-        let Some(v) = self.recs.get_mut(&win) else { return };
-        let mut keep = alloc::vec![true; v.len()];
-        let mut covers: Vec<Rect> = Vec::new();
-        for (i, r) in v.iter().enumerate().rev() {
-            let b = r.bbox();
-            if covers.iter().any(|c| c.intersect(&b) == b) { keep[i] = false; continue }
-            if r.opaque() { covers.push(b); }
-        }
-        let mut it = keep.iter();
-        v.retain(|_| *it.next().unwrap());
-        if v.len() > MAX_RECS {
-            let old: Vec<Rec> = v.drain(..v.len() - MAX_RECS / 2).collect();
-            let hole = old.iter().fold(Rect::default(), |u, r| u.union(&r.bbox())).intersect(&canvas);
-            if !hole.is_empty() { v.insert(0, Rec::Hole(hole)); }
-        }
+        if let Some(v) = self.recs.get_mut(&win) { prune_recs(v, canvas); }
     }
 
     /// Flush every damaged window as one `present_plane` carrying the display list for the damage rectangle. A host that

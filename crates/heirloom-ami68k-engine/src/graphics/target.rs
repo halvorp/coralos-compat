@@ -1,6 +1,6 @@
 //! Where a RastPort draws: its Layer's canvas (a window), or the bitmap it points at.
 use super::layout::*;
-use super::record::Prim;
+use super::record::{Prim, Sink};
 use super::state::GBitmap;
 use crate::{machine::Amiga, Refusal};
 use alloc::format;
@@ -51,10 +51,9 @@ pub fn paint_as<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, prim: Option<
             let g: &mut GBitmap = a.gfx.bitmaps.get_mut(&bm).ok_or_else(|| Refusal(format!("{what}: BitMap {bm:#x} vanished")))?;
             let clip = Clip { rect: g.bm.rect(), region: region.as_ref() };
             let r = f(&mut g.bm, &clip, origin);
-            if let Some(w) = window {
-                a.gfx.add_damage(w, r);
-                super::record::note(a, w, if region.is_some() { None } else { prim }, r, origin);
-            }
+            if let Some(w) = window { a.gfx.add_damage(w, r); }
+            let sink = match window { Some(w) => Sink::Window(w), None => Sink::Surface(bm) };
+            super::record::note(a, sink, if region.is_some() { None } else { prim }, r, origin);
             super::bitmaps::export_planes(a, bm)?;
             Ok(r)
         }
@@ -62,19 +61,19 @@ pub fn paint_as<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, prim: Option<
 }
 
 /// A call that is SYSTEM UI and so puts no pixels in the canvas (`prim`, in RastPort coordinates: a bevel box): only the display-list
-/// op is recorded, for the host's kit to draw. Refused by name where that cannot be done exactly: a destination that is not a window
-/// canvas, an installed clip region, or a host without the plane route (it would show nothing, and the guest's drawing is not faked).
+/// op is recorded, for the host's kit to draw. Refused by name where that cannot be done exactly: an installed clip region, or a host
+/// without the plane route (it would show nothing, and the guest's drawing is not faked).
 pub fn note_native<U: GuestUi>(a: &mut Amiga<U>, rp: u32, what: &str, prim: Prim, rect: Rect) -> Result<(), Refusal> {
     match resolve(a, rp)? {
         Dest::Dropped(why) => { a.log.push(format!("[graphics] {what} on {rp:#x} dropped: {why}")); Ok(()) }
-        Dest::Bitmap { window: None, .. } => Err(Refusal(format!("{what}: RastPort {rp:#x} draws into an off-screen bitmap: system UI has no display list there"))),
         Dest::Bitmap { region: Some(_), .. } => Err(Refusal(format!("{what}: a clip region is installed on the layer: a native op cannot be clipped to it"))),
-        Dest::Bitmap { bm, origin, window: Some(w), .. } => {
+        Dest::Bitmap { bm, origin, window, .. } => {
             if !a.gfx.present.plane_route() { return Err(Refusal(format!("{what}: the host has no plane route, so a native op would show nothing"))); }
             super::bitmaps::ensure_source(a, bm)?;
             let hit = rect.translate(-origin.0, -origin.1).intersect(&a.gfx.bitmaps[&bm].bm.rect());
-            a.gfx.add_damage(w, hit);
-            super::record::note(a, w, Some(prim), hit, origin);
+            if let Some(w) = window { a.gfx.add_damage(w, hit); }
+            let sink = match window { Some(w) => Sink::Window(w), None => Sink::Surface(bm) };
+            super::record::note(a, sink, Some(prim), hit, origin);
             Ok(())
         }
     }

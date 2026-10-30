@@ -27,6 +27,7 @@ pub mod record;
 pub(crate) mod regions;
 mod setup;
 pub mod state;
+pub mod surface;
 pub mod target;
 mod text;
 mod windows;

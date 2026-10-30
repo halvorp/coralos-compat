@@ -1,12 +1,14 @@
 //! BltBitMap, BltBitMapRastPort, ClipBlit, BltMaskBitMapRastPort, BltTemplate: minterm blits (every minterm, see
 //! heirloom_raster::blit) between host-backed bitmaps and window canvases. A source or destination coordinate outside a
-//! bitmap is clipped, never faulted; a destination RastPort's layer clip region applies.
+//! bitmap is clipped, never faulted; a destination RastPort's layer clip region applies. A plain copy of a recorded
+//! off-screen surface splices its named ops; every other blit is a hole.
 use super::layout::*;
-use super::{bitmaps, rastport, target::{self, Dest}};
+use super::{bitmaps, rastport, record::{self, Sink}, target::{self, Dest}};
 use crate::{machine::Amiga, Refusal};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use heirloom_present::plane::{moved, Rec};
 use heirloom_ui_abi::GuestUi;
 use crate::cpu::Cpu;
 use heirloom_raster::{blit::{blit, blit_within, MaskFn}, paint::{stencil, Clip}, Rect};
@@ -30,8 +32,40 @@ fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: 
         a.gfx.bitmaps.insert(src, s);
         r?
     };
-    // A blit is drawing the engine cannot name: damage AND a hole, so the plane route never loses it.
-    if let Some(win) = window { a.gfx.add_damage(win, hit); super::record::note(a, win, None, hit, (0, 0)); }
+    if let Some(win) = window { a.gfx.add_damage(win, hit); }
+
+    // The pixels are authoritative. Re-read a planar source now so a guest poke invalidates its display list before splicing.
+    bitmaps::ensure_source(a, src)?;
+    let depth = a.gfx.bitmaps.get(&src).map(|g| g.bm.depth()).unwrap_or(8);
+    let covered = if depth >= 8 { 0xFF } else { (1u16 << depth) as u8 - 1 };
+    let can_splice = mt == 0xC0 && mask.is_none() && planes & covered == covered && region.is_none() && src != bm && a.gfx.present.plane_route();
+    let src_rect = Rect::from_size(sxx, syy, w, h);
+    let dst_rect = Rect::from_size(bx, by, w, h);
+    let sink = match window { Some(win) => Sink::Window(win), None => Sink::Surface(bm) };
+    if can_splice {
+        // The source's own list stands in for the copied pixels: its ops move to the destination, its holes stay holes, and a
+        // pixel no rec covers is background exactly as in a window list. A rec straddling the source rect becomes a hole over
+        // the part that was copied (text is never clipped).
+        let delta = (bx - sxx, by - syy);
+        let (mut ops, mut holes) = (0u32, 0u32);
+        for rec in a.gfx.surfaces.slice(src, src_rect) {
+            let bbox = rec.bbox();
+            let part = src_rect.intersect(&bbox);
+            if part.is_empty() { continue; }
+            let rec = match rec {
+                Rec::Op { op, .. } if part == bbox => { ops += 1; Rec::Op { op: moved(&op, delta), bbox: bbox.translate(delta.0, delta.1) } }
+                _ => { holes += 1; Rec::Hole(part.translate(delta.0, delta.1)) }
+            };
+            record::emit(a, sink, rec);
+        }
+        if let Some(win) = window {
+            if a.gfx.splice_logged.insert(win) {
+                a.log.push(format!("[graphics] splice bm={src:#x} -> window {win:#x} ops={ops} holes={holes} [AMI-SURFACE-SPLICE]"));
+            }
+        }
+    } else {
+        record::emit(a, sink, Rec::Hole(dst_rect));
+    }
     bitmaps::export_planes(a, bm)?;
     Ok(hit)
 }
