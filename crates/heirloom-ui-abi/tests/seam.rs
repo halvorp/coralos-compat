@@ -130,6 +130,27 @@ fn planes_are_recorded_replaced_per_id_and_validated() {
     assert_eq!(ui.calls.len(), n);
 }
 
+/// A bound button face is a plane op like any other: recorded as sent, with a label, a pressed state and an optional exact-colour
+/// accent; a negative size or an accent that is not `0x00RRGGBB` is refused by name and nothing is recorded.
+#[test]
+fn a_face_is_recorded_as_sent_and_a_bad_one_is_refused_by_name() {
+    let mut ui = RecordingGuestUi::new();
+    let w = ui.open_window(win()).unwrap();
+    let ops = vec![
+        DrawOp::Face { rect: r(0, 0, 60, 14), label: "Copy".into(), pressed: false, accent: Some(0x00C0_3020) },
+        DrawOp::Face { rect: r(60, 0, 60, 14), label: String::new(), pressed: true, accent: None },
+    ];
+    let p = Plane { id: 9, rect: r(0, 0, 120, 14), ops };
+    ui.present_plane(w, p.clone()).unwrap();
+    assert_eq!(ui.planes[&(w.id, 9)], p);
+    let n = ui.calls.len();
+    let negative = Plane { id: 9, rect: r(0, 0, 4, 4), ops: vec![DrawOp::Face { rect: r(0, 0, -1, 4), label: "x".into(), pressed: false, accent: None }] };
+    let alpha = Plane { id: 9, rect: r(0, 0, 4, 4), ops: vec![DrawOp::Face { rect: r(0, 0, 4, 4), label: "x".into(), pressed: false, accent: Some(0xFF00_0000) }] };
+    for bad in [negative, alpha] { assert!(matches!(ui.present_plane(w, bad), Err(UiRefusal::InvalidGeometry(_)))); }
+    assert_eq!(ui.calls.len(), n, "a refused face records nothing");
+    assert_eq!(ui.planes[&(w.id, 9)], p, "and the earlier frame stands");
+}
+
 /// A host with no plane replay refuses by name (the trait default), so an engine can fall back to `present_content`.
 #[test]
 fn the_default_present_plane_is_a_named_refusal() {

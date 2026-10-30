@@ -82,6 +82,9 @@ fn plane() -> Plane {
                 rect: GuestRect { left: 0, top: 0, width: 1, height: 2 },
                 rgb: vec![0x0011_2233, 0x0044_5566],
             },
+            DrawOp::Swatch { rect: rect(), rgb: 0x00C0_3020 },
+            DrawOp::Face { rect: rect(), label: "Copy".into(), pressed: true, accent: Some(0x0012_3456) },
+            DrawOp::Face { rect: rect(), label: String::new(), pressed: false, accent: None },
         ],
     }
 }

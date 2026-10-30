@@ -22,7 +22,7 @@ fn the_tree_obeys_the_translation_seam() {
 fn the_seam_check_catches_what_it_claims_to() {
     if let Some((ok, text)) = script(&["--selftest"]) {
         assert!(ok, "{text}");
-        for must in ["planted gadget-library dependency is RED", "planted app name is RED", "bindings/ and in comments is allowed"] {
+        for must in ["planted gadget-library dependency is RED", "planted app name is RED", "bindings/ and in comments is allowed", "planted face in an engine is RED", "a face in an engine's bindings/ is RED (bindings are data)", "the face in the binding interpreter and in a comment is allowed"] {
             assert!(text.contains(must), "selftest did not exercise: {must}\n{text}");
         }
     }

@@ -37,6 +37,12 @@ pub enum DrawOp {
     /// A solid fill in an EXACT guest colour (`0x00RRGGBB`) the theme has no role for: the user's own configuration (Directory
     /// Opus's coloured button bank). The kit paints it as a plain surface; it is named, not raw, so text and edges on it replay.
     Swatch { rect: GuestRect, rgb: u32 },
+    /// A button face known to be a button only because version-bound binding DATA names it, applied by the one generic binding
+    /// interpreter (ruling 17; doctrine HEIRLOOM-APP-CHROME-NEEDS-A-BINDING): never inferred from how the drawing looks. The host replays it as the kit's
+    /// non-interactive face part and never paints it itself. `label` is the face's text (empty = none), `pressed` the face's
+    /// state as the program drew it, `accent` an optional mark in an exact guest colour (`0x00RRGGBB`): the program's own colour
+    /// for this button, shown as a tag, never as the face's fill. Input stays the guest's: the face is drawing, not a control.
+    Face { rect: GuestRect, label: String, pressed: bool, accent: Option<u32> },
 }
 
 impl DrawOp {
@@ -48,6 +54,8 @@ impl DrawOp {
                 Err(UiRefusal::InvalidGeometry("draw op with a negative size")),
             DrawOp::Pixels { rect, rgb } if bad(rect) || rgb.len() != (rect.width as usize) * (rect.height as usize) =>
                 Err(UiRefusal::InvalidGeometry("pixel op: count is not the rect's area")),
+            DrawOp::Face { rect, .. } if bad(rect) => Err(UiRefusal::InvalidGeometry("draw op with a negative size")),
+            DrawOp::Face { accent: Some(rgb), .. } if rgb >> 24 != 0 => Err(UiRefusal::InvalidGeometry("face accent is not 0x00RRGGBB")),
             DrawOp::Text { px: 0, .. } => Err(UiRefusal::InvalidGeometry("text with a zero pixel size")),
             DrawOp::Text { width, .. } if *width < 0 => Err(UiRefusal::InvalidGeometry("text with a negative run width")),
             _ => Ok(()),

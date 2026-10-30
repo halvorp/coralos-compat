@@ -51,7 +51,7 @@ fn run(rel: &str, dev: Option<(&str, &str)>, seconds: u64, prep: impl FnOnce(&mu
 struct Win { planes: String, area: i64, kinds: BTreeMap<&'static str, u32>, holes: u32, hole_px: i64, rects: Vec<(i32, i32, i32, i32)>, controls: u32 }
 
 fn kind(op: &DrawOp) -> &'static str {
-    match op { DrawOp::Fill { .. } => "fill", DrawOp::Text { .. } => "text", DrawOp::Line { .. } => "line", DrawOp::Bevel { .. } => "bevel", DrawOp::Icon { .. } => "icon", DrawOp::Pixels { .. } => "PIXELS", DrawOp::Swatch { .. } => "swatch" }
+    match op { DrawOp::Fill { .. } => "fill", DrawOp::Text { .. } => "text", DrawOp::Line { .. } => "line", DrawOp::Bevel { .. } => "bevel", DrawOp::Icon { .. } => "icon", DrawOp::Pixels { .. } => "PIXELS", DrawOp::Swatch { .. } => "swatch", DrawOp::Face { .. } => "face" }
 }
 
 /// The census of every window, from the recorder's merged plane per (window, plane id): what the host shows at the idle point.

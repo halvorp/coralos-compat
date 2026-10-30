@@ -31,10 +31,11 @@ pub enum Rec {
 
 impl Rec {
     pub fn bbox(&self) -> Rect { match self { Rec::Op { bbox, .. } => *bbox, Rec::Hole(r) => *r } }
-    /// Does this rec paint every pixel of its box opaquely (so anything under it is dead)? A fill (a theme role or a Swatch in the guest's exact colour), a hole, and a text run that
-    /// paints its cell first (`bg_role` Some: JAM2) do; a JAM1 run, a line, a bevel edge or an icon leave pixels under them.
+    /// Does this rec paint every pixel of its box opaquely (so anything under it is dead)? A fill (a theme role or a Swatch in the guest's exact colour), a hole, a bound Face (the
+    /// kit face covers its box, so the program's own drawing wholly under it never shows at the face's rounded corners), and a text
+    /// run that paints its cell first (`bg_role` Some: JAM2) do; a JAM1 run, a line, a bevel edge or an icon leave pixels under them.
     pub fn opaque(&self) -> bool {
-        matches!(self, Rec::Hole(_) | Rec::Op { op: DrawOp::Fill { .. } | DrawOp::Swatch { .. } | DrawOp::Text { bg_role: Some(_), .. }, .. })
+        matches!(self, Rec::Hole(_) | Rec::Op { op: DrawOp::Fill { .. } | DrawOp::Swatch { .. } | DrawOp::Face { .. } | DrawOp::Text { bg_role: Some(_), .. }, .. })
     }
 }
 
@@ -159,6 +160,7 @@ pub fn moved(op: &DrawOp, (dx, dy): (i32, i32)) -> DrawOp {
         DrawOp::Icon { rect, role } => DrawOp::Icon { rect: r(rect), role: *role },
         DrawOp::Pixels { rect, rgb } => DrawOp::Pixels { rect: r(rect), rgb: rgb.clone() },
         DrawOp::Swatch { rect, rgb } => DrawOp::Swatch { rect: r(rect), rgb: *rgb },
+        DrawOp::Face { rect, label, pressed, accent } => DrawOp::Face { rect: r(rect), label: label.clone(), pressed: *pressed, accent: *accent },
     }
 }
 

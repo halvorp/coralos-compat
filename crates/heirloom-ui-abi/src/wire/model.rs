@@ -561,6 +561,13 @@ pub(super) fn put_draw_op(out: &mut Vec<u8>, value: &DrawOp) {
             put_rect(out, rect);
             put_u32(out, *rgb);
         }
+        DrawOp::Face { rect, label, pressed, accent } => {
+            out.push(7);
+            put_rect(out, rect);
+            put_string(out, label);
+            put_bool(out, *pressed);
+            put_option(out, accent, |out, value| put_u32(out, *value));
+        }
     }
 }
 
@@ -589,6 +596,12 @@ pub(super) fn get_draw_op(reader: &mut Reader<'_>) -> Result<DrawOp, WireError> 
             rgb: reader.vec(4, |reader| reader.u32())?,
         },
         6 => DrawOp::Swatch { rect: get_rect(reader)?, rgb: reader.u32()? },
+        7 => DrawOp::Face {
+            rect: get_rect(reader)?,
+            label: reader.string()?,
+            pressed: reader.boolean()?,
+            accent: reader.option(|reader| reader.u32())?,
+        },
         _ => return Err(WireError::UnknownTag { what: "DrawOp", tag }),
     })
 }
