@@ -11,6 +11,9 @@ use heirloom_os_abi::*;
 use heirloom_ui_abi::wire::host::WireHost;
 use heirloom_ui_abi::wire::{decode, encode_control, Control, Frame, Report, WireStep};
 use heirloom_ui_abi::*;
+use heirloom_macppc_engine::os_face::MacPpcFamily;
+use heirloom_os_abi::serve::{FamilyHooks, HostTransport, OsFamily, Session};
+use heirloom_ui_abi::wire::proxy::ProxyUi;
 use std::sync::Once;
 
 const WALL: i64 = 1_790_000_000;
@@ -29,6 +32,23 @@ fn app() -> Vec<u8> {
 struct Sink {
     frames: Vec<Vec<u8>>,
     canvases: Vec<Vec<u32>>,
+    /// Every read_stream the library asked for: (locator, offset, capacity).
+    reads: Vec<(String, u64, usize)>,
+}
+
+/// The engine's storage in a test: "Game/War3.mpq" holds `offset as u8`; any other locator is refused.
+extern "C" fn read_stream(ctx: *mut c_void, locator: *const u8, len: usize, offset: u64, dst: *mut u8, cap: usize) -> isize {
+    let sink = unsafe { &mut *(ctx as *mut Sink) };
+    let locator = String::from_utf8(unsafe { std::slice::from_raw_parts(locator, len) }.to_vec()).unwrap();
+    sink.reads.push((locator.clone(), offset, cap));
+    if locator != "Game/War3.mpq" {
+        return -1;
+    }
+    let out = unsafe { std::slice::from_raw_parts_mut(dst, cap) };
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = (offset as usize + i) as u8;
+    }
+    cap as isize
 }
 
 extern "C" fn emit(ctx: *mut c_void, frame: *const u8, len: usize) {
@@ -53,7 +73,7 @@ struct Remote {
 impl Remote {
     fn new(family: u32, profile: &str) -> Result<Remote, String> {
         let mut sink = Box::new(Sink::default());
-        let host = OsHost { ctx: &mut *sink as *mut Sink as *mut c_void, emit, lease_canvas: lease };
+        let host = OsHost { ctx: &mut *sink as *mut Sink as *mut c_void, emit, lease_canvas: lease, read_stream: no_streams };
         let mut why = [0u8; 256];
         let mut why_len = 0usize;
         let inst = (os_mac_vtable().create_for_family)(family, profile.as_ptr(), profile.len(), &host, why.as_mut_ptr(), why.len(), &mut why_len);
@@ -165,4 +185,56 @@ fn a_family_or_profile_os_mac_does_not_serve_is_refused_by_name() {
     assert!(e.contains("macppc") && e.contains("mac-ii"), "{e}");
     let e = Remote::new(FAMILY_EKAARM, "").err().expect("os-mac.library serves no Symbian machine");
     assert!(e.contains("no family 4"), "{e}");
+}
+
+/// A PowerPC machine made the way the table makes one (Session::with_host), over `sink`'s storage.
+fn session(sink: &mut Sink, wired: bool) -> Session<MacPpc<heirloom_os_abi::serve::LibUi>> {
+    let host = OsHost { ctx: sink as *mut Sink as *mut c_void, emit, lease_canvas: lease, read_stream };
+    let machine = MacPpcFamily::create("", ProxyUi::new(HostTransport::new(host))).unwrap();
+    if wired { Session::with_host(machine, FamilyHooks::of::<MacPpcFamily>(), host) } else { Session::new(machine, FamilyHooks::of::<MacPpcFamily>()) }
+}
+
+/// The staged volume as the app ships it: one stream file named by its bundle path (its bytes stay in storage).
+fn volume_with_a_stream() -> Vec<u8> {
+    let mut t = heirloom_volume::Tree::new(31);
+    let v = t.add_volume("Warcraft III", true);
+    t.enable_streams();
+    t.put_stream(v, "War3.mpq", 1000, "Game/War3.mpq").unwrap();
+    t.put_stream(v, "Elsewhere", 10, "../outside").unwrap();
+    let snap = heirloom_volume::snapshot::encode(&t);
+    let mut b = Vec::new();
+    encode_control(&Control::Volume { offset: 0, total: snap.len() as u32, chunk: snap }, &mut b).unwrap();
+    b
+}
+
+#[test]
+fn a_staged_stream_is_read_through_the_engines_storage_by_its_locator() {
+    bind();
+    let mut sink = Box::new(Sink::default());
+    let mut s = session(&mut sink, true);
+    s.apply(&volume_with_a_stream()).unwrap();
+    let vol = s.machine().volume();
+    let game = vol.volume("Warcraft III").unwrap();
+    let f = vol.find_child(game, "War3.mpq").unwrap();
+    assert_eq!((vol.is_stream(f), vol.file_len(f)), (true, Some(1000)));
+    let mut buf = [0u8; 8];
+    assert_eq!(vol.read_at(f, 300, &mut buf), Some(8));
+    assert_eq!(buf, [44, 45, 46, 47, 48, 49, 50, 51], "bytes 300.. come from the engine's storage");
+    assert_eq!(vol.read_at(f, 996, &mut buf), Some(4), "clamped to the stream's own length");
+    let bad = vol.find_child(game, "Elsewhere").unwrap();
+    assert_eq!(vol.read_at(bad, 0, &mut buf), None, "a locator the engine refuses is an I/O error, never zeros");
+    assert_eq!(sink.reads, vec![(String::from("Game/War3.mpq"), 300, 8), (String::from("Game/War3.mpq"), 996, 4), (String::from("../outside"), 0, 8)]);
+}
+
+#[test]
+fn a_session_not_wired_to_the_engines_storage_reads_no_stream() {
+    // NEGATIVE CONTROL: the same volume in a session made without the host (Session::new) has no source: no bytes, no call out.
+    bind();
+    let mut sink = Box::new(Sink::default());
+    let mut s = session(&mut sink, false);
+    s.apply(&volume_with_a_stream()).unwrap();
+    let vol = s.machine().volume();
+    let f = vol.find_child(vol.volume("Warcraft III").unwrap(), "War3.mpq").unwrap();
+    assert_eq!(vol.read_at(f, 0, &mut [0u8; 4]), None);
+    assert!(sink.reads.is_empty());
 }

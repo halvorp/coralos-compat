@@ -24,19 +24,24 @@ pub enum Kind { Dir(Vec<NodeId>), File(Vec<u8>), Stream(Stream) }
 /// (a 401 MB game archive is never copied into the engine's memory). Only a tree whose engine has called
 /// [`Tree::enable_streams`] (its file layer reads through [`Tree::read_at`] / [`Tree::file_len`]) accepts one; on any other
 /// tree [`Tree::put_stream`] is refused and the host reads the file in full, as before.
+///
+/// A stream is named by its LOCATOR: the file's path relative to the storage root its source reads (a bundle-relative path in
+/// Heirloom.app, `Game/War3.mpq`). The tree keeps the locators itself, so a snapshot carries them to another process
+/// ([`crate::snapshot`]) and that process reads the same file from its own storage with its own source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stream {
     /// The data fork's length in bytes.
     pub len: u64,
-    /// The host's name for the bytes, passed back to [`StreamSource::read_at`].
-    pub key: u32,
+    /// Index of the stream's locator in its tree ([`Tree::stream_locator`]).
+    key: u32,
 }
 
-/// Where a tree's [`Stream`] files are read from: the host's storage (CoralFS in Heirloom.app, a host directory in tests).
+/// Where a tree's [`Stream`] files are read from: the host's storage (CoralFS in Heirloom.app and in an engine process, a host
+/// directory in tests).
 pub trait StreamSource {
-    /// Up to `dst.len()` bytes of stream `key` from `offset`: how many were read (fewer only at the end), `None` when the
-    /// storage refused or failed (the file layer reports an I/O error; nothing is invented).
-    fn read_at(&self, key: u32, offset: u64, dst: &mut [u8]) -> Option<usize>;
+    /// Up to `dst.len()` bytes of the stream at `locator` from `offset`: how many were read (fewer only at the end), `None` when
+    /// the storage refused or failed (the file layer reports an I/O error; nothing is invented).
+    fn read_at(&self, locator: &str, offset: u64, dst: &mut [u8]) -> Option<usize>;
 }
 
 /// The Finder-style file info of a file (HFS FInfo): the four-character type and creator, the flag word and the icon position.
@@ -69,6 +74,8 @@ pub struct Tree {
     /// The engine's file layer reads data forks through [`Tree::read_at`]: [`Kind::Stream`] files are accepted.
     streams_enabled: bool,
     streams: Option<alloc::boxed::Box<dyn StreamSource>>,
+    /// Every stream's locator, by its key.
+    locators: Vec<String>,
 }
 
 fn same(a: &str, b: &str) -> bool { a.eq_ignore_ascii_case(b) }
@@ -77,7 +84,7 @@ impl Tree {
     /// An empty tree (only the root). `max_name` is the longest component the platform allows (Amiga 107, HFS 31).
     pub fn new(max_name: usize) -> Tree {
         let root = Node::new(String::new(), ROOT, Kind::Dir(Vec::new()), false);
-        Tree { nodes: alloc::vec![Some(root)], max_name, streams_enabled: false, streams: None }
+        Tree { nodes: alloc::vec![Some(root)], max_name, streams_enabled: false, streams: None, locators: Vec::new() }
     }
 
     fn node(&self, id: NodeId) -> &Node { self.nodes[id].as_ref().expect("live node id") }
@@ -115,7 +122,8 @@ impl Tree {
             Kind::Stream(s) => {
                 if offset >= s.len { return Some(0); }
                 let n = dst.len().min(usize::try_from(s.len - offset).unwrap_or(usize::MAX));
-                let got = self.streams.as_deref()?.read_at(s.key, offset, &mut dst[..n])?;
+                let locator = self.locators.get(s.key as usize)?;
+                let got = self.streams.as_deref()?.read_at(locator, offset, &mut dst[..n])?;
                 Some(got.min(n))
             }
         }
@@ -126,11 +134,19 @@ impl Tree {
     pub fn streams_enabled(&self) -> bool { self.streams_enabled }
     /// The host side: where this tree's stream files are read from.
     pub fn set_stream_source(&mut self, src: alloc::boxed::Box<dyn StreamSource>) { self.streams = Some(src); }
-    /// Host-side: put a stream file named `leaf` in `dir` (a new name; an existing entry is [`VolErr::Exists`]). Refused with
-    /// [`VolErr::WrongType`] when the engine has not called [`Tree::enable_streams`]: its file layer would not see the bytes.
-    pub fn put_stream(&mut self, dir: NodeId, leaf: &str, stream: Stream) -> Result<NodeId, VolErr> {
+    /// Host-side: put a stream file named `leaf` in `dir`, `len` bytes read from `locator` (a new name; an existing entry is
+    /// [`VolErr::Exists`]). Refused with [`VolErr::WrongType`] when the engine has not called [`Tree::enable_streams`]: its file
+    /// layer would not see the bytes.
+    pub fn put_stream(&mut self, dir: NodeId, leaf: &str, len: u64, locator: &str) -> Result<NodeId, VolErr> {
         if !self.streams_enabled { return Err(VolErr::WrongType); }
-        self.create(dir, leaf, Kind::Stream(stream))
+        let key = u32::try_from(self.locators.len()).map_err(|_| VolErr::InvalidName)?;
+        let id = self.create(dir, leaf, Kind::Stream(Stream { len, key }))?;
+        self.locators.push(String::from(locator));
+        Ok(id)
+    }
+    /// The locator of stream file `id` (where its source reads it); `None` for any other node.
+    pub fn stream_locator(&self, id: NodeId) -> Option<&str> {
+        match &self.node(id).kind { Kind::Stream(s) => self.locators.get(s.key as usize).map(String::as_str), _ => None }
     }
 
     /// The volume `id` lives on (the root for the root).
@@ -321,11 +337,11 @@ mod stream_tests {
     use core::cell::Cell;
     use alloc::rc::Rc;
 
-    /// Stream key k holds the bytes `(offset + k) as u8`; counts the reads it served.
+    /// The stream at locator "k<n>" holds the bytes `(offset + n) as u8`; "broken" fails; counts the reads it served.
     struct Pattern { len: u64, reads: Rc<Cell<u32>> }
     impl StreamSource for Pattern {
-        fn read_at(&self, key: u32, offset: u64, dst: &mut [u8]) -> Option<usize> {
-            if key == 99 { return None; }
+        fn read_at(&self, locator: &str, offset: u64, dst: &mut [u8]) -> Option<usize> {
+            let key: u32 = locator.strip_prefix('k')?.parse().ok()?;
             self.reads.set(self.reads.get() + 1);
             let n = dst.len().min(self.len.saturating_sub(offset) as usize);
             for (i, b) in dst[..n].iter_mut().enumerate() { *b = (offset as usize + i + key as usize) as u8; }
@@ -340,7 +356,8 @@ mod stream_tests {
         let reads = Rc::new(Cell::new(0));
         t.enable_streams();
         t.set_stream_source(alloc::boxed::Box::new(Pattern { len: 1 << 30, reads: reads.clone() }));
-        let f = t.put_stream(v, "War3.mpq", Stream { len: 1000, key: 1 }).unwrap();
+        let f = t.put_stream(v, "War3.mpq", 1000, "k1").unwrap();
+        assert_eq!(t.stream_locator(f), Some("k1"));
         assert_eq!(reads.get(), 0, "staging reads nothing");
         assert_eq!((t.file_len(f), t.is_file(f), t.is_stream(f), t.file_data(f)), (Some(1000), true, true, None));
         let mut buf = [0u8; 8];
@@ -348,7 +365,7 @@ mod stream_tests {
         assert_eq!(&buf[..4], &[(996u32 + 1) as u8, (997u32 + 1) as u8, (998u32 + 1) as u8, (999u32 + 1) as u8]);
         assert_eq!(t.read_at(f, 1000, &mut buf), Some(0), "at the end: nothing, and the source is not asked");
         assert_eq!(reads.get(), 1);
-        let bad = t.put_stream(v, "Broken", Stream { len: 10, key: 99 }).unwrap();
+        let bad = t.put_stream(v, "Broken", 10, "broken").unwrap();
         assert_eq!(t.read_at(bad, 0, &mut buf), None, "a failing source is an error, never zeros");
     }
 
@@ -356,9 +373,9 @@ mod stream_tests {
     fn a_tree_whose_engine_reads_in_memory_only_refuses_a_stream() {
         let mut t = Tree::new(31);
         let v = t.add_volume("Game", false);
-        assert_eq!(t.put_stream(v, "War3.mpq", Stream { len: 1, key: 0 }), Err(VolErr::WrongType));
+        assert_eq!(t.put_stream(v, "War3.mpq", 1, "k0"), Err(VolErr::WrongType));
         t.enable_streams();
-        let f = t.put_stream(v, "War3.mpq", Stream { len: 1, key: 0 }).unwrap();
+        let f = t.put_stream(v, "War3.mpq", 1, "k0").unwrap();
         let mut b = [0u8; 1];
         assert_eq!(t.read_at(f, 0, &mut b), None, "NEGATIVE CONTROL: no source set, so no bytes");
         assert_eq!(t.put_file(v, "War3.mpq", alloc::vec![1]), Err(VolErr::WrongType), "a stream is not overwritten with memory bytes");
@@ -376,15 +393,37 @@ mod stream_tests {
     }
 
     #[test]
-    fn a_snapshot_or_merge_of_a_stream_is_refused_by_name() {
+    fn a_stream_crosses_a_snapshot_and_a_merge_by_its_locator_and_a_tree_that_reads_in_memory_refuses_it() {
         let mut t = Tree::new(31);
         let v = t.add_volume("Game", false);
         t.enable_streams();
-        t.put_stream(v, "War3.mpq", Stream { len: 5, key: 0 }).unwrap();
-        assert_eq!(crate::snapshot::decode(&crate::snapshot::encode(&t)).err(), Some(crate::snapshot::SnapErr::Stream { record: 1 }));
+        t.put_stream(v, "War3.mpq", 5, "Game/War3.mpq").unwrap();
+        // The snapshot carries the length and the locator, never the bytes: the receiver reads the file from its own storage.
+        let back = crate::snapshot::decode(&crate::snapshot::encode(&t)).unwrap();
+        let f = back.find_child(back.volume("Game").unwrap(), "War3.mpq").unwrap();
+        assert_eq!((back.is_stream(f), back.file_len(f), back.stream_locator(f)), (true, Some(5), Some("Game/War3.mpq")));
         let mut dst = Tree::new(31);
         dst.enable_streams();
-        assert_eq!(crate::snapshot::merge(&mut dst, &t), Err(VolErr::WrongType));
-        assert_eq!(crate::snapshot::merge_owned(&mut dst, t), Err(VolErr::WrongType));
+        crate::snapshot::merge(&mut dst, &t).unwrap();
+        let g = dst.find_child(dst.volume("Game").unwrap(), "War3.mpq").unwrap();
+        assert_eq!(dst.stream_locator(g), Some("Game/War3.mpq"));
+        let mut owned = Tree::new(31);
+        owned.enable_streams();
+        crate::snapshot::merge_owned(&mut owned, back).unwrap();
+        let h = owned.find_child(owned.volume("Game").unwrap(), "War3.mpq").unwrap();
+        assert_eq!((owned.file_len(h), owned.stream_locator(h)), (Some(5), Some("Game/War3.mpq")));
+        // A tree whose engine reads in memory only takes no stream, whichever way it comes.
+        let mut mem = Tree::new(31);
+        assert_eq!(crate::snapshot::merge(&mut mem, &t), Err(VolErr::WrongType));
+        assert_eq!(crate::snapshot::merge_owned(&mut Tree::new(31), crate::snapshot::decode(&crate::snapshot::encode(&t)).unwrap()), Err(VolErr::WrongType));
+    }
+
+    #[test]
+    fn a_stream_record_that_names_no_storage_is_refused_by_name() {
+        let mut t = Tree::new(31);
+        let v = t.add_volume("Game", false);
+        t.enable_streams();
+        t.put_stream(v, "Nowhere", 5, "").unwrap();
+        assert_eq!(crate::snapshot::decode(&crate::snapshot::encode(&t)).err(), Some(crate::snapshot::SnapErr::Stream { record: 1 }));
     }
 }

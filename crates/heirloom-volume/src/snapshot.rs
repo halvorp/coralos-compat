@@ -4,9 +4,11 @@
 //!
 //! Layout (little-endian): `"HVS1"`, `max_name: u32`, `count: u32`, then `count` node records in pre-order (a parent always
 //! before its children): `parent: u32` (the record index of the parent; `u32::MAX` = the pseudo-root, i.e. the record is a
-//! volume), `kind: u8` (0 directory, 1 file, 2 a stream file: its bytes stay in the SENDER's storage, so [`decode`] refuses it by
-//! name, [`SnapErr::Stream`]; its `data` run is empty), `writable: u8` (volumes only; 0 elsewhere), `name`, `attrs: u32`, `comment`,
-//! `created_ms: i64`, `modified_ms: i64`, FInfo (`type[4] creator[4] flags:u16 v:i16 h:i16`), `data` (files), `rsrc`.
+//! volume), `kind: u8` (0 directory, 1 file, 2 a stream file: its bytes stay in storage the receiver reads itself, so its `data`
+//! run is `len: u64` + the stream's LOCATOR in UTF-8, never the bytes; one without a locator is [`SnapErr::Stream`]), `writable: u8`
+//! (volumes only; 0 elsewhere), `name`, `attrs: u32`, `comment`, `created_ms: i64`, `modified_ms: i64`, FInfo (`type[4] creator[4]
+//! flags:u16 v:i16 h:i16`), `data` (files; a stream's length + locator), `rsrc`. A tree holding a stream decodes with streams
+//! enabled; the receiver sets its own [`crate::StreamSource`].
 //! Strings and byte runs are `len: u32` + bytes. Every length is checked against what remains before anything is allocated;
 //! a malformed snapshot is a named [`SnapErr`], never a panic and never a partial tree.
 use crate::{FInfo, Kind, NodeId, Tree, ROOT};
@@ -25,7 +27,7 @@ pub enum SnapErr {
     /// A record's parent is not an earlier directory record.
     BadParent { record: u32 },
     BadKind { record: u32, kind: u8 },
-    /// A stream file ([`crate::Kind::Stream`]): its bytes are in the sending host's storage, not in the snapshot.
+    /// A stream file record ([`crate::Kind::Stream`]) without its length and locator: nothing says where its bytes are.
     Stream { record: u32 },
     /// The tree refused the node (an empty, over-long or repeated name).
     Refused { record: u32 },
@@ -62,7 +64,14 @@ pub fn encode(tree: &Tree) -> Vec<u8> {
         out.extend_from_slice(&n.finfo.flags.to_le_bytes());
         out.extend_from_slice(&n.finfo.v.to_le_bytes());
         out.extend_from_slice(&n.finfo.h.to_le_bytes());
-        put_bytes(&mut out, tree.file_data(id).unwrap_or(&[]));
+        match (&n.kind, tree.stream_locator(id)) {
+            (Kind::Stream(s), Some(locator)) => {
+                put_u32(&mut out, (8 + locator.len()) as u32);
+                out.extend_from_slice(&s.len.to_le_bytes());
+                out.extend_from_slice(locator.as_bytes());
+            }
+            _ => put_bytes(&mut out, tree.file_data(id).unwrap_or(&[])),
+        }
         put_bytes(&mut out, &n.rsrc);
         for &c in tree.children(id).iter().rev() {
             stack.push((c, me));
@@ -138,13 +147,21 @@ pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
             if !tree.is_dir(dir) {
                 return Err(SnapErr::BadParent { record });
             }
-            let k = match kind {
-                0 => Kind::Dir(Vec::new()),
-                1 => Kind::File(data.to_vec()),
-                2 => return Err(SnapErr::Stream { record }),
+            match kind {
+                0 => tree.create(dir, &name, Kind::Dir(Vec::new())),
+                1 => tree.create(dir, &name, Kind::File(data.to_vec())),
+                2 => {
+                    let (len, locator) = data.split_at_checked(8).ok_or(SnapErr::Stream { record })?;
+                    let locator = core::str::from_utf8(locator).map_err(|_| SnapErr::BadUtf8("stream locator"))?;
+                    if locator.is_empty() {
+                        return Err(SnapErr::Stream { record });
+                    }
+                    tree.enable_streams();
+                    tree.put_stream(dir, &name, u64::from_le_bytes(len.try_into().expect("8 bytes")), locator)
+                }
                 _ => return Err(SnapErr::BadKind { record, kind }),
-            };
-            tree.create(dir, &name, k).map_err(|_| SnapErr::Refused { record })?
+            }
+            .map_err(|_| SnapErr::Refused { record })?
         };
         let n = tree.get_mut(id);
         n.attrs = attrs;
@@ -163,8 +180,9 @@ pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
 
 /// Put every volume, directory and file of `src` into `dst`, keeping what `dst` already holds (an engine's own pre-populated
 /// volumes): a volume or directory that exists is reused, a file that exists has its forks and metadata replaced. A file where
-/// `dst` has a directory (or the reverse) is refused with [`crate::VolErr::WrongType`] and nothing after it is merged. A stream file in `src` is
-/// refused the same way: its bytes are reachable only through `src`'s stream source, which a merge does not carry.
+/// `dst` has a directory (or the reverse) is refused with [`crate::VolErr::WrongType`] and nothing after it is merged. A stream file in `src`
+/// becomes a stream of `dst` with the same length and locator (read through `dst`'s own source); a `dst` whose engine reads in
+/// memory only refuses it the same way.
 pub fn merge(dst: &mut Tree, src: &Tree) -> Result<(), crate::VolErr> {
     let mut stack: Vec<(NodeId, NodeId)> = Vec::new(); // (src node, dst parent; ROOT = it is a volume)
     for &v in src.children(ROOT).iter().rev() {
@@ -179,8 +197,7 @@ pub fn merge(dst: &mut Tree, src: &Tree) -> Result<(), crate::VolErr> {
                 (Kind::Dir(_), Some(d)) if dst.is_dir(d) => d,
                 (Kind::Dir(_), None) => dst.create(parent, &n.name, Kind::Dir(Vec::new()))?,
                 (Kind::File(data), _) => dst.put_file(parent, &n.name, data.clone())?,
-                // its bytes are only reachable through SRC's stream source, which a merge does not carry
-                (Kind::Stream(_), _) => return Err(crate::VolErr::WrongType),
+                (Kind::Stream(s), _) => dst.put_stream(parent, &n.name, s.len, src.stream_locator(id).ok_or(crate::VolErr::NotFound)?)?,
                 (Kind::Dir(_), Some(_)) => return Err(crate::VolErr::WrongType),
             }
         };
@@ -214,7 +231,10 @@ pub fn merge_owned(dst: &mut Tree, mut src: Tree) -> Result<(), crate::VolErr> {
             match (is_dir, dst.find_child(parent, &name)) {
                 (true, Some(d)) if dst.is_dir(d) => d,
                 (true, None) => dst.create(parent, &name, Kind::Dir(Vec::new()))?,
-                (false, _) if src.is_stream(id) => return Err(crate::VolErr::WrongType),
+                (false, _) if src.is_stream(id) => {
+                    let len = src.file_len(id).unwrap_or(0);
+                    dst.put_stream(parent, &name, len, src.stream_locator(id).ok_or(crate::VolErr::NotFound)?)?
+                }
                 (false, _) => {
                     let data = src.file_data_mut(id).map(core::mem::take).unwrap_or_default();
                     dst.put_file(parent, &name, data)?

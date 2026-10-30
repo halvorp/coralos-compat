@@ -65,12 +65,23 @@ pub const APPLY_BAD_ARGS: i32 = -2;
 /// Where a guest machine's outbound traffic goes: the engine's side. `emit` is called once per complete wire frame, in the order
 /// the guest made the calls; `lease_canvas` copies one window's canvas into the shared region the host maps and returns the region
 /// id its Lease frame names (0 = not leased; the host then shows no pixels for that present and says so).
+///
+/// `read_stream` (OS ABI v2) reads a STREAM file of the staged volume (heirloom-volume `Kind::Stream`: a big install file whose
+/// bytes stay in storage, e.g. Warcraft III's 401 MB War3.mpq): up to `cap` bytes of the file at `locator` (UTF-8, `locator_len`
+/// bytes, relative to the storage root the engine was given) from `offset` into `dst`; the count read, or a negative number when
+/// the engine refused the locator or its storage failed (the guest's file layer reports an I/O error).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct OsHost {
     pub ctx: *mut c_void,
     pub emit: extern "C" fn(ctx: *mut c_void, frame: *const u8, len: usize),
     pub lease_canvas: extern "C" fn(ctx: *mut c_void, win: u32, width: i32, height: i32, pixels: *const u32, count: usize) -> u32,
+    pub read_stream: extern "C" fn(ctx: *mut c_void, locator: *const u8, locator_len: usize, offset: u64, dst: *mut u8, cap: usize) -> isize,
+}
+
+/// A host's `read_stream` that reads nothing: for a host with no storage (a test, a family without streams). Every read is refused.
+pub extern "C" fn no_streams(_: *mut c_void, _: *const u8, _: usize, _: u64, _: *mut u8, _: usize) -> isize {
+    -1
 }
 
 #[repr(C)]

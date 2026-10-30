@@ -44,6 +44,25 @@ impl WireTransport for HostTransport {
     }
 }
 
+/// The engine's `read_stream` as the tree's stream source: a guest read of a stream file is a call out to the engine, which reads
+/// its own storage. Nothing is cached here (the guest's File Manager asks for what it needs).
+pub struct HostStreams {
+    host: OsHost,
+}
+
+impl HostStreams {
+    pub fn new(host: OsHost) -> HostStreams {
+        HostStreams { host }
+    }
+}
+
+impl heirloom_volume::StreamSource for HostStreams {
+    fn read_at(&self, locator: &str, offset: u64, dst: &mut [u8]) -> Option<usize> {
+        let n = (self.host.read_stream)(self.host.ctx, locator.as_ptr(), locator.len(), offset, dst.as_mut_ptr(), dst.len());
+        usize::try_from(n).ok().map(|n| n.min(dst.len()))
+    }
+}
+
 /// The UI a family's machine draws on inside an os-*.library.
 pub type LibUi = ProxyUi<HostTransport>;
 
@@ -151,6 +170,15 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
         Session { machine, hooks, volume: Blob::default(), program: Blob::default(), staged_program: None, input: None, fault: None, undelivered: Vec::new(), host_refused: Vec::new() }
     }
 
+    /// The session the table makes: [`Session::new`], and a machine whose file layer reads through its tree (it takes stream
+    /// files) reads their bytes through `host`'s `read_stream` - the engine's storage.
+    pub fn with_host(mut machine: M, hooks: FamilyHooks<M>, host: OsHost) -> Self {
+        if machine.volume().streams_enabled() {
+            machine.volume().set_stream_source(Box::new(HostStreams::new(host)));
+        }
+        Session::new(machine, hooks)
+    }
+
     pub fn machine(&mut self) -> &mut M {
         &mut self.machine
     }
@@ -190,8 +218,9 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
 
     fn control(&mut self, c: Control) {
         match c {
-            // The engine creates the machine and maps the canvas region itself; a library that sees either has nothing to do.
-            Control::Machine { .. } | Control::Canvases { .. } => {}
+            // The engine creates the machine, maps the canvas region and holds the stream root itself; a library that sees one has
+            // nothing to do.
+            Control::Machine { .. } | Control::Canvases { .. } | Control::StreamRoot { .. } => {}
             Control::Volume { offset, total, chunk } => match self.volume.take("volume", offset, total, &chunk) {
                 Ok(Some(bytes)) => match heirloom_volume::snapshot::decode(&bytes) {
                     Ok(tree) => {
@@ -403,10 +432,11 @@ extern "C" fn create_impl<F: OsFamily>(profile: *const u8, len: usize, host: *co
         return core::ptr::null_mut();
     }
     // SAFETY: `host` is non-null and points to an OsHost the caller filled; it is copied here.
-    let ui = ProxyUi::new(HostTransport { host: unsafe { *host } });
+    let host = unsafe { *host };
+    let ui = ProxyUi::new(HostTransport { host });
     match F::create(profile, ui) {
         Ok(machine) => {
-            let session: Instance = Box::new(Session::new(machine, FamilyHooks::of::<F>()));
+            let session: Instance = Box::new(Session::with_host(machine, FamilyHooks::of::<F>(), host));
             Box::into_raw(Box::new(session)) as *mut OsInstance
         }
         Err(r) => {

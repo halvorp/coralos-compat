@@ -53,6 +53,10 @@ pub enum Control {
     /// reads that is neither the program nor a volume - Symbian's ordinal table, its layout data and its device ROM. The family
     /// names what it takes; any other name is refused by name.
     Input { name: String, offset: u32, total: u32, chunk: Vec<u8> },
+    /// The storage directory the staged volume's STREAM files are read from (the bundle's root on CoralFS): their locators are
+    /// relative to it. The ENGINE process takes it (a library never sees it) and reads each stream there, refusing a locator that
+    /// would leave it. Sent before the Volume chunks when the volume holds a stream.
+    StreamRoot { path: String },
 }
 
 /// The host's measured control metrics, in window pixels (the kit's tokens on CoralOS). A field of 0 / None = the toolkit's own.
@@ -176,6 +180,10 @@ pub(super) fn put_machine_control(out: &mut Vec<u8>, c: &Control) {
             put_string(out, name);
             put_blob_body(out, *offset, *total, chunk);
         }
+        Control::StreamRoot { path } => {
+            out.push(13);
+            put_string(out, path);
+        }
     }
 }
 
@@ -231,6 +239,7 @@ pub(super) fn get_machine_control(r: &mut Reader<'_>) -> Result<Control, WireErr
             let (offset, total, chunk) = get_blob(r)?;
             Control::Input { name, offset, total, chunk }
         }
+        13 => Control::StreamRoot { path: r.string()? },
         tag => return Err(WireError::UnknownTag { what: "Control", tag }),
     })
 }

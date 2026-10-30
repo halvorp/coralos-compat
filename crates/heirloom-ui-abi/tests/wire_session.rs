@@ -22,6 +22,7 @@ fn controls() -> Vec<Control> {
         Control::HostProfile(HostProfile { toggle: (20, 20), control_h: 28, pad_w: 16, label_right: Some(8), group_head: 28, group_inset: 12, label_gap: 12, spacing: (8, -4), win_pad: 12 }),
         Control::HostProfile(HostProfile::default()),
         Control::Input { name: "eka-ordinals".into(), offset: 2, total: 5, chunk: vec![7, 8, 9] },
+        Control::StreamRoot { path: "SYS:Apps/Wc3Roc.app".into() },
     ]
 }
 

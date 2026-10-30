@@ -355,7 +355,7 @@ fn wc3_host_run_with_a_gl_worker() {
         let len = u32::from_be_bytes(hdr[83..87].try_into().unwrap()) as u64;
         struct HostFile(std::fs::File);
         impl heirloom_volume::StreamSource for HostFile {
-            fn read_at(&self, _key: u32, offset: u64, dst: &mut [u8]) -> Option<usize> {
+            fn read_at(&self, _locator: &str, offset: u64, dst: &mut [u8]) -> Option<usize> {
                 if std::env::var("WC3_TRACE_READS").is_ok() { eprintln!("MPQ read {offset:#x} +{:#x}", dst.len()); }
                 std::os::unix::fs::FileExt::read_at(&self.0, dst, 128 + offset).ok()
             }
@@ -363,7 +363,7 @@ fn wc3_host_run_with_a_gl_worker() {
         let vol = GuestMachine::volume(&mut m);
         let game = vol.add_volume("Warcraft III", true);
         vol.set_stream_source(Box::new(HostFile(f)));
-        vol.put_stream(game, "War3.mpq", heirloom_volume::Stream { len, key: 0 }).unwrap();
+        vol.put_stream(game, "War3.mpq", len, "War3.mpq").unwrap();
         GuestMachine::set_home(&mut m, &["Warcraft III"]).unwrap();
         eprintln!("staged War3.mpq ({len} bytes) as a stream in Warcraft III:");
     }

@@ -49,7 +49,7 @@ struct Remote {
 impl Remote {
     fn new(profile: &str) -> Result<Remote, String> {
         let mut sink = Box::new(Sink::default());
-        let host = OsHost { ctx: &mut *sink as *mut Sink as *mut c_void, emit, lease_canvas: lease };
+        let host = OsHost { ctx: &mut *sink as *mut Sink as *mut c_void, emit, lease_canvas: lease, read_stream: no_streams };
         let mut why = [0u8; 256];
         let mut why_len = 0usize;
         let inst = (os_vtable().create)(profile.as_ptr(), profile.len(), &host, why.as_mut_ptr(), why.len(), &mut why_len);

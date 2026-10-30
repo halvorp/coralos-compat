@@ -11,7 +11,7 @@ extern "C" fn lease(_: *mut c_void, _: u32, _: i32, _: i32, _: *const u32, _: us
 
 #[test]
 fn an_unbound_library_makes_no_machine_and_names_the_missing_cpu() {
-    let host = OsHost { ctx: core::ptr::null_mut(), emit, lease_canvas: lease };
+    let host = OsHost { ctx: core::ptr::null_mut(), emit, lease_canvas: lease, read_stream: no_streams };
     let (mut why, mut n) = ([0u8; 128], 0usize);
     let inst = (os_vtable().create)(core::ptr::null(), 0, &host, why.as_mut_ptr(), why.len(), &mut n);
     assert!(inst.is_null());

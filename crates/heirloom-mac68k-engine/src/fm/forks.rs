@@ -207,11 +207,11 @@ mod tests {
         assert_eq!(fm.read(r, 0, 0, 1), Err(err::RF_NUM_ERR));
     }
 
-    /// Stream key 0 holds `offset as u8` for 10 000 bytes; key 1 always fails.
+    /// The stream at "good" holds `offset as u8` for 10 000 bytes; "bad" always fails.
     struct Counting;
     impl heirloom_volume::StreamSource for Counting {
-        fn read_at(&self, key: u32, offset: u64, dst: &mut [u8]) -> Option<usize> {
-            if key == 1 { return None; }
+        fn read_at(&self, locator: &str, offset: u64, dst: &mut [u8]) -> Option<usize> {
+            if locator == "bad" { return None; }
             let n = dst.len().min(10_000usize.saturating_sub(offset as usize));
             for (i, b) in dst[..n].iter_mut().enumerate() { *b = (offset as usize + i) as u8; }
             Some(n)
@@ -223,7 +223,7 @@ mod tests {
         let mut fm = FileMgr::new();
         let game = fm.add_volume("Game", true);
         fm.tree.set_stream_source(alloc::boxed::Box::new(Counting));
-        let n = fm.tree.put_stream(game, "War3.mpq", heirloom_volume::Stream { len: 10_000, key: 0 }).unwrap();
+        let n = fm.tree.put_stream(game, "War3.mpq", 10_000, "good").unwrap();
         let loc = Located { vol: game, parent: game, leaf: Some("War3.mpq".into()), node: Some(n) };
         let r = fm.open(&loc, false, FS_RD_PERM).unwrap();
         assert_eq!(fm.eof(r), Ok(10_000));
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(fm.open(&loc, false, FS_RD_WR_PERM), Err(err::W_PR_ERR), "a stream's data fork is read-only even on a writable volume");
         assert!(fm.open(&loc, true, FS_RD_WR_PERM).is_ok(), "NEGATIVE CONTROL: its resource fork is in memory and writable");
         assert_eq!(fm.cat_info(n).name, b"War3.mpq");
-        let bad = fm.tree.put_stream(game, "Bad", heirloom_volume::Stream { len: 4, key: 1 }).unwrap();
+        let bad = fm.tree.put_stream(game, "Bad", 4, "bad").unwrap();
         let rb = fm.open(&Located { vol: game, parent: game, leaf: Some("Bad".into()), node: Some(bad) }, false, FS_RD_PERM).unwrap();
         assert_eq!(fm.read(rb, FS_FROM_START, 0, 4), Err(err::IO_ERR), "a source that fails is ioErr, never zeros");
     }

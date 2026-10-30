@@ -50,7 +50,7 @@ struct Remote {
 impl Remote {
     fn new(profile: &str) -> Result<Remote, String> {
         let mut sink = Box::new(Sink::default());
-        let host = OsHost { ctx: &mut *sink as *mut Sink as *mut c_void, emit, lease_canvas: lease };
+        let host = OsHost { ctx: &mut *sink as *mut Sink as *mut c_void, emit, lease_canvas: lease, read_stream: no_streams };
         let (mut why, mut n) = ([0u8; 256], 0usize);
         let inst = (os_vtable().create)(profile.as_ptr(), profile.len(), &host, why.as_mut_ptr(), why.len(), &mut n);
         if inst.is_null() {
@@ -100,7 +100,7 @@ fn program(file: &[u8], name: &str) -> Vec<Vec<u8>> {
 /// A session around a machine made the way the table makes one, so a test can read the machine after a control.
 fn session() -> Session<Amiga<heirloom_os_abi::serve::LibUi>> {
     bind();
-    let host = OsHost { ctx: core::ptr::null_mut(), emit: noop_emit, lease_canvas: noop_lease };
+    let host = OsHost { ctx: core::ptr::null_mut(), emit: noop_emit, lease_canvas: noop_lease, read_stream: no_streams };
     let m = AmiFamily::create("", ProxyUi::new(HostTransport::new(host))).unwrap();
     Session::new(m, FamilyHooks::of::<AmiFamily>())
 }
