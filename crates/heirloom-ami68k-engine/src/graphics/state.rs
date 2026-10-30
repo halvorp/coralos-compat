@@ -51,6 +51,9 @@ pub struct State {
     pub present: heirloom_present::Presenter,
     /// Images (guest addresses) of default icons that carry the host's artwork for a role: a draw of one is an `Icon` op.
     pub icon_images: BTreeMap<u32, heirloom_ui_abi::IconRole>,
+    /// The ImageData (guest address) of those same Images, with the role and the image's width and height: a program that draws the
+    /// icon itself, by blitting a BitMap whose planes ARE this data (Directory Opus's backdrop), draws that icon (graphics/blits.rs).
+    pub icon_data: BTreeMap<u32, (heirloom_ui_abi::IconRole, i32, i32)>,
     /// Named display lists for off-screen bitmaps, keyed by their guest BitMap struct address.
     pub surfaces: super::surface::Surfaces,
     /// Windows whose first off-screen splice has already been logged.

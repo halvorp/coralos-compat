@@ -197,7 +197,14 @@ fn deliver_default<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, icon: &Icon, rol
     let p = cpu.dreg(0);
     if let (Some(role), true) = (role, p != 0) {
         let img = a.mem.read_u32(p + O_GADGET_RENDER as u32).map_err(Refusal::mem("DiskObject.do_Gadget.GadgetRender"))?;
-        if img != 0 { a.gfx.icon_images.insert(img, role); }
+        if img != 0 {
+            a.gfx.icon_images.insert(img, role);
+            // struct Image: Width at 4, Height at 6, ImageData at 10 (intuition/intuition.h, m68k ABI).
+            let w = a.mem.read_u16(img + 4).map_err(Refusal::mem("Image.Width"))?;
+            let h = a.mem.read_u16(img + 6).map_err(Refusal::mem("Image.Height"))?;
+            let data = a.mem.read_u32(img + 10).map_err(Refusal::mem("Image.ImageData"))?;
+            if data != 0 { a.gfx.icon_data.insert(data, (role, i32::from(w), i32::from(h))); }
+        }
     }
     Ok(r)
 }
@@ -266,6 +273,7 @@ fn free_disk_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
     if p == 0 { return Ok("[icon] FreeDiskObject NULL".into()); }
     let Some(size) = a.fs.icons.remove(&p) else { return Err(Refusal(format!("FreeDiskObject {p:#x}: not a DiskObject icon.library made (or already freed)"))) };
     a.gfx.icon_images.retain(|img, _| !(p..p + size).contains(img));
+    a.gfx.icon_data.retain(|data, _| !(p..p + size).contains(data));
     a.heap.free(p, size).map_err(|e| Refusal(format!("FreeDiskObject: {e}")))?;
     Ok(format!("[icon] FreeDiskObject {p:#x}"))
 }

@@ -206,3 +206,52 @@ fn a_fill_under_a_clip_region_is_named_per_rectangle_and_only_a_cut_op_is_a_hole
     assert!(recs.iter().any(|r| matches!(r, Rec::Op { op: DrawOp::Text { string, .. }, .. } if string == "abcdefghijkl")));
     assert_eq!(recs.iter().filter(|r| matches!(r, Rec::Hole(_))).count(), 1);
 }
+
+/// A program that draws a default icon ITSELF (a BitMap whose planes are the icon's ImageData, blitted whole, as Directory Opus's
+/// backdrop does) has drawn that icon: the plane records the host's Disk icon, not the pixels. Only the whole image from its data counts.
+#[test]
+fn a_blit_of_an_icons_own_image_data_is_that_icon_and_anything_else_stays_pixels() {
+    use heirloom_present::plane::Rec;
+    use heirloom_ui_abi::{DrawOp, IconRole};
+    const GET_DEF_DISK_OBJECT: i32 = -120;
+    let mut g = G::new_plane();
+    let art: Vec<u32> = (0..32 * 32u32).map(|i| if i % 5 == 0 { 0xFF00_0000 } else { 0xFF44_88DD }).collect();
+    g.a.ui.icon_art.insert(IconRole::Disk, (32, 32, art));
+    let nw = g.zeroed(48);
+    for (o, v) in [(0u32, 0u16), (2, 0), (4, 200), (6, 80)] { g.a.mem.write_u16(nw + o, v).unwrap(); }
+    g.a.mem.write_u32(nw + 14, 0x800).unwrap();
+    let iname = g.s("icon.library");
+    g.run(&[intu(OPEN_WINDOW, &[a(0, nw)]), (EXEC_BASE, OPEN_LIBRARY, vec![a(1, iname), d(0, 0)])]);
+    let (win, icon) = (g.result(0), g.result(1));
+    g.run(&[(icon, GET_DEF_DISK_OBJECT, vec![d(0, 1)])]);
+    let dobj = g.result(0);
+    let img = g.r32(dobj + 22);
+    let (w, h, depth, data) = (g.a.mem.read_u16(img + 4).unwrap(), g.a.mem.read_u16(img + 6).unwrap(), g.a.mem.read_u16(img + 8).unwrap(), g.r32(img + 10));
+    // A struct BitMap over `planes` (BytesPerRow, Rows, Flags, Depth, pad, Planes[8]).
+    let bitmap_over = |g: &mut G, base: u32| {
+        let bpr = (u32::from(w) + 15) / 16 * 2;
+        let bm = g.zeroed(40);
+        g.a.mem.write_u16(bm, bpr as u16).unwrap();
+        g.a.mem.write_u16(bm + 2, h).unwrap();
+        g.a.mem.write_u8(bm + 5, depth as u8).unwrap();
+        for p in 0..u32::from(depth) { g.a.mem.write_u32(bm + 8 + 4 * p, base + p * bpr * u32::from(h)).unwrap(); }
+        bm
+    };
+    let rp = g.r32(win + 50);
+    let own = bitmap_over(&mut g, data);
+    let blit = |src: u32, sx: u32, x: u32, y: u32, bw: u16| gfx(BLT_BITMAP_RASTPORT, &[a(0, src), d(0, sx), d(1, 0), a(1, rp), d(2, x), d(3, y), d(4, u32::from(bw)), d(5, u32::from(h)), d(6, 0xC0)]);
+    g.run(&[blit(own, 0, 10, 20, w)]);
+    let icons = |g: &G| g.a.gfx.present.recs(win).iter().filter_map(|r| match r { Rec::Op { op: DrawOp::Icon { rect, role }, .. } => Some((*role, rect.width, rect.height)), _ => None }).collect::<Vec<_>>();
+    let holes = |g: &G| g.a.gfx.present.recs(win).iter().filter(|r| matches!(r, Rec::Hole(_))).count();
+    assert_eq!(icons(&g), [(IconRole::Disk, i32::from(w), i32::from(h))], "{:?}", g.a.gfx.present.recs(win));
+    assert_eq!(holes(&g), 0);
+    // NEGATIVE CONTROLS: part of the image (from x = 1) is pixels, and the same pixels copied from other memory are pixels too.
+    g.run(&[blit(own, 1, 100, 20, w - 1)]);
+    assert_eq!((icons(&g).len(), holes(&g)), (1, 1), "a partial copy is not the icon: {:?}", g.a.gfx.present.recs(win));
+    let n = usize::from(depth) * ((usize::from(w) + 15) / 16 * 2) * usize::from(h);
+    let copy: Vec<u8> = (0..n as u32).map(|i| g.a.mem.read_u8(data + i).unwrap()).collect();
+    let elsewhere = g.bytes(&copy);
+    let other = bitmap_over(&mut g, elsewhere);
+    g.run(&[blit(other, 0, 150, 20, w)]);
+    assert_eq!((icons(&g).len(), holes(&g)), (1, 2), "identical pixels from other memory are not the icon: provenance, not looks");
+}

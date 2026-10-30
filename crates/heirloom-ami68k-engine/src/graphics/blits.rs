@@ -11,10 +11,12 @@ use alloc::vec::Vec;
 use heirloom_present::plane::{moved, Rec};
 use heirloom_ui_abi::GuestUi;
 use crate::cpu::Cpu;
+use heirloom_raster::{blit::{blit, blit_within, MaskFn}, paint::{stencil, Clip}, Rect};
 
 /// The minterm of a plain copy (D = S): the only blit whose result is the source's own drawing.
 const MINTERM_COPY: u8 = 0xC0;
-use heirloom_raster::{blit::{blit, blit_within, MaskFn}, paint::{stencil, Clip}, Rect};
+/// The cookie-cut copy through a mask (ABC|ABNC|ANBC, BltMaskBitMapRastPort's documented transparent blit): D = S where the mask is set.
+const MINTERM_MASKED_COPY: u8 = 0xE0;
 
 /// One blit from the bitmap `src` at (sx, sy) into `dst` at RastPort coordinates (dx, dy).
 #[allow(clippy::too_many_arguments)]
@@ -52,7 +54,10 @@ fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: 
     let src_rect = Rect::from_size(sxx, syy, w, h);
     let dst_rect = Rect::from_size(bx, by, w, h);
     let sink = match window { Some(win) => Sink::Window(win), None => Sink::Surface(bm) };
-    if refused.is_none() {
+    if let Some(role) = icon_image(a, src, (sxx, syy), (w, h), mt, mask.is_some())? {
+        // The source's planes ARE a recognised icon's image data, copied whole: the program drew that icon itself.
+        record::note(a, sink, "copy blit of an icon image", Ok(record::Prim::Icon { rect: Rect::from_size(dx, dy, w, h), role }), region.as_ref(), dst_rect, origin);
+    } else if refused.is_none() {
         // The source's own list stands in for the copied pixels: its ops move to the destination, its holes stay holes, and a
         // pixel no rec covers is background exactly as in a window list. A rec straddling the source rect becomes a hole over
         // the part that was copied (text is never clipped).
@@ -127,6 +132,14 @@ fn plane_rows<U: GuestUi>(a: &Amiga<U>, p: u32, bpr: u32, first: i32, n: i32) ->
 }
 fn bit(rows: &[u8], bpr: u32, x: i32, y: i32) -> bool {
     x >= 0 && y >= 0 && (x as u32) < bpr * 8 && rows.get((y as u32 * bpr + (x as u32 >> 3)) as usize).map_or(false, |b| (b >> (7 - (x & 7))) & 1 != 0)
+}
+
+/// The icon role when the blit copies a whole recognised icon image: the source BitMap's first plane is the ImageData of an Image
+/// icon.library handed out with the host's artwork (`Gfx::icon_data`), from (0, 0) at its full size, as a plain or a masked copy.
+fn icon_image<U: GuestUi>(a: &Amiga<U>, src: u32, at: (i32, i32), size: (i32, i32), mt: u8, masked: bool) -> Result<Option<heirloom_ui_abi::IconRole>, Refusal> {
+    if a.gfx.icon_data.is_empty() || at != (0, 0) || !(mt == MINTERM_COPY || (masked && mt == MINTERM_MASKED_COPY)) { return Ok(None); }
+    let plane0 = a.mem.read_u32(src + BM_PLANES).map_err(Refusal::mem("BitMap.Planes[0]"))?;
+    Ok(a.gfx.icon_data.get(&plane0).filter(|(_, w, h)| (*w, *h) == size).map(|(role, _, _)| *role))
 }
 
 /// BltMaskBitMapRastPort(a0 = src, d0/d1 = xSrc/ySrc, a1 = rp, d2/d3 = xDest/yDest, d4/d5 = w/h, d6 = minterm, a2 = mask plane).

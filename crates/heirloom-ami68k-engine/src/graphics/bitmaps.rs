@@ -55,7 +55,15 @@ pub fn ensure_source<U: GuestUi>(a: &mut Amiga<U>, bm: u32) -> Result<(), Refusa
     for y in 0..rows as i32 { for x in 0..(bpr * 8) as i32 { g.bm.set(x, y, pens[(y as u32 * bpr * 8 + x as u32) as usize]); } }
     let rect = g.bm.rect();
     let sum = super::surface::fnv1a(0xcbf29ce484222325, &bytes);
-    let old = a.gfx.surfaces.get(bm).map(|s| s.sum).unwrap_or(0);
+    let old = a.gfx.surfaces.get(bm).map_or(0, |s| s.sum);
+    // First sight of a bitmap whose planes already hold pixels (image data the program loaded or built itself): never read before
+    // (no sum) and never drawn into (no list), so the engine drew none of it and its list is one hole over it. A cleared bitmap is
+    // background, and one the engine drew into already has its list.
+    let unseen = a.gfx.surfaces.get(bm).is_none_or(|s| s.sum == 0 && s.rec.is_empty());
+    if unseen && pens.iter().any(|&p| p != 0) {
+        a.gfx.present.why_hole("off-screen bitmap: pixels no graphics call drew (first seen with content)", rect);
+        a.gfx.surfaces.invalidate(bm, rect);
+    }
     if old != 0 && old != sum { a.gfx.present.why_hole("off-screen bitmap: its planes were written outside a graphics call", rect); a.gfx.surfaces.invalidate(bm, rect); }
     let s = a.gfx.surfaces.entry(bm);
     s.sum = sum;
