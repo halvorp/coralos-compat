@@ -40,6 +40,20 @@ pub fn call<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, r: &mut Regs, pkg: &'stat
     Ok(log)
 }
 
+/// A stack-selector routine (`_Pack0`'s List Manager, `_TEDispatch` ...) called BY VALUE (Mixed Mode: a PowerPC program passes its C
+/// arguments in registers). The frame a 68k caller would have pushed -- the arguments in declaration order ([`pascal::write_args`]),
+/// then the selector word -- is built in scratch guest memory and its address handed to `body`, the SAME selector body the 68k trap
+/// runs on the program's own stack. The scratch is freed whatever `body` answered.
+pub fn by_value<U: GuestUi, T>(m: &mut Mac<U>, sel: u16, layout: &[Arg], values: &[u32], body: impl FnOnce(&mut Mac<U>, u32) -> Result<T, Refusal>) -> Result<T, Refusal> {
+    let bytes = 2 + pascal::frame_size(layout) + 4; // selector, arguments, the largest result slot
+    let sp = m.mm.new_ptr(&mut m.mem, &mut m.heap, bytes, true).map_err(|e| Refusal(format!("selector {sel:#x} by value: no memory for its {bytes}-byte frame ({e})")))?;
+    let out = m.mem.write_u16(sp, sel).map_err(Refusal::mem("selector frame"))
+        .and_then(|_| pascal::write_args(&mut m.mem, sp + 2, layout, values))
+        .and_then(|_| body(m, sp));
+    let _ = m.mm.dispose_ptr(&mut m.heap, sp);
+    out
+}
+
 /// `InitAllPacks` and `InitPack(packID)`: every package is resident (there is no disk to load it from), so both are accepted.
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9E6, &[], None, resident::<U>)?;
@@ -48,4 +62,22 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
 
 fn resident<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     Ok(Done { result: 0, log: format!("[pack] {} (packages are resident)", c.name) })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::pascal::frame_size;
+
+    /// A by-value caller pushes exactly the frame the 68k trap pops: every stack-selector table's argument layout must add up to the
+    /// frame size the same table gives the trap (a wrong layout would read a by-value caller's arguments from the wrong slots).
+    #[test]
+    fn every_selector_layout_fills_exactly_the_frame_its_trap_pops() {
+        for f in crate::translate::lists::FRAMES { assert_eq!(2 + frame_size(f.args), f.pop, "_Pack0 {}", f.name); }
+        for (i, &(sel, name, params)) in crate::textedit::styled::SEL_FRAMES.iter().enumerate() {
+            assert_eq!(sel as usize, i);
+            assert_eq!(frame_size(crate::textedit::styled::SEL_ARGS[i]), params, "_TEDispatch {name}");
+        }
+        assert_eq!(crate::translate::lists::frame_named("LSetDrawingMode").map(|f| f.sel), Some(0x2C), "the Carbon name finds LDoDraw");
+        assert!(crate::translate::lists::frame_named("LNoSuchCall").is_none());
+    }
 }

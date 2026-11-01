@@ -62,6 +62,8 @@ pub struct Node {
     /// The resource fork of a file (empty when it has none).
     pub rsrc: Vec<u8>,
     writable: bool,
+    /// A volume's capacity in bytes as its host declared it ([`Tree::set_capacity`]); 0 = not declared.
+    capacity: u64,
 }
 
 /// Why a tree operation was refused; the engines map these to their own error numbers.
@@ -165,6 +167,16 @@ impl Tree {
         id
     }
 
+    /// Host-side: volume `vol` holds `bytes` in all (the storage behind it: a disk's size, a disc's pressed contents). The file
+    /// layer reports its size and free space from this; an undeclared volume keeps the layer's own default. Not a volume: refused.
+    pub fn set_capacity(&mut self, vol: NodeId, bytes: u64) -> Result<(), VolErr> {
+        if !self.is_volume(vol) { return Err(VolErr::WrongType); }
+        self.node_mut(vol).capacity = bytes;
+        Ok(())
+    }
+    /// The capacity the host declared for volume `vol` (`None`: undeclared, or not a volume).
+    pub fn capacity(&self, vol: NodeId) -> Option<u64> { (self.is_volume(vol) && self.node(vol).capacity != 0).then(|| self.node(vol).capacity) }
+
     fn push(&mut self, n: Node) -> NodeId { self.nodes.push(Some(n)); self.nodes.len() - 1 }
     fn link(&mut self, dir: NodeId, id: NodeId) { if let Kind::Dir(c) = &mut self.node_mut(dir).kind { c.push(id); } }
 
@@ -259,7 +271,7 @@ impl Tree {
 
 impl Node {
     fn new(name: String, parent: NodeId, kind: Kind, writable: bool) -> Node {
-        Node { name, parent, kind, attrs: 0, comment: String::new(), created_ms: 0, modified_ms: 0, finfo: FInfo::default(), rsrc: Vec::new(), writable }
+        Node { name, parent, kind, attrs: 0, comment: String::new(), created_ms: 0, modified_ms: 0, finfo: FInfo::default(), rsrc: Vec::new(), writable, capacity: 0 }
     }
 }
 

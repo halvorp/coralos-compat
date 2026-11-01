@@ -69,3 +69,38 @@ fn location_debugstr_and_vol_parms() {
     m.mac.mem.write_u16(PB + 22, 0x7777).unwrap();
     assert_eq!(call(&mut m, "PBHGetVolParmsSync", &[PB]) as i32, -35);
 }
+
+/// PBXGetVolInfoSync (the Warcraft III Installer calls it without testing the weak import): PBHGetVInfo's fields plus the 64-bit totals of the same
+/// geometry, so a 6 GB disk is reported whole; a non-zero ioXVersion is paramErr; an unknown volume nsvErr.
+#[test]
+fn pbx_get_vol_info_reports_64_bit_sizes_of_the_volume_geometry() {
+    use heirloom_common::GuestMachine;
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let vol = GuestMachine::volume(&mut m);
+    let hd = vol.volume("Macintosh HD").unwrap();
+    vol.set_capacity(hd, 6 << 30).unwrap();
+    for o in 0..140 { m.mac.mem.write_u8(PB + o, 0).unwrap(); }
+    m.mac.mem.write_u16(PB + 28, 1).unwrap(); // ioVolIndex 1
+    assert_eq!(call(&mut m, "PBXGetVolInfoSync", &[PB]), 0, "{:?}", m.mac.log.last());
+    let (blocks, size) = (u64::from(m.mac.mem.read_u16(PB + 46).unwrap()), u64::from(m.mac.mem.read_u32(PB + 48).unwrap()));
+    let total = u64::from(m.mac.mem.read_u32(PB + 122).unwrap()) << 32 | u64::from(m.mac.mem.read_u32(PB + 126).unwrap());
+    let free = u64::from(m.mac.mem.read_u32(PB + 130).unwrap()) << 32 | u64::from(m.mac.mem.read_u32(PB + 134).unwrap());
+    assert!(total >= 6 << 30 && total < (6 << 30) + 2 * size, "the whole 6 GB, in whole blocks, past 4 GB: {total}");
+    assert!(blocks * size <= 0x7FFF_FFFF, "the 16-bit count is the pinned classic one");
+    assert!(free > 0 && free <= total);
+    assert_eq!(m.mac.mem.read_u16(PB + 66).unwrap(), 1, "ioVDrvInfo");
+    // the classic call on the same 6 GB volume: the 16-bit counts are pinned so blocks x size stays a positive 32-bit long (2 GB at most)
+    for o in 0..140 { m.mac.mem.write_u8(PB + o, 0).unwrap(); }
+    m.mac.mem.write_u16(PB + 28, 1).unwrap();
+    assert_eq!(call(&mut m, "PBHGetVInfoSync", &[PB]), 0);
+    let (nblk, frblk, bsize) = (u64::from(m.mac.mem.read_u16(PB + 46).unwrap()), u64::from(m.mac.mem.read_u16(PB + 62).unwrap()), u64::from(m.mac.mem.read_u32(PB + 48).unwrap()));
+    assert!(nblk * bsize <= 0x7FFF_FFFF && frblk * bsize <= 0x7FFF_FFFF, "{nblk} {frblk} {bsize}");
+    assert!(frblk * bsize > 0x7000_0000, "pinned near 2 GB, not wrapped to a small number");
+    for o in 0..140 { m.mac.mem.write_u8(PB + o, 0).unwrap(); }
+    m.mac.mem.write_u16(PB + 28, 1).unwrap();
+    m.mac.mem.write_u32(PB + 24, 1).unwrap();
+    assert_eq!(call(&mut m, "PBXGetVolInfoSync", &[PB]) as i32, -50, "NEGATIVE CONTROL: ioXVersion must be 0");
+    m.mac.mem.write_u32(PB + 24, 0).unwrap();
+    m.mac.mem.write_u16(PB + 28, 9).unwrap();
+    assert_eq!(call(&mut m, "PBXGetVolInfoSync", &[PB]) as i32, -35);
+}

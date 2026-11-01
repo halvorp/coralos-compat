@@ -16,6 +16,9 @@ use crate::cpu::Cpu;
 pub enum TbFn {
     GetIndString, CopyPascalStringToC, CopyCStringToPascal, C2PStr, P2CStr, EqualString, NumToString, StringToNum,
     FindFolder, SetEventMask, GetDateTime, GetDblTime, GetCaretTime, Microseconds, UpTime, AbsoluteToNanoseconds,
+    /// `TEToScrap()` / `TEFromScrap()` (glue in the Universal Interfaces) and `UpperString(Str255, diacSensitive)` (glue over `_UprString`): the 68k
+    /// engine's shared bodies. `GetGrayRgn()` reads the GrayRgn low-memory global (spec macos9-specs/Misc/GetGrayRgn.md).
+    TEToScrap, TEFromScrap, UpperString, GetGrayRgn,
     /// `LMGet<Name>` / `LMSet<Name>` over the table [`LOWMEM`]; the index is the row.
     LmGet(u8), LmSet(u8),
 }
@@ -31,6 +34,7 @@ impl TbFn {
             "C2PStr" | "c2pstr" => C2PStr, "P2CStr" | "p2cstr" => P2CStr, "EqualString" => EqualString, "NumToString" => NumToString, "StringToNum" => StringToNum,
             "FindFolder" => FindFolder, "SetEventMask" => SetEventMask, "GetDateTime" => GetDateTime, "GetDblTime" => GetDblTime, "GetCaretTime" => GetCaretTime, "Microseconds" => Microseconds, "UpTime" => UpTime,
             "AbsoluteToNanoseconds" => AbsoluteToNanoseconds,
+            "TEToScrap" => TEToScrap, "TEFromScrap" => TEFromScrap, "UpperString" => UpperString, "GetGrayRgn" => GetGrayRgn,
             n => {
                 let (get, rest) = if let Some(r) = n.strip_prefix("LMGet") { (true, r) } else if let Some(r) = n.strip_prefix("LMSet") { (false, r) } else { return None };
                 let i = LOWMEM.iter().position(|(s, _, _)| *s == rest)? as u8;
@@ -80,6 +84,15 @@ impl<U: GuestUi> MacPpc<U> {
                 let case_sens = a2 & 0xFF != 0;
                 u32::from(if case_sens { x == y } else { x.eq_ignore_ascii_case(&y) })
             }
+            TEToScrap => self.mac.te_to_scrap().map_err(|e| e.0)? as i32 as u32,
+            TEFromScrap => self.mac.te_from_scrap().map_err(|e| e.0)? as i32 as u32,
+            UpperString => {
+                let mut t = self.pstr_bytes(a0, &name)?;
+                heirloom_mac68k_engine::strcmp::upper_string(&mut t, a1 & 0xFF != 0);
+                self.put_bytes(a0 + 1, &t, &name)?;
+                0
+            }
+            GetGrayRgn => self.mac.mem.read_u32(heirloom_mac68k_engine::lowmem::GRAY_RGN).map_err(|_| format!("{name}: low memory leaves guest RAM"))?,
             NumToString => { let t = heirloom_mac68k_engine::pack7::num_text(a0 as i32); self.put_pstr(a1, t.as_bytes(), &name)?; 0 }
             StringToNum => { let s = self.pstr_bytes(a0, &name)?; let n = heirloom_mac68k_engine::pack7::parse_num(&s); self.mac.mem.write_u32(a1, n as u32).map_err(|_| format!("{name}: result pointer {a1:#x} leaves guest RAM"))?; 0 }
             // FindFolder(vRefNum, folderType, createFolder, &foundVRefNum, &foundDirID): the Folder Manager is the 68k engine's (fm/alias.rs), folders are made on first use

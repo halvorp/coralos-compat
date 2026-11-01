@@ -340,8 +340,21 @@ impl<U: GuestUi> Host for MacPpc<U> {
             return true;
         }
         // ModalDialog with user items to draw first: the program's procedures run as callbacks, then the call is entered again
-        if matches!(self.bindings.get(&symbol), Some(Binding::Native(Native::ModalDialog))) {
-            match self.begin_user_items(cpu, addr) {
+        use crate::callback::DrawOf;
+        let draw_of = match self.bindings.get(&symbol) {
+            Some(Binding::Native(Native::ModalDialog)) => Some(DrawOf::Modal),
+            // DrawDialog(d) / UpdateDialog(d, rgn) / DialogSelect(an update event for a dialog): the user items are PowerPC procedures too; the
+            // call is over after the last
+            Some(Binding::Pascal(0xA981)) => Some(DrawOf::Draw(cpu.gpr[3], 0)),
+            Some(Binding::Pascal(0xA978)) => Some(DrawOf::Draw(cpu.gpr[3], cpu.gpr[4])),
+            Some(Binding::Pascal(0xA980)) => {
+                let (what, msg) = (self.mac.mem.read_u16(cpu.gpr[3]).unwrap_or(0), self.mac.mem.read_u32(cpu.gpr[3].wrapping_add(2)).unwrap_or(0));
+                (what == 6 && self.mac.tr.dlg.dialogs.contains_key(&msg)).then_some(DrawOf::SelectUpdate(msg))
+            }
+            _ => None,
+        };
+        if let Some(draw_of) = draw_of {
+            match self.begin_user_items(cpu, addr, draw_of) {
                 Ok(true) => { self.sync_natives(cpu); return true; }
                 Ok(false) => {}
                 Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }

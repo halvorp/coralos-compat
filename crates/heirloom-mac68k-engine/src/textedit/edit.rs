@@ -5,7 +5,7 @@
 //! the insertion point (up and down by a line, to the nearest character), Backspace ($08) deletes the selection or the character
 //! before the insertion point, Forward Delete ($7F) the one after, the keypad Enter ($03) is a carriage return, and anything else
 //! is inserted. The TE scrap is the one in low memory (`TEScrpHandle` $AB4, `TEScrpLength` $AB0); `TECopy` does not touch the desk
-//! scrap (that is `TEToScrap`, `TEDispatch`, not implemented yet).
+//! scrap: `TEToScrap` / `TEFromScrap` move it to and from the desk scrap ([`Mac::te_to_scrap`], [`Mac::te_from_scrap`]).
 use super::draw::width_table;
 use super::layout::{self, CR};
 use super::*;
@@ -129,6 +129,34 @@ fn copy_to_scrap<U: GuestUi>(m: &mut Mac<U>, h: u32, what: &str) -> Result<usize
     m.mem.write_bytes(at, &bytes).map_err(Refusal::mem("TEScrp"))?;
     m.mem.write_u16(TE_SCRP_LENGTH, bytes.len() as u16).map_err(Refusal::mem("TEScrpLength"))?;
     Ok(bytes.len())
+}
+
+impl<U: GuestUi> Mac<U> {
+    /// `TEToScrap` (library glue, no trap; spec macos9-specs/TextEdit/TEFromScrap.md): the TextEdit scrap into the desk scrap as one 'TEXT'
+    /// entry of `TEScrpLength` bytes (`PutScrap`; the desk scrap is NOT zeroed first: callers do that, as DialogCut does). 0.
+    pub fn te_to_scrap(&mut self) -> Result<i16, Refusal> {
+        let sh = self.mem.read_u32(TE_SCRP_HANDLE).map_err(Refusal::mem("TEScrpHandle"))?;
+        let n = self.mem.read_u16(TE_SCRP_LENGTH).map_err(Refusal::mem("TEScrpLength"))? as u32;
+        let at = self.mm.block(sh).map(|b| b.ptr).ok_or_else(|| Refusal(format!("TEToScrap: no TextEdit scrap (TEScrpHandle {sh:#x}): the program never called TEInit")))?;
+        let bytes = self.mem.bytes(self.mem.span(at, n).map_err(Refusal::mem("TEScrp"))?).map_err(Refusal::mem("TEScrp"))?.to_vec();
+        self.scrap.put(*b"TEXT", bytes);
+        Ok(0)
+    }
+
+    /// `TEFromScrap`: the desk scrap's 'TEXT' into the TextEdit scrap. `TEScrpLength` := 0 first; no 'TEXT' is noTypeErr (-102); more than
+    /// 32000 bytes is teScrapSizeTooLarge (-501), nothing copied; otherwise the TE scrap holds it and `TEScrpLength` is its length. 0.
+    pub fn te_from_scrap(&mut self) -> Result<i16, Refusal> {
+        self.mem.write_u16(TE_SCRP_LENGTH, 0).map_err(Refusal::mem("TEScrpLength"))?;
+        let Some(text) = self.scrap.get(*b"TEXT").map(<[u8]>::to_vec) else { return Ok(crate::scrap::NO_TYPE_ERR as i16) };
+        if text.len() > 32000 { return Ok(-501); }
+        let sh = self.mem.read_u32(TE_SCRP_HANDLE).map_err(Refusal::mem("TEScrpHandle"))?;
+        if self.mm.block(sh).is_none() { return Err(Refusal(format!("TEFromScrap: no TextEdit scrap (TEScrpHandle {sh:#x}): the program never called TEInit"))); }
+        self.mm.set_handle_size(&mut self.mem, &mut self.heap, sh, text.len() as u32).map_err(|e| Refusal(format!("TEFromScrap: no memory for the TextEdit scrap (memFullErr {e})")))?;
+        let at = self.mm.block(sh).map(|b| b.ptr).ok_or_else(|| Refusal("TEFromScrap: the TextEdit scrap lost its block".into()))?;
+        self.mem.write_bytes(at, &text).map_err(Refusal::mem("TEScrp"))?;
+        self.mem.write_u16(TE_SCRP_LENGTH, text.len() as u16).map_err(Refusal::mem("TEScrpLength"))?;
+        Ok(0)
+    }
 }
 
 /// `PROCEDURE TECopy(hTE)`: the selection into the TE scrap.

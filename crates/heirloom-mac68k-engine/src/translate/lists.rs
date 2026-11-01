@@ -78,18 +78,31 @@ const SHIFT_OR_CMD: u16 = 0x0300;
 /// What a selector leaves in the slot above its frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Res { None, Boolean, Integer, Long }
-/// One `_Pack0` selector: its name, the bytes its frame pops (selector word included) and its result.
-pub struct Frame { pub sel: u16, pub name: &'static str, pub pop: u32, pub res: Res }
-const fn fr(sel: u16, name: &'static str, pop: u32, res: Res) -> Frame { Frame { sel, name, pop, res } }
+/// One `_Pack0` selector: its name, the bytes its frame pops (selector word included), its result and its Pascal arguments in
+/// declaration order (Inside Macintosh IV, "List Manager"): what a by-value caller ([`crate::package::by_value`]) pushes. A `Cell` or
+/// `Point` is passed by value as one long (v, then h).
+pub struct Frame { pub sel: u16, pub name: &'static str, pub pop: u32, pub res: Res, pub args: &'static [Arg] }
+const fn fr(sel: u16, name: &'static str, pop: u32, res: Res, args: &'static [Arg]) -> Frame { Frame { sel, name, pop, res, args } }
+use crate::pascal::Arg;
 pub const FRAMES: &[Frame] = &[
-    fr(0x00, "LActivate", 8, Res::None), fr(0x04, "LAddColumn", 10, Res::Integer), fr(0x08, "LAddRow", 10, Res::Integer), fr(0x0C, "LAddToCell", 16, Res::None),
-    fr(0x10, "LAutoScroll", 6, Res::None), fr(0x14, "LCellSize", 10, Res::None), fr(0x18, "LClick", 12, Res::Boolean), fr(0x1C, "LClrCell", 10, Res::None),
-    fr(0x20, "LDelColumn", 10, Res::None), fr(0x24, "LDelRow", 10, Res::None), fr(0x28, "LDispose", 6, Res::None), fr(0x2C, "LDoDraw", 8, Res::None),
-    fr(0x30, "LDraw", 10, Res::None), fr(0x34, "LFind", 18, Res::None), fr(0x38, "LGetCell", 18, Res::None), fr(0x3C, "LGetSelect", 12, Res::Boolean),
-    fr(0x40, "LLastClick", 6, Res::Long), fr(0x44, "LNew", 28, Res::Long), fr(0x48, "LNextCell", 14, Res::Boolean), fr(0x4C, "LRect", 14, Res::None),
-    fr(0x50, "LScroll", 10, Res::None), fr(0x54, "LSearch", 20, Res::Boolean), fr(0x58, "LSetCell", 16, Res::None), fr(0x5C, "LSetSelect", 12, Res::None),
-    fr(0x60, "LSize", 10, Res::None), fr(0x64, "LUpdate", 10, Res::None),
+    fr(0x00, "LActivate", 8, Res::None, &[Arg::B, Arg::P]), fr(0x04, "LAddColumn", 10, Res::Integer, &[Arg::W, Arg::W, Arg::P]), fr(0x08, "LAddRow", 10, Res::Integer, &[Arg::W, Arg::W, Arg::P]),
+    fr(0x0C, "LAddToCell", 16, Res::None, &[Arg::P, Arg::W, Arg::L, Arg::P]), fr(0x10, "LAutoScroll", 6, Res::None, &[Arg::P]), fr(0x14, "LCellSize", 10, Res::None, &[Arg::L, Arg::P]),
+    fr(0x18, "LClick", 12, Res::Boolean, &[Arg::L, Arg::W, Arg::P]), fr(0x1C, "LClrCell", 10, Res::None, &[Arg::L, Arg::P]), fr(0x20, "LDelColumn", 10, Res::None, &[Arg::W, Arg::W, Arg::P]),
+    fr(0x24, "LDelRow", 10, Res::None, &[Arg::W, Arg::W, Arg::P]), fr(0x28, "LDispose", 6, Res::None, &[Arg::P]), fr(0x2C, "LDoDraw", 8, Res::None, &[Arg::B, Arg::P]),
+    fr(0x30, "LDraw", 10, Res::None, &[Arg::L, Arg::P]), fr(0x34, "LFind", 18, Res::None, &[Arg::P, Arg::P, Arg::L, Arg::P]), fr(0x38, "LGetCell", 18, Res::None, &[Arg::P, Arg::P, Arg::L, Arg::P]),
+    fr(0x3C, "LGetSelect", 12, Res::Boolean, &[Arg::B, Arg::P, Arg::P]), fr(0x40, "LLastClick", 6, Res::Long, &[Arg::P]),
+    fr(0x44, "LNew", 28, Res::Long, &[Arg::P, Arg::P, Arg::L, Arg::W, Arg::P, Arg::B, Arg::B, Arg::B, Arg::B]), fr(0x48, "LNextCell", 14, Res::Boolean, &[Arg::B, Arg::B, Arg::P, Arg::P]),
+    fr(0x4C, "LRect", 14, Res::None, &[Arg::P, Arg::L, Arg::P]), fr(0x50, "LScroll", 10, Res::None, &[Arg::W, Arg::W, Arg::P]), fr(0x54, "LSearch", 20, Res::Boolean, &[Arg::P, Arg::W, Arg::P, Arg::P, Arg::P]),
+    fr(0x58, "LSetCell", 16, Res::None, &[Arg::P, Arg::W, Arg::L, Arg::P]), fr(0x5C, "LSetSelect", 12, Res::None, &[Arg::B, Arg::L, Arg::P]), fr(0x60, "LSize", 10, Res::None, &[Arg::W, Arg::W, Arg::P]),
+    fr(0x64, "LUpdate", 10, Res::None, &[Arg::P, Arg::P]),
 ];
+/// The Carbon names of `_Pack0` routines whose classic name differs (Lists.h): `LSetDrawingMode` is `LDoDraw`, `LGetCellDataLocation` is `LFind`.
+pub const C_NAMES: &[(&str, &str)] = &[("LSetDrawingMode", "LDoDraw"), ("LGetCellDataLocation", "LFind")];
+/// The List Manager routine called `name` (its classic or its Carbon name).
+pub fn frame_named(name: &str) -> Option<&'static Frame> {
+    let name = C_NAMES.iter().find(|(c, _)| *c == name).map_or(name, |&(_, classic)| classic);
+    FRAMES.iter().find(|f| f.name == name)
+}
 
 /// A cell: (row, column) = the Mac `Cell` Point's (v, h).
 pub type Cell = (i16, i16);
@@ -295,7 +308,7 @@ fn point(m: &Mac<impl GuestUi>, at: u32) -> Result<Cell, Refusal> { Ok((word(m, 
 
 /// One selector: `sp` is the selector word's address, so argument `i` bytes in is at `sp + 2 + ...` (the LAST argument is nearest).
 /// Returns the result (as the slot's value) and the log line.
-fn run_selector<U: GuestUi>(m: &mut Mac<U>, sel: u16, sp: u32) -> Result<(u32, String), Refusal> {
+pub fn run_selector<U: GuestUi>(m: &mut Mac<U>, sel: u16, sp: u32) -> Result<(u32, String), Refusal> {
     let lh = |m: &Mac<U>| long(m, sp + 2);
     Ok(match sel {
         0x44 => {

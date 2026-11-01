@@ -97,7 +97,13 @@ pub enum Native { StandardAlert, GetSharedLibrary, FindSymbol, CloseConnection, 
     /// An offscreen graphics world / port accessor call ([`crate::gworld`]).
     Gw(crate::gworld::GwFn),
     /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.
-    Math(crate::clib_math::MathFn) }
+    Math(crate::clib_math::MathFn),
+    /// A stack-selector routine (List Manager, styled TextEdit dispatch) by value ([`crate::selector_c`]).
+    Sel(crate::selector_c::SelFn),
+    /// A Sound Manager `_SoundDispatch` routine by C name ([`crate::snd_c`]).
+    Snd(crate::snd_c::SndFn),
+    /// A Carbon Scrap Manager call ([`crate::scrap_c`]).
+    Scrap(crate::scrap_c::ScrapFn) }
 
 /// Which trap table a [`Native::TrapAddress`] import names, as the calling 68k trap word's type bits would.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +153,9 @@ impl Native {
             n if crate::carbon_ctl::CxFn::by_name(n).is_some() => Native::Cx(crate::carbon_ctl::CxFn::by_name(n).expect("checked")),
             n if crate::gworld::GwFn::by_name(n).is_some() => Native::Gw(crate::gworld::GwFn::by_name(n).expect("checked")),
             n if crate::toolbox_c::TbFn::by_name(n).is_some() => Native::Tb(crate::toolbox_c::TbFn::by_name(n).expect("checked")),
+            n if crate::scrap_c::ScrapFn::by_name(n).is_some() => Native::Scrap(crate::scrap_c::ScrapFn::by_name(n).expect("checked")),
+            n if crate::snd_c::SndFn::by_name(n).is_some() => Native::Snd(crate::snd_c::SndFn::by_name(n).expect("checked")),
+            n if crate::selector_c::SelFn::by_name(n).is_some() => Native::Sel(crate::selector_c::SelFn::by_name(n).expect("checked")),
             n if n.len() > 6 && n.starts_with("New") && n.ends_with("UPP") => Native::NewUpp,
             n if n.len() > 9 && n.starts_with("Dispose") && n.ends_with("UPP") => Native::DisposeUpp,
             _ => return crate::files::FileCall::by_name(name).map(Native::File).or_else(|| crate::osroutines::OsRoutine::by_name(name).map(Native::Os)).or_else(|| crate::fsspec::SpecCall::by_name(name).map(Native::Spec)).or_else(|| crate::alias_c::AliasCall::by_name(name).map(Native::Alias)),

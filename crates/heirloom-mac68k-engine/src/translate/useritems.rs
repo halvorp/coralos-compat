@@ -15,8 +15,8 @@
 //!   runs again with its arguments still on the stack, so the wait itself is unchanged.
 //!
 //! From PowerPC code, `ModalDialog`'s draw runs through heirloom-macppc-engine's callback machine ([`Mac::begin_modal_user_items`] /
-//! [`Mac::end_user_items`]: each procedure is a UPP called as PowerPC code). `DrawDialog`, `UpdtDialog` and `DialogSelect`'s update
-//! draw from PowerPC code are still refused by name (owner: heirloom-macppc-engine; delete-when each has a PowerPC witness).
+//! [`Mac::end_user_items`]: each procedure is a UPP called as PowerPC code), and so do `DrawDialog` and `UpdtDialog`
+//! ([`Mac::begin_draw_user_items`]) and `DialogSelect`'s update draw ([`Mac::begin_select_update_user_items`]).
 use super::dialogs::Item;
 use crate::guestcall::{Frame, TRAMPOLINE};
 use crate::machine::{Call, Done, Mac};
@@ -153,6 +153,11 @@ pub struct UserItemDraw {
     pub todo: VecDeque<(u32, i16)>,
     /// `thePort` before the draw, put back by [`Mac::end_user_items`].
     pub port: u32,
+    /// The draw began with `BeginUpdate` (`ModalDialog`'s): [`Mac::end_user_items`] ends it. `DrawDialog` / `UpdateDialog` draw no update.
+    pub end_update: bool,
+    /// After the last procedure the interrupted call runs AGAIN (`ModalDialog`: its update is empty then, so it waits); otherwise the
+    /// call is over and its caller continues (`DrawDialog`, `UpdateDialog`).
+    pub reenter: bool,
 }
 
 impl<U: GuestUi> Mac<U> {
@@ -169,12 +174,39 @@ impl<U: GuestUi> Mac<U> {
         let port = if self.qd_globals != 0 { self.mem.read_u32(self.qd_globals).unwrap_or(0) } else { 0 };
         if let Err(Refusal(e)) = crate::quickdraw::set_the_port(self, win) { self.note_refusal("ModalDialog", e); }
         self.log.push(format!("[dialog] ModalDialog {win:#x}: {} user item(s) drawn by the program's procedures first", todo.len()));
-        Ok(Some(UserItemDraw { win, todo, port }))
+        Ok(Some(UserItemDraw { win, todo, port, end_update: true, reenter: true }))
+    }
+
+    /// `DialogSelect` on an update event for dialog `win`, for a PowerPC caller (the 68k form is [`Mac::update_dialog_event`]): `BeginUpdate`,
+    /// the user items over the update region to call through Mixed Mode, `EndUpdate` after the last; the call then answers FALSE. `None` when no
+    /// user item meets the region (the update is ended here and the 68k handler answers the call).
+    pub fn begin_select_update_user_items(&mut self, win: u32) -> Result<Option<UserItemDraw>, Refusal> {
+        let region = begin_update_of(self, win)?;
+        let todo = self.user_items(win, Some(&region));
+        if todo.is_empty() { end_update_of(self, win)?; return Ok(None); }
+        let port = if self.qd_globals != 0 { self.mem.read_u32(self.qd_globals).unwrap_or(0) } else { 0 };
+        if let Err(Refusal(e)) = crate::quickdraw::set_the_port(self, win) { self.note_refusal("DialogSelect", e); }
+        self.log.push(format!("[dialog] DialogSelect {win:#x} (update event): {} user item(s) drawn by the program's procedures", todo.len()));
+        Ok(Some(UserItemDraw { win, todo, port, end_update: true, reenter: false }))
+    }
+
+    /// `DrawDialog(d)` (`clip` None) / `UpdateDialog(d, rgn)` for a PowerPC caller: the user items to call through Mixed Mode, with `thePort`
+    /// set to the dialog; `None` when the dialog has none to draw (the 68k handler then answers the call, drawing nothing). An unknown dialog is
+    /// refused by name, as the 68k handler refuses it.
+    pub fn begin_draw_user_items(&mut self, win: u32, clip: Option<u32>) -> Result<Option<UserItemDraw>, Refusal> {
+        if !self.tr.dlg.dialogs.contains_key(&win) { return Err(Refusal(format!("DrawDialog: {win:#x} is not a dialog"))); }
+        let clip = clip.map(|h| self.read_region(h)).transpose()?;
+        let todo = self.user_items(win, clip.as_ref());
+        if todo.is_empty() { return Ok(None); }
+        let port = if self.qd_globals != 0 { self.mem.read_u32(self.qd_globals).unwrap_or(0) } else { 0 };
+        if let Err(Refusal(e)) = crate::quickdraw::set_the_port(self, win) { self.note_refusal("DrawDialog", e); }
+        self.log.push(format!("[dialog] {} {win:#x}: {} user item(s) drawn by the program's procedures", if clip.is_some() { "UpdateDialog" } else { "DrawDialog" }, todo.len()));
+        Ok(Some(UserItemDraw { win, todo, port, end_update: false, reenter: false }))
     }
 
     /// The last procedure of a [`UserItemDraw`] returned: `EndUpdate` and put `thePort` back.
     pub fn end_user_items(&mut self, d: &UserItemDraw) {
-        if let Err(Refusal(e)) = end_update_of(self, d.win) { self.note_refusal("EndUpdate", e); }
+        if d.end_update { if let Err(Refusal(e)) = end_update_of(self, d.win) { self.note_refusal("EndUpdate", e); } }
         if self.qd_globals != 0 { let _ = self.mem.write_u32(self.qd_globals, d.port); }
     }
 }

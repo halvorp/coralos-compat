@@ -26,13 +26,16 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
         b"qtim" => crate::qt_c::QUICKTIME_4,
         // gestaltThreadMgrAttr: bit 0 gestaltThreadMgrPresent, bit 2 gestaltThreadsLibraryPresent (ThreadsLib is provided); bit 1 (exact-match support) is not claimed
         b"thds" => 0b101,
+        // gestaltAppearanceAttr: bit 0 gestaltAppearanceExists (Mac OS 9.2.1 always has the Appearance Manager; its calls are served per call in
+        // carbon_ctl.rs and refused by name where missing), bit 1 gestaltAppearanceCompatMode NOT set. A program that finds no Appearance Manager takes a
+        // pre-8.0 path a Mac OS 9 personality never runs: the Warcraft III Installer then asks for DLOG 3102, which its own file does not have.
+        b"appr" => 0b01,
         _ => return None,
     })
 }
 
 /// Selectors the shared (68k) profile would answer WRONGLY for a PowerPC program, or that wait for a feature, with the reason each has no answer.
 pub const UNANSWERED: &[(&[u8; 4], &str)] = &[
-    (b"appr", "the Appearance Manager is not provided"),
     (b"nav ", "Navigation Services is not provided"),
     (b"mpsv", "Multiprocessing Services runs cooperatively (no preemption, one processor, see mp.rs); the selector's value carries the MP Services version and attribute bits, which are not claimed"),
     (b"mach", "no PowerPC machine model is claimed (the shared value names a 68k Macintosh II)"),

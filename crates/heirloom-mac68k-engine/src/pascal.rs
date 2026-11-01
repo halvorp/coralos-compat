@@ -65,6 +65,23 @@ pub fn read_args(mem: &GuestMem, sp: u32, layout: &[Arg]) -> Result<Args, Refusa
     Ok(Args(out))
 }
 
+/// Push `values` (declaration order) the way a 68k caller would, so that the last argument lands at `sp` and [`read_args`] gives them
+/// back: a by-value caller (Mixed Mode from PowerPC) builds the frame a stack-reading routine expects. Each value is truncated to its
+/// slot as [`Args::from_values`] does; a BOOLEAN's byte goes in the slot's first (low-address) byte, the other byte cleared.
+pub fn write_args(mem: &mut GuestMem, sp: u32, layout: &[Arg], values: &[u32]) -> Result<(), Refusal> {
+    let args = Args::from_values(layout, values)?;
+    let mut at = sp.checked_add(frame_size(layout)).ok_or_else(|| Refusal("Pascal frame: sp overflows".into()))?;
+    for (a, &v) in layout.iter().zip(&args.0) {
+        at -= a.size();
+        match a {
+            Arg::B => mem.write_u16(at, (v as u16) << 8),
+            Arg::W => mem.write_u16(at, v as u16),
+            Arg::L | Arg::P => mem.write_u32(at, v),
+        }.map_err(Refusal::mem("Pascal argument"))?;
+    }
+    Ok(())
+}
+
 /// Pop the arguments (the callee's job) and store `result` in the slot the caller reserved above them. Returns the
 /// new SP, which the caller sets.
 pub fn complete(mem: &mut GuestMem, sp: u32, layout: &[Arg], result: Option<(Arg, u32)>) -> Result<u32, Refusal> {
@@ -112,6 +129,18 @@ pub fn read_rect(mem: &GuestMem, addr: u32) -> Result<Rect, Refusal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_args_builds_the_frame_read_args_reads() {
+        let mut m = GuestMem::new(0x1000);
+        let layout = [Arg::L, Arg::B, Arg::W, Arg::P];
+        write_args(&mut m, 0x100, &layout, &[0x1122_3344, 0x1_01, 0xFFFE, 0x0080_0000]).unwrap();
+        assert_eq!(read_args(&m, 0x100, &layout).unwrap().0, alloc::vec![0x1122_3344, 1, 0xFFFE, 0x0080_0000]);
+        assert_eq!(m.read_u16(0x104).unwrap(), 0xFFFE, "the LAST argument is nearest sp");
+        assert_eq!(m.read_u16(0x106).unwrap(), 0x0100, "a BOOLEAN's byte is the slot's first byte, the other cleared");
+        assert_eq!(m.read_u32(0x108).unwrap(), 0x1122_3344, "the first argument is deepest");
+        assert!(write_args(&mut m, 0x100, &layout, &[1, 2]).is_err(), "NEGATIVE CONTROL: a value per argument");
+    }
 
     /// FUNCTION F(a: LONGINT; b: BOOLEAN; c: INTEGER): LONGINT, called with a=0x11223344, b=TRUE, c=-2, SP = 0x100.
     fn frame() -> GuestMem {

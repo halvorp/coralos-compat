@@ -435,6 +435,27 @@ fn a_plain_get_vol_info_block_is_not_written_past_its_64_bytes() {
     assert_ne!(b, 0xDEAD_BEEF, "NEGATIVE CONTROL: the HFS variant does write ioVFilCnt at 82");
 }
 
+#[test]
+fn hget_vinfo_names_the_volumes_drive_and_a_drives_control_or_status_reaches_no_driver() {
+    // The Warcraft III Installer accepts a disc only on a drive (ioVDrvInfo > 0); the WriteNow 4.0 installer then asks that drive
+    // through _Control. No driver is installed, so Control / Status / KillIO answer badUnitErr (-21), sync in D0 and in ioResult.
+    let mut g = Rig::new();
+    let pb = OUT + 0x100;
+    g.m.mem.zero(pb, 0x80).unwrap();
+    let cb = OUT + 0x200;
+    g.m.mem.zero(cb, 0x40).unwrap();
+    g.m.mem.write_u16(cb + 24, 0xFFDF).unwrap(); // ioCRefNum -33, a SCSI disk driver's on a real Mac
+    g.m.mem.write_u16(cb + 26, 1).unwrap(); // csCode
+    let mut p = Prog::new();
+    set_a0(&mut p, pb); p.trap(0xA207);
+    set_a0(&mut p, cb); p.trap(0xA004); save_d0(&mut p, OUT);
+    set_a0(&mut p, cb); p.trap(0xA005); save_d0(&mut p, OUT + 4);
+    p.exit();
+    g.run(&p);
+    assert_eq!(w(&g, pb + 66), 1, "ioVDrvInfo: the default volume is mounted on drive 1");
+    assert_eq!((l(&g, OUT) as i32, l(&g, OUT + 4) as i32, w(&g, cb + 16) as i16), (-21, -21, -21), "no driver: badUnitErr");
+}
+
 // ---- dialogs -------------------------------------------------------------------------------------------------------------
 
 fn text_dialog_fork(text: &str) -> Vec<u8> {
@@ -496,6 +517,14 @@ fn is_dialog_event_is_true_only_for_events_that_belong_to_a_dialog_and_dialog_se
     let other = g.win;
     let e = ev(&mut g, 6, other, 0, 0);
     assert_eq!(ask(&mut g, e), 0, "NEGATIVE CONTROL: an update for an ordinary window");
+    // a null event is the front window's: TRUE while the dialog is in front (a modeless loop then collects a host-reported hit through
+    // DialogSelect: the Warcraft III Installer's), FALSE once an ordinary window is in front
+    let e = ev(&mut g, 0, 0, 0, 0);
+    assert_eq!(g.m.z.first(), Some(&dlg), "the new dialog is in front");
+    assert_eq!(ask(&mut g, e), 1, "a null event with a dialog in front");
+    g.m.z.retain(|&w| w != other);
+    g.m.z.insert(0, other);
+    assert_eq!(ask(&mut g, e), 0, "NEGATIVE CONTROL: a null event with an ordinary window in front");
     // DialogSelect: nothing pending -> FALSE; a queued hit -> TRUE with dialog and item
     let sel = |g: &mut Rig| { let e = SCRATCH + 0x300; g.run(Prog::new().clr_w().l(e).l(OUT + 0x30).l(OUT + 0x34).trap(0xA980).pop_w(OUT + 0x38).exit()); w(g, OUT + 0x38) >> 8 };
     assert_eq!(sel(&mut g), 0);
