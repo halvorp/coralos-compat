@@ -93,11 +93,20 @@ fn shot(m: &MacPpc<RecordingGuestUi>, path: &str) {
     eprintln!("shot: window {win} {w}x{h} -> {path}");
 }
 
-/// Every log line since the last drain, appended to `INST_LOG_FILE` when set (the machine's own log is a bounded ring and the Installer's
-/// polling loops fill it), with the polling noise left out.
+/// The newest log lines the harness keeps in the machine between drains (what the diagnostics print at the end).
+const LOG_TAIL: usize = 2000;
+
+/// Every log line since the last drain, appended to `INST_LOG_FILE` when set (the file then holds the log; the machine keeps none), with the
+/// polling noise left out; without a file the machine keeps only the newest [`LOG_TAIL`] lines. The machine's log is NOT a ring (a host drains it every slice, as Heirloom.app does): the Installer writes ~70 000
+/// lines per 5M-instruction slice in its polling loops, so a harness that put the lines back held 39 million of them (3.5 GiB) after 558
+/// slices - the 2026-10-30 owner-key run's OOM at 8 G and 20 G (measured 2026-11-01 with [`probe`]).
 fn drain(m: &mut MacPpc<RecordingGuestUi>) {
-    let lines = core::mem::take(&mut m.mac.log);
-    let Ok(path) = std::env::var("INST_LOG_FILE") else { m.mac.log = lines; return };
+    let mut lines = core::mem::take(&mut m.mac.log);
+    let Ok(path) = std::env::var("INST_LOG_FILE") else {
+        lines.drain(..lines.len().saturating_sub(LOG_TAIL));
+        m.mac.log = lines;
+        return;
+    };
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
     // the owner's key never reaches a file: each of its five parts is blanked wherever it appears
@@ -110,9 +119,38 @@ fn drain(m: &mut MacPpc<RecordingGuestUi>) {
     }
 }
 
+/// This process's resident set, MiB (Linux /proc/self/statm: pages).
+fn rss_mib() -> u64 {
+    let s = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
+    s.split_whitespace().nth(1).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) * 4096 >> 20
+}
+
+/// What the host harness holds, every `INST_PROBE_EVERY` slices: `[WC3-PROBE]` with RSS and each retained store (UI call history and
+/// the pixels in it, retained plane frames, queued audio, the log). Over `INST_RSS_MAX_MB` the run stops BY NAME (`[WC3-PROBE
+/// RSS-CEILING]`) instead of being OOM-killed with no output.
+fn probe(m: &MacPpc<RecordingGuestUi>, slice: u64) -> bool {
+    let every: u64 = std::env::var("INST_PROBE_EVERY").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let ceiling: u64 = std::env::var("INST_RSS_MAX_MB").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let rss = rss_mib();
+    let over = ceiling > 0 && rss > ceiling;
+    if (every > 0 && slice % every == 0) || over {
+        let ui = GuestMachine::ui(m);
+        let px = |p: &heirloom_ui_abi::Plane| p.ops.iter().map(|o| if let heirloom_ui_abi::DrawOp::Pixels { rgb, .. } = o { rgb.len() } else { 0 }).sum::<usize>();
+        let call_px: usize = ui.calls.iter().map(|c| if let heirloom_ui_abi::UiCall::PresentPlane(_, p) = c { px(p) } else { 0 }).sum();
+        let frames: usize = ui.plane_frames.values().map(Vec::len).sum();
+        let frame_px: usize = ui.plane_frames.values().flatten().map(px).sum();
+        let audio: usize = ui.audio.values().map(|a| a.queued.len()).sum();
+        eprintln!("[WC3-PROBE] slice={slice} rss_mib={rss} calls={} call_px={call_px} plane_frames={frames} frame_px={frame_px} audio_bytes={audio} log={}",
+            ui.calls.len(), m.mac.log.len());
+    }
+    if over { eprintln!("[WC3-PROBE RSS-CEILING] rss_mib={rss} > {ceiling} at slice {slice}"); }
+    !over
+}
+
 /// Run `slices` host slices of 5M instructions / 20 ms.
 fn run(m: &mut MacPpc<RecordingGuestUi>, t: &mut u64, slices: u32) -> bool {
     for i in 0..slices {
+        if !probe(m, *t / 20_000) { return false }
         drain(m);
         let (st, _) = GuestMachine::step(m, 5_000_000);
         if matches!(st, Step::Fault(_) | Step::Exited) {
@@ -198,6 +236,8 @@ fn the_installer_reaches_its_cd_key_dialog_and_refuses_a_dummy_key() {
     assert!(act(&mut m, &mut t, "field:0=Heirloom Test;run:5;field:1=BCDEFG;run:5;field:2=HJKM;run:5;field:3=NPRTVW;run:5;field:4=XYZ2;run:5;field:5=46789B;run:20;button:OK;run:100"), "{:?}", m.fault());
     let asked: Vec<String> = GuestMachine::ui(&m).requests.values().map(|r| format!("{r:?}")).collect();
     assert!(asked.iter().any(|r| r.contains("Invalid CD-Key")), "the Installer's own check refused the dummy: {asked:?}");
+    // the harness holds a bounded log however long the Installer runs (the owner-key run's OOM: millions of lines put back)
+    assert!(m.mac.log.len() <= LOG_TAIL, "the harness holds {} log lines", m.mac.log.len());
 }
 
 /// The whole install with the OWNER's CD key, typed at run time: `INST_CDKEY=<26 characters> INST_NAME=<name> cargo test --release --features
@@ -230,8 +270,33 @@ fn installer_installs_with_the_owners_key() {
             if vol.is_dir(c) { stack.push((c, p)); } else if vol.name(c).eq_ignore_ascii_case("War3.mpq") { mpq = vol.file_data(c).map(<[u8]>::to_vec); }
         }
     }
+    if let Ok(dir) = std::env::var("INST_EXPORT_DIR") { export(vol, hd, std::path::Path::new(&dir)); }
     let mpq = mpq.expect("the install wrote War3.mpq on Macintosh HD");
     for f in ["font\\font.gid", "font\\font.clh"] { assert!(mpq_has(&mpq, f), "{f} is in the installed War3.mpq"); }
+}
+
+/// The installed tree, written out for staging (owner data: the corpus lane, never committed): each file's data fork at its Mac path
+/// (`:` -> `/`), its resource fork beside it as `<name>.rsrc` when it has one, and `manifest.tsv` (path, type, creator, finder flags,
+/// data bytes, resource bytes) for the Finder info a plain file cannot carry.
+fn export(vol: &heirloom_volume::Tree, top: heirloom_volume::NodeId, dir: &std::path::Path) {
+    let mut manifest = String::from("# path\ttype\tcreator\tflags\tdata\trsrc\n");
+    let mut stack = vec![(top, dir.to_path_buf(), String::new())];
+    while let Some((d, host, rel)) = stack.pop() {
+        std::fs::create_dir_all(&host).unwrap();
+        for &c in vol.children(d) {
+            let name = vol.name(c).replace('/', ":");
+            let (h, r) = (host.join(&name), if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") });
+            if vol.is_dir(c) { stack.push((c, h, r)); continue }
+            let n = vol.get(c);
+            let data = vol.file_data(c).unwrap_or(&[]);
+            std::fs::write(&h, data).unwrap();
+            if !n.rsrc.is_empty() { std::fs::write(host.join(format!("{name}.rsrc")), &n.rsrc).unwrap(); }
+            let fourcc = |b: [u8; 4]| b.iter().map(|&x| if x.is_ascii_graphic() || x == b' ' { char::from(x) } else { '?' }).collect::<String>();
+            manifest += &format!("{r}\t{}\t{}\t{:#06x}\t{}\t{}\n", fourcc(n.finfo.file_type), fourcc(n.finfo.creator), n.finfo.flags, data.len(), n.rsrc.len());
+        }
+    }
+    std::fs::write(dir.join("manifest.tsv"), manifest).unwrap();
+    eprintln!("EXPORTED the installed tree -> {}", dir.display());
 }
 
 /// Storm's hash of `name` for `kind` (0 index, 1 name A, 2 name B, 3 key) over its crypt table: the MPQ format's public lookup.
