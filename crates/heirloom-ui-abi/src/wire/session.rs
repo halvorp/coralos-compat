@@ -109,8 +109,9 @@ pub enum Report {
     /// verbatim by the window owner. Sent as a DUPLEX event while a slice is outstanding (the 2026-11-01 ruling), never held for the
     /// slice's own answer.
     GpuImage(Vec<u8>),
-    /// The guest set its GL drawable to `w` x `h` (aglSetDrawable): the window owner asks coral-wm for the attachment at that size.
-    GlDrawable { w: u16, h: u16 },
+    /// The guest set its GL drawable to `w` x `h` on its window `win` (aglSetDrawable; the host window id, 0 = no shown window):
+    /// the window owner asks coral-wm for the attachment at that size on exactly that window.
+    GlDrawable { w: u16, h: u16, win: u32 },
 }
 
 fn put_blob(out: &mut Vec<u8>, tag: u8, offset: u32, total: u32, chunk: &[u8]) {
@@ -307,10 +308,11 @@ pub(super) fn put_machine_report(out: &mut Vec<u8>, rep: &Report) {
             put_len(out, bytes.len());
             out.extend_from_slice(bytes);
         }
-        Report::GlDrawable { w, h } => {
+        Report::GlDrawable { w, h, win } => {
             out.push(5);
             put_u16(out, *w);
             put_u16(out, *h);
+            put_u32(out, *win);
         }
     }
 }
@@ -341,7 +343,7 @@ pub(super) fn get_machine_report(r: &mut Reader<'_>) -> Result<Report, WireError
             let len = r.u32()? as usize;
             Report::GpuImage(r.take(len)?.to_vec())
         }
-        5 => Report::GlDrawable { w: r.u16()?, h: r.u16()? },
+        5 => Report::GlDrawable { w: r.u16()?, h: r.u16()?, win: r.u32()? },
         tag => return Err(WireError::UnknownTag { what: "Report", tag }),
     })
 }

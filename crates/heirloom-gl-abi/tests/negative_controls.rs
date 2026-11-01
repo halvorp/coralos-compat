@@ -197,11 +197,13 @@ fn nc_one_missing_entry_withdraws_its_extension_and_the_version() {
 #[test]
 fn nc_frames_are_version_first_and_little_endian() {
     let b = Frame { token: Token { slot: 0x0102_0304, incarnation: 5 }, command: Command::FenceSet { id: 9 } }.encode();
-    assert_eq!(b[..2], [2, 0], "ABI version 2, little-endian, FIRST");
+    assert_eq!(b[..2], [3, 0], "ABI version 3, little-endian, FIRST");
     assert_eq!(b[8..12], [4, 3, 2, 1]);
     let mut bad = b.clone();
-    bad[0] = 3;
-    assert_eq!(Frame::decode(&bad).unwrap_err(), WireError::Version { got: 3 });
+    bad[0] = 4;
+    assert_eq!(Frame::decode(&bad).unwrap_err(), WireError::Version { got: 4 });
+    bad[0] = 2;
+    assert_eq!(Frame::decode(&bad).unwrap_err(), WireError::Version { got: 2 }, "a version-2 peer (two-argument aglSetDrawable) is refused");
     bad[0] = 1;
     assert_eq!(Frame::decode(&bad).unwrap_err(), WireError::Version { got: 1 }, "a version-1 peer is refused, not misread");
     assert_eq!(Frame::decode(&b[..1]).unwrap_err(), WireError::Truncated);
@@ -255,7 +257,8 @@ fn a_streaming_reader_learns_each_frames_length_from_its_header_alone() {
         assert_eq!(peek_len(&b[..n]), if n >= 2 { Ok(None) } else { Ok(None) }, "header incomplete at {n}");
     }
     assert_eq!(peek_len(&b[..16]), Ok(Some(b.len())));
-    assert_eq!(peek_len(&[3, 0]), Err(WireError::Version { got: 3 }), "an unknown ABI is refused from its first two bytes");
+    assert_eq!(peek_len(&[2, 0]), Err(WireError::Version { got: 2 }), "an older ABI is refused from its first two bytes");
+    assert_eq!(peek_len(&[4, 0]), Err(WireError::Version { got: 4 }), "an unknown ABI is refused from its first two bytes");
 }
 
 #[test]

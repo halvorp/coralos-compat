@@ -48,6 +48,14 @@ pub struct DspState {
     fades: u32,
 }
 
+impl DspState {
+    /// The reserved context's native window (its guest WindowPtr), 0 when no context is reserved: where the games-windowed rule
+    /// shows an `aglSetFullScreen` drawable.
+    pub(crate) fn window(&self) -> u32 {
+        self.window
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DspFn {
     Startup, Shutdown, GetVersion, GetFirstContext, GetNextContext, FindBestContext, FindBestContextOnDisplayID, UserSelectContext, CanUserSelectContext,

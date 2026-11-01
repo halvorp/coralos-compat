@@ -3,7 +3,9 @@ use alloc::vec::Vec;
 
 /// The ABI version: the FIRST field of every frame, so a reader can refuse an unknown layout before parsing it.
 /// 2: `CallData` and `ReplyData` (texture pixels and read-backs) joined the frame kinds; a version-1 peer refuses a version-2 ring.
-pub const ABI_VERSION: u16 = 2;
+/// 3: `aglSetDrawable`'s Call carries THREE arguments - width, height and the drawable's host window id (0 = no shown window) -
+///    so the window owner attaches the GL picture to exactly the drawable's window; a version-2 peer refuses a version-3 ring.
+pub const ABI_VERSION: u16 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WireError {

@@ -243,12 +243,18 @@ impl<U: GuestUi> MacPpc<U> {
             }
             "aglSetDrawable" => match self.gl.ctxs.get(&a0).copied() {
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
-                Some(t) if a1 == 0 => { self.gl_queue(t, Command::Call { entry: f.0, args: alloc::vec![0, 0] }); ret = 1; }
+                Some(t) if a1 == 0 => { self.gl_queue(t, Command::Call { entry: f.0, args: alloc::vec![0, 0, 0] }); ret = 1; }
                 Some(t) => {
                     // CGrafPort / GrafPort: portRect (top, left, bottom, right) at +16
                     let r: Result<[i16; 4], _> = (|| Ok::<_, heirloom_mem_flat32::MemError>([self.mac.mem.read_i16(a1 + 16)?, self.mac.mem.read_i16(a1 + 18)?, self.mac.mem.read_i16(a1 + 20)?, self.mac.mem.read_i16(a1 + 22)?]))();
                     match r {
-                        Ok([t0, l, b, rr]) if b > t0 && rr > l => { self.gl_queue(t, Command::Call { entry: f.0, args: alloc::vec![u64::from((rr - l) as u32), u64::from((b - t0) as u32)] }); ret = 1; }
+                        Ok([t0, l, b, rr]) if b > t0 && rr > l => {
+                            // ABI 3: the drawable's host window id (the port IS the window here: GetWindowPort returns the window),
+                            // so the window owner attaches the picture to exactly that window; 0 = a port that is no shown window.
+                            let win = self.mac.windows.get(&a1).and_then(|w| w.native).map_or(0, |n| u64::from(n.id));
+                            self.gl_queue(t, Command::Call { entry: f.0, args: alloc::vec![u64::from((rr - l) as u32), u64::from((b - t0) as u32), win] });
+                            ret = 1;
+                        }
                         _ => self.gl.agl_error = AGL_BAD_DRAWABLE,
                     }
                 }
@@ -263,7 +269,10 @@ impl<U: GuestUi> MacPpc<U> {
                 Some(_) if a1 == 0 || a2 == 0 || a1 > 8192 || a2 > 8192 => self.gl.agl_error = AGL_BAD_DRAWABLE,
                 Some(t) => {
                     let set = GlFn::by_name("aglSetDrawable").ok_or_else(|| String::from("aglSetFullScreen: the contract has no aglSetDrawable"))?;
-                    self.gl_queue(t, Command::Call { entry: set.0, args: alloc::vec![u64::from(a1), u64::from(a2)] });
+                    // The window the games-windowed rule shows it in: the DrawSprocket context's window when one is reserved, else none
+                    // (0: the window owner attaches nothing and says so).
+                    let win = self.mac.windows.get(&self.dsp.window()).and_then(|w| w.native).map_or(0, |n| u64::from(n.id));
+                    self.gl_queue(t, Command::Call { entry: set.0, args: alloc::vec![u64::from(a1), u64::from(a2), win] });
                     self.gl_note(format!("[HEIRLOOM-GL FULLSCREEN-AS-WINDOW w={a1} h={a2}] the games-windowed rule: the display mode is not changed"));
                     ret = 1;
                 }

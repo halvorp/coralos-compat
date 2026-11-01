@@ -45,7 +45,7 @@ fn reports() -> Vec<Report> {
         Report::Stepped { step: WireStep::Exited, insns: 1, bus_faults: 0, deadline_us: None, refused: vec![], undelivered: vec![] },
         Report::Stepped { step: WireStep::BudgetSpent, insns: 200_000, bus_faults: 0, deadline_us: None, refused: vec![], undelivered: vec![] },
         Report::GpuImage(vec![0xE7, 9, 8, 7, 6]),
-        Report::GlDrawable { w: 800, h: 600 },
+        Report::GlDrawable { w: 800, h: 600, win: 7 },
     ]
 }
 

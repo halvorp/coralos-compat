@@ -25,6 +25,8 @@ struct Seen {
     bad_tokens: usize,
     /// Draws counted, not kept (a long game run).
     draws_seen: usize,
+    /// Every aglSetDrawable's arguments, in order (width, height, the drawable's host window id).
+    drawables: Vec<Vec<u64>>,
 }
 
 struct Mock {
@@ -66,6 +68,9 @@ impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
                 Command::Call { entry, args } => {
                     let name = heirloom_gl_abi::ENTRIES[usize::from(entry)].name;
                     seen.kinds.push(format!("Call {name}"));
+                    if name == "aglSetDrawable" {
+                        seen.drawables.push(args.clone());
+                    }
                     match name {
                         "aglChoosePixelFormat" if self.gpu => reply(&mut out, 0, vec![1], ""),
                         "glGetString" => {
@@ -332,6 +337,14 @@ fn the_gl_spinner_swaps_frame_after_frame_into_its_own_window() {
     let swaps = s.kinds.iter().filter(|k| *k == "Swap").count();
     assert!(swaps >= 3, "frame after frame: {swaps} swaps, {:?}", &s.kinds[..s.kinds.len().min(40)]);
     assert!(s.kinds.iter().any(|k| k == "Call aglSetDrawable"), "the window is the drawable");
+    // The drawable names its window: the third argument is the host window id of the port's window (ABI 3), so the window
+    // owner attaches the picture to exactly that window.
+    let natives: Vec<u64> = m.mac.windows.values().filter_map(|w| w.native).map(|n| u64::from(n.id)).collect();
+    assert!(
+        s.drawables.iter().any(|a| a.len() == 3 && a[2] != 0 && natives.contains(&a[2])),
+        "aglSetDrawable carries its window's host id: {:?} (windows {natives:?})",
+        s.drawables
+    );
     assert!(s.draws.len() >= swaps, "every frame draws its triangle");
     let firsts: Vec<u8> = s.draws.iter().filter_map(|d| d.arrays.iter().find(|a| a.size == 4).map(|a| a.data[1])).collect();
     assert!(firsts.windows(2).any(|w| w[0] != w[1]), "the first vertex's colour changes from frame to frame: {firsts:?}");
