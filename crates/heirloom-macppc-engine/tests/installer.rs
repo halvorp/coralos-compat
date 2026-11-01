@@ -52,11 +52,14 @@ fn staged() -> Option<(MacPpc<RecordingGuestUi>, Vec<u8>)> {
     for p in files {
         let corpus = p.file_name().unwrap().to_string_lossy().into_owned();
         let Some(stem) = corpus.strip_suffix(".bin") else { continue };
-        let mut parts: Vec<&str> = stem.split('_').collect();
-        let leaf = parts.pop().unwrap();
-        // Finder housekeeping (desktop databases, icons, .DS_Store) and the installer itself (start_file puts it there) are not staged
-        if leaf.starts_with('.') || leaf.starts_with("Icon") || leaf.starts_with("Desktop D") || parts.first() == Some(&"TheVolumeSettingsFolder") || stem == "Warcraft III Installer" { continue; }
         let Some((name, ty, cr, flags, dlen, rsrc)) = macbinary(&p) else { continue };
+        // the folders are the corpus name BEFORE the file's own (header) name, `_` between them: a name may hold `_` itself
+        let Some(parts) = stem.strip_suffix(name.as_str()).map(|d| d.strip_suffix('_').unwrap_or(d)).map(|d| d.split('_').filter(|c| !c.is_empty()).collect::<Vec<&str>>()) else {
+            eprintln!("SKIPPED {corpus}: its header name {name:?} is not the end of its corpus name");
+            continue;
+        };
+        // Finder housekeeping (desktop databases, icons, .DS_Store) and the installer itself (start_file puts it there) are not staged
+        if name.starts_with('.') || name.starts_with("Icon") || name.starts_with("Desktop D") || parts.first() == Some(&"TheVolumeSettingsFolder") || stem == "Warcraft III Installer" { continue; }
         let dir = vol.mkdirs(cd, parts.iter().copied()).unwrap();
         let id = vol.put_stream(dir, &name, dlen, p.to_str().unwrap()).unwrap();
         let n = vol.get_mut(id);
@@ -69,6 +72,22 @@ fn staged() -> Option<(MacPpc<RecordingGuestUi>, Vec<u8>)> {
     vol.set_capacity(hd, 4 << 30).unwrap(); // a 4 GB scratch disk: room for the 450 MB install
     GuestMachine::set_home(&mut m, &["Warcraft III"]).unwrap();
     Some((m, app))
+}
+
+/// Every disc file the copy phase opens is staged at its real place: names hold `_` too ("c_left.jpg"), so a corpus file's folders are
+/// never guessed from `_` inside its own name. The 2026-11-01 owner-key run stopped copying at ":Support:ReadMe:Images:c_left.jpg"
+/// (fnfErr: it had been staged as Support:ReadMe:Images:c:c_left.jpg), leaving War3.mpq, the maps and every later file pre-sized
+/// and all zero. Corpus-skipping, not ignored.
+#[test]
+fn a_disc_file_whose_name_holds_an_underscore_is_staged_at_its_real_place() {
+    let Some((mut m, _)) = staged() else { return };
+    let vol = GuestMachine::volume(&mut m);
+    let cd = vol.volume("Warcraft III").unwrap();
+    let mut at = cd;
+    for c in ["Support", "ReadMe", "Images", "c_left.jpg"] { at = vol.find_child(at, c).unwrap_or_else(|| panic!("no {c} on the disc")); }
+    assert!(vol.is_file(at));
+    assert!(vol.find_child(vol.find_child(vol.find_child(vol.find_child(cd, "Support").unwrap(), "ReadMe").unwrap(), "Images").unwrap(), "c").is_none(),
+        "no folder made out of a file name's underscore");
 }
 
 /// The window's picture as the host shows it now: every pixel frame of every plane, oldest first, composed (PPM).
@@ -259,6 +278,10 @@ fn installer_installs_with_the_owners_key() {
     let ok = ok && act(&mut m, &mut t, &format!("run:{slices}"));
     drain(&mut m);
     eprintln!("stopped: {ok} {:?}", m.fault());
+    let mut refused = m.mac.refused.clone();
+    refused.sort();
+    refused.dedup();
+    eprintln!("REFUSED {refused:?}");
     let vol = GuestMachine::volume(&mut m);
     let hd = vol.volume("Macintosh HD").unwrap();
     let mut stack = vec![(hd, String::from("Macintosh HD"))];

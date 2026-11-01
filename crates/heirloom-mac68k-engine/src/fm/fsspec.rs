@@ -202,5 +202,13 @@ impl FileMgr {
 impl<U: GuestUi> Mac<U> {
     /// The `FSp...` calls by VALUE (selector as in [`sel`], arguments in declaration order, missing ones 0): the entry a PowerPC caller uses, which
     /// has no 68k stack to read them from. Runs the same body the `_HighLevelFSDispatch` trap runs; `Ok(v)` is 0, or the refnum for `sel::OPEN_RES_FILE`.
-    pub fn fsp_call(&mut self, selector: u16, args: &[u32]) -> Result<u32, i16> { fsp(self, selector, &|i| args.get(i).copied().unwrap_or(0)) }
+    /// Each call is one `[file] FSp <selector> "<name>" -> <result>` line (the spec's name; MakeFSSpec's own name argument).
+    pub fn fsp_call(&mut self, selector: u16, args: &[u32]) -> Result<u32, i16> {
+        let a = |i: usize| args.get(i).copied().unwrap_or(0);
+        let name_at = if selector == sel::MAKE_FSSPEC { a(2) } else if a(0) != 0 { a(0) + FSS_NAME } else { 0 };
+        let name = if name_at == 0 { alloc::string::String::new() } else { pascal::read_pstring(&self.mem, name_at).unwrap_or_default() };
+        let r = fsp(self, selector, &a);
+        self.log.push(format!("[file] FSp sel={selector} \"{name}\" -> {}", match r { Ok(v) => v as i64, Err(e) => i64::from(e) }));
+        r
+    }
 }

@@ -79,7 +79,16 @@ fn run<U: GuestUi>(m: &mut Mac<U>, r: &mut Regs, name: &str, body: Body<U>) -> R
     if async_call && done != 0 {
         m.pending_call = Some(GuestCall { target: m.mem.strip(done), d0: Some(res as i32 as u32), a0: Some(pb.0), d1: None, restore: Some((0, 0)) });
     }
-    Ok(format!("[file] {name}{}{} -> {res}{}", if hfs { " (HFS)" } else { "" }, if async_call { " (async)" } else { "" }, if async_call && done != 0 { " + completion" } else { "" }))
+    // what moved: a Read / Write names its fork, the bytes asked and done and where; a SetEOF / Allocate its fork and size (the
+    // 2026-11-01 Warcraft III install left 120 files at their final size and all zero: these lines show which writes ran)
+    let io = |off| pb.u32(&m.mem, off).unwrap_or(u32::MAX);
+    let refnum = pb.i16(&m.mem, IO_REF_NUM).unwrap_or(0);
+    let what = match name {
+        "Read" | "Write" => format!(" ref={refnum} req={} act={} mode={} pos={}", io(IO_REQ_COUNT), io(IO_ACT_COUNT), pb.i16(&m.mem, IO_POS_MODE).unwrap_or(0), io(IO_POS_OFFSET)),
+        "SetEOF" | "Allocate" => format!(" ref={refnum} size={}", io(IO_MISC)),
+        _ => alloc::string::String::new(),
+    };
+    Ok(format!("[file] {name}{}{} -> {res}{}{what}", if hfs { " (HFS)" } else { "" }, if async_call { " (async)" } else { "" }, if async_call && done != 0 { " + completion" } else { "" }))
 }
 
 fn mem_err(what: &'static str) -> impl Fn(heirloom_mem_flat32::MemError) -> i16 { move |_| { let _ = what; err::PARAM_ERR } }
