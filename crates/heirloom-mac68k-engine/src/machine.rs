@@ -92,6 +92,8 @@ pub struct Mac<U: GuestUi> {
     pub log: Vec<String>,
     /// Refusals (bad guest pointers, unimplemented traps ...), in order.
     pub refused: Vec<String>,
+    /// The guest's registered cursor devices (`CursorDeviceNewDevice` records, in registration order: [`crate::cursor_device`]).
+    pub cursor_devices: Vec<u32>,
     /// Census mode: the first call to an unimplemented trap halts the guest (the run's last refusal names it).
     pub stop_on_unimplemented: bool,
     /// (trap word, address of the A-line word) for every call to an unimplemented trap, in order.
@@ -147,7 +149,7 @@ impl<U: GuestUi> Mac<U> {
         let mut m = Mac {
             mem: GuestMem::new(DEFAULT_SIZE), ui, windows: BTreeMap::new(), z: vec![], mm: MemMgr::default(), rm: ResMgr::default(),
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
-            table: BTreeMap::new(), log: vec![], refused: vec![],
+            table: BTreeMap::new(), log: vec![], refused: vec![], cursor_devices: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
             fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT,
         };
@@ -183,6 +185,7 @@ impl<U: GuestUi> Mac<U> {
         crate::mouse::register(&mut m)?;
         crate::toolutil::register(&mut m)?;
         crate::package::register(&mut m)?;
+        crate::cursor_device::register(&mut m)?;
         crate::intl::register(&mut m)?;
         crate::strcmp::register(&mut m)?;
         crate::procmgr::register(&mut m)?;

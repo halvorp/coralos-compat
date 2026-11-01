@@ -84,7 +84,7 @@ fn idle() -> RunStats { RunStats { insns: 0, halted: false, blocked: true, trap:
 
 impl<U: GuestUi> MacPpc<U> {
     /// The pointer-glue sequence (`lwz r12,d(r2); stw r2,20(r1); lwz r0,0(r12) ...`) that jumped to 0, decoded from the call site in LR: which import's TOC slot held the 0.
-    fn null_call_import(&self, cpu: &Cpu) -> Option<String> {
+    fn null_call_import(&self, cpu: &Cpu) -> Option<(u32, String, String, bool)> {
         let call = cpu.lr.wrapping_sub(4);
         let w = self.mac.mem.read_u32(call).ok()?;
         if w >> 26 != 18 || w & 3 != 1 { return None; } // not a `bl`
@@ -95,7 +95,7 @@ impl<U: GuestUi> MacPpc<U> {
         let caller_toc = self.mac.mem.read_u32(cpu.gpr[1].wrapping_add(20)).ok()?;
         let slot = caller_toc.wrapping_add(first as u16 as i16 as i32 as u32);
         let (lib, sym, weak) = self.import_slots.get(&slot)?;
-        Some(format!("the call at {call:#x} went through {lib}/{sym}, an import that is {} and was relocated to 0", if *weak { "WEAK and absent" } else { "unresolved" }))
+        Some((call, lib.clone(), sym.clone(), *weak))
     }
 
     /// Prepare to run `frag`: `main` (after `init`, when it has one).
@@ -180,8 +180,18 @@ impl<U: GuestUi> MacPpc<U> {
                     why = format!("{why} -- the placeholder address of an unbound DATA import; unbound data imports of this fragment: {}", self.unbound_data.join(", "));
                 }
             }
-            // a branch to address 0 is, almost always, a call through a weak import that is absent: name it
-            if matches!(t, crate::cpu::Trap::Unimplemented { pc: 0, .. } | crate::cpu::Trap::BusFault { pc: 0, .. }) { if let Some(n) = self.null_call_import(&cpu) { why = format!("{why} -- {n}"); } }
+            // a branch to address 0 is, almost always, a call through a weak import that is absent (its TOC word stays 0, so the
+            // program's own `if (&sym)` test still sees it absent): REFUSED BY NAME - a marker first, in the machine's refusals and log
+            if matches!(t, crate::cpu::Trap::Unimplemented { pc: 0, .. } | crate::cpu::Trap::BusFault { pc: 0, .. }) {
+                let named = match self.null_call_import(&cpu) {
+                    Some((call, lib, sym, weak)) => format!("[HEIRLOOM-MACPPC {} lib={lib} sym={sym} call={call:#x}] the call went through {lib}/{sym}, an import that is {} and was relocated to 0",
+                        if weak { "WEAK-IMPORT-CALLED" } else { "UNRESOLVED-IMPORT-CALLED" }, if weak { "WEAK and absent" } else { "unresolved" }),
+                    None => format!("[HEIRLOOM-MACPPC NULL-CALL from={:#x}] a branch to address 0 that is not an import's pointer glue", cpu.lr.wrapping_sub(4)),
+                };
+                self.mac.refused.push(named.clone());
+                self.mac.log.push(named.clone());
+                why = format!("{named} -- {why}");
+            }
             self.rt.fault = Some(why);
         }
         let step = if let Some(f) = &self.rt.fault { Step::Fault(f.clone()) }
@@ -278,6 +288,11 @@ impl<U: GuestUi> Host for MacPpc<U> {
                 Ok(false) => {}
                 Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
             }
+        }
+        if let Some(Binding::Native(Native::CallUniversalProc)) = self.bindings.get(&symbol).cloned() {
+            if let Err(why) = self.call_universal_proc(cpu) { self.mac.log.push(why.clone()); self.rt.fault = Some(why); cpu.halt(); }
+            self.sync_natives(cpu);
+            return true;
         }
         if let Some(Binding::Native(Native::Invoke(f))) = self.bindings.get(&symbol).cloned() {
             if let Err(why) = self.begin_invoke(cpu, f) { self.rt.fault = Some(why); cpu.halt(); }

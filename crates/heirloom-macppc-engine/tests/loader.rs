@@ -138,4 +138,9 @@ fn a_call_through_an_absent_weak_import_is_traced_to_its_name_instead_of_a_bare_
     m.start(&frag).unwrap();
     let (step, _) = m.run_loop(1000);
     assert!(matches!(&step, Step::Fault(w) if w.contains("Apple;Carbon;Networking/OTOpenEndpoint") && w.contains("WEAK and absent")), "{step:?}");
+    // refused BY NAME, as a refusal the host reports (the ring line), not only a fault text (WC3 2026-11-01: CallUniversalProc)
+    let marker = "[HEIRLOOM-MACPPC WEAK-IMPORT-CALLED lib=Apple;Carbon;Networking sym=OTOpenEndpoint";
+    assert!(matches!(&step, Step::Fault(w) if w.starts_with(marker)), "{step:?}");
+    assert!(m.mac.refused.iter().any(|r| r.starts_with(marker)), "{:?}", m.mac.refused);
+    assert!(m.mac.log.iter().any(|l| l.starts_with(marker)), "the machine's log names it");
 }

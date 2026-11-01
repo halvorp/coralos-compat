@@ -381,6 +381,12 @@ fn wc3_host_run_with_a_gl_worker() {
         let (st, stats) = GuestMachine::step(&mut m, 5_000_000);
         if matches!(st, Step::Fault(_) | Step::Exited) {
             eprintln!("slice {i}: {st:?} {:?}", m.fault());
+            // `WC3_DUMP=<words>`: the code before the faulting call (LR - 4*words .. LR), for reading the caller
+            if let (Ok(n), Some(cpu)) = (std::env::var("WC3_DUMP").map(|v| v.parse::<u32>().unwrap_or(32)), m.cpu()) {
+                let from = cpu.lr.wrapping_sub(4 * n);
+                let words: Vec<String> = (0..n + 2).map(|k| m.mac.mem.read_u32(from + 4 * k).map_or_else(|_| String::from("????????"), |w| format!("{w:08x}"))).collect();
+                eprintln!("DUMP lr={:#x} from={from:#x}: {}", cpu.lr, words.join(" "));
+            }
             break;
         }
         let _ = stats;
@@ -404,7 +410,10 @@ fn wc3_host_run_with_a_gl_worker() {
 }
 
 /// Stage an exported installed tree (`manifest.tsv`: path, type, creator, flags, data bytes, resource bytes; data forks at their paths,
-/// `<name>.rsrc` beside) as the volume "Macintosh HD", every file a stream by its host path, and make the folder holding War3.mpq home.
+/// `<name>.rsrc` beside) the way the Z83 bundle stages it (coralos tools/z83-heirloom-stage.sh stage_export): ONLY the game's own
+/// folder (the top folder holding War3.mpq) becomes the read-only volume "Warcraft III", every file a stream by its host path, and the
+/// folder holding War3.mpq is home. The export's System Folder is the machine's own (CarbonLib, OpenGL, Game Sprockets: the engine
+/// serves them), so it is not staged.
 fn stage_installed(m: &mut M, root: &std::path::Path) {
     use heirloom_common::GuestMachine;
     struct Raw;
@@ -415,21 +424,21 @@ fn stage_installed(m: &mut M, root: &std::path::Path) {
     }
     let drop_rsrc = std::env::var("WC3_DROP_RSRC").is_ok();
     let manifest = std::fs::read_to_string(root.join("manifest.tsv")).expect("the export's manifest.tsv");
+    let rows: Vec<Vec<&str>> = manifest.lines().filter(|l| !l.starts_with('#') && !l.is_empty()).map(|l| l.split('\t').collect()).collect();
+    let anchor = rows.iter().find(|f| f[0].rsplit('/').next().is_some_and(|n| n.eq_ignore_ascii_case("War3.mpq"))).expect("War3.mpq in the exported tree")[0];
+    let top = anchor.split('/').next().unwrap().to_string();
     let vol = GuestMachine::volume(m);
     vol.enable_streams();
     vol.set_stream_source(Box::new(Raw));
-    let hd = vol.add_volume("Macintosh HD", true);
-    let mut home = None;
-    for line in manifest.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
-        let f: Vec<&str> = line.split('\t').collect();
+    let game = vol.add_volume("Warcraft III", false);
+    for f in rows.iter().filter(|f| f[0].starts_with(&format!("{top}/"))) {
         let (path, ty, cr, flags) = (f[0], f[1], f[2], u16::from_str_radix(f[3].trim_start_matches("0x"), 16).unwrap());
-        let mut parts: Vec<&str> = path.split('/').collect();
+        let mut parts: Vec<&str> = path[top.len() + 1..].split('/').collect();
         let leaf = parts.pop().unwrap();
-        let dir = vol.mkdirs(hd, parts.iter().copied()).unwrap();
+        let dir = vol.mkdirs(game, parts.iter().copied()).unwrap();
         let host = root.join(path);
         let len = std::fs::metadata(&host).unwrap().len();
-        let id = vol.put_stream(dir, leaf, len, host.to_str().unwrap()).unwrap();
-        if leaf.eq_ignore_ascii_case("War3.mpq") { home = Some(parts.iter().map(|p| p.to_string()).collect::<Vec<_>>()); }
+        let id = vol.put_stream(dir, leaf, len, host.to_str().unwrap()).unwrap_or_else(|e| panic!("staging {path}: {e:?}"));
         if drop_rsrc { continue }
         let fourcc = |t: &str| { let mut b = [b' '; 4]; b[..t.len().min(4)].copy_from_slice(&t.as_bytes()[..t.len().min(4)]); b };
         let n = vol.get_mut(id);
@@ -438,9 +447,8 @@ fn stage_installed(m: &mut M, root: &std::path::Path) {
         n.finfo.flags = flags;
         if let Ok(r) = std::fs::read(root.join(format!("{path}.rsrc"))) { n.rsrc = r; }
     }
-    let home = home.expect("War3.mpq in the exported tree");
-    let mut at = vec!["Macintosh HD"];
-    at.extend(home.iter().map(String::as_str));
+    let mut at = vec!["Warcraft III"];
+    at.extend(anchor[top.len() + 1..].split('/').rev().skip(1).collect::<Vec<_>>().into_iter().rev());
     GuestMachine::set_home(m, &at).unwrap();
-    eprintln!("staged the installed tree {} as Macintosh HD, home {:?} (resource forks {})", root.display(), at, if drop_rsrc { "DROPPED" } else { "kept" });
+    eprintln!("staged {top} of {} as the volume Warcraft III, home {at:?} (resource forks {})", root.display(), if drop_rsrc { "DROPPED" } else { "kept" });
 }

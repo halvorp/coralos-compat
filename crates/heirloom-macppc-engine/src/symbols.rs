@@ -84,6 +84,8 @@ pub enum Native { StandardAlert, GetSharedLibrary, FindSymbol, CloseConnection, 
     Qt(crate::qt_c::QtFn),
     /// An `Invoke<Name>UPP` call of the program's own UPP ([`crate::invoke_c`]): served by the run loop through the callback machine.
     Invoke(crate::invoke_c::InvokeFn),
+    /// `CallUniversalProc` ([`crate::upp_c`]): served by the run loop through the callback machine.
+    CallUniversalProc,
     /// A Text Services Manager document call, no input method ([`crate::tsm_c`]).
     Tsm(crate::tsm_c::TsmFn),
     /// A Script Manager call, Roman only ([`crate::script_c`]).
@@ -147,6 +149,7 @@ impl Native {
             n if crate::gl_c::GlFn::by_name(n).is_some() => Native::Gl(crate::gl_c::GlFn::by_name(n).expect("checked")),
             n if crate::tm_c::TmFn::by_name(n).is_some() => Native::Tm(crate::tm_c::TmFn::by_name(n).expect("checked")),
             n if crate::qdacc_c::QaFn::by_name(n).is_some() => Native::Qa(crate::qdacc_c::QaFn::by_name(n).expect("checked")),
+            "CallUniversalProc" => Native::CallUniversalProc,
             n if crate::invoke_c::InvokeFn::by_name(n).is_some() => Native::Invoke(crate::invoke_c::InvokeFn::by_name(n).expect("checked")),
             n if crate::tsm_c::TsmFn::by_name(n).is_some() => Native::Tsm(crate::tsm_c::TsmFn::by_name(n).expect("checked")),
             n if crate::script_c::ScFn::by_name(n).is_some() => Native::Sc(crate::script_c::ScFn::by_name(n).expect("checked")),

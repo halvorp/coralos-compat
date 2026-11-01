@@ -48,6 +48,7 @@ pub mod osconv;
 pub mod pack7;
 pub mod palette;
 pub mod package;
+pub mod cursor_device; // the Cursor Device Manager ($AADB): no guest cursor device (the host owns the pointer)
 pub mod pascal;
 pub mod procmgr;
 pub mod profile;
