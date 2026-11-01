@@ -58,16 +58,16 @@ const fn e(name: &'static str, home: Home, imported_by: u8, owner: Owner) -> Ent
 pub static ENTRIES: &[Entry] = &[
     e("aglChoosePixelFormat", Home::Agl, 0b1111, Owner::Adapter).on(),
     e("aglCreateContext", Home::Agl, 0b1111, Owner::Adapter).on(),
-    e("aglDescribeRenderer", Home::Agl, 0b0101, Owner::Adapter),
+    e("aglDescribeRenderer", Home::Agl, 0b0101, Owner::Adapter).on(),
     e("aglDestroyContext", Home::Agl, 0b1111, Owner::Adapter).on(),
     e("aglDestroyPixelFormat", Home::Agl, 0b1111, Owner::Adapter).on(),
-    e("aglDestroyRendererInfo", Home::Agl, 0b0101, Owner::Adapter),
+    e("aglDestroyRendererInfo", Home::Agl, 0b0101, Owner::Adapter).on(),
     e("aglGetError", Home::Agl, 0b1111, Owner::Adapter).on(),
-    e("aglNextRendererInfo", Home::Agl, 0b0101, Owner::Adapter),
-    e("aglQueryRendererInfo", Home::Agl, 0b0101, Owner::Adapter),
+    e("aglNextRendererInfo", Home::Agl, 0b0101, Owner::Adapter).on(),
+    e("aglQueryRendererInfo", Home::Agl, 0b0101, Owner::Adapter).on(),
     e("aglSetCurrentContext", Home::Agl, 0b1111, Owner::Adapter).on(),
     e("aglSetDrawable", Home::Agl, 0b1111, Owner::Adapter).on(),
-    e("aglSetFullScreen", Home::Agl, 0b1111, Owner::Adapter),
+    e("aglSetFullScreen", Home::Agl, 0b1111, Owner::Adapter).on(),
     e("aglSwapBuffers", Home::Agl, 0b1111, Owner::Adapter).on(),
     e("glActiveTextureARB", Home::Ext(Ext::ArbMultitexture), 0b1111, Owner::Mesa).on(),
     e("glAlphaFunc", Home::Core(Version::V1_0), 0b1111, Owner::Mesa).on(),
@@ -126,8 +126,8 @@ pub static ENTRIES: &[Entry] = &[
     e("glVertexArrayRangeAPPLE", Home::Ext(Ext::AppleVertexArrayRange), 0b1100, Owner::Adapter).on(),
     e("glVertexPointer", Home::Core(Version::V1_1), 0b1111, Owner::Mesa).on(),
     e("glViewport", Home::Core(Version::V1_0), 0b1111, Owner::Mesa).on(),
-    e("glmSetFunc", Home::Glm, 0b1111, Owner::Adapter),
-    e("glmSetMode", Home::Glm, 0b1111, Owner::Adapter),
+    e("glmSetFunc", Home::Glm, 0b1111, Owner::Adapter).on(),
+    e("glmSetMode", Home::Glm, 0b1111, Owner::Adapter).on(),
     e("gluErrorString", Home::Glu, 0b1100, Owner::Adapter),
     e("glDrawRangeElements", Home::Core(Version::V1_2), 0b0000, Owner::Mesa).on(),
     e("glTexImage3D", Home::Core(Version::V1_2), 0b0000, Owner::Mesa).on(),
@@ -548,6 +548,8 @@ mod tests {
             "glScissor", "glSetFenceAPPLE", "glTestFenceAPPLE", "glTestObjectAPPLE", "glTexCoordPointer", "glTexEnvi", "glTexGeni", "glTexImage1D",
             "glTexImage2D", "glTexImage3D", "glTexParameteri", "glTexSubImage1D", "glTexSubImage2D", "glTexSubImage3D", "glUnlockArraysEXT", "glVertexArrayParameteriAPPLE",
             "glVertexArrayRangeAPPLE", "glVertexPointer", "glViewport",
+            // the Warcraft III start-up adapters (2026-11-01 game call map): renderer info, fullscreen-as-window, the OpenGL Memory hooks
+            "aglDescribeRenderer", "aglDestroyRendererInfo", "aglNextRendererInfo", "aglQueryRendererInfo", "aglSetFullScreen", "glmSetFunc", "glmSetMode",
         ];
         let mut want: alloc::vec::Vec<&str> = hand.iter().copied().chain(crate::family_table::GENERATED.iter().map(|s| s.name)).chain(crate::bulk_table::BULK.iter().map(|s| s.name)).collect();
         want.sort_unstable();

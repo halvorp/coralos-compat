@@ -9,11 +9,18 @@
 //! answers both for a PowerPC build; the interpreter runs the 601/603/G3 user set, a 750). `gestaltCFMAttr` ('cfrg') bit 0 = `gestaltCFMPresent`: the
 //! Code Fragment Manager calls (`GetSharedLibrary`, `FindSymbol`, `CloseConnection`) are native here. `'altv'` 0 = no AltiVec (heirloom-cpu-ppc has none).
 
+pub const EMULATED_CPU: u32 = 0x108; // gestaltCPU750
+pub const EMULATED_CPU_HZ: u32 = 400_000_000; // 400 MHz
+
 /// The answer for `selector`, if the PowerPC profile gives one.
 pub fn answer(selector: [u8; 4]) -> Option<u32> {
     Some(match &selector {
         b"sysa" => 2,
-        b"cput" => 0x108,
+        b"cput" => EMULATED_CPU,
+        // gestaltNativeCPUfamily: PowerPC 750 (same as 'cput')
+        b"cpuf" => EMULATED_CPU,
+        // gestaltProcClkSpeed: 400 MHz PowerPC 750 (emulated model constant, not host clock)
+        b"pclk" => EMULATED_CPU_HZ,
         b"cfrg" => 1,
         b"altv" => 0,
         // gestaltTimeMgrVersion: 4 = the native (PowerPC) Time Manager with extended tasks and Microseconds (spec: macos9-specs/TimeManager/InsTime)
@@ -30,6 +37,8 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
         // carbon_ctl.rs and refused by name where missing), bit 1 gestaltAppearanceCompatMode NOT set. A program that finds no Appearance Manager takes a
         // pre-8.0 path a Mac OS 9 personality never runs: the Warcraft III Installer then asks for DLOG 3102, which its own file does not have.
         b"appr" => 0b01,
+        // gestaltAppearanceVersion: Appearance Manager 1.1 (Mac OS 8.5+); the level carbon_ctl.rs serves
+        b"apvr" => 0x0110,
         _ => return None,
     })
 }

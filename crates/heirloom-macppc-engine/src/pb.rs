@@ -34,6 +34,8 @@ const SELECTORS: &[(&str, u16)] = &[("OpenWD", sel::OPEN_WD), ("CloseWD", sel::C
 
 impl PbCall {
     pub fn by_name(name: &str) -> Option<PbCall> {
+        // the Desktop Manager's synchronous calls have no Sync suffix (PBDTGetPath)
+        if name == "PBDTGetPath" { return Some(PbCall { kind: Kind::Selector(heirloom_mac68k_engine::fm::traps::sel::DT_GET_PATH), hfs: true, async_call: false }); }
         let rest = name.strip_prefix("PB")?;
         let (core, async_call) = match (rest.strip_suffix("Sync"), rest.strip_suffix("Async")) { (Some(c), _) => (c, false), (_, Some(c)) => (c, true), _ => return None };
         let (hfs, base) = match core.strip_prefix('H') { Some(b) if TRAPS.iter().any(|(n, _)| *n == b) || SELECTORS.iter().any(|(n, _)| *n == b) => (true, b), _ => (false, core) };

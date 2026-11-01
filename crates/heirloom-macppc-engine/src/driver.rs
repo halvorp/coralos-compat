@@ -39,6 +39,9 @@ impl<U: GuestUi> GuestMachine for MacPpc<U> {
         for (lib, lib_bytes) in crate::source::library_fragments(file, None) {
             self.provide_library(&lib, &lib_bytes);
         }
+        // and the shared libraries in the application's own folder (the CFM searches it first, before Extensions): Warcraft III's
+        // "Miles Carbon Library" sits beside it
+        self.provide_folder_libraries();
         if !Pef::has_magic(file) {
             if let Err(why) = self.attach_resources(file) { self.mac.log.push(format!("[cfm] no resource fork attached: {why}")); }
         }

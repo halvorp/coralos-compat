@@ -124,14 +124,14 @@ fn tokens_grow_without_a_fixed_cap() {
 // ---- control 5: an unsupported call is refused by NAME, never skipped ------------------------------------------------
 #[test]
 fn nc_unsupported_call_is_refused_by_name() {
-    // aglSetFullScreen is imported by all four Warcraft III binaries, listed in the contract, and not implemented.
-    let i = find(ENTRIES, "aglSetFullScreen").unwrap() as u16;
+    // gluErrorString is imported by the two TFT binaries, listed in the contract, and not implemented.
+    let i = find(ENTRIES, "gluErrorString").unwrap() as u16;
     let r = admit_call(ENTRIES, i).unwrap_err();
-    assert_eq!(r, Refusal::Unsupported { name: "aglSetFullScreen".into() });
-    assert_eq!(refusal_marker(&r), "[HEIRLOOM-GL REFUSED call=aglSetFullScreen]");
+    assert_eq!(r, Refusal::Unsupported { name: "gluErrorString".into() });
+    assert_eq!(refusal_marker(&r), "[HEIRLOOM-GL REFUSED call=gluErrorString]");
     let mut on: Vec<Entry> = ENTRIES.to_vec();
     on[i as usize].implemented = true;
-    assert_eq!(admit_call(&on, i).unwrap().name, "aglSetFullScreen");
+    assert_eq!(admit_call(&on, i).unwrap().name, "gluErrorString");
     assert!(admit_call(ENTRIES, find(ENTRIES, "glDrawElements").unwrap() as u16).is_ok(), "an implemented row passes");
     assert_eq!(admit_call(&on, u16::MAX).unwrap_err(), Refusal::UnknownEntry { index: u16::MAX });
 }

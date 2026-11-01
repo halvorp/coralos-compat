@@ -61,6 +61,7 @@ pub mod threads;
 pub mod alias_c;
 pub mod carbon_ctl;
 pub mod scrap_c; // the Carbon Scrap Manager over the one desk scrap
+pub mod evloop_c; // the Carbon Event Loop: the main loop ref and its timers, fired at safepoints through the callback machine
 pub mod upp_c; // CallUniversalProc through the one callback machine, and the 68k traps served by value
 pub mod snd_c; // Sound Manager 3.0 dispatch routines by C name
 pub mod selector_c; // the List Manager and styled TextEdit dispatch by C name, through the 68k selector bodies

@@ -288,6 +288,16 @@ impl<U: GuestUi> Host for MacPpc<U> {
                 Ok(false) => {}
                 Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
             }
+            match self.evloop_safepoint(cpu, addr) {
+                Ok(true) => { self.sync_natives(cpu); return true; }
+                Ok(false) => {}
+                Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
+            }
+        }
+        if let Some(Binding::Native(Native::El(f))) = self.bindings.get(&symbol).cloned() {
+            if let Err(why) = self.el_call(f, cpu) { self.mac.log.push(why.clone()); self.rt.fault = Some(why); cpu.halt(); }
+            self.sync_natives(cpu);
+            return true;
         }
         if let Some(Binding::Native(Native::CallUniversalProc)) = self.bindings.get(&symbol).cloned() {
             if let Err(why) = self.call_universal_proc(cpu) { self.mac.log.push(why.clone()); self.rt.fault = Some(why); cpu.halt(); }

@@ -17,8 +17,10 @@
 //! * `APPLE_vertex_array_range` is accepted and validated; because arrays are snapshotted at draw time the hint changes
 //!   nothing the guest can observe (NAMED LIMIT: no client-memory aliasing of GPU storage).
 //!
-//! NAMED LIMITS: one context current at a time; `aglSetDrawable` takes the port's `portRect` for the size; no `aglSetFullScreen` or
-//! renderer queries. The GL 1.0-1.2 core is served in families: the regular calls (`gl_c/generic.rs`, from the generated
+//! NAMED LIMITS: one context current at a time; `aglSetDrawable` takes the port's `portRect` for the size; `aglSetFullScreen` is the
+//! games-windowed rule (the context's drawable becomes a window of the asked size, the display mode is never changed); the renderer
+//! queries describe ONE renderer, the Heirloom GPU renderer (properties without a true answer are GL_FALSE); `glmSetMode` / `glmSetFunc`
+//! are recorded and have no effect (the GL's memory is heirloom-gl.engine's own). The GL 1.0-1.2 core is served in families: the regular calls (`gl_c/generic.rs`, from the generated
 //! `heirloom_gl_abi::family_table`), the bulk-data calls (`bulk.rs`), client arrays and client state (`arrays.rs`, `client.rs`), client
 //! images and bitmaps (`image.rs`), the glBegin/glEnd and glNewList/glEndList state machines (`begin_end.rs`) and the hand-written state
 //! calls (`state.rs`). What the specification defines and the stack under the worker cannot render is refused by name
@@ -51,6 +53,16 @@ const GL_INVALID_VALUE: u32 = 0x0501;
 const GL_INVALID_OPERATION: u32 = 0x0502;
 const AGL_BAD_CONTEXT: u32 = 10000;
 const AGL_BAD_DRAWABLE: u32 = 10001;
+/// AGL.h renderer properties this engine answers (`aglDescribeRenderer`): AGL_RENDERER_ID 70, AGL_ACCELERATED 73, AGL_WINDOW 80,
+/// AGL_VIDEO_MEMORY 120, AGL_TEXTURE_MEMORY 121, AGL_RENDERER_COUNT 128 (Apple's AGL.h numbering).
+const AGL_RENDERER_ID: u32 = 70; const AGL_ACCELERATED: u32 = 73; const AGL_WINDOW: u32 = 80; const AGL_FULLSCREEN: u32 = 54;
+const AGL_VIDEO_MEMORY: u32 = 120; const AGL_TEXTURE_MEMORY: u32 = 121; const AGL_RENDERER_COUNT: u32 = 128;
+/// The one renderer's info handle (opaque, odd: never a guest pointer).
+const RENDERER_INFO: u32 = 0x0053_0001;
+/// The Heirloom GPU renderer's id: no Apple-assigned id names it, so it is one OUTSIDE Apple's table (whose hardware ids are 0x0002xxxx).
+pub const HEIRLOOM_RENDERER_ID: u32 = 0x0007_0001;
+/// The GL memory the renderer reports as its video and texture memory: heirloom-gl.engine's per-launch texture budget, 64 MiB.
+pub const GL_TEXTURE_BUDGET: u32 = 64 << 20;
 const GL_VENDOR: u32 = 0x1F00;
 const GL_RENDERER: u32 = 0x1F01;
 const GL_VERSION: u32 = 0x1F02;
@@ -245,6 +257,38 @@ impl<U: GuestUi> MacPpc<U> {
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
                 Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); }
             },
+            "aglSetFullScreen" => match self.gl.ctxs.get(&a0).copied() {
+                // aglSetFullScreen(ctx, width, height, freq, device): the games-windowed rule - the drawable becomes a window of that size
+                None => self.gl.agl_error = AGL_BAD_CONTEXT,
+                Some(_) if a1 == 0 || a2 == 0 || a1 > 8192 || a2 > 8192 => self.gl.agl_error = AGL_BAD_DRAWABLE,
+                Some(t) => {
+                    let set = GlFn::by_name("aglSetDrawable").ok_or_else(|| String::from("aglSetFullScreen: the contract has no aglSetDrawable"))?;
+                    self.gl_queue(t, Command::Call { entry: set.0, args: alloc::vec![u64::from(a1), u64::from(a2)] });
+                    self.gl_note(format!("[HEIRLOOM-GL FULLSCREEN-AS-WINDOW w={a1} h={a2}] the games-windowed rule: the display mode is not changed"));
+                    ret = 1;
+                }
+            },
+            "aglQueryRendererInfo" => { ret = RENDERER_INFO; }
+            "aglNextRendererInfo" => { ret = 0; }
+            "aglDestroyRendererInfo" => { ret = 0; }
+            "aglDescribeRenderer" => {
+                // aglDescribeRenderer(rend, prop, GLint *value) -> GLboolean
+                if a0 != RENDERER_INFO || a2 == 0 { self.gl.agl_error = AGL_BAD_DRAWABLE; } else {
+                    let v = match a1 {
+                        AGL_RENDERER_ID => Some(HEIRLOOM_RENDERER_ID),
+                        AGL_ACCELERATED | AGL_WINDOW => Some(u32::from(self.gl.has_worker())),
+                        AGL_FULLSCREEN => Some(0),
+                        AGL_VIDEO_MEMORY | AGL_TEXTURE_MEMORY => Some(GL_TEXTURE_BUDGET),
+                        AGL_RENDERER_COUNT => Some(1),
+                        _ => None,
+                    };
+                    match v {
+                        Some(v) => { self.mac.mem.write_u32(a2, v).map_err(|_| format!("aglDescribeRenderer: the value at {a2:#x} leaves guest RAM"))?; ret = 1; }
+                        None => self.gl_note(format!("[HEIRLOOM-GL RENDERER-PROPERTY {a1} unanswered] no true answer: GL_FALSE")),
+                    }
+                }
+            }
+            "glmSetMode" | "glmSetFunc" => self.gl_note(format!("[HEIRLOOM-GL GLM {name}({a0:#x}, {a1:#x})] recorded, no effect: the GL's memory is heirloom-gl.engine's own")),
             "aglGetError" => { ret = core::mem::take(&mut self.gl.agl_error); }
             // ---- GL state forwarded as calls ------------------------------------------------------------------------
             "glViewport" | "glClear" | "glMatrixMode" | "glEnable" | "glDisable" | "glActiveTextureARB" | "glFinish" => {

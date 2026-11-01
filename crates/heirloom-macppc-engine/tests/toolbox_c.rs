@@ -78,10 +78,22 @@ fn clocks_folders_and_the_memory_queries_answer_from_the_machine() {
     call(&mut m, "GetDateTime", &[PB]);
     assert!(m.mac.mem.read_u32(PB).unwrap() > 3_000_000_000, "seconds since 1904");
     m.mac.advance_ticks(60);
+    // AbsoluteTime is a STRUCT returned by value: the Mac OS PowerPC ABI passes the caller's result buffer in r3 and expects it back (Storm's
+    // FPMicroseconds read a never-written buffer, so Warcraft III's 10 ms thread wait never ended)
     let mut regs = [0u32; 32];
+    regs[3] = PB + 16;
+    m.mac.mem.write_u32(PB + 16, 0xDEAD_BEEF).unwrap();
     m.bind("UpTime");
     assert_eq!(m.glue_call("UpTime", &mut regs), GlueOutcome::Return);
-    assert_eq!((u64::from(regs[3]) << 32 | u64::from(regs[4])), 1_000_000_000, "one second of ticks is 1e9 AbsoluteTime units (nanoseconds)");
+    assert_eq!(regs[3], PB + 16, "the result buffer comes back in r3");
+    let up = u64::from(m.mac.mem.read_u32(PB + 16).unwrap()) << 32 | u64::from(m.mac.mem.read_u32(PB + 20).unwrap());
+    assert_eq!(up, 1_000_000_000, "one second of ticks is 1e9 AbsoluteTime units (nanoseconds), in the caller's buffer");
+    // AbsoluteToNanoseconds(AbsoluteTime by value in r4/r5) -> Nanoseconds, also through the r3 buffer: the identity in these units
+    let mut regs = [0u32; 32];
+    regs[3] = PB + 24; regs[4] = 0x1; regs[5] = 0x2;
+    m.bind("AbsoluteToNanoseconds");
+    assert_eq!(m.glue_call("AbsoluteToNanoseconds", &mut regs), GlueOutcome::Return);
+    assert_eq!((regs[3], m.mac.mem.read_u32(PB + 24).unwrap(), m.mac.mem.read_u32(PB + 28).unwrap()), (PB + 24, 1, 2));
     call(&mut m, "Microseconds", &[PB]);
     assert_eq!((m.mac.mem.read_u32(PB).unwrap(), m.mac.mem.read_u32(PB + 4).unwrap()), (0, 1_000_000));
     // FindFolder('pref'): the Preferences folder exists (made on first use) on the boot volume; an unknown type is an error

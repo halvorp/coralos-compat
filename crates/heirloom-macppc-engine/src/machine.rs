@@ -87,6 +87,8 @@ pub struct MacPpc<U: GuestUi> {
     pub(crate) sys: crate::sysmisc_c::SysState,
     pub(crate) dsp: crate::dsp_c::DspState,
     pub(crate) tm: crate::tm_c::TmState,
+    /// The Carbon Event Loop's timers ([`crate::evloop_c`]).
+    pub(crate) el: crate::evloop_c::ElState,
     /// Guest OpenGL: AGL/GL calls encoded for `heirloom-gl.engine` ([`crate::gl_c`]).
     pub gl: crate::gl_c::GlState,
     pub(crate) qa: crate::qdacc_c::QaState,
@@ -151,7 +153,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(heirloom_mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new() })
     }
 
     /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.
@@ -178,6 +180,32 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// Make a PEF library available under `name` (the fragment name an import table uses). Instantiated, with its own imports and init routine, the first time something imports from it.
     pub fn provide_library(&mut self, name: &str, pef: &[u8]) { self.libs.insert(name.into(), LibSlot::Available(pef.to_vec())); }
+
+    /// Every PEF container file (data fork starting `Joy!peff`) in the default folder - the application's own folder once `set_home` named it -
+    /// is a shared library the CFM finds there: provided under its file name (a bundle volume carries no `cfrg` resource to read another name
+    /// from), unless a library of that name is already provided. Only the first eight bytes of each file are read now; the library loads on
+    /// its first import. The log names each one.
+    pub fn provide_folder_libraries(&mut self) {
+        let fm = &self.mac.fm;
+        let dir = fm.def_dir;
+        let mut found = Vec::new();
+        for &c in fm.tree.children(dir) {
+            if fm.tree.is_dir(c) { continue }
+            let mut magic = [0u8; 8];
+            if fm.tree.read_at(c, 0, &mut magic) == Some(8) && &magic == b"Joy!peff" { found.push((c, String::from(fm.tree.name(c)))); }
+        }
+        for (node, name) in found {
+            if self.libs.contains_key(name.as_str()) { continue }
+            let len = self.mac.fm.tree.file_len(node).unwrap_or(0) as usize;
+            let mut bytes = alloc::vec![0u8; len];
+            if self.mac.fm.tree.read_at(node, 0, &mut bytes) != Some(len) {
+                self.mac.log.push(alloc::format!("[cfm] the shared library \"{name}\" in the application's folder did not read back whole: not provided"));
+                continue;
+            }
+            self.mac.log.push(alloc::format!("[cfm] shared library \"{name}\" found in the application's folder ({len} bytes)"));
+            self.provide_library(&name, &bytes);
+        }
+    }
 
     fn export_binding(&mut self, lib: &str, name: &str) -> Binding {
         if let Some(LibSlot::Available(_)) = self.libs.get(lib) {

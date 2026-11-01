@@ -23,18 +23,22 @@ struct Seen {
     draws: Vec<heirloom_gl_abi::DrawCommand>,
     queries: Vec<u64>,
     bad_tokens: usize,
+    /// Draws counted, not kept (a long game run).
+    draws_seen: usize,
 }
 
 struct Mock {
     tokens: TokenTable,
     seen: Arc<Mutex<Seen>>,
     gpu: bool,
+    /// Keep every request byte (the triangle test's ring image); a long game run keeps none (its textures would fill the host).
+    keep: bool,
 }
 
 impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
     fn transact(&mut self, req: &[u8]) -> Vec<u8> {
         let mut seen = self.seen.lock().unwrap();
-        seen.stream.extend_from_slice(req);
+        if self.keep { seen.stream.extend_from_slice(req); }
         let mut out = Vec::new();
         let reply = |out: &mut Vec<u8>, status: u32, words: Vec<u64>, text: &str| {
             out.extend(Frame { token: Token { slot: 0, incarnation: 0 }, command: Command::Reply { status, words, text: text.into() } }.encode());
@@ -74,8 +78,9 @@ impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
                 }
                 Command::Draw(d) => {
                     seen.kinds.push("Draw".into());
-                    seen.draws.push(d);
+                    if self.keep { seen.draws.push(d); } else { seen.draws_seen += 1; }
                 }
+                Command::CallData { entry, .. } => seen.kinds.push(format!("CallData {}", heirloom_gl_abi::ENTRIES[usize::from(entry)].name)),
                 Command::FenceSet { .. } => seen.kinds.push("FenceSet".into()),
                 Command::Swap { .. } => seen.kinds.push("Swap".into()),
                 Command::BatchEnd { seq } => out.extend(Frame { token: Token { slot: 0, incarnation: 0 }, command: Command::Retired { seq } }.encode()),
@@ -221,7 +226,7 @@ fn run(gpu: bool) -> (M, Arc<Mutex<Seen>>, Layout, u32) {
     let seen = Arc::new(Mutex::new(Seen::default()));
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     if gpu {
-        m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu }));
+        m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu, keep: true }));
     }
     let frag = m.instantiate("tri", &Pef::parse(&bytes).unwrap()).unwrap();
     let data = frag.section_bases[1].unwrap();
@@ -278,9 +283,9 @@ fn without_a_worker_there_is_no_pixel_format_and_the_refusal_is_named() {
 fn an_unimplemented_entry_is_refused_by_name_never_skipped() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     let mut regs = [0u32; 32];
-    assert!(!matches!(m.bind("aglSetFullScreen"), heirloom_macppc_engine::symbols::Binding::Unbound(_)), "bound, so the call is refused by name");
-    match m.glue_call("aglSetFullScreen", &mut regs) {
-        GlueOutcome::Refused(s) => assert_eq!(s, "[HEIRLOOM-GL REFUSED call=aglSetFullScreen]"),
+    assert!(!matches!(m.bind("gluErrorString"), heirloom_macppc_engine::symbols::Binding::Unbound(_)), "bound, so the call is refused by name");
+    match m.glue_call("gluErrorString", &mut regs) {
+        GlueOutcome::Refused(s) => assert_eq!(s, "[HEIRLOOM-GL REFUSED call=gluErrorString]"),
         other => panic!("a skipped call: {other:?}"),
     }
     m.bind("glDrawElements");
@@ -314,7 +319,7 @@ fn the_gl_spinner_swaps_frame_after_frame_into_its_own_window() {
     }
     let seen = Arc::new(Mutex::new(Seen::default()));
     let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
-    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true }));
+    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: true }));
     m.start_file(&app, "GL Spinner").unwrap();
     let mut t = 0u64;
     for _ in 0..12 {
@@ -331,6 +336,46 @@ fn the_gl_spinner_swaps_frame_after_frame_into_its_own_window() {
     let firsts: Vec<u8> = s.draws.iter().filter_map(|d| d.arrays.iter().find(|a| a.size == 4).map(|a| a.data[1])).collect();
     assert!(firsts.windows(2).any(|w| w[0] != w[1]), "the first vertex's colour changes from frame to frame: {firsts:?}");
 }
+/// Warcraft III's start-up AGL adapters (the 2026-11-01 game call map): ONE renderer described truthfully, aglSetFullScreen presented as
+/// a window of that size (the games-windowed rule), the OpenGL Memory hooks recorded. Before this they were refused by name and stopped the game.
+#[test]
+fn the_renderer_info_fullscreen_as_window_and_memory_hooks_answer_instead_of_stopping_the_game() {
+    use heirloom_macppc_engine::cpu::{Cpu, Host};
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: true }));
+    let mut call = |m: &mut M, name: &str, args: &[u32]| -> u32 {
+        m.bind(name);
+        let id = m.glue.intern(&mut m.mac, "CFM", name).unwrap();
+        let stub = m.glue.entry(id).unwrap().stub;
+        let mut cpu = Cpu::new(0x5000, 0x0004_0000);
+        cpu.lr = 0x0005_5554;
+        cpu.gpr[3..3 + args.len()].copy_from_slice(args);
+        assert!(m.native(&mut cpu, stub));
+        assert!(m.fault().is_none(), "{name}: {:?}", m.fault());
+        cpu.gpr[3]
+    };
+    let rend = call(&mut m, "aglQueryRendererInfo", &[0, 0]);
+    assert_ne!(rend, 0, "one renderer");
+    const OUT: u32 = 0x0003_9000;
+    assert_eq!(call(&mut m, "aglDescribeRenderer", &[rend, 121, OUT]), 1, "AGL_TEXTURE_MEMORY");
+    assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 64 << 20, "the worker's per-launch texture budget");
+    assert_eq!(call(&mut m, "aglDescribeRenderer", &[rend, 73, OUT]), 1);
+    assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 1, "accelerated: a GPU worker is attached");
+    // NEGATIVE CONTROL: a property with no true answer is GL_FALSE (never an invented value), the end of the list is NIL
+    assert_eq!(call(&mut m, "aglDescribeRenderer", &[rend, 999, OUT]), 0);
+    assert_eq!(call(&mut m, "aglNextRendererInfo", &[rend]), 0);
+    call(&mut m, "glmSetMode", &[1]);
+    call(&mut m, "glmSetFunc", &[1, 0x1234]);
+    // aglSetFullScreen on no context is AGL_BAD_CONTEXT; on a context it is the drawable at that size
+    assert_eq!(call(&mut m, "aglSetFullScreen", &[0x77, 800, 600, 0, 0]), 0);
+    assert_eq!(call(&mut m, "aglGetError", &[]), 10000);
+    let pf = call(&mut m, "aglChoosePixelFormat", &[0, 0, 0]);
+    let ctx = call(&mut m, "aglCreateContext", &[pf, 0]);
+    assert_eq!(call(&mut m, "aglSetFullScreen", &[ctx, 800, 600, 0, 0]), 1);
+    assert!(m.mac.log.iter().any(|l| l.starts_with("[HEIRLOOM-GL FULLSCREEN-AS-WINDOW w=800 h=600]")), "named");
+}
+
 
 /// A HOST RUN of Warcraft III (the owner's disc, never committed: /data/build/corpus-bin) WITH a GL worker, the way the Z83 runs it
 /// since guest-GL slice 5: how far it gets, its last log lines and UI calls. Diagnostic, not a gate: `cargo test --features fixtures
@@ -345,7 +390,7 @@ fn wc3_host_run_with_a_gl_worker() {
     };
     let seen = Arc::new(Mutex::new(Seen::default()));
     let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
-    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true }));
+    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: false }));
     // The INSTALLED tree the owner-key Installer run exported (`WC3_INSTALLED`, tests/installer.rs INST_EXPORT_DIR): staged as the volume
     // "Macintosh HD" the way the Z83 bundle stages it (every file a stream read on demand), launched from the folder holding War3.mpq.
     // `WC3_DROP_RSRC=1` leaves the resource forks and Finder info out, as a bundle volume does today.
@@ -389,12 +434,21 @@ fn wc3_host_run_with_a_gl_worker() {
             }
             break;
         }
-        let _ = stats;
+        if std::env::var("WC3_STEPS").is_ok() && i % 50 == 0 { eprintln!("STEP {i}: {st:?} {stats:?} pc={:#x} lr={:#x} cb={}", m.cpu().map_or(0, |c| c.pc), m.cpu().map_or(0, |c| c.lr), m.callback_depth()); }
         t += 20_000;
         GuestMachine::advance_clock_to(&mut m, t).unwrap();
         if m.ui().calls.iter().any(|c| format!("{c:?}").starts_with("Request")) {
             eprintln!("slice {i}: the program raised a request");
             break;
+        }
+    }
+    if let Some(cpu) = m.cpu() {
+        eprintln!("END pc={:#x} lr={:#x} callbacks={:?}", cpu.pc, cpu.lr, m.callback_kinds());
+        if let Ok(n) = std::env::var("WC3_DUMP").map(|v| v.parse::<u32>().unwrap_or(32)) {
+            let from = cpu.pc.wrapping_sub(4 * n);
+            let words: Vec<String> = (0..2 * n).map(|k| m.mac.mem.read_u32(from + 4 * k).map_or_else(|_| String::from("????????"), |w| format!("{w:08x}"))).collect();
+            eprintln!("DUMP-END from={from:#x}: {}", words.join(" "));
+            eprintln!("REGS r3..r12={:x?}", &cpu.gpr[3..13]);
         }
     }
     let log = &m.mac.log;
@@ -407,6 +461,9 @@ fn wc3_host_run_with_a_gl_worker() {
     }
     let s = seen.lock().unwrap();
     eprintln!("GL kinds: {:?}", s.kinds.iter().take(60).collect::<Vec<_>>());
+    let mut counts = std::collections::BTreeMap::new();
+    for k in &s.kinds { *counts.entry(k.as_str()).or_insert(0u32) += 1; }
+    eprintln!("GL kind counts ({} calls, {} draws): {counts:?}", s.kinds.len(), s.draws.len() + s.draws_seen);
 }
 
 /// Stage an exported installed tree (`manifest.tsv`: path, type, creator, flags, data bytes, resource bytes; data forks at their paths,

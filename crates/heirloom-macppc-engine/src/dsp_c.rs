@@ -126,7 +126,12 @@ impl<U: GuestUi> MacPpc<U> {
                 let depth = if self.mac.cqd.main_device != 0 { self.mac.device_pixmap(self.mac.cqd.main_device).map(|d| d.0).unwrap_or(8) } else { 8 };
                 let mask = 1u32 << depth.trailing_zeros() as u32 + 0; // depth 1,2,4,8,16,32 -> bit 0..5 (kDSpDepthMask_n = 1 << log2(n))
                 self.put_bytes(a1, &alloc::vec![0u8; ATTR_SIZE as usize], n)?;
-                for (o, v) in [(0u32, 60u32 << 16), (4, w), (8, h), (28, 0), (32, mask), (36, mask), (40, depth), (44, depth), (48, 1)] { self.dsp_put32(a1 + o, v, n)?; }
+                // the DISPLAY's depths are the host's: a true-colour display that presents 8-, 16- and 32-bit pictures (the GPU path composes every guest
+                // depth), so displayDepthMask = 8|16|32 and displayBestDepth = 32 (Warcraft III keeps only a context whose displayBestDepth >= 16 and
+                // displayWidth >= 640: its mode list, FUN_10350930 in the 2026-11-01 game call map). The BACK BUFFER stays the main device's depth: a
+                // DSp back buffer is a GWorld at that depth (GetBackBuffer), so its mask and best depth say what GetBackBuffer gives.
+                let display_mask = (1u32 << 3) | (1 << 4) | (1 << 5);
+                for (o, v) in [(0u32, 60u32 << 16), (4, w), (8, h), (28, 0), (32, mask), (36, display_mask), (40, depth), (44, 32), (48, 1)] { self.dsp_put32(a1 + o, v, n)?; }
                 0
             }
             Reserve => {

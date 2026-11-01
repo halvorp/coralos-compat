@@ -117,9 +117,17 @@ impl<U: GuestUi> MacPpc<U> {
                 self.mac.mem.write_u32(a0, (us >> 32) as u32).and_then(|_| self.mac.mem.write_u32(a0 + 4, us as u32)).map_err(|_| format!("{name}: result pointer {a0:#x} leaves guest RAM"))?;
                 0
             }
-            // AbsoluteTime is two words (hi, lo) returned in r3/r4; one unit = one nanosecond of the tick clock
-            UpTime => { let ns = self.mac.ev.ticks_total * 1_000_000_000 / 60; cpu.gpr[3] = (ns >> 32) as u32; cpu.gpr[4] = ns as u32; return Ok(()); }
-            AbsoluteToNanoseconds => { cpu.gpr[3] = a0; cpu.gpr[4] = a1; return Ok(()); }
+            // AbsoluteTime / Nanoseconds are STRUCTS returned by value: the Mac OS PowerPC ABI passes the caller's result buffer in r3 and expects it
+            // back (the measured DSpGetVersion convention); one unit = one nanosecond of the tick clock, so the conversion is the identity
+            UpTime => {
+                let ns = self.mac.ev.ticks_total * 1_000_000_000 / 60;
+                self.mac.mem.write_u32(a0, (ns >> 32) as u32).and_then(|_| self.mac.mem.write_u32(a0 + 4, ns as u32)).map_err(|_| format!("{name}: result buffer {a0:#x} leaves guest RAM"))?;
+                cpu.gpr[3] = a0; return Ok(());
+            }
+            AbsoluteToNanoseconds => { // (buffer r3, AbsoluteTime by value r4/r5)
+                self.mac.mem.write_u32(a0, a1).and_then(|_| self.mac.mem.write_u32(a0 + 4, a2)).map_err(|_| format!("{name}: result buffer {a0:#x} leaves guest RAM"))?;
+                cpu.gpr[3] = a0; return Ok(());
+            }
             LmGet(i) => {
                 let (_, at, n) = LOWMEM[i as usize];
                 match n { 1 => u32::from(self.mac.mem.read_u8(at).unwrap_or(0)), 2 => u32::from(self.mac.mem.read_u16(at).unwrap_or(0)), _ => self.mac.mem.read_u32(at).unwrap_or(0) }

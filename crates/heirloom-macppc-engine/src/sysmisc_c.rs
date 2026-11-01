@@ -20,14 +20,14 @@ const SCREEN_ACTIVE: u16 = 1 << 11;
 pub struct SysState { location: [u8; 12] }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SysFn { DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr, DMGetDisplayIDByGDevice }
+pub enum SysFn { DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr, DMGetDisplayIDByGDevice, UpdateSystemActivity, RegisterComponentResourceFile, OpenADefaultComponent }
 
 impl SysFn {
     pub fn by_name(name: &str) -> Option<SysFn> {
         use SysFn::*;
         Some(match name {
             "DMGetFirstScreenDevice" => DMGetFirstScreenDevice, "DMGetNextScreenDevice" => DMGetNextScreenDevice,
-            "ReadLocation" => ReadLocation, "WriteLocation" => WriteLocation, "DMGetDisplayIDByGDevice" => DMGetDisplayIDByGDevice, "DebugStr" => DebugStr,
+            "ReadLocation" => ReadLocation, "WriteLocation" => WriteLocation, "DMGetDisplayIDByGDevice" => DMGetDisplayIDByGDevice, "DebugStr" => DebugStr, "UpdateSystemActivity" => UpdateSystemActivity, "RegisterComponentResourceFile" => RegisterComponentResourceFile, "OpenADefaultComponent" => OpenADefaultComponent,
             _ => return None,
         })
     }
@@ -63,6 +63,22 @@ impl<U: GuestUi> MacPpc<U> {
                 if a1 == 0 { (-50i32) as u32 } else if self.qualifies(a0, false) || a2 & 0xFF != 0 {
                     self.mac.mem.write_u32(a1, 1).map_err(|_| format!("{n}: the result pointer leaves guest RAM"))?; 0
                 } else { (-71130i32) as u32 }
+            }
+            // UpdateSystemActivity(activity) -> OSErr (Power Manager, CarbonLib 1.0): "the user is active, do not idle-sleep". The guest has no
+            // idle-sleep timer here (the host owns power), so there is nothing to reset: noErr. Activity types 0..4 are the defined ones.
+            UpdateSystemActivity => if a0 & 0xFF <= 4 { 0 } else { (-50i32) as u32 },
+            // RegisterComponentResourceFile(resRefNum, global) -> short (Component Manager): the number of components registered from the file's 'thng'
+            // resources. This engine runs no third-party components (QuickTime's are refused per call, qt_c.rs): it registers none and says so (0), which is
+            // the honest count; a program that needs one of them finds it missing at the call that asks for it.
+            RegisterComponentResourceFile => { self.mac.log.push(format!("[component] RegisterComponentResourceFile file {} -> 0 components (none are run here)", a0 as i16)); 0 }
+            // OpenADefaultComponent(componentType, componentSubType, &ci) -> OSErr: no component is registered here (see above), so there is none to open:
+            // *ci = NIL and invalidComponentID (-3000), the Component Manager's "no such component"; named in the log with the type asked for.
+            OpenADefaultComponent => {
+                let out = arg(self, cpu, 2)?;
+                if out != 0 { self.mac.mem.write_u32(out, 0).map_err(|_| format!("{n}: the result pointer leaves guest RAM"))?; }
+                let fc = |v: u32| String::from_utf8_lossy(&v.to_be_bytes()).into_owned();
+                self.mac.log.push(format!("[component] OpenADefaultComponent '{}'/'{}' -> invalidComponentID (no component is run here)", fc(a0), fc(a1)));
+                (-3000i32) as u32
             }
             ReadLocation => { let loc = self.sys.location; self.put_bytes(a0, &loc, &n)?; 0 }
             WriteLocation => { let b = self.get_bytes(a0, 12, &n)?; self.sys.location.copy_from_slice(&b); 0 }

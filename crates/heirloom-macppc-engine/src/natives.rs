@@ -243,7 +243,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let args = match self.arg_values(c.arg_count(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{}: {e}", c.name())) };
                 match self.spec_call(c, &args) { Ok(v) => { regs[3] = v; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
-            Native::C(_) | Native::Math(_) | Native::Stdio(_) | Native::Thread(_) | Native::Mp(_) | Native::Invoke(_) | Native::CallUniversalProc | Native::Carbon(_) | Native::Ae(_) => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
+            Native::C(_) | Native::Math(_) | Native::Stdio(_) | Native::Thread(_) | Native::Mp(_) | Native::Invoke(_) | Native::CallUniversalProc | Native::El(_) | Native::Carbon(_) | Native::Ae(_) => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
             Native::BlockZero => {
                 let (dest, n) = (a(0), a(1));
@@ -269,6 +269,42 @@ impl<U: GuestUi> MacPpc<U> {
                 regs[3] = if ok { 0 } else { err(-50) };
                 GlueOutcome::Return
             }
+            // GetDiskFragment(fileSpec, offset, length, fragName, options, &connID, &mainAddr, errMessage): a PEF container in a FILE (Miles loads its
+            // plug-ins from its "Miles" folder this way). The bytes [offset, offset + length) of the file's data fork (length 0 = to the end) are
+            // provided as a library under fragName (else the file's own name) and connected like GetSharedLibrary: it is instantiated, imports and
+            // init, at its first FindSymbol. *mainAddr is NIL (the program asks FindSymbol for what it needs). A file that does not open is
+            // fragLibNotFound, and bytes that are not a PEF container cfragFragmentFormatErr (-2806), both logged by name.
+            Native::GetDiskFragment => {
+                let (spec, offset, length, name_p, conn_p, main_p) = (a(0), a(1), a(2), a(3), a(5), a(6));
+                // FSpOpenDF(spec, fsRdPerm, &refNum) through the shared body, the refnum written to a scratch word
+                let scratch = match self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, 2, true) { Ok(p) => p, Err(e) => { regs[3] = err(e); return GlueOutcome::Return; } };
+                let r = self.mac.fsp_call(heirloom_mac68k_engine::fm::fsspec::sel::OPEN_DF, &[spec, 1, scratch]);
+                let refnum = self.mac.mem.read_u16(scratch).unwrap_or(0) as i16;
+                let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, scratch);
+                if let Err(e) = r {
+                    self.mac.log.push(format!("[cfm] GetDiskFragment: the file does not open ({e}) -> fragLibNotFound"));
+                    regs[3] = err(FRAG_LIB_NOT_FOUND);
+                    return GlueOutcome::Return;
+                }
+                let eof = self.mac.fm.eof(refnum).unwrap_or(0);
+                let count = if length == 0 { eof.saturating_sub(offset) } else { length.min(eof.saturating_sub(offset)) };
+                let bytes = self.mac.fm.read(refnum, 1, offset as i32, count).map(|o| o.data).unwrap_or_default();
+                let _ = self.mac.fm.close(refnum);
+                let file_name = match self.pstr(spec + 6) { Ok(n) => n, Err(e) => return GlueOutcome::Refused(format!("GetDiskFragment: {e}")) };
+                let name = if name_p != 0 { self.pstr(name_p).unwrap_or_default() } else { String::new() };
+                let name = if name.is_empty() { file_name } else { name };
+                if bytes.len() < 8 || &bytes[..8] != b"Joy!peff" {
+                    self.mac.log.push(format!("[cfm] GetDiskFragment \"{name}\": {} bytes that are not a PEF container -> cfragFragmentFormatErr", bytes.len()));
+                    regs[3] = err(-2806);
+                    return GlueOutcome::Return;
+                }
+                self.provide_library(&name, &bytes);
+                let id = match self.connections.iter().position(|c| *c == name) { Some(i) => i, None => { self.connections.push(name.clone()); self.connections.len() - 1 } } as u32 + 1;
+                let ok = self.mac.mem.write_u32(conn_p, id).is_ok() && (main_p == 0 || self.mac.mem.write_u32(main_p, 0).is_ok());
+                self.mac.log.push(format!("[cfm] GetDiskFragment \"{name}\" ({} bytes) -> connection {id}", bytes.len()));
+                regs[3] = if ok { 0 } else { err(-50) };
+                GlueOutcome::Return
+            }
             Native::FindSymbol => {
                 let (conn, name_p, addr_p, class_p) = (a(0), a(1), a(2), a(3));
                 let Some(lib) = conn.checked_sub(1).and_then(|i| self.connections.get(i as usize)).filter(|n| !n.is_empty()).cloned() else {
@@ -279,6 +315,8 @@ impl<U: GuestUi> MacPpc<U> {
                 let b = self.bind_from(&lib, &name);
                 let (addr, class) = match &b {
                     Binding::Unbound(_) => { self.mac.log.push(format!("[cfm] FindSymbol {lib}/{name} -> fragSymbolNotFound")); regs[3] = err(FRAG_SYMBOL_NOT_FOUND); return GlueOutcome::Return; }
+                    // a symbol a PEF library exports: its own address (a TVector for code), never a glue stub (no binding is recorded for one)
+                    Binding::Export(a) => (*a, SYMBOL_CLASS_TVECTOR),
                     Binding::Qd | Binding::CData(_) => match self.data_block(&name, &b) { Ok(p) => (p, SYMBOL_CLASS_DATA), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
                     _ => match self.glue.intern(&mut self.mac, &lib, &name) { Ok(id) => (self.glue.entry(id).map_or(0, |e| e.tvector), SYMBOL_CLASS_TVECTOR), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
                 };

@@ -176,6 +176,8 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// Callbacks in progress (for tests and the census).
     pub fn callback_depth(&self) -> usize { self.rt.callbacks.len() }
+    /// What each callback in progress will do when it returns, innermost last, and the PC it resumes (diagnostics).
+    pub fn callback_kinds(&self) -> alloc::vec::Vec<String> { self.rt.callbacks.iter().map(|f| format!("{:?} resume={:#x}", f.cont, f.saved.pc)).collect() }
 }
 
 #[cfg(test)]

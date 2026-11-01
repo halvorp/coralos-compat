@@ -57,7 +57,7 @@ const T_WINDOW: u32 = fc(b"wind"); const T_QDPOINT: u32 = fc(b"QDpt"); const T_M
 pub enum CarbonFn {
     GetApplicationEventTarget, GetWindowEventTarget, GetEventDispatcherTarget, InstallEventHandler, RemoveEventHandler, InstallStandardEventHandler,
     GetEventClass, GetEventKind, GetEventParameter, SetEventParameter, CreateEvent, RetainEvent, ReleaseEvent, SendEventToEventTarget, CallNextEventHandler,
-    ReceiveNextEvent, RunApplicationEventLoop, QuitApplicationEventLoop, GetMainEventQueue, GetCurrentEventQueue, GetCurrentEventTime,
+    ReceiveNextEvent, RunApplicationEventLoop, QuitApplicationEventLoop, GetMainEventQueue, GetCurrentEventQueue, GetCurrentEventTime, PostEventToQueue,
     CreateNewWindow, SetWindowTitleWithCFString, GetWindowPort, SetPortWindowPort,
 }
 impl CarbonFn {
@@ -69,7 +69,7 @@ impl CarbonFn {
             "GetEventClass" => GetEventClass, "GetEventKind" => GetEventKind, "GetEventParameter" => GetEventParameter, "SetEventParameter" => SetEventParameter,
             "CreateEvent" => CreateEvent, "RetainEvent" => RetainEvent, "ReleaseEvent" => ReleaseEvent, "SendEventToEventTarget" => SendEventToEventTarget,
             "CallNextEventHandler" => CallNextEventHandler, "ReceiveNextEvent" => ReceiveNextEvent, "RunApplicationEventLoop" => RunApplicationEventLoop,
-            "QuitApplicationEventLoop" => QuitApplicationEventLoop, "GetMainEventQueue" => GetMainEventQueue, "GetCurrentEventQueue" => GetCurrentEventQueue,
+            "QuitApplicationEventLoop" => QuitApplicationEventLoop, "PostEventToQueue" => PostEventToQueue, "GetMainEventQueue" => GetMainEventQueue, "GetCurrentEventQueue" => GetCurrentEventQueue,
             "GetCurrentEventTime" => GetCurrentEventTime, "CreateNewWindow" => CreateNewWindow, "SetWindowTitleWithCFString" => SetWindowTitleWithCFString,
             "GetWindowPort" => GetWindowPort, "SetPortWindowPort" => SetPortWindowPort,
             _ => return None,
@@ -83,7 +83,12 @@ struct Event { class: u32, kind: u32, window: u32, params: BTreeMap<u32, (u32, V
 /// A chain being walked: (tv, userData) of each handler, the next to call, and the window whose standard handler gives the default.
 struct Chain { handlers: Vec<(u32, u32)>, next: usize, std_window: u32 }
 #[derive(Default)]
-pub(crate) struct CarbonState { handlers: Vec<Handler>, events: BTreeMap<u32, Event>, chains: BTreeMap<u32, Chain>, std_windows: BTreeSet<u32>, next: u32, quit: bool, scratch: u32 }
+pub(crate) struct CarbonState { handlers: Vec<Handler>, events: BTreeMap<u32, Event>, posted: alloc::collections::VecDeque<u32>, chains: BTreeMap<u32, Chain>, std_windows: BTreeSet<u32>, next: u32, quit: bool, scratch: u32 }
+
+impl CarbonState {
+    /// Whether `r` is an EventRef this engine made (and has not released).
+    pub(crate) fn is_event(&self, r: u32) -> bool { self.events.contains_key(&r) }
+}
 
 /// What a finished dispatch does: re-enter the event loop that started it, or hand its result to the caller of `SendEventToEventTarget`.
 #[derive(Debug, Clone, Copy)]
@@ -262,6 +267,8 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// Pull one classic event as a Carbon event (None: nothing pending).
     fn pull_event(&mut self) -> Result<Option<u32>, String> {
+        // an event the program posted (PostEventToQueue) comes first, in posting order; the queue held a reference to it
+        if let Some(ev) = self.rt.carbon.posted.pop_front() { return Ok(Some(ev)); }
         let rec = self.cb_scratch()? + 16;
         let Some(op) = trap_opcode("WaitNextEvent") else { return Err(String::from("WaitNextEvent has no trap word")) };
         let r = self.mac.pascal_call(op, &[0xFFFF, rec, 0, 0]).map_err(|e| format!("event pull: {e}"))?;
@@ -304,8 +311,8 @@ impl<U: GuestUi> MacPpc<U> {
             RetainEvent => { if let Some(e) = self.rt.carbon.events.get_mut(&a0) { e.refs += 1; } cpu.gpr[3] = a0; return Ok(()); }
             ReleaseEvent => { if let Some(e) = self.rt.carbon.events.get_mut(&a0) { e.refs -= 1; if e.refs == 0 { self.rt.carbon.events.remove(&a0); } } return Ok(()); }
             CreateEvent => {
-                // (allocator, class, kind, double when [r6,r7], flags, &event)
-                let (class, kind, out) = (a1, a2, a(self, 5)?);
+                // (allocator r3, class r4, kind r5, double when in f1 shadowing r6/r7, flags r8, &event r9): the PowerOpen ABI, as ReceiveNextEvent
+                let (class, kind, out) = (a1, a2, a(self, 6)?);
                 let id = self.new_event(class, kind, 0);
                 self.put32(out, id, "CreateEvent")?;
                 0
@@ -350,6 +357,15 @@ impl<U: GuestUi> MacPpc<U> {
                 }
             }
             QuitApplicationEventLoop => { self.rt.carbon.quit = true; return Ok(()); }
+            // PostEventToQueue(queue, event, priority) -> OSStatus: the main queue (1) only; the queue retains the event and the event loop
+            // (RunApplicationEventLoop / ReceiveNextEvent) hands it out before the next classic event. NAMED LIMIT: priority is not honoured (FIFO).
+            PostEventToQueue => {
+                if a0 != 1 || !self.rt.carbon.events.contains_key(&a1) { PARAM_ERR } else {
+                    if let Some(e) = self.rt.carbon.events.get_mut(&a1) { e.refs += 1; }
+                    self.rt.carbon.posted.push_back(a1);
+                    0
+                }
+            }
             RunApplicationEventLoop => {
                 if self.rt.carbon.quit { self.rt.carbon.quit = false; return Ok(()); }
                 match self.pull_event()? {

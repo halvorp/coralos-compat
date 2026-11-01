@@ -453,6 +453,15 @@ fn get_fcb_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> 
 /// vMLocalHand @6, vMServerAdr @10, vMVolumeGrade @14, vMForeignPrivID @18) into `ioBuffer`, `min(ioReqCount, 20)` bytes, `ioActCount` = the bytes written. The attribute word is 0: the
 /// synthetic volume claims none of the optional features (no Desktop Manager, no CatSearch, no OpenDeny ...) because those calls are not provided. It is a local volume: no server,
 /// grade 0, no foreign file system. An unknown volume is nsvErr.
+/// `PBDTGetPath`: no volume here has a Desktop Database (HGetVolParms reports vMAttrib 0, so bHasDesktopMgr is clear, which is what a
+/// program is meant to test first): a volume that exists answers paramErr, one that does not nsvErr. The program then does without it
+/// (comments, application mappings and Finder icons of the Desktop Manager).
+fn dt_get_path<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
+    let vref = pb.i16(&m.mem, IO_VREF_NUM).map_err(mem_err("block"))?;
+    m.fm.volume_of_vref(vref).map_err(|_| err::NSV_ERR)?;
+    Err(err::PARAM_ERR)
+}
+
 fn get_vol_parms<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
     let g = mem_err("block");
     let vref = pb.i16(&m.mem, IO_VREF_NUM).map_err(&g)?;
@@ -482,6 +491,8 @@ pub mod sel {
     pub const UNLOCK_RNG: u16 = 0x11;
     pub const OPEN_DF: u16 = 0x1A;
     pub const GET_VOL_PARMS: u16 = 0x30;
+    /// `PBDTGetPath` (`_HFSDispatch` selector $20): the Desktop Database of a volume.
+    pub const DT_GET_PATH: u16 = 0x20;
     /// `PBXGetVolInfo` (`_FSDispatch` $A060, selector $12): PBHGetVInfo plus 64-bit byte counts.
     pub const XGET_VOL_INFO: u16 = 0x12;
 }
@@ -500,6 +511,7 @@ fn selector_body<U: GuestUi>(selector: u16) -> Option<(&'static str, Body<U>)> {
         sel::UNLOCK_RNG => Some(("UnlockRng", lock_range::<U>)),
         sel::OPEN_DF => Some(("OpenDF", open_data::<U>)),
         sel::GET_VOL_PARMS => Some(("HGetVolParms", get_vol_parms::<U>)),
+        sel::DT_GET_PATH => Some(("DTGetPath", dt_get_path::<U>)),
         sel::XGET_VOL_INFO => Some(("XGetVolInfo", xget_vol_info::<U>)),
         _ => None,
     }
