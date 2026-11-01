@@ -27,6 +27,10 @@ struct Seen {
     draws_seen: usize,
     /// Every aglSetDrawable's arguments, in order (width, height, the drawable's host window id).
     drawables: Vec<Vec<u64>>,
+    /// `WC3_GL_ARGS`: (call with its arguments) -> count, for the texture- and state-relevant calls (a diagnostic census).
+    args_hist: std::collections::BTreeMap<String, u32>,
+    /// The last texture name handed out by glGenTextures (names are fresh and never 0, as GL makes them).
+    names: u64,
 }
 
 struct Mock {
@@ -71,13 +75,22 @@ impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
                     if name == "aglSetDrawable" {
                         seen.drawables.push(args.clone());
                     }
+                    if std::env::var("WC3_GL_ARGS").is_ok() && matches!(name, "glBindTexture" | "glEnable" | "glDisable" | "glTexParameteri" | "glPixelStorei" | "glTexGeni" | "glBlendFunc" | "glAlphaFunc" | "glClearColor" | "glColorMaterial") {
+                        *seen.args_hist.entry(format!("{name}{args:x?}")).or_insert(0) += 1;
+                    }
                     match name {
                         "aglChoosePixelFormat" if self.gpu => reply(&mut out, 0, vec![1], ""),
                         "glGetString" => {
                             seen.queries.push(args[0]);
-                            reply(&mut out, 0, vec![], if args[0] == 0x1F01 { "Mock GPU" } else { "" });
+                            let renderer = std::env::var("WC3_RENDERER").unwrap_or_else(|_| String::from("Mock GPU"));
+                            reply(&mut out, 0, vec![], if args[0] == 0x1F01 { renderer.as_str() } else { "" });
                         }
                         "glGetError" => reply(&mut out, 0, vec![0], ""),
+                        "glGenTextures" => {
+                            let first = seen.names + 1;
+                            seen.names += args[0];
+                            reply(&mut out, 0, (first..=seen.names).collect(), "");
+                        }
                         _ => {}
                     }
                 }
@@ -85,7 +98,13 @@ impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
                     seen.kinds.push("Draw".into());
                     if self.keep { seen.draws.push(d); } else { seen.draws_seen += 1; }
                 }
-                Command::CallData { entry, .. } => seen.kinds.push(format!("CallData {}", heirloom_gl_abi::ENTRIES[usize::from(entry)].name)),
+                Command::CallData { entry, ref args, ref data } => {
+                    let name = heirloom_gl_abi::ENTRIES[usize::from(entry)].name;
+                    seen.kinds.push(format!("CallData {name}"));
+                    if std::env::var("WC3_GL_ARGS").is_ok() {
+                        *seen.args_hist.entry(format!("{name}{args:x?} bytes={}", data.len())).or_insert(0) += 1;
+                    }
+                }
                 Command::FenceSet { .. } => seen.kinds.push("FenceSet".into()),
                 Command::Swap { .. } => seen.kinds.push("Swap".into()),
                 Command::BatchEnd { seq } => out.extend(Frame { token: Token { slot: 0, incarnation: 0 }, command: Command::Retired { seq } }.encode()),
@@ -387,6 +406,10 @@ fn the_renderer_info_fullscreen_as_window_and_memory_hooks_answer_instead_of_sto
     let ctx = call(&mut m, "aglCreateContext", &[pf, 0]);
     assert_eq!(call(&mut m, "aglSetFullScreen", &[ctx, 800, 600, 0, 0]), 1);
     assert!(m.mac.log.iter().any(|l| l.starts_with("[HEIRLOOM-GL FULLSCREEN-AS-WINDOW w=800 h=600]")), "named");
+    // every AGL answer the engine gives is said, with the value an aglDescribeRenderer wrote (what the game was told)
+    assert!(m.mac.log.iter().any(|l| l.starts_with("[HEIRLOOM-GL AGL aglDescribeRenderer(") && l.ends_with("-> 0x1 value=0x4000000]")), "the texture-memory answer is said: {:?}", m.mac.log);
+    assert!(m.mac.log.iter().any(|l| l.starts_with("[HEIRLOOM-GL AGL aglSetFullScreen(")), "{:?}", m.mac.log);
+    assert!(!m.mac.log.iter().any(|l| l.starts_with("[HEIRLOOM-GL AGL aglSwapBuffers(")), "per-frame calls are not said");
 }
 
 
@@ -403,7 +426,11 @@ fn wc3_host_run_with_a_gl_worker() {
     };
     let seen = Arc::new(Mutex::new(Seen::default()));
     let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
-    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: false }));
+    // `RGL_RING_OUT=<file>`: keep the request stream up to the `WC3_RING_SWAPS`-th swap (default 128) and write it as a ring image
+    // for the C worker's host replay (heirloom-gl-host --dump), the way the triangle test hands over its ring.
+    let ring_out = std::env::var("RGL_RING_OUT").ok();
+    let ring_swaps: usize = std::env::var("WC3_RING_SWAPS").ok().and_then(|s| s.parse().ok()).unwrap_or(128);
+    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: ring_out.is_some() }));
     // The INSTALLED tree the owner-key Installer run exported (`WC3_INSTALLED`, tests/installer.rs INST_EXPORT_DIR): staged as the volume
     // "Macintosh HD" the way the Z83 bundle stages it (every file a stream read on demand), launched from the folder holding War3.mpq.
     // `WC3_DROP_RSRC=1` leaves the resource forks and Finder info out, as a bundle volume does today.
@@ -450,6 +477,10 @@ fn wc3_host_run_with_a_gl_worker() {
         if std::env::var("WC3_STEPS").is_ok() && i % 50 == 0 { eprintln!("STEP {i}: {st:?} {stats:?} pc={:#x} lr={:#x} cb={}", m.cpu().map_or(0, |c| c.pc), m.cpu().map_or(0, |c| c.lr), m.callback_depth()); }
         t += 20_000;
         GuestMachine::advance_clock_to(&mut m, t).unwrap();
+        if ring_out.is_some() && seen.lock().unwrap().kinds.iter().filter(|k| *k == "Swap").count() >= ring_swaps {
+            eprintln!("slice {i}: {ring_swaps} swaps kept for the ring image");
+            break;
+        }
         if m.ui().calls.iter().any(|c| format!("{c:?}").starts_with("Request")) {
             eprintln!("slice {i}: the program raised a request");
             break;
@@ -477,6 +508,15 @@ fn wc3_host_run_with_a_gl_worker() {
     let mut counts = std::collections::BTreeMap::new();
     for k in &s.kinds { *counts.entry(k.as_str()).or_insert(0u32) += 1; }
     eprintln!("GL kind counts ({} calls, {} draws): {counts:?}", s.kinds.len(), s.draws.len() + s.draws_seen);
+    for (k, v) in &s.args_hist {
+        eprintln!("ARGS {v:>6} {k}");
+    }
+    if let Some(path) = &ring_out {
+        let ring = OwnedRing::new(s.stream.len().max(4096)).unwrap();
+        assert_eq!(ring.ring().push(&s.stream), s.stream.len());
+        std::fs::write(path, ring.image()).unwrap();
+        eprintln!("ring image: {} request bytes -> {path}", s.stream.len());
+    }
 }
 
 /// Stage an exported installed tree (`manifest.tsv`: path, type, creator, flags, data bytes, resource bytes; data forks at their paths,

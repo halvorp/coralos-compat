@@ -433,6 +433,12 @@ impl<U: GuestUi> MacPpc<U> {
             }
             other => ret = self.gl_state_call(other, f.0, cpu)?,
         }
+        // Every AGL answer the engine gives (renderer info, pixel formats, contexts, errors) is said: a game decides its renderer
+        // path from these, and nothing else shows what it was told. Swaps and context switches are per frame: not said.
+        if name.starts_with("agl") && !matches!(name, "aglSwapBuffers" | "aglSetCurrentContext") {
+            let v = if name == "aglDescribeRenderer" && ret == 1 { self.mac.mem.read_u32(a2).map_or(String::new(), |v| format!(" value={v:#x}")) } else { String::new() };
+            self.gl_note(format!("[HEIRLOOM-GL AGL {name}({a0:#x}, {a1:#x}, {a2:#x}) -> {ret:#x}{v}]"));
+        }
         self.gl_finish(cpu, ret)
     }
 
