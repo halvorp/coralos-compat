@@ -57,6 +57,10 @@ pub enum Control {
     /// relative to it. The ENGINE process takes it (a library never sees it) and reads each stream there, refusing a locator that
     /// would leave it. Sent before the Volume chunks when the volume holds a stream.
     StreamRoot { path: String },
+    /// The window owner's coral-wm events for the guest's GL attachment (coral-gpu-image-abi frames, OPAQUE here and relayed
+    /// verbatim): the engine hands them to its GL worker as a CONTROL batch (doc 23 slice 4.3, the 2026-10-30 G1 ruling). The
+    /// bytes are an offer identifier's traffic, never authority: coral-wm and coral-drm check every token.
+    GpuImage(Vec<u8>),
 }
 
 /// The host's measured control metrics, in window pixels (the kit's tokens on CoralOS). A field of 0 / None = the toolkit's own.
@@ -101,6 +105,12 @@ pub enum Report {
     /// A slice ran: the step, its counts, the next timer deadline (virtual µs), the refusals the machine drained, and the native
     /// events this batch carried that reached no guest window (each named).
     Stepped { step: WireStep, insns: u64, bus_faults: u32, deadline_us: Option<u64>, refused: Vec<String>, undelivered: Vec<String> },
+    /// The guest's GL worker produced coral-gpu-image-abi frames for coral-wm (its buffer offers, each PRESENT): OPAQUE here, relayed
+    /// verbatim by the window owner. Sent as a DUPLEX event while a slice is outstanding (the 2026-11-01 ruling), never held for the
+    /// slice's own answer.
+    GpuImage(Vec<u8>),
+    /// The guest set its GL drawable to `w` x `h` (aglSetDrawable): the window owner asks coral-wm for the attachment at that size.
+    GlDrawable { w: u16, h: u16 },
 }
 
 fn put_blob(out: &mut Vec<u8>, tag: u8, offset: u32, total: u32, chunk: &[u8]) {
@@ -184,6 +194,11 @@ pub(super) fn put_machine_control(out: &mut Vec<u8>, c: &Control) {
             out.push(13);
             put_string(out, path);
         }
+        Control::GpuImage(bytes) => {
+            out.push(14);
+            put_len(out, bytes.len());
+            out.extend_from_slice(bytes);
+        }
     }
 }
 
@@ -240,6 +255,10 @@ pub(super) fn get_machine_control(r: &mut Reader<'_>) -> Result<Control, WireErr
             Control::Input { name, offset, total, chunk }
         }
         13 => Control::StreamRoot { path: r.string()? },
+        14 => {
+            let len = r.u32()? as usize;
+            Control::GpuImage(r.take(len)?.to_vec())
+        }
         tag => return Err(WireError::UnknownTag { what: "Control", tag }),
     })
 }
@@ -283,6 +302,16 @@ pub(super) fn put_machine_report(out: &mut Vec<u8>, rep: &Report) {
             put_strings(out, refused);
             put_strings(out, undelivered);
         }
+        Report::GpuImage(bytes) => {
+            out.push(4);
+            put_len(out, bytes.len());
+            out.extend_from_slice(bytes);
+        }
+        Report::GlDrawable { w, h } => {
+            out.push(5);
+            put_u16(out, *w);
+            put_u16(out, *h);
+        }
     }
 }
 
@@ -308,6 +337,11 @@ pub(super) fn get_machine_report(r: &mut Reader<'_>) -> Result<Report, WireError
                 undelivered: get_strings(r)?,
             }
         }
+        4 => {
+            let len = r.u32()? as usize;
+            Report::GpuImage(r.take(len)?.to_vec())
+        }
+        5 => Report::GlDrawable { w: r.u16()?, h: r.u16()? },
         tag => return Err(WireError::UnknownTag { what: "Report", tag }),
     })
 }

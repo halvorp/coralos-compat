@@ -218,9 +218,9 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
 
     fn control(&mut self, c: Control) {
         match c {
-            // The engine creates the machine, maps the canvas region and holds the stream root itself; a library that sees one has
-            // nothing to do.
-            Control::Machine { .. } | Control::Canvases { .. } | Control::StreamRoot { .. } => {}
+            // The engine creates the machine, maps the canvas region, holds the stream root and relays the GL attachment's coral-wm
+            // events to its GL worker itself; a library that sees one has nothing to do.
+            Control::Machine { .. } | Control::Canvases { .. } | Control::StreamRoot { .. } | Control::GpuImage(_) => {}
             Control::Volume { offset, total, chunk } => match self.volume.take("volume", offset, total, &chunk) {
                 Ok(Some(bytes)) => match heirloom_volume::snapshot::decode(&bytes) {
                     Ok(tree) => {

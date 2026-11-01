@@ -346,6 +346,12 @@ fn wc3_host_run_with_a_gl_worker() {
     let seen = Arc::new(Mutex::new(Seen::default()));
     let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
     m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true }));
+    // The INSTALLED tree the owner-key Installer run exported (`WC3_INSTALLED`, tests/installer.rs INST_EXPORT_DIR): staged as the volume
+    // "Macintosh HD" the way the Z83 bundle stages it (every file a stream read on demand), launched from the folder holding War3.mpq.
+    // `WC3_DROP_RSRC=1` leaves the resource forks and Finder info out, as a bundle volume does today.
+    if let Ok(root) = std::env::var("WC3_INSTALLED") {
+        stage_installed(&mut m, std::path::Path::new(&root));
+    } else {
     // The installed game folder: War3.mpq (the disc's MacBinary file, its data fork) as a STREAM beside the application.
     let mpq = "/data/build/corpus-bin/mac/warcraft3/roc-fs/Support_War3.mpq.bin";
     if let Ok(f) = std::fs::File::open(mpq) {
@@ -366,6 +372,7 @@ fn wc3_host_run_with_a_gl_worker() {
         vol.put_stream(game, "War3.mpq", len, "War3.mpq").unwrap();
         GuestMachine::set_home(&mut m, &["Warcraft III"]).unwrap();
         eprintln!("staged War3.mpq ({len} bytes) as a stream in Warcraft III:");
+    }
     }
     m.start_file(&app, "Warcraft III").unwrap();
     let mut t = 0u64;
@@ -394,4 +401,46 @@ fn wc3_host_run_with_a_gl_worker() {
     }
     let s = seen.lock().unwrap();
     eprintln!("GL kinds: {:?}", s.kinds.iter().take(60).collect::<Vec<_>>());
+}
+
+/// Stage an exported installed tree (`manifest.tsv`: path, type, creator, flags, data bytes, resource bytes; data forks at their paths,
+/// `<name>.rsrc` beside) as the volume "Macintosh HD", every file a stream by its host path, and make the folder holding War3.mpq home.
+fn stage_installed(m: &mut M, root: &std::path::Path) {
+    use heirloom_common::GuestMachine;
+    struct Raw;
+    impl heirloom_volume::StreamSource for Raw {
+        fn read_at(&self, locator: &str, offset: u64, dst: &mut [u8]) -> Option<usize> {
+            std::os::unix::fs::FileExt::read_at(&std::fs::File::open(locator).ok()?, dst, offset).ok()
+        }
+    }
+    let drop_rsrc = std::env::var("WC3_DROP_RSRC").is_ok();
+    let manifest = std::fs::read_to_string(root.join("manifest.tsv")).expect("the export's manifest.tsv");
+    let vol = GuestMachine::volume(m);
+    vol.enable_streams();
+    vol.set_stream_source(Box::new(Raw));
+    let hd = vol.add_volume("Macintosh HD", true);
+    let mut home = None;
+    for line in manifest.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
+        let f: Vec<&str> = line.split('\t').collect();
+        let (path, ty, cr, flags) = (f[0], f[1], f[2], u16::from_str_radix(f[3].trim_start_matches("0x"), 16).unwrap());
+        let mut parts: Vec<&str> = path.split('/').collect();
+        let leaf = parts.pop().unwrap();
+        let dir = vol.mkdirs(hd, parts.iter().copied()).unwrap();
+        let host = root.join(path);
+        let len = std::fs::metadata(&host).unwrap().len();
+        let id = vol.put_stream(dir, leaf, len, host.to_str().unwrap()).unwrap();
+        if leaf.eq_ignore_ascii_case("War3.mpq") { home = Some(parts.iter().map(|p| p.to_string()).collect::<Vec<_>>()); }
+        if drop_rsrc { continue }
+        let fourcc = |t: &str| { let mut b = [b' '; 4]; b[..t.len().min(4)].copy_from_slice(&t.as_bytes()[..t.len().min(4)]); b };
+        let n = vol.get_mut(id);
+        n.finfo.file_type = fourcc(ty);
+        n.finfo.creator = fourcc(cr);
+        n.finfo.flags = flags;
+        if let Ok(r) = std::fs::read(root.join(format!("{path}.rsrc"))) { n.rsrc = r; }
+    }
+    let home = home.expect("War3.mpq in the exported tree");
+    let mut at = vec!["Macintosh HD"];
+    at.extend(home.iter().map(String::as_str));
+    GuestMachine::set_home(m, &at).unwrap();
+    eprintln!("staged the installed tree {} as Macintosh HD, home {:?} (resource forks {})", root.display(), at, if drop_rsrc { "DROPPED" } else { "kept" });
 }
