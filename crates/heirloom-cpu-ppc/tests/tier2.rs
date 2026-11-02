@@ -252,9 +252,11 @@ fn random_program(seed: u64) -> Vec<u32> {
         p.push(w);
     }
     p.push(0x6000_0000); // a body-ending skip lands here, never past the trip count
-    p.push(d(13, 31, 31, 0xFFFF)); // addic. r31,r31,-1
+    // the trip count in cr7, so CR0 (every Rc=1 form's) reaches the end state instead of being overwritten each iteration
+    p.push(d(12, 31, 31, 0xFFFF)); // addic r31,r31,-1
+    p.push(d(11, 7 << 2, 31, 0)); // cmpwi cr7,r31,0
     let back = -(4 * (p.len() - top) as i32);
-    p.push(bc(4, 2, back)); // bne top
+    p.push(bc(4, 30, back)); // bne cr7,top
     p.push(d(15, 24, 0, EXIT >> 16));
     p.push(d(24, 24, 24, EXIT & 0xFFFF));
     p.push(mtspr(8, 24)); // mtlr r24 (the closing blr goes to EXIT)
@@ -297,7 +299,7 @@ fn fuzz_setup(seed: u64) -> impl Fn(&mut Cpu, &mut M) {
 
 #[test]
 fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
-    let mut compared = 0u64;
+    let (mut compared, mut pinned, mut compiled) = (0u64, 0u64, 0u64);
     for seed in 0..400u64 {
         let prog = random_program(seed);
         let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, fuzz_setup(seed));
@@ -305,6 +307,7 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
         // a run slice publishes what it compiled: short slices make the fuzz's short loops run in JIT code
         for slice in [37, 1_000, 1_000_000] {
             let (got, e) = run_on(Tier::Jit, 0, &prog, slice, fuzz_setup(seed));
+            (pinned, compiled) = (pinned + e.jit_stats().pinned, compiled + e.jit_stats().compiled);
             assert!(got == want, "seed {seed} slice {slice}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} tb {}/{} last {:?}/{:?} ram equal {} {:?}",
                 got.gpr, want.gpr, got.cr, want.cr, got.xer, want.xer, got.tb, want.tb, got.last, want.last, got.ram == want.ram, e.jit_stats());
         }
@@ -321,13 +324,39 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
     }
     // a floor that proves JIT code ran (~100k with this generator: programs that trap early compare less)
     assert!(compared > 50_000, "the fuzz really compared JIT code: {compared}");
+    // and the register cache really held guest fields in host registers (blocks pin ~2-5 of them)
+    assert!(pinned > compiled, "the register cache engaged: {pinned} fields pinned over {compiled} blocks");
+}
+
+/// CR0 of Rc=1 forms whose x86 flags are NOT the result's sign test (an add or subtract that overflows: OF = 1), left in the
+/// end state: `add.` / `subf.` of 0x7FFFFFFF and 1 in a hot loop (the trip count in cr7).
+fn overflow_flags_program() -> Vec<u32> {
+    let mut p = vec![d(14, 31, 0, 20)];
+    p.push(x(5, 3, 4, 40, true)); // subf. r5,r3,r4 (1 - 0x7FFFFFFF: no overflow)
+    p.push(x(6, 3, 4, 266, true)); // add. r6,r3,r4 (0x80000000: overflow, LT)
+    p.push(d(12, 31, 31, 0xFFFF));
+    p.push(d(11, 7 << 2, 31, 0));
+    p.push(bc(4, 30, -16));
+    p
+}
+fn overflow_flags_setup(c: &mut Cpu, _: &mut M) { c.gpr[3] = 0x7FFF_FFFF; c.gpr[4] = 1; }
+
+#[test]
+fn rc_forms_set_cr0_from_the_result_even_when_the_add_overflows() {
+    let prog = overflow_flags_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, overflow_flags_setup);
+    assert_eq!(want.cr >> 28, 0b1000, "tier 0: 0x80000000 is negative");
+    for slice in [1_000_000, 7] {
+        let (got, e) = run_on(Tier::Jit, 0, &prog, slice, overflow_flags_setup);
+        assert!(got == want && e.jit_stats().insns > 0, "slice {slice}: cr {:#x}/{:#x} {:?}", got.cr, want.cr, e.jit_stats());
+    }
 }
 
 /// Each planted JIT mutant makes the gates RED: the fuzz (end state or lockstep) for the arithmetic ones, the self-modifying
 /// programs for the store-watch and exit-count ones. A gate that stays green with a mutant proves nothing.
 #[test]
 fn negative_control_every_planted_jit_mutant_goes_red() {
-    for mutant in 1..=7u8 {
+    for mutant in 1..=10u8 {
         let mut red = false;
         for seed in 0..400u64 {
             let prog = random_program(seed);
@@ -335,8 +364,8 @@ fn negative_control_every_planted_jit_mutant_goes_red() {
             let (got, _) = run_on(Tier::Jit, mutant, &prog, 37, fuzz_setup(seed));
             if got != want { red = true; break; }
         }
-        let smc = smc_store_program();
-        for (prog, setup) in [(&smc[..], smc_store_setup as Setup), (programs::BENCH_SMC, |c, _| c.gpr[3] = 100)] {
+        let (smc, flags) = (smc_store_program(), overflow_flags_program());
+        for (prog, setup) in [(&smc[..], smc_store_setup as Setup), (programs::BENCH_SMC, |c, _| c.gpr[3] = 100), (&flags[..], overflow_flags_setup)] {
             if red { break; }
             let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
             let (got, _) = run_on(Tier::Jit, mutant, prog, 13, setup);

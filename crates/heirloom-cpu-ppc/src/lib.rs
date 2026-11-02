@@ -59,6 +59,8 @@ mod jit_emit;
 mod jit_mem;
 #[cfg(target_arch = "x86_64")]
 mod jit_inline;
+#[cfg(target_arch = "x86_64")]
+mod jit_regs;
 mod jit_stats;
 pub use jit_stats::JitStats;
 #[cfg(target_arch = "x86_64")]

@@ -137,7 +137,6 @@ impl Jit {
         a.mov_rr64(R13, RDI);
         a.ld64(RBX, m(R13, offset_of!(Ctx, cpu) as i32));
         a.ld64(R12, m(R13, offset_of!(Ctx, ram) as i32));
-        a.ld64(R14, m(R13, offset_of!(Ctx, budget) as i32));
         a.alu_rr(Alu::Xor, R15, R15);
         a.jmp_r(RSI);
         let exit = a.pos();
@@ -148,15 +147,15 @@ impl Jit {
         let stub = a.pos();
         a.mov_ri(RAX, EXIT_NORMAL);
         a.jmp_m(m(R13, offset_of!(Ctx, exit) as i32));
-        // the shared slow stub: called from a block with esi = word, edx = pc, ecx = block-relative index i; runs h_one and
-        // returns to the block (answer 0) or leaves with i (trap) or i + 1 (anything else) instructions of it retired
+        // the shared slow stub: called from a block with esi = word, edx = pc, ecx = block-relative index i (kept on the
+        // stack across the call: rbp and r14 belong to the register cache); runs h_one and returns to the block (answer 0)
+        // or leaves with i (trap) or i + 1 (anything else) instructions of it retired
         let slow = a.pos();
-        a.mov_rr(RBP, RCX);
+        a.push(RCX);
         a.mov_rr64(RDI, R13);
-        a.lea64(RCX, mx(R15, RBP, 1));
-        a.alu_ri64(Alu::Sub, RSP, 8);
+        a.lea64(RCX, mx(R15, RCX, 1));
         a.call_m(m(R13, offset_of!(Ctx, helper) as i32));
-        a.alu_ri64(Alu::Add, RSP, 8);
+        a.pop(RCX);
         a.test_rr(RAX, RAX);
         let out = a.jcc(Cc::Ne);
         a.ret();
@@ -164,11 +163,11 @@ impl Jit {
         a.alu_ri64(Alu::Add, RSP, 8);
         a.alu_ri(Alu::Cmp, RAX, 2);
         let t = a.jcc(Cc::E);
-        a.lea64(R15, mxd(R15, RBP, 1, if self.mutant == crate::jit_emit::MUT_EXIT_COUNT { 2 } else { 1 }));
+        a.lea64(R15, mxd(R15, RCX, 1, if self.mutant == crate::jit_emit::MUT_EXIT_COUNT { 2 } else { 1 }));
         a.mov_ri(RAX, EXIT_NORMAL);
         a.jmp_m(m(R13, offset_of!(Ctx, exit) as i32));
         a.here(t);
-        a.alu_rr64(Alu::Add, R15, RBP);
+        a.alu_rr64(Alu::Add, R15, RCX);
         a.mov_ri(RAX, EXIT_TRAP);
         a.jmp_m(m(R13, offset_of!(Ctx, exit) as i32));
         let Some(p) = self.arena.put(&a.b) else { return false };
@@ -258,10 +257,11 @@ impl Jit {
             &links[i] as *const u64
         };
         let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
-        let code = jit_emit::compile(ops, pc, gen, page, &mut env);
+        let (code, pinned) = jit_emit::compile(ops, pc, gen, page, &mut env);
         if self.nlinks == self.links.len() { self.flush(); return; }
         let Some(p) = self.arena.put(&code) else { self.stats.arena_full += 1; self.flush(); return };
         self.stats.compiled += 1;
+        self.stats.pinned += pinned as u64;
         self.stats.movbe = self.movbe;
         if self.blocks.contains_key(&pc) { self.stats.recompiled += 1; }
         self.stats.code_bytes = self.arena.used() as u64;

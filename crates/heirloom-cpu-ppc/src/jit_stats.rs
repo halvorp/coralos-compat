@@ -17,6 +17,8 @@ pub struct JitStats {
     pub bails: u64,
     /// Whole-cache drops (arena or link table full, natives changed, RAM moved).
     pub flushes: u64,
+    /// Guest fields (GPRs, CR, XER, LR, CTR) the register cache held in host registers, summed over compiled blocks.
+    pub pinned: u64,
     /// Bytes of code in the arena now.
     pub code_bytes: u64,
     /// Big-endian loads and stores use MOVBE (the CPU has it and it was not turned off).

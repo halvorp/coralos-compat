@@ -18,7 +18,7 @@ use crate::fields::W;
 use crate::jit_asm::*;
 use crate::cpu::XER_CA;
 use crate::fields::mask;
-use crate::jit_emit::{cpu, fpr, g, Ea, E, CR, XER, MUT_CA_IN, MUT_FP_SINGLE, MUT_SRAW_BIG};
+use crate::jit_emit::{cpu, fpr, Ea, E, CR, XER, MUT_CA_IN, MUT_FP_SINGLE, MUT_SRAW_BIG};
 use crate::t1op::{Op, K};
 use core::mem::offset_of;
 
@@ -186,10 +186,9 @@ impl E<'_, '_> {
         a.st32(cpu(FPSCR), RCX);
         let sh = 28 - 4 * (bf as u32 & 7);
         if sh != 0 { a.sh_ri(Sh::Shl, RAX, sh as u8); }
-        a.ld32(RCX, cpu(CR));
-        a.alu_ri(Alu::And, RCX, !(0xF << sh));
-        a.alu_rr(Alu::Or, RCX, RAX);
-        a.st32(cpu(CR), RCX);
+        let c = self.rw(CR);
+        self.a.alu_oi(Alu::And, c, !(0xF << sh));
+        self.a.alu_or(Alu::Or, c, RAX);
     }
 
     /// Opcode-31 forms tier 1 leaves Generic that WC3 runs hot.
@@ -202,42 +201,45 @@ impl E<'_, '_> {
             792 => self.sraw(t, a_, b, w.rc()),
             10 | 138 | 202 | 8 | 136 | 200 => self.carry(w.xo(), t, a_, b, w.rc()),
             26 => {
+                let o = self.gr(t);
                 let a = &mut self.a;
                 a.mov_ri(RAX, 63);
-                a.bsr_rm(RDX, g(t));
+                a.bsr_ro(RDX, o);
                 a.cmov(Cc::E, RDX, RAX);
                 a.alu_ri(Alu::Xor, RDX, 31);
-                a.st32(g(a_), RDX);
+                self.stg(a_, RDX);
                 if w.rc() { self.cr0_of_edx(); }
             }
             75 | 11 => {
-                self.a.ld32(RAX, g(a_));
-                self.a.grp3_m(if w.xo() == 75 { 5 } else { 4 }, g(b));
-                self.a.st32(g(t), RDX);
+                self.ldg(RAX, a_);
+                let o = self.gr(b);
+                self.a.grp3_o(if w.xo() == 75 { 5 } else { 4 }, o);
+                self.stg(t, RDX);
                 if w.rc() { self.cr0_of_edx(); }
             }
             491 | 459 => {
-                let a = &mut self.a;
-                a.alu_mi(Alu::Cmp, g(b), 0);
+                let (ob, oa) = (self.gr(b), self.gr(a_));
+                self.a.alu_oi(Alu::Cmp, ob, 0);
                 self.slow_if(Cc::E, i);
                 if w.xo() == 491 {
                     let a = &mut self.a;
-                    a.alu_mi(Alu::Cmp, g(b), u32::MAX);
+                    a.alu_oi(Alu::Cmp, ob, u32::MAX);
                     let ok = a.jcc(Cc::Ne);
-                    a.alu_mi(Alu::Cmp, g(a_), 0x8000_0000);
+                    a.alu_oi(Alu::Cmp, oa, 0x8000_0000);
                     self.slow_if(Cc::E, i);
                     self.a.here(ok);
                 }
                 let a = &mut self.a;
-                a.ld32(RAX, g(a_));
-                if w.xo() == 491 { a.cdq(); a.grp3_m(7, g(b)); } else { a.alu_rr(Alu::Xor, RDX, RDX); a.grp3_m(6, g(b)); }
+                a.ld32o(RAX, oa);
+                if w.xo() == 491 { a.cdq(); a.grp3_o(7, ob); } else { a.alu_rr(Alu::Xor, RDX, RDX); a.grp3_o(6, ob); }
                 a.mov_rr(RDX, RAX);
-                a.st32(g(t), RDX);
+                self.stg(t, RDX);
                 if w.rc() { self.cr0_of_edx(); }
             }
             922 | 954 if w.rc() => {
-                if w.xo() == 922 { self.a.movsx16(RDX, g(t)) } else { self.a.movsx8(RDX, g(t)) }
-                self.a.st32(g(a_), RDX);
+                let o = self.gr(t);
+                if w.xo() == 922 { self.a.movsx16o(RDX, o) } else { self.a.movsx8o(RDX, o) }
+                self.stg(a_, RDX);
                 self.cr0_of_edx();
             }
             _ if w.rc() => return false,
@@ -252,14 +254,14 @@ impl E<'_, '_> {
                     790 => self.a.movzx16(RDX, at),
                     _ => self.ld_be(n, w.xo() == 343),
                 }
-                self.a.st32(g(t), RDX);
+                self.stg(t, RDX);
             }
             // stores: stwx stbx (RA = 0), sthx, stwbrx sthbrx
             151 | 215 | 407 | 662 | 918 => {
                 let n = match w.xo() { 151 | 662 => 4, 215 => 1, _ => 2 };
                 let ea = x(self, n);
                 self.store_guard(i, ea, n);
-                self.a.ld32(RDX, g(t));
+                self.ldg(RDX, t);
                 match w.xo() {
                     662 => self.a.st32(at, RDX),
                     918 => self.a.st16(at, RDX),
@@ -274,14 +276,14 @@ impl E<'_, '_> {
     /// rlwimi: rA = (rotl(rS, sh) & m) | (rA & !m).
     fn rlwimi(&mut self, w: W) {
         let (s, d, m) = (w.rt() as u8, w.ra() as u8, mask(w.mb(), w.me()));
+        self.ldg(RDX, s);
+        self.ldg(RCX, d);
         let a = &mut self.a;
-        a.ld32(RDX, g(s));
         if w.sh() != 0 { a.sh_ri(Sh::Rol, RDX, w.sh() as u8); }
         a.alu_ri(Alu::And, RDX, m);
-        a.ld32(RCX, g(d));
         a.alu_ri(Alu::And, RCX, !m);
         a.alu_rr(Alu::Or, RDX, RCX);
-        a.st32(g(d), RDX);
+        self.stg(d, RDX);
         if w.rc() { self.cr0_of_edx(); }
     }
 
@@ -289,18 +291,18 @@ impl E<'_, '_> {
     /// !rA + CA (subfze); XER[CA] = the carry out.
     fn carry(&mut self, xo: u32, d: u8, s: u8, b: u8, rc: bool) {
         let ca_in = |e: &mut Self| {
-            if e.env.mutant == MUT_CA_IN { e.a.alu_rr(Alu::Xor, RCX, RCX) } else { e.a.bt_mi(cpu(XER), XER_CA.trailing_zeros() as u8) }
+            if e.env.mutant == MUT_CA_IN { e.a.alu_rr(Alu::Xor, RCX, RCX) } else { let x = e.r(XER); e.a.bt_oi(x, XER_CA.trailing_zeros() as u8) }
         };
-        self.a.ld32(RDX, g(s));
+        self.ldg(RDX, s);
         if matches!(xo, 8 | 136 | 200) { self.a.not(RDX); }
         match xo {
-            10 => self.a.alu_rm(Alu::Add, RDX, g(b)),
-            8 => { self.a.stc(); self.a.adc_rm(RDX, g(b)); }
-            138 | 136 => { ca_in(self); self.a.adc_rm(RDX, g(b)); }
+            10 => self.alug(Alu::Add, RDX, b),
+            8 => { let o = self.gr(b); self.a.stc(); self.a.adc_ro(RDX, o); }
+            138 | 136 => { let o = self.gr(b); ca_in(self); self.a.adc_ro(RDX, o); }
             _ => { ca_in(self); self.a.adc_ri(RDX, 0); }
         }
         self.a.setcc(Cc::B, R8);
-        self.a.st32(g(d), RDX);
+        self.stg(d, RDX);
         self.ca_from_r8();
         if rc { self.cr0_of_edx(); }
     }
@@ -327,10 +329,10 @@ impl E<'_, '_> {
 
     /// sraw: n = rB & 0x3F; n > 31 fills with the sign (CA = negative), else srawi's rule with a variable count.
     fn sraw(&mut self, s: u8, d: u8, b: u8, rc: bool) {
+        self.ldg(RCX, b);
+        self.ldg(RDX, s);
         let a = &mut self.a;
-        a.ld32(RCX, g(b));
         a.alu_ri(Alu::And, RCX, 0x3F);
-        a.ld32(RDX, g(s));
         a.mov_rr(R8, RDX);
         a.alu_ri(Alu::Cmp, RCX, if self.env.mutant == MUT_SRAW_BIG { 63 } else { 31 });
         let big = a.jcc(Cc::A);
@@ -348,8 +350,8 @@ impl E<'_, '_> {
         a.test_rr(R8, R8);
         a.setcc(Cc::S, RCX);
         a.and8_rr(RAX, RCX);
-        a.st32(g(d), RDX);
         a.mov_rr(R8, RAX);
+        self.stg(d, RDX);
         self.ca_from_r8();
         if rc { self.cr0_of_edx(); }
     }
