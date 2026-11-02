@@ -264,6 +264,11 @@ mod tests {
     use super::*;
     fn enc(f: impl FnOnce(&mut Asm)) -> Vec<u8> { let mut a = Asm::default(); f(&mut a); a.b }
 
+    #[test]
+    fn the_movbe_probe_agrees_with_std_feature_detection() {
+        assert_eq!(cpu_has_movbe(), std::is_x86_feature_detected!("movbe"));
+    }
+
     /// Each expected byte string is what GNU as (Intel syntax) assembles for the comment beside it.
     #[test]
     fn encodings_match_an_assembler() {
@@ -338,7 +343,13 @@ mod tests {
 
 /// CPUID.1:ECX[22] MOVBE (the Z8350 has it; x86-64-v2 does not promise it: runtime dispatch).
 pub(crate) fn cpu_has_movbe() -> bool {
-    // CPUID leaf 1 exists on every x86-64 processor (a safe intrinsic: no side effects).
-    let r = core::arch::x86_64::__cpuid(1);
-    r.ecx & (1 << 22) != 0
+    let ecx: u32;
+    // SAFETY: CPUID leaf 1 exists on every x86-64 processor and only writes eax/ebx/ecx/edx; rbx, which LLVM reserves, is
+    // saved in a scratch register and restored. (asm rather than core::arch::__cpuid: that intrinsic is `unsafe` on the CoralOS
+    // toolchain and safe on newer ones, so neither spelling builds warning-free on both.)
+    unsafe {
+        core::arch::asm!("mov {t}, rbx", "cpuid", "mov rbx, {t}", t = out(reg) _, inout("eax") 1u32 => _,
+            inout("ecx") 0u32 => ecx, out("edx") _, options(nostack, preserves_flags));
+    }
+    ecx & (1 << 22) != 0
 }
