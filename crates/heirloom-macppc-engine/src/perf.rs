@@ -107,7 +107,10 @@ impl Perf {
 fn pct(part: u64, whole: u64) -> u64 { if whole == 0 { 0 } else { part.saturating_mul(100) / whole } }
 
 /// The `[HEIRLOOM-PERF ...]` line for one window. Frame times in ms (p50/p95 of swap-to-swap), MIPS over the time inside `step`
-/// AND over the wall time, instructions per frame, and the share of the WALL time (sum of the frames) each stage took.
+/// AND over the wall time, instructions per frame, and the share of the WALL time (sum of the frames) each stage took; then the
+/// absolute means that tell the two host-side suspects apart: per frame the GL round trip (`gl_ring_us`, the guest blocked on
+/// heirloom-gl.engine) and the time outside `step` (`outside_us`), per slice the time inside it (`step_us`) and between two
+/// (`gap_us`, the host's scheduling of the next slice).
 pub fn report(w: &Window, per_us: u64, frames_total: u64) -> String {
     let mut f = w.frames.clone();
     f.sort_unstable();
@@ -121,11 +124,14 @@ pub fn report(w: &Window, per_us: u64, frames_total: u64) -> String {
     let mips = |t: u64| if t == 0 { 0 } else { w.insns.saturating_mul(per_us) / t };
     let classes: String = (0..CLASSES).map(|i| format!(" {}={}%/{}", CLASS_NAMES[i], pct(w.native_time[i], wall), w.native_calls[i] / n as u64)).collect();
     format!("[HEIRLOOM-PERF frames={frames_total} n={n} frame_ms p50={} p95={} fps={}] insns/frame={} mips_step={} mips_wall={} steps/frame={} \
-interp={}% native={}% outside_step={}% gl_ring={}%{classes} clock_reads/frame={} clock_poll={}% of insns",
+interp={}% native={}% outside_step={}% gl_ring={}%{classes} clock_reads/frame={} clock_poll={}% of insns \
+| per frame: gl_ring_us={} outside_us={} | per slice: step_us={} gap_us={}",
         at(50) / per_ms, at(95) / per_ms, if wall == 0 { 0 } else { (n as u64) * per_ms * 1000 / wall },
         w.insns / n as u64, mips(w.step_time), mips(wall), w.steps / n as u64,
         pct(interp, wall), pct(native, wall), pct(outside, wall), pct(w.gl_ring_time, wall),
-        w.clock_reads / n as u64, pct(w.poll_insns, w.insns))
+        w.clock_reads / n as u64, pct(w.poll_insns, w.insns),
+        w.gl_ring_time / per_us.max(1) / n as u64, outside / per_us.max(1) / n as u64,
+        w.step_time / per_us.max(1) / w.steps.max(1), outside / per_us.max(1) / w.steps.max(1))
 }
 
 impl<U: GuestUi> MacPpc<U> {
@@ -213,5 +219,8 @@ mod tests {
         assert!(line.contains("insns/frame=2000000 mips_step=79 mips_wall=39 steps/frame=10"), "{line}");
         assert!(line.contains("interp=40% native=10% outside_step=50%"), "{line}");
         assert!(line.contains(" gl=10%/0"), "{line}");
+        // the absolute times that tell a slow GL round trip from slow slicing on the Z83: 2_525_000 units outside step over 100
+        // frames and 1000 slices; nothing in gl_ring
+        assert!(line.ends_with("| per frame: gl_ring_us=0 outside_us=25250 | per slice: step_us=2525 gap_us=2525"), "{line}");
     }
 }
