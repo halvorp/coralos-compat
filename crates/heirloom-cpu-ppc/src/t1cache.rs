@@ -130,6 +130,29 @@ impl Cache {
         self.decode(mem, pc, idx)
     }
 
+    /// Tier 2's superblocks: append to `out` the block `decode` would cut at `pc` (same rules: up to the first terminal
+    /// instruction, the page end, the instruction before a bound native or one that cannot be fetched; never `sc`) if pc
+    /// is on a non-volatile page whose generation is still `gen` and the block has at most `room` instructions. Nothing
+    /// is cached; false (and `out` unchanged) otherwise.
+    pub(crate) fn peek(&self, mem: &GuestMem, pc: u32, gen: u64, room: usize, out: &mut Vec<Op>) -> bool {
+        let page = mem.strip(pc) >> CODE_PAGE_SHIFT;
+        if room == 0 || mem.code_gen(pc) != gen || self.natives.contains(&pc) || self.volatile.contains(&page) { return false; }
+        let page_end = (pc | (PAGE - 1)).wrapping_add(1);
+        let stop = self.natives.range(pc.wrapping_add(4)..).next().copied().filter(|&n| n < page_end || page_end == 0).unwrap_or(page_end);
+        let start = out.len();
+        let mut a = pc;
+        loop {
+            let Ok(word) = mem.read_u32(a) else { break };
+            let op = decode(a, word);
+            if op.k == K::Sc { break; }
+            if out.len() - start == room { out.truncate(start); return false; }
+            out.push(op);
+            a = a.wrapping_add(4);
+            if op.terminal() || a == stop || a == 0 { break; }
+        }
+        out.len() > start
+    }
+
     fn decode(&mut self, mem: &mut GuestMem, pc: u32, idx: usize) -> Result<Found, Trap> {
         if self.ops.len() + (PAGE / 4) as usize > ARENA_OPS { self.flush(); }
         let gen = mem.watch_code_page(pc);

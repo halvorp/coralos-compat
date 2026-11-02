@@ -2,7 +2,8 @@
 //! write guest RAM and the loop's own code, write the time base, bind and unbind a native over guest code that was already
 //! compiled, grow guest RAM, redirect the return, block the CPU, trap - ends in tier 0's state in every slicing, with the
 //! natives really run from JIT code; and the planted dispatcher mutants go RED (a native counted twice, a dispatch table
-//! kept across a flush, no resync after a native changed the natives set or RAM). Host only (HostCodeMem).
+//! kept across a flush, no resync after a native changed the natives set or RAM). Also how control leaves a SUPERBLOCK: a
+//! side exit stores the registers dirty at its branch (mutant 16 RED). Host only (HostCodeMem).
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use heirloom_cpu_ppc::{Cpu, Exec, Host, HostCodeMem, RunStats, Tier};
 use heirloom_mem_flat32::GuestMem;
@@ -176,4 +177,46 @@ fn table_child() {
         let (got, _) = run(Tier::Jit, mutant, &prog, slice);
         assert!(got == want, "slice {slice}");
     }
+}
+
+/// SUPERBLOCKS: a loop whose block runs on through a conditional branch's not-taken path. The branch is taken every 4th
+/// trip with r3 written just before it (held dirty in a host register by the register cache), and the taken target reads
+/// r3 from the Cpu: the side exit must store it. Tier 0's state in every slicing and under lockstep, superblocks really
+/// compiled; mutant 16 (side exits store nothing) RED.
+fn side_exit_program() -> Vec<u32> {
+    let mut p = vec![d(14, 31, 0, 120)]; // li r31,120
+    let top = p.len();
+    p.extend([d(14, 3, 3, 1), d(14, 3, 3, 1), d(14, 3, 3, 1)]); // r3 += 3 (dirty)
+    p.push(d(28, 31, 8, 3)); // andi. r8,r31,3
+    p.push(bc(12, 2, 4 * 5)); // beq side (5 instructions on)
+    p.push(d(14, 4, 4, 1)); // not taken: addi r4,r4,1
+    p.push(d(13, 31, 31, 0xFFFF)); // addic. r31,r31,-1
+    p.push(bc(4, 2, -(4 * (p.len() - top) as i32))); // bne top
+    p.push(18 << 26 | 4 * 5); // b out
+    // side:
+    p.push(d(14, 5, 3, 0)); // addi r5,r3,0: r3 as the side exit left it
+    p.push(d(13, 31, 31, 0xFFFF));
+    p.push(bc(4, 2, -(4 * (p.len() - top) as i32)));
+    // out:
+    p.push(d(15, 24, 0, EXIT >> 16));
+    p.push(d(24, 24, 24, EXIT & 0xFFFF));
+    p.push(mtspr(8, 24));
+    p.push(BLR);
+    p
+}
+
+#[test]
+fn a_superblock_side_exit_stores_the_registers_dirty_at_its_branch() {
+    let prog = side_exit_program();
+    let (want, _) = run(Tier::Interp, 0, &prog, 1_000_000);
+    assert!(want.last.halted && want.gpr[5] != 0, "the reference run takes the side exit: {:?}", want.last);
+    for slice in [1, 5, 37, 1_000_000] {
+        let (got, e) = run(Tier::Jit, 0, &prog, slice);
+        assert!(got == want, "slice {slice}: r3 {:#x}/{:#x} r5 {:#x}/{:#x} {:?}", got.gpr[3], want.gpr[3], got.gpr[5], want.gpr[5], e.jit_stats());
+        if slice > 5 { assert!(e.jit_stats().superblocks > 0, "slice {slice}: a superblock was compiled: {:?}", e.jit_stats()); }
+    }
+    let (got, e) = run(Tier::JitLockstep, 0, &prog, 50);
+    assert!(e.divergence().is_none() && got == want, "lockstep: {:?}", e.divergence());
+    let (got, _) = run(Tier::Jit, 16, &prog, 1_000_000);
+    assert!(got != want, "mutant 16 (a side exit stores no dirty register) stayed GREEN");
 }

@@ -38,6 +38,10 @@ pub(crate) const ARENA_BYTES: usize = 32 << 20;
 /// Segments of the arena (2 MiB each at the default size): one is dropped at a time.
 pub(crate) const SEGMENTS: usize = 16;
 const TABLE_BITS: u32 = 16;
+/// Longest superblock (guest instructions): a block ending in a conditional branch goes on through the NOT-taken path into
+/// the next tier-1 block on the same code page, the taken edge a side exit (jit_emit). A new constant of this tier (WC3
+/// blocks average 3.8 instructions; tuned only by measurement).
+pub(crate) const SUPER_MAX: usize = 48;
 const LINKS: usize = 1 << 18;
 /// Publish when this much code waits (most of a page), or when the oldest waiting block has waited this many guest
 /// instructions (across runs). Every publish rounds up to a whole page that is never written again, so publishing a few
@@ -261,18 +265,22 @@ impl Jit {
         !self.blocks.get(pc).is_some_and(|s| s.gen == gen_now)
     }
 
-    fn compile<H: Host>(&mut self, ops: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, at: u64) {
+    /// Compile `ops` (a superblock whose first tier-1 block is `ops[..first]`) at `pc`.
+    fn compile<H: Host>(&mut self, ops: &[crate::t1op::Op], first: usize, pc: u32, gen: u64, page: usize, at: u64) {
         let t0 = self.timer.map(|c| c());
-        self.compile_untimed::<H>(ops, pc, gen, page, at);
+        // a superblock whose code would not fit an empty arena segment is compiled as its first block alone (a block that
+        // big would only ever flush the whole cache)
+        if !self.compile_untimed::<H>(ops, pc, gen, page, at, first < ops.len()) { self.compile_untimed::<H>(&ops[..first], pc, gen, page, at, false); }
         if let (Some(c), Some(t0)) = (self.timer, t0) { self.stats.translate_time += c().wrapping_sub(t0); }
     }
 
-    fn compile_untimed<H: Host>(&mut self, ops: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, at: u64) {
+    /// False (nothing compiled, its link slots given back) when `may_refuse` and the code is longer than a segment.
+    fn compile_untimed<H: Host>(&mut self, ops: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, at: u64, may_refuse: bool) -> bool {
         let (blocks, links, by_target, owner, free) = (&self.blocks, &mut self.links, &mut self.by_target, &mut self.link_owner, &mut self.free_links);
         let nlinks = &mut self.nlinks;
         let exit_stub = self.exit_stub;
         let mut out_of_links = false;
-        let mut taken: Vec<u32> = Vec::new();
+        let mut taken: Vec<(u32, u32)> = Vec::new();
         let mut link = |target: u32| -> *const u64 {
             let i = match free.pop() {
                 Some(i) => i as usize,
@@ -280,15 +288,25 @@ impl Jit {
                 None => { out_of_links = true; return &links[0] as *const u64; }
             };
             owner[i] = LINK_NEW;
-            taken.push(i as u32);
+            taken.push((i as u32, target));
             links[i] = blocks.get(target).map_or(exit_stub, |s| s.entry);
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
         let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
         let (code, pinned) = jit_emit::compile(ops, pc, gen, page, &mut env);
-        if out_of_links { self.flush(); return; }
-        self.place(&code, taken, pc, ops.len() as u32, gen, pinned, at);
+        if out_of_links { self.flush(); return true; }
+        if may_refuse && code.len() > self.arena.segment_bytes() {
+            for (i, target) in taken {
+                self.link_owner[i as usize] = 0;
+                self.links[i as usize] = self.exit_stub;
+                self.free_links.push(i);
+                if let Some(v) = self.by_target.get_mut(&target) { v.retain(|&j| j != i); }
+            }
+            return false;
+        }
+        self.place(&code, taken.iter().map(|t| t.0).collect(), pc, ops.len() as u32, gen, pinned, at);
+        true
     }
 
     /// Put compiled code in the arena (reusing the oldest segment when full) and queue it for publishing; `taken` = the
@@ -486,6 +504,23 @@ pub(crate) extern "C" fn h_note<H: Host>(ctx: *mut Ctx, ea: u32, n: u32) {
     host.mem().journal_note(ea, n);
 }
 
+/// A superblock: the tier-1 block `first` at `pc` and, while its last instruction is a FORWARD conditional branch (not
+/// branch-always) whose next instruction is on the same code page, the blocks of the not-taken path after it
+/// (t1cache::Cache::peek: the same cuts, the same page generation), up to [`SUPER_MAX`] instructions: contiguous code, one
+/// page, so one generation check covers it, and the taken edge is a side exit. A BACKWARD branch is usually a loop's back
+/// edge, taken, its fall-through the loop's exit: cold code that would only be duplicated. (Tracing through `b` / `bl` too
+/// was measured on WC3: 0.6% fewer JIT host instructions than this for 38% more compiles and 2x the evictions.)
+fn superblock(cache: &Cache, mem: &heirloom_mem_flat32::GuestMem, first: &[crate::t1op::Op], pc: u32, gen: u64, page: usize) -> Vec<crate::t1op::Op> {
+    let mut ops = first.to_vec();
+    while let Some(last) = ops.last() {
+        let next = pc.wrapping_add(4 * ops.len() as u32);
+        let forward = matches!(last.k, K::Bc | K::Bcl) && last.d & 0x14 != 0x14 && last.imm.wrapping_sub(next) < 0x8000_0000;
+        if !forward || ops.len() >= SUPER_MAX || (mem.strip(next) >> heirloom_mem_flat32::CODE_PAGE_SHIFT) as usize != page { break; }
+        if !cache.peek(mem, next, gen, SUPER_MAX - ops.len(), &mut ops) { break; }
+    }
+    ops
+}
+
 /// Tier 2 for `budget` instructions; with `ls` (JitLockstep) every JIT entry is checked against tier 0 (tier 0's result
 /// kept) and the first divergence stops the run.
 pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut Prof, cache: &mut Cache, jit: &mut Jit, mut ls: Option<&mut LockstepStats>) -> (RunStats, Option<Divergence>) {
@@ -568,7 +603,11 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
         if usable && take == len && !host_call && jit.hot(pc, gen) {
             let page = (host.mem().strip(pc) >> heirloom_mem_flat32::CODE_PAGE_SHIFT) as usize;
             // a block's entry reads its page's generation: only pages inside the watch's array are compiled
-            if page < host.mem().raw().gen_pages as usize { jit.compile::<H>(&cache.ops[start..start + len], pc, gen, page, n); }
+            if page < host.mem().raw().gen_pages as usize {
+                let ops = superblock(cache, host.mem(), &cache.ops[start..start + len], pc, gen, page);
+                jit.stats.superblocks += (ops.len() > len) as u64;
+                jit.compile::<H>(&ops, len, pc, gen, page, n);
+            }
         }
         n += t1run::run(host, cpu, &cache.ops[start..start + take], pc, gen, check, &mut trap);
         prof.blocks += 1;

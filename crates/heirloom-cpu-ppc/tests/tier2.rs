@@ -230,6 +230,7 @@ fn random_program(seed: u64) -> Vec<u32> {
             30 => x(t, 0, 0, [339 /* mflr */, 467][r.pick(2) as usize], false) | if r.pick(2) == 0 { 8 << 16 } else { 9 << 16 },
             31 => d(14, 23, 0, r.pick(0x80) * 4), // r23 = a small aligned offset
             32 => mtspr(1, t), // mtxer (tier 1): random SO/OV/CA for the next compares and carries
+            33 => 18 << 26 | 8 | r.pick(2), // b / bl +8: ends a block (bl sets LR, which mflr above reads)
             // the forms jit_inline.rs takes off the slow path (each also has its slow cases: NaNs, denormals, RN, Rc)
             34 => fa(63, fr(&mut r), fr(&mut r), fr(&mut r), fr(&mut r), [20, 21, 25][r.pick(3) as usize], r.pick(8) == 0),
             35 => fa(59, fr(&mut r), fr(&mut r), fr(&mut r), fr(&mut r), [20, 21, 25][r.pick(3) as usize], r.pick(8) == 0),
@@ -312,7 +313,7 @@ fn fuzz_setup(seed: u64) -> impl Fn(&mut Cpu, &mut M) {
 
 #[test]
 fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
-    let (mut compared, mut pinned, mut compiled) = (0u64, 0u64, 0u64);
+    let (mut compared, mut pinned, mut compiled, mut superblocks) = (0u64, 0u64, 0u64, 0u64);
     for seed in 0..400u64 {
         let prog = random_program(seed);
         let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, fuzz_setup(seed));
@@ -320,7 +321,7 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
         // a run slice publishes what it compiled: short slices make the fuzz's short loops run in JIT code
         for slice in [37, 1_000, 1_000_000] {
             let (got, e) = run_on(Tier::Jit, 0, &prog, slice, fuzz_setup(seed));
-            (pinned, compiled) = (pinned + e.jit_stats().pinned, compiled + e.jit_stats().compiled);
+            (pinned, compiled, superblocks) = (pinned + e.jit_stats().pinned, compiled + e.jit_stats().compiled, superblocks + e.jit_stats().superblocks);
             assert!(got == want, "seed {seed} slice {slice}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} tb {}/{} last {:?}/{:?} ram equal {} {:?}",
                 got.gpr, want.gpr, got.cr, want.cr, got.xer, want.xer, got.tb, want.tb, got.last, want.last, got.ram == want.ram, e.jit_stats());
         }
@@ -339,6 +340,8 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
     assert!(compared > 50_000, "the fuzz really compared JIT code: {compared}");
     // and the register cache really held guest fields in host registers (blocks pin ~2-5 of them)
     assert!(pinned > compiled, "the register cache engaged: {pinned} fields pinned over {compiled} blocks");
+    // and superblocks (the generator's skip-the-next bc and the loop's own) were compiled and fuzzed
+    assert!(superblocks > 100, "superblocks were fuzzed: {superblocks} of {compiled} blocks");
 }
 
 /// A tiny code arena (the stub page and 16 segments of one page; the tests publish after every run, a page each time):
@@ -476,17 +479,20 @@ fn rc_forms_set_cr0_from_the_result_even_when_the_add_overflows() {
     }
 }
 
-/// Each planted JIT mutant makes the gates RED: the fuzz (end state or lockstep) for the arithmetic ones, the self-modifying
+/// Each planted JIT mutant makes the gates RED: the fuzz (end state, then lockstep) for the arithmetic and trace ones, the self-modifying
 /// programs for the store-watch and exit-count ones. A gate that stays green with a mutant proves nothing.
 #[test]
 fn negative_control_every_planted_jit_mutant_goes_red() {
-    for mutant in (1..=10u8).chain([12]) {
+    for mutant in (1..=10u8).chain([12, 16]) {
         let mut red = false;
         for seed in 0..400u64 {
             let prog = random_program(seed);
             let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, fuzz_setup(seed));
             let (got, _) = run_on(Tier::Jit, mutant, &prog, 37, fuzz_setup(seed));
             if got != want { red = true; break; }
+            // a fault that never reaches the end state (a register written the same way every trip) is lockstep's to see
+            let (got, e) = run_on(Tier::JitLockstep, mutant, &prog, 50, fuzz_setup(seed));
+            if got != want || e.divergence().is_some() { red = true; break; }
         }
         let (smc, flags, ties) = (smc_store_program(), overflow_flags_program(), fma_ties_program());
         for (prog, setup) in [(&smc[..], smc_store_setup as Setup), (programs::BENCH_SMC, |c, _| c.gpr[3] = 100), (&flags[..], overflow_flags_setup), (&ties[..], fma_ties_setup)] {

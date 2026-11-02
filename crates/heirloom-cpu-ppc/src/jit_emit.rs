@@ -48,6 +48,9 @@ pub(crate) const MUT_NATIVE_COUNT: u8 = 13;
 pub(crate) const MUT_TABLE_STALE: u8 = 14;
 /// A native that changed the natives set or guest RAM does not make JIT code leave for the dispatcher's resync (jit.rs).
 pub(crate) const MUT_NO_RESYNC: u8 = 15;
+/// A superblock's side exit (the taken edge of a conditional branch inside it) stores none of the cached registers that
+/// are dirty there: the target block reads the guest fields' stale values from the Cpu.
+pub(crate) const MUT_SIDE_NO_SPILL: u8 = 16;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -93,6 +96,11 @@ pub(crate) struct E<'a, 'b> {
     /// Inline fast paths that fell back: (jcc to patch, instruction index, the cached registers dirty at the jump); each
     /// gets a slow stub after the body.
     slow: Vec<(Fix, usize, u8)>,
+    /// Superblock side exits: (the jumps taken to it, the branch's instruction index, the cached registers dirty at the
+    /// branch, its target); each gets an out-of-line exit after the body.
+    sides: Vec<(Vec<Fix>, usize, u8, u32)>,
+    /// Instructions in the (super)block: a conditional branch before the last one is a side exit, not the end.
+    n: usize,
     resume: Vec<usize>,
     words: Vec<u32>,
     /// The register cache (jit_regs): the Cpu fields held in host registers for this block, which of them hold a value
@@ -100,7 +108,7 @@ pub(crate) struct E<'a, 'b> {
     pub(crate) regs: crate::jit_regs::Regs,
 }
 
-/// Compile `ops` (a whole tier-1 block at `pc`, decoded from code page `page` at generation `gen`): a counting pass picks
+/// Compile `ops` (a whole tier-1 block or a superblock at `pc`, decoded from code page `page` at generation `gen`): a counting pass picks
 /// the Cpu fields the register cache holds, then the real pass emits. Answers the code and how many fields were pinned.
 pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env) -> (Vec<u8>, usize) {
     let pins = {
@@ -185,7 +193,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>, regs: crate::jit_regs::Regs) -> Self {
-        E { a: Asm::default(), env, pc, slow: Vec::new(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), regs }
+        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), regs }
     }
 
     /// The instructions, and the fall-through exit when the last one does not end the block.
@@ -280,8 +288,14 @@ impl E<'_, '_> {
     }
 
     /// The slow paths of the inline forms: store what the cache held dirty AT THE JUMP (every fast path leaves before
-    /// writing guest state), the helper, reload, then back after the instruction.
+    /// writing guest state), the helper, reload, then back after the instruction. Then the superblock side exits: the
+    /// registers dirty at their branch stored, and a chained exit to the branch target.
     fn tails(&mut self) {
+        for (fixes, i, dirty, target) in core::mem::take(&mut self.sides) {
+            for f in fixes { self.a.here(f); }
+            self.regs.dirty = if self.env.mutant == MUT_SIDE_NO_SPILL { 0 } else { dirty };
+            self.chain(target, i + 1);
+        }
         for (f, i, dirty) in core::mem::take(&mut self.slow) {
             self.a.here(f);
             self.regs.dirty = dirty;
@@ -528,6 +542,12 @@ impl E<'_, '_> {
             }
             K::B => { self.chain(op.imm, i + 1); return true; }
             K::Bl => { self.set_lr(i); self.chain(op.imm, i + 1); return true; }
+            K::Bc | K::Bcl if i + 1 < self.n => {
+                // inside a superblock: the taken edge leaves through an out-of-line side exit, the not-taken one runs on
+                if op.k == K::Bcl { self.set_lr(i); }
+                let taken = self.cond_taken(d, s);
+                self.sides.push((taken, i, self.regs.dirty, op.imm));
+            }
             K::Bc | K::Bcl => {
                 if op.k == K::Bcl { self.set_lr(i); }
                 let not = self.cond(d, s);
@@ -582,5 +602,30 @@ impl E<'_, '_> {
             not.push(self.a.jcc(if bo & 0x08 != 0 { Cc::Ae } else { Cc::B }));
         }
         not
+    }
+
+    /// The same tests as [`Self::cond`], but the returned jumps go to the TAKEN path (the not-taken one falls through):
+    /// one inverted jcc when only CTR or only a CR bit is tested.
+    fn cond_taken(&mut self, bo: u8, bi: u8) -> Vec<Fix> {
+        match (bo & 0x04 == 0, bo & 0x10 == 0) {
+            (true, true) => {
+                let not = self.cond(bo, bi);
+                let t = self.a.jmp();
+                for f in not { self.a.here(f); }
+                alloc::vec![t]
+            }
+            (true, false) => {
+                let o = self.rw(CTR);
+                self.a.alu_oi(Alu::Sub, o, 1);
+                alloc::vec![self.a.jcc(if bo & 0x02 != 0 { Cc::E } else { Cc::Ne })]
+            }
+            (false, true) => {
+                let o = self.r(CR);
+                self.a.bt_oi(o, 31 - (bi & 31));
+                alloc::vec![self.a.jcc(if bo & 0x08 != 0 { Cc::B } else { Cc::Ae })]
+            }
+            // branch always: superblocks never continue past one (jit.rs), but stay exact if one is given
+            (false, false) => alloc::vec![self.a.jmp()],
+        }
     }
 }
