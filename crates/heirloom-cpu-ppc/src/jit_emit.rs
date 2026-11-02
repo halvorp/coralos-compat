@@ -29,6 +29,8 @@ pub(crate) const MUT_EXIT_COUNT: u8 = 4;
 pub(crate) const MUT_FP_SINGLE: u8 = 5;
 /// sraw's count > 31 path dropped (x86 masks the count to 5 bits: the wrong result and CA) (jit_inline).
 pub(crate) const MUT_SRAW_BIG: u8 = 6;
+/// adde / addze / subfe / subfze ignore XER[CA] as their carry in (jit_inline).
+pub(crate) const MUT_CA_IN: u8 = 7;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -44,6 +46,8 @@ pub(crate) struct Env<'a> {
     pub(crate) logged: bool,
     pub(crate) mutant: u8,
     pub(crate) table_mask: u32,
+    /// Use MOVBE for big-endian loads and stores (CPUID-dispatched: jit_asm::cpu_has_movbe).
+    pub(crate) movbe: bool,
 }
 
 pub(crate) const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
@@ -151,6 +155,33 @@ impl E<'_, '_> {
         a.mov_ri(RDX, ipc);
         a.mov_ri(RCX, i as u32);
         a.call_m(ctx(offset_of!(Ctx, slow)));
+    }
+
+    /// edx (rdx for 8) = the big-endian `n`-byte value at [r12 + rax], zero- or sign-extended (16 bits).
+    pub(crate) fn ld_be(&mut self, n: u8, sign: bool) {
+        let (a, at) = (&mut self.a, mx(R12, RAX, 1));
+        match (n, self.env.movbe) {
+            (8, true) => a.movbe_ld(64, RDX, at),
+            (8, false) => { a.ld64(RDX, at); a.bswap64(RDX); }
+            (4, true) => a.movbe_ld(32, RDX, at),
+            (4, false) => { a.ld32(RDX, at); a.bswap32(RDX); }
+            (2, true) => { a.movbe_ld(16, RDX, at); if sign { a.movsx16_rr(RDX, RDX) } else { a.movzx16_rr(RDX, RDX) } }
+            (2, false) => { a.movzx16(RDX, at); a.bswap32(RDX); a.sh_ri(if sign { Sh::Sar } else { Sh::Shr }, RDX, 16); }
+            _ => a.movzx8(RDX, at),
+        }
+    }
+    /// Store edx (rdx for 8) big-endian as `n` bytes at [r12 + rax] (edx is clobbered).
+    pub(crate) fn st_be(&mut self, n: u8) {
+        let (a, at) = (&mut self.a, mx(R12, RAX, 1));
+        match (n, self.env.movbe) {
+            (8, true) => a.movbe_st(64, at, RDX),
+            (8, false) => { a.bswap64(RDX); a.st64(at, RDX); }
+            (4, true) => a.movbe_st(32, at, RDX),
+            (4, false) => { a.bswap32(RDX); a.st32(at, RDX); }
+            (2, true) => a.movbe_st(16, at, RDX),
+            (2, false) => { a.bswap32(RDX); a.sh_ri(Sh::Shr, RDX, 16); a.st16(at, RDX); }
+            _ => a.st8(at, RDX),
+        }
     }
 
     /// A conditional jump to instruction `i`'s slow path (tier 1's handler for it, then back after it).
@@ -368,40 +399,24 @@ impl E<'_, '_> {
             K::Lwz | K::Lbz | K::Lhz | K::Lha | K::Lwzu | K::Lbzu | K::Lwzx | K::Lbzx => {
                 let n = match op.k { K::Lwz | K::Lwzu | K::Lwzx => 4, K::Lhz | K::Lha => 2, _ => 1 };
                 self.ea(i, Ea::of(op, matches!(op.k, K::Lwzx | K::Lbzx)), n);
+                self.ld_be(n, op.k == K::Lha);
                 let a = &mut self.a;
-                let at = mx(R12, RAX, 1);
-                match n {
-                    4 => { a.ld32(RDX, at); a.bswap32(RDX); }
-                    2 => {
-                        a.movzx16(RDX, at);
-                        a.bswap32(RDX);
-                        a.sh_ri(if op.k == K::Lha { Sh::Sar } else { Sh::Shr }, RDX, 16);
-                    }
-                    _ => a.movzx8(RDX, at),
-                }
                 a.st32(g(d), RDX);
                 if matches!(op.k, K::Lwzu | K::Lbzu) { a.st32(g(s), RSI); }
             }
             K::Lfd => {
                 self.ea(i, Ea::of(op, false), 8);
-                let a = &mut self.a;
-                a.ld64(RDX, mx(R12, RAX, 1));
-                a.bswap64(RDX);
-                a.st64(m(RBX, fpr(d)), RDX);
+                self.ld_be(8, false);
+                self.a.st64(m(RBX, fpr(d)), RDX);
             }
             K::Stw | K::Stb | K::Sth | K::Stwu | K::Stbu | K::Stwx | K::Stbx | K::Stfd => {
                 let n = match op.k { K::Stw | K::Stwu | K::Stwx => 4, K::Sth => 2, K::Stfd => 8, _ => 1 };
                 let indexed = matches!(op.k, K::Stwx | K::Stbx);
                 self.ea(i, Ea::of(op, indexed), n);
                 self.store_guard(i, Ea::of(op, indexed), n);
+                if n == 8 { self.a.ld64(RDX, m(RBX, fpr(d))) } else { self.a.ld32(RDX, g(d)) }
+                self.st_be(n);
                 let a = &mut self.a;
-                let at = mx(R12, RAX, 1);
-                match n {
-                    8 => { a.ld64(RDX, m(RBX, fpr(d))); a.bswap64(RDX); a.st64(at, RDX); }
-                    4 => { a.ld32(RDX, g(d)); a.bswap32(RDX); a.st32(at, RDX); }
-                    2 => { a.ld32(RDX, g(d)); a.bswap32(RDX); a.sh_ri(Sh::Shr, RDX, 16); a.st16(at, RDX); }
-                    _ => { a.ld32(RDX, g(d)); a.st8(at, RDX); }
-                }
                 if matches!(op.k, K::Stwu | K::Stbu) { a.st32(g(s), RSI); }
             }
             K::B => { self.chain(op.imm, i + 1); return true; }

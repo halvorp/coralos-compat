@@ -30,6 +30,7 @@ pub struct Exec {
     jit_mutant: u8,
     jit_refused: bool,
     jit_publish_after: Option<u64>,
+    jit_movbe: Option<bool>,
 }
 
 /// Per native address: (calls, time inside), timed by a host-supplied clock.
@@ -48,7 +49,7 @@ impl Exec {
             code_mem: None,
             #[cfg(target_arch = "x86_64")]
             jit: None,
-            jit_mutant: 0, jit_refused: false, jit_publish_after: None,
+            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None,
         }
     }
     /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
@@ -81,13 +82,17 @@ impl Exec {
         if enable && c.is_none() { *c = Some(Default::default()); }
         c.as_ref()
     }
+    /// Tests: false forces the BSWAP forms even on a CPU with MOVBE (both encodings must agree with tier 0). Takes effect
+    /// for a JIT made after the call.
+    #[doc(hidden)]
+    pub fn set_jit_movbe(&mut self, on: bool) {
+        self.jit_movbe = Some(on);
+    }
     /// NEGATIVE CONTROL ONLY: plant JIT mutant `m` (1 subfic CA inverted, 2 no XER[SO] in CR, 3 no code-watch test on
-    /// stores, 4 one instruction too many retired at a helper exit, 5 single-precision FP arithmetic not rounded to single, 6 sraw's count > 31 path dropped). The JIT gates must go RED with each.
+    /// stores, 4 one instruction too many retired at a helper exit, 5 single-precision FP arithmetic not rounded to single, 6 sraw's count > 31 path dropped, 7 the carry chain ignoring XER[CA] in). The JIT gates must go RED with each.
     #[doc(hidden)]
     pub fn plant_jit_mutant(&mut self, m: u8) {
         self.jit_mutant = m;
-        #[cfg(target_arch = "x86_64")]
-        { self.jit = None; }
     }
     /// Collect an opcode/block census from now on (tier 0 runs it; it costs a table update per instruction).
     pub fn enable_census(&mut self) { self.census.get_or_insert_with(Box::default); }
@@ -147,15 +152,15 @@ impl Exec {
         let lock = self.tier == Tier::JitLockstep;
         #[cfg(target_arch = "x86_64")]
         {
-            if self.jit.as_ref().is_some_and(|j| j.logged != lock) { self.jit = None; }
             if self.jit.is_none() {
                 if let Some(mem) = self.code_mem.take() {
                     self.jit = crate::jit::Jit::new(mem, self.jit_mutant).map(Box::new);
-                    if let Some(j) = self.jit.as_mut() {
-                        j.logged = lock;
-                        if let Some(n) = self.jit_publish_after { j.publish_after = n; }
-                    }
+                    if let (Some(j), Some(n)) = (self.jit.as_mut(), self.jit_publish_after) { j.publish_after = n; }
                 }
+            }
+            // lockstep journaling, a planted mutant or MOVBE changed since the code was made: it is dropped and remade
+            if let Some(j) = self.jit.as_mut() {
+                j.reconfigure(lock, self.jit_mutant, self.jit_movbe != Some(false));
             }
             if let Some(jit) = self.jit.as_mut() {
                 let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));

@@ -95,6 +95,8 @@ pub struct JitStats {
     pub flushes: u64,
     /// Bytes of code in the arena now.
     pub code_bytes: u64,
+    /// Big-endian loads and stores use MOVBE (the CPU has it and it was not turned off).
+    pub movbe: bool,
     /// Tier::Jit was asked for but no executable memory was provided (or it was refused): tier 1 ran instead.
     pub refused: bool,
 }
@@ -128,6 +130,10 @@ pub(crate) struct Jit {
     lock_seed: u32,
     /// The address mask the code was compiled for.
     mask: u32,
+    /// Big-endian accesses by MOVBE (CPUID, at creation; Exec::set_jit_movbe(false) forces the BSWAP forms).
+    pub(crate) movbe: bool,
+    /// The CPU has MOVBE (CPUID once, at creation).
+    hw_movbe: bool,
 }
 
 impl Jit {
@@ -138,7 +144,7 @@ impl Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, by_target: BTreeMap::new(), blocks: BTreeMap::new(), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: BTreeSet::new(), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
-            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX,
+            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(),
         };
         if !j.stubs() { return None; }
         Some(j)
@@ -193,6 +199,16 @@ impl Jit {
         self.ctx.slow = p as u64 + slow as u64;
         self.links[0] = self.exit_stub;
         self.arena.publish()
+    }
+
+    /// Change how code is made (lockstep journaling, a planted mutant, MOVBE): everything compiled is dropped.
+    pub(crate) fn reconfigure(&mut self, logged: bool, mutant: u8, movbe: bool) {
+        let movbe = movbe && self.hw_movbe;
+        if (logged, mutant, movbe) == (self.logged, self.mutant, self.movbe) { return; }
+        self.logged = logged;
+        self.mutant = mutant;
+        self.movbe = movbe;
+        self.flush();
     }
 
     /// Drop every block and start again (the arena back to RW, the stubs re-emitted).
@@ -256,11 +272,12 @@ impl Jit {
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1 };
+        let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
         let code = jit_emit::compile(ops, pc, gen, page, &mut env);
         if self.nlinks == self.links.len() { self.flush(); return; }
         let Some(p) = self.arena.put(&code) else { self.stats.arena_full += 1; self.flush(); return };
         self.stats.compiled += 1;
+        self.stats.movbe = self.movbe;
         if self.blocks.contains_key(&pc) { self.stats.recompiled += 1; }
         self.stats.code_bytes = self.arena.used() as u64;
         if self.pending.is_empty() { self.pending_at = self.clock + at; }

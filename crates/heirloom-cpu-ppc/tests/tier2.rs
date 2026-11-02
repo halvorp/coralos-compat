@@ -208,7 +208,7 @@ fn random_program(seed: u64) -> Vec<u32> {
         let (t, a, b) = (r.reg(), r.reg(), r.reg());
         let imm = r.next() & 0xFFFF;
         let off = r.pick(0x3F0) & !3;
-        let w = match r.pick(44) {
+        let w = match r.pick(50) {
             0 => d(14, t, a, imm), 1 => d(15, t, a, imm), 2 => d(24, a, t, imm), 3 => d(25, a, t, imm), 4 => d(26, a, t, imm),
             5 => d(28, a, t, imm), 6 => d(29, a, t, imm), 7 => d(7, t, a, imm), 8 => d(12, t, a, imm), 9 => d(13, t, a, imm),
             10 => d(8, t, a, imm),
@@ -241,6 +241,12 @@ fn random_program(seed: u64) -> Vec<u32> {
             41 => x(t, 0, 23, [23, 87][r.pick(2) as usize], false), // lwzx / lbzx with RA = 0 (low memory)
             42 => d([48, 52][r.pick(2) as usize], fr(&mut r), 20, 0xC00 + (off & 0x1F8)), // lfs / stfs over the special singles
             43 => d(14, 23, 0, r.pick(0x80) * 4 + (r.pick(4) == 0) as u32), // r23: sometimes unaligned
+            44 => 20 << 26 | t << 21 | a << 16 | r.pick(32) << 11 | r.pick(32) << 6 | r.pick(32) << 1 | r.pick(2), // rlwimi(.)
+            45 => x(t, a, b, [10, 138, 202, 8, 136, 200, 26][r.pick(7) as usize], r.pick(2) == 1), // carry chain, cntlzw (+Rc)
+            46 => x(t, a, b, [75, 11, 491, 459][r.pick(4) as usize], r.pick(2) == 1), // mulhw(u), divw(u) (+Rc)
+            47 => 63 << 26 | fr(&mut r) << 21 | fr(&mut r) << 11 | 12 << 1, // frsp
+            48 => x(fr(&mut r), 20, 23, [535, 663][r.pick(2) as usize], false), // lfsx / stfsx (r23 into BUF)
+            49 => d(14, [b, 0][r.pick(2) as usize], 0, [0, 0xFFFF, 1][r.pick(3) as usize]), // zero / -1 / 1 divisors and operands
             _ => 0x6000_0000,
         };
         p.push(w);
@@ -302,19 +308,26 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
             assert!(got == want, "seed {seed} slice {slice}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} tb {}/{} last {:?}/{:?} ram equal {} {:?}",
                 got.gpr, want.gpr, got.cr, want.cr, got.xer, want.xer, got.tb, want.tb, got.last, want.last, got.ram == want.ram, e.jit_stats());
         }
+        // the BSWAP forms too (a CPU without MOVBE): the same state
+        let (mut c, mut m) = load(&prog, fuzz_setup(seed));
+        let mut e = exec(Tier::Jit, 0);
+        e.set_jit_movbe(false);
+        let got = finish(&mut e, &mut c, &mut m, 37);
+        assert!(got == want && !e.jit_stats().movbe, "seed {seed}: without MOVBE");
         let (got, e) = run_on(Tier::JitLockstep, 0, &prog, 50, fuzz_setup(seed));
         assert!(e.divergence().is_none(), "seed {seed}: {:?}", e.divergence());
         assert!(got == want, "seed {seed}: lockstep end state");
         compared += e.lockstep_stats().insns;
     }
-    assert!(compared > 100_000, "the fuzz really compared JIT code: {compared}");
+    // a floor that proves JIT code ran (~100k with this generator: programs that trap early compare less)
+    assert!(compared > 50_000, "the fuzz really compared JIT code: {compared}");
 }
 
 /// Each planted JIT mutant makes the gates RED: the fuzz (end state or lockstep) for the arithmetic ones, the self-modifying
 /// programs for the store-watch and exit-count ones. A gate that stays green with a mutant proves nothing.
 #[test]
 fn negative_control_every_planted_jit_mutant_goes_red() {
-    for mutant in 1..=6u8 {
+    for mutant in 1..=7u8 {
         let mut red = false;
         for seed in 0..400u64 {
             let prog = random_program(seed);

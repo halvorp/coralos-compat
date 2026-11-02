@@ -99,6 +99,9 @@ impl Asm {
     pub(crate) fn movsx8(&mut self, r: u8, mm: M) { self.op_m(None, false, &[0x0F, 0xBE], r, mm, false) }
     pub(crate) fn movsx16(&mut self, r: u8, mm: M) { self.op_m(None, false, &[0x0F, 0xBF], r, mm, false) }
     /// movzx r32, r8.
+    /// movzx / movsx r32, r16.
+    pub(crate) fn movzx16_rr(&mut self, d: u8, s: u8) { self.op_r(false, &[0x0F, 0xB7], d, s, false) }
+    pub(crate) fn movsx16_rr(&mut self, d: u8, s: u8) { self.op_r(false, &[0x0F, 0xBF], d, s, false) }
     pub(crate) fn movzx8_rr(&mut self, d: u8, s: u8) { self.op_r(false, &[0x0F, 0xB6], d, s, s >= 4) }
     pub(crate) fn mov_rr(&mut self, d: u8, s: u8) { self.op_r(false, &[0x89], s, d, false) }
     pub(crate) fn mov_rr64(&mut self, d: u8, s: u8) { self.op_r(true, &[0x89], s, d, false) }
@@ -187,6 +190,27 @@ impl Asm {
     pub(crate) fn sh_ri64(&mut self, op: Sh, d: u8, n: u8) {
         self.op_r(true, &[0xC1], op as u8, d, false);
         self.u8(n);
+    }
+
+    /// adc r32, [m] / adc r32, imm32 (CF in).
+    pub(crate) fn adc_rm(&mut self, d: u8, mm: M) { self.op_m(None, false, &[0x13], d, mm, false) }
+    pub(crate) fn adc_ri(&mut self, d: u8, v: u32) {
+        self.op_r(false, &[0x81], 2, d, false);
+        self.u32(v);
+    }
+    pub(crate) fn stc(&mut self) { self.u8(0xF9) }
+    /// bsr r32, [m] (ZF = the source was zero, the destination then undefined).
+    pub(crate) fn bsr_rm(&mut self, d: u8, mm: M) { self.op_m(None, false, &[0x0F, 0xBD], d, mm, false) }
+    /// The one-operand group-3 forms on [m]: 4 mul, 5 imul (edx:eax = eax * [m]), 6 div, 7 idiv (edx:eax / [m]).
+    pub(crate) fn grp3_m(&mut self, ext: u8, mm: M) { self.op_m(None, false, &[0xF7], ext, mm, false) }
+    /// cdq (sign-extend eax into edx).
+    pub(crate) fn cdq(&mut self) { self.u8(0x99) }
+    /// MOVBE (CPUID.1:ECX[22]; callers check `cpu_has_movbe`): r <- byte-swapped [m] / [m] <- byte-swapped r, 16/32/64 bits.
+    pub(crate) fn movbe_ld(&mut self, bits: u8, r: u8, mm: M) {
+        self.op_m(if bits == 16 { Some(0x66) } else { None }, bits == 64, &[0x0F, 0x38, 0xF0], r, mm, false)
+    }
+    pub(crate) fn movbe_st(&mut self, bits: u8, mm: M, r: u8) {
+        self.op_m(if bits == 16 { Some(0x66) } else { None }, bits == 64, &[0x0F, 0x38, 0xF1], r, mm, false)
     }
 
     // ---- SSE2 (x86-64 baseline): scalar double / single, xmm0..xmm7 only ----
@@ -296,10 +320,25 @@ mod tests {
         assert_eq!(enc(|a| a.movq_rx(RDX, 0)), [0x66, 0x48, 0x0F, 0x7E, 0xC2]); // movq rdx,xmm0
         assert_eq!(enc(|a| a.movd_xr(0, RDX)), [0x66, 0x0F, 0x6E, 0xC2]); // movd xmm0,edx
         assert_eq!(enc(|a| a.sh_ri64(Sh::Shr, RAX, 53)), [0x48, 0xC1, 0xE8, 53]); // shr rax,53
+        assert_eq!(enc(|a| a.adc_rm(RDX, m(RBX, 8))), [0x13, 0x53, 0x08]); // adc edx,[rbx+8]
+        assert_eq!(enc(|a| a.adc_ri(RDX, 0)), [0x81, 0xD2, 0, 0, 0, 0]); // adc edx,0
+        assert_eq!(enc(|a| a.bsr_rm(RDX, m(RBX, 8))), [0x0F, 0xBD, 0x53, 0x08]); // bsr edx,[rbx+8]
+        assert_eq!(enc(|a| a.grp3_m(4, m(RBX, 8))), [0xF7, 0x63, 0x08]); // mul dword [rbx+8]
+        assert_eq!(enc(|a| a.grp3_m(7, m(RBX, 8))), [0xF7, 0x7B, 0x08]); // idiv dword [rbx+8]
+        assert_eq!(enc(|a| a.movbe_ld(32, RDX, mx(R12, RAX, 1))), [0x41, 0x0F, 0x38, 0xF0, 0x14, 0x04]); // movbe edx,[r12+rax]
+        assert_eq!(enc(|a| a.movbe_ld(16, RDX, mx(R12, RAX, 1))), [0x66, 0x41, 0x0F, 0x38, 0xF0, 0x14, 0x04]); // movbe dx,[r12+rax]
+        assert_eq!(enc(|a| a.movbe_st(64, mx(R12, RAX, 1), RDX)), [0x49, 0x0F, 0x38, 0xF1, 0x14, 0x04]); // movbe [r12+rax],rdx
         let mut a = Asm::default();
         let f = a.jcc(Cc::Ne);
         a.ret();
         a.here(f);
         assert_eq!(a.b, [0x0F, 0x85, 1, 0, 0, 0, 0xC3]);
     }
+}
+
+/// CPUID.1:ECX[22] MOVBE (the Z8350 has it; x86-64-v2 does not promise it: runtime dispatch).
+pub(crate) fn cpu_has_movbe() -> bool {
+    // CPUID leaf 1 exists on every x86-64 processor (a safe intrinsic: no side effects).
+    let r = core::arch::x86_64::__cpuid(1);
+    r.ecx & (1 << 22) != 0
 }

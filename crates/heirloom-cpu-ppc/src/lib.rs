@@ -65,7 +65,7 @@ pub use jit::JitStats;
 mod jit_stats_none {
     /// Tier 2's counters (no JIT off x86-64: always `refused` when asked for).
     #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct JitStats { pub compiled: u64, pub recompiled: u64, pub arena_full: u64, pub entries: u64, pub insns: u64, pub bails: u64, pub flushes: u64, pub code_bytes: u64, pub refused: bool }
+    pub struct JitStats { pub compiled: u64, pub recompiled: u64, pub arena_full: u64, pub entries: u64, pub insns: u64, pub bails: u64, pub flushes: u64, pub code_bytes: u64, pub movbe: bool, pub refused: bool }
 }
 #[cfg(not(target_arch = "x86_64"))]
 pub use jit_stats_none::JitStats;

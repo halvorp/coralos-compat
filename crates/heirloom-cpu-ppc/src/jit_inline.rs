@@ -10,10 +10,15 @@
 //!   `(r as f32) as f64` - exactly tier 0's arithmetic - and only when the result is finite (a NaN result means a NaN or an
 //!   invalid operand, an infinite one means OX or an infinite operand: all slow). FPRF from the result's class.
 //! - sraw (and Rc), extsh. / extsb., and the X-form loads/stores tier 1 leaves Generic (RA = 0, halfword, byte-reversed).
+//! - rlwimi(.), cntlzw(.), the carry chain addc/adde/addze/subfc/subfe/subfze(.) with OE=0 (XER[CA] in through x86 CF),
+//!   mulhw(u)(.), divw(u)(.) with OE=0 (a zero divisor or 0x80000000 / -1 goes slow: tier 0's documented results),
+//!   frsp (a NaN or infinite result goes slow), lfsx / stfsx.
 use crate::cpu::Cpu;
 use crate::fields::W;
 use crate::jit_asm::*;
-use crate::jit_emit::{cpu, fpr, g, Ea, E, CR, MUT_FP_SINGLE, MUT_SRAW_BIG};
+use crate::cpu::XER_CA;
+use crate::fields::mask;
+use crate::jit_emit::{cpu, fpr, g, Ea, E, CR, XER, MUT_CA_IN, MUT_FP_SINGLE, MUT_SRAW_BIG};
 use crate::t1op::{Op, K};
 use core::mem::offset_of;
 
@@ -28,6 +33,7 @@ impl E<'_, '_> {
             K::Lfs => { self.lfs(i, Ea { ra: op.a, rb: None, imm: op.imm, update: false }, op.d as usize); true }
             K::Stfs => { self.stfs(i, Ea { ra: op.a, rb: None, imm: op.imm, update: false }, op.d as usize); true }
             K::Fp59 | K::Fp63 => self.fp(i, w, op.k == K::Fp59),
+            K::Generic if w.op() == 20 => { self.rlwimi(w); true }
             K::Generic => self.x31(i, w),
             _ => false,
         }
@@ -35,9 +41,8 @@ impl E<'_, '_> {
 
     fn lfs(&mut self, i: usize, e: Ea, d: usize) {
         self.ea(i, e, 4);
+        self.ld_be(4, false);
         let a = &mut self.a;
-        a.ld32(RDX, mx(R12, RAX, 1));
-        a.bswap32(RDX);
         a.mov_rr(RCX, RDX);
         a.alu_ri(Alu::And, RCX, 0x7FFF_FFFF);
         a.alu_ri(Alu::Cmp, RCX, 0x7F80_0000);
@@ -71,8 +76,7 @@ impl E<'_, '_> {
         a.sh_ri64(Sh::Shr, RDX, 29);
         a.alu_ri(Alu::And, RDX, 0x3FFF_FFFF);
         a.alu_rr(Alu::Or, RDX, RCX);
-        a.bswap32(RDX);
-        a.st32(mx(R12, RAX, 1), RDX);
+        self.st_be(4);
     }
 
     fn fp(&mut self, i: usize, w: W, single: bool) -> bool {
@@ -92,6 +96,7 @@ impl E<'_, '_> {
                     a.st64(f(d), RDX);
                     return true;
                 }
+                12 if !w.rc() => { self.frsp(i, d, b); return true; }
                 // every other opcode-63 form with an xo10 of its own (frsp, fctiw, mffs, mtfsf, ...): tier 1's handler
                 12 | 14 | 15 | 40 | 72 | 136 | 264 | 583 | 711 | 134 | 38 | 70 | 64 => return false,
                 _ => {}
@@ -195,44 +200,129 @@ impl E<'_, '_> {
         let at = mx(R12, RAX, 1);
         match w.xo() {
             792 => self.sraw(t, a_, b, w.rc()),
+            10 | 138 | 202 | 8 | 136 | 200 => self.carry(w.xo(), t, a_, b, w.rc()),
+            26 => {
+                let a = &mut self.a;
+                a.mov_ri(RAX, 63);
+                a.bsr_rm(RDX, g(t));
+                a.cmov(Cc::E, RDX, RAX);
+                a.alu_ri(Alu::Xor, RDX, 31);
+                a.st32(g(a_), RDX);
+                if w.rc() { self.cr0_of_edx(); }
+            }
+            75 | 11 => {
+                self.a.ld32(RAX, g(a_));
+                self.a.grp3_m(if w.xo() == 75 { 5 } else { 4 }, g(b));
+                self.a.st32(g(t), RDX);
+                if w.rc() { self.cr0_of_edx(); }
+            }
+            491 | 459 => {
+                let a = &mut self.a;
+                a.alu_mi(Alu::Cmp, g(b), 0);
+                self.slow_if(Cc::E, i);
+                if w.xo() == 491 {
+                    let a = &mut self.a;
+                    a.alu_mi(Alu::Cmp, g(b), u32::MAX);
+                    let ok = a.jcc(Cc::Ne);
+                    a.alu_mi(Alu::Cmp, g(a_), 0x8000_0000);
+                    self.slow_if(Cc::E, i);
+                    self.a.here(ok);
+                }
+                let a = &mut self.a;
+                a.ld32(RAX, g(a_));
+                if w.xo() == 491 { a.cdq(); a.grp3_m(7, g(b)); } else { a.alu_rr(Alu::Xor, RDX, RDX); a.grp3_m(6, g(b)); }
+                a.mov_rr(RDX, RAX);
+                a.st32(g(t), RDX);
+                if w.rc() { self.cr0_of_edx(); }
+            }
             922 | 954 if w.rc() => {
                 if w.xo() == 922 { self.a.movsx16(RDX, g(t)) } else { self.a.movsx8(RDX, g(t)) }
                 self.a.st32(g(a_), RDX);
                 self.cr0_of_edx();
             }
             _ if w.rc() => return false,
+            535 => self.lfs(i, Ea { ra: a_, rb: Some(b), imm: 0, update: false }, t as usize),
+            663 => self.stfs(i, Ea { ra: a_, rb: Some(b), imm: 0, update: false }, t as usize),
             // loads: lwzx lbzx (RA = 0 only reach here), lhzx lhax, lwbrx lhbrx
             23 | 87 | 279 | 343 | 534 | 790 => {
                 let n = match w.xo() { 23 | 534 => 4, 87 => 1, _ => 2 };
                 x(self, n);
-                let a = &mut self.a;
                 match w.xo() {
-                    23 => { a.ld32(RDX, at); a.bswap32(RDX); }
-                    534 => a.ld32(RDX, at),
-                    87 => a.movzx8(RDX, at),
-                    790 => a.movzx16(RDX, at),
-                    _ => { a.movzx16(RDX, at); a.bswap32(RDX); a.sh_ri(if w.xo() == 343 { Sh::Sar } else { Sh::Shr }, RDX, 16); }
+                    534 => self.a.ld32(RDX, at),
+                    790 => self.a.movzx16(RDX, at),
+                    _ => self.ld_be(n, w.xo() == 343),
                 }
-                a.st32(g(t), RDX);
+                self.a.st32(g(t), RDX);
             }
             // stores: stwx stbx (RA = 0), sthx, stwbrx sthbrx
             151 | 215 | 407 | 662 | 918 => {
                 let n = match w.xo() { 151 | 662 => 4, 215 => 1, _ => 2 };
                 let ea = x(self, n);
                 self.store_guard(i, ea, n);
-                let a = &mut self.a;
-                a.ld32(RDX, g(t));
+                self.a.ld32(RDX, g(t));
                 match w.xo() {
-                    151 => { a.bswap32(RDX); a.st32(at, RDX); }
-                    662 => a.st32(at, RDX),
-                    215 => a.st8(at, RDX),
-                    918 => a.st16(at, RDX),
-                    _ => { a.bswap32(RDX); a.sh_ri(Sh::Shr, RDX, 16); a.st16(at, RDX); }
+                    662 => self.a.st32(at, RDX),
+                    918 => self.a.st16(at, RDX),
+                    _ => self.st_be(n),
                 }
             }
             _ => return false,
         }
         true
+    }
+
+    /// rlwimi: rA = (rotl(rS, sh) & m) | (rA & !m).
+    fn rlwimi(&mut self, w: W) {
+        let (s, d, m) = (w.rt() as u8, w.ra() as u8, mask(w.mb(), w.me()));
+        let a = &mut self.a;
+        a.ld32(RDX, g(s));
+        if w.sh() != 0 { a.sh_ri(Sh::Rol, RDX, w.sh() as u8); }
+        a.alu_ri(Alu::And, RDX, m);
+        a.ld32(RCX, g(d));
+        a.alu_ri(Alu::And, RCX, !m);
+        a.alu_rr(Alu::Or, RDX, RCX);
+        a.st32(g(d), RDX);
+        if w.rc() { self.cr0_of_edx(); }
+    }
+
+    /// The carry chain (OE=0): rD = rA + rB (addc), + CA (adde), rA + CA (addze); !rA + rB + 1 (subfc), + CA (subfe),
+    /// !rA + CA (subfze); XER[CA] = the carry out.
+    fn carry(&mut self, xo: u32, d: u8, s: u8, b: u8, rc: bool) {
+        let ca_in = |e: &mut Self| {
+            if e.env.mutant == MUT_CA_IN { e.a.alu_rr(Alu::Xor, RCX, RCX) } else { e.a.bt_mi(cpu(XER), XER_CA.trailing_zeros() as u8) }
+        };
+        self.a.ld32(RDX, g(s));
+        if matches!(xo, 8 | 136 | 200) { self.a.not(RDX); }
+        match xo {
+            10 => self.a.alu_rm(Alu::Add, RDX, g(b)),
+            8 => { self.a.stc(); self.a.adc_rm(RDX, g(b)); }
+            138 | 136 => { ca_in(self); self.a.adc_rm(RDX, g(b)); }
+            _ => { ca_in(self); self.a.adc_ri(RDX, 0); }
+        }
+        self.a.setcc(Cc::B, R8);
+        self.a.st32(g(d), RDX);
+        self.ca_from_r8();
+        if rc { self.cr0_of_edx(); }
+    }
+
+    /// frsp, Rc=0, RN = 0: frD = (frB as f32) as f64 when that is finite (a NaN, an infinity or an overflow goes slow).
+    fn frsp(&mut self, i: usize, d: usize, b: usize) {
+        let a = &mut self.a;
+        a.ld32(RCX, cpu(FPSCR));
+        a.test_ri(RCX, 3);
+        self.slow_if(Cc::Ne, i);
+        let a = &mut self.a;
+        a.sse_m(0xF2, 0x10, 0, f(b));
+        a.sse_r(0xF2, 0x5A, 0, 0);
+        a.sse_r(0xF3, 0x5A, 0, 0);
+        a.movq_rx(RAX, 0);
+        a.mov_rr64(RCX, RAX);
+        a.sh_ri64(Sh::Shr, RCX, 52);
+        a.alu_ri(Alu::And, RCX, 0x7FF);
+        a.alu_ri(Alu::Cmp, RCX, 0x7FF);
+        self.slow_if(Cc::E, i);
+        self.a.st64(f(d), RAX);
+        self.fprf(true);
     }
 
     /// sraw: n = rB & 0x3F; n > 31 fills with the sign (CA = negative), else srawi's rule with a variable count.
