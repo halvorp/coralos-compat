@@ -72,11 +72,11 @@ impl Arena {
 
 /// Linux x86-64 executable memory for the host (tests, bench, the WC3 harness): an anonymous private mapping, RW until
 /// published, then RX.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "host-codemem", target_os = "linux", target_arch = "x86_64"))]
 #[derive(Default)]
 pub struct HostCodeMem { map: Option<(usize, usize)> }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "host-codemem", target_os = "linux", target_arch = "x86_64"))]
 impl HostCodeMem {
     pub fn new() -> HostCodeMem { HostCodeMem { map: None } }
     fn sys(nr: usize, a: usize, b: usize, c: usize, d: usize, e: isize, f: usize) -> isize {
@@ -91,7 +91,7 @@ impl HostCodeMem {
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "host-codemem", target_os = "linux", target_arch = "x86_64"))]
 impl CodeMem for HostCodeMem {
     fn reserve(&mut self, len: usize) -> Option<*mut u8> {
         const PROT_RW: usize = 3;
@@ -105,7 +105,7 @@ impl CodeMem for HostCodeMem {
     fn reset(&mut self, ptr: *mut u8, len: usize) -> bool { Self::sys(10, ptr as usize, len, 3, 0, 0, 0) == 0 }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "host-codemem", target_os = "linux", target_arch = "x86_64"))]
 impl Drop for HostCodeMem {
     fn drop(&mut self) {
         if let Some((p, l)) = self.map.take() { Self::sys(11, p, l, 0, 0, 0, 0); }

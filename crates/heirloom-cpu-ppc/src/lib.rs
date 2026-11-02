@@ -69,7 +69,7 @@ mod jit_stats_none {
 pub use jit_stats_none::JitStats;
 #[cfg(target_arch = "x86_64")]
 pub use jit_mem::CodeMem;
-#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[cfg(all(feature = "host-codemem", target_arch = "x86_64", target_os = "linux"))]
 pub use jit_mem::HostCodeMem;
 /// cpu-ppc.library's flat table (heirloom-cpu-abi::ppc): what its coral_lib_open returns.
 pub mod table;

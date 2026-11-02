@@ -1,7 +1,7 @@
 //! Tier 2 (the x86-64 JIT) against tier 0 (the reference): the same state at every exit, whatever the slicing, the traps,
 //! the natives and the code modifications; JitLockstep finds no divergence; a random-program fuzz over every inline form
 //! agrees; and each planted JIT mutant goes RED. Host only (the JIT needs executable memory: HostCodeMem).
-#![cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#![cfg(all(target_arch = "x86_64", target_os = "linux"))] // HostCodeMem: the crate's own dev-dependency enables host-codemem
 mod common;
 use common::{programs, CODE, EXIT, STACK};
 use heirloom_cpu_ppc::{Cpu, Exec, Host, HostCodeMem, RunStats, Tier};

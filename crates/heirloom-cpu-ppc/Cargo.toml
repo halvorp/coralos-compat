@@ -11,3 +11,12 @@ heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }
 heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
 # MIT/Apache-2.0: correctly rounded fma and sqrt for no_std (core has neither on stable).
 libm = "0.2"
+
+[features]
+# HostCodeMem: Linux executable memory (raw mmap/mprotect) for tier 2 on the HOST only (tests, ppc-bench, the WC3 harness).
+# Never enabled by cpu-ppc.library: CoralOS code must not carry Linux syscalls; its provider comes from macppc.engine.
+host-codemem = []
+
+[dev-dependencies]
+# the integration tests (tests/tier2.rs) run tier 2 in host executable memory
+heirloom-cpu-ppc = { path = ".", features = ["host-codemem"] }

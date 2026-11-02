@@ -11,7 +11,7 @@ description = "Host-only benchmark of the heirloom-cpu-ppc execution tiers: synt
 [workspace]
 
 [dependencies]
-heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc" }
+heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc", features = ["host-codemem"] }
 heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
 heirloom-fmt-pef = { path = "../heirloom-fmt-pef" }
 heirloom-ui-abi = { path = "../heirloom-ui-abi" }
