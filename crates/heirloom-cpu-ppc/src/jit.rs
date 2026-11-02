@@ -12,6 +12,7 @@ use crate::cpu::{Cpu, RunStats, Trap};
 use crate::jit_asm::*;
 use crate::jit_emit::{self, Env};
 use crate::jit_mem::{Arena, CodeMem};
+use crate::jit_stats::JitStats;
 use crate::t1::{self, Divergence, LockstepStats, Next};
 use crate::t1cache::Cache;
 use crate::t1op::K;
@@ -76,30 +77,6 @@ pub(crate) struct Ctx {
     pub(crate) census: Option<BTreeMap<u32, u64>>,
 }
 
-/// Tier 2's counters.
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct JitStats {
-    /// Blocks compiled.
-    pub compiled: u64,
-    /// Of those, blocks compiled again because their code page was written after they were compiled.
-    pub recompiled: u64,
-    /// Whole-cache drops because the arena was full.
-    pub arena_full: u64,
-    /// Entries from the dispatcher into JIT code (each may chain through many blocks).
-    pub entries: u64,
-    /// Instructions retired in JIT code.
-    pub insns: u64,
-    /// Entries or chained jumps that bailed (stale page or budget) back to the dispatcher.
-    pub bails: u64,
-    /// Whole-cache drops (arena or link table full, natives changed, RAM moved).
-    pub flushes: u64,
-    /// Bytes of code in the arena now.
-    pub code_bytes: u64,
-    /// Big-endian loads and stores use MOVBE (the CPU has it and it was not turned off).
-    pub movbe: bool,
-    /// Tier::Jit was asked for but no executable memory was provided (or it was refused): tier 1 ran instead.
-    pub refused: bool,
-}
 
 pub(crate) struct Jit {
     arena: Arena,
@@ -134,6 +111,8 @@ pub(crate) struct Jit {
     pub(crate) movbe: bool,
     /// The CPU has MOVBE (CPUID once, at creation).
     hw_movbe: bool,
+    /// Opt-in clock timing translation (JitStats.translate_time); None = untimed, no clock reads.
+    pub(crate) timer: Option<fn() -> u64>,
 }
 
 impl Jit {
@@ -144,7 +123,7 @@ impl Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, by_target: BTreeMap::new(), blocks: BTreeMap::new(), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: BTreeSet::new(), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
-            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(),
+            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None,
         };
         if !j.stubs() { return None; }
         Some(j)
@@ -261,6 +240,12 @@ impl Jit {
     }
 
     fn compile<H: Host>(&mut self, ops: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, at: u64) {
+        let t0 = self.timer.map(|c| c());
+        self.compile_untimed::<H>(ops, pc, gen, page, at);
+        if let (Some(c), Some(t0)) = (self.timer, t0) { self.stats.translate_time += c().wrapping_sub(t0); }
+    }
+
+    fn compile_untimed<H: Host>(&mut self, ops: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, at: u64) {
         let (blocks, links, by_target) = (&self.blocks, &mut self.links, &mut self.by_target);
         let nlinks = &mut self.nlinks;
         let exit_stub = self.exit_stub;
@@ -297,6 +282,12 @@ impl Jit {
     /// Publish what was compiled during this run and make it reachable (dispatch table + every link slot naming it).
     fn publish(&mut self) {
         if !self.arena.pending() { return; }
+        let t0 = self.timer.map(|c| c());
+        self.publish_untimed();
+        if let (Some(c), Some(t0)) = (self.timer, t0) { self.stats.translate_time += c().wrapping_sub(t0); }
+    }
+
+    fn publish_untimed(&mut self) {
         if !self.arena.publish() { self.flush(); return; }
         for s in core::mem::take(&mut self.pending) {
             self.table[(s.pc >> 2) as usize & ((1 << TABLE_BITS) - 1)] = s;

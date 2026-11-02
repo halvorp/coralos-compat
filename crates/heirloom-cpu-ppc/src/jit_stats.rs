@@ -1,0 +1,29 @@
+//! Tier 2's counters: one definition for every target (off x86-64 there is no JIT and `refused` says so when asked).
+
+/// Tier 2's counters.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitStats {
+    /// Blocks compiled.
+    pub compiled: u64,
+    /// Of those, blocks compiled again because their code page was written after they were compiled.
+    pub recompiled: u64,
+    /// Whole-cache drops because the arena was full.
+    pub arena_full: u64,
+    /// Entries from the dispatcher into JIT code (each may chain through many blocks).
+    pub entries: u64,
+    /// Instructions retired in JIT code.
+    pub insns: u64,
+    /// Entries or chained jumps that bailed (stale page or budget) back to the dispatcher.
+    pub bails: u64,
+    /// Whole-cache drops (arena or link table full, natives changed, RAM moved).
+    pub flushes: u64,
+    /// Bytes of code in the arena now.
+    pub code_bytes: u64,
+    /// Big-endian loads and stores use MOVBE (the CPU has it and it was not turned off).
+    pub movbe: bool,
+    /// Time spent translating (compiling blocks, publishing pages, flushing), in the units of the clock given to
+    /// `Exec::set_jit_clock`; 0 without one.
+    pub translate_time: u64,
+    /// Tier::Jit was asked for but no executable memory was provided (or it was refused): tier 1 ran instead.
+    pub refused: bool,
+}

@@ -31,6 +31,7 @@ pub struct Exec {
     jit_refused: bool,
     jit_publish_after: Option<u64>,
     jit_movbe: Option<bool>,
+    jit_clock: Option<fn() -> u64>,
 }
 
 /// Per native address: (calls, time inside), timed by a host-supplied clock.
@@ -49,7 +50,7 @@ impl Exec {
             code_mem: None,
             #[cfg(target_arch = "x86_64")]
             jit: None,
-            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None,
+            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None,
         }
     }
     /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
@@ -81,6 +82,13 @@ impl Exec {
         let c = j.census();
         if enable && c.is_none() { *c = Some(Default::default()); }
         c.as_ref()
+    }
+    /// Time tier 2's translation (compile, publish, flush) with `clock` (any monotonic unit) into
+    /// `JitStats::translate_time`: two clock reads per compiled block and per published batch, nothing per instruction.
+    pub fn set_jit_clock(&mut self, clock: fn() -> u64) {
+        self.jit_clock = Some(clock);
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_mut() { j.timer = Some(clock); }
     }
     /// Tests: false forces the BSWAP forms even on a CPU with MOVBE (both encodings must agree with tier 0). Takes effect
     /// for a JIT made after the call.
@@ -156,6 +164,7 @@ impl Exec {
                 if let Some(mem) = self.code_mem.take() {
                     self.jit = crate::jit::Jit::new(mem, self.jit_mutant).map(Box::new);
                     if let (Some(j), Some(n)) = (self.jit.as_mut(), self.jit_publish_after) { j.publish_after = n; }
+                    if let Some(j) = self.jit.as_mut() { j.timer = self.jit_clock; }
                 }
             }
             // lockstep journaling, a planted mutant or MOVBE changed since the code was made: it is dropped and remade

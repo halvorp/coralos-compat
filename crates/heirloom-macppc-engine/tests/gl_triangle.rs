@@ -481,6 +481,12 @@ fn wc3_host_run_with_a_gl_worker() {
         m.exec().set_code_mem(Box::new(heirloom_cpu_ppc::HostCodeMem::new()));
     }
     let jit_census = std::env::var("WC3_JIT_CENSUS").is_ok();
+    // `WC3_JIT_FRAMES=<file>`: per guest frame (swap to swap, seen at slice ends) host wall ns, tier 2's translation ns and the
+    // blocks it compiled - the data for a persistent translation cache's case (do first-translations land in p95/p99 frames?)
+    fn host_ns() -> u64 { static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new(); T0.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64 }
+    let mut jit_frames = std::env::var("WC3_JIT_FRAMES").ok().map(|p| std::io::BufWriter::new(std::fs::File::create(p).unwrap()));
+    if jit_frames.is_some() { m.exec().set_jit_clock(host_ns); }
+    let (mut jf_swaps, mut jf_t, mut jf_tr, mut jf_n) = (0usize, host_ns(), 0u64, 0u64);
     // `WC3_PERF=<frames>`: the engine's stage clock (heirloom_macppc_engine::perf) on host nanoseconds, a line every <frames> swaps
     if let Ok(every) = std::env::var("WC3_PERF") {
         fn ns() -> u64 { static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new(); T0.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64 }
@@ -519,6 +525,15 @@ fn wc3_host_run_with_a_gl_worker() {
                 let mut v: Vec<_> = sites.iter().collect();
                 v.sort_by(|a, b| b.1.cmp(a.1));
                 for (s, n) in v.iter().take(6) { eprintln!("  POLL-SITE lr={:#x} {:#x} {:#x} insns={n}", s[0], s[1], s[2]); }
+            }
+        }
+        if let Some(w) = jit_frames.as_mut() {
+            let swaps = seen.lock().unwrap().swaps;
+            if swaps != jf_swaps {
+                use std::io::Write;
+                let (now, js) = (host_ns(), m.exec().jit_stats());
+                writeln!(w, "{swaps},{},{},{},{}", swaps - jf_swaps, now - jf_t, js.translate_time - jf_tr, js.compiled - jf_n).unwrap();
+                (jf_swaps, jf_t, jf_tr, jf_n) = (swaps, now, js.translate_time, js.compiled);
             }
         }
         // a blocked guest waits for its deadline: the clock jumps there (the host's timer); else the slice's own time passes
