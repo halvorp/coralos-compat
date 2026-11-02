@@ -238,3 +238,97 @@ fn a_session_not_wired_to_the_engines_storage_reads_no_stream() {
     assert_eq!(vol.read_at(f, 0, &mut [0u8; 4]), None);
     assert!(sink.reads.is_empty());
 }
+
+/// What the engine's GL worker saw through the table's `attach_gl` (OS ABI v3): every request batch, and the reply it lends back.
+#[derive(Default)]
+struct GlSink {
+    requests: Vec<Vec<u8>>,
+    reply: Vec<u8>,
+}
+
+/// The engine's GL transport in a test: records each request batch and answers nothing (no request here needs an answer).
+extern "C" fn gl_transact(ctx: *mut c_void, req: *const u8, len: usize, reply_len: *mut usize) -> *const u8 {
+    // SAFETY: ctx is the test's boxed GlSink; the library lends `len` request bytes and one writable usize.
+    let sink = unsafe { &mut *(ctx as *mut GlSink) };
+    sink.requests.push(unsafe { std::slice::from_raw_parts(req, len) }.to_vec());
+    unsafe { *reply_len = sink.reply.len() };
+    sink.reply.as_ptr()
+}
+
+/// A PowerPC program that makes an AGL context and destroys it (the GL a game makes before its first frame).
+fn gl_app() -> Vec<u8> {
+    use heirloom_fmt_pef::loader::SymbolClass;
+    use heirloom_macppc_engine::asm::Asm;
+    let names = ["aglChoosePixelFormat", "aglCreateContext", "aglSetCurrentContext", "aglDestroyContext"];
+    let toc = |n: &str| (fixture::TOC_FIRST as i32) + 4 * names.iter().position(|x| *x == n).unwrap() as i32;
+    let mut a = Asm::new();
+    a.mflr(0).stw(0, 8, 1).stwu(1, -160, 1).stw(31, 156, 1).stw(30, 152, 1);
+    a.li(3, 0).li(4, 0).li(5, 0).call_toc(toc("aglChoosePixelFormat")).mr(31, 3);
+    a.mr(3, 31).li(4, 0).call_toc(toc("aglCreateContext")).mr(30, 3);
+    a.mr(3, 30).call_toc(toc("aglSetCurrentContext"));
+    a.mr(3, 30).call_toc(toc("aglDestroyContext"));
+    a.li(3, 0).lwz(30, 152, 1).lwz(31, 156, 1).addi(1, 1, 160).lwz(0, 8, 1).mtlr(0).blr();
+    let syms: Vec<(&str, SymbolClass, bool)> = names.iter().map(|n| (*n, SymbolClass::TVector, false)).collect();
+    let libs: [fixture::Lib; 1] = [("OpenGLLibrary", false, &syms)];
+    fixture::macbinary_app(&fixture::app_with(&libs, &a.finish(), &[]))
+}
+
+/// Run `gl_app` through the table, with the engine's GL worker attached or not: the GL requests the worker saw.
+fn gl_through_the_table(attach: bool) -> Vec<Vec<u8>> {
+    bind();
+    let mut remote = Remote::new(FAMILY_MACPPC, "").unwrap();
+    let mut gl = Box::new(GlSink::default());
+    if attach {
+        let host = GlHost { ctx: &mut *gl as *mut GlSink as *mut c_void, transact: gl_transact };
+        assert_eq!((os_mac_vtable().attach_gl)(remote.inst, &host), GL_ATTACH_OK);
+    }
+    assert_eq!(remote.send(&program(&gl_app(), "GL Context")), APPLY_OK);
+    assert_eq!(remote.send(&[control(Control::Advance { virtual_us: 0 }), control(Control::Step { budget: BUDGET })]), APPLY_OK);
+    assert!(matches!(remote.reports.last(), Some(Report::Stepped { .. })), "{:?}", remote.reports);
+    gl.requests
+}
+
+#[test]
+fn the_engines_gl_worker_attached_through_the_table_receives_the_guests_gl() {
+    use heirloom_gl_abi::command::peek_len;
+    use heirloom_gl_abi::{Command, Frame as GlFrame, ENTRIES};
+    let sent = gl_through_the_table(true).concat();
+    let mut commands = Vec::new();
+    let mut at = 0;
+    while let Ok(Some(k)) = peek_len(&sent[at..]) {
+        commands.push(GlFrame::decode(&sent[at..at + k]).expect("the library sends whole GL frames").0.command);
+        at += k;
+    }
+    let choose = ENTRIES.iter().position(|e| e.name == "aglChoosePixelFormat").unwrap() as u16;
+    assert!(matches!(commands.first(), Some(Command::Call { entry, .. }) if *entry == choose), "the guest's first AGL call reached the engine's worker: {commands:?}");
+    assert!(commands.iter().any(|c| matches!(c, Command::BatchEnd { .. })), "as whole batches: {commands:?}");
+    // without a worker the machine keeps its no-GL behaviour: nothing is sent anywhere (AGL offers no pixel format)
+    assert!(gl_through_the_table(false).is_empty());
+}
+
+#[test]
+fn a_null_host_or_instance_is_bad_args_and_the_machine_keeps_running() {
+    bind();
+    let mut remote = Remote::new(FAMILY_MACPPC, "").unwrap();
+    let mut gl = Box::new(GlSink::default());
+    let host = GlHost { ctx: &mut *gl as *mut GlSink as *mut c_void, transact: gl_transact };
+    assert_eq!((os_mac_vtable().attach_gl)(remote.inst, core::ptr::null()), GL_ATTACH_BAD_ARGS);
+    assert_eq!((os_mac_vtable().attach_gl)(core::ptr::null_mut(), &host), GL_ATTACH_BAD_ARGS);
+    assert_eq!(remote.send(&program(&app(), "PPC Hello")), APPLY_OK, "a refused attach leaves the machine as it was");
+}
+
+#[test]
+fn the_engine_reads_the_powerpc_stage_clock_through_the_table() {
+    bind();
+    let mut remote = Remote::new(FAMILY_MACPPC, "").unwrap();
+    let (mut line, mut n) = ([0u8; 512], 0usize);
+    let perf = os_mac_vtable().perf;
+    assert_eq!(perf(remote.inst, 0, line.as_mut_ptr(), line.len(), &mut n), PERF_REFUSED, "no rate, no line");
+    assert_eq!(perf(core::ptr::null_mut(), 1000, line.as_mut_ptr(), line.len(), &mut n), PERF_REFUSED);
+    // the first call switches the clock on; a guest that has swapped no frame has no line yet
+    assert_eq!(perf(remote.inst, 1000, line.as_mut_ptr(), line.len(), &mut n), PERF_NONE);
+    assert_eq!(remote.send(&program(&app(), "PPC Hello")), APPLY_OK);
+    assert_eq!(remote.send(&[control(Control::Advance { virtual_us: 0 }), control(Control::Step { budget: BUDGET })]), APPLY_OK);
+    assert_eq!(perf(remote.inst, 1000, line.as_mut_ptr(), line.len(), &mut n), PERF_NONE);
+    assert_eq!(n, 0);
+}

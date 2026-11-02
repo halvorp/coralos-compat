@@ -99,6 +99,16 @@ pub trait OsFamily: 'static {
     fn input(_m: &mut Self::Machine, name: &str, _bytes: Vec<u8>) -> Result<(), String> {
         Err(format!("input {name:?}: this guest OS takes no named input"))
     }
+    /// The engine's GL worker for the machine's guest GL ([`OsVTable::attach_gl`], OS ABI v3). A family whose guest OS has no GL
+    /// refuses it by name.
+    fn gl_attach(_m: &mut Self::Machine, _gl: GlHost) -> Result<(), String> {
+        Err(String::from("attach_gl: this guest OS has no GL"))
+    }
+    /// The machine's stage clock ([`OsVTable::perf`]): switch it on if it is off, then one finished line formatted at `tsc_per_us`,
+    /// if one is ready. A family without one refuses it by name.
+    fn perf(_m: &mut Self::Machine, _tsc_per_us: u64) -> Result<Option<String>, String> {
+        Err(String::from("perf: this guest machine has no stage clock"))
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -156,12 +166,14 @@ pub struct FamilyHooks<M> {
     pub assign: fn(&mut M, &str, &str, bool) -> Result<(), String>,
     pub host_profile: fn(&mut M, &HostProfile) -> Result<(), String>,
     pub input: fn(&mut M, &str, Vec<u8>) -> Result<(), String>,
+    pub gl_attach: fn(&mut M, GlHost) -> Result<(), String>,
+    pub perf: fn(&mut M, u64) -> Result<Option<String>, String>,
 }
 
 impl<M> FamilyHooks<M> {
     /// The hooks of family `F`.
     pub fn of<F: OsFamily<Machine = M>>() -> Self {
-        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input }
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input, gl_attach: F::gl_attach, perf: F::perf }
     }
 }
 
@@ -319,11 +331,19 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
 /// A session of any family behind one instance pointer: `destroy` and `apply` serve every family a table names.
 trait AnySession {
     fn apply(&mut self, frames: &[u8]) -> Result<(), String>;
+    fn attach_gl(&mut self, gl: GlHost) -> Result<(), String>;
+    fn perf(&mut self, tsc_per_us: u64) -> Result<Option<String>, String>;
 }
 
 impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
     fn apply(&mut self, frames: &[u8]) -> Result<(), String> {
         Session::apply(self, frames)
+    }
+    fn attach_gl(&mut self, gl: GlHost) -> Result<(), String> {
+        (self.hooks.gl_attach)(&mut self.machine, gl)
+    }
+    fn perf(&mut self, tsc_per_us: u64) -> Result<Option<String>, String> {
+        (self.hooks.perf)(&mut self.machine, tsc_per_us)
     }
 }
 
@@ -478,6 +498,35 @@ extern "C" fn apply_impl(inst: *mut OsInstance, frames: *const u8, len: usize) -
     }
 }
 
+extern "C" fn attach_gl_impl(inst: *mut OsInstance, gl: *const GlHost) -> i32 {
+    if inst.is_null() || gl.is_null() {
+        return GL_ATTACH_BAD_ARGS;
+    }
+    // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed; `gl` points to a GlHost the engine filled (copied).
+    let (session, gl) = unsafe { (&mut **(inst as *mut Instance), *gl) };
+    match session.attach_gl(gl) {
+        Ok(()) => GL_ATTACH_OK,
+        Err(_) => GL_ATTACH_REFUSED,
+    }
+}
+
+extern "C" fn perf_impl(inst: *mut OsInstance, tsc_per_us: u64, line: *mut u8, cap: usize, line_len: *mut usize) -> i32 {
+    write_why("", line, cap, line_len);
+    if inst.is_null() || tsc_per_us == 0 {
+        return PERF_REFUSED;
+    }
+    // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed; the engine calls it from one thread.
+    let session = unsafe { &mut **(inst as *mut Instance) };
+    match session.perf(tsc_per_us) {
+        Ok(Some(l)) => {
+            write_why(&l, line, cap, line_len);
+            PERF_LINE
+        }
+        Ok(None) => PERF_NONE,
+        Err(_) => PERF_REFUSED,
+    }
+}
+
 /// The table for family `F`: `static TABLE: OsVTable = heirloom_os_abi::serve::vtable::<MyFamily>();`.
 pub const fn vtable<F: OsFamily>() -> OsVTable {
     vtable2::<F, F>()
@@ -497,5 +546,7 @@ pub const fn vtable2<F: OsFamily, G: OsFamily>() -> OsVTable {
         cpu_abi_for_family: cpu_abi_for_family_impl::<F, G>,
         bind_cpu_ppc: bind_cpu_ppc_impl::<F, G>,
         create_for_family: create_for_family_impl::<F, G>,
+        attach_gl: attach_gl_impl,
+        perf: perf_impl,
     }
 }

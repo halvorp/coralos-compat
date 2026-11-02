@@ -29,10 +29,27 @@ extern crate alloc;
 #[cfg(feature = "serve")]
 pub mod serve;
 
-pub const OS_ABI_VERSION: u32 = 2;
+pub const OS_ABI_VERSION: u32 = 3;
 /// The first version with the multi-family entries ([`OsVTable::cpu_abi_for_family`] and after): a family other than the header's is
 /// only served from this version on.
 pub const OS_ABI_MULTI_FAMILY: u32 = 2;
+/// The first version with [`OsVTable::attach_gl`] and [`OsVTable::perf`]: a machine's guest GL can reach the engine's GL worker, and
+/// its stage clock can be read by the engine process.
+pub const OS_ABI_GL: u32 = 3;
+
+/// `attach_gl`: the machine's guest GL now goes to the host's [`GlHost`].
+pub const GL_ATTACH_OK: i32 = 0;
+/// `attach_gl`: this machine's family has no guest GL (its OS offers none), or it already has a worker.
+pub const GL_ATTACH_REFUSED: i32 = 1;
+/// `attach_gl`: a null instance or a null host.
+pub const GL_ATTACH_BAD_ARGS: i32 = 2;
+
+/// `perf`: one finished stage-clock line was written.
+pub const PERF_LINE: i32 = 0;
+/// `perf`: the stage clock runs (switched on by this call if it was off) and has no finished line yet.
+pub const PERF_NONE: i32 = 1;
+/// `perf`: this machine's family has no stage clock, or a null instance / a zero TSC rate.
+pub const PERF_REFUSED: i32 = 2;
 
 /// `cpu_abi_for_family`: the CPU contract a family runs on - a [`CpuVTable`] (CPU ABI v2, `bind_cpu`).
 pub const CPU_CONTRACT_V2: u32 = 2;
@@ -79,6 +96,30 @@ pub struct OsHost {
     pub read_stream: extern "C" fn(ctx: *mut c_void, locator: *const u8, locator_len: usize, offset: u64, dst: *mut u8, cap: usize) -> isize,
 }
 
+/// The engine's transport to its GL worker (heirloom-gl.engine, the engine process's own `gl.req` / `gl.evt` session; doc 23 slice
+/// 4.3): `transact` sends one request batch (whole heirloom-gl-abi frames) and returns the reply's GL frames - `*reply_len` bytes at
+/// the returned pointer, lent until the next call. A null pointer (or a zero length for a request that needs an answer) = the worker
+/// is gone or its ring failed: the guest's GL call is refused, never waited on.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GlHost {
+    pub ctx: *mut c_void,
+    pub transact: extern "C" fn(ctx: *mut c_void, request: *const u8, len: usize, reply_len: *mut usize) -> *const u8,
+}
+
+impl GlHost {
+    /// One request through the host: the reply's bytes, lent until the next call (the `&mut` borrow); empty = the worker is gone.
+    pub fn transact(&mut self, request: &[u8]) -> &[u8] {
+        let mut n = 0usize;
+        let p = (self.transact)(self.ctx, request.as_ptr(), request.len(), &mut n);
+        if p.is_null() || n == 0 {
+            return &[];
+        }
+        // SAFETY: the host lends `n` readable bytes at `p` until its next transact, which needs this `&mut self` again.
+        unsafe { core::slice::from_raw_parts(p, n) }
+    }
+}
+
 /// A host's `read_stream` that reads nothing: for a host with no storage (a test, a family without streams). Every read is refused.
 pub extern "C" fn no_streams(_: *mut c_void, _: *const u8, _: usize, _: u64, _: *mut u8, _: usize) -> isize {
     -1
@@ -113,10 +154,20 @@ pub struct OsVTable {
     /// `create` for a named family this library serves (`create` is this with the header's family). `destroy` and `apply` take an
     /// instance of any family.
     pub create_for_family: extern "C" fn(family: u32, profile: *const u8, len: usize, host: *const OsHost, why: *mut u8, why_cap: usize, why_len: *mut usize) -> *mut OsInstance,
+    // ---- version 3 (OS_ABI_GL): appended only ----
+    /// Give a machine its GL worker: the guest's GL batches go to `gl` (copied) from now on. See GL_ATTACH_*. A machine with no
+    /// worker keeps its family's no-GL behaviour (a Mac's AGL offers no pixel format).
+    pub attach_gl: extern "C" fn(inst: *mut OsInstance, gl: *const GlHost) -> i32,
+    /// The machine's stage clock (doc 22 phase 5, the `[HEIRLOOM-PERF ...]` line): the first call switches it on (the library reads
+    /// the CPU's own time-stamp counter); each call writes at most one finished line (UTF-8, at most `cap` bytes at `line`,
+    /// `*line_len` = bytes written), formatted at `tsc_per_us` TSC ticks per microsecond (the ENGINE measures the rate). See PERF_*.
+    pub perf: extern "C" fn(inst: *mut OsInstance, tsc_per_us: u64, line: *mut u8, cap: usize, line_len: *mut usize) -> i32,
 }
 
 /// The byte size of a version-1 table (the four header words' entries up to `apply`).
 pub const OS_TABLE_V1_SIZE: u32 = core::mem::offset_of!(OsVTable, cpu_abi_for_family) as u32;
+/// The byte size of a version-2 table (everything before `attach_gl`).
+pub const OS_TABLE_V2_SIZE: u32 = core::mem::offset_of!(OsVTable, attach_gl) as u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenRefusal {
@@ -164,7 +215,13 @@ pub unsafe fn check_ptr(p: *const OsVTable, required_version: u32, family: u32) 
         return Err(OpenRefusal::VersionTooOld { found: version, required: required_version });
     }
     let multi = version >= OS_ABI_MULTI_FAMILY;
-    let required = if multi { core::mem::size_of::<OsVTable>() as u32 } else { OS_TABLE_V1_SIZE };
+    let required = if version >= OS_ABI_GL {
+        core::mem::size_of::<OsVTable>() as u32
+    } else if multi {
+        OS_TABLE_V2_SIZE
+    } else {
+        OS_TABLE_V1_SIZE
+    };
     if size < required {
         return Err(OpenRefusal::TableTooSmall { found: size, required });
     }
@@ -200,9 +257,11 @@ mod tests {
     }
     extern "C" fn bind_ppc(_: *const ppc::PpcVTable) -> i32 { BIND_OK }
     extern "C" fn create_for(_: u32, _: *const u8, _: usize, _: *const OsHost, _: *mut u8, _: usize, _: *mut usize) -> *mut OsInstance { core::ptr::null_mut() }
+    extern "C" fn attach(_: *mut OsInstance, _: *const GlHost) -> i32 { GL_ATTACH_REFUSED }
+    extern "C" fn perf(_: *mut OsInstance, _: u64, _: *mut u8, _: usize, _: *mut usize) -> i32 { PERF_REFUSED }
 
     fn table(version: u32, size: u32, family: u32) -> OsVTable {
-        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for }
+        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf }
     }
 
     #[test]
@@ -225,7 +284,7 @@ mod tests {
         let v1 = table(1, OS_TABLE_V1_SIZE, FAMILY_MAC68K);
         assert_eq!(unsafe { check_ptr(&v1, 1, FAMILY_MAC68K) }, Ok(()));
         // ... is too old for an engine that needs version 2 ...
-        assert_eq!(unsafe { check_ptr(&v1, OS_ABI_VERSION, FAMILY_MAC68K) }, Err(OpenRefusal::VersionTooOld { found: 1, required: 2 }));
+        assert_eq!(unsafe { check_ptr(&v1, OS_ABI_VERSION, FAMILY_MAC68K) }, Err(OpenRefusal::VersionTooOld { found: 1, required: OS_ABI_VERSION }));
         // ... and never serves another family, even one a v2 table of the same library would (its entries are not there to ask).
         assert_eq!(unsafe { check_ptr(&v1, 1, FAMILY_MACPPC) }, Err(OpenRefusal::WrongFamily { found: FAMILY_MAC68K, required: FAMILY_MACPPC }));
     }
@@ -239,5 +298,18 @@ mod tests {
         // A v2 header with a v1 size is refused before its v2 entries are read.
         let short = table(OS_ABI_VERSION, OS_TABLE_V1_SIZE, FAMILY_MAC68K);
         assert_eq!(unsafe { check_ptr(&short, OS_ABI_VERSION, FAMILY_MACPPC) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V1_SIZE, required: full }));
+    }
+
+    #[test]
+    fn a_version_three_table_must_carry_attach_gl_and_a_version_two_one_is_too_old_for_it() {
+        let full = core::mem::size_of::<OsVTable>() as u32;
+        // a v2 library (built before attach_gl) opens at version 2 with its own, smaller size ...
+        let v2 = table(OS_ABI_MULTI_FAMILY, OS_TABLE_V2_SIZE, FAMILY_MAC68K);
+        assert_eq!(unsafe { check_ptr(&v2, OS_ABI_MULTI_FAMILY, FAMILY_MACPPC) }, Ok(()));
+        // ... is too old for an engine that attaches GL ...
+        assert_eq!(unsafe { check_ptr(&v2, OS_ABI_GL, FAMILY_MAC68K) }, Err(OpenRefusal::VersionTooOld { found: 2, required: OS_ABI_GL }));
+        // ... and a v3 header without the attach_gl entry is refused before it is read.
+        let short = table(OS_ABI_GL, OS_TABLE_V2_SIZE, FAMILY_MAC68K);
+        assert_eq!(unsafe { check_ptr(&short, OS_ABI_GL, FAMILY_MAC68K) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V2_SIZE, required: full }));
     }
 }
