@@ -86,6 +86,14 @@ impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
                             reply(&mut out, 0, vec![], if args[0] == 0x1F01 { renderer.as_str() } else { "" });
                         }
                         "glGetError" => reply(&mut out, 0, vec![0], ""),
+                        // a GL's answer: GL_MAX_TEXTURE_UNITS_ARB is `WC3_TEX_UNITS` (default 8, Mesa's fixed-function units), every
+                        // other query its value count of zeros
+                        "glGetIntegerv" => {
+                            seen.queries.push(args[0]);
+                            let n = heirloom_gl_abi::sig::integer_count(args[0] as u32).unwrap_or(0);
+                            let units: u64 = std::env::var("WC3_TEX_UNITS").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
+                            reply(&mut out, 0, if args[0] == 0x84E2 { vec![units] } else { vec![0; n] }, "");
+                        }
                         "glGenTextures" => {
                             let first = seen.names + 1;
                             seen.names += args[0];

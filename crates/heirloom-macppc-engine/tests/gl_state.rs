@@ -243,6 +243,7 @@ fn an_enum_the_encoder_cannot_size_is_invalid_enum_and_is_never_sent() {
         ]
     }, true);
     assert!(saw(&seen, "glLightfv").is_empty() && saw(&seen, "glGetIntegerv").is_empty() && saw(&seen, "glPixelStorei").is_empty(), "nothing invalid reached the worker");
+    assert!(m.mac.log.iter().any(|l| l.starts_with("[HEIRLOOM-GL PNAME-UNSIZED call=glGetIntegerv pname=0x1234]")), "the unsized query is named, not silent: {:?}", m.mac.log);
     assert_eq!(m.mac.mem.read_u32(d + at.get() as u32).unwrap(), 0x0500, "GL_INVALID_ENUM (the first error recorded is the one reported)");
     assert_eq!(m.mac.mem.read_u32(d + at.get() as u32 + 4).unwrap(), 0, "and the flag is cleared by reading it");
 }
@@ -283,6 +284,30 @@ fn texture_names_queries_and_deletes_go_through_the_worker() {
     assert_eq!(m.mac.mem.read_u32(d + ints_at.get() as u32 + 12).unwrap(), 0xFFFF_FFF3);
     assert_eq!(m.mac.mem.read_u32(d + ints_at.get() as u32 + 16 + 60).unwrap(), 0xFFFF_FFFF, "GL_MODELVIEW_MATRIX is sixteen");
     assert_eq!(m.mac.mem.read_u32(d + ints_at.get() as u32 + 16 + 64).unwrap(), 0, "and not a word more");
+}
+
+/// Warcraft III's GL device init (game fragment FUN_1034d8f0) reads GL_VERSION and then `glGetIntegerv(GL_MAX_TEXTURE_UNITS_ARB)`
+/// straight into the count its texture-stage loop (FUN_1034b6f0) runs to: an unanswered query leaves the count 0, so the game
+/// never enables GL_TEXTURE_2D, never binds a texture at a draw, and its menu draws untextured. The engine advertises
+/// GL_ARB_multitexture (glActiveTextureARB is bound), so the extension's three GetPNames are sized queries the worker answers.
+#[test]
+fn arb_multitexture_queries_reach_the_worker_and_their_answer_is_written() {
+    let (out, err) = (Cell::new(0), Cell::new(0));
+    let (m, seen, d) = run(|d| {
+        out.set(d.put(&[0xAA; 16]));
+        err.set(d.put(&[0; 8]));
+        vec![
+            call("glGetIntegerv", vec![I::V(0x84E2), I::P(out.get())], vec![]),
+            call("glGetIntegerv", vec![I::V(0x84E0), I::P(out.get() + 4)], vec![]),
+            call("glGetIntegerv", vec![I::V(0x84E1), I::P(out.get() + 8)], vec![]),
+            keep("glGetError", vec![], err.get()),
+        ]
+    }, true);
+    let asked: Vec<u64> = saw(&seen, "glGetIntegerv").iter().map(|(a, _)| a[0]).collect();
+    assert_eq!(asked, [0x84E2, 0x84E0, 0x84E1], "GL_MAX_TEXTURE_UNITS_ARB, GL_ACTIVE_TEXTURE_ARB, GL_CLIENT_ACTIVE_TEXTURE_ARB are asked of the worker");
+    for k in 0..3 { assert_eq!(m.mac.mem.read_u32(d + out.get() as u32 + 4 * k).unwrap(), 0xFFFF_FFF0, "query {k}: one integer, the worker's answer"); }
+    assert_eq!(m.mac.mem.read_u32(d + out.get() as u32 + 12).unwrap(), 0xAAAA_AAAA, "and not a word more");
+    assert_eq!(m.mac.mem.read_u32(d + err.get() as u32).unwrap(), 0, "no GL error");
 }
 
 #[test]

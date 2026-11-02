@@ -50,6 +50,10 @@ impl<U: GuestUi> MacPpc<U> {
                     let ptr = arg(self, cpu, slot)?;
                     slot += 1;
                     let Some(n) = words.last().and_then(|w| u32::try_from(*w).ok()).and_then(|pn| family::var_len(kind, pn)) else {
+                        // named, not silent: an unsized query writes nothing, so the program reads whatever its variable held
+                        // (Warcraft III's texture-unit count stayed 0 this way until GL_MAX_TEXTURE_UNITS_ARB was sized)
+                        let pn = words.last().copied().unwrap_or(0);
+                        self.gl_note(format!("[HEIRLOOM-GL PNAME-UNSIZED call={who} pname={pn:#x}] not in the {kind:?} table: GL_INVALID_ENUM, nothing written"));
                         self.gl_set_error(GL_INVALID_ENUM);
                         return Ok(0);
                     };

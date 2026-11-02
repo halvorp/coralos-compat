@@ -131,8 +131,12 @@ pub fn check_words(name: &str, args: &[u64]) -> Result<(), String> {
 /// `GetPName` group restricted to the enums of those three features, 249 values), with its value count. `None`: not a
 /// GL 1.2 state query. Values the worker returns are the current state, converted by GL's own rules (booleans 0/1,
 /// floats rounded, colours and normals scaled to the full integer range).
+/// Plus the `GetPName` values of the extensions this GL advertises ([`crate::version::Ext::ALL`]) that the program reads back:
+/// GL_ARB_multitexture's GL_ACTIVE_TEXTURE_ARB 0x84E0, GL_CLIENT_ACTIVE_TEXTURE_ARB 0x84E1 and GL_MAX_TEXTURE_UNITS_ARB 0x84E2
+/// (Warcraft III sizes its texture-stage loop by the last one; unanswered, it never textures).
 pub fn integer_count(pname: u32) -> Option<usize> {
     Some(match pname {
+        0x84E0..=0x84E2 => 1,
         0x0BA6..=0x0BA8 => 16,
         0x0B00 | 0x0B03 | 0x0B04 | 0x0B06 | 0x0B07 | 0x0B53 | 0x0B66 | 0x0B80 | 0x0BA2 | 0x0C10 | 0x0C22 | 0x0C23 | 0x0DD2 => 4,
         0x0B02 => 3,
@@ -183,6 +187,13 @@ mod tests {
         assert!((0u32..0x9000).filter(|p| engine_answers(*p)).all(|p| integer_count(p).is_some()));
         assert_eq!((0u32..0x9000).filter(|p| engine_answers(*p)).count(), 20);
         assert!(!engine_answers(0x0BA2) && !engine_answers(0x0B01));
+    }
+
+    #[test]
+    fn the_advertised_multitexture_extension_has_its_state_queries_sized() {
+        assert_eq!([0x84E0, 0x84E1, 0x84E2].map(integer_count), [Some(1); 3]);
+        assert_eq!(vec_len(VecKind::State, 0x84E2), Some(1), "glGetIntegerv's output is sized from the same table");
+        assert_eq!(integer_count(0x84E3), None, "GL_ARB_multitexture defines no fourth GetPName");
     }
 
     #[test]
