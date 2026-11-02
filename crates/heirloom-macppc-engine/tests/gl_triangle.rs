@@ -32,6 +32,8 @@ struct Seen {
     args_hist: std::collections::BTreeMap<String, u32>,
     /// The last texture name handed out by glGenTextures (names are fresh and never 0, as GL makes them).
     names: u64,
+    /// Swaps seen (a long run counts them here instead of rescanning `kinds`).
+    swaps: usize,
 }
 
 struct Mock {
@@ -115,7 +117,7 @@ impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
                     }
                 }
                 Command::FenceSet { .. } => seen.kinds.push("FenceSet".into()),
-                Command::Swap { .. } => seen.kinds.push("Swap".into()),
+                Command::Swap { .. } => { seen.swaps += 1; seen.kinds.push("Swap".into()) }
                 Command::BatchEnd { seq } => out.extend(Frame { token: Token { slot: 0, incarnation: 0 }, command: Command::Retired { seq } }.encode()),
                 other => panic!("the engine sent a worker-to-engine frame: {other:?}"),
             }
@@ -472,13 +474,25 @@ fn wc3_host_run_with_a_gl_worker() {
     }
     }
     m.start_file(&app, "Warcraft III").unwrap();
+    // `WC3_PERF=<frames>`: the engine's stage clock (heirloom_macppc_engine::perf) on host nanoseconds, a line every <frames> swaps
+    if let Ok(every) = std::env::var("WC3_PERF") {
+        fn ns() -> u64 { static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new(); T0.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64 }
+        m.perf_enable(ns);
+        m.perf_report_every(every.parse().unwrap_or(64));
+        if std::env::var("WC3_PERF_SITES").is_ok() { m.perf_census(); }
+    }
+    // `WC3_BUDGET=<insns>` per slice (default 5M) and `WC3_CLOCK_MIPS=<n>`: the virtual clock advances by the instructions the slice ran
+    // at n million per second (a slower CPU's clock, e.g. the Z83's) instead of 20 ms per slice
+    let budget: u64 = std::env::var("WC3_BUDGET").ok().and_then(|s| s.parse().ok()).unwrap_or(5_000_000);
+    let clock_mips: Option<u64> = std::env::var("WC3_CLOCK_MIPS").ok().and_then(|s| s.parse().ok());
     let mut t = 0u64;
     let slices: u32 = std::env::var("WC3_SLICES").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
     use heirloom_ui_abi::UiCall;
     let mut drive = wc3_drive::Drive::from_env();
     let (mut click_phase, mut click_kinds) = (0u8, 0usize);
+    let mut ui_seen = 0usize;
     for i in 0..slices {
-        let (st, stats) = GuestMachine::step(&mut m, 5_000_000);
+        let (st, stats) = GuestMachine::step(&mut m, budget);
         if matches!(st, Step::Fault(_) | Step::Exited) {
             eprintln!("slice {i}: {st:?} {:?}", m.fault());
             // `WC3_DUMP=<words>`: the code before the faulting call (LR - 4*words .. LR), for reading the caller
@@ -490,12 +504,25 @@ fn wc3_host_run_with_a_gl_worker() {
             break;
         }
         if std::env::var("WC3_STEPS").is_ok() && i % 50 == 0 { eprintln!("STEP {i}: {st:?} {stats:?} pc={:#x} lr={:#x} cb={}", m.cpu().map_or(0, |c| c.pc), m.cpu().map_or(0, |c| c.lr), m.callback_depth()); }
-        t += 20_000;
+        while let Some(l) = m.perf_take_line(1000) {
+            eprintln!("{l} (slice {i})");
+            if let Some(sites) = m.perf().and_then(|p| p.sites.as_ref()) {
+                let mut v: Vec<_> = sites.iter().collect();
+                v.sort_by(|a, b| b.1.cmp(a.1));
+                for (s, n) in v.iter().take(6) { eprintln!("  POLL-SITE lr={:#x} {:#x} {:#x} insns={n}", s[0], s[1], s[2]); }
+            }
+        }
+        // a blocked guest waits for its deadline: the clock jumps there (the host's timer); else the slice's own time passes
+        t += match (clock_mips, &st) {
+            (Some(_), Step::Blocked) => GuestMachine::next_timer_deadline(&m).map_or(1000, |d| d.saturating_sub(t).max(1000)),
+            (Some(mips), _) => (stats.insns / mips.max(1)).max(1),
+            (None, _) => 20_000,
+        };
         GuestMachine::advance_clock_to(&mut m, t).unwrap();
         // `WC3_DRIVE` (tests/wc3_drive): pointer and key steps to the window the game's last aglSetDrawable names (the GL picture's window,
         // as the Z83 host routes input on it), each once the game has swapped enough frames.
         if let Some(d) = drive.as_mut().filter(|d| !d.done()) {
-            let swaps = seen.lock().unwrap().kinds.iter().filter(|k| *k == "Swap").count();
+            let swaps = seen.lock().unwrap().swaps;
             let host = seen.lock().unwrap().drawables.last().and_then(|d| d.get(2).copied()).unwrap_or(0) as u32;
             if let Some(win) = m.mac.windows.values().filter_map(|w| w.native).find(|n| n.id == host) {
                 let evs = d.due(swaps, win, &mut |l| eprintln!("{l} (slice {i})"));
@@ -503,14 +530,16 @@ fn wc3_host_run_with_a_gl_worker() {
                 m.mac.ui.events.extend(evs);
             }
         }
-        if ring_out.is_some() && seen.lock().unwrap().kinds.iter().filter(|k| *k == "Swap").count() >= ring_swaps {
+        if ring_out.is_some() && seen.lock().unwrap().swaps >= ring_swaps {
             eprintln!("slice {i}: {ring_swaps} swaps kept for the ring image");
             break;
         }
-        if m.ui().calls.iter().any(|c| format!("{c:?}").starts_with("Request")) {
+        let ui_calls = m.ui().calls.len();
+        if m.ui().calls[ui_seen.min(ui_calls)..].iter().any(|c| format!("{c:?}").starts_with("Request")) {
             eprintln!("slice {i}: the program raised a request");
             break;
         }
+        ui_seen = ui_calls;
     }
     if let Some(cpu) = m.cpu() {
         eprintln!("END pc={:#x} lr={:#x} callbacks={:?}", cpu.pc, cpu.lr, m.callback_kinds());

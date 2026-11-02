@@ -3,6 +3,7 @@
 //! of [`CHUNK_CELLS`] taken from the guest heap, so the table grows with the number of distinct imports.
 use crate::error::CfmError;
 use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
@@ -16,8 +17,10 @@ pub const BLR: u32 = 0x4E80_0020;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlueEntry { pub library: String, pub symbol: String, pub tvector: u32, pub stub: u32 }
 
+/// `keys[id]` is entry `id`'s binding key, made once at intern: the run loop looks it up on every glue call, and building it
+/// per call (a String, a `format!` for a non-Toolbox library) was a measured share of a Warcraft III frame (doc 22 phase 5).
 #[derive(Default)]
-pub struct Glue { chunks: Vec<u32>, entries: Vec<GlueEntry>, by_key: BTreeMap<(String, String), usize> }
+pub struct Glue { chunks: Vec<u32>, entries: Vec<GlueEntry>, keys: Vec<Rc<str>>, by_key: BTreeMap<(String, String), usize> }
 
 /// The libraries whose exports are the Macintosh Toolbox under the Universal Interfaces' C names: InterfaceLib itself, CarbonLib, and the
 /// Mac OS 8.6+ sub-libraries the Toolbox was split into (the import-library set of a Mac OS 9 SDK, Retro68 `ImportLibraries/`: AppearanceLib,
@@ -56,16 +59,24 @@ impl Glue {
         mac.mem.write_u32(tv + 4, 0).map_err(m)?;
         mac.mem.write_u32(stub, BLR).map_err(m)?;
         self.entries.push(GlueEntry { library: library.into(), symbol: symbol.into(), tvector: tv, stub });
+        self.keys.push(Rc::from(binding_key(library, symbol)));
         self.by_key.insert((library.into(), symbol.into()), id);
         Ok(id)
     }
 
     /// The cell whose STUB is at `pc` (not its TVector), if any.
-    pub fn at_stub(&self, pc: u32) -> Option<&GlueEntry> {
+    pub fn at_stub(&self, pc: u32) -> Option<&GlueEntry> { self.id_at_stub(pc).and_then(|id| self.entries.get(id)) }
+
+    /// The binding key of the cell whose STUB is at `pc` (shared, not rebuilt), if any.
+    pub fn key_at_stub(&self, pc: u32) -> Option<Rc<str>> { self.id_at_stub(pc).and_then(|id| self.keys.get(id)).cloned() }
+
+    /// The id of the cell whose STUB is at `pc`, if any.
+    pub fn id_at_stub(&self, pc: u32) -> Option<usize> {
         for (ci, &base) in self.chunks.iter().enumerate() {
             let size = CELL * CHUNK_CELLS;
             if pc >= base && pc - base < size && (pc - base) % CELL == 8 {
-                return self.entries.get(ci * CHUNK_CELLS as usize + ((pc - base) / CELL) as usize);
+                let id = ci * CHUNK_CELLS as usize + ((pc - base) / CELL) as usize;
+                return (id < self.entries.len()).then_some(id);
             }
         }
         None

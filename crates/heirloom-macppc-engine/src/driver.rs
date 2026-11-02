@@ -68,4 +68,5 @@ impl<U: GuestUi> GuestMachine for MacPpc<U> {
     fn set_stop_on_unimplemented(&mut self, on: bool) { self.mac.stop_on_unimplemented = on; }
     fn drain_log(&mut self) -> Vec<String> { core::mem::take(&mut self.mac.log) }
     fn drain_refused(&mut self) -> Vec<String> { core::mem::take(&mut self.mac.refused) }
+    fn perf_take_line(&mut self, per_us: u64) -> Option<String> { MacPpc::perf_take_line(self, per_us) }
 }

@@ -91,4 +91,8 @@ pub trait GuestMachine {
 
     /// Every refusal since the last drain, in order: a bridge call the engine refused by name.
     fn drain_refused(&mut self) -> Vec<String>;
+
+    /// The next `[HEIRLOOM-PERF ...]` line of an engine whose host turned its stage clock on (heirloom-macppc-engine `perf`),
+    /// with the host clock's `per_us` units per microsecond. `None`: no line is due, or the engine has no stage clock.
+    fn perf_take_line(&mut self, _per_us: u64) -> Option<String> { None }
 }

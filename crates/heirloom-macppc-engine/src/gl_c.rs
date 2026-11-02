@@ -167,7 +167,9 @@ impl<U: GuestUi> MacPpc<U> {
         let req = core::mem::take(&mut self.gl.pending);
         self.gl.sent_bytes += req.len() as u64;
         let Some(w) = self.gl.worker.as_mut() else { return Vec::new() };
+        let t0 = self.perf.as_ref().map(|p| p.now());
         let reply = w.transact(&req);
+        if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let dt = p.now().wrapping_sub(t0); p.add_gl_ring(dt); }
         let mut out = Vec::new();
         let mut at = 0;
         while at < reply.len() {
@@ -261,7 +263,7 @@ impl<U: GuestUi> MacPpc<U> {
             },
             "aglSwapBuffers" => match self.gl.ctxs.get(&a0).copied() {
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
-                Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); }
+                Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); if let Some(p) = self.perf.as_mut() { p.swap(); } }
             },
             "aglSetFullScreen" => match self.gl.ctxs.get(&a0).copied() {
                 // aglSetFullScreen(ctx, width, height, freq, device): the games-windowed rule - the drawable becomes a window of that size

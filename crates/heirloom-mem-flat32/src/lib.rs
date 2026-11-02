@@ -155,11 +155,13 @@ impl GuestMem {
     pub fn flat_ram(&self) -> Option<*const FlatRam> { self.owned.as_ref().map(|o| &o.desc as *const FlatRam) }
 
     /// The bytes as a slice (empty RAM: an empty slice).
+    #[inline]
     fn ram(&self) -> &[u8] {
         if self.len == 0 { return &[]; }
         // SAFETY: `base` holds `len` initialised bytes (the owner's Vec, or the view's descriptor - GuestMem::view's contract).
         unsafe { core::slice::from_raw_parts(self.base, self.len) }
     }
+    #[inline]
     fn ram_mut(&mut self) -> &mut [u8] {
         if self.len == 0 { return &mut []; }
         // SAFETY: as in `ram`; `&mut self` is the only path to the bytes through this GuestMem.
@@ -173,6 +175,7 @@ impl GuestMem {
     }
     pub fn addr_mask(&self) -> u32 { self.mask }
     /// `addr` as the bus sees it (StripAddress).
+    #[inline]
     pub fn strip(&self, addr: u32) -> u32 { addr & self.mask }
     pub fn len(&self) -> usize { self.len }
     /// Grow the address space to `new_len` bytes. New RAM is obtained from the
@@ -216,10 +219,12 @@ impl GuestMem {
     }
     pub fn is_empty(&self) -> bool { self.len == 0 }
 
+    #[inline]
     pub fn contains(&self, addr: u32, len: u32) -> bool {
         let addr = self.strip(addr);
         (addr as u64) + (len as u64) <= self.len as u64
     }
+    #[inline]
     pub fn check(&self, addr: u32, len: u32) -> Result<(), MemError> {
         if self.contains(addr, len) { Ok(()) } else { Err(MemError::OutOfRange { addr, len }) }
     }
@@ -254,28 +259,38 @@ impl GuestMem {
         self.hooks.before_write(ram, addr, len);
     }
 
-    fn read_be(&self, addr: u32, len: u32) -> Result<u32, MemError> {
-        self.check(addr, len)?;
+    /// `N` bytes at `addr` (one bounds check, one slice copy: a guest load is the hottest path there is).
+    #[inline(always)]
+    fn read_n<const N: usize>(&self, addr: u32) -> Result<[u8; N], MemError> {
+        self.check(addr, N as u32)?;
         let a = self.strip(addr) as usize;
-        Ok(self.ram()[a..a + len as usize].iter().fold(0u32, |v, b| (v << 8) | *b as u32))
+        let mut b = [0u8; N];
+        b.copy_from_slice(&self.ram()[a..a + N]);
+        Ok(b)
     }
-    fn write_be(&mut self, addr: u32, len: u32, val: u32) -> Result<(), MemError> {
-        self.check(addr, len)?;
+    /// Store `bytes` at `addr` (one bounds check, the write hooks, one slice copy: a guest store).
+    #[inline(always)]
+    fn write_n<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) -> Result<(), MemError> {
+        self.check(addr, N as u32)?;
         let addr = self.strip(addr);
-        self.before_write(addr, len);
-        let ram = self.ram_mut();
-        for i in 0..len {
-            ram[(addr + i) as usize] = (val >> (8 * (len - 1 - i))) as u8;
-        }
+        self.before_write(addr, N as u32);
+        self.ram_mut()[addr as usize..addr as usize + N].copy_from_slice(&bytes);
         Ok(())
     }
-    pub fn read_u8(&self, addr: u32) -> Result<u8, MemError> { self.read_be(addr, 1).map(|v| v as u8) }
-    pub fn read_u16(&self, addr: u32) -> Result<u16, MemError> { self.read_be(addr, 2).map(|v| v as u16) }
-    pub fn read_u32(&self, addr: u32) -> Result<u32, MemError> { self.read_be(addr, 4) }
+    #[inline]
+    pub fn read_u8(&self, addr: u32) -> Result<u8, MemError> { self.read_n::<1>(addr).map(|b| b[0]) }
+    #[inline]
+    pub fn read_u16(&self, addr: u32) -> Result<u16, MemError> { self.read_n(addr).map(u16::from_be_bytes) }
+    #[inline]
+    pub fn read_u32(&self, addr: u32) -> Result<u32, MemError> { self.read_n(addr).map(u32::from_be_bytes) }
+    #[inline]
     pub fn read_i16(&self, addr: u32) -> Result<i16, MemError> { self.read_u16(addr).map(|v| v as i16) }
-    pub fn write_u8(&mut self, addr: u32, v: u8) -> Result<(), MemError> { self.write_be(addr, 1, v as u32) }
-    pub fn write_u16(&mut self, addr: u32, v: u16) -> Result<(), MemError> { self.write_be(addr, 2, v as u32) }
-    pub fn write_u32(&mut self, addr: u32, v: u32) -> Result<(), MemError> { self.write_be(addr, 4, v) }
+    #[inline]
+    pub fn write_u8(&mut self, addr: u32, v: u8) -> Result<(), MemError> { self.write_n(addr, [v]) }
+    #[inline]
+    pub fn write_u16(&mut self, addr: u32, v: u16) -> Result<(), MemError> { self.write_n(addr, v.to_be_bytes()) }
+    #[inline]
+    pub fn write_u32(&mut self, addr: u32, v: u32) -> Result<(), MemError> { self.write_n(addr, v.to_be_bytes()) }
 
     /// Read a NUL-terminated string (lossy UTF-8, at most [`MAX_CSTR`] bytes).
     pub fn read_cstr(&self, addr: u32) -> Result<String, MemError> {
@@ -306,6 +321,24 @@ impl GuestMem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sized loads and stores (one bounds check and one slice copy each since doc 22 phase 5): big-endian, exact at the end of
+    /// RAM, refused one byte past it with nothing written, through the address mask.
+    #[test]
+    fn sized_loads_and_stores_are_big_endian_exact_at_the_end_and_refused_past_it() {
+        let mut m = GuestMem::new(0x100);
+        m.write_u32(0x10, 0x1122_3344).unwrap();
+        assert_eq!(m.bytes(m.span(0x10, 4).unwrap()).unwrap(), &[0x11, 0x22, 0x33, 0x44]);
+        assert_eq!((m.read_u16(0x11), m.read_u8(0x13), m.read_i16(0x10)), (Ok(0x2233), Ok(0x44), Ok(0x1122)));
+        m.write_u16(0xFE, 0xBEEF).unwrap();
+        assert_eq!(m.read_u16(0xFE), Ok(0xBEEF), "the last two bytes");
+        assert_eq!(m.write_u32(0xFD, 0xFFFF_FFFF), Err(MemError::OutOfRange { addr: 0xFD, len: 4 }));
+        assert_eq!(m.read_u16(0xFE), Ok(0xBEEF), "NEGATIVE CONTROL: a refused store writes no byte");
+        assert_eq!(m.read_u32(0xFD), Err(MemError::OutOfRange { addr: 0xFD, len: 4 }));
+        m.set_addr_mask(0xFF);
+        m.write_u8(0x1_0020, 7).unwrap();
+        assert_eq!(m.read_u8(0x20), Ok(7), "the bus mask applies to the sized paths");
+    }
 
     #[test]
     fn a_long_string_reads_whole_with_read_cstr_long_and_a_runaway_is_a_named_error() {

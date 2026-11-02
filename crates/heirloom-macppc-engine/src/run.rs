@@ -171,8 +171,10 @@ impl<U: GuestUi> MacPpc<U> {
         }
         self.sync_natives(&mut cpu);
         let mut exec = core::mem::take(&mut self.rt.exec);
+        let t0 = self.perf.as_ref().map(|p| p.now());
         let stats = exec.resume(self, &mut cpu, budget);
         self.rt.exec = exec;
+        if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let dt = p.now().wrapping_sub(t0); p.add_step(dt, stats.insns); }
         heirloom_mac68k_engine::qd::flush(&mut self.mac);
         if let Some(t) = stats.trap {
             let mut why = format!("PowerPC fault: {t}");
@@ -240,7 +242,30 @@ impl<U: GuestUi> Host for MacPpc<U> {
     fn mem(&mut self) -> &mut GuestMem { &mut self.mac.mem }
 
     fn native(&mut self, cpu: &mut Cpu, addr: u32) -> bool {
-        let Some(symbol) = self.glue_symbol_at(addr) else { return false };
+        if self.perf.is_none() { return self.native_call(cpu, addr); }
+        let class = self.perf_class(addr);
+        let tick = self.mac.ev.ticks_total;
+        let site = if class == crate::perf::Class::Clock && self.perf.as_ref().is_some_and(|p| p.sites.is_some()) {
+            // the caller's LR, then the saved LRs of the two frames above (the back chain at 0(r1), the saved LR at 8)
+            let m = &self.mac.mem;
+            let f1 = m.read_u32(cpu.gpr[1]).unwrap_or(0);
+            let f2 = m.read_u32(f1).unwrap_or(0);
+            [cpu.lr, m.read_u32(f1.wrapping_add(8)).unwrap_or(0), m.read_u32(f2.wrapping_add(8)).unwrap_or(0)]
+        } else { [0; 3] };
+        let Some(p) = self.perf.as_mut() else { return self.native_call(cpu, addr) };
+        if class == crate::perf::Class::Clock { p.clock_read(tick, cpu.tb, site); }
+        let t0 = p.now();
+        let served = self.native_call(cpu, addr);
+        if let Some(p) = self.perf.as_mut() { let dt = p.now().wrapping_sub(t0); p.add_native(class, dt); }
+        served
+    }
+}
+
+impl<U: GuestUi> MacPpc<U> {
+    /// A glue call (the `Host::native` hook without the stage clock).
+    fn native_call(&mut self, cpu: &mut Cpu, addr: u32) -> bool {
+        let Some(symbol) = self.glue.key_at_stub(addr) else { return false };
+        let symbol: &str = &symbol;
         if symbol == INIT_DONE {
             let Some(m) = self.rt.after_init.clone() else { self.rt.fault = Some("the init routine returned twice".into()); cpu.halt(); return true };
             // a CFM initialization function returns an OSErr (16 bits); nonzero fails the fragment's preparation, so main never runs
@@ -272,8 +297,12 @@ impl<U: GuestUi> Host for MacPpc<U> {
         // Not work by itself: a yield; a callback's return (a thread switcher, a dialog filter, a Time Manager task: what the
         // callback called is noted call by call, and what it computed counts in its task's turn); a Thread Manager query that
         // changes nothing (Warcraft III's waiting thread polls GetCurrentThread + YieldToAnyThread, measured on the host).
+        // The symbol's binding, looked up once and shared by every branch below: this is the hottest host path of a game (a lookup
+        // per branch measured ~78 string compares a call, doc 22 phase 5). Nothing between here and the dispatch binds a symbol: a
+        // safepoint that enters a callback returns before it.
+        let binding = self.bindings.get(symbol).cloned();
         let yielding = symbol == crate::callback::CALLBACK_RETURN
-            || matches!(self.bindings.get(&symbol), Some(Binding::Native(Native::Thread(
+            || matches!(binding, Some(Binding::Native(Native::Thread(
                 ThreadFn::YieldToAnyThread | ThreadFn::YieldToThread | ThreadFn::GetCurrentThread | ThreadFn::GetThreadState
                 | ThreadFn::GetDefaultThreadStackSize | ThreadFn::ThreadCurrentStackSpace))));
         self.note_call(cpu, yielding);
@@ -295,23 +324,23 @@ impl<U: GuestUi> Host for MacPpc<U> {
                 Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
             }
         }
-        if let Some(Binding::Native(Native::El(f))) = self.bindings.get(&symbol).cloned() {
+        if let Some(Binding::Native(Native::El(f))) = binding {
             if let Err(why) = self.el_call(f, cpu) { self.mac.log.push(why.clone()); self.rt.fault = Some(why); cpu.halt(); }
             self.sync_natives(cpu);
             return true;
         }
-        if let Some(Binding::Native(Native::CallUniversalProc)) = self.bindings.get(&symbol).cloned() {
+        if let Some(Binding::Native(Native::CallUniversalProc)) = binding {
             if let Err(why) = self.call_universal_proc(cpu) { self.mac.log.push(why.clone()); self.rt.fault = Some(why); cpu.halt(); }
             self.sync_natives(cpu);
             return true;
         }
-        if let Some(Binding::Native(Native::Invoke(f))) = self.bindings.get(&symbol).cloned() {
+        if let Some(Binding::Native(Native::Invoke(f))) = binding {
             if let Err(why) = self.begin_invoke(cpu, f) { self.rt.fault = Some(why); cpu.halt(); }
             self.sync_natives(cpu);
             return true;
         }
-        if let Some(Binding::Native(n @ (Native::SetJmp | Native::CExit | Native::BreakPoint))) = self.bindings.get(&symbol).cloned() { self.cpu_native(n, cpu); return true; }
-        match self.bindings.get(&symbol).cloned() {
+        if let Some(Binding::Native(n @ (Native::SetJmp | Native::CExit | Native::BreakPoint))) = binding { self.cpu_native(n, cpu); return true; }
+        match binding {
             Some(Binding::Native(Native::C(f))) => {
                 if let Err(why) = self.c_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
                 self.sync_natives(cpu);
@@ -367,7 +396,7 @@ impl<U: GuestUi> Host for MacPpc<U> {
         }
         // ModalDialog with user items to draw first: the program's procedures run as callbacks, then the call is entered again
         use crate::callback::DrawOf;
-        let draw_of = match self.bindings.get(&symbol) {
+        let draw_of = match &binding {
             Some(Binding::Native(Native::ModalDialog)) => Some(DrawOf::Modal),
             // DrawDialog(d) / UpdateDialog(d, rgn) / DialogSelect(an update event for a dialog): the user items are PowerPC procedures too; the
             // call is over after the last
@@ -387,7 +416,7 @@ impl<U: GuestUi> Host for MacPpc<U> {
             }
         }
         let mut regs = cpu.gpr;
-        let outcome = self.glue_call(&symbol, &mut regs);
+        let outcome = self.glue_call(symbol, &mut regs);
         // a host call changes the result registers only; anything else it touched would be a bug in the adapter
         cpu.gpr[3] = regs[3];
         cpu.gpr[4] = regs[4];

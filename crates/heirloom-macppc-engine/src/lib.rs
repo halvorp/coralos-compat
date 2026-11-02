@@ -56,6 +56,7 @@ pub mod run;
 pub mod source;
 pub mod mp;
 pub mod sched;
+pub mod perf; // the opt-in stage clock: where a guest frame's time goes ([HEIRLOOM-PERF] lines)
 pub mod stdclib;
 pub mod threads;
 pub mod alias_c;
