@@ -72,3 +72,14 @@ fn encode_into_appends_after_queued_bytes_and_each_frame_decodes_back() {
     }
     assert_eq!(&queue[..5], &[0xAA; 5]);
 }
+
+#[test]
+fn a_call_from_borrowed_words_is_the_bytes_of_the_call_frame() {
+    for args in [&[][..], &[7][..], &[1, u64::MAX, 0x8077, 0, 5][..], &[0x3F80_0000; 16][..]] {
+        let mut queue = vec![0x55u8; 3];
+        Frame::encode_call_into(&mut queue, tok(), 0x0102, args);
+        let want = Frame { token: tok(), command: Command::Call { entry: 0x0102, args: args.to_vec() } }.encode();
+        assert_eq!(&queue[..3], &[0x55; 3]);
+        assert_eq!(&queue[3..], &want[..], "{args:x?}");
+    }
+}

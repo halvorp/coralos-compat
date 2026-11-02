@@ -144,6 +144,8 @@ pub struct GlState {
     /// Per contract entry: its generated family signature (`heirloom_gl_abi::family::lookup` of its name), made once at the
     /// first call - the per-call path indexes it instead of scanning the 259-row table by name.
     sigs: Vec<Option<&'static heirloom_gl_abi::family::Sig>>,
+    /// The argument words of the call being encoded: one buffer reused call after call ([`MacPpc::gl_words`]), not a `Vec` each.
+    words: Vec<u64>,
 }
 
 impl GlState {
@@ -160,6 +162,16 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn gl_attach(&mut self, w: Box<dyn GlWorker>) { self.gl.attach(w); }
 
     fn gl_queue(&mut self, token: Token, command: Command) { Frame { token, command }.encode_into(&mut self.gl.pending); }
+
+    /// The (empty) argument buffer for one call: fill it, then hand it back through [`MacPpc::gl_queue_call`] or [`MacPpc::gl_words_back`].
+    pub(super) fn gl_words(&mut self) -> Vec<u64> { let mut w = core::mem::take(&mut self.gl.words); w.clear(); w }
+    pub(super) fn gl_words_back(&mut self, w: Vec<u64>) { self.gl.words = w; }
+
+    /// Queue `Command::Call { entry, args: w }` without building the command, and keep `w`'s buffer for the next call.
+    pub(super) fn gl_queue_call(&mut self, token: Token, entry: u16, w: Vec<u64>) {
+        Frame::encode_call_into(&mut self.gl.pending, token, entry, &w);
+        self.gl.words = w;
+    }
 
     /// Send what is queued as one batch (ending in `BatchEnd`) and return the replies. Retired batches advance the fences.
     fn gl_flush(&mut self) -> Vec<Command> {
@@ -316,16 +328,17 @@ impl<U: GuestUi> MacPpc<U> {
             // ---- GL state forwarded as calls ------------------------------------------------------------------------
             "glViewport" | "glClear" | "glMatrixMode" | "glEnable" | "glDisable" | "glActiveTextureARB" | "glFinish" => {
                 if let Some(m) = heirloom_gl_abi::gaps::refused_value(name, &[u64::from(a0)]) { self.gl_note(m.clone()); return Err(m); }
-                let args: Vec<u64> = match name { "glViewport" => alloc::vec![u64::from(a0), u64::from(a1), u64::from(a2), u64::from(a3)], "glFinish" => Vec::new(), _ => alloc::vec![u64::from(a0)] };
+                let mut args = self.gl_words();
+                match name { "glViewport" => args.extend([a0, a1, a2, a3].map(u64::from)), "glFinish" => {}, _ => args.push(u64::from(a0)) }
                 match self.gl_ctx_token() {
-                    Some(t) => { self.gl_queue(t, Command::Call { entry: f.0, args }); if name == "glFinish" { self.gl_flush(); } }
+                    Some(t) => { self.gl_queue_call(t, f.0, args); if name == "glFinish" { self.gl_flush(); } }
                     None => self.gl_set_error(GL_INVALID_OPERATION),
                 }
             }
             "glLoadMatrixf" => {
-                let mut w = Vec::with_capacity(16);
+                let mut w = self.gl_words();
                 for i in 0..16 { w.push(u64::from(self.mac.mem.read_u32(a0.wrapping_add(4 * i)).map_err(|_| format!("glLoadMatrixf: the matrix at {a0:#x} leaves guest RAM"))?)); }
-                match self.gl_ctx_token() { Some(t) => self.gl_queue(t, Command::Call { entry: f.0, args: w }), None => self.gl_set_error(GL_INVALID_OPERATION) }
+                match self.gl_ctx_token() { Some(t) => self.gl_queue_call(t, f.0, w), None => { self.gl_words_back(w); self.gl_set_error(GL_INVALID_OPERATION) } }
             }
             // ---- client arrays: descriptors only, read at the draw ----------------------------------------------------
             "glEnableClientState" | "glDisableClientState" if matches!(a0, 0x8077 | 0x8079) => {

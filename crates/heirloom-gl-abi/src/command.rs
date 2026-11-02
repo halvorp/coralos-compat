@@ -87,12 +87,15 @@ pub struct Frame {
     pub command: Command,
 }
 
+/// The frame kind of [`Command::Call`].
+const KIND_CALL: u16 = 4;
+
 fn kind_of(c: &Command) -> u16 {
     match c {
         Command::ContextCreate => 1,
         Command::ContextDestroy => 2,
         Command::MakeCurrent => 3,
-        Command::Call { .. } => 4,
+        Command::Call { .. } => KIND_CALL,
         Command::Draw(_) => 5,
         Command::FenceSet { .. } => 6,
         Command::Swap { .. } => 7,
@@ -121,6 +124,33 @@ pub fn peek_len(bytes: &[u8]) -> Result<Option<usize>, WireError> {
     HEADER.checked_add(len).map(Some).ok_or(WireError::Overflow)
 }
 
+/// Start a frame at the end of `out`: its header with the payload length still 0 ([`finish`] patches it).
+fn begin(out: &mut Vec<u8>, kind: u16, token: Token) -> (Writer, usize) {
+    let start = out.len();
+    let mut p = Writer { buf: core::mem::take(out) };
+    p.u16(ABI_VERSION);
+    p.u16(kind);
+    p.u32(0);
+    p.u32(token.slot);
+    p.u32(token.incarnation);
+    (p, start)
+}
+
+fn finish(mut p: Writer, start: usize, out: &mut Vec<u8>) {
+    let len = (p.buf.len() - start - HEADER) as u32;
+    p.buf[start + 4..start + 8].copy_from_slice(&len.to_le_bytes());
+    *out = p.buf;
+}
+
+fn call_payload(p: &mut Writer, entry: u16, args: &[u64]) {
+    p.u16(entry);
+    p.u16(0);
+    p.u32(args.len() as u32);
+    for a in args {
+        p.u64(*a);
+    }
+}
+
 impl Frame {
     /// The frame's bytes as a new vector (the same bytes [`Frame::encode_into`] appends).
     pub fn encode(&self) -> Vec<u8> {
@@ -132,23 +162,10 @@ impl Frame {
     /// Append the frame's bytes to `out`: the header first with its length patched once the payload is written, so a
     /// queue of frames grows in place with no per-frame buffer (the engine encodes thousands of GL calls a frame).
     pub fn encode_into(&self, out: &mut Vec<u8>) {
-        let start = out.len();
-        let mut p = Writer { buf: core::mem::take(out) };
-        p.u16(ABI_VERSION);
-        p.u16(kind_of(&self.command));
-        p.u32(0);
-        p.u32(self.token.slot);
-        p.u32(self.token.incarnation);
+        let (mut p, start) = begin(out, kind_of(&self.command), self.token);
         match &self.command {
             Command::ContextCreate | Command::ContextDestroy | Command::MakeCurrent => {}
-            Command::Call { entry, args } => {
-                p.u16(*entry);
-                p.u16(0);
-                p.u32(args.len() as u32);
-                for a in args {
-                    p.u64(*a);
-                }
-            }
+            Command::Call { entry, args } => call_payload(&mut p, *entry, args),
             Command::CallData { entry, args, data } => {
                 p.u16(*entry);
                 p.u16(0);
@@ -200,9 +217,15 @@ impl Frame {
             }
             Command::BatchEnd { seq } | Command::Retired { seq } => p.u64(*seq),
         }
-        let len = (p.buf.len() - start - HEADER) as u32;
-        p.buf[start + 4..start + 8].copy_from_slice(&len.to_le_bytes());
-        *out = p.buf;
+        finish(p, start, out);
+    }
+
+    /// Append a `Command::Call { entry, args }` frame for `token` from borrowed words - the same bytes as encoding that frame, with
+    /// no `Vec` of arguments to build first (the engine's per-call path).
+    pub fn encode_call_into(out: &mut Vec<u8>, token: Token, entry: u16, args: &[u64]) {
+        let (mut p, start) = begin(out, KIND_CALL, token);
+        call_payload(&mut p, entry, args);
+        finish(p, start, out);
     }
 
     /// Decode ONE frame from the front of `bytes`; returns it and the bytes consumed.

@@ -27,7 +27,7 @@ impl<U: GuestUi> MacPpc<U> {
         let Some(token) = self.gl_ctx_token() else { self.gl_set_error(GL_INVALID_OPERATION); return Ok(0); };
         let who = sig.name;
         let (mut slot, mut fp) = (0usize, 0usize);
-        let mut words: Vec<u64> = Vec::new();
+        let mut words = self.gl_words();
         let mut out: Option<(u32, Ty, usize)> = None;
         for p in sig.params {
             match *p {
@@ -71,7 +71,7 @@ impl<U: GuestUi> MacPpc<U> {
             return Err(m);
         }
         if !sig.answers() {
-            self.gl_queue(token, Command::Call { entry, args: words });
+            self.gl_queue_call(token, entry, words);
             return Ok(0);
         }
         // client-array state is the engine's: it answers those queries itself

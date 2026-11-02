@@ -21,10 +21,12 @@ impl<U: GuestUi> MacPpc<U> {
     /// The k-th float argument (an `f32` parameter arrives in an FPR as a double).
     fn fl(cpu: &Cpu, k: usize) -> u64 { u64::from((f64::from_bits(cpu.fpr[1 + k]) as f32).to_bits()) }
 
-    /// `n` big-endian floats at guest `p`, as ring words (`f32` bits).
-    fn gl_floats(&self, p: u32, n: usize, who: &str) -> Result<Vec<u64>, String> {
-        (0..n).map(|i| self.mac.mem.read_u32(p.wrapping_add(4 * i as u32)).map(u64::from).map_err(|_| format!("{who}: the parameters at {p:#x} leave guest RAM"))).collect()
+    /// `n` big-endian floats at guest `p`, as ring words (`f32` bits), appended to `w`.
+    fn gl_floats_into(&self, p: u32, n: usize, who: &str, w: &mut Vec<u64>) -> Result<(), String> {
+        for i in 0..n { w.push(u64::from(self.mac.mem.read_u32(p.wrapping_add(4 * i as u32)).map_err(|_| format!("{who}: the parameters at {p:#x} leave guest RAM"))?)); }
+        Ok(())
     }
+
 
     /// Record a `glPixelStorei` the way GL does; false = an invalid enum or value (the error is already set).
     pub(super) fn gl_pixel_store(&mut self, pname: u32, v: i32) -> bool {
@@ -72,33 +74,33 @@ impl<U: GuestUi> MacPpc<U> {
             if !self.gl_pixel_store(p, v) { return Ok(0); }
         }
         let Some(token) = self.gl_ctx_token() else { self.gl_set_error(GL_INVALID_OPERATION); return Ok(0); };
-        let words: Vec<u64> = match name {
-            "glAlphaFunc" => vec![u64::from(i(self, 0)?), Self::fl(cpu, 0)],
-            "glBindTexture" | "glBlendFunc" | "glColorMaterial" | "glFogi" | "glPixelStorei" => vec![u64::from(i(self, 0)?), u64::from(i(self, 1)?)],
-            "glClearColor" => (0..4).map(|k| Self::fl(cpu, k)).collect(),
-            "glDepthFunc" => vec![u64::from(i(self, 0)?)],
-            "glDepthMask" => vec![u64::from(i(self, 0)? & 0xFF)],
-            "glDepthRange" => vec![cpu.fpr[1], cpu.fpr[2]],
-            "glFogf" => vec![u64::from(i(self, 0)?), Self::fl(cpu, 0)],
-            "glPolygonOffset" => vec![Self::fl(cpu, 0), Self::fl(cpu, 1)],
-            "glScissor" => (0..4).map(|k| i(self, k).map(u64::from)).collect::<Result<_, _>>()?,
-            "glTexEnvi" | "glTexGeni" | "glTexParameteri" => (0..3).map(|k| i(self, k).map(u64::from)).collect::<Result<_, _>>()?,
-            "glLightf" => vec![u64::from(i(self, 0)?), u64::from(i(self, 1)?), Self::fl(cpu, 0)],
-            "glNormal3fv" => self.gl_floats(i(self, 0)?, 3, name)?,
+        // the call's words go into the engine's one reusable buffer (no allocation per call)
+        let mut w = self.gl_words();
+        match name {
+            "glAlphaFunc" => w.extend([u64::from(i(self, 0)?), Self::fl(cpu, 0)]),
+            "glBindTexture" | "glBlendFunc" | "glColorMaterial" | "glFogi" | "glPixelStorei" => w.extend([u64::from(i(self, 0)?), u64::from(i(self, 1)?)]),
+            "glClearColor" => w.extend((0..4).map(|k| Self::fl(cpu, k))),
+            "glDepthFunc" => w.push(u64::from(i(self, 0)?)),
+            "glDepthMask" => w.push(u64::from(i(self, 0)? & 0xFF)),
+            "glDepthRange" => w.extend([cpu.fpr[1], cpu.fpr[2]]),
+            "glFogf" => w.extend([u64::from(i(self, 0)?), Self::fl(cpu, 0)]),
+            "glPolygonOffset" => w.extend([Self::fl(cpu, 0), Self::fl(cpu, 1)]),
+            "glScissor" => for k in 0..4 { w.push(u64::from(i(self, k)?)); },
+            "glTexEnvi" | "glTexGeni" | "glTexParameteri" => for k in 0..3 { w.push(u64::from(i(self, k)?)); },
+            "glLightf" => w.extend([u64::from(i(self, 0)?), u64::from(i(self, 1)?), Self::fl(cpu, 0)]),
+            "glNormal3fv" => self.gl_floats_into(i(self, 0)?, 3, name, &mut w)?,
             "glFogfv" | "glLightModelfv" | "glLightfv" | "glMaterialfv" => {
                 let (lead, kind) = match name { "glFogfv" => (1, sig::VecKind::Fog), "glLightModelfv" => (1, sig::VecKind::LightModel), "glLightfv" => (2, sig::VecKind::Light), _ => (2, sig::VecKind::Material) };
-                let mut w: Vec<u64> = (0..lead).map(|k| i(self, k).map(u64::from)).collect::<Result<_, _>>()?;
-                let Some(n) = sig::vec_len(kind, w[lead - 1] as u32) else { self.gl_set_error(GL_INVALID_ENUM); return Ok(0); };
-                w.extend(self.gl_floats(i(self, lead)?, n, name)?);
-                w
+                for k in 0..lead { w.push(u64::from(i(self, k)?)); }
+                let Some(n) = sig::vec_len(kind, w[lead - 1] as u32) else { self.gl_words_back(w); self.gl_set_error(GL_INVALID_ENUM); return Ok(0); };
+                self.gl_floats_into(i(self, lead)?, n, name, &mut w)?;
             }
             "glDeleteTextures" => {
                 let n = i(self, 0)? as i32;
-                if n < 0 { self.gl_set_error(GL_INVALID_VALUE); return Ok(0); }
-                let mut w = vec![n as u64];
+                if n < 0 { self.gl_words_back(w); self.gl_set_error(GL_INVALID_VALUE); return Ok(0); }
+                w.push(n as u64);
                 let p = i(self, 1)?;
                 for k in 0..n as u32 { w.push(u64::from(self.mac.mem.read_u32(p.wrapping_add(4 * k)).map_err(|_| String::from("glDeleteTextures: the names leave guest RAM"))?)); }
-                w
             }
             "glGenTextures" => {
                 let n = i(self, 0)? as i32;
@@ -149,12 +151,12 @@ impl<U: GuestUi> MacPpc<U> {
                 return Ok(0);
             }
             other => return Err(format!("{other}: marked implemented but has no encoder in this engine (a contract/engine skew)")),
-        };
-        if let Some(m) = heirloom_gl_abi::gaps::refused_value(name, &words) {
+        }
+        if let Some(m) = heirloom_gl_abi::gaps::refused_value(name, &w) {
             self.gl_note(m.clone());
             return Err(m);
         }
-        self.gl_queue(token, Command::Call { entry, args: words });
+        self.gl_queue_call(token, entry, w);
         Ok(0)
     }
 }
