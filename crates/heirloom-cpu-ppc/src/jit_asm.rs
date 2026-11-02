@@ -25,7 +25,7 @@ pub(crate) const R15: u8 = 15;
 /// Condition codes (the low nibble of Jcc / SETcc / CMOVcc).
 #[derive(Clone, Copy)]
 #[repr(u8)]
-pub(crate) enum Cc { B = 2, Ae = 3, E = 4, Ne = 5, A = 7, S = 8, P = 10, L = 12, G = 15 }
+pub(crate) enum Cc { B = 2, Ae = 3, E = 4, Ne = 5, A = 7, S = 8, Ns = 9, P = 10, L = 12, G = 15 }
 
 /// ALU group-1 operations: the /digit of 0x81 and (digit << 3) | 1 is the `r/m, reg` opcode.
 #[derive(Clone, Copy)]
@@ -207,6 +207,7 @@ impl Asm {
     pub(crate) fn neg(&mut self, r: u8) { self.op_r(false, &[0xF7], 3, r, false) }
     pub(crate) fn not(&mut self, r: u8) { self.op_r(false, &[0xF7], 2, r, false) }
     pub(crate) fn test_rr(&mut self, a: u8, b: u8) { self.op_r(false, &[0x85], b, a, false) }
+    pub(crate) fn test_rr64(&mut self, a: u8, b: u8) { self.op_r(true, &[0x85], b, a, false) }
     pub(crate) fn test_ri(&mut self, r: u8, v: u32) {
         self.op_r(false, &[0xF7], 0, r, false);
         self.u32(v);
@@ -248,6 +249,14 @@ impl Asm {
     /// movq r64, xmm / movd xmm, r32.
     pub(crate) fn movq_rx(&mut self, r: u8, x: u8) { self.u8(0x66); self.op_r(true, &[0x0F, 0x7E], x, r, false) }
     pub(crate) fn movd_xr(&mut self, x: u8, r: u8) { self.u8(0x66); self.op_r(false, &[0x0F, 0x6E], x, r, false) }
+    /// movq xmm, r64.
+    pub(crate) fn movq_xr(&mut self, x: u8, r: u8) { self.u8(0x66); self.op_r(true, &[0x0F, 0x6E], x, r, false) }
+    /// movapd xmm, xmm.
+    pub(crate) fn movapd(&mut self, x: u8, y: u8) { self.sse_r(0x66, 0x28, x, y) }
+    /// cvttsd2si r32, xmm (truncating; 0x80000000 for NaN or out of range).
+    pub(crate) fn cvttsd2si(&mut self, r: u8, x: u8) { self.sse_r(0xF2, 0x2C, r, x) }
+    /// cvtsi2sd xmm, r32.
+    pub(crate) fn cvtsi2sd(&mut self, x: u8, r: u8) { self.sse_r(0xF2, 0x2A, x, r) }
 
     // ---- control flow ----
     pub(crate) fn jcc(&mut self, cc: Cc) -> Fix {
@@ -350,6 +359,11 @@ mod tests {
         assert_eq!(enc(|a| a.movq_rx(RDX, 0)), [0x66, 0x48, 0x0F, 0x7E, 0xC2]); // movq rdx,xmm0
         assert_eq!(enc(|a| a.movd_xr(0, RDX)), [0x66, 0x0F, 0x6E, 0xC2]); // movd xmm0,edx
         assert_eq!(enc(|a| a.sh_ri64(Sh::Shr, RAX, 53)), [0x48, 0xC1, 0xE8, 53]); // shr rax,53
+        assert_eq!(enc(|a| a.test_rr64(RCX, RCX)), [0x48, 0x85, 0xC9]); // test rcx,rcx
+        assert_eq!(enc(|a| a.movq_xr(1, RDX)), [0x66, 0x48, 0x0F, 0x6E, 0xCA]); // movq xmm1,rdx
+        assert_eq!(enc(|a| a.movapd(5, 0)), [0x66, 0x0F, 0x28, 0xE8]); // movapd xmm5,xmm0
+        assert_eq!(enc(|a| a.cvttsd2si(RAX, 0)), [0xF2, 0x0F, 0x2C, 0xC0]); // cvttsd2si eax,xmm0
+        assert_eq!(enc(|a| a.cvtsi2sd(1, RAX)), [0xF2, 0x0F, 0x2A, 0xC8]); // cvtsi2sd xmm1,eax
         assert_eq!(enc(|a| a.adc_ro(RDX, O::M(m(RBX, 8)))), [0x13, 0x53, 0x08]); // adc edx,[rbx+8]
         assert_eq!(enc(|a| a.adc_ri(RDX, 0)), [0x81, 0xD2, 0, 0, 0, 0]); // adc edx,0
         assert_eq!(enc(|a| a.bsr_ro(RDX, O::M(m(RBX, 8)))), [0x0F, 0xBD, 0x53, 0x08]); // bsr edx,[rbx+8]

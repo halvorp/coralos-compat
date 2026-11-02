@@ -6,7 +6,7 @@
 //!   keeps) goes slow.
 //! - stfs: the PEM truncation's first branch (exponent > 896, or +-0) is pure bit selection; a single denormal goes slow.
 //! - fcmpu/fcmpo: ordered operands (ucomisd PF clear); a NaN (VXSNAN / VXVC) goes slow.
-//! - fadd/fsub/fmul and the single forms, Rc=0: under FPSCR[RN] = 0 only, the f64 operation then, for the single forms,
+//! - fadd/fsub/fmul/fdiv and the single forms, Rc=0 (fdiv: a zero divisor goes slow): under FPSCR[RN] = 0 only, the f64 operation then, for the single forms,
 //!   `(r as f32) as f64` - exactly tier 0's arithmetic - and only when the result is finite (a NaN result means a NaN or an
 //!   invalid operand, an infinite one means OX or an infinite operand: all slow). FPRF from the result's class.
 //! - sraw (and Rc), extsh. / extsb., and the X-form loads/stores tier 1 leaves Generic (RA = 0, halfword, byte-reversed).
@@ -34,6 +34,8 @@ impl E<'_, '_> {
             K::Stfs => { self.stfs(i, Ea { ra: op.a, rb: None, imm: op.imm, update: false }, op.d as usize); true }
             K::Fp59 | K::Fp63 => self.fp(i, w, op.k == K::Fp59),
             K::Generic if w.op() == 20 => { self.rlwimi(w); true }
+            K::Generic if w.op() == 19 => self.crlogic(w),
+            K::Generic if w.op() == 46 || w.op() == 47 => self.lmw_stmw(i, w),
             K::Generic => self.x31(i, w),
             _ => false,
         }
@@ -97,13 +99,25 @@ impl E<'_, '_> {
                     return true;
                 }
                 12 if !w.rc() => { self.frsp(i, d, b); return true; }
+                15 if !w.rc() => { self.fctiwz(i, d, b); return true; }
                 // every other opcode-63 form with an xo10 of its own (frsp, fctiw, mffs, mtfsf, ...): tier 1's handler
                 12 | 14 | 15 | 40 | 72 | 136 | 264 | 583 | 711 | 134 | 38 | 70 | 64 => return false,
                 _ => {}
             }
         }
-        let (opc, src) = match w.xo5() { 20 => (0x5C, b), 21 => (0x58, b), 25 => (0x59, c), _ => return false };
+        if single && (28..=31).contains(&w.xo5()) {
+            if w.rc() { return false; }
+            self.fmadds(i, w.xo5(), d, a_, b, c);
+            return true;
+        }
+        let (opc, src) = match w.xo5() { 18 => (0x5E, b), 20 => (0x5C, b), 21 => (0x58, b), 25 => (0x59, c), _ => return false };
         if w.rc() { return false; }
+        if w.xo5() == 18 {
+            // a zero divisor (ZX, or VXZDZ for 0/0) is tier 0's
+            self.a.ld64(RCX, f(b));
+            self.a.alu_rr64(Alu::Add, RCX, RCX);
+            self.slow_if(Cc::E, i);
+        }
         let a = &mut self.a;
         a.ld32(RCX, cpu(FPSCR));
         a.test_ri(RCX, 3); // FPSCR[RN] != 0: tier 0 refuses by name
@@ -128,7 +142,7 @@ impl E<'_, '_> {
 
     /// FPSCR[FPRF] = the class of the finite result in rax (fpscr::classify): +-zero, +-denormal (below the single or the
     /// double normal range), +-normal.
-    fn fprf(&mut self, single: bool) {
+    pub(crate) fn fprf(&mut self, single: bool) {
         let a = &mut self.a;
         a.mov_rr64(RDX, RAX);
         a.sh_ri64(Sh::Shr, RDX, 63);
@@ -243,6 +257,8 @@ impl E<'_, '_> {
                 self.cr0_of_edx();
             }
             _ if w.rc() => return false,
+            // mfcr (not mfocrf: bit 20 clear)
+            19 if op20(w) == 0 => { let c = self.r(CR); self.a.ld32o(RDX, c); self.stg(t, RDX); }
             535 => self.lfs(i, Ea { ra: a_, rb: Some(b), imm: 0, update: false }, t as usize),
             663 => self.stfs(i, Ea { ra: a_, rb: Some(b), imm: 0, update: false }, t as usize),
             // loads: lwzx lbzx (RA = 0 only reach here), lhzx lhax, lwbrx lhbrx
@@ -354,5 +370,94 @@ impl E<'_, '_> {
         self.stg(d, RDX);
         self.ca_from_r8();
         if rc { self.cr0_of_edx(); }
+    }
+}
+
+/// Bit 20 of an X-form word (mfocrf / mtocrf when set).
+fn op20(w: W) -> u32 { (w.0 >> 20) & 1 }
+
+impl E<'_, '_> {
+    /// The CR logical forms (XL-form, opcode 19: crand crandc creqv crnand crnor cror crorc crxor) and mcrf; anything else
+    /// with opcode 19 (isync, rfi, ...) is not taken.
+    fn crlogic(&mut self, w: W) -> bool {
+        let (d, a_, b) = (w.rt() as u32, w.ra() as u32, w.rb() as u32);
+        let xo = w.xo();
+        if xo == 0 {
+            // mcrf: CR field rt>>2 = CR field ra>>2
+            let (fd, fs_) = (d >> 2, a_ >> 2);
+            let c = self.rw(CR);
+            let a = &mut self.a;
+            a.ld32o(RAX, c);
+            a.sh_ri(Sh::Shr, RAX, (28 - 4 * fs_) as u8);
+            a.alu_ri(Alu::And, RAX, 0xF);
+            if fd != 7 { a.sh_ri(Sh::Shl, RAX, (28 - 4 * fd) as u8); }
+            a.alu_oi(Alu::And, c, !(0xF << (28 - 4 * fd)));
+            a.alu_or(Alu::Or, c, RAX);
+            return true;
+        }
+        // (operation, complement the result, complement b first)
+        let (op, not_r, not_b) = match xo {
+            257 => (Alu::And, false, false), 129 => (Alu::And, false, true), 225 => (Alu::And, true, false),
+            449 => (Alu::Or, false, false), 417 => (Alu::Or, false, true), 33 => (Alu::Or, true, false),
+            193 => (Alu::Xor, false, false), 289 => (Alu::Xor, true, false),
+            _ => return false,
+        };
+        let c = self.rw(CR);
+        let a = &mut self.a;
+        a.ld32o(RAX, c);
+        a.mov_rr(RCX, RAX);
+        if a_ != 31 { a.sh_ri(Sh::Shr, RAX, (31 - a_) as u8); }
+        if b != 31 { a.sh_ri(Sh::Shr, RCX, (31 - b) as u8); }
+        if not_b { a.not(RCX); }
+        a.alu_rr(op, RAX, RCX);
+        if not_r { a.not(RAX); }
+        a.alu_ri(Alu::And, RAX, 1);
+        if d != 31 { a.sh_ri(Sh::Shl, RAX, (31 - d) as u8); }
+        a.alu_oi(Alu::And, c, !(1u32 << (31 - d)));
+        a.alu_or(Alu::Or, c, RAX);
+        true
+    }
+
+    /// lmw / stmw: words from EA to rD..r31 / from rS..r31 to EA. Word aligned, every byte in RAM, and (stmw) one page that
+    /// holds no decoded code, or the slow stub; lmw with rA in the loaded range is tier 0's (an invalid form).
+    fn lmw_stmw(&mut self, i: usize, w: W) -> bool {
+        let (t, a_) = (w.rt() as u8, w.ra() as u8);
+        let store = w.op() == 47;
+        if !store && a_ != 0 && a_ >= t { return false; }
+        let n = 32 - t as u32;
+        let e = Ea { ra: a_, rb: None, imm: w.simm(), update: false };
+        if a_ == 0 {
+            self.a.mov_ri(RAX, e.imm);
+            if self.env.mask != u32::MAX { self.a.alu_rm(Alu::And, RAX, crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, mask))); }
+        } else {
+            self.ea_regs(e);
+        }
+        let a = &mut self.a;
+        a.test_ri(RAX, 3);
+        self.slow_if(Cc::Ne, i);
+        let a = &mut self.a;
+        a.lea64(RCX, m(RAX, 4 * n as i32));
+        a.alu_rm64(Alu::Cmp, RCX, crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, len)));
+        self.slow_if(Cc::A, i);
+        if store {
+            let a = &mut self.a;
+            // one page: (ea & 0xFFF) + 4n <= 0x1000; then the page's code-watch bit and the lockstep journal (store_guard)
+            a.mov_rr(RCX, RAX);
+            a.alu_ri(Alu::And, RCX, 0xFFF);
+            a.alu_ri(Alu::Cmp, RCX, 0x1000 - 4 * n);
+            self.slow_if(Cc::A, i);
+            self.store_guard_n(i, n * 4);
+            if a_ == 0 {
+                self.a.mov_ri(RAX, e.imm);
+                if self.env.mask != u32::MAX { self.a.alu_rm(Alu::And, RAX, crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, mask))); }
+            } else if self.env.logged {
+                self.ea_regs(e);
+            }
+        }
+        for k in 0..n as u8 {
+            if store { self.ldg(RDX, t + k); self.st_be(4); } else { self.ld_be(4, false); self.stg(t + k, RDX); }
+            if (k as u32) + 1 < n { self.a.lea64(RAX, m(RAX, 4)); }
+        }
+        true
     }
 }

@@ -40,6 +40,8 @@ pub(crate) const MUT_LAZY_FLAGS: u8 = 10;
 /// Eviction leaves the dropped segment's blocks in the block map and the dispatch table (jit.rs): the dispatcher then
 /// enters code whose pages went back to RW (no execute) or were rewritten.
 pub(crate) const MUT_EVICT_STALE: u8 = 11;
+/// fmadds rounded twice (the f64 sum, then single) instead of round-to-odd + one rounding (jit_fp).
+pub(crate) const MUT_FMA_TWICE: u8 = 12;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -289,7 +291,7 @@ impl E<'_, '_> {
         self.a.alu_rm64(Alu::Cmp, RAX, ctx(lim));
         self.slow_if(Cc::A, i);
     }
-    fn ea_regs(&mut self, e: Ea) {
+    pub(crate) fn ea_regs(&mut self, e: Ea) {
         let r = if e.update { RSI } else { RAX };
         match (e.ra, e.rb) {
             (0, Some(rb)) => { let o = self.gr(rb); self.a.ld32o(r, o) }
@@ -314,6 +316,12 @@ impl E<'_, '_> {
             a.alu_ri(Alu::Cmp, RCX, 0x1000 - n as u32);
             self.slow_if(Cc::A, i);
         }
+        self.store_guard_n(i, n as u32);
+        if self.env.logged { self.ea_regs(e); }
+    }
+    /// A store of `bytes` at eax that stays in one page: slow if the page is watched (it holds decoded code); in lockstep
+    /// the old bytes are journaled first (eax is then clobbered: the caller recomputes it).
+    pub(crate) fn store_guard_n(&mut self, i: usize, bytes: u32) {
         if self.env.mutant != MUT_NO_WATCH {
             let a = &mut self.a;
             a.mov_rr(RCX, RAX);
@@ -332,12 +340,11 @@ impl E<'_, '_> {
             a.alu_ri64(Alu::Sub, RSP, 8);
             a.mov_rr64(RDI, R13);
             a.mov_rr(RSI, RAX);
-            a.mov_ri(RDX, n as u32);
+            a.mov_ri(RDX, bytes);
             a.mov_ri64(RAX, self.env.note);
             a.call_r(RAX);
             a.alu_ri64(Alu::Add, RSP, 8);
             for r in crate::jit_regs::CALLER_SAVED.iter().rev() { a.pop(*r); }
-            self.ea_regs(e);
         }
     }
 

@@ -208,7 +208,7 @@ fn random_program(seed: u64) -> Vec<u32> {
         let (t, a, b) = (r.reg(), r.reg(), r.reg());
         let imm = r.next() & 0xFFFF;
         let off = r.pick(0x3F0) & !3;
-        let w = match r.pick(50) {
+        let w = match r.pick(56) {
             0 => d(14, t, a, imm), 1 => d(15, t, a, imm), 2 => d(24, a, t, imm), 3 => d(25, a, t, imm), 4 => d(26, a, t, imm),
             5 => d(28, a, t, imm), 6 => d(29, a, t, imm), 7 => d(7, t, a, imm), 8 => d(12, t, a, imm), 9 => d(13, t, a, imm),
             10 => d(8, t, a, imm),
@@ -247,6 +247,19 @@ fn random_program(seed: u64) -> Vec<u32> {
             47 => 63 << 26 | fr(&mut r) << 21 | fr(&mut r) << 11 | 12 << 1, // frsp
             48 => x(fr(&mut r), 20, 23, [535, 663][r.pick(2) as usize], false), // lfsx / stfsx (r23 into BUF)
             49 => d(14, [b, 0][r.pick(2) as usize], 0, [0, 0xFFFF, 1][r.pick(3) as usize]), // zero / -1 / 1 divisors and operands
+            // ppc-jit2 increment 3: fmadds fmsubs fnmadds fnmsubs (+Rc), fdivs / fdiv, fctiwz (+Rc), stmw + lmw round trips,
+            // the CR logical forms and mcrf (never into cr7: the loop counts there)
+            50 => fa(59, fr(&mut r), fr(&mut r), fr(&mut r), fr(&mut r), 28 + r.pick(4), r.pick(8) == 0),
+            51 => fa([59, 63][r.pick(2) as usize], fr(&mut r), fr(&mut r), fr(&mut r), 0, 18, r.pick(8) == 0),
+            52 => 63 << 26 | fr(&mut r) << 21 | fr(&mut r) << 11 | 15 << 1 | (r.pick(8) == 0) as u32, // fctiwz
+            53 => {
+                let (rs, off) = (25 + r.pick(6), 0x400 + (off & 0x1F8) + if r.pick(16) == 0 { 2 } else { 0 });
+                p.push(0x6000_0000); // a preceding skip-the-next bc lands here, never between the pair
+                p.push(d(47, rs, 20, off)); // stmw rS,off(r20)
+                d(46, rs, 20, off) // lmw rS,off(r20): the same words back (r31, the trip count, unchanged)
+            }
+            54 => 19 << 26 | r.pick(28) << 21 | r.pick(32) << 16 | r.pick(32) << 11 | [257, 129, 289, 225, 33, 449, 417, 193][r.pick(8) as usize] << 1,
+            55 => 19 << 26 | r.pick(7) << 23 | r.pick(8) << 18, // mcrf
             _ => 0x6000_0000,
         };
         p.push(w);
@@ -392,6 +405,53 @@ fn evict_child() {
     small_arena_workload(mutant).unwrap();
 }
 
+/// fmadds at single-precision TIES: a, c = 1 + k * 2^-12 (a*c = 1 + ... + 2^-24 k_a k_c, often exactly half a single ulp
+/// above a representable value) and b a tiny single (+-2^-53 .. 2^-70, or 0) that decides the tie. Rounding the f64 sum first
+/// loses b and rounds the tie to even; the fused instruction does not. 400 triples at BUF: lfs x3, fmadds/fmsubs/fnmadds/
+/// fnmsubs, stfd the result.
+fn fma_ties_program() -> Vec<u32> {
+    vec![
+        d(14, 31, 0, 400), d(14, 21, 20, 0x2000), d(14, 22, 20, 0),
+        d(48, 1, 22, 0), d(48, 2, 22, 4), d(48, 3, 22, 8), // lfs f1,0(r22); lfs f2,4(r22); lfs f3,8(r22)
+        fa(59, 4, 1, 3, 2, 29, false), fa(59, 5, 1, 3, 2, 28, false), fa(59, 6, 1, 3, 2, 31, false), fa(59, 7, 1, 3, 2, 30, false),
+        d(54, 4, 21, 0), d(54, 5, 21, 8), d(54, 6, 21, 16), d(54, 7, 21, 24), // stfd
+        d(14, 22, 22, 12), d(14, 21, 21, 32),
+        d(12, 31, 31, 0xFFFF), d(11, 7 << 2, 31, 0), bc(4, 30, -4 * 15), // back to the first lfs
+    ]
+}
+fn fma_ties_setup(c: &mut Cpu, m: &mut M) {
+    c.gpr[20] = BUF;
+    let mut r = Rng(0x1234_5678_9ABC);
+    for k in 0..400u32 {
+        let (ka, kc) = (1 + r.pick(2048), 1 + r.pick(2048));
+        let a = 1.0f32 + ka as f32 * (2.0f32).powi(-12);
+        let cc = 1.0f32 + kc as f32 * (2.0f32).powi(-12);
+        let b = if r.pick(4) == 0 { 0.0 } else { (2.0f32).powi(-53 - r.pick(18) as i32) * if r.pick(2) == 0 { 1.0 } else { -1.0 } };
+        for (j, v) in [a, cc, b].iter().enumerate() { m.mem.write_u32(BUF + 12 * k + 4 * j as u32, v.to_bits()).unwrap(); }
+    }
+}
+
+#[test]
+fn fused_single_multiply_add_rounds_once_at_ties() {
+    let prog = fma_ties_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, fma_ties_setup);
+    assert!(want.last.halted, "tier 0 ends: {:?}", want.last);
+    for slice in [1_000_000, 37] {
+        let (got, mut e) = run_on(Tier::Jit, 0, &prog, slice, fma_ties_setup);
+        assert!(got == want, "slice {slice}: a fused result differs from tier 0's");
+        assert!(e.jit_stats().insns > want.total / 2, "slice {slice}: mostly JIT code: {:?}", e.jit_stats());
+        let _ = e.jit_helper_census(false);
+    }
+    // the inline path really runs (not the slow stub): with a census on, fmadds reaches tier 1's handler rarely
+    let (mut c, mut m) = load(&prog, fma_ties_setup);
+    let mut e = exec(Tier::Jit, 0);
+    e.resume(&mut m, &mut c, 2_000);
+    e.jit_helper_census(true);
+    let _ = finish(&mut e, &mut c, &mut m, 1_000_000);
+    let slow: u64 = e.jit_helper_census(false).map_or(0, |c| c.iter().filter(|(k, _)| **k >> 26 == 59).map(|(_, n)| *n).sum());
+    assert!(slow < 100, "fmadds family through the slow stub {slow} times of 1600");
+}
+
 /// CR0 of Rc=1 forms whose x86 flags are NOT the result's sign test (an add or subtract that overflows: OF = 1), left in the
 /// end state: `add.` / `subf.` of 0x7FFFFFFF and 1 in a hot loop (the trip count in cr7).
 fn overflow_flags_program() -> Vec<u32> {
@@ -420,7 +480,7 @@ fn rc_forms_set_cr0_from_the_result_even_when_the_add_overflows() {
 /// programs for the store-watch and exit-count ones. A gate that stays green with a mutant proves nothing.
 #[test]
 fn negative_control_every_planted_jit_mutant_goes_red() {
-    for mutant in 1..=10u8 {
+    for mutant in (1..=10u8).chain([12]) {
         let mut red = false;
         for seed in 0..400u64 {
             let prog = random_program(seed);
@@ -428,8 +488,8 @@ fn negative_control_every_planted_jit_mutant_goes_red() {
             let (got, _) = run_on(Tier::Jit, mutant, &prog, 37, fuzz_setup(seed));
             if got != want { red = true; break; }
         }
-        let (smc, flags) = (smc_store_program(), overflow_flags_program());
-        for (prog, setup) in [(&smc[..], smc_store_setup as Setup), (programs::BENCH_SMC, |c, _| c.gpr[3] = 100), (&flags[..], overflow_flags_setup)] {
+        let (smc, flags, ties) = (smc_store_program(), overflow_flags_program(), fma_ties_program());
+        for (prog, setup) in [(&smc[..], smc_store_setup as Setup), (programs::BENCH_SMC, |c, _| c.gpr[3] = 100), (&flags[..], overflow_flags_setup), (&ties[..], fma_ties_setup)] {
             if red { break; }
             let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
             let (got, _) = run_on(Tier::Jit, mutant, prog, 13, setup);
