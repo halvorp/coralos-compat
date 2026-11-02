@@ -50,9 +50,9 @@ impl Arch {
 pub struct LockstepStats { pub blocks: u64, pub insns: u64, pub bytes_compared: u64 }
 
 /// Where the next instructions come from: a native hook (tier 0's path), a volatile page (tier 0), or a block.
-enum Next { Native, Interp, Block { start: usize, len: usize, gen: u64 } }
+pub(crate) enum Next { Native, Interp, Block { start: usize, len: usize, gen: u64 } }
 
-fn next(cache: &mut Cache, mem: &mut heirloom_mem_flat32::GuestMem, cpu: &mut Cpu) -> Result<Next, Trap> {
+pub(crate) fn next(cache: &mut Cache, mem: &mut heirloom_mem_flat32::GuestMem, cpu: &mut Cpu) -> Result<Next, Trap> {
     let pc = cpu.pc;
     match cache.find(mem, pc) {
         Ok(Found::Native) => Ok(Next::Native),
@@ -62,7 +62,7 @@ fn next(cache: &mut Cache, mem: &mut heirloom_mem_flat32::GuestMem, cpu: &mut Cp
     }
 }
 
-fn native<H: Host>(host: &mut H, cpu: &mut Cpu, cache: &mut Cache, prof: &mut Prof) -> Result<(), Trap> {
+pub(crate) fn native<H: Host>(host: &mut H, cpu: &mut Cpu, cache: &mut Cache, prof: &mut Prof) -> Result<(), Trap> {
     let pc = cpu.pc;
     cpu.note_pc(pc);
     prof.natives += 1;
@@ -72,7 +72,7 @@ fn native<H: Host>(host: &mut H, cpu: &mut Cpu, cache: &mut Cache, prof: &mut Pr
 }
 
 /// Tier 0 while pc stays on the volatile page it is on (natives included: `step` handles them), up to `budget`.
-fn interp_page<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut Prof, cache: &mut Cache, trap: &mut Option<Trap>) -> u64 {
+pub(crate) fn interp_page<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut Prof, cache: &mut Cache, trap: &mut Option<Trap>) -> u64 {
     let page = cpu.pc >> heirloom_mem_flat32::CODE_PAGE_SHIFT;
     let mut n = 0;
     while n < budget && !cpu.halted() && !cpu.blocked() {
@@ -155,37 +155,12 @@ pub(crate) fn lockstep<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: 
                     if trap.is_some() { break; }
                     continue;
                 }
-                let before = Arch::of(cpu);
-                let trace = cpu.tracing().then(|| cpu.trace_snapshot());
-                host.mem().journal_begin();
-                let mut trap1 = None;
-                let n1 = t1run::run(host, cpu, &cache.ops[start..start + take], pc, gen, check, &mut trap1);
-                let j1 = host.mem().journal_end();
-                let after1 = Arch::of(cpu);
-                let mut t1_bytes: BTreeMap<u32, u8> = BTreeMap::new();
-                for &(a, _) in &j1 { t1_bytes.insert(a, host.mem().read_u8(a).unwrap_or(0)); }
-                // roll back, then the reference
-                host.mem().journal_undo(&j1);
-                before.restore(cpu);
-                if let Some(t) = &trace { cpu.trace_restore(t); }
-                let k = n1 + trap1.is_some() as u64;
-                host.mem().journal_begin();
-                let (n0, trap0) = tier0(host, cpu, k);
-                let j0 = host.mem().journal_end();
-                let after0 = Arch::of(cpu);
-                ls.blocks += 1;
-                ls.insns += n0;
+                let (n0, trap0, what) = compare(host, cpu, ls, |host, cpu| {
+                    let mut trap1 = None;
+                    let n1 = t1run::run(host, cpu, &cache.ops[start..start + take], pc, gen, check, &mut trap1);
+                    (n1, trap1)
+                });
                 prof.blocks += 1;
-                let mut what = Vec::new();
-                if n0 != n1 { what.push(alloc::format!("retired t1={n1} t0={n0}")); }
-                if trap0 != trap1 { what.push(alloc::format!("trap t1={trap1:?} t0={trap0:?}")); }
-                after1.diff(&after0, &mut what);
-                for &(a, old) in &j0 { t1_bytes.entry(a).or_insert(old); }
-                for (&a, &v1) in &t1_bytes {
-                    ls.bytes_compared += 1;
-                    let v0 = host.mem().read_u8(a).unwrap_or(0);
-                    if v0 != v1 && what.len() < 24 { what.push(alloc::format!("mem[{a:#x}] t1={v1:#04x} t0={v0:#04x}")); }
-                }
                 n += n0;
                 if !what.is_empty() { return (RunStats { insns: n, halted: cpu.halted(), blocked: cpu.blocked(), trap: trap0 }, Some(Divergence { block: pc, what })); }
                 if let Some(t) = trap0 { trap = Some(t); break; }
@@ -193,6 +168,42 @@ pub(crate) fn lockstep<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: 
         }
     }
     (RunStats { insns: n, halted: cpu.halted(), blocked: cpu.blocked(), trap }, None)
+}
+
+/// Run `fast` from the current state with guest RAM journaled, roll it back, run tier 0 for the same number of instructions
+/// from the same state, and compare everything (registers, time base, reservation, trap, every byte either run wrote).
+/// Tier 0's result is the one kept: (its retired count, its trap, the differences - empty when they agree).
+pub(crate) fn compare<H: Host>(host: &mut H, cpu: &mut Cpu, ls: &mut LockstepStats, fast: impl FnOnce(&mut H, &mut Cpu) -> (u64, Option<Trap>)) -> (u64, Option<Trap>, Vec<String>) {
+    let before = Arch::of(cpu);
+    let trace = cpu.tracing().then(|| cpu.trace_snapshot());
+    host.mem().journal_begin();
+    let (n1, trap1) = fast(host, cpu);
+    let j1 = host.mem().journal_end();
+    let after1 = Arch::of(cpu);
+    let mut t1_bytes: BTreeMap<u32, u8> = BTreeMap::new();
+    for &(a, _) in &j1 { t1_bytes.insert(a, host.mem().read_u8(a).unwrap_or(0)); }
+    // roll back, then the reference
+    host.mem().journal_undo(&j1);
+    before.restore(cpu);
+    if let Some(t) = &trace { cpu.trace_restore(t); }
+    let k = n1 + trap1.is_some() as u64;
+    host.mem().journal_begin();
+    let (n0, trap0) = tier0(host, cpu, k);
+    let j0 = host.mem().journal_end();
+    let after0 = Arch::of(cpu);
+    ls.blocks += 1;
+    ls.insns += n0;
+    let mut what = Vec::new();
+    if n0 != n1 { what.push(alloc::format!("retired fast={n1} t0={n0}")); }
+    if trap0 != trap1 { what.push(alloc::format!("trap fast={trap1:?} t0={trap0:?}")); }
+    after1.diff(&after0, &mut what);
+    for &(a, old) in &j0 { t1_bytes.entry(a).or_insert(old); }
+    for (&a, &v1) in &t1_bytes {
+        ls.bytes_compared += 1;
+        let v0 = host.mem().read_u8(a).unwrap_or(0);
+        if v0 != v1 && what.len() < 24 { what.push(alloc::format!("mem[{a:#x}] fast={v1:#04x} t0={v0:#04x}")); }
+    }
+    (n0, trap0, what)
 }
 
 /// Tier 0 for at most `k` instructions: (retired, trap).

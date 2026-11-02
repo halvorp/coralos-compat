@@ -474,6 +474,13 @@ fn wc3_host_run_with_a_gl_worker() {
     }
     }
     m.start_file(&app, "Warcraft III").unwrap();
+    // `HEIRLOOM_PPC_TIER=0|1|lockstep|...`: the PowerPC execution tier (heirloom_cpu_ppc::Tier::parse), default tier 1
+    // (tier 2, `jit` / `jitlockstep`, runs in this host's executable memory: heirloom_cpu_ppc::HostCodeMem)
+    if let Some(t) = std::env::var("HEIRLOOM_PPC_TIER").ok().and_then(|s| heirloom_macppc_engine::cpu::Tier::parse(&s)) {
+        m.exec().tier = t;
+        m.exec().set_code_mem(Box::new(heirloom_cpu_ppc::HostCodeMem::new()));
+    }
+    let jit_census = std::env::var("WC3_JIT_CENSUS").is_ok();
     // `WC3_PERF=<frames>`: the engine's stage clock (heirloom_macppc_engine::perf) on host nanoseconds, a line every <frames> swaps
     if let Ok(every) = std::env::var("WC3_PERF") {
         fn ns() -> u64 { static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new(); T0.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64 }
@@ -492,6 +499,8 @@ fn wc3_host_run_with_a_gl_worker() {
     let (mut click_phase, mut click_kinds) = (0u8, 0usize);
     let mut ui_seen = 0usize;
     for i in 0..slices {
+        // `WC3_JIT_CENSUS`: count the forms tier 2 hands to tier 1's handler from slice 40000 on (gameplay)
+        if jit_census && i == 40_000 { m.exec().jit_helper_census(true); }
         let (st, stats) = GuestMachine::step(&mut m, budget);
         if matches!(st, Step::Fault(_) | Step::Exited) {
             eprintln!("slice {i}: {st:?} {:?}", m.fault());
@@ -540,6 +549,16 @@ fn wc3_host_run_with_a_gl_worker() {
             break;
         }
         ui_seen = ui_calls;
+    }
+    {
+        let e = m.exec();
+        if let Some(c) = e.jit_helper_census(false) {
+            let mut v: Vec<_> = c.iter().map(|(k, n)| (*n, *k)).collect();
+            v.sort_unstable_by(|a, b| b.cmp(a));
+            let total: u64 = v.iter().map(|x| x.0).sum();
+            eprintln!("JIT-HELPER total={total} top: {}", v.iter().take(30).map(|(n, k)| format!("op{}/xo{}={n}", k >> 26, (k >> 1) & 0x3FF)).collect::<Vec<_>>().join(" "));
+        }
+        eprintln!("PPC-TIER {:?} prof={:?} jit={:?} cache={:?} lockstep={:?} divergence={:?}", e.tier, e.prof, e.jit_stats(), e.cache_stats(), e.lockstep_stats(), e.divergence());
     }
     if let Some(cpu) = m.cpu() {
         eprintln!("END pc={:#x} lr={:#x} callbacks={:?}", cpu.pc, cpu.lr, m.callback_kinds());

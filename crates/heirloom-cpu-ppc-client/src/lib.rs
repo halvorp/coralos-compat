@@ -265,8 +265,9 @@ impl Exec {
         let host = Box::new(PpcHostCallbacks { size: core::mem::size_of::<PpcHostCallbacks>() as u32, flags: 0, ctx: ptr::null_mut(), on_native, on_syscall });
         Exec { tier, prof: Prof::default(), inst: ptr::null_mut(), host, bound: BoundSet::default(), tier_set: None, lockstep_refused: false }
     }
-    /// True once a resume was asked for [`Tier::Lockstep`]: cpu-ppc.library does not serve it (the static core does), so the run
-    /// used tier 1 - named here, never silent.
+    /// True once a resume was asked for [`Tier::Lockstep`], [`Tier::Jit`] or [`Tier::JitLockstep`]: cpu-ppc.library does not serve
+    /// them (the static core does; the JIT needs executable memory the CPU ABI cannot pass yet), so the run used tier 1 - named
+    /// here, never silent.
     pub fn lockstep_refused(&self) -> bool { self.lockstep_refused }
 
     /// Execute `cpu` until [`Cpu::halt`], [`Cpu::block`], a trap, or `budget` instructions.
@@ -277,7 +278,11 @@ impl Exec {
             let cfg = PpcCreate { size: core::mem::size_of::<PpcCreate>() as u32, sub_arch: SUB_ARCH_G3, ram, host: &*self.host };
             if (t.create)(&cfg, &mut self.inst) != 0 { self.inst = ptr::null_mut(); return refused(REFUSED_CREATE); }
         }
-        let tier = match self.tier { Tier::Interp => TIER_INTERP, Tier::Blocks => TIER_BLOCKS, Tier::Lockstep => { self.lockstep_refused = true; TIER_BLOCKS } };
+        // cpu-ppc.library serves neither lockstep nor (until the CPU ABI carries an executable-memory provider) the JIT: tier 1, named
+        let tier = match self.tier {
+            Tier::Interp => TIER_INTERP, Tier::Blocks => TIER_BLOCKS,
+            Tier::Lockstep | Tier::Jit | Tier::JitLockstep => { self.lockstep_refused = true; TIER_BLOCKS }
+        };
         if self.tier_set != Some(tier) { (t.set_tier)(self.inst, tier); self.tier_set = Some(tier); }
         self.bound.sync(t, self.inst, cpu);
         if cpu.trace_cap != 0 || !cpu.last.is_null() { (t.trace_pcs)(self.inst, cpu.trace_cap as u32); }

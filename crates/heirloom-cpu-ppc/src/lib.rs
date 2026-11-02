@@ -49,6 +49,28 @@ mod t1;
 mod t1cache;
 mod t1op;
 mod t1run;
+#[cfg(target_arch = "x86_64")]
+mod jit;
+#[cfg(target_arch = "x86_64")]
+mod jit_asm;
+#[cfg(target_arch = "x86_64")]
+mod jit_emit;
+#[cfg(target_arch = "x86_64")]
+mod jit_mem;
+#[cfg(target_arch = "x86_64")]
+pub use jit::JitStats;
+#[cfg(not(target_arch = "x86_64"))]
+mod jit_stats_none {
+    /// Tier 2's counters (no JIT off x86-64: always `refused` when asked for).
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct JitStats { pub compiled: u64, pub recompiled: u64, pub arena_full: u64, pub entries: u64, pub insns: u64, pub bails: u64, pub flushes: u64, pub code_bytes: u64, pub refused: bool }
+}
+#[cfg(not(target_arch = "x86_64"))]
+pub use jit_stats_none::JitStats;
+#[cfg(target_arch = "x86_64")]
+pub use jit_mem::CodeMem;
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+pub use jit_mem::HostCodeMem;
 /// cpu-ppc.library's flat table (heirloom-cpu-abi::ppc): what its coral_lib_open returns.
 pub mod table;
 #[cfg(test)]

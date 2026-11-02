@@ -57,6 +57,8 @@ fn clock_ns() -> u64 {
 /// Configure a fresh runner for `tier` (with a census / native timing when asked).
 pub fn exec_for(tier: Tier, o: Opts) -> Exec {
     let mut e = Exec::new(tier);
+    // tier 2 (jit / jitlockstep) runs in this host's executable memory
+    e.set_code_mem(Box::new(heirloom_cpu_ppc::HostCodeMem::new()));
     if o.census { e.enable_census(); }
     if o.natives { e.profile_natives(clock_ns); }
     e

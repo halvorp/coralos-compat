@@ -120,6 +120,17 @@ impl crate::GuestMem {
     }
     /// Stop recording; the (address, old byte) pairs in write order (empty if no journal was open).
     pub fn journal_end(&mut self) -> Vec<(u32, u8)> { self.hooks.journal.take().unwrap_or_default() }
+    /// Record the old bytes of `[addr, addr + len)` in the open journal (if one is open), as a write through this GuestMem
+    /// would, without writing: for a writer that stores to the bytes directly (heirloom-cpu-ppc's JIT in lockstep, which
+    /// writes guest RAM through [`GuestMem::raw`]). `addr` is a stripped address inside RAM; anything else records nothing.
+    pub fn journal_note(&mut self, addr: u32, len: u32) {
+        if !self.contains(addr, len) { return; }
+        let base = self.raw().base;
+        if let Some(j) = self.hooks.journal.as_mut() {
+            // SAFETY: `contains` checked [addr, addr + len) is inside the `len` bytes at `base` (the RAM this GuestMem reads).
+            j.extend((addr..addr + len).map(|a| (a, unsafe { *base.add(a as usize) })));
+        }
+    }
     /// Put back the bytes a journal recorded, newest first: memory is as it was at `journal_begin`. The writes go
     /// through the normal path, so watched pages they touch change generation like any other write.
     pub fn journal_undo(&mut self, j: &[(u32, u8)]) {

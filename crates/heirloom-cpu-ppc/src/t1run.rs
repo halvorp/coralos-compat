@@ -27,11 +27,11 @@ fn st<H: Host>(host: &mut H, pc: u32, ea: u32, n: u32, v: u32) -> Result<(), Tra
 fn ca(cpu: &mut Cpu, c: bool) { cpu.xer = (cpu.xer & !XER_CA) | if c { XER_CA } else { 0 }; }
 
 /// What an instruction did to the flow.
-enum Flow { Next, Jump(u32) }
+pub(crate) enum Flow { Next, Jump(u32) }
 
 /// One decoded instruction at `ipc` (`tb` = the time base before it).
 #[inline(always)]
-fn one<H: Host>(host: &mut H, cpu: &mut Cpu, op: &Op, ipc: u32, tb: u64) -> Result<Flow, Trap> {
+pub(crate) fn one<H: Host>(host: &mut H, cpu: &mut Cpu, op: &Op, ipc: u32, tb: u64) -> Result<Flow, Trap> {
     let (d, a, b) = (op.d as usize & 31, op.a as usize & 31, op.b as usize & 31);
     let g = &mut cpu.gpr;
     match op.k {

@@ -96,6 +96,10 @@ struct Owned {
     desc: FlatRam,
 }
 
+/// [`GuestMem::raw`]: the bytes and the code watch's arrays as raw pointers (see its contract).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawRam { pub base: *mut u8, pub len: usize, pub mask: u32, pub marked: *mut u64, pub marked_words: u32, pub gen: *mut u64, pub gen_pages: u32 }
+
 /// Checked big-endian guest RAM. The OWNER (the engine: [`GuestMem::new`]) allocates the bytes and the code watch and publishes
 /// both as a [`FlatRam`] descriptor ([`GuestMem::flat_ram`]); a BORROWED VIEW of that descriptor ([`GuestMem::view`],
 /// cpu-ppc.library during a run) reads and writes the same bytes and the same watch. Only the owner grows.
@@ -154,6 +158,15 @@ impl GuestMem {
     /// [`set_addr_mask`](Self::set_addr_mask)). `None` for a view.
     pub fn flat_ram(&self) -> Option<*const FlatRam> { self.owned.as_ref().map(|o| &o.desc as *const FlatRam) }
 
+    /// The raw form of this RAM for a code generator (heirloom-cpu-ppc's JIT): the bytes, their length, the address mask and
+    /// the code watch's page bitmap. A writer through `base` MUST NOT write a byte of a page whose bit is set in `marked`
+    /// (it holds decoded code: write it through this GuestMem so its generation changes), and the view is valid only until
+    /// the owner grows the RAM (the caller re-reads it after every host callback, as cpu-ppc.library remakes its view).
+    pub fn raw(&self) -> RawRam {
+        // SAFETY: `watch` points at this RAM's live CodeWatch (GuestMem's invariant; see Hooks).
+        let w = unsafe { &*self.hooks.watch };
+        RawRam { base: self.base, len: self.len, mask: self.mask, marked: w.marked, marked_words: w.marked_words, gen: w.gen, gen_pages: w.gen_pages }
+    }
     /// The bytes as a slice (empty RAM: an empty slice).
     #[inline]
     fn ram(&self) -> &[u8] {

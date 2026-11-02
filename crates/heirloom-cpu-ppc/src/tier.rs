@@ -22,6 +22,14 @@ pub struct Exec {
     cache: Option<Box<Cache>>,
     lockstep: LockstepStats,
     divergence: Option<Divergence>,
+    /// Tier 2: the executable memory the caller gave (`set_code_mem`), turned into the JIT on its first run.
+    #[cfg(target_arch = "x86_64")]
+    code_mem: Option<Box<dyn crate::jit_mem::CodeMem>>,
+    #[cfg(target_arch = "x86_64")]
+    jit: Option<Box<crate::jit::Jit>>,
+    jit_mutant: u8,
+    jit_refused: bool,
+    jit_publish_after: Option<u64>,
 }
 
 /// Per native address: (calls, time inside), timed by a host-supplied clock.
@@ -33,7 +41,54 @@ pub struct NativeProfile { clock: fn() -> u64, pub by_addr: BTreeMap<u32, (u64, 
 impl Default for Exec { fn default() -> Self { Exec::new(Tier::Blocks) } }
 
 impl Exec {
-    pub fn new(tier: Tier) -> Exec { Exec { tier, prof: Prof::default(), census: None, natives: None, cache: None, lockstep: LockstepStats::default(), divergence: None } }
+    pub fn new(tier: Tier) -> Exec {
+        Exec {
+            tier, prof: Prof::default(), census: None, natives: None, cache: None, lockstep: LockstepStats::default(), divergence: None,
+            #[cfg(target_arch = "x86_64")]
+            code_mem: None,
+            #[cfg(target_arch = "x86_64")]
+            jit: None,
+            jit_mutant: 0, jit_refused: false, jit_publish_after: None,
+        }
+    }
+    /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
+    /// no syscall). Replaces any JIT made from earlier memory.
+    #[cfg(target_arch = "x86_64")]
+    pub fn set_code_mem(&mut self, mem: Box<dyn crate::jit_mem::CodeMem>) { self.code_mem = Some(mem); self.jit = None; }
+    /// Tier 2's counters; `refused` = Tier::Jit was asked for but tier 1 ran (no executable memory, it was refused, off
+    /// x86-64, or the trace ring is on).
+    pub fn jit_stats(&self) -> crate::JitStats {
+        #[cfg(target_arch = "x86_64")]
+        let s = self.jit.as_ref().map(|j| j.stats).unwrap_or_default();
+        #[cfg(not(target_arch = "x86_64"))]
+        let s = crate::JitStats::default();
+        crate::JitStats { refused: s.refused || self.jit_refused, ..s }
+    }
+    /// Publish new JIT code after it waited `n` guest instructions (default 2M, or once most of a page is written). Tests
+    /// set 0 so that short programs run in JIT code at all.
+    #[doc(hidden)]
+    pub fn set_jit_publish_after(&mut self, n: u64) {
+        self.jit_publish_after = Some(n);
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_mut() { j.publish_after = n; }
+    }
+    /// Diagnostics: count the instruction forms JIT code hands to tier 1's handler (key = word & 0xFC0007FE: primary and
+    /// extended opcode). `None` before the JIT ran or when not enabled.
+    #[cfg(target_arch = "x86_64")]
+    pub fn jit_helper_census(&mut self, enable: bool) -> Option<&alloc::collections::BTreeMap<u32, u64>> {
+        let j = self.jit.as_mut()?;
+        let c = j.census();
+        if enable && c.is_none() { *c = Some(Default::default()); }
+        c.as_ref()
+    }
+    /// NEGATIVE CONTROL ONLY: plant JIT mutant `m` (1 subfic CA inverted, 2 no XER[SO] in CR, 3 no code-watch test on
+    /// stores, 4 one instruction too many retired at a helper exit). The JIT gates must go RED with each.
+    #[doc(hidden)]
+    pub fn plant_jit_mutant(&mut self, m: u8) {
+        self.jit_mutant = m;
+        #[cfg(target_arch = "x86_64")]
+        { self.jit = None; }
+    }
     /// Collect an opcode/block census from now on (tier 0 runs it; it costs a table update per instruction).
     pub fn enable_census(&mut self) { self.census.get_or_insert_with(Box::default); }
     pub fn census(&self) -> Option<&Census> { self.census.as_deref() }
@@ -67,6 +122,10 @@ impl Exec {
                     let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));
                     t1::run(host, cpu, budget, &mut self.prof, cache)
                 }
+                Tier::Jit | Tier::JitLockstep => {
+                    if self.divergence.is_some() { cpu.halt(); return RunStats { insns: 0, halted: true, blocked: false, trap: None }; }
+                    self.run_jit(host, cpu, budget)
+                }
                 Tier::Lockstep => {
                     if self.divergence.is_some() { cpu.halt(); return RunStats { insns: 0, halted: true, blocked: false, trap: None }; }
                     let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));
@@ -79,6 +138,37 @@ impl Exec {
         };
         self.prof.insns += st.insns;
         st
+    }
+}
+
+impl Exec {
+    /// Tier 2 (or its lockstep), or tier 1 with `jit_refused` when there is no JIT to run.
+    fn run_jit<H: Host>(&mut self, host: &mut H, cpu: &mut Cpu, budget: u64) -> RunStats {
+        let lock = self.tier == Tier::JitLockstep;
+        #[cfg(target_arch = "x86_64")]
+        {
+            if self.jit.as_ref().is_some_and(|j| j.logged != lock) { self.jit = None; }
+            if self.jit.is_none() {
+                if let Some(mem) = self.code_mem.take() {
+                    self.jit = crate::jit::Jit::new(mem, self.jit_mutant).map(Box::new);
+                    if let Some(j) = self.jit.as_mut() {
+                        j.logged = lock;
+                        if let Some(n) = self.jit_publish_after { j.publish_after = n; }
+                    }
+                }
+            }
+            if let Some(jit) = self.jit.as_mut() {
+                let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));
+                let ls = if lock { Some(&mut self.lockstep) } else { None };
+                let (mut st, d) = crate::jit::run(host, cpu, budget, &mut self.prof, cache, jit, ls);
+                if d.is_some() { cpu.halt(); st.halted = true; }
+                self.divergence = d;
+                return st;
+            }
+        }
+        self.jit_refused = true;
+        let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));
+        t1::run(host, cpu, budget, &mut self.prof, cache)
     }
 }
 

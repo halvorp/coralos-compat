@@ -515,14 +515,22 @@ pub enum Tier {
     /// Tier 1 checked against tier 0 on every block (slow; for gates and triage). Stops at the first divergence,
     /// which the static core's `Exec::divergence` (the library does not serve lockstep) then names.
     Lockstep,
+    /// Tier 2: tier 1's blocks compiled to x86-64 (heirloom-cpu-ppc's jit*), in executable memory the CALLER provides
+    /// (`Exec::set_code_mem`); without it, or off x86-64, tier 1 runs and the static core's `JitStats::refused` says so.
+    Jit,
+    /// Tier 2 checked against tier 0 on every JIT entry (chained blocks included). Like [`Tier::Lockstep`], static core only.
+    JitLockstep,
 }
 
 impl Tier {
     /// The number a `[PPC-PROF ... tier=]` line prints.
-    pub fn number(self) -> u32 { match self { Tier::Interp => 0, Tier::Blocks | Tier::Lockstep => 1 } }
-    /// Parse `0` / `interp`, `1` / `blocks`, `lockstep`; None for anything else.
+    pub fn number(self) -> u32 { match self { Tier::Interp => 0, Tier::Blocks | Tier::Lockstep => 1, Tier::Jit | Tier::JitLockstep => 2 } }
+    /// Parse `0` / `interp`, `1` / `blocks`, `lockstep`, `2` / `jit`, `jitlockstep`; None for anything else.
     pub fn parse(s: &str) -> Option<Tier> {
-        match s { "0" | "interp" => Some(Tier::Interp), "1" | "blocks" => Some(Tier::Blocks), "lockstep" => Some(Tier::Lockstep), _ => None }
+        match s {
+            "0" | "interp" => Some(Tier::Interp), "1" | "blocks" => Some(Tier::Blocks), "lockstep" => Some(Tier::Lockstep),
+            "2" | "jit" => Some(Tier::Jit), "jitlockstep" => Some(Tier::JitLockstep), _ => None,
+        }
     }
 }
 
