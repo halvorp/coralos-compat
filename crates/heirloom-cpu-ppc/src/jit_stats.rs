@@ -34,6 +34,15 @@ pub struct JitStats {
     /// Time spent translating (compiling blocks, publishing pages, flushing), in the units of the clock given to
     /// `Exec::set_jit_clock`; 0 without one.
     pub translate_time: u64,
+    /// The executable-memory provider: publish calls (pages made RX) and the pages they covered; withdraw calls (pages
+    /// back to RW: a segment reused, or the whole arena) and their pages; calls it refused; time inside it (the
+    /// `Exec::set_jit_clock` units). On CoralOS a call is one EXEC_CODE_PROTECT syscall and a page one TLB shootdown round.
+    pub publishes: u64,
+    pub publish_pages: u64,
+    pub withdraws: u64,
+    pub withdraw_pages: u64,
+    pub codemem_failures: u64,
+    pub codemem_time: u64,
     /// Tier::Jit was asked for but no executable memory was provided (or it was refused): tier 1 ran instead.
     pub refused: bool,
 }

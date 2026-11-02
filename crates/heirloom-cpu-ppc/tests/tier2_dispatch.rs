@@ -6,7 +6,7 @@
 //! side exit stores the registers dirty at its branch (mutant 16 RED); and a chained jump skips its target's page-generation
 //! check only from the same page at the same generation (mutant 17 RED). Host only (HostCodeMem).
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
-use heirloom_cpu_ppc::{Cpu, Exec, Host, HostCodeMem, RunStats, Tier};
+use heirloom_cpu_ppc::{CodeMem, Cpu, Exec, Host, HostCodeMem, RunStats, Tier};
 use heirloom_mem_flat32::GuestMem;
 
 const CODE: u32 = 0x1000;
@@ -110,10 +110,12 @@ fn load(prog: &[u32]) -> (Cpu, M) {
 #[derive(Debug, PartialEq)]
 struct End { gpr: [u32; 32], cr: u32, lr: u32, ctr: u32, xer: u32, pc: u32, tb: u64, ram: Vec<u8>, last: RunStats, total: u64, calls: Vec<u32> }
 
-fn run(tier: Tier, mutant: u8, prog: &[u32], slice: u64) -> (End, Exec) {
+fn run(tier: Tier, mutant: u8, prog: &[u32], slice: u64) -> (End, Exec) { run_with(tier, mutant, prog, slice, Box::new(HostCodeMem::new())) }
+
+fn run_with(tier: Tier, mutant: u8, prog: &[u32], slice: u64, mem: Box<dyn CodeMem>) -> (End, Exec) {
     let (mut c, mut m) = load(prog);
     let mut e = Exec::new(tier);
-    e.set_code_mem(Box::new(HostCodeMem::new()));
+    e.set_code_mem(mem);
     e.set_jit_publish_after(0);
     if mutant != 0 { e.plant_jit_mutant(mutant); }
     let mut total = 0;
@@ -260,4 +262,41 @@ fn a_chained_jump_skips_the_generation_check_only_into_a_block_of_its_own_genera
     assert!(e.divergence().is_none() && got == want, "lockstep: {:?}", e.divergence());
     let (got, _) = run(Tier::Jit, 17, &prog, 1_000_000);
     assert!(got != want, "mutant 17 (a same-page chained jump skips the check into a block of an older generation) stayed GREEN");
+}
+
+/// A provider that refuses publish calls: `refuse(n)` answers for the n-th call (0 = the stub page at creation).
+struct Refusing { inner: HostCodeMem, calls: u32, refuse: fn(u32) -> bool }
+impl CodeMem for Refusing {
+    fn reserve(&mut self, len: usize) -> Option<*mut u8> { self.inner.reserve(len) }
+    fn publish(&mut self, ptr: *mut u8, len: usize) -> bool {
+        let n = self.calls;
+        self.calls += 1;
+        // the pages really become RX either way (as the kernel's NOT-GLOBAL leaves them locally): only the answer is no
+        self.inner.publish(ptr, len) && !(self.refuse)(n)
+    }
+    fn reset(&mut self, ptr: *mut u8, len: usize) -> bool { self.inner.reset(ptr, len) }
+}
+fn refusing(refuse: fn(u32) -> bool) -> Box<dyn CodeMem> { Box::new(Refusing { inner: HostCodeMem::new(), calls: 0, refuse }) }
+
+/// EXECUTABLE MEMORY THAT SAYS NO (on CoralOS: a TLB shootdown not acknowledged in time, EXEC_CODE_PROTECT's NOT-GLOBAL). A
+/// refused batch is dropped, never run and never answered with a whole-arena withdraw; a provider that keeps refusing
+/// stops tier 2 by name. Tier 0's state in every case, natives-set changes included (they drop code without a withdraw);
+/// mutant 18 (a refusal resets the whole arena, the loop the Z83 showed) RED.
+#[test]
+fn a_refused_publish_drops_its_batch_and_never_withdraws_the_arena() {
+    for prog in [program(false), same_page_program()] {
+        let (want, _) = run(Tier::Interp, 0, &prog, 1_000_000);
+        for slice in [37, 1_000] {
+            let (got, e) = run_with(Tier::Jit, 0, &prog, slice, refusing(|n| n % 3 == 2));
+            let s = e.jit_stats();
+            assert!(got == want, "every 3rd publish refused, slice {slice}: {s:?}");
+            assert!(s.codemem_failures > 0 && s.withdraw_pages == 0 && !s.refused && s.insns > 0, "refusals absorbed, nothing withdrawn: {s:?}");
+            let (got, e) = run_with(Tier::Jit, 0, &prog, slice, refusing(|n| n > 0));
+            let s = e.jit_stats();
+            assert!(got == want, "every publish refused, slice {slice}: {s:?}");
+            assert!(s.refused && s.codemem_failures == 8 && s.withdraw_pages == 0 && s.insns == 0, "tier 2 stopped by name after 8: {s:?}");
+        }
+        let (_, e) = run_with(Tier::Jit, 18, &prog, 37, refusing(|n| n % 3 == 2));
+        assert!(e.jit_stats().withdraw_pages > 0, "mutant 18 (a refusal withdraws the whole arena) stayed GREEN: {:?}", e.jit_stats());
+    }
 }

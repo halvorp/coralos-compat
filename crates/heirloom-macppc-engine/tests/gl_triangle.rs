@@ -478,7 +478,12 @@ fn wc3_host_run_with_a_gl_worker() {
     // (tier 2, `jit` / `jitlockstep`, runs in this host's executable memory: heirloom_cpu_ppc::HostCodeMem)
     if let Some(t) = std::env::var("HEIRLOOM_PPC_TIER").ok().and_then(|s| heirloom_macppc_engine::cpu::Tier::parse(&s)) {
         m.exec().tier = t;
-        m.exec().set_code_mem(Box::new(heirloom_cpu_ppc::HostCodeMem::new()));
+        // `WC3_CODEMEM_COST=<us per call>,<us per page>`: every publish / withdraw also costs this much (a busy wait), the
+        // shape of CoralOS's EXEC_CODE_PROTECT - one syscall per call, one TLB shootdown round per page that changes state
+        match std::env::var("WC3_CODEMEM_COST").ok().and_then(|v| v.split_once(',').map(|(a, b)| (a.parse::<u64>().ok(), b.parse::<u64>().ok()))) {
+            Some((Some(call), Some(page))) => m.exec().set_code_mem(Box::new(CostedCodeMem::new(call, page))),
+            _ => m.exec().set_code_mem(Box::new(heirloom_cpu_ppc::HostCodeMem::new())),
+        }
     }
     let jit_census = std::env::var("WC3_JIT_CENSUS").is_ok();
     // `WC3_JIT_FRAMES=<file>`: per guest frame (swap to swap, seen at slice ends) host wall ns, tier 2's translation ns and the
@@ -655,4 +660,24 @@ fn stage_installed(m: &mut M, root: &std::path::Path) {
     at.extend(anchor[top.len() + 1..].split('/').rev().skip(1).collect::<Vec<_>>().into_iter().rev());
     GuestMachine::set_home(m, &at).unwrap();
     eprintln!("staged {top} of {} as the volume Warcraft III, home {at:?} (resource forks {})", root.display(), if drop_rsrc { "DROPPED" } else { "kept" });
+}
+
+/// HostCodeMem plus a simulated provider cost (WC3_CODEMEM_COST): `.1` us per call and `.2` us per page whose state
+/// CHANGES (CoralOS's exec_code_protect skips a leaf already in the asked state: no shootdown for it).
+struct CostedCodeMem(heirloom_cpu_ppc::HostCodeMem, u64, u64, usize, std::collections::BTreeSet<usize>);
+impl CostedCodeMem {
+    fn new(call: u64, page: u64) -> Self { CostedCodeMem(heirloom_cpu_ppc::HostCodeMem::new(), call, page, 0, Default::default()) }
+    fn cost(&mut self, ptr: *mut u8, len: usize, rx: bool) {
+        let first = (ptr as usize - self.3) / 4096;
+        let changed = (first..first + len / 4096).filter(|p| if rx { self.4.insert(*p) } else { self.4.remove(p) }).count() as u64;
+        let t = std::time::Instant::now();
+        let us = self.1 + self.2 * changed;
+        // a busy wait, not a sleep: the modelled kernel path holds this CPU (IF off, waiting for acks) - host test only
+        while (t.elapsed().as_micros() as u64) < us { std::hint::spin_loop(); }
+    }
+}
+impl heirloom_cpu_ppc::CodeMem for CostedCodeMem {
+    fn reserve(&mut self, len: usize) -> Option<*mut u8> { let p = self.0.reserve(len)?; self.3 = p as usize; Some(p) }
+    fn publish(&mut self, ptr: *mut u8, len: usize) -> bool { self.cost(ptr, len, true); self.0.publish(ptr, len) }
+    fn reset(&mut self, ptr: *mut u8, len: usize) -> bool { self.cost(ptr, len, false); self.0.reset(ptr, len) }
 }

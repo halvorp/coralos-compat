@@ -43,10 +43,14 @@ const TABLE_BITS: u32 = 16;
 /// blocks average 3.8 instructions; tuned only by measurement).
 pub(crate) const SUPER_MAX: usize = 48;
 const LINKS: usize = 1 << 18;
-/// Publish when this much code waits (most of a page), or when the oldest waiting block has waited this many guest
-/// instructions (across runs). Every publish rounds up to a whole page that is never written again, so publishing a few
-/// blocks per run slice filled the 16 MiB arena with mostly empty pages (WC3: an arena flush every ~15k blocks, measured).
-const PUBLISH_BYTES: usize = 3072;
+/// Publish when this much code waits, or when the oldest waiting block has waited this many guest instructions (across
+/// runs); waiting blocks run on tier 1. Every publish is a provider call - on CoralOS one EXEC_CODE_PROTECT syscall with a
+/// TLB shootdown round per page - and rounds up to a whole page never written again (the first Z83 run of tier 2 through
+/// that provider, publishing a page per 3 KiB batch, crawled at 1/40 of tier 1: h86, 2026-11-02). Eight pages per call.
+const PUBLISH_BYTES: usize = 8 * 4096 - 1024;
+/// Publish calls refused IN A ROW after which tier 2 stops (refused by name; tier 1 runs): a refused batch is dropped,
+/// never run, so a provider that keeps refusing would only make the JIT compile code that never runs.
+const PUBLISH_REFUSALS: u32 = 8;
 pub(crate) const PUBLISH_AFTER: u64 = 2_000_000;
 const EMPTY_PC: u32 = 1; // never a PowerPC instruction address (not word aligned)
 /// `link_owner` of a slot the block being compiled took (its segment is known once its code is placed).
@@ -145,6 +149,10 @@ pub(crate) struct Jit {
     hw_movbe: bool,
     /// Opt-in clock timing translation (JitStats.translate_time); None = untimed, no clock reads.
     pub(crate) timer: Option<fn() -> u64>,
+    /// Consecutive refused publishes; and true once the provider failed in a way the JIT cannot work around (a withdraw,
+    /// or PUBLISH_REFUSALS publishes in a row): tier 2 is refused from then on (JitStats::refused), tier 1 runs.
+    refusals: u32,
+    pub(crate) dead: bool,
 }
 
 impl Jit {
@@ -155,7 +163,7 @@ impl Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
-            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None,
+            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false,
         };
         if !j.stubs() { return None; }
         Some(j)
@@ -217,18 +225,31 @@ impl Jit {
     pub(crate) fn reconfigure(&mut self, logged: bool, mutant: u8, movbe: bool) {
         let movbe = movbe && self.hw_movbe;
         if (logged, mutant, movbe) == (self.logged, self.mutant, self.movbe) { return; }
+        let stubs_change = mutant != self.mutant; // the stubs depend on the mutant only (MUT_EXIT_COUNT)
         self.logged = logged;
         self.mutant = mutant;
         self.movbe = movbe;
-        self.flush();
+        if stubs_change { self.flush(); } else if self.stats.compiled != 0 { self.drop_code(); }
     }
 
-    /// Drop every block and start again (the arena back to RW, the stubs re-emitted).
+    /// Drop every block and start again (the arena back to RW, the stubs re-emitted): only when the stubs change.
     fn flush(&mut self) {
+        self.drop_code();
+        self.link_gen.fill(ANY_GEN);
+        self.links.fill(0);
+        if !self.arena.reset() { self.dead = true; }
+        self.stubs();
+    }
+
+    /// Make every block unreachable WITHOUT touching the arena's pages (no provider call: on CoralOS a whole-arena withdraw
+    /// is a TLB shootdown per published page): the dispatch table, block map, link slots (to the exit stub) and hot counts
+    /// are cleared and unpublished code is forgotten; the old code stays published but nothing jumps to it, and its
+    /// segments are withdrawn when the FIFO reuses them, as always. For a natives-set, RAM or link-table change.
+    fn drop_code(&mut self) {
         self.stats.flushes += 1;
         if self.mutant != crate::jit_emit::MUT_TABLE_STALE { self.table.fill(EMPTY); }
         self.hot.fill((EMPTY_PC, 0));
-        self.links.fill(0);
+        self.links.fill(self.exit_stub);
         self.link_owner.fill(0);
         self.link_gen.fill(ANY_GEN);
         self.free_links.clear();
@@ -237,8 +258,7 @@ impl Jit {
         self.blocks.clear();
         self.pending.clear();
         self.pending_pcs.clear();
-        self.arena.reset();
-        self.stubs();
+        self.arena.discard();
     }
 
     /// Before a run: drop everything compiled against another natives set, another RAM's watch arrays or address mask, or
@@ -246,7 +266,7 @@ impl Jit {
     fn sync<H: Host>(&mut self, cache: &Cache, raw: &heirloom_mem_flat32::RawRam) {
         let helper = h_one::<H> as HOne as usize as u64;
         if cache.stats.flushes != self.seen_flushes || raw.gen != self.gen_base || helper != self.helper || raw.mask != self.mask {
-            if self.stats.compiled != 0 { self.flush(); }
+            if self.stats.compiled != 0 { self.drop_code(); }
             self.seen_flushes = cache.stats.flushes;
             self.gen_base = raw.gen;
             self.helper = helper;
@@ -307,7 +327,7 @@ impl Jit {
         };
         let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
         let (code, pinned, inner) = jit_emit::compile(ops, pc, gen, page, &mut env);
-        if out_of_links { self.flush(); return true; }
+        if out_of_links { self.drop_code(); return true; }
         if may_refuse && code.len() > self.arena.segment_bytes() {
             for (i, target) in taken {
                 self.link_owner[i as usize] = 0;
@@ -331,8 +351,9 @@ impl Jit {
                 // the current segment is full: publish it, drop the next one's blocks, write there
                 self.publish_untimed();
                 self.evict(self.arena.next_segment());
-                if !self.arena.reuse() { self.flush(); return; }
-                match self.arena.put(code) { Some(p) => p, None => { self.stats.arena_full += 1; self.flush(); return } }
+                // a withdraw the provider refused leaves pages it may still execute elsewhere: never write them
+                if !self.arena.reuse() { self.dead = true; self.drop_code(); return; }
+                match self.arena.put(code) { Some(p) => p, None => { self.stats.arena_full += 1; self.drop_code(); return } }
             }
         };
         let seg = self.arena.segment_of(p as u64).map_or(0, |s| s as u8 + 1);
@@ -344,7 +365,7 @@ impl Jit {
         self.stats.code_bytes = self.arena.used() as u64;
         if self.pending.is_empty() { self.pending_at = self.clock + at; }
         self.pending.push(Slot { pc, len, entry: p as u64, gen, inner: p as u64 + inner as u64 });
-        if !self.pending_pcs.insert(pc, ()) { self.flush(); }
+        if !self.pending_pcs.insert(pc, ()) { self.drop_code(); }
     }
 
     /// Compile the block of the bound native at `pc` (jit_emit::compile_native); `gen` is its page's generation now (only
@@ -400,7 +421,18 @@ impl Jit {
     }
 
     fn publish_untimed(&mut self) {
-        if !self.arena.publish() { self.flush(); return; }
+        if !self.arena.publish() {
+            if self.mutant == crate::jit_emit::MUT_FLUSH_ON_REFUSAL { self.flush(); return; }
+            // refused (on CoralOS: a TLB shootdown not acknowledged in time): this batch never runs - its blocks are dropped
+            // (compiled again when hot; nothing was linked to them: link slots name new code only here, after a publish), its
+            // pages skipped until their segment is reused. Never a whole-arena reset.
+            self.pending.clear();
+            self.pending_pcs.clear();
+            self.refusals += 1;
+            if self.refusals >= PUBLISH_REFUSALS { self.dead = true; }
+            return;
+        }
+        self.refusals = 0;
         let mut grown = true;
         for s in core::mem::take(&mut self.pending) {
             if !self.blocks.insert(s.pc, s) { grown = false; break; }
@@ -409,7 +441,7 @@ impl Jit {
         }
         self.pending_pcs.clear();
         // the block map could not grow: drop the code (a block not in the map would never be refilled into the table)
-        if !grown { self.flush(); }
+        if !grown { self.drop_code(); }
     }
 
     /// Run JIT code from `entry` for at most `budget` instructions: (exit status, instructions retired).
@@ -552,13 +584,16 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
     // the inline 8-byte accesses rely on a masked address + 8 never wrapping inside RAM
     let tracing = cpu.tracing();
     let usable_for = |raw: &heirloom_mem_flat32::RawRam| !tracing && raw.len >= 8 && raw.len as u64 <= raw.mask as u64 + 1;
-    let mut usable = usable_for(&raw);
+    jit.arena.timer = jit.timer;
+    let mut usable = usable_for(&raw) && !jit.dead;
     if !usable { jit.stats.refused = true; }
     while n < budget && !cpu.halted() && !cpu.blocked() {
         let pc = cpu.pc;
         let left = budget - n;
         // publish a page's worth of new blocks, or anything compiled a while ago (a long run must not wait for its end)
         if jit.due(n) { jit.publish(); }
+        // the provider failed for good (jit.dead): no more compiling, publishing or entering, from this instruction on
+        if usable && jit.dead { usable = false; jit.stats.refused = true; }
         if usable {
             if let Some((entry, len)) = jit.entry(pc, host.mem().code_gen(pc), left) {
                 let (st, r, t, what) = match ls.as_deref_mut() {
@@ -571,7 +606,7 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
                             cache.sync_natives(cpu);
                             let raw = host.mem().raw();
                             jit.sync::<H>(cache, &raw);
-                            usable = usable_for(&raw);
+                            usable = usable_for(&raw) && !jit.dead;
                         }
                         (st, r, if st == EXIT_TRAP { jit.ctx.trap.take() } else { None }, Vec::new())
                     }
@@ -633,8 +668,12 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
         if host_call { cache.sync_natives(cpu); jit.sync::<H>(cache, &host.mem().raw()); }
         if trap.is_some() { break; }
     }
-    if jit.due(n) { jit.publish(); }
+    if !jit.dead && jit.due(n) { jit.publish(); }
     jit.clock += n;
     jit.stats.code_bytes = jit.arena.used() as u64;
+    let io = jit.arena.io;
+    (jit.stats.publishes, jit.stats.publish_pages, jit.stats.withdraws, jit.stats.withdraw_pages, jit.stats.codemem_failures, jit.stats.codemem_time) =
+        (io.publishes, io.publish_pages, io.withdraws, io.withdraw_pages, io.failures, io.time);
+    if jit.dead { jit.stats.refused = true; }
     (RunStats { insns: n, halted: cpu.halted(), blocked: cpu.blocked(), trap }, None)
 }

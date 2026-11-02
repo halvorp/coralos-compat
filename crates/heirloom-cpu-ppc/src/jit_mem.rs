@@ -44,6 +44,26 @@ pub(crate) struct Arena {
     cur: usize,
     /// The end of the region written now (the stub page, or the current segment).
     limit: usize,
+    /// What the provider was asked (every call is a syscall on CoralOS, and every page a TLB shootdown there).
+    pub(crate) io: CodeMemStats,
+    /// Opt-in clock for `io.time` (the JIT's translation clock); None = no clock reads.
+    pub(crate) timer: Option<fn() -> u64>,
+}
+
+/// The provider calls an arena made: on CoralOS each call is one EXEC_CODE_PROTECT syscall and each page that changes
+/// state one TLB shootdown round (the h86 Z83 finding: a JIT that published a page at a time crawled at 1/40 of tier 1).
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CodeMemStats {
+    /// publish calls, and the pages they covered.
+    pub(crate) publishes: u64,
+    pub(crate) publish_pages: u64,
+    /// reset calls (a segment reused, or the whole arena), and the pages they covered.
+    pub(crate) withdraws: u64,
+    pub(crate) withdraw_pages: u64,
+    /// Calls the provider refused.
+    pub(crate) failures: u64,
+    /// Time inside the provider, in the units of the JIT's clock (0 without one).
+    pub(crate) time: u64,
 }
 
 impl Arena {
@@ -53,9 +73,21 @@ impl Arena {
         let seg_len = (len.saturating_sub(STUB_BYTES) / nseg) & !(PAGE - 1);
         if seg_len == 0 { return None; }
         let base = mem.reserve(len)?;
-        Some(Arena { mem, base, len, seg_len, nseg, seg: None, used: 0, published: 0, cur: 0, limit: STUB_BYTES })
+        Some(Arena { mem, base, len, seg_len, nseg, seg: None, used: 0, published: 0, cur: 0, limit: STUB_BYTES, io: CodeMemStats::default(), timer: None })
     }
     fn seg_start(&self, s: usize) -> usize { STUB_BYTES + s * self.seg_len }
+    /// One provider call, counted and timed: `publish` (RX) or not (back to RW).
+    fn call(&mut self, publish: bool, ptr: *mut u8, len: usize) -> bool {
+        let t0 = self.timer.map(|c| c());
+        let ok = if publish { self.mem.publish(ptr, len) } else { self.mem.reset(ptr, len) };
+        if let (Some(c), Some(t0)) = (self.timer, t0) { self.io.time += c().wrapping_sub(t0); }
+        let pages = (len / PAGE) as u64;
+        if publish { self.io.publishes += 1; self.io.publish_pages += pages; } else { self.io.withdraws += 1; self.io.withdraw_pages += pages; }
+        self.io.failures += !ok as u64;
+        ok
+    }
+    /// Forget the written, unpublished code (it was never reachable): the space is written again.
+    pub(crate) fn discard(&mut self) { self.cur = self.published; }
     /// Copy `code` to the unpublished tail of the current region; None when it does not fit there.
     /// Bytes of one segment: no block's code may be longer.
     pub(crate) fn segment_bytes(&self) -> usize { self.seg_len }
@@ -75,7 +107,7 @@ impl Arena {
         if !self.pending() { return true; }
         let end = ((self.cur + PAGE - 1) & !(PAGE - 1)).min(self.limit);
         // SAFETY: published <= end <= limit <= len: the range is inside the reservation.
-        let ok = self.mem.publish(unsafe { self.base.add(self.published) }, end - self.published);
+        let ok = self.call(true, unsafe { self.base.add(self.published) }, end - self.published);
         self.published = end;
         self.cur = end;
         if let Some(s) = self.seg { self.used |= 1 << s; }
@@ -108,7 +140,7 @@ impl Arena {
         let ok = if self.used & (1 << s) != 0 {
             let (a, _) = self.segment(s);
             self.used &= !(1 << s);
-            self.mem.reset(a as *mut u8, self.seg_len)
+            self.call(false, a as *mut u8, self.seg_len)
         } else { true };
         self.enter(s);
         ok
@@ -120,7 +152,7 @@ impl Arena {
         self.published = 0;
         self.cur = 0;
         self.limit = STUB_BYTES;
-        self.mem.reset(self.base, self.len)
+        self.call(false, self.base, self.len)
     }
     /// Bytes of code space written in the current segment (the arena's other segments hold older code).
     pub(crate) fn used(&self) -> usize { self.cur - self.seg.map_or(0, |s| self.seg_start(s)) }

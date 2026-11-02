@@ -54,6 +54,9 @@ pub(crate) const MUT_SIDE_NO_SPILL: u8 = 16;
 /// A chained jump from the target's own page lands past its page-generation check even when the two blocks were compiled
 /// at different generations (jit.rs): a block left stale by a write to its page runs.
 pub(crate) const MUT_INNER_ANY_GEN: u8 = 17;
+/// A refused publish resets the whole arena and drops every block (jit.rs) - the pre-h86 behaviour that turned one slow
+/// TLB shootdown on the Z83 into a withdraw-everything / recompile-everything loop.
+pub(crate) const MUT_FLUSH_ON_REFUSAL: u8 = 18;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
