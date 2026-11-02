@@ -144,6 +144,18 @@ fn a_forwarded_host_event_carries_the_engine_window_id() {
     assert_eq!(got, Frame::Event(GuestUiEvent::CloseRequested { win: UiObjectRef { id: 1, generation: 1 }, token: CallbackToken(1) }));
 }
 
+#[test]
+fn an_engine_window_id_from_guest_data_maps_to_the_hosts_window() {
+    let mut host = WireHost::new(RecordingGuestUi::new());
+    let model = WindowModel { title: "w".into(), rect: GuestRect { left: 0, top: 0, width: 10, height: 10 }, role: WindowRole::Document, closable: true, resizable: false, token: CallbackToken(1) };
+    host.ui_mut().open_window(model.clone()).unwrap();
+    let mut call = Vec::new();
+    heirloom_ui_abi::wire::encode_call(&UiCall::OpenWindow(model), &mut call).unwrap();
+    host.apply(&call).unwrap();
+    assert_eq!(host.host_window(1), Some(2), "the engine's first window is the host's second");
+    assert_eq!(host.host_window(7), None, "a window the engine never opened here");
+}
+
 mod canvas_arena {
     use heirloom_ui_abi::wire::canvas::*;
 

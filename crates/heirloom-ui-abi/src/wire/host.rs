@@ -96,6 +96,12 @@ impl<G: GuestUi> WireHost<G> {
         self.canvas_pixels.insert(region, pixels);
     }
 
+    /// The host's id of the window the engine calls `engine_window` (an id a guest names in its own data, e.g. the drawable window
+    /// an AGL call carries): None for a window this host never opened for the engine.
+    pub fn host_window(&self, engine_window: u32) -> Option<u32> {
+        self.window_map.get(&engine_window).map(|h| h.id)
+    }
+
     fn translate_window(&self, engine: UiObjectRef) -> UiObjectRef {
         self.window_map.get(&engine.id).copied().unwrap_or(engine)
     }
