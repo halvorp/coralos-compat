@@ -20,7 +20,8 @@ use crate::t1run::{self, Flow};
 use crate::tier::Prof;
 use crate::Host;
 use alloc::boxed::Box;
-use alloc::collections::{BTreeMap, BTreeSet};
+use crate::pc_map::PcMap;
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::offset_of;
@@ -79,6 +80,13 @@ pub(crate) struct Ctx {
     pub(crate) slow: u64,
     pub(crate) helper: u64,
     pub(crate) trap: Option<Trap>,
+    /// `h_native::<H>` (native blocks call it), the natives it ran this entry, and whether one changed what the dispatcher
+    /// must resync (the natives set, guest RAM).
+    pub(crate) native: u64,
+    pub(crate) natives: u64,
+    pub(crate) resync: bool,
+    /// Planted mutant MUT_NO_RESYNC: h_native never asks for the resync.
+    pub(crate) no_resync: bool,
     /// Opt-in census of the instructions JIT code hands to h_one (key: primary opcode and extended opcode bits).
     pub(crate) census: Option<BTreeMap<u32, u64>>,
 }
@@ -97,11 +105,12 @@ pub(crate) struct Jit {
     free_links: Vec<u32>,
     by_target: BTreeMap<u32, Vec<u32>>,
     /// Every published block by pc (the dispatch table is a direct-mapped cache in front of it: a colliding block is
-    /// refilled from here, never recompiled).
-    blocks: BTreeMap<u32, Slot>,
+    /// refilled from here, never recompiled). Hashed: every dispatcher miss probes it, and in WC3 gameplay most misses are
+    /// native calls (pcs that are never a block), ~1 per 500 guest instructions.
+    blocks: PcMap<Slot>,
     hot: Box<[(u32, u32)]>,
     pending: Vec<Slot>,
-    pending_pcs: BTreeSet<u32>,
+    pending_pcs: PcMap<()>,
     /// `clock` when the oldest unpublished block was compiled.
     pending_at: u64,
     /// Guest instructions run on this tier so far (all runs): the age of waiting blocks.
@@ -128,11 +137,11 @@ pub(crate) struct Jit {
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
         let arena = Arena::new(mem, arena_bytes, SEGMENTS)?;
-        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, census: None });
+        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, resync: false, no_resync: false, census: None });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
-            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), by_target: BTreeMap::new(), blocks: BTreeMap::new(), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
-            pending_pcs: BTreeSet::new(), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
+            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
+            pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None,
         };
         if !j.stubs() { return None; }
@@ -204,7 +213,7 @@ impl Jit {
     /// Drop every block and start again (the arena back to RW, the stubs re-emitted).
     fn flush(&mut self) {
         self.stats.flushes += 1;
-        self.table.fill(EMPTY);
+        if self.mutant != crate::jit_emit::MUT_TABLE_STALE { self.table.fill(EMPTY); }
         self.hot.fill((EMPTY_PC, 0));
         self.links.fill(0);
         self.link_owner.fill(0);
@@ -237,7 +246,7 @@ impl Jit {
         let i = (pc >> 2) as usize & ((1 << TABLE_BITS) - 1);
         let mut s = self.table[i];
         if s.pc != pc {
-            s = *self.blocks.get(&pc)?;
+            s = *self.blocks.get(pc)?;
             self.table[i] = s;
         }
         (s.gen == gen_now && s.len as u64 <= left).then_some((s.entry, s.len))
@@ -248,8 +257,8 @@ impl Jit {
         let h = &mut self.hot[(pc >> 2) as usize & ((1 << TABLE_BITS) - 1)];
         if h.0 != pc { *h = (pc, 1); return HOT_AFTER <= 1; }
         h.1 = h.1.saturating_add(1);
-        if h.1 < HOT_AFTER || self.pending_pcs.contains(&pc) { return false; }
-        !self.blocks.get(&pc).is_some_and(|s| s.gen == gen_now)
+        if h.1 < HOT_AFTER || self.pending_pcs.contains(pc) { return false; }
+        !self.blocks.get(pc).is_some_and(|s| s.gen == gen_now)
     }
 
     fn compile<H: Host>(&mut self, ops: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, at: u64) {
@@ -272,21 +281,27 @@ impl Jit {
             };
             owner[i] = LINK_NEW;
             taken.push(i as u32);
-            links[i] = blocks.get(&target).map_or(exit_stub, |s| s.entry);
+            links[i] = blocks.get(target).map_or(exit_stub, |s| s.entry);
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
         let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
         let (code, pinned) = jit_emit::compile(ops, pc, gen, page, &mut env);
         if out_of_links { self.flush(); return; }
-        let p = match self.arena.put(&code) {
+        self.place(&code, taken, pc, ops.len() as u32, gen, pinned, at);
+    }
+
+    /// Put compiled code in the arena (reusing the oldest segment when full) and queue it for publishing; `taken` = the
+    /// link slots its code jumps through.
+    fn place(&mut self, code: &[u8], taken: Vec<u32>, pc: u32, len: u32, gen: u64, pinned: usize, at: u64) {
+        let p = match self.arena.put(code) {
             Some(p) => p,
             None => {
                 // the current segment is full: publish it, drop the next one's blocks, write there
                 self.publish_untimed();
                 self.evict(self.arena.next_segment());
                 if !self.arena.reuse() { self.flush(); return; }
-                match self.arena.put(&code) { Some(p) => p, None => { self.stats.arena_full += 1; self.flush(); return } }
+                match self.arena.put(code) { Some(p) => p, None => { self.stats.arena_full += 1; self.flush(); return } }
             }
         };
         let seg = self.arena.segment_of(p as u64).map_or(0, |s| s as u8 + 1);
@@ -294,11 +309,23 @@ impl Jit {
         self.stats.compiled += 1;
         self.stats.pinned += pinned as u64;
         self.stats.movbe = self.movbe;
-        if self.blocks.contains_key(&pc) { self.stats.recompiled += 1; }
+        if self.blocks.contains(pc) { self.stats.recompiled += 1; }
         self.stats.code_bytes = self.arena.used() as u64;
         if self.pending.is_empty() { self.pending_at = self.clock + at; }
-        self.pending.push(Slot { pc, len: ops.len() as u32, entry: p as u64, gen, pad: 0 });
-        self.pending_pcs.insert(pc);
+        self.pending.push(Slot { pc, len, entry: p as u64, gen, pad: 0 });
+        if !self.pending_pcs.insert(pc, ()) { self.flush(); }
+    }
+
+    /// Compile the block of the bound native at `pc` (jit_emit::compile_native); `gen` is its page's generation now (only
+    /// so the dispatcher's entry test reads the same way for every block: the code does not depend on the page).
+    fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
+        let t0 = self.timer.map(|c| c());
+        let mut none = |_: u32| -> *const u64 { core::ptr::null() };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
+        let code = jit_emit::compile_native(pc, &mut env);
+        self.place(&code, Vec::new(), pc, 1, gen, 0, at);
+        self.stats.natives_compiled += 1;
+        if let (Some(c), Some(t0)) = (self.timer, t0) { self.stats.translate_time += c().wrapping_sub(t0); }
     }
 
     /// Drop every block whose code is in arena segment `s` (about to be reused): out of the block map and the dispatch
@@ -309,7 +336,7 @@ impl Jit {
         let inside = |e: u64| e >= a && e < b;
         let mut gone = Vec::new();
         let stale = self.mutant == crate::jit_emit::MUT_EVICT_STALE;
-        self.blocks.retain(|&pc, slot| { let k = inside(slot.entry); if k { gone.push(pc); } !k || stale });
+        self.blocks.retain(|pc, slot| { let k = inside(slot.entry); if k { gone.push(pc); } !k || stale });
         if !stale { for t in self.table.iter_mut() { if inside(t.entry) { *t = EMPTY; } } }
         for pc in &gone {
             if let Some(v) = self.by_target.get(pc) { for &i in v { self.links[i as usize] = self.exit_stub; } }
@@ -343,12 +370,15 @@ impl Jit {
 
     fn publish_untimed(&mut self) {
         if !self.arena.publish() { self.flush(); return; }
+        let mut grown = true;
         for s in core::mem::take(&mut self.pending) {
+            if !self.blocks.insert(s.pc, s) { grown = false; break; }
             self.table[(s.pc >> 2) as usize & ((1 << TABLE_BITS) - 1)] = s;
-            self.blocks.insert(s.pc, s);
             if let Some(v) = self.by_target.get(&s.pc) { for &i in v { self.links[i as usize] = s.entry; } }
         }
         self.pending_pcs.clear();
+        // the block map could not grow: drop the code (a block not in the map would never be refilled into the table)
+        if !grown { self.flush(); }
     }
 
     /// Run JIT code from `entry` for at most `budget` instructions: (exit status, instructions retired).
@@ -372,6 +402,10 @@ impl Jit {
         c.host = host as *mut H as *mut u8;
         c.table = self.table.as_ptr();
         c.trap = None;
+        c.native = h_native::<H> as HNative as usize as u64;
+        c.natives = 0;
+        c.resync = false;
+        c.no_resync = self.mutant == crate::jit_emit::MUT_NO_RESYNC;
         // SAFETY: `enter` is the trampoline this Jit emitted and published (RX) at the arena's start, with the System V
         // signature extern "C" fn(*mut Ctx, u64) -> u32; `entry` is a published block's entry in the same arena. The
         // generated code touches only the Cpu, the Ctx, guest RAM inside `len` bytes at `ram` (bounds-checked per access)
@@ -397,6 +431,31 @@ impl Jit {
 
 type HOne = extern "C" fn(*mut Ctx, u32, u32, u64) -> u32;
 type HNote = extern "C" fn(*mut Ctx, u32, u32);
+type HNative = extern "C" fn(*mut Ctx, u32, u64) -> u32;
+
+/// A native block's call: the host's native bound at `pc` with `done` instructions of this entry retired before it, as
+/// tier 1's dispatcher runs it (t1::native): the time base exact, the pc noted, one retired instruction. Answers 0 = go on
+/// at cpu.pc, 1 = leave after it (halted or blocked, or the natives set or guest RAM changed: `resync` tells the
+/// dispatcher), 2 = trap (in the Ctx; pc at the native, nothing retired). A native that sets the time base itself moves
+/// `tb0`, so the exit's `tb0 + retired` is what it wrote plus what ran after.
+pub(crate) extern "C" fn h_native<H: Host>(ctx: *mut Ctx, pc: u32, done: u64) -> u32 {
+    // SAFETY: as in h_one.
+    let c = unsafe { &mut *ctx };
+    let (host, cpu) = unsafe { (&mut *(c.host as *mut H), &mut *c.cpu) };
+    let natives_gen = cpu.natives_gen;
+    cpu.tb = c.tb0.wrapping_add(done);
+    cpu.note_pc(pc);
+    c.natives += 1;
+    if let Err(t) = crate::exec::native(host, cpu, pc) { cpu.pc = pc; c.trap = Some(t); return 2; }
+    if cpu.tb != c.tb0.wrapping_add(done + 1) { c.tb0 = cpu.tb.wrapping_sub(done + 1); }
+    let raw = host.mem().raw();
+    if c.no_resync { return 0; }
+    if cpu.natives_gen != natives_gen || raw.base != c.ram || raw.len as u64 != c.len || raw.mask != c.mask || raw.gen as *const u64 != c.gen || raw.marked as *const u64 != c.marked {
+        c.resync = true;
+        return 1;
+    }
+    if cpu.halted() || cpu.blocked() { 1 } else { 0 }
+}
 
 /// JIT code's call for ONE instruction it has no inline code for (or whose inline guard failed): tier 1's handler, with the
 /// exact pc and time base. Answers 0 = continue the block, 1 = leave (pc set: a branch, a halt or block), 2 = trap (in the
@@ -437,7 +496,9 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
     jit.sync::<H>(cache, &raw);
     let check = !cache.ignore_generations;
     // the inline 8-byte accesses rely on a masked address + 8 never wrapping inside RAM
-    let usable = !cpu.tracing() && raw.len >= 8 && raw.len as u64 <= raw.mask as u64 + 1;
+    let tracing = cpu.tracing();
+    let usable_for = |raw: &heirloom_mem_flat32::RawRam| !tracing && raw.len >= 8 && raw.len as u64 <= raw.mask as u64 + 1;
+    let mut usable = usable_for(&raw);
     if !usable { jit.stats.refused = true; }
     while n < budget && !cpu.halted() && !cpu.blocked() {
         let pc = cpu.pc;
@@ -449,6 +510,15 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
                 let (st, r, t, what) = match ls.as_deref_mut() {
                     None => {
                         let (st, r) = jit.run_code(host, cpu, entry, left);
+                        prof.natives += jit.ctx.natives;
+                        jit.stats.natives += jit.ctx.natives;
+                        if jit.ctx.resync {
+                            // a native in JIT code changed the natives set or guest RAM (t1::native's sync, done here)
+                            cache.sync_natives(cpu);
+                            let raw = host.mem().raw();
+                            jit.sync::<H>(cache, &raw);
+                            usable = usable_for(&raw);
+                        }
                         (st, r, if st == EXIT_TRAP { jit.ctx.trap.take() } else { None }, Vec::new())
                     }
                     Some(ls) => {
@@ -475,6 +545,11 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
             None => match t1::next(cache, host.mem(), cpu) {
                 Err(t) => { trap = Some(t); break; }
                 Ok(Next::Native) => {
+                    // natives run inside JIT code once hot (never in lockstep: a native cannot be rolled back and run twice)
+                    if usable && !jit.logged {
+                        let gen = host.mem().code_gen(pc);
+                        if jit.hot(pc, gen) { jit.compile_native(pc, gen, n); }
+                    }
                     if let Err(t) = t1::native(host, cpu, cache, prof) { trap = Some(t); break; }
                     n += 1;
                     jit.sync::<H>(cache, &host.mem().raw());

@@ -42,6 +42,12 @@ pub(crate) const MUT_LAZY_FLAGS: u8 = 10;
 pub(crate) const MUT_EVICT_STALE: u8 = 11;
 /// fmadds rounded twice (the f64 sum, then single) instead of round-to-odd + one rounding (jit_fp).
 pub(crate) const MUT_FMA_TWICE: u8 = 12;
+/// A native block counts the native as two retired instructions (the time base and the budget drift from tier 0's).
+pub(crate) const MUT_NATIVE_COUNT: u8 = 13;
+/// The dispatcher keeps an evicted or flushed block's entry in its dispatch table (jit.rs): a stale jump-cache hit.
+pub(crate) const MUT_TABLE_STALE: u8 = 14;
+/// A native that changed the natives set or guest RAM does not make JIT code leave for the dispatcher's resync (jit.rs).
+pub(crate) const MUT_NO_RESYNC: u8 = 15;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -124,6 +130,59 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     (e.a.b, pinned)
 }
 
+/// Jump to the published block at the guest pc in r8d if the dispatch table's slot for it holds that block; else fall
+/// through (rax clobbered).
+fn probe(a: &mut Asm, table_mask: u32) {
+    a.mov_rr(RAX, R8);
+    a.sh_ri(Sh::Shr, RAX, 2);
+    a.alu_ri(Alu::And, RAX, table_mask);
+    a.sh_ri(Sh::Shl, RAX, core::mem::size_of::<Slot>().trailing_zeros() as u8);
+    a.alu_rm64(Alu::Add, RAX, ctx(offset_of!(Ctx, table)));
+    a.alu_rm(Alu::Cmp, R8, m(RAX, offset_of!(Slot, pc) as i32));
+    let miss = a.jcc(Cc::Ne);
+    a.jmp_m(m(RAX, offset_of!(Slot, entry) as i32));
+    a.here(miss);
+}
+
+/// The block of a bound NATIVE address: the host's native through `jit::h_native` (one retired instruction, as tier 0
+/// counts it), then on to the pc it left (normally LR) through the dispatch table - so a guest call into the host and its
+/// return stay in JIT code instead of a round trip through the dispatcher each (WC3 gameplay: ~1 native per 500 guest
+/// instructions, ~750 host instructions of dispatcher each). The helper answers 0 = go on, 1 = leave after it (halted,
+/// blocked, the natives set or guest RAM changed: the dispatcher must resync first), 2 = trap (nothing retired).
+/// Every cached register was stored by the exit that got here, so the call clobbers nothing a block holds.
+pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
+    let mut a = Asm::default();
+    a.lea64(RAX, m(R15, 1));
+    a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
+    let bail = a.jcc(Cc::A);
+    a.mov_rr64(RDI, R13);
+    a.mov_ri(RSI, pc);
+    a.mov_rr64(RDX, R15);
+    a.call_m(ctx(offset_of!(Ctx, native)));
+    a.test_rr(RAX, RAX);
+    let out = a.jcc(Cc::Ne);
+    a.alu_ri64(Alu::Add, R15, if env.mutant == MUT_NATIVE_COUNT { 2 } else { 1 });
+    if env.chain {
+        a.ld32(R8, cpu(PC));
+        probe(&mut a, env.table_mask);
+    }
+    a.mov_ri(RAX, EXIT_NORMAL);
+    a.jmp_m(ctx(offset_of!(Ctx, exit)));
+    a.here(out);
+    a.alu_ri(Alu::Cmp, RAX, 2);
+    let t = a.jcc(Cc::E);
+    a.alu_ri64(Alu::Add, R15, 1);
+    a.mov_ri(RAX, EXIT_NORMAL);
+    a.jmp_m(ctx(offset_of!(Ctx, exit)));
+    a.here(t);
+    a.mov_ri(RAX, crate::jit::EXIT_TRAP);
+    a.jmp_m(ctx(offset_of!(Ctx, exit)));
+    a.here(bail);
+    a.mov_ri(RAX, EXIT_BAIL);
+    a.jmp_m(ctx(offset_of!(Ctx, exit)));
+    a.b
+}
+
 impl<'a, 'b> E<'a, 'b> {
     fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>, regs: crate::jit_regs::Regs) -> Self {
         E { a: Asm::default(), env, pc, slow: Vec::new(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), regs }
@@ -169,17 +228,7 @@ impl E<'_, '_> {
         let a = &mut self.a;
         a.alu_ri64(Alu::Add, R15, n as i32);
         a.st32(cpu(PC), R8);
-        if self.env.chain {
-            a.mov_rr(RAX, R8);
-            a.sh_ri(Sh::Shr, RAX, 2);
-            a.alu_ri(Alu::And, RAX, self.env.table_mask);
-            a.sh_ri(Sh::Shl, RAX, core::mem::size_of::<Slot>().trailing_zeros() as u8);
-            a.alu_rm64(Alu::Add, RAX, ctx(offset_of!(Ctx, table)));
-            a.alu_rm(Alu::Cmp, R8, m(RAX, offset_of!(Slot, pc) as i32));
-            let miss = a.jcc(Cc::Ne);
-            a.jmp_m(m(RAX, offset_of!(Slot, entry) as i32));
-            a.here(miss);
-        }
+        if self.env.chain { probe(a, self.env.table_mask); }
         self.exit_normal();
     }
 
