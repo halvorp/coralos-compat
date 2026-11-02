@@ -98,6 +98,8 @@ pub(crate) struct Ctx {
     /// must resync (the natives set, guest RAM).
     pub(crate) native: u64,
     pub(crate) natives: u64,
+    /// h_one calls this entry.
+    pub(crate) helpers: u64,
     pub(crate) resync: bool,
     /// Planted mutant MUT_NO_RESYNC: h_native never asks for the resync.
     pub(crate) no_resync: bool,
@@ -158,7 +160,7 @@ pub(crate) struct Jit {
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
         let arena = Arena::new(mem, arena_bytes, SEGMENTS)?;
-        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, resync: false, no_resync: false, census: None });
+        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, resync: false, no_resync: false, census: None });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
@@ -467,6 +469,7 @@ impl Jit {
         c.trap = None;
         c.native = h_native::<H> as HNative as usize as u64;
         c.natives = 0;
+        c.helpers = 0;
         c.resync = false;
         c.no_resync = self.mutant == crate::jit_emit::MUT_NO_RESYNC;
         // SAFETY: `enter` is the trampoline this Jit emitted and published (RX) at the arena's start, with the System V
@@ -476,6 +479,7 @@ impl Jit {
         let f: extern "C" fn(*mut Ctx, u64) -> u32 = unsafe { core::mem::transmute(self.enter as usize) };
         let st = f(&mut *self.ctx, entry);
         let r = self.ctx.retired;
+        self.stats.helpers += self.ctx.helpers;
         cpu.tb = self.ctx.tb0.wrapping_add(r);
         self.stats.entries += 1;
         self.stats.insns += r;
@@ -534,6 +538,7 @@ pub(crate) extern "C" fn h_one<H: Host>(ctx: *mut Ctx, w: u32, ipc: u32, done: u
     // `&mut Cpu` of that call, which Rust does not use while JIT code runs.
     let c = unsafe { &mut *ctx };
     let (host, cpu) = unsafe { (&mut *(c.host as *mut H), &mut *c.cpu) };
+    c.helpers += 1;
     if let Some(m) = c.census.as_mut() { *m.entry(w & 0xFC00_07FE).or_default() += 1; }
     let op = crate::t1op::decode(ipc, w);
     let bumps = host.mem().code_bumps();

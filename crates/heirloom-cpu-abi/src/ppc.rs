@@ -355,7 +355,9 @@ impl PpcExit {
     }
 }
 
-/// Counters one `read_prof` snapshot holds (caller-owned).
+/// Counters one `read_prof` snapshot holds (caller-owned). The caller sets `size` to the bytes it has: the library fills
+/// that much (`size` 0, as callers before 2026-11-02 left it: the fields up to `cache_invalidations`, [`PPC_PROF_V1_SIZE`]). A
+/// library older than a field leaves it as the caller set it (zero).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PpcProf {
@@ -368,7 +370,30 @@ pub struct PpcProf {
     pub cache_hits: u64,
     pub cache_misses: u64,
     pub cache_invalidations: u64,
+    // ---- appended 2026-11-02 (h86): where the instructions ran, and tier 2's executable memory ----
+    /// Instructions retired in tier 2's JIT code (`insns` - this - `interp_insns` - `natives` ran on tier 1).
+    pub jit_insns: u64,
+    /// Entries from the dispatcher into JIT code, and entries / chained jumps that bailed back (stale page or budget).
+    pub jit_entries: u64,
+    pub jit_bails: u64,
+    /// Blocks compiled; native calls made from JIT code; instructions JIT code handed to tier 1's handler one at a time.
+    pub jit_compiled: u64,
+    pub jit_natives: u64,
+    pub jit_helpers: u64,
+    /// Instructions tier 0 ran (pages whose code keeps being rewritten: tier 1's volatile pages).
+    pub interp_insns: u64,
+    /// 1 when Tier::Jit was asked but tier 2 does not run (no or refused executable memory, a provider that failed).
+    pub jit_refused: u64,
+    /// Executable-memory provider calls: publishes and their pages, withdraws and their pages, refusals.
+    pub publishes: u64,
+    pub publish_pages: u64,
+    pub withdraws: u64,
+    pub withdraw_pages: u64,
+    pub codemem_failures: u64,
 }
+
+/// `PpcProf`'s size before the tier counters were appended: what a `size` of 0 asks for.
+pub const PPC_PROF_V1_SIZE: u32 = core::mem::offset_of!(PpcProf, jit_insns) as u32;
 
 /// `PpcVTable::set_tier`.
 pub const TIER_INTERP: u32 = 0;

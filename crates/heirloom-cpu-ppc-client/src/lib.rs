@@ -248,6 +248,9 @@ pub struct Exec {
     code_mem: Option<PpcCodeMem>,
     /// The library refused the provider (`set_code_mem` != 0): Tier::Jit runs tier 1.
     code_mem_refused: bool,
+    /// The library's last `read_prof` (after every run): where the instructions ran - tier 2 / tier 0 / natives, the rest on
+    /// tier 1 - and tier 2's executable-memory calls. For the engine's perf line.
+    pub tiers: PpcProf,
 }
 
 // SAFETY: the instance and the callbacks box are owned by this Exec alone and used only through `&mut self`; moving the Exec moves
@@ -268,7 +271,7 @@ fn refused(why: &'static str) -> RunStats { RunStats { insns: 0, halted: false, 
 impl Exec {
     pub fn new(tier: Tier) -> Exec {
         let host = Box::new(PpcHostCallbacks { size: core::mem::size_of::<PpcHostCallbacks>() as u32, flags: 0, ctx: ptr::null_mut(), on_native, on_syscall });
-        Exec { tier, prof: Prof::default(), inst: ptr::null_mut(), host, bound: BoundSet::default(), tier_set: None, lockstep_refused: false, code_mem: None, code_mem_refused: false }
+        Exec { tier, prof: Prof::default(), inst: ptr::null_mut(), host, bound: BoundSet::default(), tier_set: None, lockstep_refused: false, code_mem: None, code_mem_refused: false, tiers: PpcProf::default() }
     }
     /// True once a resume was asked for [`Tier::Lockstep`] or [`Tier::JitLockstep`] (cpu-ppc.library serves neither: the static
     /// core does), or for [`Tier::Jit`] with no executable memory given or with the provider refused: the run used tier 1 - named
@@ -321,8 +324,8 @@ impl Exec {
             EXIT_TRAP => st.trap = Some(exit.decode_trap().unwrap_or(Trap::Unimplemented { pc: exit.pc, word: exit.word, what: WHAT_UNLISTED })),
             _ => st.trap = Some(Trap::Refused { why: refusal_of(&exit) }),
         }
-        let mut p = PpcProf::default();
-        if (t.read_prof)(self.inst, &mut p) == 0 { (self.prof.natives, self.prof.blocks) = (p.natives, p.blocks); }
+        let mut p = PpcProf { size: core::mem::size_of::<PpcProf>() as u32, ..PpcProf::default() };
+        if (t.read_prof)(self.inst, &mut p) == 0 { (self.prof.natives, self.prof.blocks, self.tiers) = (p.natives, p.blocks, p); }
         self.prof.insns += st.insns;
         st
     }

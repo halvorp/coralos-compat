@@ -24,6 +24,8 @@ pub struct JitStats {
     pub pinned: u64,
     /// Compiled blocks that are superblocks (go on through a conditional branch's not-taken path into the next block).
     pub superblocks: u64,
+    /// Instructions JIT code handed to tier 1's handler (jit::h_one), one call each.
+    pub helpers: u64,
     /// Native calls made from JIT code (native blocks), and native blocks compiled.
     pub natives: u64,
     pub natives_compiled: u64,

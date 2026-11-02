@@ -275,9 +275,16 @@ fn tier_2_runs_in_the_engines_executable_memory_through_set_code_mem() {
     let c = count_loop(&mut r, 3_000_000);
     // 1 for `li`, then addi, b, addi, ... : the 2_999_999 after it hold 1_500_000 addi
     assert_eq!(c.regs.gpr[3], 1_500_000);
-    let mut p = PpcProf::default();
+    // a caller of the first record version (size 0) gets exactly those fields: the appended ones keep what it had there
+    let mut p = PpcProf { jit_insns: 7, ..PpcProf::default() };
     assert_eq!((vtable().read_prof)(r.inst, &mut p), 0);
-    assert_eq!(p.tier, TIER_JIT);
+    assert_eq!((p.tier, p.jit_insns), (TIER_JIT, 7), "a v1 caller's record is not written past PPC_PROF_V1_SIZE");
+    // a caller that states the full size gets where the instructions ran and the provider calls
+    let mut p = PpcProf { size: core::mem::size_of::<PpcProf>() as u32, ..PpcProf::default() };
+    assert_eq!((vtable().read_prof)(r.inst, &mut p), 0);
+    // the loop's batch waits PUBLISH_AFTER (2M instructions) on tier 1, then runs in JIT code: ~1M of the 3M there
+    assert!(p.jit_insns > 900_000 && p.jit_insns + p.blocks <= p.insns && p.jit_entries > 0 && p.jit_compiled > 0 && p.jit_refused == 0, "{p:?}");
+    assert_eq!((p.publishes, p.publish_pages > 0), (prov.publishes as u64, true), "the provider calls as the provider saw them: {p:?}");
     assert_eq!(prov.reserves, 1, "one reservation, asked of the ENGINE's provider");
     assert!(prov.publishes >= 2, "the trampoline and the compiled loop were published through it ({})", prov.publishes);
     drop(r); // the instance (and its JIT) before the provider it borrows

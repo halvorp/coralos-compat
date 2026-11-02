@@ -480,16 +480,23 @@ fn wc3_host_run_with_a_gl_worker() {
         m.exec().tier = t;
         // `WC3_CODEMEM_COST=<us per call>,<us per page>`: every publish / withdraw also costs this much (a busy wait), the
         // shape of CoralOS's EXEC_CODE_PROTECT - one syscall per call, one TLB shootdown round per page that changes state
-        match std::env::var("WC3_CODEMEM_COST").ok().and_then(|v| v.split_once(',').map(|(a, b)| (a.parse::<u64>().ok(), b.parse::<u64>().ok()))) {
-            Some((Some(call), Some(page))) => m.exec().set_code_mem(Box::new(CostedCodeMem::new(call, page))),
-            _ => m.exec().set_code_mem(Box::new(heirloom_cpu_ppc::HostCodeMem::new())),
-        }
+        let mem: Box<dyn heirloom_cpu_ppc::CodeMem> = match std::env::var("WC3_CODEMEM_COST").ok().and_then(|v| v.split_once(',').map(|(a, b)| (a.parse::<u64>().ok(), b.parse::<u64>().ok()))) {
+            Some((Some(call), Some(page))) => Box::new(CostedCodeMem::new(call, page)),
+            _ => Box::new(heirloom_cpu_ppc::HostCodeMem::new()),
+        };
+        #[cfg(not(feature = "cpu-library"))]
+        m.exec().set_code_mem(mem);
+        // through cpu-ppc.library's table (`--no-default-features --features cpu-library,heirloom-cpu-ppc-client/bind-static`):
+        // the same provider as CPU ABI v3's PpcCodeMem record, as macppc.engine hands it over on CoralOS
+        #[cfg(feature = "cpu-library")]
+        m.exec().set_code_mem(abi_code_mem(mem));
     }
     let jit_census = std::env::var("WC3_JIT_CENSUS").is_ok();
     // `WC3_JIT_FRAMES=<file>`: per guest frame (swap to swap, seen at slice ends) host wall ns, tier 2's translation ns and the
     // blocks it compiled - the data for a persistent translation cache's case (do first-translations land in p95/p99 frames?)
     fn host_ns() -> u64 { static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new(); T0.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64 }
     let mut jit_frames = std::env::var("WC3_JIT_FRAMES").ok().map(|p| std::io::BufWriter::new(std::fs::File::create(p).unwrap()));
+    #[cfg(not(feature = "cpu-library"))]
     if jit_frames.is_some() { m.exec().set_jit_clock(host_ns); }
     let (mut jf_swaps, mut jf_t, mut jf_tr, mut jf_n) = (0usize, host_ns(), 0u64, 0u64);
     // `WC3_PERF=<frames>`: the engine's stage clock (heirloom_macppc_engine::perf) on host nanoseconds, a line every <frames> swaps
@@ -511,6 +518,7 @@ fn wc3_host_run_with_a_gl_worker() {
     let mut ui_seen = 0usize;
     for i in 0..slices {
         // `WC3_JIT_CENSUS`: count the forms tier 2 hands to tier 1's handler from slice 40000 on (gameplay)
+        #[cfg(not(feature = "cpu-library"))]
         if jit_census && i == 40_000 { m.exec().jit_helper_census(true); }
         let (st, stats) = GuestMachine::step(&mut m, budget);
         if matches!(st, Step::Fault(_) | Step::Exited) {
@@ -536,9 +544,12 @@ fn wc3_host_run_with_a_gl_worker() {
             let swaps = seen.lock().unwrap().swaps;
             if swaps != jf_swaps {
                 use std::io::Write;
-                let (now, js) = (host_ns(), m.exec().jit_stats());
-                writeln!(w, "{swaps},{},{},{},{}", swaps - jf_swaps, now - jf_t, js.translate_time - jf_tr, js.compiled - jf_n).unwrap();
-                (jf_swaps, jf_t, jf_tr, jf_n) = (swaps, now, js.translate_time, js.compiled);
+                #[cfg(not(feature = "cpu-library"))]
+                let (now, tr, n) = { let js = m.exec().jit_stats(); (host_ns(), js.translate_time, js.compiled) };
+                #[cfg(feature = "cpu-library")]
+                let (now, tr, n) = (host_ns(), 0u64, 0u64);
+                writeln!(w, "{swaps},{},{},{},{}", swaps - jf_swaps, now - jf_t, tr - jf_tr, n - jf_n).unwrap();
+                (jf_swaps, jf_t, jf_tr, jf_n) = (swaps, now, tr, n);
             }
         }
         // a blocked guest waits for its deadline: the clock jumps there (the host's timer); else the slice's own time passes
@@ -570,6 +581,10 @@ fn wc3_host_run_with_a_gl_worker() {
         }
         ui_seen = ui_calls;
     }
+    // cpu-library: the library's read_prof record (where the instructions ran; tier 2's executable-memory calls)
+    #[cfg(feature = "cpu-library")]
+    eprintln!("PPC-TIERS {:?}", m.exec().tiers);
+    #[cfg(not(feature = "cpu-library"))]
     {
         let e = m.exec();
         if let Some(c) = e.jit_helper_census(false) {
@@ -680,4 +695,19 @@ impl heirloom_cpu_ppc::CodeMem for CostedCodeMem {
     fn reserve(&mut self, len: usize) -> Option<*mut u8> { let p = self.0.reserve(len)?; self.3 = p as usize; Some(p) }
     fn publish(&mut self, ptr: *mut u8, len: usize) -> bool { self.cost(ptr, len, true); self.0.publish(ptr, len) }
     fn reset(&mut self, ptr: *mut u8, len: usize) -> bool { self.cost(ptr, len, false); self.0.reset(ptr, len) }
+}
+
+/// A tier-2 provider as CPU ABI v3's PpcCodeMem record (cpu-library builds): `ctx` owns the boxed provider (leaked: the
+/// harness's machine lives to the process's end).
+#[cfg(feature = "cpu-library")]
+fn abi_code_mem(mem: Box<dyn heirloom_cpu_ppc::CodeMem>) -> heirloom_cpu_ppc_client::PpcCodeMem {
+    use core::ffi::c_void;
+    type M = Box<dyn heirloom_cpu_ppc::CodeMem>;
+    // SAFETY (all three): `ctx` is the leaked `*mut M` below, never freed, used by one CPU instance at a time.
+    extern "C" fn reserve(ctx: *mut c_void, len: usize, out: *mut *mut u8) -> i32 {
+        match unsafe { &mut *(ctx as *mut M) }.reserve(len) { Some(p) => { unsafe { *out = p }; 0 } None => -1 }
+    }
+    extern "C" fn publish(ctx: *mut c_void, ptr: *mut u8, len: usize) -> i32 { if unsafe { &mut *(ctx as *mut M) }.publish(ptr, len) { 0 } else { -1 } }
+    extern "C" fn reset(ctx: *mut c_void, ptr: *mut u8, len: usize) -> i32 { if unsafe { &mut *(ctx as *mut M) }.reset(ptr, len) { 0 } else { -1 } }
+    heirloom_cpu_ppc_client::PpcCodeMem { size: core::mem::size_of::<heirloom_cpu_ppc_client::PpcCodeMem>() as u32, flags: 0, ctx: Box::into_raw(Box::new(mem)) as *mut c_void, reserve, publish, reset }
 }

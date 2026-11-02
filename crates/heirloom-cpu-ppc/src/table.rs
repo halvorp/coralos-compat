@@ -240,14 +240,21 @@ extern "C" fn set_code_mem(inst: *mut CpuInstance, mem: *const heirloom_cpu_abi:
 
 extern "C" fn read_prof(inst: *mut CpuInstance, out: *mut PpcProf) -> i32 {
     let (Some(e), false) = (instance(inst).and_then(|i| i.exec.as_ref()), out.is_null()) else { return -1 };
-    let c = e.cache_stats();
+    let (c, j) = (e.cache_stats(), e.jit_stats());
     let p = PpcProf {
         size: core::mem::size_of::<PpcProf>() as u32, tier: e.tier.number(), insns: e.prof.insns, natives: e.prof.natives,
         blocks: e.prof.blocks, cache_hits: e.prof.blocks.saturating_sub(c.decodes), cache_misses: c.decodes,
         cache_invalidations: c.stale + c.flushes,
+        jit_insns: j.insns, jit_entries: j.entries, jit_bails: j.bails, jit_compiled: j.compiled, jit_natives: j.natives, jit_helpers: j.helpers,
+        interp_insns: c.interp_insns, jit_refused: (e.tier == Tier::Jit && j.refused) as u64, publishes: j.publishes,
+        publish_pages: j.publish_pages, withdraws: j.withdraws, withdraw_pages: j.withdraw_pages, codemem_failures: j.codemem_failures,
     };
-    // SAFETY: `out` is non-null and the caller's record.
-    unsafe { *out = p };
+    // the caller's size (0 = the first version's fields), never more than this record
+    // SAFETY: `out` is non-null and the caller's record, at least as large as the size it states (PpcProf's contract).
+    let want = match unsafe { (*out).size } { 0 => heirloom_cpu_abi::ppc::PPC_PROF_V1_SIZE, n => n } as usize;
+    let n = want.min(core::mem::size_of::<PpcProf>());
+    // SAFETY: both records hold at least `n` bytes (above); plain-old-data, no overlap.
+    unsafe { core::ptr::copy_nonoverlapping(&p as *const PpcProf as *const u8, out as *mut u8, n) };
     0
 }
 
