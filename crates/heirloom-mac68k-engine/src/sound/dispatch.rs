@@ -4,7 +4,7 @@
 //! of the key; the three selectors Inside Macintosh VI lists with a zero size byte are tabled below. Facts: AMS `ams-snd`
 //! `SoundDispatch.cc` (D0 low word = API, high word = call), systemless `trap/sound.rs` (the routine / frame table, read as facts).
 //!
-//! Implemented: `SndSoundManagerVersion` (reports 3.0, final), `UnsignedFixedMulDiv`, `SndChannelStatus`, `SndGetSysBeepState`,
+//! Implemented: `SndSoundManagerVersion` ([`SOUND_MANAGER_VERSION`], 3.3 final), `UnsignedFixedMulDiv`, `SndChannelStatus`, `SndGetSysBeepState`,
 //! `SndSetSysBeepState`, `GetSysBeepVolume`, `SetSysBeepVolume`, `GetDefaultOutputVolume`, `SetDefaultOutputVolume`. Any other selector pops
 //! its frame (so the program's stack stays whole) and is refused by name: its OSErr slot is left untouched.
 use super::*;
@@ -57,7 +57,7 @@ pub fn sound_dispatch<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, regs: &mut Regs
     let ret_w = |m: &mut Mac<U>, cpu: &mut Cpu, v: u16| -> Result<(), Refusal> { m.mem.write_u16(sp + params, v).map_err(Refusal::mem("SoundDispatch result"))?; cpu.set_areg(7, sp + params); Ok(()) };
     let ret_l = |m: &mut Mac<U>, cpu: &mut Cpu, v: u32| -> Result<(), Refusal> { m.mem.write_u32(sp + params, v).map_err(Refusal::mem("SoundDispatch result"))?; cpu.set_areg(7, sp + params); Ok(()) };
     let text = match (routine, words, family) {
-        (0x0C, 0, _) => { ret_l(m, cpu, 0x0300_8000)?; String::from("SndSoundManagerVersion -> 3.0 final") }
+        (0x0C, 0, _) => { ret_l(m, cpu, SOUND_MANAGER_VERSION)?; String::from("SndSoundManagerVersion -> 3.3 final") }
         (0x0C, 6, _) => {
             let (div, mul, val) = (arg32(m, 0)?, arg32(m, 4)?, arg32(m, 8)?);
             let r = if div == 0 { u32::MAX } else { ((u64::from(val) * u64::from(mul)) / u64::from(div)).min(u64::from(u32::MAX)) as u32 };

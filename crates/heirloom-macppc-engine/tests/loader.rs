@@ -98,8 +98,10 @@ fn upp_constructors_are_bound_in_every_library_even_an_absent_one_and_build_a_po
         assert_eq!(m.bind_from(lib, name), Binding::Native(Native::NewUpp), "{lib}/{name}");
     }
     assert_eq!(m.bind_from("Apple;Carbon;Networking", "DisposeOTNotifyUPP"), Binding::Native(Native::DisposeUpp));
-    // NEGATIVE CONTROL: only the UPP constructors: another symbol of the absent library stays unbound by name
-    assert!(matches!(m.bind_from("Apple;Carbon;Networking", "OTOpenEndpoint"), Binding::Unbound(w) if w.contains("not provided")));
+    // NEGATIVE CONTROL: only the UPP constructors: another symbol of an absent library stays unbound by name, and so does a networking
+    // call of Open Transport, of which only OTAtomicAdd32 is served (ot_c.rs)
+    assert!(matches!(m.bind_from("OpenTransportLib", "OTOpenEndpoint"), Binding::Unbound(w) if w.contains("not provided")));
+    assert!(matches!(m.bind_from("Apple;Carbon;Networking", "OTOpenEndpoint"), Binding::Unbound(w) if w.contains("OTAtomicAdd32 only, no networking")));
     // calling it builds a routine descriptor around the TVector (what NewRoutineDescriptor would build for a PowerPC routine)
     m.bind_from("CarbonLib", "NewThreadTerminationUPP");
     let tv = 0x5000u32;

@@ -433,7 +433,10 @@ fn wc3_host_run_with_a_gl_worker() {
         return;
     };
     let seen = Arc::new(Mutex::new(Seen::default()));
-    let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
+    // `WC3_NO_AUDIO=1`: a host with no audio service, as the CoralOS Heirloom host is today (SndNewChannel answers notEnoughHardware)
+    let mut ui = RecordingGuestUi::new();
+    ui.refuse_audio = std::env::var("WC3_NO_AUDIO").is_ok();
+    let mut m = MacPpc::for_program(ui, &app).unwrap();
     // `RGL_RING_OUT=<file>`: keep the request stream up to the `WC3_RING_SWAPS`-th swap (default 128) and write it as a ring image
     // for the C worker's host replay (heirloom-gl-host --dump), the way the triangle test hands over its ring.
     let ring_out = std::env::var("RGL_RING_OUT").ok();

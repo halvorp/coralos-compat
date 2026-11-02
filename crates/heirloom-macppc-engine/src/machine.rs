@@ -328,6 +328,12 @@ impl<U: GuestUi> MacPpc<U> {
                     b
                 }
             },
+            // Open Transport: only its atomic utility; its UPP constructors fall to the UPP rule below, the rest is unbound after it
+            l if crate::ot_c::provided(l) && crate::ot_c::OtFn::by_name(name).is_some() => {
+                let b = Binding::Native(crate::symbols::Native::Ot(crate::ot_c::OtFn::by_name(name).expect("checked")));
+                self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
+                b
+            }
             l if crate::qt_c::provided(l) => match crate::qt_c::QtFn::by_name(name) {
                 Some(f) => { let b = Binding::Native(crate::symbols::Native::Qt(f)); self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
                 None => {
@@ -343,6 +349,11 @@ impl<U: GuestUi> MacPpc<U> {
             l if (name.starts_with("New") && name.ends_with("UPP") && name.len() > 6) || (name.starts_with("Dispose") && name.ends_with("UPP") && name.len() > 9) => {
                 let b = Binding::Native(if name.starts_with("New") { crate::symbols::Native::NewUpp } else { crate::symbols::Native::DisposeUpp });
                 self.bindings.insert(crate::glue::binding_key(l, name), b.clone());
+                b
+            }
+            l if crate::ot_c::provided(l) => {
+                let b = Binding::Unbound(alloc::format!("{name} is not in the part of Open Transport this engine provides (OTAtomicAdd32 only, no networking)"));
+                self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
                 b
             }
             l => {

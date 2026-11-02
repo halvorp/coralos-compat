@@ -197,7 +197,8 @@ fn sysbeep_queues_a_beep_unless_the_program_turned_it_off_and_the_dispatch_calls
     assert_eq!((word(&g, OUT), g.m.mem.read_u16(STATUS).unwrap(), queued(&g).len()), (0, 0, n), "the beep is off: nothing more queued");
     // version
     go(&mut g, |p| { p.clr_l(); d0(p, 0x000C_0008); p.trap(0xA800).pop_l(OUT + 10); });
-    assert_eq!(g.m.mem.read_u32(OUT + 10).unwrap(), 0x0300_8000);
+    assert_eq!(g.m.mem.read_u32(OUT + 10).unwrap(), heirloom_mac68k_engine::sound::SOUND_MANAGER_VERSION);
+    assert_eq!(heirloom_mac68k_engine::sound::SOUND_MANAGER_VERSION, 0x0330_8000, "3.3 final, the PowerPC export's value too");
     // GetDefaultOutputVolume as Glider PRO asks it: $022C0018
     go(&mut g, |p| { p.clr_w().l(OUT + 16); d0(p, 0x022C_0018); p.trap(0xA800).pop_w(OUT + 14); });
     assert_eq!((word(&g, OUT + 14), g.m.mem.read_u32(OUT + 16).unwrap()), (0, 0x0100_0100));

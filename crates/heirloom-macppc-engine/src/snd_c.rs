@@ -1,12 +1,11 @@
-//! Sound Manager 3.0 routines that are `_SoundDispatch` ($A800) selectors on a 68k, by C name: the SAME bodies the 68k dispatch runs
+//! Sound Manager routines that are `_SoundDispatch` ($A800) selectors on a 68k, by C name: the SAME bodies the 68k dispatch runs
 //! (heirloom-mac68k-engine `sound::dispatch`). `SndChannelStatus(chan, theLength, theStatus)` (spec macos9-specs/Sound/SoundMisc.md).
 use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 
-/// NumVersion 3.0.0 final (major 3, minor/bug 0, stage 0x80 finalStage, nonRel 0).
-pub const SOUND_MANAGER_3_0: u32 = 0x0300_8000;
+use heirloom_mac68k_engine::sound::SOUND_MANAGER_VERSION;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SndFn { SndChannelStatus, SndSoundManagerVersion }
@@ -27,11 +26,12 @@ impl<U: GuestUi> MacPpc<U> {
                 regs[3] = e as i32 as u32;
             }
             // SndSoundManagerVersion() -> NumVersion, a struct returned by value: the caller's buffer in r3, returned in r3 (the measured
-            // DSpGetVersion convention). 3.0.0 final: the Sound Manager 3.0 API level the shared sound dispatch serves, no higher.
+            // DSpGetVersion convention). The shared Sound Manager's one version (heirloom-mac68k-engine sound::SOUND_MANAGER_VERSION).
             SndFn::SndSoundManagerVersion => {
                 let buf = regs[3];
-                self.mac.mem.write_u32(buf, SOUND_MANAGER_3_0).map_err(|_| format!("SndSoundManagerVersion: the result buffer {buf:#x} leaves guest RAM"))?;
-                self.mac.log.push(String::from("[sound] SndSoundManagerVersion -> 3.0.0"));
+                self.mac.mem.write_u32(buf, SOUND_MANAGER_VERSION).map_err(|_| format!("SndSoundManagerVersion: the result buffer {buf:#x} leaves guest RAM"))?;
+                let v = SOUND_MANAGER_VERSION.to_be_bytes();
+                self.mac.log.push(format!("[sound] SndSoundManagerVersion -> {:x}.{:x}.{:x} stage {:#x}", v[0], v[1] >> 4, v[1] & 0xF, v[2]));
             }
         }
         Ok(())

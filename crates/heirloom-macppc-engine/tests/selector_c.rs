@@ -87,6 +87,54 @@ fn snd_channel_status_from_powerpc_is_the_sound_dispatch_body() {
     assert_eq!(call(&mut m, "SndChannelStatus", &[chan, 8, STATUS]) as i32, -50, "too short for an SCStatus");
 }
 
+/// Warcraft III's sound init, the Miles Sound System's `AIL_API_open_digital_driver` (Miles Carbon Library @1001abd0) from PowerPC:
+/// `SndSoundManagerVersion` must be 3.2 or later (Miles compares the top 12 bits of the NumVersion with 0x032 and gives up below it:
+/// the game's "Unable to initialize base sound services" dialog), then `SndNewChannel(&chan, sampledSynth, initStereo, cb)` and, for
+/// 16-bit output, `SndDoImmediate(chan, {linkSoundComponentsCmd, 0, &SoundComponentData})` (Sound Manager 3.3) to set the channel up
+/// for 16-bit stereo 'twos' before its first bufferCmd. A format the seam cannot play is badFormat, said by name, never a success.
+#[test]
+fn miles_open_digital_driver_sees_sound_manager_3_3_and_its_link_command_configures_the_channel() {
+    let (mut m, _) = machine();
+    const VER: u32 = 0x3300;
+    const CHAN: u32 = 0x3400;
+    const CMD: u32 = 0x3410;
+    const SCD: u32 = 0x3420;
+    call(&mut m, "SndSoundManagerVersion", &[VER]);
+    let v = m.mac.mem.read_u32(VER).unwrap();
+    assert!(v >> 20 >= 0x32, "Miles' gate: Sound Manager {v:#010x} is below 3.2");
+    assert_eq!(v, 0x0330_8000, "3.3 final: the level of the linkSoundComponentsCmd it serves");
+    m.mac.mem.write_u32(CHAN, 0).unwrap();
+    assert_eq!(call(&mut m, "SndNewChannel", &[CHAN, 5, 0xC0, 0]) as i16, 0, "{:?}", m.mac.refused);
+    let chan = m.mac.mem.read_u32(CHAN).unwrap();
+    // SoundComponentData: flags, format, numChannels, sampleSize, sampleRate (Fixed), sampleCount, buffer, reserved
+    let scd = |m: &mut M, fmt: &[u8; 4], ch: u16, size: u16, rate: u32| {
+        m.mac.mem.write_u32(SCD, 0).unwrap();
+        m.mac.mem.write_bytes(SCD + 4, fmt).unwrap();
+        m.mac.mem.write_u16(SCD + 8, ch).unwrap();
+        m.mac.mem.write_u16(SCD + 10, size).unwrap();
+        m.mac.mem.write_u32(SCD + 12, rate << 16).unwrap();
+        m.mac.mem.write_u32(SCD + 16, 1024).unwrap();
+        m.mac.mem.write_u32(SCD + 20, 0x5000).unwrap();
+        m.mac.mem.write_u32(SCD + 24, 0).unwrap();
+        m.mac.mem.write_u16(CMD, 53).unwrap();
+        m.mac.mem.write_u16(CMD + 2, 0).unwrap();
+        m.mac.mem.write_u32(CMD + 4, SCD).unwrap();
+    };
+    scd(&mut m, b"twos", 2, 16, 22050);
+    assert_eq!(call(&mut m, "SndDoImmediate", &[chan, CMD]) as i16, 0, "{:?}", m.mac.refused);
+    let opened: Vec<_> = m.mac.ui.calls.iter().filter_map(|c| match c { heirloom_ui_abi::UiCall::OpenAudio(a) => Some((a.rate_hz, a.channels, a.format)), _ => None }).collect();
+    // SndNewChannel opened the default 8-bit mono stream; the link opens the linked format's (the idle default is closed)
+    assert_eq!(opened.last(), Some(&(22050, 2, heirloom_ui_abi::AudioFormat::S16Le)), "the channel is set up for the linked format: {opened:?}");
+    let n = opened.len();
+    assert!(m.mac.log.iter().any(|l| l.contains("linkSoundComponentsCmd")), "{:?}", m.mac.log.last());
+    // NEGATIVE: a compressed format is badFormat, named, and opens nothing
+    scd(&mut m, b"ima4", 2, 16, 22050);
+    assert_eq!(call(&mut m, "SndDoImmediate", &[chan, CMD]) as i16, -206);
+    assert!(m.mac.log.iter().any(|l| l.contains("linkSoundComponentsCmd") && l.contains("'ima4'") && l.contains("badFormat")), "{:?}", m.mac.log.last());
+    assert_eq!(m.mac.ui.calls.iter().filter(|c| matches!(c, heirloom_ui_abi::UiCall::OpenAudio(_))).count(), n, "badFormat opens no stream");
+    assert!(m.mac.refused.is_empty(), "{:?}", m.mac.refused);
+}
+
 /// The Carbon Scrap Manager over the one desk scrap: GetCurrentScrap's reference reads what PutScrap put (GetScrapFlavorSize), an absent
 /// flavor is noTypeErr, and a reference taken before ZeroScrap is refused (paramErr), never answered from the new scrap.
 #[test]

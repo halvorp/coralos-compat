@@ -29,10 +29,17 @@ pub const AVAILABLE_CMD: u16 = 24;
 pub const VERSION_CMD: u16 = 25;
 pub const VOLUME_CMD: u16 = 46;
 pub const GET_VOLUME_CMD: u16 = 47;
+pub const CLOCK_COMPONENT_CMD: u16 = 50;
+pub const GET_CLOCK_COMPONENT_CMD: u16 = 51;
+pub const SCHEDULED_SOUND_CMD: u16 = 52;
+/// Sound Manager 3.3: `param2` is a `SoundComponentData` the channel is set up for before its first sound.
+pub const LINK_SOUND_COMPONENTS_CMD: u16 = 53;
 pub const SOUND_CMD: u16 = 80;
 pub const BUFFER_CMD: u16 = 81;
 pub const RATE_CMD: u16 = 82;
 pub const GET_RATE_CMD: u16 = 85;
+pub const RATE_MULTIPLIER_CMD: u16 = 86;
+pub const GET_RATE_MULTIPLIER_CMD: u16 = 87;
 
 /// One command of a `'snd '` resource or a `SndCommand`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

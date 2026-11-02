@@ -82,6 +82,7 @@ pub enum Native { StandardAlert, GetSharedLibrary, GetDiskFragment, FindSymbol, 
     Isp(crate::isp_c::IspFn),
     /// The QuickTime Movie Toolbox, no decoder ([`crate::qt_c`]).
     Qt(crate::qt_c::QtFn),
+    Ot(crate::ot_c::OtFn),
     /// An `Invoke<Name>UPP` call of the program's own UPP ([`crate::invoke_c`]): served by the run loop through the callback machine.
     Invoke(crate::invoke_c::InvokeFn),
     /// `CallUniversalProc` ([`crate::upp_c`]): served by the run loop through the callback machine.

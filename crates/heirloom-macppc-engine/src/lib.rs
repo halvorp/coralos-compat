@@ -78,6 +78,7 @@ pub mod gworld;
 pub mod invoke_c;
 pub mod isp_c;
 pub mod qt_c; // the Movie Toolbox calls with no movie decoder: every movie refused by name
+pub mod ot_c; // Open Transport's OTAtomicAdd32 (Apple;Carbon;Networking); no networking
 pub mod keys_c;
 pub mod menu_c;
 pub mod toolbox_c;

@@ -13,7 +13,12 @@
 //! * **Traps**: `SndNewChannel` ($A807), `SndDisposeChannel` ($A801), `SndAddModifier` ($A802, refused: no modifier code is
 //!   modelled), `SndDoCommand` ($A803), `SndDoImmediate` ($A804), `SndPlay` ($A805), `SndControl` ($A806, refused), `SysBeep` ($A9C8)
 //!   and `SoundDispatch` ($A800, [`dispatch`]).
-//! * **Commands**: `nullCmd`, `quietCmd`, `flushCmd`, `pauseCmd`, `resumeCmd`, `rateCmd`, `volumeCmd`, `soundCmd`, `bufferCmd`.
+//! * **Commands**: `nullCmd`, `quietCmd`, `flushCmd`, `pauseCmd`, `resumeCmd`, `rateCmd`, `volumeCmd`, `soundCmd`, `bufferCmd`,
+//!   `linkSoundComponentsCmd` (Sound Manager 3.3: the channel opens its stream for the `SoundComponentData` format now, so the first
+//!   sound needs no set-up; a format the seam cannot play - compressed, 8-bit 'twos', little-endian 'sowt', >2 channels - is badFormat).
+//! * **Version**: [`SOUND_MANAGER_VERSION`] 3.3 final, the level of `linkSoundComponentsCmd` and the level the profiled system has
+//!   (QuickTime 3 and later install Sound Manager 3.3; the PowerPC Gestalt `qtim` answers QuickTime 4). The other 3.2.1 / 3.3 commands
+//!   (`clockComponentCmd`, `getClockComponentCmd`, `scheduledSoundCmd`, `rateMultiplierCmd`, `getRateMultiplierCmd`) are refused by name.
 //!   Every other command is refused BY NAME, none succeeds silently. NAMED LIMITS: `syncCmd` / `waitCmd` (a timed wait) are refused (`callBackCmd` runs the channel's routine: callback.rs); compressed (MACE /
 //!   IMA) sound headers are refused; only the sampled synthesizer (and "any", 0) exists, the square-wave, wave-table and note
 //!   synthesizers answer `notEnoughHardware`; a synchronous `SndPlay` (`async` FALSE) returns when the sound is QUEUED, not when it has
@@ -41,6 +46,11 @@ pub const BAD_CHANNEL: i16 = -205;
 pub const BAD_FORMAT: i16 = -206;
 pub const PARAM_ERR: i16 = -50;
 pub const SAMPLED_SYNTH: i16 = 5;
+
+/// `SndSoundManagerVersion`: NumVersion 3.3 final (major 3, minor/bug $30, stage $80 finalStage, nonRel 0). One value for the 68k
+/// `_SoundDispatch` selector and the PowerPC `SndSoundManagerVersion` export. The Miles Sound System (Warcraft III) refuses anything
+/// below 3.2.
+pub const SOUND_MANAGER_VERSION: u32 = 0x0330_8000;
 
 pub const SC_CALL_BACK: u32 = 8;
 pub const SC_FLAGS: u32 = 28;
@@ -207,6 +217,26 @@ impl<U: GuestUi> Mac<U> {
                 Ok((err, format!("{} {text}", if c.cmd == snd::SOUND_CMD { "soundCmd" } else { "bufferCmd" })))
             }
             snd::CALL_BACK_CMD => self.snd_queue_callback(key, c),
+            snd::LINK_SOUND_COMPONENTS_CMD => {
+                let e = Refusal::mem("linkSoundComponentsCmd SoundComponentData");
+                let at = c.param2;
+                let (fmt, ch, size, rate) = (self.mem.read_u32(at + 4).map_err(&e)?, self.mem.read_u16(at + 8).map_err(&e)?, self.mem.read_u16(at + 10).map_err(&e)?, snd::hz(self.mem.read_u32(at + 12).map_err(&e)?));
+                let name = String::from_utf8_lossy(&fmt.to_be_bytes()).into_owned();
+                let format = match (&fmt.to_be_bytes(), size) {
+                    (b"twos", 16) => Some(AudioFormat::S16Le),
+                    (b"raw ", 8) => Some(AudioFormat::U8),
+                    _ => None,
+                };
+                let (Some(format), 1..=2, 1..) = (format, ch, rate) else {
+                    return Ok((BAD_FORMAT, format!("linkSoundComponentsCmd '{name}' {ch}ch {size}-bit {rate} Hz: no component chain for it here (badFormat)")));
+                };
+                let f = Fmt { rate, channels: ch as u8, format };
+                match self.snd_stream_for(key, f) {
+                    Ok(_) => Ok((NO_ERR, format!("linkSoundComponentsCmd '{name}' {ch}ch {size}-bit {rate} Hz: the channel's stream is open for it"))),
+                    Err(UiRefusal::Unsupported(w)) => Ok((NOT_ENOUGH_HARDWARE, format!("linkSoundComponentsCmd: no audio out in this host ({w}): notEnoughHardware"))),
+                    Err(e) => Err(Refusal(format!("linkSoundComponentsCmd: the host refused the audio stream: {e:?}"))),
+                }
+            }
             other => Err(Refusal(format!("{} (command {other}) is not implemented", cmd_name(other)))),
         }
     }
@@ -217,6 +247,8 @@ fn cmd_name(c: u16) -> &'static str {
         snd::WAIT_CMD => "waitCmd", snd::CALL_BACK_CMD => "callBackCmd", snd::SYNC_CMD => "syncCmd", snd::RE_INIT_CMD => "reInitCmd",
         snd::AVAILABLE_CMD => "availableCmd", snd::VERSION_CMD => "versionCmd", snd::GET_VOLUME_CMD => "getVolumeCmd", snd::GET_RATE_CMD => "getRateCmd",
         26 => "totalLoadCmd", 27 => "loadCmd", 40 => "freqDurationCmd", 41 => "restCmd", 42 => "freqCmd", 43 => "ampCmd", 44 => "timbreCmd", 45 => "getAmpCmd",
+        snd::CLOCK_COMPONENT_CMD => "clockComponentCmd", snd::GET_CLOCK_COMPONENT_CMD => "getClockComponentCmd", snd::SCHEDULED_SOUND_CMD => "scheduledSoundCmd",
+        snd::RATE_MULTIPLIER_CMD => "rateMultiplierCmd", snd::GET_RATE_MULTIPLIER_CMD => "getRateMultiplierCmd",
         60 => "waveTableCmd", 61 => "phaseCmd", 20 => "initCmd", 21 => "freeCmd", 22 => "totalLoad", 83 => "bufferCmd-related", _ => "an unnamed command",
     }
 }

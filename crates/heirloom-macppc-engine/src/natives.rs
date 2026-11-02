@@ -203,6 +203,7 @@ impl<U: GuestUi> MacPpc<U> {
                 cpu.gpr = *regs;
                 match self.isp_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::Ot(f) => match self.ot_call(f, regs) { Ok(()) => GlueOutcome::Return, Err(e) => GlueOutcome::Refused(e) },
             Native::Qt(f) => {
                 let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;

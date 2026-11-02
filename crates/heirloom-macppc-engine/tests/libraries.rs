@@ -89,6 +89,25 @@ fn the_census_counts_bound_named_and_weak_missing_imports_per_library() {
     assert!(t[0].starts_with("LIBRARY") && t[2].starts_with("OpenGLLibrary") && t[2].contains("2"), "{t:?}");
 }
 
+/// Open Transport's atomic utility from `Apple;Carbon;Networking` (ot_c.rs): the Miles Sound System (Warcraft III) calls
+/// `OTAtomicAdd32(toAdd, &dest)` unguarded at 64 sites as soon as its digital driver runs, so a weak-absent import faulted at 0.
+/// It adds to the 32-bit word and returns the NEW value (OpenTransport.h); the networking calls of the same library stay unbound.
+#[test]
+fn ot_atomic_add32_from_carbon_networking_adds_and_returns_the_new_value() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let frag = load(&mut m, &[("Apple;Carbon;Networking", true, &[("OTAtomicAdd32", F, false), ("OTOpenEndpointInContext", F, false), ("NewOTNotifyUPP", F, false)])]);
+    assert!(matches!(frag.imports[2].status, ImportStatus::Bound(_)), "a UPP constructor of the library is still glue (StormCarbon calls it unguarded): {:?}", frag.imports[2].status);
+    assert!(matches!(frag.imports[0].status, ImportStatus::Bound(_)), "{:?}", frag.imports[0].status);
+    assert!(matches!(&frag.imports[1].status, ImportStatus::WeakAbsent(_) | ImportStatus::Unbound(_)), "networking itself is not served: {:?}", frag.imports[1].status);
+    const DEST: u32 = 0x3000;
+    m.mac.mem.write_u32(DEST, 40).unwrap();
+    assert_eq!(call(&mut m, &frag, 0, &[2, DEST]), (GlueOutcome::Return, 42));
+    assert_eq!(m.mac.mem.read_u32(DEST).unwrap(), 42);
+    assert_eq!(call(&mut m, &frag, 0, &[(-43i32) as u32, DEST]), (GlueOutcome::Return, (-1i32) as u32), "signed, wraps like the hardware add");
+    assert_eq!(m.mac.mem.read_u32(DEST).unwrap(), u32::MAX);
+    assert!(matches!(call(&mut m, &frag, 0, &[1, 0xFFFF_FFF0]).0, GlueOutcome::Refused(_)), "a dest outside guest RAM is refused, never a made-up answer");
+}
+
 /// The Movie Toolbox with NO decoder (qt_c.rs): the library is provided, Gestalt 'qtim' names its API level (4.0), EnterMovies
 /// succeeds, every way of making a movie is refused by NAME with invalidMovie and a NIL movie, calls on a NIL movie are
 /// invalidMovie and change nothing, IsMovieDone is TRUE. Warcraft III checked 'qtim' and stopped at "you need QuickTime 4.0".
