@@ -121,6 +121,9 @@ impl<U: GuestUi> MacPpc<U> {
         }
         self.sync_natives(&mut cpu);
         self.rt.cpu = Some(cpu);
+        // the stage clock's PC sampler maps PCs to functions inside the main fragment's code section: [section 0, the next section)
+        let lo = frag.section_bases.first().copied().flatten();
+        self.code_range = lo.map(|lo| (lo, frag.section_bases.iter().flatten().copied().filter(|&b| b > lo).min().unwrap_or(lo.saturating_add(0x0100_0000))));
         Ok(())
     }
 
@@ -171,9 +174,19 @@ impl<U: GuestUi> MacPpc<U> {
         }
         self.sync_natives(&mut cpu);
         let mut exec = core::mem::take(&mut self.rt.exec);
-        let t0 = self.perf.as_ref().map(|p| p.now());
-        let stats = exec.resume(self, &mut cpu, budget);
+        let t0 = self.perf.as_mut().map(|p| { let t = p.now(); p.step_begin(t); t });
+        let sample = self.perf.as_ref().and_then(|p| p.pc.as_ref()).map(|pc| pc.every);
+        #[cfg(not(feature = "cpu-library"))]
+        if let Some(p) = &self.perf { exec.set_jit_clock(p.clock_fn()); }
+        let stats = match sample {
+            Some(every) => self.resume_sampled(&mut exec, &mut cpu, budget, every),
+            None => exec.resume(self, &mut cpu, budget),
+        };
+        #[cfg(not(feature = "cpu-library"))]
+        let translated = exec.jit_stats().translate_time;
         self.rt.exec = exec;
+        #[cfg(not(feature = "cpu-library"))]
+        if let Some(p) = self.perf.as_mut() { p.add_translate(translated); }
         if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let dt = p.now().wrapping_sub(t0); p.add_step(dt, stats.insns); }
         heirloom_mac68k_engine::qd::flush(&mut self.mac);
         if let Some(t) = stats.trap {
@@ -201,6 +214,27 @@ impl<U: GuestUi> MacPpc<U> {
             else if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked } else { Step::BudgetSpent };
         if step != Step::Exited { self.rt.cpu = Some(cpu); }
         (step, stats)
+    }
+
+    /// `exec.resume` cut into chunks of `every` instructions with the PC sampled after each ([`crate::perf_pc`]): the chunk's retired
+    /// instructions and its host time outside glue calls are charged to the PC it stopped at. The result is the sum of the chunks'.
+    fn resume_sampled(&mut self, exec: &mut crate::cpu::Exec, cpu: &mut Cpu, budget: u64, every: u64) -> RunStats {
+        let mut total = RunStats { insns: 0, halted: false, blocked: false, trap: None };
+        while total.insns < budget {
+            let chunk = (budget - total.insns).min(every);
+            let before = self.perf.as_ref().map(|p| (p.now(), p.win.native_time.iter().sum::<u64>()));
+            let s = exec.resume(self, cpu, chunk);
+            total.insns += s.insns;
+            if let (Some((t0, n0)), Some(p)) = (before, self.perf.as_mut()) {
+                let (dt, n1) = (p.now().wrapping_sub(t0), p.win.native_time.iter().sum::<u64>());
+                let w = crate::perf_pc::Weight { insns: s.insns, time: dt.saturating_sub(n1.saturating_sub(n0)) };
+                if let Some(mut pc) = p.pc.take() { pc.record(&mut p.win.pcs, cpu.pc, w); p.pc = Some(pc); }
+            }
+            let stopped = s.halted || s.blocked || s.trap.is_some();
+            (total.halted, total.blocked, total.trap) = (s.halted, s.blocked, s.trap);
+            if stopped || s.insns == 0 { break; }
+        }
+        total
     }
 
     /// Step until the program exits, blocks for an event, faults, or `max_insns` are spent. Returns the last step.
@@ -254,6 +288,7 @@ impl<U: GuestUi> Host for MacPpc<U> {
         } else { [0; 3] };
         let Some(p) = self.perf.as_mut() else { return self.native_call(cpu, addr) };
         if class == crate::perf::Class::Clock { p.clock_read(tick, cpu.tb, site); }
+        if let (Some(pc), true) = (p.pc.as_mut(), matches!(class, crate::perf::Class::Clock | crate::perf::Class::Thread)) { pc.caller(class as u8, cpu.lr); }
         let t0 = p.now();
         let served = self.native_call(cpu, addr);
         if let Some(p) = self.perf.as_mut() { let dt = p.now().wrapping_sub(t0); p.add_native(class, dt); }

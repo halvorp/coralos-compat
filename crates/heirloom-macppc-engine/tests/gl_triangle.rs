@@ -493,7 +493,13 @@ fn wc3_host_run_with_a_gl_worker() {
         m.perf_enable(ns);
         m.perf_report_every(every.parse().unwrap_or(64));
         if std::env::var("WC3_PERF_SITES").is_ok() { m.perf_census(); }
+        // `WC3_PC=<insns>`: the guest-PC sampler (heirloom_macppc_engine::perf_pc) every <insns> instructions (0 = its default); `WC3_PC_FROM=<swaps>`
+        // forgets the samples before that swap (the menus and the loading), `WC3_PC_OUT=<file>` writes the table at the end (`S`/`C`/`R` rows)
+        // and `WC3_CODE_OUT=<file>` the code section's bytes (the range is the file's first 8 bytes' `R` row)
+        if let Ok(e) = std::env::var("WC3_PC") { m.perf_pc_enable(e.parse().ok().filter(|&n| n > 0).unwrap_or(heirloom_macppc_engine::perf_pc::EVERY)); }
     }
+    let pc_from: usize = std::env::var("WC3_PC_FROM").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let mut pc_reset = false;
     // `WC3_BUDGET=<insns>` per slice (default 5M) and `WC3_CLOCK_MIPS=<n>`: the virtual clock advances by the instructions the slice ran
     // at n million per second (a slower CPU's clock, e.g. the Z83's) instead of 20 ms per slice
     let budget: u64 = std::env::var("WC3_BUDGET").ok().and_then(|s| s.parse().ok()).unwrap_or(5_000_000);
@@ -518,6 +524,7 @@ fn wc3_host_run_with_a_gl_worker() {
             }
             break;
         }
+        if !pc_reset && pc_from > 0 && seen.lock().unwrap().swaps >= pc_from { m.perf_pc_reset(); pc_reset = true; eprintln!("PC-RESET at swap {pc_from} (slice {i})"); }
         if std::env::var("WC3_STEPS").is_ok() && i % 50 == 0 { eprintln!("STEP {i}: {st:?} {stats:?} pc={:#x} lr={:#x} cb={}", m.cpu().map_or(0, |c| c.pc), m.cpu().map_or(0, |c| c.lr), m.callback_depth()); }
         while let Some(l) = m.perf_take_line(1000) {
             eprintln!("{l} (slice {i})");
@@ -575,6 +582,8 @@ fn wc3_host_run_with_a_gl_worker() {
         }
         eprintln!("PPC-TIER {:?} prof={:?} jit={:?} cache={:?} lockstep={:?} divergence={:?}", e.tier, e.prof, e.jit_stats(), e.cache_stats(), e.lockstep_stats(), e.divergence());
     }
+    if let Ok(path) = std::env::var("WC3_PC_OUT") { m.perf_pc_starts(); std::fs::write(&path, m.perf_pc_dump()).unwrap(); eprintln!("PC table -> {path}"); }
+    if let (Ok(path), Some((lo, bytes))) = (std::env::var("WC3_CODE_OUT"), m.perf_pc_code()) { std::fs::write(&path, bytes).unwrap(); eprintln!("code section {lo:#x} -> {path}"); }
     if let Some(cpu) = m.cpu() {
         eprintln!("END pc={:#x} lr={:#x} callbacks={:?}", cpu.pc, cpu.lr, m.callback_kinds());
         if let Ok(n) = std::env::var("WC3_DUMP").map(|v| v.parse::<u32>().unwrap_or(32)) {

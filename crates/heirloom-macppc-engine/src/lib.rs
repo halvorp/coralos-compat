@@ -57,6 +57,8 @@ pub mod source;
 pub mod mp;
 pub mod sched;
 pub mod perf; // the opt-in stage clock: where a guest frame's time goes ([HEIRLOOM-PERF] lines)
+pub mod perf_hist; // per-frame capture: the HIST line (percentiles, buckets, the tail attributed to a stage) and the on-demand dump
+pub mod perf_pc; // the guest-PC sampling profiler: top guest functions by instruction share ([HEIRLOOM-PERF-PC])
 pub mod stdclib;
 pub mod threads;
 pub mod alias_c;
