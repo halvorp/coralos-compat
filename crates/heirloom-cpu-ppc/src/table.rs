@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 use heirloom_cpu_abi::ppc::{
     FlatRam, PpcContext, PpcCreate, PpcExit, PpcHostCallbacks, PpcProf, PpcVTable, ABI_FAMILY_PPC_FLAT, CTX_HALTED, HOST_BLOCK,
     HOST_HALT, HOST_HANDLED, HOST_REDIRECTED, HOST_UNHANDLED, LAYOUT, PPC_ABI_VERSION, REFUSE_CONTEXT, REFUSE_INSTANCE, REFUSE_RAM,
-    SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP,
+    SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP, TIER_JIT,
 };
 use heirloom_cpu_abi::{CpuInstance, ARCH_PPC};
 use heirloom_mem_flat32::GuestMem;
@@ -203,8 +203,39 @@ extern "C" fn unbind_native(inst: *mut CpuInstance, addr: u32) -> i32 {
 
 extern "C" fn set_tier(inst: *mut CpuInstance, tier: u32) -> i32 {
     let Some(e) = instance(inst).and_then(|i| i.exec.as_mut()) else { return -1 };
-    e.tier = match tier { TIER_INTERP => Tier::Interp, TIER_BLOCKS => Tier::Blocks, _ => return -1 };
+    // TIER_JIT without executable memory runs tier 1 and is named (JitStats::refused), as the static core does
+    e.tier = match tier { TIER_INTERP => Tier::Interp, TIER_BLOCKS => Tier::Blocks, TIER_JIT => Tier::Jit, _ => return -1 };
     0
+}
+
+/// The engine's [`heirloom_cpu_abi::ppc::PpcCodeMem`] as tier 2's [`crate::CodeMem`]: every call goes back to the engine, which
+/// holds the authority (CoralOS: CapKind::ExecRegion, syscalls 132/133).
+#[cfg(target_arch = "x86_64")]
+struct AbiCodeMem(heirloom_cpu_abi::ppc::PpcCodeMem);
+
+#[cfg(target_arch = "x86_64")]
+impl crate::CodeMem for AbiCodeMem {
+    fn reserve(&mut self, len: usize) -> Option<*mut u8> {
+        let mut p = core::ptr::null_mut();
+        ((self.0.reserve)(self.0.ctx, len, &mut p) == 0 && !p.is_null()).then_some(p)
+    }
+    fn publish(&mut self, ptr: *mut u8, len: usize) -> bool { (self.0.publish)(self.0.ctx, ptr, len) == 0 }
+    fn reset(&mut self, ptr: *mut u8, len: usize) -> bool { (self.0.reset)(self.0.ctx, ptr, len) == 0 }
+}
+
+extern "C" fn set_code_mem(inst: *mut CpuInstance, mem: *const heirloom_cpu_abi::ppc::PpcCodeMem) -> i32 {
+    // SAFETY: a non-null record is the caller's for this call; it is copied (its ctx and functions must outlive the instance).
+    let Some(m) = (unsafe { mem.as_ref() }) else { return -1 };
+    if m.size != core::mem::size_of::<heirloom_cpu_abi::ppc::PpcCodeMem>() as u32 || m.flags != 0 { return -1; }
+    // a running instance has moved its Exec out: refused, never deferred
+    let Some(_e) = instance(inst).and_then(|i| i.exec.as_mut()) else { return -1 };
+    #[cfg(target_arch = "x86_64")]
+    {
+        _e.set_code_mem(Box::new(AbiCodeMem(*m)));
+        0
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    { -1 }
 }
 
 extern "C" fn read_prof(inst: *mut CpuInstance, out: *mut PpcProf) -> i32 {
@@ -266,6 +297,7 @@ static PPC_VTABLE: PpcVTable = PpcVTable {
     trace_pcs,
     recent_pcs,
     flush_icache_range,
+    set_code_mem,
 };
 
 /// cpu-ppc.library's table.

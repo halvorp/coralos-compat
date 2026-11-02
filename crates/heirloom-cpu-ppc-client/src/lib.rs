@@ -28,8 +28,9 @@ use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use heirloom_cpu_abi::ppc::{
     check_ppc, PpcContext, PpcCreate, PpcExit, PpcHostCallbacks, PpcOpenRefusal, PpcProf, CTX_HALTED, CTX_RUNNABLE,
     EXIT_BLOCK, EXIT_BUDGET, EXIT_HALT, EXIT_TRAP, HOST_BLOCK, HOST_HALT, HOST_HANDLED, HOST_REDIRECTED, HOST_UNHANDLED,
-    REFUSED_CREATE, REFUSED_NO_FLAT_RAM, REFUSED_UNBOUND, SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP, WHAT_UNLISTED, refusal_of,
+    REFUSED_CREATE, REFUSED_NO_FLAT_RAM, REFUSED_UNBOUND, SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP, TIER_JIT, WHAT_UNLISTED, refusal_of,
 };
+pub use heirloom_cpu_abi::ppc::PpcCodeMem;
 use heirloom_cpu_abi::CpuInstance;
 pub use heirloom_cpu_abi::ppc::{Prof, PpcVTable, Reg, RunStats, Tier, Trap, PPC_ABI_VERSION, XER_CA, XER_MASK, XER_OV, XER_SO};
 use heirloom_mem_flat32::GuestMem;
@@ -243,6 +244,10 @@ pub struct Exec {
     bound: BoundSet,
     tier_set: Option<u32>,
     lockstep_refused: bool,
+    /// Tier 2's executable memory, handed to the instance at its creation (or at once, if it exists).
+    code_mem: Option<PpcCodeMem>,
+    /// The library refused the provider (`set_code_mem` != 0): Tier::Jit runs tier 1.
+    code_mem_refused: bool,
 }
 
 // SAFETY: the instance and the callbacks box are owned by this Exec alone and used only through `&mut self`; moving the Exec moves
@@ -263,12 +268,21 @@ fn refused(why: &'static str) -> RunStats { RunStats { insns: 0, halted: false, 
 impl Exec {
     pub fn new(tier: Tier) -> Exec {
         let host = Box::new(PpcHostCallbacks { size: core::mem::size_of::<PpcHostCallbacks>() as u32, flags: 0, ctx: ptr::null_mut(), on_native, on_syscall });
-        Exec { tier, prof: Prof::default(), inst: ptr::null_mut(), host, bound: BoundSet::default(), tier_set: None, lockstep_refused: false }
+        Exec { tier, prof: Prof::default(), inst: ptr::null_mut(), host, bound: BoundSet::default(), tier_set: None, lockstep_refused: false, code_mem: None, code_mem_refused: false }
     }
-    /// True once a resume was asked for [`Tier::Lockstep`], [`Tier::Jit`] or [`Tier::JitLockstep`]: cpu-ppc.library does not serve
-    /// them (the static core does; the JIT needs executable memory the CPU ABI cannot pass yet), so the run used tier 1 - named
+    /// True once a resume was asked for [`Tier::Lockstep`] or [`Tier::JitLockstep`] (cpu-ppc.library serves neither: the static
+    /// core does), or for [`Tier::Jit`] with no executable memory given or with the provider refused: the run used tier 1 - named
     /// here, never silent.
     pub fn lockstep_refused(&self) -> bool { self.lockstep_refused }
+    /// Tier 2's executable memory (CPU ABI v3 [`PpcCodeMem`]; on CoralOS macppc.engine fills it from libcoral::codemem, behind
+    /// its CapKind::ExecRegion). The record's `ctx` and functions must outlive this Exec. Without it [`Tier::Jit`] runs tier 1.
+    pub fn set_code_mem(&mut self, mem: PpcCodeMem) {
+        self.code_mem = Some(mem);
+        self.code_mem_refused = false;
+        if let (Some(t), false) = (table(), self.inst.is_null()) {
+            self.code_mem_refused = (t.set_code_mem)(self.inst, &mem) != 0;
+        }
+    }
 
     /// Execute `cpu` until [`Cpu::halt`], [`Cpu::block`], a trap, or `budget` instructions.
     pub fn resume<H: Host>(&mut self, host: &mut H, cpu: &mut Cpu, budget: u64) -> RunStats {
@@ -277,10 +291,12 @@ impl Exec {
             let Some(ram) = host.mem().flat_ram() else { return refused(REFUSED_NO_FLAT_RAM) };
             let cfg = PpcCreate { size: core::mem::size_of::<PpcCreate>() as u32, sub_arch: SUB_ARCH_G3, ram, host: &*self.host };
             if (t.create)(&cfg, &mut self.inst) != 0 { self.inst = ptr::null_mut(); return refused(REFUSED_CREATE); }
+            if let Some(m) = self.code_mem { self.code_mem_refused = (t.set_code_mem)(self.inst, &m) != 0; }
         }
-        // cpu-ppc.library serves neither lockstep nor (until the CPU ABI carries an executable-memory provider) the JIT: tier 1, named
+        // cpu-ppc.library serves no lockstep tier; the JIT only with executable memory it accepted: otherwise tier 1, named
         let tier = match self.tier {
             Tier::Interp => TIER_INTERP, Tier::Blocks => TIER_BLOCKS,
+            Tier::Jit if self.code_mem.is_some() && !self.code_mem_refused => TIER_JIT,
             Tier::Lockstep | Tier::Jit | Tier::JitLockstep => { self.lockstep_refused = true; TIER_BLOCKS }
         };
         if self.tier_set != Some(tier) { (t.set_tier)(self.inst, tier); self.tier_set = Some(tier); }

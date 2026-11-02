@@ -143,3 +143,33 @@ fn a_run_that_ran_nothing_is_a_named_refusal_never_a_guest_fault() {
         assert_eq!(PpcExit::trap(&Trap::Refused { why }, 0).decode_trap(), Some(Trap::Refused { why }), "{why} crosses by id");
     }
 }
+
+extern "C" fn refuse_reserve(_: *mut c_void, _: usize, _: *mut *mut u8) -> i32 { -1 }
+extern "C" fn refuse_range(_: *mut c_void, _: *mut u8, _: usize) -> i32 { -1 }
+
+/// Tier::Jit crosses the table only with executable memory the library accepted; otherwise the run is tier 1 and named.
+#[test]
+fn tier_jit_needs_an_accepted_code_mem_and_otherwise_runs_tier_1_by_name() {
+    let mut h = host(|_, _, _| true);
+    let mut cpu = Cpu::new(CODE, 0x8_0000);
+    let mut e = Exec::new(Tier::Jit);
+    let _ = e.resume(&mut h, &mut cpu, 3);
+    assert!(e.lockstep_refused(), "no provider: tier 1, named");
+    assert_eq!(cpu.gpr[3], 6);
+    // a malformed record is refused by the library, and the run stays tier 1 by name
+    let bad = PpcCodeMem { size: 1, flags: 0, ctx: ptr::null_mut(), reserve: refuse_reserve, publish: refuse_range, reset: refuse_range };
+    let mut e = Exec::new(Tier::Jit);
+    e.set_code_mem(bad);
+    let mut cpu = Cpu::new(CODE, 0x8_0000);
+    let _ = e.resume(&mut h, &mut cpu, 3);
+    assert!(e.lockstep_refused());
+    // an accepted record selects TIER_JIT (this one refuses to reserve, so the library's JIT itself falls back to tier 1)
+    let ok = PpcCodeMem { size: core::mem::size_of::<PpcCodeMem>() as u32, ..bad };
+    let mut e = Exec::new(Tier::Jit);
+    e.set_code_mem(ok);
+    let mut cpu = Cpu::new(CODE, 0x8_0000);
+    let st = e.resume(&mut h, &mut cpu, 3);
+    assert!(!e.lockstep_refused(), "NEGATIVE CONTROL: an accepted provider is not a refusal");
+    assert_eq!((st.insns, cpu.gpr[3]), (3, 6));
+    assert_eq!(e.tier_set, Some(TIER_JIT));
+}

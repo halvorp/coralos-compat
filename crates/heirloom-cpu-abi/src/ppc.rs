@@ -360,7 +360,7 @@ impl PpcExit {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PpcProf {
     pub size: u32,
-    /// The tier now selected (`set_tier`): 0 interpreter, 1 blocks.
+    /// The tier now selected (`set_tier`): 0 interpreter, 1 blocks, 2 JIT.
     pub tier: u32,
     pub insns: u64,
     pub natives: u64,
@@ -373,6 +373,31 @@ pub struct PpcProf {
 /// `PpcVTable::set_tier`.
 pub const TIER_INTERP: u32 = 0;
 pub const TIER_BLOCKS: u32 = 1;
+/// Tier 2, the x86-64 JIT. Served only with executable memory ([`PpcVTable::set_code_mem`]); without it the library runs tier 1
+/// and says so (`JitStats::refused`), never silently.
+pub const TIER_JIT: u32 = 2;
+
+/// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
+/// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;
+/// the host tests use heirloom-cpu-ppc's HostCodeMem). The library holds no authority and makes no syscall: it asks through these.
+/// `reserve` once (RW, not executable); `publish` page-aligned ranges inside it (R+X, never writable again); `reset` the whole
+/// reservation to RW (no code of it runs afterwards). Each returns 0, or a negative refusal. `ctx` and the functions must stay
+/// valid for the instance's life (the library keeps a copy of this record).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PpcCodeMem {
+    /// `size_of::<PpcCodeMem>()`.
+    pub size: u32,
+    /// No flag is defined; a record with one set is refused.
+    pub flags: u32,
+    pub ctx: *mut c_void,
+    /// `*out` = `len` bytes (a multiple of 4096), RW and not executable.
+    pub reserve: extern "C" fn(ctx: *mut c_void, len: usize, out: *mut *mut u8) -> i32,
+    /// `[ptr, ptr + len)` read + execute, not writable. Nonzero = the code must not run.
+    pub publish: extern "C" fn(ctx: *mut c_void, ptr: *mut u8, len: usize) -> i32,
+    /// `[ptr, ptr + len)` read + write, not executable.
+    pub reset: extern "C" fn(ctx: *mut c_void, ptr: *mut u8, len: usize) -> i32,
+}
 
 /// cpu-ppc.library's table: `coral_lib_open()` returns it. Every entry returns 0 or a negative named refusal unless it says otherwise.
 #[repr(C)]
@@ -400,7 +425,7 @@ pub struct PpcVTable {
     pub bind_native: extern "C" fn(inst: *mut crate::CpuInstance, addr: u32) -> i32,
     /// 1 if `addr` was bound (and is no longer), 0 if it was not.
     pub unbind_native: extern "C" fn(inst: *mut crate::CpuInstance, addr: u32) -> i32,
-    /// [`TIER_INTERP`] or [`TIER_BLOCKS`]; anything else -1.
+    /// [`TIER_INTERP`], [`TIER_BLOCKS`] or [`TIER_JIT`]; anything else -1.
     pub set_tier: extern "C" fn(inst: *mut crate::CpuInstance, tier: u32) -> i32,
     pub read_prof: extern "C" fn(inst: *mut crate::CpuInstance, out: *mut PpcProf) -> i32,
     /// Keep the program counters of the last `n` executed instructions (0 = off).
@@ -409,13 +434,17 @@ pub struct PpcVTable {
     pub recent_pcs: extern "C" fn(inst: *mut crate::CpuInstance, out: *mut u32, cap: u32, written: *mut u32) -> i32,
     /// Code decoded from `[addr, addr + len)` is stale (the guest's icbi range; a later JIT's invalidation hook).
     pub flush_icache_range: extern "C" fn(inst: *mut crate::CpuInstance, addr: u32, len: u32) -> i32,
+    /// Tier 2's executable memory (a [`PpcCodeMem`] the engine fills; copied). -1 for a null or malformed record, an instance
+    /// that is running, or a library built for a target with no JIT (the JIT is x86-64 code). Replaces any earlier provider (and drops its code).
+    pub set_code_mem: extern "C" fn(inst: *mut crate::CpuInstance, mem: *const PpcCodeMem) -> i32,
 }
 
 /// A fingerprint of every record this face exchanges (sizes and the offsets that matter), so two sides built from different record
 /// definitions refuse each other at open instead of misreading.
 pub const LAYOUT: u64 = {
     use core::mem::{offset_of, size_of};
-    let parts: [u64; 16] = [
+    let parts: [u64; 17] = [
+        size_of::<PpcCodeMem>() as u64,
         size_of::<PpcRegs>() as u64, offset_of!(PpcRegs, pc) as u64, offset_of!(PpcRegs, tb) as u64,
         size_of::<PpcContext>() as u64, offset_of!(PpcContext, regs) as u64, offset_of!(PpcContext, state) as u64,
         size_of::<CodeWatch>() as u64, offset_of!(CodeWatch, gen) as u64, offset_of!(CodeWatch, active) as u64,
