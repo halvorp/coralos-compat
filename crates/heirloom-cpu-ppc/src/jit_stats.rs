@@ -7,15 +7,18 @@ pub struct JitStats {
     pub compiled: u64,
     /// Of those, blocks compiled again because their code page was written after they were compiled.
     pub recompiled: u64,
-    /// Whole-cache drops because the arena was full.
+    /// Whole-cache drops because a block did not fit even in an emptied segment.
     pub arena_full: u64,
+    /// Arena segments reused (FIFO) when the current one was full, and the blocks dropped with them.
+    pub evictions: u64,
+    pub evicted: u64,
     /// Entries from the dispatcher into JIT code (each may chain through many blocks).
     pub entries: u64,
     /// Instructions retired in JIT code.
     pub insns: u64,
     /// Entries or chained jumps that bailed (stale page or budget) back to the dispatcher.
     pub bails: u64,
-    /// Whole-cache drops (arena or link table full, natives changed, RAM moved).
+    /// Whole-cache drops (a block larger than a segment, link table full, natives changed, RAM moved, reconfigured).
     pub flushes: u64,
     /// Guest fields (GPRs, CR, XER, LR, CTR) the register cache held in host registers, summed over compiled blocks.
     pub pinned: u64,

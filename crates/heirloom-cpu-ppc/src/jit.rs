@@ -30,8 +30,12 @@ pub(crate) const EXIT_TRAP: u32 = 2;
 pub(crate) const EXIT_BAIL: u32 = 3;
 /// Whole-block tier-1 runs before a block is compiled (a new constant of this tier; tuned only by measurement).
 pub(crate) const HOT_AFTER: u32 = 2;
-/// Code arena per guest machine: a cache, dropped whole and refilled when full (never a refusal).
+/// Code arena per guest machine: a cache of [`SEGMENTS`] segments reused in turn (FIFO) when full - the oldest segment's
+/// blocks are dropped, never all of them (an arena-wide drop re-translated ~7k blocks inside ONE WC3 gameplay frame: the
+/// worst frame of the host run, 22 ms of 36). Never a refusal.
 pub(crate) const ARENA_BYTES: usize = 32 << 20;
+/// Segments of the arena (2 MiB each at the default size): one is dropped at a time.
+pub(crate) const SEGMENTS: usize = 16;
 const TABLE_BITS: u32 = 16;
 const LINKS: usize = 1 << 18;
 /// Publish when this much code waits (most of a page), or when the oldest waiting block has waited this many guest
@@ -40,6 +44,8 @@ const LINKS: usize = 1 << 18;
 const PUBLISH_BYTES: usize = 3072;
 pub(crate) const PUBLISH_AFTER: u64 = 2_000_000;
 const EMPTY_PC: u32 = 1; // never a PowerPC instruction address (not word aligned)
+/// `link_owner` of a slot the block being compiled took (its segment is known once its code is placed).
+const LINK_NEW: u8 = 0xFF;
 
 /// One dispatch-table entry: a published block (32 bytes; jit_emit's indirect probe shifts by its size).
 #[repr(C)]
@@ -85,6 +91,10 @@ pub(crate) struct Jit {
     table: Box<[Slot]>,
     links: Box<[u64]>,
     nlinks: usize,
+    /// Per link slot: 0 free (or never used), [`LINK_NEW`] taken by the block being compiled, else 1 + the arena segment
+    /// holding the code that jumps through it (the slot is freed when that segment is reused).
+    link_owner: Box<[u8]>,
+    free_links: Vec<u32>,
     by_target: BTreeMap<u32, Vec<u32>>,
     /// Every published block by pc (the dispatch table is a direct-mapped cache in front of it: a colliding block is
     /// refilled from here, never recompiled).
@@ -116,12 +126,12 @@ pub(crate) struct Jit {
 }
 
 impl Jit {
-    pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8) -> Option<Jit> {
-        let arena = Arena::new(mem, ARENA_BYTES)?;
+    pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
+        let arena = Arena::new(mem, arena_bytes, SEGMENTS)?;
         let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, census: None });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
-            nlinks: 1, by_target: BTreeMap::new(), blocks: BTreeMap::new(), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
+            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), by_target: BTreeMap::new(), blocks: BTreeMap::new(), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: BTreeSet::new(), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None,
         };
@@ -176,7 +186,9 @@ impl Jit {
         self.exit_stub = p as u64 + stub as u64;
         self.ctx.slow = p as u64 + slow as u64;
         self.links[0] = self.exit_stub;
-        self.arena.publish()
+        let ok = self.arena.publish();
+        self.arena.begin();
+        ok
     }
 
     /// Change how code is made (lockstep journaling, a planted mutant, MOVBE): everything compiled is dropped.
@@ -195,6 +207,8 @@ impl Jit {
         self.table.fill(EMPTY);
         self.hot.fill((EMPTY_PC, 0));
         self.links.fill(0);
+        self.link_owner.fill(0);
+        self.free_links.clear();
         self.nlinks = 1;
         self.by_target.clear();
         self.blocks.clear();
@@ -245,21 +259,38 @@ impl Jit {
     }
 
     fn compile_untimed<H: Host>(&mut self, ops: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, at: u64) {
-        let (blocks, links, by_target) = (&self.blocks, &mut self.links, &mut self.by_target);
+        let (blocks, links, by_target, owner, free) = (&self.blocks, &mut self.links, &mut self.by_target, &mut self.link_owner, &mut self.free_links);
         let nlinks = &mut self.nlinks;
         let exit_stub = self.exit_stub;
+        let mut out_of_links = false;
+        let mut taken: Vec<u32> = Vec::new();
         let mut link = |target: u32| -> *const u64 {
-            if *nlinks == links.len() { return &links[0] as *const u64; }
-            let i = *nlinks;
-            *nlinks += 1;
+            let i = match free.pop() {
+                Some(i) => i as usize,
+                None if *nlinks < links.len() => { *nlinks += 1; *nlinks - 1 }
+                None => { out_of_links = true; return &links[0] as *const u64; }
+            };
+            owner[i] = LINK_NEW;
+            taken.push(i as u32);
             links[i] = blocks.get(&target).map_or(exit_stub, |s| s.entry);
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
         let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
         let (code, pinned) = jit_emit::compile(ops, pc, gen, page, &mut env);
-        if self.nlinks == self.links.len() { self.flush(); return; }
-        let Some(p) = self.arena.put(&code) else { self.stats.arena_full += 1; self.flush(); return };
+        if out_of_links { self.flush(); return; }
+        let p = match self.arena.put(&code) {
+            Some(p) => p,
+            None => {
+                // the current segment is full: publish it, drop the next one's blocks, write there
+                self.publish_untimed();
+                self.evict(self.arena.next_segment());
+                if !self.arena.reuse() { self.flush(); return; }
+                match self.arena.put(&code) { Some(p) => p, None => { self.stats.arena_full += 1; self.flush(); return } }
+            }
+        };
+        let seg = self.arena.segment_of(p as u64).map_or(0, |s| s as u8 + 1);
+        for i in taken { self.link_owner[i as usize] = seg; }
         self.stats.compiled += 1;
         self.stats.pinned += pinned as u64;
         self.stats.movbe = self.movbe;
@@ -268,6 +299,29 @@ impl Jit {
         if self.pending.is_empty() { self.pending_at = self.clock + at; }
         self.pending.push(Slot { pc, len: ops.len() as u32, entry: p as u64, gen, pad: 0 });
         self.pending_pcs.insert(pc);
+    }
+
+    /// Drop every block whose code is in arena segment `s` (about to be reused): out of the block map and the dispatch
+    /// table, every link slot that jumps to one back to the exit stub, and the link slots their own code jumped through
+    /// freed. Nothing can enter the segment afterwards, so its pages may go back to RW. (Runs between JIT entries only.)
+    fn evict(&mut self, s: usize) {
+        let (a, b) = self.arena.segment(s);
+        let inside = |e: u64| e >= a && e < b;
+        let mut gone = Vec::new();
+        let stale = self.mutant == crate::jit_emit::MUT_EVICT_STALE;
+        self.blocks.retain(|&pc, slot| { let k = inside(slot.entry); if k { gone.push(pc); } !k || stale });
+        if !stale { for t in self.table.iter_mut() { if inside(t.entry) { *t = EMPTY; } } }
+        for pc in &gone {
+            if let Some(v) = self.by_target.get(pc) { for &i in v { self.links[i as usize] = self.exit_stub; } }
+        }
+        let tag = s as u8 + 1;
+        for i in 1..self.nlinks {
+            if self.link_owner[i] == tag { self.link_owner[i] = 0; self.links[i] = self.exit_stub; self.free_links.push(i as u32); }
+        }
+        let owner = &self.link_owner;
+        self.by_target.retain(|_, v| { v.retain(|&i| owner[i as usize] != 0); !v.is_empty() });
+        self.stats.evictions += 1;
+        self.stats.evicted += gone.len() as u64;
     }
 
     /// Count, per instruction form, what JIT code hands to tier 1's handler (diagnostics; a map update per helper call).

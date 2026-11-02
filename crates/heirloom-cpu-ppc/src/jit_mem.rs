@@ -1,7 +1,8 @@
 //! Tier 2's executable memory: the [`CodeMem`] provider the CALLER injects (heirloom-cpu-ppc makes no syscall and holds no
 //! authority), and the arena that fills it under the PUBLISH model of the PowerPC ruling's phase 2: pages are written while
-//! RW (never executable) and then published RX (never writable again until the whole arena is reset). Nothing is ever
-//! patched in place: chaining goes through a RW link table (jit.rs), so code needs no write after its page is published.
+//! RW (never executable) and then published RX (never writable again until its segment is reused or the arena reset).
+//! Nothing is ever patched in place: chaining goes through a RW link table (jit.rs), so code needs no write after its page
+//! is published.
 //!
 //! [`HostCodeMem`] is the Linux x86-64 provider (raw mmap / mprotect / munmap syscalls, no dependency) for the host tests,
 //! the bench and the WC3 harness. On CoralOS the provider will be macppc.engine's (syscall 47's publish form, delegated by
@@ -9,38 +10,57 @@
 //! Tier::Jit runs tier 1 and `JitStats::refused` names it.
 
 /// Executable memory as a caller provides it. `reserve` once; then any page-aligned range may be published (RW -> RX) and
-/// the whole reservation reset to RW (every published page withdrawn, all code dropped).
+/// any page-aligned range withdrawn back to RW (one segment of the arena when it is reused, or the whole reservation).
 pub trait CodeMem {
     /// Reserve `len` bytes (a multiple of 4096), readable and writable, NOT executable. None = refused.
     fn reserve(&mut self, len: usize) -> Option<*mut u8>;
     /// Make `[ptr, ptr + len)` (page aligned, inside the reservation) read + execute, no write. False = refused.
     fn publish(&mut self, ptr: *mut u8, len: usize) -> bool;
-    /// Make the whole reservation read + write, not executable, again (an arena reset: no code of it runs afterwards).
+    /// Make `[ptr, ptr + len)` (page aligned, inside the reservation) read + write, not executable, again: no code of it runs
+    /// afterwards (a segment being reused, or the whole arena).
     fn reset(&mut self, ptr: *mut u8, len: usize) -> bool;
 }
 
 pub(crate) const PAGE: usize = 4096;
+/// The arena's first page: the trampoline and the shared stubs (never evicted; only a whole reset rewrites it).
+pub(crate) const STUB_BYTES: usize = PAGE;
 
-/// The code arena: `[base, base + len)` of a provider, published up to `published`, written from `cur`.
+/// The code arena: `[base, base + len)` of a provider. Its first page holds the stubs; the rest is `nseg` equal SEGMENTS used
+/// in turn (FIFO): code is written into the current segment from `cur`, published up to `published`, and when the current
+/// segment is full the NEXT one is reused - the caller first drops every block that lives in it (`next_segment` says
+/// which), then its pages go back to RW. So a full arena costs one segment's blocks, never all of them.
 pub(crate) struct Arena {
     mem: alloc::boxed::Box<dyn CodeMem>,
     pub(crate) base: *mut u8,
     pub(crate) len: usize,
-    /// Everything below this is published (RX); `cur` >= it. Page aligned.
+    seg_len: usize,
+    nseg: usize,
+    /// The segment written now; None while the stubs are written.
+    seg: Option<usize>,
+    /// Segments that have held published code since the last whole reset (bit per segment).
+    used: u64,
+    /// Everything of the current region below this is published (RX); `cur` >= it. Page aligned.
     published: usize,
     cur: usize,
+    /// The end of the region written now (the stub page, or the current segment).
+    limit: usize,
 }
 
 impl Arena {
-    pub(crate) fn new(mut mem: alloc::boxed::Box<dyn CodeMem>, len: usize) -> Option<Arena> {
+    /// `len` bytes: the stub page and `nseg` (1..=64) segments of whole pages.
+    pub(crate) fn new(mut mem: alloc::boxed::Box<dyn CodeMem>, len: usize, nseg: usize) -> Option<Arena> {
+        let nseg = nseg.clamp(1, 64);
+        let seg_len = (len.saturating_sub(STUB_BYTES) / nseg) & !(PAGE - 1);
+        if seg_len == 0 { return None; }
         let base = mem.reserve(len)?;
-        Some(Arena { mem, base, len, published: 0, cur: 0 })
+        Some(Arena { mem, base, len, seg_len, nseg, seg: None, used: 0, published: 0, cur: 0, limit: STUB_BYTES })
     }
-    /// Copy `code` to the unpublished tail; None when it does not fit (the caller resets the arena).
+    fn seg_start(&self, s: usize) -> usize { STUB_BYTES + s * self.seg_len }
+    /// Copy `code` to the unpublished tail of the current region; None when it does not fit there.
     pub(crate) fn put(&mut self, code: &[u8]) -> Option<*const u8> {
-        if self.cur + code.len() > self.len { return None; }
-        // SAFETY: [base + cur, base + cur + code.len()) is inside the reservation (checked) and at or above `published`, so
-        // it is RW (reserved RW, or reset to RW) and no published code lives there.
+        if self.cur + code.len() > self.limit { return None; }
+        // SAFETY: [base + cur, base + cur + code.len()) is inside the reservation (limit <= len) and at or above `published`
+        // in a region that was reserved RW or reset to RW, so it is RW and no published code lives there.
         let p = unsafe { self.base.add(self.cur) };
         unsafe { core::ptr::copy_nonoverlapping(code.as_ptr(), p, code.len()) };
         self.cur += code.len();
@@ -51,21 +71,57 @@ impl Arena {
     /// Publish everything written (rounded up to whole pages: the rest of the last page is never written again).
     pub(crate) fn publish(&mut self) -> bool {
         if !self.pending() { return true; }
-        let end = (self.cur + PAGE - 1) & !(PAGE - 1);
-        let end = end.min(self.len);
-        // SAFETY: published <= end <= len: the range is inside the reservation.
+        let end = ((self.cur + PAGE - 1) & !(PAGE - 1)).min(self.limit);
+        // SAFETY: published <= end <= limit <= len: the range is inside the reservation.
         let ok = self.mem.publish(unsafe { self.base.add(self.published) }, end - self.published);
         self.published = end;
         self.cur = end;
+        if let Some(s) = self.seg { self.used |= 1 << s; }
         ok
     }
-    /// Withdraw every published page (back to RW) and start writing at the base again.
+    /// Start writing blocks: the first segment (after the stubs are published).
+    pub(crate) fn begin(&mut self) { self.enter(0); }
+    fn enter(&mut self, s: usize) {
+        self.seg = Some(s);
+        self.cur = self.seg_start(s);
+        self.published = self.cur;
+        self.limit = self.cur + self.seg_len;
+    }
+    /// The segment after the current one, whose blocks the caller must drop BEFORE `reuse` makes its pages writable.
+    pub(crate) fn next_segment(&self) -> usize { self.seg.map_or(0, |s| (s + 1) % self.nseg) }
+    /// The address range of segment `s`.
+    pub(crate) fn segment(&self, s: usize) -> (u64, u64) {
+        let a = self.base as u64 + self.seg_start(s) as u64;
+        (a, a + self.seg_len as u64)
+    }
+    /// Which segment `p` (an address in the arena) is in; None for the stub page.
+    pub(crate) fn segment_of(&self, p: u64) -> Option<usize> {
+        let off = p.checked_sub(self.base as u64)? as usize;
+        (off >= STUB_BYTES && off < STUB_BYTES + self.nseg * self.seg_len).then(|| (off - STUB_BYTES) / self.seg_len)
+    }
+    /// Write into the next segment from its start; its pages are withdrawn to RW first if they ever held published code.
+    /// The current segment's written code must be published first.
+    pub(crate) fn reuse(&mut self) -> bool {
+        let s = self.next_segment();
+        let ok = if self.used & (1 << s) != 0 {
+            let (a, _) = self.segment(s);
+            self.used &= !(1 << s);
+            self.mem.reset(a as *mut u8, self.seg_len)
+        } else { true };
+        self.enter(s);
+        ok
+    }
+    /// Withdraw every published page (back to RW) and start writing the stubs again.
     pub(crate) fn reset(&mut self) -> bool {
+        self.seg = None;
+        self.used = 0;
         self.published = 0;
         self.cur = 0;
+        self.limit = STUB_BYTES;
         self.mem.reset(self.base, self.len)
     }
-    pub(crate) fn used(&self) -> usize { self.cur }
+    /// Bytes of code space written in the current segment (the arena's other segments hold older code).
+    pub(crate) fn used(&self) -> usize { self.cur - self.seg.map_or(0, |s| self.seg_start(s)) }
     /// Bytes written and not yet published.
     pub(crate) fn unpublished(&self) -> usize { self.cur - self.published }
 }

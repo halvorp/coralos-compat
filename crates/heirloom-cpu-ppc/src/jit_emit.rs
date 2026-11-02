@@ -37,6 +37,9 @@ pub(crate) const MUT_NO_SPILL: u8 = 8;
 pub(crate) const MUT_NO_RELOAD: u8 = 9;
 /// CR0 of `add.` read from the add's own flags (its OF is not the result's sign test) instead of `test`.
 pub(crate) const MUT_LAZY_FLAGS: u8 = 10;
+/// Eviction leaves the dropped segment's blocks in the block map and the dispatch table (jit.rs): the dispatcher then
+/// enters code whose pages went back to RW (no execute) or were rewritten.
+pub(crate) const MUT_EVICT_STALE: u8 = 11;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {

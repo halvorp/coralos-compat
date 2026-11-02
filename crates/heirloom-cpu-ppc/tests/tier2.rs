@@ -328,6 +328,70 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
     assert!(pinned > compiled, "the register cache engaged: {pinned} fields pinned over {compiled} blocks");
 }
 
+/// A tiny code arena (the stub page and 16 segments of one page; the tests publish after every run, a page each time):
+/// segments fill and are reused all the time.
+const SMALL_ARENA: usize = 4096 + 16 * 4096;
+
+fn run_small_arena(tier: Tier, mutant: u8, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut M)) -> (End, Exec) {
+    let (mut c, mut m) = load(prog, &setup);
+    let mut e = exec(tier, 0);
+    e.set_jit_arena(SMALL_ARENA);
+    if mutant != 0 { e.plant_jit_mutant(mutant); }
+    let end = finish(&mut e, &mut c, &mut m, slice);
+    (end, e)
+}
+
+/// Every program under test and 120 fuzz seeds with the small arena, at two slicings and under JitLockstep, against tier 0:
+/// (evictions, blocks evicted) or the first difference.
+fn small_arena_workload(mutant: u8) -> Result<(u64, u64), String> {
+    let (mut evictions, mut evicted) = (0u64, 0u64);
+    let mut progs: Vec<(String, Vec<u32>, Box<dyn Fn(&mut Cpu, &mut M)>)> =
+        programs_under_test().into_iter().map(|(n, p, s)| (n.to_string(), p.to_vec(), Box::new(s) as Box<dyn Fn(&mut Cpu, &mut M)>)).collect();
+    for seed in 0..120u64 { progs.push((format!("fuzz {seed}"), random_program(seed), Box::new(fuzz_setup(seed)))); }
+    for (name, prog, setup) in &progs {
+        let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
+        for slice in [37, 1_000] {
+            let (got, e) = run_small_arena(Tier::Jit, mutant, prog, slice, setup);
+            let s = e.jit_stats();
+            if got != want { return Err(format!("{name} slice {slice}: differs from tier 0 with a small arena: {s:?}")); }
+            if s.arena_full != 0 { return Err(format!("{name}: a whole-cache drop for want of space: {s:?}")); }
+            (evictions, evicted) = (evictions + s.evictions, evicted + s.evicted);
+        }
+        let (got, e) = run_small_arena(Tier::JitLockstep, mutant, prog, 50, setup);
+        if e.divergence().is_some() || got != want { return Err(format!("{name}: lockstep with a small arena: {:?}", e.divergence())); }
+    }
+    Ok((evictions, evicted))
+}
+
+/// A full arena drops its OLDEST segment's blocks, never all of them (the p99 hitch of a whole-arena flush): with a tiny
+/// arena every program and fuzz seed reuses segments over and over, still ends in tier 0's state, JitLockstep finds no
+/// divergence, and no whole-cache flush happens for want of space.
+#[test]
+fn a_full_arena_reuses_its_oldest_segment_and_stays_exact() {
+    let (evictions, evicted) = small_arena_workload(0).unwrap();
+    assert!(evictions > 100 && evicted > 100, "segments really were reused: {evictions} evictions, {evicted} blocks dropped");
+}
+
+/// Negative control for eviction, in a child process (the mutant makes the dispatcher enter pages that are no longer
+/// executable or hold other code: the process may die, which a test cannot survive in-process). The child runs the
+/// small-arena workload; it must pass without the mutant and fail with it.
+#[test]
+fn negative_control_eviction_that_leaves_blocks_reachable_goes_red() {
+    let child = |mutant: u8| std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "evict_child", "--ignored", "--test-threads=1"]).env("TIER2_EVICT_MUTANT", mutant.to_string())
+        .output().unwrap();
+    let ok = child(0);
+    assert!(ok.status.success(), "the child is green without the mutant: {}", String::from_utf8_lossy(&ok.stdout));
+    assert!(!child(11).status.success(), "mutant 11 (evicted blocks left reachable) stayed GREEN");
+}
+
+#[test]
+#[ignore = "run by negative_control_eviction_that_leaves_blocks_reachable_goes_red in a child process"]
+fn evict_child() {
+    let mutant: u8 = std::env::var("TIER2_EVICT_MUTANT").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    small_arena_workload(mutant).unwrap();
+}
+
 /// CR0 of Rc=1 forms whose x86 flags are NOT the result's sign test (an add or subtract that overflows: OF = 1), left in the
 /// end state: `add.` / `subf.` of 0x7FFFFFFF and 1 in a hot loop (the trip count in cr7).
 fn overflow_flags_program() -> Vec<u32> {

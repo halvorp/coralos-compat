@@ -32,6 +32,7 @@ pub struct Exec {
     jit_publish_after: Option<u64>,
     jit_movbe: Option<bool>,
     jit_clock: Option<fn() -> u64>,
+    jit_arena: Option<usize>,
 }
 
 /// Per native address: (calls, time inside), timed by a host-supplied clock.
@@ -50,7 +51,7 @@ impl Exec {
             code_mem: None,
             #[cfg(target_arch = "x86_64")]
             jit: None,
-            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None,
+            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None,
         }
     }
     /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
@@ -74,6 +75,10 @@ impl Exec {
         #[cfg(target_arch = "x86_64")]
         if let Some(j) = self.jit.as_mut() { j.publish_after = n; }
     }
+    /// Tests: the code arena's size in bytes (default 32 MiB: the stub page and 16 segments), so a test can make segments
+    /// fill and be reused. Takes effect for a JIT made after the call.
+    #[doc(hidden)]
+    pub fn set_jit_arena(&mut self, bytes: usize) { self.jit_arena = Some(bytes); }
     /// Diagnostics: count the instruction forms JIT code hands to tier 1's handler (key = word & 0xFC0007FE: primary and
     /// extended opcode). `None` before the JIT ran or when not enabled.
     #[cfg(target_arch = "x86_64")]
@@ -165,7 +170,7 @@ impl Exec {
         {
             if self.jit.is_none() {
                 if let Some(mem) = self.code_mem.take() {
-                    self.jit = crate::jit::Jit::new(mem, self.jit_mutant).map(Box::new);
+                    self.jit = crate::jit::Jit::new(mem, self.jit_mutant, self.jit_arena.unwrap_or(crate::jit::ARENA_BYTES)).map(Box::new);
                     if let (Some(j), Some(n)) = (self.jit.as_mut(), self.jit_publish_after) { j.publish_after = n; }
                     if let Some(j) = self.jit.as_mut() { j.timer = self.jit_clock; }
                 }
