@@ -45,6 +45,7 @@ mod begin_end;
 mod bulk;
 mod client;
 mod generic;
+mod hot;
 mod image;
 mod state;
 
@@ -144,6 +145,8 @@ pub struct GlState {
     /// Per contract entry: its generated family signature (`heirloom_gl_abi::family::lookup` of its name), made once at the
     /// first call - the per-call path indexes it instead of scanning the 259-row table by name.
     sigs: Vec<Option<&'static heirloom_gl_abi::family::Sig>>,
+    /// Per contract entry: how `gl_call` dispatches it (`hot::Hot`), made once at the first call.
+    routes: Vec<hot::Hot>,
     /// The argument words of the call being encoded: one buffer reused call after call ([`MacPpc::gl_words`]), not a `Vec` each.
     words: Vec<u64>,
 }
@@ -233,6 +236,12 @@ impl<U: GuestUi> MacPpc<U> {
         let none = Token { slot: 0, incarnation: 0 };
         let mut ret: u32 = 0;
         if self.gl_ctx_token().is_some() && !self.gl_begin_end_gate(name, a0 <= 9, a0, a1)? { return self.gl_finish(cpu, 0); }
+        // the per-frame calls are dispatched by their entry's route, resolved once - not by comparing the name with every arm below
+        match self.gl_route(f.0) {
+            hot::Hot::Rest => {}
+            hot::Hot::State => { let r = self.gl_state_call(name, f.0, cpu)?; return self.gl_finish(cpu, r); }
+            h => { self.gl_hot_call(h, f.0, name, [a0, a1, a2, a3])?; return self.gl_finish(cpu, 0); }
+        }
         match name {
             // ---- AGL ------------------------------------------------------------------------------------------------
             "aglChoosePixelFormat" => {
@@ -325,64 +334,6 @@ impl<U: GuestUi> MacPpc<U> {
             }
             "glmSetMode" | "glmSetFunc" => self.gl_note(format!("[HEIRLOOM-GL GLM {name}({a0:#x}, {a1:#x})] recorded, no effect: the GL's memory is heirloom-gl.engine's own")),
             "aglGetError" => { ret = core::mem::take(&mut self.gl.agl_error); }
-            // ---- GL state forwarded as calls ------------------------------------------------------------------------
-            "glViewport" | "glClear" | "glMatrixMode" | "glEnable" | "glDisable" | "glActiveTextureARB" | "glFinish" => {
-                if let Some(m) = heirloom_gl_abi::gaps::refused_value(name, &[u64::from(a0)]) { self.gl_note(m.clone()); return Err(m); }
-                let mut args = self.gl_words();
-                match name { "glViewport" => args.extend([a0, a1, a2, a3].map(u64::from)), "glFinish" => {}, _ => args.push(u64::from(a0)) }
-                match self.gl_ctx_token() {
-                    Some(t) => { self.gl_queue_call(t, f.0, args); if name == "glFinish" { self.gl_flush(); } }
-                    None => self.gl_set_error(GL_INVALID_OPERATION),
-                }
-            }
-            "glLoadMatrixf" => {
-                let mut w = self.gl_words();
-                for i in 0..16 { w.push(u64::from(self.mac.mem.read_u32(a0.wrapping_add(4 * i)).map_err(|_| format!("glLoadMatrixf: the matrix at {a0:#x} leaves guest RAM"))?)); }
-                match self.gl_ctx_token() { Some(t) => self.gl_queue_call(t, f.0, w), None => { self.gl_words_back(w); self.gl_set_error(GL_INVALID_OPERATION) } }
-            }
-            // ---- client arrays: descriptors only, read at the draw ----------------------------------------------------
-            "glEnableClientState" | "glDisableClientState" if matches!(a0, 0x8077 | 0x8079) => {
-                let enable = name == "glEnableClientState";
-                if let Some(m) = heirloom_gl_abi::gaps::refused_value(name, &[u64::from(a0)]).filter(|_| enable) { self.gl_note(m.clone()); return Err(m); }
-                let slot = if a0 == 0x8077 { &mut self.gl.index_array } else { &mut self.gl.edge_array };
-                slot.get_or_insert(IndexArray { ty: 0x1406, stride: 0, enabled: false, ptr: 0 }).enabled = enable;
-            }
-            "glEnableClientState" | "glDisableClientState" => match role_of(a0) {
-                Some(r) => {
-                    let key = (r as u8, if r == Role::TexCoord { self.gl.client_unit } else { 0 });
-                    if name == "glEnableClientState" { self.gl.enabled.insert(key); } else { self.gl.enabled.remove(&key); }
-                }
-                None => return Err(format!("{name}: client state {a0:#x} is not one of the vertex/normal/colour/texcoord arrays this engine serves")),
-            },
-            "glClientActiveTextureARB" => { self.gl.client_unit = (a0.wrapping_sub(0x84C0)).min(255) as u8; if a0 < 0x84C0 || a0 > 0x84DF { self.gl_set_error(GL_INVALID_ENUM); self.gl.client_unit = 0; } }
-            "glVertexPointer" | "glColorPointer" | "glTexCoordPointer" | "glNormalPointer" => {
-                let (role, size, ty, stride, ptr) = match name {
-                    "glVertexPointer" => (Role::Vertex, a0, a1, a2, a3),
-                    "glColorPointer" => (Role::Color, a0, a1, a2, a3),
-                    "glTexCoordPointer" => (Role::TexCoord, a0, a1, a2, a3),
-                    _ => (Role::Normal, 3, a0, a1, a2),
-                };
-                let ok_size = match role { Role::Vertex => (2..=4).contains(&size), Role::Color => size == 3 || size == 4, Role::TexCoord => (1..=4).contains(&size), Role::Normal => true, Role::EdgeFlag => false };
-                match ElemType::from_gl(ty).filter(|_| arrays::type_ok(role, ty)) {
-                    Some(t) if ok_size && (stride as i32) >= 0 => {
-                        let unit = if role == Role::TexCoord { self.gl.client_unit } else { 0 };
-                        self.gl.arrays.insert((role as u8, unit), Descriptor { role, unit, offset: self.mac.mem.strip(ptr) as usize, size: size as u8, ty: t, stride });
-                    }
-                    Some(_) => self.gl_set_error(GL_INVALID_VALUE),
-                    None => self.gl_set_error(GL_INVALID_ENUM),
-                }
-            }
-            "glDrawElements" => {
-                let (mode, count, ty, ptr) = (a0, a1, a2, a3);
-                let Some(t) = self.gl_ctx_token() else { self.gl_set_error(GL_INVALID_OPERATION); return self.gl_finish(cpu, 0); };
-                if mode > 9 || (count as i32) < 0 { self.gl_set_error(if mode > 9 { GL_INVALID_ENUM } else { GL_INVALID_VALUE }); return self.gl_finish(cpu, 0); }
-                let it = match ElemType::from_gl(ty) { Some(t @ (ElemType::U8 | ElemType::U16 | ElemType::U32)) => t, _ => { self.gl_set_error(GL_INVALID_ENUM); return self.gl_finish(cpu, 0); } };
-                let descs: Vec<Descriptor> = self.gl.enabled.iter().filter_map(|k| self.gl.arrays.get(k).copied()).collect();
-                if descs.len() != self.gl.enabled.len() { self.gl_set_error(GL_INVALID_OPERATION); return self.gl_finish(cpu, 0); } // enabled with no pointer set
-                let off = self.mac.mem.strip(ptr) as usize;
-                self.gl_queue_draw(t, "glDrawElements", |mem| DrawCommand::capture(mem, mode, off, count, it, &descs))?;
-            }
-            "glLockArraysEXT" | "glUnlockArraysEXT" => { /* arrays are read at the draw; the lock's promise (no change) is honoured trivially */ }
             // ---- queries --------------------------------------------------------------------------------------------
             "glGetError" => {
                 let engine = core::mem::take(&mut self.gl.gl_error);
@@ -458,7 +409,12 @@ impl<U: GuestUi> MacPpc<U> {
             "glVertexArrayParameteriAPPLE" => {
                 if a0 != GL_VERTEX_ARRAY_STORAGE_HINT_APPLE || !(a1 == GL_STORAGE_CACHED_APPLE || a1 == GL_STORAGE_SHARED_APPLE || a1 == 0x85BC /* GL_STORAGE_PRIVATE_APPLE */) { self.gl_set_error(GL_INVALID_ENUM); }
             }
-            other => ret = self.gl_state_call(other, f.0, cpu)?,
+            other => {
+                // no arm above serves this entry (a pure function of the name: the one guarded arm falls through to another arm), so
+                // its later calls go straight to the state calls
+                self.gl_route_state(f.0);
+                ret = self.gl_state_call(other, f.0, cpu)?;
+            }
         }
         // Every AGL answer the engine gives (renderer info, pixel formats, contexts, errors) is said: a game decides its renderer
         // path from these, and nothing else shows what it was told. Swaps and context switches are per frame: not said.
