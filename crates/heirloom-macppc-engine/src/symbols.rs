@@ -204,7 +204,15 @@ impl core::ops::Deref for Bindings {
 }
 
 impl Bindings {
-    pub fn insert(&mut self, key: String, b: Binding) -> Option<Binding> { self.generation += 1; self.map.insert(key, b) }
+    /// Insert or replace; re-inserting the SAME binding (every callback re-binds `$CallbackReturn`) changes nothing and keeps the
+    /// cells' caches.
+    pub fn insert(&mut self, key: String, b: Binding) -> Option<Binding> {
+        if self.map.get(&key) == Some(&b) { return Some(b); }
+        self.generation += 1;
+        self.map.insert(key, b)
+    }
+    /// How many times a binding changed (a cell's cache is valid only within one generation).
+    pub fn generation(&self) -> u64 { self.generation }
     pub fn entry(&mut self, key: String) -> alloc::collections::btree_map::Entry<'_, String, Binding> { self.generation += 1; self.map.entry(key) }
     /// `get(key).cloned()` for the glue cell `id` whose key is `key`: answered from the cell's cache while no binding has changed
     /// since it was filled (an absent binding is cached too: a later insert bumps the generation).
@@ -284,5 +292,16 @@ mod tests {
         assert_eq!(b.for_cell(3, "glFoo"), Some(Binding::Pascal(0xA9F4)), "a change through entry");
         assert_eq!(b.for_cell(0, "other"), None, "cells are independent");
         assert_eq!(b.get("glFoo"), Some(&Binding::Pascal(0xA9F4)), "reads see the map");
+    }
+
+    #[test]
+    fn re_inserting_the_same_binding_keeps_the_generation_and_a_different_one_bumps_it() {
+        let mut b = Bindings::default();
+        b.insert("$CallbackReturn".into(), Binding::Native(Native::CallbackReturn));
+        let g = b.generation();
+        assert_eq!(b.insert("$CallbackReturn".into(), Binding::Native(Native::CallbackReturn)), Some(Binding::Native(Native::CallbackReturn)));
+        assert_eq!(b.generation(), g, "the same binding again is not a change");
+        b.insert("$CallbackReturn".into(), Binding::Export(4));
+        assert!(b.generation() > g, "a different binding is");
     }
 }
