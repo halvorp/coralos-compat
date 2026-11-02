@@ -30,6 +30,13 @@ fn deadline(now: u64, seconds: f64) -> u64 {
 pub struct ElState {
     timers: BTreeMap<u32, ElTimer>,
     next: u32,
+    /// The earliest due time of an ARMED timer (None: none armed), recomputed at every change of `timers`: every glue call is a
+    /// safepoint, and this lets one that has nothing due return without walking the timers.
+    next_due: Option<u64>,
+}
+
+impl ElState {
+    fn rescan(&mut self) { self.next_due = self.timers.values().map(|t| t.due_us).filter(|&d| d != DISARMED).min(); }
 }
 
 #[derive(Clone, Copy)]
@@ -99,11 +106,12 @@ impl<U: GuestUi> MacPpc<U> {
                     self.put32(out_timer, id, "InstallEventLoopTimer")?;
                 }
                 self.el.timers.insert(id, ElTimer { due_us, interval_us, proc, data });
+                self.el.rescan();
                 NO_ERR
             }
             RemoveEventLoopTimer => {
                 let timer = arg(self, cpu, 0)?;
-                if self.el.timers.remove(&timer).is_some() { NO_ERR } else { PARAM_ERR }
+                if self.el.timers.remove(&timer).is_some() { self.el.rescan(); NO_ERR } else { PARAM_ERR }
             }
             SetEventLoopTimerNextFireTime => {
                 let timer = arg(self, cpu, 0)?;
@@ -111,6 +119,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let due_us = deadline(now_us(self), seconds);
                 if let Some(t) = self.el.timers.get_mut(&timer) {
                     t.due_us = due_us;
+                    self.el.rescan();
                     NO_ERR
                 } else { PARAM_ERR }
             }
@@ -133,6 +142,8 @@ impl<U: GuestUi> MacPpc<U> {
     pub(crate) fn evloop_safepoint(&mut self, cpu: &mut Cpu, call_pc: u32) -> Result<bool, String> {
         if !self.rt.callbacks.is_empty() { return Ok(false); }
         let now = now_us(self);
+        // nothing armed is due (exact: the walk below finds a timer only when the earliest armed due time has come)
+        if self.el.next_due.is_none_or(|d| d > now) { return Ok(false); }
         let due_id = self.el.timers.iter()
             .filter(|(_, t)| t.due_us != DISARMED && t.due_us <= now)
             .min_by_key(|(_, t)| t.due_us)
@@ -153,6 +164,7 @@ impl<U: GuestUi> MacPpc<U> {
             DISARMED
         };
         if let Some(t) = self.el.timers.get_mut(&timer_id) { t.due_us = due_us; }
+        self.el.rescan();
         self.mac.log.push(format!("[evloop] timer {timer_id:#x} fires (missed {missed})"));
 
         let saved = Saved::of(cpu, call_pc);

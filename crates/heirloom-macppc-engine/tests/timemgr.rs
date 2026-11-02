@@ -99,3 +99,52 @@ fn gestalt_tmgr_is_4() {
     assert_eq!(heirloom_macppc_engine::gestalt_ppc::answer(*b"tmgr"), Some(4));
     let _ = &mut m;
 }
+
+/// A task primed from INSIDE a task's procedure (the periodic pattern: the procedure re-primes itself, or primes another) is due at
+/// the safepoint after its wake time - the safepoint's "nothing due" answer is never a stale earliest wake - and of two due tasks the
+/// earlier wake runs first.
+#[test]
+fn a_task_primed_during_a_task_runs_when_due_and_the_earlier_wake_runs_first() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    m.mac.mem.write_u32(TV, CODE).unwrap();
+    m.mac.mem.write_u32(TV + 4, TOC).unwrap();
+    let upp = new_routine_descriptor(&mut m.mac, TV, 0x2C0, ISA_PPC).unwrap();
+    let (a, b) = (T, T + 0x40);
+    for t in [a, b] { m.mac.mem.write_u32(t + 6, upp).unwrap(); call(&mut m, "InsTime", &[t]); }
+    call(&mut m, "PrimeTime", &[a, 100]); // 6 ticks
+    m.bind("TickCount");
+    let id = m.glue.intern(&mut m.mac, "CFM", "TickCount").unwrap();
+    let stub = m.glue.entry(id).unwrap().stub;
+    m.mac.advance_ticks(6);
+    let mut cpu = Cpu::new(0x5000, SP);
+    assert!(m.native(&mut cpu, stub));
+    assert_eq!((cpu.pc, cpu.gpr[3]), (CODE, a));
+    // inside a's procedure: re-prime a for 100 ms, prime b for 50 ms (b is due EARLIER)
+    call(&mut m, "PrimeTime", &[a, 100]);
+    call(&mut m, "PrimeTime", &[b, 50]); // 3 ticks
+    let ret = cpu.lr;
+    assert!(m.native(&mut cpu, ret));
+    assert_eq!(m.callback_depth(), 0);
+    m.mac.advance_ticks(2); // b due at +3, a at +6: nothing yet
+    let mut cpu = Cpu::new(0x5000, SP);
+    m.native(&mut cpu, stub);
+    assert_ne!(cpu.pc, CODE, "nothing is due 2 ticks in");
+    m.mac.advance_ticks(10); // both due: b (earlier wake) first, then a
+    let mut ran = Vec::new();
+    for _ in 0..2 {
+        let mut cpu = Cpu::new(0x5000, SP);
+        assert!(m.native(&mut cpu, stub));
+        assert_eq!(cpu.pc, CODE, "ran so far: {ran:x?}");
+        ran.push(cpu.gpr[3]);
+        let ret = cpu.lr;
+        assert!(m.native(&mut cpu, ret));
+    }
+    assert_eq!(ran, vec![b, a]);
+    // RmvTime of a primed task: it never runs
+    call(&mut m, "PrimeTime", &[a, 100]);
+    call(&mut m, "RmvTime", &[a]);
+    m.mac.advance_ticks(60);
+    let mut cpu = Cpu::new(0x5000, SP);
+    m.native(&mut cpu, stub);
+    assert_ne!(cpu.pc, CODE, "a removed task never runs");
+}

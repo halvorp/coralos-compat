@@ -306,3 +306,66 @@ fn gestalt_reports_appearance_and_the_emulated_cpu_model() {
         assert_eq!(gestalt_ppc::unanswered(*selector), Some(reason));
     }
 }
+/// The earliest DUE timer fires first whatever the install order, and equal due times fire in timer-ref order (the walk's order).
+#[test]
+fn due_timers_fire_earliest_first_and_ties_in_ref_order() {
+    let (mut m, mut cpu) = setup();
+    let late = install(&mut m, &mut cpu, 0.75, 0.0);
+    let early = install(&mut m, &mut cpu, 0.25, 0.0);
+    let tie = install(&mut m, &mut cpu, 0.75, 0.0);
+    let stub = bind_and_stub(&mut m, "GetCurrentEventLoop");
+    advance(&mut m, 60); // 1 s: all three are due
+    let mut order = Vec::new();
+    for _ in 0..3 {
+        call(&mut m, &mut cpu, stub);
+        assert_eq!(m.callback_depth(), 1);
+        order.push(cpu.gpr[3]);
+        finish_callback(&mut m, &mut cpu, stub);
+    }
+    assert_eq!(order, vec![early, late.min(tie), late.max(tie)]);
+    call(&mut m, &mut cpu, stub);
+    assert_eq!(m.callback_depth(), 0, "one-shots fire once");
+}
+
+/// A timer installed, re-timed EARLIER or removed while a timer's procedure runs (a callout) is seen by the very next safepoint
+/// after that procedure returns - the safepoint's "nothing is due" answer never comes from a stale earliest-due time.
+#[test]
+fn a_timer_installed_or_moved_earlier_during_a_callout_fires_at_the_next_safepoint() {
+    let (mut m, mut cpu) = setup();
+    let slow = install(&mut m, &mut cpu, 10.0, 0.0);
+    let first = install(&mut m, &mut cpu, 0.1, 0.0);
+    let stub = bind_and_stub(&mut m, "GetCurrentEventLoop");
+    advance(&mut m, 12); // 0.2 s
+    call(&mut m, &mut cpu, stub);
+    assert_eq!((m.callback_depth(), cpu.gpr[3]), (1, first));
+    // inside the callout: install a timer due at once, and move the 10 s one to "now"
+    let fresh = install(&mut m, &mut cpu, 0.0, 0.0);
+    let set = bind_and_stub(&mut m, "SetEventLoopTimerNextFireTime");
+    cpu.gpr[3] = slow;
+    cpu.fpr[1] = 0.0_f64.to_bits();
+    call(&mut m, &mut cpu, set);
+    assert_eq!(cpu.gpr[3], 0);
+    assert_eq!(m.callback_depth(), 1, "no nesting while the callout runs");
+    let ret = cpu.lr;
+    call(&mut m, &mut cpu, ret);
+    assert_eq!(m.callback_depth(), 0);
+    let mut fired = Vec::new();
+    for _ in 0..2 {
+        call(&mut m, &mut cpu, stub);
+        assert_eq!(m.callback_depth(), 1, "fired so far: {fired:x?}");
+        fired.push(cpu.gpr[3]);
+        finish_callback(&mut m, &mut cpu, stub);
+    }
+    fired.sort_unstable();
+    let mut want = vec![slow, fresh];
+    want.sort_unstable();
+    assert_eq!(fired, want);
+    // removing the only armed timer leaves nothing due; installing a later one is not due early
+    let late = install(&mut m, &mut cpu, 0.5, 0.0);
+    let remove = bind_and_stub(&mut m, "RemoveEventLoopTimer");
+    cpu.gpr[3] = late;
+    call(&mut m, &mut cpu, remove);
+    advance(&mut m, 60);
+    call(&mut m, &mut cpu, stub);
+    assert_eq!(m.callback_depth(), 0, "a removed timer never fires");
+}

@@ -27,7 +27,16 @@ const EXTENDED: u16 = 0x4000;
 const MAX_TASKS: usize = 384;
 
 #[derive(Default)]
-pub struct TmState { tasks: BTreeMap<u32, Task> }
+pub struct TmState {
+    tasks: BTreeMap<u32, Task>,
+    /// The earliest wake tick of a primed task (None: none primed), recomputed at every change of `tasks`: the safepoint on every
+    /// glue call returns at once when nothing is due instead of walking the tasks.
+    next_wake: Option<u64>,
+}
+
+impl TmState {
+    fn rescan(&mut self) { self.next_wake = self.tasks.values().filter_map(|t| t.wake_tick).min(); }
+}
 #[derive(Clone, Copy, Default)]
 struct Task { extended: bool, wake_tick: Option<u64>, prev_wake_tick: u64 }
 
@@ -78,6 +87,7 @@ impl<U: GuestUi> MacPpc<U> {
             TmFn::RmvTime => match self.tm.tasks.remove(&task) {
                 None => -1,
                 Some(t) => {
+                    self.tm.rescan(); // before a fault below can return early
                     let q = rd16(self, task + Q_TYPE)?;
                     let left = if q & ACTIVE != 0 { t.wake_tick.map_or(0, |w| w.saturating_sub(now)) * 1000 / 60 } else { 0 };
                     self.mac.mem.write_u16(task + Q_TYPE, q & 0x1F).and_then(|_| self.mac.mem.write_u32(task + TM_COUNT, left as u32)).map_err(|_| format!("{n}: the TMTask leaves guest RAM"))?;
@@ -86,18 +96,21 @@ impl<U: GuestUi> MacPpc<U> {
                 }
             },
         };
+        self.tm.rescan();
         cpu.gpr[3] = r as u32;
         Ok(())
     }
 
     /// The earliest wake tick among primed tasks (so a parked program wakes for it).
-    pub(crate) fn tm_next_wake(&self) -> Option<u64> { self.tm.tasks.values().filter_map(|t| t.wake_tick).min() }
+    pub(crate) fn tm_next_wake(&self) -> Option<u64> { self.tm.next_wake }
 
     /// A primed task whose wake time has come: its pointer (the active bit is cleared when it is taken).
     fn tm_take_due(&mut self) -> Option<u32> {
         let now = self.mac.ev.ticks_total;
+        if self.tm.next_wake.is_none_or(|w| w > now) { return None; }
         let due = self.tm.tasks.iter().filter(|(_, t)| t.wake_tick.is_some_and(|w| w <= now)).min_by_key(|(_, t)| t.wake_tick).map(|(&p, _)| p)?;
         if let Some(t) = self.tm.tasks.get_mut(&due) { t.wake_tick = None; }
+        self.tm.rescan();
         if let Ok(q) = self.mac.mem.read_u16(due + Q_TYPE) { let _ = self.mac.mem.write_u16(due + Q_TYPE, q & !ACTIVE); }
         Some(due)
     }
