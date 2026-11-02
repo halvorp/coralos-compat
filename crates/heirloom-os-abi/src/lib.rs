@@ -33,8 +33,9 @@ pub const OS_ABI_VERSION: u32 = 3;
 /// The first version with the multi-family entries ([`OsVTable::cpu_abi_for_family`] and after): a family other than the header's is
 /// only served from this version on.
 pub const OS_ABI_MULTI_FAMILY: u32 = 2;
-/// The first version with [`OsVTable::attach_gl`] and [`OsVTable::perf`]: a machine's guest GL can reach the engine's GL worker, and
-/// its stage clock can be read by the engine process.
+/// The first version with [`OsVTable::attach_gl`], [`OsVTable::perf`] and [`OsVTable::set_code_mem`]: a machine's guest GL can
+/// reach the engine's GL worker, its stage clock can be read by the engine process, and its CPU can run in the engine's executable
+/// memory.
 pub const OS_ABI_GL: u32 = 3;
 
 /// `attach_gl`: the machine's guest GL now goes to the host's [`GlHost`].
@@ -43,6 +44,13 @@ pub const GL_ATTACH_OK: i32 = 0;
 pub const GL_ATTACH_REFUSED: i32 = 1;
 /// `attach_gl`: a null instance or a null host.
 pub const GL_ATTACH_BAD_ARGS: i32 = 2;
+
+/// `set_code_mem`: the machine's CPU will run tier 2 (the JIT) in the engine's executable memory.
+pub const CODE_MEM_OK: i32 = 0;
+/// `set_code_mem`: this machine's family has no JIT (its CPU contract carries no executable memory).
+pub const CODE_MEM_REFUSED: i32 = 1;
+/// `set_code_mem`: a null instance or a null record.
+pub const CODE_MEM_BAD_ARGS: i32 = 2;
 
 /// `perf`: one finished stage-clock line was written.
 pub const PERF_LINE: i32 = 0;
@@ -162,6 +170,10 @@ pub struct OsVTable {
     /// the CPU's own time-stamp counter); each call writes at most one finished line (UTF-8, at most `cap` bytes at `line`,
     /// `*line_len` = bytes written), formatted at `tsc_per_us` TSC ticks per microsecond (the ENGINE measures the rate). See PERF_*.
     pub perf: extern "C" fn(inst: *mut OsInstance, tsc_per_us: u64, line: *mut u8, cap: usize, line_len: *mut usize) -> i32,
+    /// Executable memory for the machine's CPU (CPU ABI v3 [`ppc::PpcCodeMem`], copied; its `ctx` and functions must outlive the
+    /// instance): a PowerPC machine runs tier 2 in it from now on (its named input `cpu-tier` can still force another tier).
+    /// See CODE_MEM_*.
+    pub set_code_mem: extern "C" fn(inst: *mut OsInstance, mem: *const ppc::PpcCodeMem) -> i32,
 }
 
 /// The byte size of a version-1 table (the four header words' entries up to `apply`).
@@ -259,9 +271,10 @@ mod tests {
     extern "C" fn create_for(_: u32, _: *const u8, _: usize, _: *const OsHost, _: *mut u8, _: usize, _: *mut usize) -> *mut OsInstance { core::ptr::null_mut() }
     extern "C" fn attach(_: *mut OsInstance, _: *const GlHost) -> i32 { GL_ATTACH_REFUSED }
     extern "C" fn perf(_: *mut OsInstance, _: u64, _: *mut u8, _: usize, _: *mut usize) -> i32 { PERF_REFUSED }
+    extern "C" fn code_mem(_: *mut OsInstance, _: *const ppc::PpcCodeMem) -> i32 { CODE_MEM_REFUSED }
 
     fn table(version: u32, size: u32, family: u32) -> OsVTable {
-        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf }
+        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem }
     }
 
     #[test]

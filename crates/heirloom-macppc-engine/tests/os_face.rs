@@ -332,3 +332,47 @@ fn the_engine_reads_the_powerpc_stage_clock_through_the_table() {
     assert_eq!(perf(remote.inst, 1000, line.as_mut_ptr(), line.len(), &mut n), PERF_NONE);
     assert_eq!(n, 0);
 }
+
+/// The engine's executable memory in a test: counts the library's reserve calls and refuses them (the JIT then runs tier 1 and
+/// names it in its own stats) - enough to see the record reach the CPU instance through the table.
+static RESERVES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+extern "C" fn count_reserve(_: *mut c_void, _: usize, _: *mut *mut u8) -> i32 {
+    RESERVES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    -1
+}
+extern "C" fn no_range(_: *mut c_void, _: *mut u8, _: usize) -> i32 {
+    -1
+}
+
+/// A hot loop (40 x 30000 iterations of addi / cmpwi / bne): the blocks tier 2 compiles.
+fn hot_app() -> Vec<u8> {
+    use heirloom_macppc_engine::asm::Asm;
+    let mut a = Asm::new();
+    a.li(5, 0).label("outer").li(3, 0).label("inner").addi(3, 3, 1).cmpwi(3, 30000).bne("inner");
+    a.addi(5, 5, 1).cmpwi(5, 40).bne("outer").li(3, 0).blr();
+    fixture::macbinary_app(&fixture::app_with(&[], &a.finish(), &[]))
+}
+
+fn run_with_code_mem(tier: Option<&str>) -> u32 {
+    bind();
+    let mut remote = Remote::new(FAMILY_MACPPC, "").unwrap();
+    let rec = ppc::PpcCodeMem { size: core::mem::size_of::<ppc::PpcCodeMem>() as u32, flags: 0, ctx: core::ptr::null_mut(), reserve: count_reserve, publish: no_range, reset: no_range };
+    assert_eq!((os_mac_vtable().set_code_mem)(remote.inst, &rec), CODE_MEM_OK);
+    assert_eq!((os_mac_vtable().set_code_mem)(remote.inst, core::ptr::null()), CODE_MEM_BAD_ARGS);
+    let before = RESERVES.load(std::sync::atomic::Ordering::SeqCst);
+    let mut frames = Vec::new();
+    if let Some(t) = tier {
+        frames.push(control(Control::Input { name: heirloom_macppc_engine::os_face::CPU_TIER.into(), offset: 0, total: t.len() as u32, chunk: t.as_bytes().to_vec() }));
+    }
+    frames.extend(program(&hot_app(), "Hot Loop"));
+    assert_eq!(remote.send(&frames), APPLY_OK);
+    assert_eq!(remote.send(&[control(Control::Advance { virtual_us: 0 }), control(Control::Step { budget: BUDGET })]), APPLY_OK);
+    assert!(matches!(remote.reports.last(), Some(Report::Stepped { insns, .. }) if *insns > 0), "the guest ran: {:?}", remote.reports);
+    RESERVES.load(std::sync::atomic::Ordering::SeqCst) - before
+}
+
+#[test]
+fn the_engines_executable_memory_reaches_the_cpu_and_cpu_tier_can_force_tier_1() {
+    assert!(run_with_code_mem(None) >= 1, "tier 2 asked the engine's provider for its executable memory");
+    assert_eq!(run_with_code_mem(Some("blocks")), 0, "a bundle's cpu-tier \"blocks\" runs tier 1 and never asks");
+}

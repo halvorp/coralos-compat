@@ -12,6 +12,7 @@ use heirloom_common::Refusal;
 use heirloom_mac68k_engine::os_face::MacFamily;
 use heirloom_os_abi::ppc::PpcVTable;
 use heirloom_os_abi::serve::{vtable2, LibUi, OsFamily};
+use heirloom_os_abi::ppc::{PpcCodeMem, Tier};
 use heirloom_os_abi::{GlHost, OsVTable, BIND_ALREADY, BIND_OK, BIND_REFUSED, CPU_CONTRACT_PPC, FAMILY_MACPPC};
 
 pub struct MacPpcFamily;
@@ -49,7 +50,42 @@ impl OsFamily for MacPpcFamily {
         if m.perf.is_none() {
             m.perf_enable(tsc);
         }
-        Ok(m.perf_take_line(tsc_per_us))
+        Ok(m.perf_take_line(tsc_per_us).map(|l| {
+            // which tier ran: the one asked for, and whether the library had to run tier 1 instead (no or a refused provider)
+            let e = m.exec();
+            format!("{l} | cpu: tier={} fell_back={}", tier_name(e.tier), e.lockstep_refused())
+        }))
+    }
+    /// macppc.engine's executable memory (OS ABI v3): tier 2 runs in it from now on, unless the bundle's `cpu-tier` input said
+    /// otherwise.
+    fn set_code_mem(m: &mut MacPpc<LibUi>, mem: PpcCodeMem) -> Result<(), String> {
+        // the engine gives the memory right after it makes the machine; a `cpu-tier` input (start_file's batch) comes later and wins
+        m.exec().set_code_mem(mem);
+        m.exec().tier = Tier::Jit;
+        Ok(())
+    }
+    /// The named input `cpu-tier` (the bundle manifest's `(cpu-tier "interp" | "blocks" | "jit")`): forces the PowerPC tier - tier 1
+    /// on a box where the JIT misbehaves, without a rebuild.
+    fn input(m: &mut MacPpc<LibUi>, name: &str, bytes: Vec<u8>) -> Result<(), String> {
+        if name != CPU_TIER {
+            return Err(format!("input {name:?}: the PowerPC Mac takes only {CPU_TIER:?}"));
+        }
+        let t = core::str::from_utf8(&bytes).ok().and_then(Tier::parse).ok_or_else(|| format!("{CPU_TIER}: {:?} is not a tier (interp, blocks or jit)", String::from_utf8_lossy(&bytes)))?;
+        m.exec().tier = t;
+        Ok(())
+    }
+}
+
+/// The named input that forces the PowerPC tier (heirloom-ui-abi Control::Input).
+pub const CPU_TIER: &str = "cpu-tier";
+
+fn tier_name(t: Tier) -> &'static str {
+    match t {
+        Tier::Interp => "interp",
+        Tier::Blocks => "blocks",
+        Tier::Lockstep => "lockstep",
+        Tier::Jit => "jit",
+        Tier::JitLockstep => "jitlockstep",
     }
 }
 

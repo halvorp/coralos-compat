@@ -106,7 +106,10 @@ impl<U: GuestUi> MacPpc<U> {
         cpu.gpr[2] = main.r2;
         cpu.gpr[12] = frag.main.map_or(0, |t| t.address);
         cpu.lr = main.lr;
-        self.rt = Runtime { main_tvector: cpu.gpr[12], main_stack: (main.r1 + 64).saturating_sub(crate::cfm::STACK_SIZE), ..Runtime::default() };
+        // the execution tier and the executable memory are the MACHINE's, chosen before its program starts (macppc.engine gives the
+        // JIT its memory right after it makes the machine): they carry over; everything else of the runtime starts afresh
+        let exec = core::mem::take(&mut self.rt.exec);
+        self.rt = Runtime { main_tvector: cpu.gpr[12], main_stack: (main.r1 + 64).saturating_sub(crate::cfm::STACK_SIZE), exec, ..Runtime::default() };
         // every library's init routine (dependencies first), then the application's own, run before main; each returns to `$InitDone`, which starts the next
         let mut inits: alloc::collections::VecDeque<crate::cfm::Tv> = self.lib_inits.iter().copied().collect();
         if let Some(init) = frag.init { inits.push_back(init); }
