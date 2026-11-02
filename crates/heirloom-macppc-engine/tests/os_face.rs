@@ -376,3 +376,28 @@ fn the_engines_executable_memory_reaches_the_cpu_and_cpu_tier_can_force_tier_1()
     assert!(run_with_code_mem(None) >= 1, "tier 2 asked the engine's provider for its executable memory");
     assert_eq!(run_with_code_mem(Some("blocks")), 0, "a bundle's cpu-tier \"blocks\" runs tier 1 and never asks");
 }
+
+#[test]
+fn the_home_input_sets_the_powerpc_programs_folder_through_the_table() {
+    bind();
+    let tree_with = |vol: &str| {
+        let mut tree = heirloom_volume::Tree::new(31);
+        let v = tree.add_volume(vol, true);
+        tree.put_file(v, "ReadMe", b"hello".to_vec()).unwrap();
+        heirloom_volume::snapshot::encode(&tree)
+    };
+    let input = |name: &str, b: &[u8]| control(Control::Input { name: name.into(), offset: 0, total: b.len() as u32, chunk: b.to_vec() });
+    // a folder on the staged volumes: the program starts from there
+    let mut ok = Remote::new(FAMILY_MACPPC, "").unwrap();
+    let vol = tree_with("Game");
+    let mut frames = vec![control(Control::Volume { offset: 0, total: vol.len() as u32, chunk: vol.clone() }), input("home", b"Game")];
+    frames.extend(program(&app(), "PPC Hello"));
+    assert_eq!(ok.send(&frames), APPLY_OK);
+    assert_eq!(ok.reports.last(), Some(&Report::Started(Ok(()))), "{:?}", ok.reports);
+    // NEGATIVE: a folder that is not on the volumes is the named refusal of the start
+    let mut bad = Remote::new(FAMILY_MACPPC, "").unwrap();
+    let mut frames = vec![control(Control::Volume { offset: 0, total: vol.len() as u32, chunk: vol }), input("home", b"Nowhere")];
+    frames.extend(program(&app(), "PPC Hello"));
+    let _ = bad.send(&frames);
+    assert!(matches!(bad.reports.last(), Some(Report::Started(Err(e))) if e.contains("Nowhere")), "{:?}", bad.reports);
+}

@@ -64,11 +64,18 @@ impl OsFamily for MacPpcFamily {
         m.exec().tier = Tier::Jit;
         Ok(())
     }
-    /// The named input `cpu-tier` (the bundle manifest's `(cpu-tier "interp" | "blocks" | "jit")`): forces the PowerPC tier - tier 1
-    /// on a box where the JIT misbehaves, without a rebuild.
+    /// The named inputs: `home` (the manifest's `(home ...)`: the program's own folder) and `cpu-tier` (the manifest's `(cpu-tier
+    /// "interp" | "blocks" | "jit")`: forces the PowerPC tier - tier 1 on a box where the JIT misbehaves, without a rebuild).
     fn input(m: &mut MacPpc<LibUi>, name: &str, bytes: Vec<u8>) -> Result<(), String> {
+        if name == HOME {
+            // the program's own folder on the staged volumes, volume first, colon-separated ("Warcraft III"): GuestMachine::set_home,
+            // as an in-process host calls it before start_file (the volume chunks precede every input in that batch)
+            let path = core::str::from_utf8(&bytes).map_err(|_| format!("{HOME}: the folder is not UTF-8"))?;
+            let parts: Vec<&str> = path.split(':').collect();
+            return heirloom_common::GuestMachine::set_home(m, &parts).map_err(|r| r.0);
+        }
         if name != CPU_TIER {
-            return Err(format!("input {name:?}: the PowerPC Mac takes only {CPU_TIER:?}"));
+            return Err(format!("input {name:?}: the PowerPC Mac takes {CPU_TIER:?} and {HOME:?}"));
         }
         let t = core::str::from_utf8(&bytes).ok().and_then(Tier::parse).ok_or_else(|| format!("{CPU_TIER}: {:?} is not a tier (interp, blocks or jit)", String::from_utf8_lossy(&bytes)))?;
         m.exec().tier = t;
@@ -78,6 +85,8 @@ impl OsFamily for MacPpcFamily {
 
 /// The named input that forces the PowerPC tier (heirloom-ui-abi Control::Input).
 pub const CPU_TIER: &str = "cpu-tier";
+/// The named input that sets the program's own folder (a host's `(home ...)`; colon-separated, volume first).
+pub const HOME: &str = "home";
 
 fn tier_name(t: Tier) -> &'static str {
     match t {
