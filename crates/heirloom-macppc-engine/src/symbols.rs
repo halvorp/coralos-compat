@@ -187,6 +187,37 @@ pub enum Binding {
     Unbound(String),
 }
 
+/// symbol key -> how it is served, with a GENERATION every change bumps, so a binding cached per glue cell knows when it may be
+/// stale. Reads go through `Deref` (the map); the only writes are [`Bindings::insert`] and [`Bindings::entry`].
+#[derive(Default)]
+pub struct Bindings {
+    map: alloc::collections::BTreeMap<String, Binding>,
+    generation: u64,
+    /// glue cell id -> (the generation it was looked up at, its binding): the native-call path's lookup, which otherwise walks the
+    /// map by string (~13 string compares a call, the largest per-call cost of a GL call outside the encoder).
+    by_cell: alloc::vec::Vec<(u64, Option<Binding>)>,
+}
+
+impl core::ops::Deref for Bindings {
+    type Target = alloc::collections::BTreeMap<String, Binding>;
+    fn deref(&self) -> &Self::Target { &self.map }
+}
+
+impl Bindings {
+    pub fn insert(&mut self, key: String, b: Binding) -> Option<Binding> { self.generation += 1; self.map.insert(key, b) }
+    pub fn entry(&mut self, key: String) -> alloc::collections::btree_map::Entry<'_, String, Binding> { self.generation += 1; self.map.entry(key) }
+    /// `get(key).cloned()` for the glue cell `id` whose key is `key`: answered from the cell's cache while no binding has changed
+    /// since it was filled (an absent binding is cached too: a later insert bumps the generation).
+    pub fn for_cell(&mut self, id: usize, key: &str) -> Option<Binding> {
+        let generation = self.generation + 1; // 0 = never filled
+        if let Some((_, b)) = self.by_cell.get(id).filter(|(g, _)| *g == generation) { return b.clone(); }
+        let b = self.map.get(key).cloned();
+        if self.by_cell.len() <= id { self.by_cell.resize(id + 1, (0, None)); }
+        self.by_cell[id] = (generation, b.clone());
+        b
+    }
+}
+
 impl Binding {
     pub fn is_bound(&self) -> bool { !matches!(self, Binding::Unbound(_)) }
     pub fn is_data(&self) -> bool { matches!(self, Binding::Qd | Binding::CData(_)) }
@@ -234,4 +265,24 @@ pub fn lookup<U: GuestUi>(mac: &Mac<U>, name: &str) -> Binding {
     if mac.is_pascal(op) { return Binding::Pascal(op); }
     if mac.is_os(op) { return Binding::Unbound(format!("{} is an OS trap with no C prototype in OS_SIGS yet", describe(op))); }
     Binding::Unbound(format!("{} has no handler yet", describe(op)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cells_cached_binding_follows_every_insert_and_entry_never_a_stale_answer() {
+        let mut b = Bindings::default();
+        assert_eq!(b.for_cell(3, "glFoo"), None); // absent, and cached as absent
+        b.insert("glFoo".into(), Binding::Export(0x10));
+        assert_eq!(b.for_cell(3, "glFoo"), Some(Binding::Export(0x10)), "an insert after a cached miss");
+        assert_eq!(b.for_cell(3, "glFoo"), Some(Binding::Export(0x10)));
+        b.insert("glFoo".into(), Binding::Export(0x20)); // re-bound (a library that loaded after all)
+        assert_eq!(b.for_cell(3, "glFoo"), Some(Binding::Export(0x20)), "a replaced binding");
+        *b.entry("glFoo".into()).or_insert(Binding::Qd) = Binding::Pascal(0xA9F4);
+        assert_eq!(b.for_cell(3, "glFoo"), Some(Binding::Pascal(0xA9F4)), "a change through entry");
+        assert_eq!(b.for_cell(0, "other"), None, "cells are independent");
+        assert_eq!(b.get("glFoo"), Some(&Binding::Pascal(0xA9F4)), "reads see the map");
+    }
 }

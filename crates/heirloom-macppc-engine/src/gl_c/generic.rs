@@ -61,7 +61,7 @@ impl<U: GuestUi> MacPpc<U> {
                 }
             }
         }
-        if let Some((err, why)) = heirloom_gl_abi::checks::violation(who, &words) {
+        if let Some((err, why)) = heirloom_gl_abi::checks::violation_for(sig, &words) {
             self.gl_note(format!("[HEIRLOOM-GL] {why}"));
             self.gl_set_error(err);
             return Ok(0);

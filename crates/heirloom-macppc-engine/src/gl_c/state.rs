@@ -62,7 +62,7 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     pub(super) fn gl_state_call(&mut self, name: &str, entry: u16, cpu: &mut Cpu) -> Result<u32, String> {
-        if let Some(sig) = heirloom_gl_abi::family::lookup(name) { return self.gl_generic_call(sig, entry, cpu); }
+        if let Some(sig) = self.gl_sig(entry).filter(|s| s.name == name) { return self.gl_generic_call(sig, entry, cpu); }
         if heirloom_gl_abi::family::lookup_bulk(name).is_some() { return self.gl_bulk_call(name, entry, cpu); }
         if let Some(r) = self.gl_array_call(name, entry, cpu)? { return Ok(r); }
         if let Some(r) = self.gl_image_call(name, entry, cpu)? { return Ok(r); }

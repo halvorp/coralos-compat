@@ -267,7 +267,8 @@ impl<U: GuestUi> Host for MacPpc<U> {
 impl<U: GuestUi> MacPpc<U> {
     /// A glue call (the `Host::native` hook without the stage clock).
     fn native_call(&mut self, cpu: &mut Cpu, addr: u32) -> bool {
-        let Some(symbol) = self.glue.key_at_stub(addr) else { return false };
+        let Some(cell) = self.glue.id_at_stub(addr) else { return false };
+        let Some(symbol) = self.glue.key_of(cell) else { return false };
         let symbol: &str = &symbol;
         if symbol == INIT_DONE {
             let Some(m) = self.rt.after_init.clone() else { self.rt.fault = Some("the init routine returned twice".into()); cpu.halt(); return true };
@@ -303,7 +304,7 @@ impl<U: GuestUi> MacPpc<U> {
         // The symbol's binding, looked up once and shared by every branch below: this is the hottest host path of a game (a lookup
         // per branch measured ~78 string compares a call, doc 22 phase 5). Nothing between here and the dispatch binds a symbol: a
         // safepoint that enters a callback returns before it.
-        let binding = self.bindings.get(symbol).cloned();
+        let binding = self.bindings.for_cell(cell, symbol);
         let yielding = symbol == crate::callback::CALLBACK_RETURN
             || matches!(binding, Some(Binding::Native(Native::Thread(
                 ThreadFn::YieldToAnyThread | ThreadFn::YieldToThread | ThreadFn::GetCurrentThread | ThreadFn::GetThreadState

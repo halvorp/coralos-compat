@@ -141,6 +141,9 @@ pub struct GlState {
     pack: Store,
     /// Bytes handed to the worker so far (a recorder reads this for the ring image).
     pub sent_bytes: u64,
+    /// Per contract entry: its generated family signature (`heirloom_gl_abi::family::lookup` of its name), made once at the
+    /// first call - the per-call path indexes it instead of scanning the 259-row table by name.
+    sigs: Vec<Option<&'static heirloom_gl_abi::family::Sig>>,
 }
 
 impl GlState {
@@ -156,7 +159,7 @@ impl<U: GuestUi> MacPpc<U> {
     /// Attach the worker that executes the program's GL (the host's `heirloom-gl.engine` transport).
     pub fn gl_attach(&mut self, w: Box<dyn GlWorker>) { self.gl.attach(w); }
 
-    fn gl_queue(&mut self, token: Token, command: Command) { self.gl.pending.extend(Frame { token, command }.encode()); }
+    fn gl_queue(&mut self, token: Token, command: Command) { Frame { token, command }.encode_into(&mut self.gl.pending); }
 
     /// Send what is queued as one batch (ending in `BatchEnd`) and return the replies. Retired batches advance the fences.
     fn gl_flush(&mut self) -> Vec<Command> {
@@ -164,11 +167,14 @@ impl<U: GuestUi> MacPpc<U> {
         let seq = self.gl.batch;
         self.gl.batch += 1;
         self.gl_queue(Token { slot: 0, incarnation: 0 }, Command::BatchEnd { seq });
-        let req = core::mem::take(&mut self.gl.pending);
+        let mut req = core::mem::take(&mut self.gl.pending);
         self.gl.sent_bytes += req.len() as u64;
         let Some(w) = self.gl.worker.as_mut() else { return Vec::new() };
         let t0 = self.perf.as_ref().map(|p| p.now());
         let reply = w.transact(&req);
+        // the next batch reuses this one's capacity (a gameplay frame is ~470 KB: no regrowth from zero every flush)
+        req.clear();
+        self.gl.pending = req;
         if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let dt = p.now().wrapping_sub(t0); p.add_gl_ring(dt); }
         let mut out = Vec::new();
         let mut at = 0;
@@ -188,6 +194,12 @@ impl<U: GuestUi> MacPpc<U> {
     fn gl_ask(&mut self, token: Token, command: Command) -> Option<(u32, Vec<u64>, String)> {
         self.gl_queue(token, command);
         self.gl_flush().into_iter().find_map(|c| if let Command::Reply { status, words, text } = c { Some((status, words, text)) } else { None })
+    }
+
+    /// The generated family signature of contract entry `entry`, if it is a family call.
+    fn gl_sig(&mut self, entry: u16) -> Option<&'static heirloom_gl_abi::family::Sig> {
+        if self.gl.sigs.is_empty() { self.gl.sigs = ENTRIES.iter().map(|e| heirloom_gl_abi::family::lookup(e.name)).collect(); }
+        self.gl.sigs.get(usize::from(entry)).copied().flatten()
     }
 
     fn gl_ctx_token(&self) -> Option<Token> { self.gl.ctxs.get(&self.gl.current).copied() }

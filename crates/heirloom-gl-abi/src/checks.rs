@@ -56,6 +56,16 @@ pub static NO_BUFFER_CALLS: &[(&str, &str)] = &[("glAccum", "this visual has no 
 /// outside [`ENUM_ARGS`] is GL_INVALID_ENUM; a NEGATIVE `GLsizei` argument of a family call is GL_INVALID_VALUE (every command of
 /// GL 1.2 that takes a size, count or range says so).
 pub fn violation(name: &str, args: &[u64]) -> Option<(u32, String)> {
+    violation_with(name, crate::family::lookup(name), args)
+}
+
+/// [`violation`] for a family call whose signature the caller already holds - one [`crate::family::lookup`] answers, i.e. a
+/// GENERATED row (the engine's per-call path: no table scan by name).
+pub fn violation_for(sig: &crate::family::Sig, args: &[u64]) -> Option<(u32, String)> {
+    violation_with(sig.name, Some(sig), args)
+}
+
+fn violation_with(name: &str, sig: Option<&crate::family::Sig>, args: &[u64]) -> Option<(u32, String)> {
     let enumerated = ENUM_ARGS.iter().filter(|c| c.call == name).find_map(|c| {
         let v = *args.get(c.arg)?;
         if c.absent.iter().any(|a| u64::from(*a) == v) {
@@ -67,12 +77,11 @@ pub fn violation(name: &str, args: &[u64]) -> Option<(u32, String)> {
     let enumerated = enumerated.or_else(|| {
         POSITIVE_ARGS.iter().find(|(c, _)| *c == name).and_then(|(_, idx)| idx.iter().find(|i| args.get(**i).is_some_and(|w| (*w as u32 as i32) < 1)).map(|i| (GL_INVALID_VALUE, format!("{name} argument {i}: a division count must be at least 1 (GL 1.2 §5.1)"))))
     });
-    enumerated.or_else(|| negative_size(name, args).map(|(k, v)| (GL_INVALID_VALUE, format!("{name} argument {k}: the size {v} is negative (GL 1.2: GL_INVALID_VALUE)"))))
+    enumerated.or_else(|| sig.and_then(|sig| negative_size(sig, args)).map(|(k, v)| (GL_INVALID_VALUE, format!("{name} argument {k}: the size {v} is negative (GL 1.2: GL_INVALID_VALUE)"))))
 }
 
-fn negative_size(name: &str, args: &[u64]) -> Option<(usize, i32)> {
+fn negative_size(sig: &crate::family::Sig, args: &[u64]) -> Option<(usize, i32)> {
     use crate::family::{Ty, P};
-    let sig = crate::family::lookup(name)?;
     let mut at = 0;
     for p in sig.params {
         match *p {
@@ -93,6 +102,16 @@ fn negative_size(name: &str, args: &[u64]) -> Option<(usize, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn violation_for_a_held_signature_is_violation_by_name_for_every_family_call() {
+        let probes: &[&[u64]] = &[&[], &[0], &[10], &[0xFFFF_FFFF], &[1, 0xFFFF_FFFF, 3], &[0x0401, 0, 0, 0, 0x1802], &[0, 0, 0, 0x8000_0000]];
+        for sig in crate::family_table::GENERATED {
+            for a in probes {
+                assert_eq!(violation_for(sig, a), violation(sig.name, a), "{} {a:x?}", sig.name);
+            }
+        }
+    }
 
     #[test]
     fn an_argument_outside_its_domain_is_invalid_enum() {

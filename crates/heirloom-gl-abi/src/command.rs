@@ -122,8 +122,23 @@ pub fn peek_len(bytes: &[u8]) -> Result<Option<usize>, WireError> {
 }
 
 impl Frame {
+    /// The frame's bytes as a new vector (the same bytes [`Frame::encode_into`] appends).
     pub fn encode(&self) -> Vec<u8> {
-        let mut p = Writer::default();
+        let mut out = Vec::new();
+        self.encode_into(&mut out);
+        out
+    }
+
+    /// Append the frame's bytes to `out`: the header first with its length patched once the payload is written, so a
+    /// queue of frames grows in place with no per-frame buffer (the engine encodes thousands of GL calls a frame).
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        let start = out.len();
+        let mut p = Writer { buf: core::mem::take(out) };
+        p.u16(ABI_VERSION);
+        p.u16(kind_of(&self.command));
+        p.u32(0);
+        p.u32(self.token.slot);
+        p.u32(self.token.incarnation);
         match &self.command {
             Command::ContextCreate | Command::ContextDestroy | Command::MakeCurrent => {}
             Command::Call { entry, args } => {
@@ -185,14 +200,9 @@ impl Frame {
             }
             Command::BatchEnd { seq } | Command::Retired { seq } => p.u64(*seq),
         }
-        let mut w = Writer::default();
-        w.u16(ABI_VERSION);
-        w.u16(kind_of(&self.command));
-        w.u32(p.buf.len() as u32);
-        w.u32(self.token.slot);
-        w.u32(self.token.incarnation);
-        w.bytes(&p.buf);
-        w.buf
+        let len = (p.buf.len() - start - HEADER) as u32;
+        p.buf[start + 4..start + 8].copy_from_slice(&len.to_le_bytes());
+        *out = p.buf;
     }
 
     /// Decode ONE frame from the front of `bytes`; returns it and the bytes consumed.

@@ -68,7 +68,7 @@ pub struct MacPpc<U: GuestUi> {
     pub mac: Mac<U>,
     pub glue: Glue,
     /// symbol name -> how it is served (filled when an import or `FindSymbol` first names it).
-    pub bindings: BTreeMap<String, Binding>,
+    pub bindings: crate::symbols::Bindings,
     /// Strict mode: instantiating a fragment with an unresolved strong import fails instead of binding a refusing stub.
     pub strict_imports: bool,
     pub(crate) connections: Vec<String>,
@@ -155,7 +155,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(heirloom_mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: BTreeMap::new(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new(), perf: None })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: Default::default(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new(), perf: None })
     }
 
     /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.

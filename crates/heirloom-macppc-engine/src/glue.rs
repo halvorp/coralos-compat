@@ -67,6 +67,9 @@ impl Glue {
     /// The cell whose STUB is at `pc` (not its TVector), if any.
     pub fn at_stub(&self, pc: u32) -> Option<&GlueEntry> { self.id_at_stub(pc).and_then(|id| self.entries.get(id)) }
 
+    /// The binding key of cell `id` (shared, not rebuilt).
+    pub fn key_of(&self, id: usize) -> Option<Rc<str>> { self.keys.get(id).cloned() }
+
     /// The binding key of the cell whose STUB is at `pc` (shared, not rebuilt), if any.
     pub fn key_at_stub(&self, pc: u32) -> Option<Rc<str>> { self.id_at_stub(pc).and_then(|id| self.keys.get(id)).cloned() }
 

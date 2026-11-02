@@ -110,7 +110,8 @@ fn pct(part: u64, whole: u64) -> u64 { if whole == 0 { 0 } else { part.saturatin
 /// AND over the wall time, instructions per frame, and the share of the WALL time (sum of the frames) each stage took; then the
 /// absolute means that tell the two host-side suspects apart: per frame the GL round trip (`gl_ring_us`, the guest blocked on
 /// heirloom-gl.engine) and the time outside `step` (`outside_us`), per slice the time inside it (`step_us`) and between two
-/// (`gap_us`, the host's scheduling of the next slice).
+/// (`gap_us`, the host's scheduling of the next slice); and the engine's own GL time without the round trip, per frame (`gl_us`)
+/// and per GL call (`per gl call: ns`): what the guest's core spends encoding its GL.
 pub fn report(w: &Window, per_us: u64, frames_total: u64) -> String {
     let mut f = w.frames.clone();
     f.sort_unstable();
@@ -121,16 +122,19 @@ pub fn report(w: &Window, per_us: u64, frames_total: u64) -> String {
     let native: u64 = w.native_time.iter().sum();
     let interp = w.step_time.saturating_sub(native);
     let outside = wall.saturating_sub(w.step_time);
+    // the engine's OWN GL cost (encoding, validation, snapshots), the worker round trip excluded: the callouts' share of the guest's core
+    let gl_own = w.native_time[Class::Gl as usize].saturating_sub(w.gl_ring_time);
     let mips = |t: u64| if t == 0 { 0 } else { w.insns.saturating_mul(per_us) / t };
     let classes: String = (0..CLASSES).map(|i| format!(" {}={}%/{}", CLASS_NAMES[i], pct(w.native_time[i], wall), w.native_calls[i] / n as u64)).collect();
     format!("[HEIRLOOM-PERF frames={frames_total} n={n} frame_ms p50={} p95={} fps={}] insns/frame={} mips_step={} mips_wall={} steps/frame={} \
 interp={}% native={}% outside_step={}% gl_ring={}%{classes} clock_reads/frame={} clock_poll={}% of insns \
-| per frame: gl_ring_us={} outside_us={} | per slice: step_us={} gap_us={}",
+| per frame: gl_ring_us={} outside_us={} gl_us={} | per gl call: ns={} | per slice: step_us={} gap_us={}",
         at(50) / per_ms, at(95) / per_ms, if wall == 0 { 0 } else { (n as u64) * per_ms * 1000 / wall },
         w.insns / n as u64, mips(w.step_time), mips(wall), w.steps / n as u64,
         pct(interp, wall), pct(native, wall), pct(outside, wall), pct(w.gl_ring_time, wall),
         w.clock_reads / n as u64, pct(w.poll_insns, w.insns),
-        w.gl_ring_time / per_us.max(1) / n as u64, outside / per_us.max(1) / n as u64,
+        w.gl_ring_time / per_us.max(1) / n as u64, outside / per_us.max(1) / n as u64, gl_own / per_us.max(1) / n as u64,
+        gl_own.saturating_mul(1000) / per_us.max(1) / w.native_calls[Class::Gl as usize].max(1),
         w.step_time / per_us.max(1) / w.steps.max(1), outside / per_us.max(1) / w.steps.max(1))
 }
 
@@ -221,6 +225,19 @@ mod tests {
         assert!(line.contains(" gl=10%/0"), "{line}");
         // the absolute times that tell a slow GL round trip from slow slicing on the Z83: 2_525_000 units outside step over 100
         // frames and 1000 slices; nothing in gl_ring
-        assert!(line.ends_with("| per frame: gl_ring_us=0 outside_us=25250 | per slice: step_us=2525 gap_us=2525"), "{line}");
+        assert!(line.ends_with("| per frame: gl_ring_us=0 outside_us=25250 gl_us=5050 | per gl call: ns=505000000 | per slice: step_us=2525 gap_us=2525"), "{line}");
+    }
+
+    #[test]
+    fn the_engines_own_gl_time_excludes_the_worker_round_trip_per_frame_and_per_call() {
+        let mut w = Window::default();
+        w.frames = vec![10_000; 4]; // 4 frames of 10 ms at per_us = 1
+        w.steps = 4;
+        w.step_time = 40_000;
+        w.native_time[Class::Gl as usize] = 9_000; // 9 ms of GL glue in all, 1 ms of it waiting on the worker
+        w.native_calls[Class::Gl as usize] = 4_000;
+        w.gl_ring_time = 1_000;
+        let line = report(&w, 1, 4);
+        assert!(line.contains("| per frame: gl_ring_us=250 outside_us=0 gl_us=2000 | per gl call: ns=2000 |"), "{line}");
     }
 }

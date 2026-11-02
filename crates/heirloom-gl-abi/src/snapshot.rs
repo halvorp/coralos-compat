@@ -107,11 +107,21 @@ pub struct ArraySnapshot {
 
 /// Reverse every `ty`-sized component in place: guest (big-endian) to wire (little-endian).
 fn to_wire_order(ty: ElemType, bytes: &mut [u8]) {
-    let n = ty.bytes();
-    if n > 1 {
-        for c in bytes.chunks_exact_mut(n) {
-            c.reverse();
-        }
+    // one fixed-width swap per component (the compiler vectorises these; a per-chunk `reverse` it does not)
+    match ty.bytes() {
+        2 => bytes.chunks_exact_mut(2).for_each(|c| {
+            let v = u16::from_be_bytes([c[0], c[1]]);
+            c.copy_from_slice(&v.to_le_bytes());
+        }),
+        4 => bytes.chunks_exact_mut(4).for_each(|c| {
+            let v = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
+            c.copy_from_slice(&v.to_le_bytes());
+        }),
+        8 => bytes.chunks_exact_mut(8).for_each(|c| {
+            let v = u64::from_be_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
+            c.copy_from_slice(&v.to_le_bytes());
+        }),
+        _ => {}
     }
 }
 
@@ -133,9 +143,13 @@ pub fn snapshot_array(mem: &[u8], d: &Descriptor, first: u32, count: u32) -> Res
             return Err(SnapshotError::OutOfRange);
         }
         data.reserve_exact(total);
-        for i in 0..count as usize {
-            let at = start + i * stride; // bounded by the proof above
-            data.extend_from_slice(&mem[at..at + vbytes]);
+        if stride == vbytes {
+            data.extend_from_slice(&mem[start..end]); // tightly packed: the range is one copy
+        } else {
+            for i in 0..count as usize {
+                let at = start + i * stride; // bounded by the proof above
+                data.extend_from_slice(&mem[at..at + vbytes]);
+            }
         }
         to_wire_order(d.ty, &mut data);
     }
