@@ -368,6 +368,17 @@ fn run_with_code_mem(tier: Option<&str>) -> u32 {
     assert_eq!(remote.send(&frames), APPLY_OK);
     assert_eq!(remote.send(&[control(Control::Advance { virtual_us: 0 }), control(Control::Step { budget: BUDGET })]), APPLY_OK);
     assert!(matches!(remote.reports.last(), Some(Report::Stepped { insns, .. }) if *insns > 0), "the guest ran: {:?}", remote.reports);
+    // OsVTable::cpu_prof (appended to v3): the CPU's counters reach the engine, under PpcProf's size contract
+    assert!(heirloom_os_abi::has_cpu_prof(os_mac_vtable()));
+    let mut p = ppc::PpcProf { size: core::mem::size_of::<ppc::PpcProf>() as u32, ..Default::default() };
+    assert_eq!((os_mac_vtable().cpu_prof)(remote.inst, &mut p), heirloom_os_abi::CPU_PROF_OK);
+    assert!(p.insns > 0 && p.tier != 0, "the machine's CPU counters: {p:?}");
+    // the provider here refuses every reserve: tier 2 never ran, and the record says the instructions ran elsewhere
+    assert_eq!(p.jit_insns, 0, "{p:?}");
+    let mut v1 = ppc::PpcProf { jit_insns: 9, ..Default::default() };
+    assert_eq!((os_mac_vtable().cpu_prof)(remote.inst, &mut v1), heirloom_os_abi::CPU_PROF_OK);
+    assert_eq!((v1.insns, v1.jit_insns), (p.insns, 9), "a size-0 record is filled up to PPC_PROF_V1_SIZE only");
+    assert_eq!((os_mac_vtable().cpu_prof)(core::ptr::null_mut(), &mut p), heirloom_os_abi::CPU_PROF_BAD_ARGS);
     RESERVES.load(std::sync::atomic::Ordering::SeqCst) - before
 }
 

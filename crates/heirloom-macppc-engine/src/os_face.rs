@@ -56,6 +56,10 @@ impl OsFamily for MacPpcFamily {
             format!("{l} | cpu: tier={} fell_back={}", tier_name(e.tier), e.lockstep_refused())
         }))
     }
+    /// cpu-ppc.library's counters for the engine's perf line (OsVTable::cpu_prof): where the instructions ran.
+    fn cpu_prof(m: &mut MacPpc<LibUi>) -> Option<heirloom_os_abi::ppc::PpcProf> {
+        Some(m.exec().tiers)
+    }
     /// macppc.engine's executable memory (OS ABI v3): tier 2 runs in it from now on, unless the bundle's `cpu-tier` input said
     /// otherwise.
     fn set_code_mem(m: &mut MacPpc<LibUi>, mem: PpcCodeMem) -> Result<(), String> {

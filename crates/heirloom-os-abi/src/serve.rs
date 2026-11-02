@@ -114,6 +114,11 @@ pub trait OsFamily: 'static {
     fn set_code_mem(_m: &mut Self::Machine, _mem: ppc::PpcCodeMem) -> Result<(), String> {
         Err(String::from("set_code_mem: this guest machine's CPU has no JIT"))
     }
+    /// The machine's CPU counters ([`OsVTable::cpu_prof`]): a PowerPC family's cpu-ppc.library record (full size). None = this
+    /// family's CPU keeps none.
+    fn cpu_prof(_m: &mut Self::Machine) -> Option<ppc::PpcProf> {
+        None
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -174,12 +179,13 @@ pub struct FamilyHooks<M> {
     pub gl_attach: fn(&mut M, GlHost) -> Result<(), String>,
     pub perf: fn(&mut M, u64) -> Result<Option<String>, String>,
     pub set_code_mem: fn(&mut M, ppc::PpcCodeMem) -> Result<(), String>,
+    pub cpu_prof: fn(&mut M) -> Option<ppc::PpcProf>,
 }
 
 impl<M> FamilyHooks<M> {
     /// The hooks of family `F`.
     pub fn of<F: OsFamily<Machine = M>>() -> Self {
-        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem }
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof }
     }
 }
 
@@ -340,6 +346,7 @@ trait AnySession {
     fn attach_gl(&mut self, gl: GlHost) -> Result<(), String>;
     fn perf(&mut self, tsc_per_us: u64) -> Result<Option<String>, String>;
     fn set_code_mem(&mut self, mem: ppc::PpcCodeMem) -> Result<(), String>;
+    fn cpu_prof(&mut self) -> Option<ppc::PpcProf>;
 }
 
 impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
@@ -354,6 +361,9 @@ impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
     }
     fn set_code_mem(&mut self, mem: ppc::PpcCodeMem) -> Result<(), String> {
         (self.hooks.set_code_mem)(&mut self.machine, mem)
+    }
+    fn cpu_prof(&mut self) -> Option<ppc::PpcProf> {
+        (self.hooks.cpu_prof)(&mut self.machine)
     }
 }
 
@@ -549,6 +559,22 @@ extern "C" fn set_code_mem_impl(inst: *mut OsInstance, mem: *const ppc::PpcCodeM
     }
 }
 
+extern "C" fn cpu_prof_impl(inst: *mut OsInstance, out: *mut ppc::PpcProf) -> i32 {
+    if inst.is_null() || out.is_null() {
+        return CPU_PROF_BAD_ARGS;
+    }
+    // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed.
+    let session = unsafe { &mut **(inst as *mut Instance) };
+    let Some(p) = session.cpu_prof() else { return CPU_PROF_REFUSED };
+    // the caller's size (0 = the first version's fields), never more than this record: PpcProf's contract
+    // SAFETY: `out` is non-null and the engine's record, at least as large as the size it states.
+    let want = match unsafe { (*out).size } { 0 => ppc::PPC_PROF_V1_SIZE, n => n } as usize;
+    let n = want.min(core::mem::size_of::<ppc::PpcProf>());
+    // SAFETY: both records hold at least `n` bytes; plain-old-data, no overlap.
+    unsafe { core::ptr::copy_nonoverlapping(&p as *const ppc::PpcProf as *const u8, out as *mut u8, n) };
+    CPU_PROF_OK
+}
+
 /// The table for family `F`: `static TABLE: OsVTable = heirloom_os_abi::serve::vtable::<MyFamily>();`.
 pub const fn vtable<F: OsFamily>() -> OsVTable {
     vtable2::<F, F>()
@@ -571,5 +597,6 @@ pub const fn vtable2<F: OsFamily, G: OsFamily>() -> OsVTable {
         attach_gl: attach_gl_impl,
         perf: perf_impl,
         set_code_mem: set_code_mem_impl,
+        cpu_prof: cpu_prof_impl,
     }
 }

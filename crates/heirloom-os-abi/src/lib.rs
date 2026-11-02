@@ -58,6 +58,12 @@ pub const PERF_LINE: i32 = 0;
 pub const PERF_NONE: i32 = 1;
 /// `perf`: this machine's family has no stage clock, or a null instance / a zero TSC rate.
 pub const PERF_REFUSED: i32 = 2;
+/// [`OsVTable::cpu_prof`]: the record was filled.
+pub const CPU_PROF_OK: i32 = 0;
+/// This machine's CPU keeps no such counters (not a PowerPC machine), or the instance is unknown.
+pub const CPU_PROF_REFUSED: i32 = 1;
+/// A null instance or record.
+pub const CPU_PROF_BAD_ARGS: i32 = 2;
 
 /// `cpu_abi_for_family`: the CPU contract a family runs on - a [`CpuVTable`] (CPU ABI v2, `bind_cpu`).
 pub const CPU_CONTRACT_V2: u32 = 2;
@@ -174,12 +180,22 @@ pub struct OsVTable {
     /// instance): a PowerPC machine runs tier 2 in it from now on (its named input `cpu-tier` can still force another tier).
     /// See CODE_MEM_*.
     pub set_code_mem: extern "C" fn(inst: *mut OsInstance, mem: *const ppc::PpcCodeMem) -> i32,
+    /// APPENDED 2026-11-02 (h86), present when the table's `size` > [`OS_TABLE_V3_SIZE`] (an engine checks before calling; the
+    /// version stays 3): the machine's CPU counters as cpu-ppc.library's `read_prof` last gave them (where the instructions ran:
+    /// tier 2 / tier 1 / tier 0, the executable-memory calls), into the engine's record under [`ppc::PpcProf`]'s size contract
+    /// (the caller sets `size`; 0 = the first version's fields). See CPU_PROF_*.
+    pub cpu_prof: extern "C" fn(inst: *mut OsInstance, out: *mut ppc::PpcProf) -> i32,
 }
 
 /// The byte size of a version-1 table (the four header words' entries up to `apply`).
 pub const OS_TABLE_V1_SIZE: u32 = core::mem::offset_of!(OsVTable, cpu_abi_for_family) as u32;
 /// The byte size of a version-2 table (everything before `attach_gl`).
 pub const OS_TABLE_V2_SIZE: u32 = core::mem::offset_of!(OsVTable, attach_gl) as u32;
+/// The byte size of a version-3 table as first published (everything before `cpu_prof`): what [`check_ptr`] requires of a v3
+/// table, so an engine built with `cpu_prof` still opens a library built before it.
+pub const OS_TABLE_V3_SIZE: u32 = core::mem::offset_of!(OsVTable, cpu_prof) as u32;
+/// Whether a table checked by [`check_ptr`] carries [`OsVTable::cpu_prof`].
+pub fn has_cpu_prof(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, cpu_prof) + core::mem::size_of::<usize>() }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenRefusal {
@@ -205,7 +221,8 @@ impl OpenRefusal {
 
 /// Check a possibly foreign table pointer (the `coral_lib_open` result) before any of its functions is called, without forming a
 /// reference to the whole table first. A table of version `required_version` or later, at least as large as that version's entries
-/// (the v1 entries for version 1, the whole table from version 2), serving `family`: the family its header names, or - a version-2
+/// (the v1 entries for version 1, the v2 entries for version 2, the v3 entries as first published - OS_TABLE_V3_SIZE - from
+/// version 3: an entry appended since is used only when [`has_cpu_prof`]-style size checks say it is there), serving `family`: the family its header names, or - a version-2
 /// table only - another family its `cpu_abi_for_family` says it serves. A version-1 table serves its header's family alone.
 ///
 /// # Safety
@@ -228,7 +245,7 @@ pub unsafe fn check_ptr(p: *const OsVTable, required_version: u32, family: u32) 
     }
     let multi = version >= OS_ABI_MULTI_FAMILY;
     let required = if version >= OS_ABI_GL {
-        core::mem::size_of::<OsVTable>() as u32
+        OS_TABLE_V3_SIZE
     } else if multi {
         OS_TABLE_V2_SIZE
     } else {
@@ -272,9 +289,23 @@ mod tests {
     extern "C" fn attach(_: *mut OsInstance, _: *const GlHost) -> i32 { GL_ATTACH_REFUSED }
     extern "C" fn perf(_: *mut OsInstance, _: u64, _: *mut u8, _: usize, _: *mut usize) -> i32 { PERF_REFUSED }
     extern "C" fn code_mem(_: *mut OsInstance, _: *const ppc::PpcCodeMem) -> i32 { CODE_MEM_REFUSED }
+    extern "C" fn cpu_prof(_: *mut OsInstance, _: *mut ppc::PpcProf) -> i32 { CPU_PROF_REFUSED }
 
     fn table(version: u32, size: u32, family: u32) -> OsVTable {
-        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem }
+        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof }
+    }
+
+    /// `cpu_prof` was appended to version 3: a v3 library built before it still opens (its size is OS_TABLE_V3_SIZE) and an
+    /// engine sees it has no `cpu_prof` (never calls past the table's end); a table with it says so.
+    #[test]
+    fn a_v3_table_from_before_cpu_prof_still_opens_and_says_it_has_none() {
+        let before = table(OS_ABI_VERSION, OS_TABLE_V3_SIZE, FAMILY_MAC68K);
+        assert_eq!(unsafe { check_ptr(&before, OS_ABI_VERSION, FAMILY_MACPPC) }, Ok(()));
+        assert!(!has_cpu_prof(&before));
+        let now = table(OS_ABI_VERSION, core::mem::size_of::<OsVTable>() as u32, FAMILY_MAC68K);
+        assert!(has_cpu_prof(&now));
+        let short = table(OS_ABI_VERSION, OS_TABLE_V3_SIZE - 8, FAMILY_MAC68K);
+        assert_eq!(unsafe { check_ptr(&short, OS_ABI_VERSION, FAMILY_MACPPC) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V3_SIZE - 8, required: OS_TABLE_V3_SIZE }));
     }
 
     #[test]
@@ -310,7 +341,7 @@ mod tests {
         assert_eq!(unsafe { check_ptr(&mac, OS_ABI_VERSION, FAMILY_EKAARM) }, Err(OpenRefusal::FamilyNotServed { header: FAMILY_MAC68K, required: FAMILY_EKAARM }));
         // A v2 header with a v1 size is refused before its v2 entries are read.
         let short = table(OS_ABI_VERSION, OS_TABLE_V1_SIZE, FAMILY_MAC68K);
-        assert_eq!(unsafe { check_ptr(&short, OS_ABI_VERSION, FAMILY_MACPPC) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V1_SIZE, required: full }));
+        assert_eq!(unsafe { check_ptr(&short, OS_ABI_VERSION, FAMILY_MACPPC) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V1_SIZE, required: OS_TABLE_V3_SIZE }));
     }
 
     #[test]
@@ -323,6 +354,8 @@ mod tests {
         assert_eq!(unsafe { check_ptr(&v2, OS_ABI_GL, FAMILY_MAC68K) }, Err(OpenRefusal::VersionTooOld { found: 2, required: OS_ABI_GL }));
         // ... and a v3 header without the attach_gl entry is refused before it is read.
         let short = table(OS_ABI_GL, OS_TABLE_V2_SIZE, FAMILY_MAC68K);
-        assert_eq!(unsafe { check_ptr(&short, OS_ABI_GL, FAMILY_MAC68K) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V2_SIZE, required: full }));
+        assert_eq!(unsafe { check_ptr(&short, OS_ABI_GL, FAMILY_MAC68K) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V2_SIZE, required: OS_TABLE_V3_SIZE }));
+        // (a full table today is larger than a v3 one as first published: cpu_prof was appended)
+        assert!(full > OS_TABLE_V3_SIZE);
     }
 }
