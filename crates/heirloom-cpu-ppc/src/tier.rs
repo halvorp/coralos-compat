@@ -82,7 +82,7 @@ impl Exec {
         c.as_ref()
     }
     /// NEGATIVE CONTROL ONLY: plant JIT mutant `m` (1 subfic CA inverted, 2 no XER[SO] in CR, 3 no code-watch test on
-    /// stores, 4 one instruction too many retired at a helper exit). The JIT gates must go RED with each.
+    /// stores, 4 one instruction too many retired at a helper exit, 5 single-precision FP arithmetic not rounded to single, 6 sraw's count > 31 path dropped). The JIT gates must go RED with each.
     #[doc(hidden)]
     pub fn plant_jit_mutant(&mut self, m: u8) {
         self.jit_mutant = m;

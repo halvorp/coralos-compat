@@ -25,6 +25,10 @@ pub(crate) const MUT_SUBFIC_CA: u8 = 1;
 pub(crate) const MUT_NO_SO: u8 = 2;
 pub(crate) const MUT_NO_WATCH: u8 = 3;
 pub(crate) const MUT_EXIT_COUNT: u8 = 4;
+/// Single-precision FP arithmetic not rounded to single (jit_inline).
+pub(crate) const MUT_FP_SINGLE: u8 = 5;
+/// sraw's count > 31 path dropped (x86 masks the count to 5 bits: the wrong result and CA) (jit_inline).
+pub(crate) const MUT_SRAW_BIG: u8 = 6;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -42,20 +46,29 @@ pub(crate) struct Env<'a> {
     pub(crate) table_mask: u32,
 }
 
-const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
-const fn fpr(n: u8) -> i32 { (offset_of!(Cpu, fpr) + 8 * (n as usize & 31)) as i32 }
-fn g(n: u8) -> M { m(RBX, gpr(n)) }
-fn cpu(off: usize) -> M { m(RBX, off as i32) }
-fn ctx(off: usize) -> M { m(R13, off as i32) }
-const CR: usize = offset_of!(Cpu, cr);
-const XER: usize = offset_of!(Cpu, xer);
-const LR: usize = offset_of!(Cpu, lr);
-const CTR: usize = offset_of!(Cpu, ctr);
-const PC: usize = offset_of!(Cpu, pc);
+pub(crate) const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
+pub(crate) const fn fpr(n: u8) -> i32 { (offset_of!(Cpu, fpr) + 8 * (n as usize & 31)) as i32 }
+pub(crate) fn g(n: u8) -> M { m(RBX, gpr(n)) }
+pub(crate) fn cpu(off: usize) -> M { m(RBX, off as i32) }
+pub(crate) fn ctx(off: usize) -> M { m(R13, off as i32) }
+pub(crate) const CR: usize = offset_of!(Cpu, cr);
+pub(crate) const XER: usize = offset_of!(Cpu, xer);
+pub(crate) const LR: usize = offset_of!(Cpu, lr);
+pub(crate) const CTR: usize = offset_of!(Cpu, ctr);
+pub(crate) const PC: usize = offset_of!(Cpu, pc);
 
-struct E<'a, 'b> {
-    a: Asm,
-    env: &'a mut Env<'b>,
+/// How an access forms its EA: (rA|0) + rB, or rA + imm (rA != 0); `update` keeps the unmasked EA in esi for rA.
+#[derive(Clone, Copy)]
+pub(crate) struct Ea { pub(crate) ra: u8, pub(crate) rb: Option<u8>, pub(crate) imm: u32, pub(crate) update: bool }
+impl Ea {
+    fn of(op: &Op, indexed: bool) -> Ea {
+        Ea { ra: op.a, rb: indexed.then_some(op.b), imm: op.imm, update: matches!(op.k, K::Lwzu | K::Lbzu | K::Stwu | K::Stbu) }
+    }
+}
+
+pub(crate) struct E<'a, 'b> {
+    pub(crate) a: Asm,
+    pub(crate) env: &'a mut Env<'b>,
     pc: u32,
     /// Inline fast paths that fell back: (jcc to patch, instruction index); each gets a slow stub after the body.
     slow: Vec<(Fix, usize)>,
@@ -131,13 +144,19 @@ impl E<'_, '_> {
 
     /// Run instruction `i` through tier 1's handler (the shared slow stub: it returns here when the block goes on, else
     /// leaves with the exact retired count).
-    fn helper(&mut self, i: usize) {
+    pub(crate) fn helper(&mut self, i: usize) {
         let (ipc, w) = (self.ipc(i), self.words[i]);
         let a = &mut self.a;
         a.mov_ri(RSI, w);
         a.mov_ri(RDX, ipc);
         a.mov_ri(RCX, i as u32);
         a.call_m(ctx(offset_of!(Ctx, slow)));
+    }
+
+    /// A conditional jump to instruction `i`'s slow path (tier 1's handler for it, then back after it).
+    pub(crate) fn slow_if(&mut self, cc: Cc, i: usize) {
+        let f = self.a.jcc(cc);
+        self.slow.push((f, i));
     }
 
     /// The slow paths of the inline loads and stores: the helper, then back to the instruction after.
@@ -152,7 +171,7 @@ impl E<'_, '_> {
     }
 
     /// CR field `bf` from the flags of a compare: LT / GT by `lt` / `gt`, EQ by ZF, SO from XER.
-    fn cr_set(&mut self, bf: u8, lt: Cc, gt: Cc) {
+    pub(crate) fn cr_set(&mut self, bf: u8, lt: Cc, gt: Cc) {
         let no_so = self.env.mutant == MUT_NO_SO;
         let a = &mut self.a;
         a.setcc(lt, RAX);
@@ -179,12 +198,12 @@ impl E<'_, '_> {
         a.st32(cpu(CR), RCX);
     }
     /// CR0 from the signed value in edx.
-    fn cr0_of_edx(&mut self) {
+    pub(crate) fn cr0_of_edx(&mut self) {
         self.a.test_rr(RDX, RDX);
         self.cr_set(0, Cc::L, Cc::G);
     }
     /// XER[CA] = the byte in r8b (0 or 1).
-    fn ca_from_r8(&mut self) {
+    pub(crate) fn ca_from_r8(&mut self) {
         let a = &mut self.a;
         a.movzx8_rr(R8, R8);
         a.sh_ri(Sh::Shl, R8, 29);
@@ -195,25 +214,27 @@ impl E<'_, '_> {
     }
 
     /// eax = EA & mask (esi = EA unmasked too, for the update forms); a slow path unless `n` bytes from it are in RAM.
-    fn ea(&mut self, i: usize, op: &Op, indexed: bool, n: u8) {
-        self.ea_regs(op, indexed);
+    pub(crate) fn ea(&mut self, i: usize, e: Ea, n: u8) {
+        self.ea_regs(e);
         let lim = match n { 1 => offset_of!(Ctx, lim1), 2 => offset_of!(Ctx, lim2), 4 => offset_of!(Ctx, lim4), _ => offset_of!(Ctx, lim8) };
         self.a.alu_rm64(Alu::Cmp, RAX, ctx(lim));
         let f = self.a.jcc(Cc::A);
         self.slow.push((f, i));
     }
-    fn ea_regs(&mut self, op: &Op, indexed: bool) {
-        let update = matches!(op.k, K::Lwzu | K::Lbzu | K::Stwu | K::Stbu);
-        let r = if update { RSI } else { RAX };
+    fn ea_regs(&mut self, e: Ea) {
+        let r = if e.update { RSI } else { RAX };
         let a = &mut self.a;
-        a.ld32(r, g(op.a));
-        if indexed { a.alu_rm(Alu::Add, r, g(op.b)); } else if op.imm != 0 { a.alu_ri(Alu::Add, r, op.imm); }
-        if update { a.mov_rr(RAX, RSI); }
+        match (e.ra, e.rb) {
+            (0, Some(rb)) => a.ld32(r, g(rb)),
+            (ra, Some(rb)) => { a.ld32(r, g(ra)); a.alu_rm(Alu::Add, r, g(rb)); }
+            (ra, None) => { a.ld32(r, g(ra)); if e.imm != 0 { a.alu_ri(Alu::Add, r, e.imm); } }
+        }
+        if e.update { a.mov_rr(RAX, RSI); }
         if self.env.mask != u32::MAX { a.alu_rm(Alu::And, RAX, ctx(offset_of!(Ctx, mask))); }
     }
     /// The store guards after `ea`: no page crossing, the page not watched (it holds decoded code), and in lockstep the
     /// old bytes journaled first.
-    fn store_guard(&mut self, i: usize, op: &Op, indexed: bool, n: u8) {
+    pub(crate) fn store_guard(&mut self, i: usize, e: Ea, n: u8) {
         let a = &mut self.a;
         if n > 1 {
             a.mov_rr(RCX, RAX);
@@ -241,7 +262,7 @@ impl E<'_, '_> {
             a.mov_ri(RDX, n as u32);
             a.mov_ri64(RAX, self.env.note);
             a.call_r(RAX);
-            self.ea_regs(op, indexed);
+            self.ea_regs(e);
         }
     }
 
@@ -346,7 +367,7 @@ impl E<'_, '_> {
             K::Mtctr => { self.a.ld32(RDX, g(d)); self.a.st32(cpu(CTR), RDX); }
             K::Lwz | K::Lbz | K::Lhz | K::Lha | K::Lwzu | K::Lbzu | K::Lwzx | K::Lbzx => {
                 let n = match op.k { K::Lwz | K::Lwzu | K::Lwzx => 4, K::Lhz | K::Lha => 2, _ => 1 };
-                self.ea(i, op, matches!(op.k, K::Lwzx | K::Lbzx), n);
+                self.ea(i, Ea::of(op, matches!(op.k, K::Lwzx | K::Lbzx)), n);
                 let a = &mut self.a;
                 let at = mx(R12, RAX, 1);
                 match n {
@@ -362,7 +383,7 @@ impl E<'_, '_> {
                 if matches!(op.k, K::Lwzu | K::Lbzu) { a.st32(g(s), RSI); }
             }
             K::Lfd => {
-                self.ea(i, op, false, 8);
+                self.ea(i, Ea::of(op, false), 8);
                 let a = &mut self.a;
                 a.ld64(RDX, mx(R12, RAX, 1));
                 a.bswap64(RDX);
@@ -371,8 +392,8 @@ impl E<'_, '_> {
             K::Stw | K::Stb | K::Sth | K::Stwu | K::Stbu | K::Stwx | K::Stbx | K::Stfd => {
                 let n = match op.k { K::Stw | K::Stwu | K::Stwx => 4, K::Sth => 2, K::Stfd => 8, _ => 1 };
                 let indexed = matches!(op.k, K::Stwx | K::Stbx);
-                self.ea(i, op, indexed, n);
-                self.store_guard(i, op, indexed, n);
+                self.ea(i, Ea::of(op, indexed), n);
+                self.store_guard(i, Ea::of(op, indexed), n);
                 let a = &mut self.a;
                 let at = mx(R12, RAX, 1);
                 match n {
@@ -405,6 +426,7 @@ impl E<'_, '_> {
                 return true;
             }
             K::Generic | K::GenericEnd | K::Sc | K::Fp59 | K::Fp63 | K::Lfs | K::Stfs => {
+                if self.inline(i, op) { return false; }
                 self.helper(i);
                 if op.terminal() {
                     // a block-ending Generic always leaves through its helper (it is a branch: answer 1)

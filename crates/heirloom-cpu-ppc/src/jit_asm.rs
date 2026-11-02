@@ -20,7 +20,7 @@ pub(crate) const R15: u8 = 15;
 /// Condition codes (the low nibble of Jcc / SETcc / CMOVcc).
 #[derive(Clone, Copy)]
 #[repr(u8)]
-pub(crate) enum Cc { B = 2, Ae = 3, E = 4, Ne = 5, A = 7, S = 8, L = 12, G = 15 }
+pub(crate) enum Cc { B = 2, Ae = 3, E = 4, Ne = 5, A = 7, S = 8, P = 10, L = 12, G = 15 }
 
 /// ALU group-1 operations: the /digit of 0x81 and (digit << 3) | 1 is the `r/m, reg` opcode.
 #[derive(Clone, Copy)]
@@ -184,6 +184,23 @@ impl Asm {
     /// bt r64, r64 (bit index mod 64).
     pub(crate) fn bt_rr64(&mut self, r: u8, bit: u8) { self.op_r(true, &[0x0F, 0xA3], bit, r, false) }
 
+    pub(crate) fn sh_ri64(&mut self, op: Sh, d: u8, n: u8) {
+        self.op_r(true, &[0xC1], op as u8, d, false);
+        self.u8(n);
+    }
+
+    // ---- SSE2 (x86-64 baseline): scalar double / single, xmm0..xmm7 only ----
+    /// `pre` op xmm, [m] (pre = F2: movsd 10 / addsd 58 / mulsd 59 / subsd 5C; 66: ucomisd 2E).
+    pub(crate) fn sse_m(&mut self, pre: u8, opc: u8, x: u8, mm: M) { self.op_m(Some(pre), false, &[0x0F, opc], x, mm, false) }
+    /// `pre` op xmm, xmm (F2 5A cvtsd2ss, F3 5A cvtss2sd).
+    pub(crate) fn sse_r(&mut self, pre: u8, opc: u8, x: u8, y: u8) {
+        self.u8(pre);
+        self.op_r(false, &[0x0F, opc], x, y, false);
+    }
+    /// movq r64, xmm / movd xmm, r32.
+    pub(crate) fn movq_rx(&mut self, r: u8, x: u8) { self.u8(0x66); self.op_r(true, &[0x0F, 0x7E], x, r, false) }
+    pub(crate) fn movd_xr(&mut self, x: u8, r: u8) { self.u8(0x66); self.op_r(false, &[0x0F, 0x6E], x, r, false) }
+
     // ---- control flow ----
     pub(crate) fn jcc(&mut self, cc: Cc) -> Fix {
         self.b.extend_from_slice(&[0x0F, 0x80 + cc as u8]);
@@ -271,6 +288,14 @@ mod tests {
         assert_eq!(enc(|a| a.pop(RBX)), [0x5B]);
         assert_eq!(enc(|a| a.test_ri(R8, 0x20)), [0x41, 0xF7, 0xC0, 0x20, 0, 0, 0]); // test r8d,0x20
         assert_eq!(enc(|a| a.movsx16(RDX, m(RBX, 8))), [0x0F, 0xBF, 0x53, 0x08]);
+        assert_eq!(enc(|a| a.sse_m(0xF2, 0x10, 0, m(RBX, 0x80))), [0xF2, 0x0F, 0x10, 0x83, 0x80, 0, 0, 0]); // movsd xmm0,[rbx+0x80]
+        assert_eq!(enc(|a| a.sse_m(0x66, 0x2E, 0, m(RBX, 8))), [0x66, 0x0F, 0x2E, 0x43, 0x08]); // ucomisd xmm0,[rbx+8]
+        assert_eq!(enc(|a| a.sse_m(0xF2, 0x58, 0, m(RBX, 8))), [0xF2, 0x0F, 0x58, 0x43, 0x08]); // addsd xmm0,[rbx+8]
+        assert_eq!(enc(|a| a.sse_r(0xF2, 0x5A, 0, 0)), [0xF2, 0x0F, 0x5A, 0xC0]); // cvtsd2ss xmm0,xmm0
+        assert_eq!(enc(|a| a.sse_r(0xF3, 0x5A, 0, 0)), [0xF3, 0x0F, 0x5A, 0xC0]); // cvtss2sd xmm0,xmm0
+        assert_eq!(enc(|a| a.movq_rx(RDX, 0)), [0x66, 0x48, 0x0F, 0x7E, 0xC2]); // movq rdx,xmm0
+        assert_eq!(enc(|a| a.movd_xr(0, RDX)), [0x66, 0x0F, 0x6E, 0xC2]); // movd xmm0,edx
+        assert_eq!(enc(|a| a.sh_ri64(Sh::Shr, RAX, 53)), [0x48, 0xC1, 0xE8, 53]); // shr rax,53
         let mut a = Asm::default();
         let f = a.jcc(Cc::Ne);
         a.ret();

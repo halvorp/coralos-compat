@@ -208,7 +208,7 @@ fn random_program(seed: u64) -> Vec<u32> {
         let (t, a, b) = (r.reg(), r.reg(), r.reg());
         let imm = r.next() & 0xFFFF;
         let off = r.pick(0x3F0) & !3;
-        let w = match r.pick(34) {
+        let w = match r.pick(44) {
             0 => d(14, t, a, imm), 1 => d(15, t, a, imm), 2 => d(24, a, t, imm), 3 => d(25, a, t, imm), 4 => d(26, a, t, imm),
             5 => d(28, a, t, imm), 6 => d(29, a, t, imm), 7 => d(7, t, a, imm), 8 => d(12, t, a, imm), 9 => d(13, t, a, imm),
             10 => d(8, t, a, imm),
@@ -230,6 +230,17 @@ fn random_program(seed: u64) -> Vec<u32> {
             30 => x(t, 0, 0, [339 /* mflr */, 467][r.pick(2) as usize], false) | if r.pick(2) == 0 { 8 << 16 } else { 9 << 16 },
             31 => d(14, 23, 0, r.pick(0x80) * 4), // r23 = a small aligned offset
             32 => mtspr(1, t), // mtxer (tier 1): random SO/OV/CA for the next compares and carries
+            // the forms jit_inline.rs takes off the slow path (each also has its slow cases: NaNs, denormals, RN, Rc)
+            34 => fa(63, fr(&mut r), fr(&mut r), fr(&mut r), fr(&mut r), [20, 21, 25][r.pick(3) as usize], r.pick(8) == 0),
+            35 => fa(59, fr(&mut r), fr(&mut r), fr(&mut r), fr(&mut r), [20, 21, 25][r.pick(3) as usize], r.pick(8) == 0),
+            36 => 63 << 26 | r.pick(8) << 23 | fr(&mut r) << 16 | fr(&mut r) << 11 | [0, 32][r.pick(2) as usize] << 1, // fcmpu / fcmpo
+            37 => 63 << 26 | fr(&mut r) << 21 | fr(&mut r) << 11 | [40, 72, 136, 264][r.pick(4) as usize] << 1 | (r.pick(8) == 0) as u32,
+            38 => x(t, a, b, 792, r.pick(2) == 1), // sraw(.)
+            39 => x(t, a, 0, [922, 954][r.pick(2) as usize], true), // extsh. / extsb.
+            40 => x(t, 20, 23, [279, 343, 407, 534, 790, 662, 918][r.pick(7) as usize], false), // lhzx lhax sthx lwbrx lhbrx stwbrx sthbrx
+            41 => x(t, 0, 23, [23, 87][r.pick(2) as usize], false), // lwzx / lbzx with RA = 0 (low memory)
+            42 => d([48, 52][r.pick(2) as usize], fr(&mut r), 20, 0xC00 + (off & 0x1F8)), // lfs / stfs over the special singles
+            43 => d(14, 23, 0, r.pick(0x80) * 4 + (r.pick(4) == 0) as u32), // r23: sometimes unaligned
             _ => 0x6000_0000,
         };
         p.push(w);
@@ -244,17 +255,37 @@ fn random_program(seed: u64) -> Vec<u32> {
     p
 }
 
+fn fa(op: u32, d: u32, a: u32, b: u32, c: u32, xo: u32, rc: bool) -> u32 { op << 26 | d << 21 | a << 16 | b << 11 | c << 6 | xo << 1 | rc as u32 }
+fn fr(r: &mut Rng) -> u32 { 1 + r.pick(6) }
+/// FP values that take every path: specials (NaNs incl. signalling, infinities, zeros, denormals of both ranges, the
+/// single range's edges) and ordinary numbers of both precisions.
+fn special_fp(r: &mut Rng) -> u64 {
+    const S: [u64; 14] = [0x7FF8_0000_0000_0001, 0x7FF0_0000_0000_0001, 0xFFF0_0000_0000_0000, 0x7FF0_0000_0000_0000, 0, 1 << 63, 1, 0x8000_0000_0000_0010,
+        0x3810_0000_0000_0000 /* 2^-126 */, 0x380F_FFFF_FFFF_FFFF, 0x47EF_FFFF_E000_0000 /* f32::MAX */, 0x47EF_FFFF_F000_0000, 0x3FF0_0000_0000_0001, 0xC059_0000_0000_0000];
+    match r.pick(3) {
+        0 => S[r.pick(S.len() as u32) as usize],
+        1 => (((r.next() as i32) as f64) / (1 + r.pick(1000)) as f64).to_bits(),
+        _ => ((((r.next() as i32) as f32) / (1 + r.pick(1000)) as f32) as f64).to_bits(),
+    }
+}
+
 fn fuzz_setup(seed: u64) -> impl Fn(&mut Cpu, &mut M) {
     move |c, m| {
         let mut r = Rng(seed ^ 0x5DEE_CE66);
         for i in 3..13 { c.gpr[i] = r.next() ^ r.next() << 16; }
         c.gpr[20] = BUF;
         c.gpr[23] = 16;
-        for i in 1..5 { c.fpr[i] = (r.next() as u64) << 32 | 0x3FF0_0000 << 32 >> 32 | r.next() as u64; }
+        for i in 1..7 { c.fpr[i] = special_fp(&mut r); }
+        if r.pick(16) == 0 { c.fpscr = r.pick(4); } // a directed rounding mode: every arithmetic form is tier 0's refusal
         c.xer = r.next() & 0xE000_0000;
         c.cr = r.next();
         let bytes: Vec<u8> = (0..0x1000).map(|_| r.next() as u8).collect();
         m.mem.write_bytes(BUF, &bytes).unwrap();
+        // singles for lfs at BUF + 0xC00: NaNs (quiet / signalling), infinities, zeros, denormals, ordinary values
+        for k in 0..64u32 {
+            let v = [0x7FC0_0001u32, 0x7F80_0001, 0xFF80_0000, 0x8000_0000, 0x0000_0001, 0x007F_FFFF, 0x3F80_0000, r.next()][(k % 8) as usize];
+            m.mem.write_u32(BUF + 0xC00 + 4 * k, v).unwrap();
+        }
     }
 }
 
@@ -264,7 +295,7 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
     for seed in 0..400u64 {
         let prog = random_program(seed);
         let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, fuzz_setup(seed));
-        assert!(want.last.halted, "seed {seed}: the generated loop ends ({:?})", want.last);
+        assert!(want.last.halted || want.last.trap.is_some(), "seed {seed}: the generated loop ends, halted or trapped ({:?})", want.last);
         // a run slice publishes what it compiled: short slices make the fuzz's short loops run in JIT code
         for slice in [37, 1_000, 1_000_000] {
             let (got, e) = run_on(Tier::Jit, 0, &prog, slice, fuzz_setup(seed));
@@ -283,7 +314,7 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
 /// programs for the store-watch and exit-count ones. A gate that stays green with a mutant proves nothing.
 #[test]
 fn negative_control_every_planted_jit_mutant_goes_red() {
-    for mutant in 1..=4u8 {
+    for mutant in 1..=6u8 {
         let mut red = false;
         for seed in 0..400u64 {
             let prog = random_program(seed);

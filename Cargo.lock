@@ -107,6 +107,7 @@ name = "heirloom-cpu-ppc"
 version = "0.1.0"
 dependencies = [
  "heirloom-cpu-abi",
+ "heirloom-cpu-ppc",
  "heirloom-mem-flat32",
  "libm",
 ]
