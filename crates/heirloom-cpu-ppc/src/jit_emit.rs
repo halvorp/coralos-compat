@@ -51,6 +51,9 @@ pub(crate) const MUT_NO_RESYNC: u8 = 15;
 /// A superblock's side exit (the taken edge of a conditional branch inside it) stores none of the cached registers that
 /// are dirty there: the target block reads the guest fields' stale values from the Cpu.
 pub(crate) const MUT_SIDE_NO_SPILL: u8 = 16;
+/// A chained jump from the target's own page lands past its page-generation check even when the two blocks were compiled
+/// at different generations (jit.rs): a block left stale by a write to its page runs.
+pub(crate) const MUT_INNER_ANY_GEN: u8 = 17;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -110,7 +113,7 @@ pub(crate) struct E<'a, 'b> {
 
 /// Compile `ops` (a whole tier-1 block or a superblock at `pc`, decoded from code page `page` at generation `gen`): a counting pass picks
 /// the Cpu fields the register cache holds, then the real pass emits. Answers the code and how many fields were pinned.
-pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env) -> (Vec<u8>, usize) {
+pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env) -> (Vec<u8>, usize, usize) {
     let pins = {
         let mut e = E::new(ops, pc, env, crate::jit_regs::Regs::counting());
         e.body(ops);
@@ -119,14 +122,16 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     let pinned = pins.len();
     let mut e = E::new(ops, pc, env, crate::jit_regs::Regs::pinned(pins));
     let a = &mut e.a;
-    // entry checks: budget, then the page generation
-    a.lea64(RAX, m(R15, ops.len() as i32));
-    a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
-    let b1 = a.jcc(Cc::A);
+    // entry checks: the page generation (skipped by a chained jump from this page at this generation: the INNER entry),
+    // then the budget
     a.ld64(RAX, ctx(offset_of!(Ctx, gen)));
     let at = m(RAX, (8 * page) as i32);
     if gen <= i32::MAX as u64 { a.alu_mi64(Alu::Cmp, at, gen as u32); } else { a.mov_ri64(RCX, gen); a.alu_rm64(Alu::Cmp, RCX, at); }
     let b2 = a.jcc(Cc::Ne);
+    let inner = a.pos();
+    a.lea64(RAX, m(R15, ops.len() as i32));
+    a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
+    let b1 = a.jcc(Cc::A);
     e.reload(true);
     e.body(ops);
     e.tails();
@@ -135,7 +140,7 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     a.here(b2);
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
-    (e.a.b, pinned)
+    (e.a.b, pinned, inner)
 }
 
 /// Jump to the published block at the guest pc in r8d if the dispatch table's slot for it holds that block; else fall

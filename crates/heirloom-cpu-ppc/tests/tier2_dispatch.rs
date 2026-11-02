@@ -3,7 +3,8 @@
 //! compiled, grow guest RAM, redirect the return, block the CPU, trap - ends in tier 0's state in every slicing, with the
 //! natives really run from JIT code; and the planted dispatcher mutants go RED (a native counted twice, a dispatch table
 //! kept across a flush, no resync after a native changed the natives set or RAM). Also how control leaves a SUPERBLOCK: a
-//! side exit stores the registers dirty at its branch (mutant 16 RED). Host only (HostCodeMem).
+//! side exit stores the registers dirty at its branch (mutant 16 RED); and a chained jump skips its target's page-generation
+//! check only from the same page at the same generation (mutant 17 RED). Host only (HostCodeMem).
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use heirloom_cpu_ppc::{Cpu, Exec, Host, HostCodeMem, RunStats, Tier};
 use heirloom_mem_flat32::GuestMem;
@@ -21,6 +22,8 @@ const N_GROW: u32 = 0xF500;
 const N_REDIR: u32 = 0xF600;
 const N_BLOCK: u32 = 0xF700;
 const N_TRAP: u32 = 0xF800;
+/// Rewrites instruction 8 of the same-page program (its block B) when r31 is 50.
+const N_PATCH: u32 = 0xF900;
 const RAM: usize = 1 << 20;
 /// The loop's first body instruction, which N_ADD rewrites now and then (a native writing code that JIT code runs).
 const PATCH: u32 = CODE + 4;
@@ -48,6 +51,7 @@ impl Host for M {
             N_REDIR => cpu.set_pc(cpu.lr.wrapping_add(4)),
             N_BLOCK => cpu.block(),
             N_TRAP => return cpu.gpr[31] != 75,
+            N_PATCH => if cpu.gpr[31] == 50 { self.mem.write_u32(CODE + 4 * 8, d(14, 6, 6, 2)).unwrap() },
             _ => {}
         }
         true
@@ -98,8 +102,8 @@ fn load(prog: &[u32]) -> (Cpu, M) {
     m.mem.write_u32(TOGGLE, d(14, 5, 5, 100)).unwrap();
     m.mem.write_u32(TOGGLE + 4, BLR).unwrap();
     let mut c = Cpu::new(CODE, STACK);
-    for a in [EXIT, N_ADD, N_TB, N_BIND, N_GROW, N_REDIR, N_BLOCK, N_TRAP] { c.bind_native(a); }
-    for (r, a) in [(6, N_ADD), (7, N_TB), (9, N_BIND), (10, TOGGLE), (11, N_GROW), (12, N_REDIR), (13, N_BLOCK), (14, N_TRAP)] { c.gpr[r] = a; }
+    for a in [EXIT, N_ADD, N_TB, N_BIND, N_GROW, N_REDIR, N_BLOCK, N_TRAP, N_PATCH] { c.bind_native(a); }
+    for (r, a) in [(6, N_ADD), (7, N_TB), (9, N_BIND), (10, TOGGLE), (11, N_GROW), (12, N_REDIR), (13, N_BLOCK), (14, N_TRAP), (15, N_PATCH)] { c.gpr[r] = a; }
     (c, m)
 }
 
@@ -219,4 +223,41 @@ fn a_superblock_side_exit_stores_the_registers_dirty_at_its_branch() {
     assert!(e.divergence().is_none() && got == want, "lockstep: {:?}", e.divergence());
     let (got, _) = run(Tier::Jit, 16, &prog, 1_000_000);
     assert!(got != want, "mutant 16 (a side exit stores no dirty register) stayed GREEN");
+}
+
+/// CHAINED ENTRIES PAST THE GENERATION CHECK: a chained jump from a block on the same code page compiled at the same
+/// generation lands past the target's page-generation check. Block A (the loop top) jumps to block B on its page every 4th
+/// trip; a native rewrites B's instruction at trip 50 (on A's other path); A is recompiled at the new generation on the
+/// next trip, which does NOT reach B, so B is still the stale code of the old generation when A's next jump to it comes: it
+/// must take B's full entry (and bail), never the inner one. Tier 0's state; mutant 17 (same page, generation ignored) RED.
+fn same_page_program() -> Vec<u32> {
+    let b = |from: u32, to: u32| 18 << 26 | (4 * (to as i32 - from as i32)) as u32 & 0x03FF_FFFC;
+    vec![
+        d(14, 31, 0, 101),          // 0: li r31,101
+        d(13, 31, 31, 0xFFFF),      // 1 top (A): addic. r31,r31,-1
+        bc(12, 2, 4 * 8),           // 2: beq out
+        d(28, 31, 8, 3),            // 3: andi. r8,r31,3
+        bc(12, 2, 4 * 4),           // 4: beq B (every 4th trip)
+        mtspr(9, 15), BCTRL,        // 5, 6: N_PATCH (rewrites instruction 8 at r31 = 50)
+        b(7, 1),                    // 7: b top
+        d(14, 6, 6, 1),             // 8 (B): addi r6,r6,1 (-> addi r6,r6,2)
+        b(9, 1),                    // 9: b top
+        d(15, 24, 0, EXIT >> 16),   // 10 out
+        d(24, 24, 24, EXIT & 0xFFFF), mtspr(8, 24), BLR,
+    ]
+}
+
+#[test]
+fn a_chained_jump_skips_the_generation_check_only_into_a_block_of_its_own_generation() {
+    let prog = same_page_program();
+    let (want, _) = run(Tier::Interp, 0, &prog, 1_000_000);
+    assert!(want.last.halted && want.gpr[6] > 25, "the reference run takes B with both instructions: r6 = {}", want.gpr[6]);
+    for slice in [1, 7, 37, 1_000_000] {
+        let (got, e) = run(Tier::Jit, 0, &prog, slice);
+        assert!(got == want, "slice {slice}: r6 {}/{} {:?}", got.gpr[6], want.gpr[6], e.jit_stats());
+    }
+    let (got, e) = run(Tier::JitLockstep, 0, &prog, 50);
+    assert!(e.divergence().is_none() && got == want, "lockstep: {:?}", e.divergence());
+    let (got, _) = run(Tier::Jit, 17, &prog, 1_000_000);
+    assert!(got != want, "mutant 17 (a same-page chained jump skips the check into a block of an older generation) stayed GREEN");
 }

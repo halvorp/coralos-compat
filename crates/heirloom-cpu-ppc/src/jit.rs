@@ -55,8 +55,14 @@ const LINK_NEW: u8 = 0xFF;
 /// One dispatch-table entry: a published block (32 bytes; jit_emit's indirect probe shifts by its size).
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub(crate) struct Slot { pub(crate) pc: u32, pub(crate) len: u32, pub(crate) entry: u64, pub(crate) gen: u64, pad: u64 }
-const EMPTY: Slot = Slot { pc: EMPTY_PC, len: 0, entry: 0, gen: 0, pad: 0 };
+/// `inner` = the entry past the page-generation check: where a chained jump from a block on the SAME code page compiled at
+/// the SAME generation lands (that block's own check passed and nothing it does can move the generation without leaving
+/// first: a store to a watched page goes through the helper, which leaves when any code page was written). A native
+/// block has no generation check: inner = entry.
+pub(crate) struct Slot { pub(crate) pc: u32, pub(crate) len: u32, pub(crate) entry: u64, pub(crate) gen: u64, pub(crate) inner: u64 }
+const EMPTY: Slot = Slot { pc: EMPTY_PC, len: 0, entry: 0, gen: 0, inner: 0 };
+/// `link_gen` of a link slot whose owner is on another page than its target (or that is free): always the full entry.
+const ANY_GEN: u64 = u64::MAX;
 
 /// What JIT code reads through r13, and what its helpers find. Rebuilt before every entry.
 #[repr(C)]
@@ -107,6 +113,9 @@ pub(crate) struct Jit {
     /// holding the code that jumps through it (the slot is freed when that segment is reused).
     link_owner: Box<[u8]>,
     free_links: Vec<u32>,
+    /// Per link slot: the generation its owner was compiled at when the target is on the owner's own code page (the slot
+    /// then holds the target's INNER entry if the target was compiled at that generation too), else [`ANY_GEN`].
+    link_gen: Box<[u64]>,
     by_target: BTreeMap<u32, Vec<u32>>,
     /// Every published block by pc (the dispatch table is a direct-mapped cache in front of it: a colliding block is
     /// refilled from here, never recompiled). Hashed: every dispatcher miss probes it, and in WC3 gameplay most misses are
@@ -144,7 +153,7 @@ impl Jit {
         let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, resync: false, no_resync: false, census: None });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
-            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
+            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None,
         };
@@ -221,6 +230,7 @@ impl Jit {
         self.hot.fill((EMPTY_PC, 0));
         self.links.fill(0);
         self.link_owner.fill(0);
+        self.link_gen.fill(ANY_GEN);
         self.free_links.clear();
         self.nlinks = 1;
         self.by_target.clear();
@@ -276,7 +286,8 @@ impl Jit {
 
     /// False (nothing compiled, its link slots given back) when `may_refuse` and the code is longer than a segment.
     fn compile_untimed<H: Host>(&mut self, ops: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, at: u64, may_refuse: bool) -> bool {
-        let (blocks, links, by_target, owner, free) = (&self.blocks, &mut self.links, &mut self.by_target, &mut self.link_owner, &mut self.free_links);
+        let (blocks, links, by_target, owner, free, link_gen) = (&self.blocks, &mut self.links, &mut self.by_target, &mut self.link_owner, &mut self.free_links, &mut self.link_gen);
+        let (mask, mutant) = (self.mask, self.mutant);
         let nlinks = &mut self.nlinks;
         let exit_stub = self.exit_stub;
         let mut out_of_links = false;
@@ -289,29 +300,31 @@ impl Jit {
             };
             owner[i] = LINK_NEW;
             taken.push((i as u32, target));
-            links[i] = blocks.get(target).map_or(exit_stub, |s| s.entry);
+            link_gen[i] = if ((target & mask) >> heirloom_mem_flat32::CODE_PAGE_SHIFT) as usize == page { gen } else { ANY_GEN };
+            links[i] = blocks.get(target).map_or(exit_stub, |s| landing(s, link_gen[i], mutant));
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
         let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
-        let (code, pinned) = jit_emit::compile(ops, pc, gen, page, &mut env);
+        let (code, pinned, inner) = jit_emit::compile(ops, pc, gen, page, &mut env);
         if out_of_links { self.flush(); return true; }
         if may_refuse && code.len() > self.arena.segment_bytes() {
             for (i, target) in taken {
                 self.link_owner[i as usize] = 0;
+                self.link_gen[i as usize] = ANY_GEN;
                 self.links[i as usize] = self.exit_stub;
                 self.free_links.push(i);
                 if let Some(v) = self.by_target.get_mut(&target) { v.retain(|&j| j != i); }
             }
             return false;
         }
-        self.place(&code, taken.iter().map(|t| t.0).collect(), pc, ops.len() as u32, gen, pinned, at);
+        self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, ops.len() as u32, gen, pinned, at);
         true
     }
 
     /// Put compiled code in the arena (reusing the oldest segment when full) and queue it for publishing; `taken` = the
     /// link slots its code jumps through.
-    fn place(&mut self, code: &[u8], taken: Vec<u32>, pc: u32, len: u32, gen: u64, pinned: usize, at: u64) {
+    fn place(&mut self, code: &[u8], inner: usize, taken: Vec<u32>, pc: u32, len: u32, gen: u64, pinned: usize, at: u64) {
         let p = match self.arena.put(code) {
             Some(p) => p,
             None => {
@@ -330,7 +343,7 @@ impl Jit {
         if self.blocks.contains(pc) { self.stats.recompiled += 1; }
         self.stats.code_bytes = self.arena.used() as u64;
         if self.pending.is_empty() { self.pending_at = self.clock + at; }
-        self.pending.push(Slot { pc, len, entry: p as u64, gen, pad: 0 });
+        self.pending.push(Slot { pc, len, entry: p as u64, gen, inner: p as u64 + inner as u64 });
         if !self.pending_pcs.insert(pc, ()) { self.flush(); }
     }
 
@@ -341,7 +354,7 @@ impl Jit {
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
         let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
         let code = jit_emit::compile_native(pc, &mut env);
-        self.place(&code, Vec::new(), pc, 1, gen, 0, at);
+        self.place(&code, 0, Vec::new(), pc, 1, gen, 0, at);
         self.stats.natives_compiled += 1;
         if let (Some(c), Some(t0)) = (self.timer, t0) { self.stats.translate_time += c().wrapping_sub(t0); }
     }
@@ -361,7 +374,7 @@ impl Jit {
         }
         let tag = s as u8 + 1;
         for i in 1..self.nlinks {
-            if self.link_owner[i] == tag { self.link_owner[i] = 0; self.links[i] = self.exit_stub; self.free_links.push(i as u32); }
+            if self.link_owner[i] == tag { self.link_owner[i] = 0; self.link_gen[i] = ANY_GEN; self.links[i] = self.exit_stub; self.free_links.push(i as u32); }
         }
         let owner = &self.link_owner;
         self.by_target.retain(|_, v| { v.retain(|&i| owner[i as usize] != 0); !v.is_empty() });
@@ -392,7 +405,7 @@ impl Jit {
         for s in core::mem::take(&mut self.pending) {
             if !self.blocks.insert(s.pc, s) { grown = false; break; }
             self.table[(s.pc >> 2) as usize & ((1 << TABLE_BITS) - 1)] = s;
-            if let Some(v) = self.by_target.get(&s.pc) { for &i in v { self.links[i as usize] = s.entry; } }
+            if let Some(v) = self.by_target.get(&s.pc) { for &i in v { self.links[i as usize] = landing(&s, self.link_gen[i as usize], self.mutant); } }
         }
         self.pending_pcs.clear();
         // the block map could not grow: drop the code (a block not in the map would never be refilled into the table)
@@ -445,6 +458,12 @@ impl Jit {
         self.lock_seed ^= self.lock_seed << 5;
         (len as u64 + (self.lock_seed % 64) as u64).min(left)
     }
+}
+
+/// Where a link slot whose owner was compiled at `link_gen` (ANY_GEN: another page) jumps into published block `s`.
+#[inline(always)]
+fn landing(s: &Slot, link_gen: u64, mutant: u8) -> u64 {
+    if link_gen != ANY_GEN && (link_gen == s.gen || mutant == crate::jit_emit::MUT_INNER_ANY_GEN) { s.inner } else { s.entry }
 }
 
 type HOne = extern "C" fn(*mut Ctx, u32, u32, u64) -> u32;
