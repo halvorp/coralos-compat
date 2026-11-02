@@ -148,7 +148,8 @@ impl<U: GuestUi> MacPpc<U> {
             let timed_out = self.rt.wait_deadline.is_some_and(|d| self.mac.ev.ticks.wrapping_sub(d) < 0x8000_0000);
             // a Time Manager task that is due wakes the parked call too: the retried call is the safepoint that runs it
             let timer_due = self.tm_next_wake().is_some_and(|w| w <= self.mac.ev.ticks_total);
-            let wake = self.mac.event_pending(mask) || timed_out || timer_due;
+            let wake = self.mac.event_pending(mask) || timed_out || timer_due || self.carbon_motion_wakes();
+            if wake { self.carbon_unpark(); }
             if self.rt.sched.sweep.is_some() {
                 if wake {
                     self.rt.sched.sweep = None;

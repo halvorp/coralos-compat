@@ -50,7 +50,8 @@ const C_MOUSE: u32 = fc(b"mous"); const C_KEY: u32 = fc(b"keyb"); const C_WINDOW
 const K_WINDOW_UPDATE: u32 = 1; const K_WINDOW_ACTIVATED: u32 = 5; const K_WINDOW_DEACTIVATED: u32 = 6; const K_WINDOW_CLOSE: u32 = 72; const K_WINDOW_CLOSED: u32 = 73;
 const C_COMMAND: u32 = fc(b"cmds"); const K_COMMAND_PROCESS: u32 = 1; const T_HICOMMAND: u32 = fc(b"hcmd");
 const P_DIRECT: u32 = fc(b"----"); const P_MLOC: u32 = fc(b"mloc"); const P_MBTN: u32 = fc(b"mbtn"); const P_KMOD: u32 = fc(b"kmod"); const P_KCOD: u32 = fc(b"kcod");
-const P_KCHR: u32 = fc(b"kchr"); const P_CCNT: u32 = fc(b"ccnt");
+const P_KCHR: u32 = fc(b"kchr"); const P_CCNT: u32 = fc(b"ccnt"); const P_MDTA: u32 = fc(b"mdta");
+const K_MOUSE_MOVED: u32 = 5; const K_MOUSE_DRAGGED: u32 = 6;
 const T_WINDOW: u32 = fc(b"wind"); const T_QDPOINT: u32 = fc(b"QDpt"); const T_MBTN: u32 = fc(b"mbtn"); const T_UINT32: u32 = fc(b"magn"); const T_CHAR: u32 = fc(b"TEXT");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +84,11 @@ struct Event { class: u32, kind: u32, window: u32, params: BTreeMap<u32, (u32, V
 /// A chain being walked: (tv, userData) of each handler, the next to call, and the window whose standard handler gives the default.
 struct Chain { handlers: Vec<(u32, u32)>, next: usize, std_window: u32 }
 #[derive(Default)]
-pub(crate) struct CarbonState { handlers: Vec<Handler>, events: BTreeMap<u32, Event>, posted: alloc::collections::VecDeque<u32>, chains: BTreeMap<u32, Chain>, std_windows: BTreeSet<u32>, next: u32, quit: bool, scratch: u32 }
+pub(crate) struct CarbonState { handlers: Vec<Handler>, events: BTreeMap<u32, Event>, posted: alloc::collections::VecDeque<u32>, chains: BTreeMap<u32, Chain>, std_windows: BTreeSet<u32>, next: u32, quit: bool, scratch: u32,
+    /// Where the last kEventMouseMoved/Dragged put the mouse (global v, h); None until the loop first looks.
+    moved_at: Option<(i16, i16)>,
+    /// The Carbon event loop is the parked call (not a classic WaitNextEvent): a pending mouse move wakes it.
+    parked: bool }
 
 impl CarbonState {
     /// Whether `r` is an EventRef this engine made (and has not released).
@@ -262,13 +267,56 @@ impl<U: GuestUi> MacPpc<U> {
     fn park(&mut self, cpu: &mut Cpu, addr: u32, deadline: Option<u32>) {
         self.rt.wait_mask = Some(0xFFFF);
         self.rt.wait_deadline = deadline;
+        self.rt.carbon.parked = true;
         if !self.idle_yield(cpu, addr) { cpu.block(); cpu.set_pc(addr); }
     }
+
+    /// `kEventMouseMoved` (button up) or `kEventMouseDragged` (held) when the low-memory `Mouse` is not where the last one put it, for a program that
+    /// listens for that kind (classic programs poll `GetMouse`; a Carbon program like Warcraft III tracks its cursor and hit-tests its own UI from these
+    /// events, so without them every click lands where the game last saw the mouse). Coalesced: one event carries the newest location and the delta
+    /// since the last. The first look only records the location.
+    fn moved_event(&mut self) -> Option<u32> {
+        use heirloom_mac68k_engine::lowmem::MOUSE;
+        let (v, h) = (self.mac.mem.read_i16(MOUSE).ok()?, self.mac.mem.read_i16(MOUSE + 2).ok()?);
+        if self.rt.carbon.moved_at.is_none() { self.rt.carbon.moved_at = Some((v, h)); return None; }
+        let ((pv, ph), held) = self.motion_due()?;
+        let kind = if held { K_MOUSE_DRAGGED } else { K_MOUSE_MOVED };
+        self.rt.carbon.moved_at = Some((v, h));
+        let window = self.toolbox_call("FrontWindow", &[]);
+        let point = |v: i16, h: i16| { let mut b = v.to_be_bytes().to_vec(); b.extend(h.to_be_bytes()); b };
+        let e = self.new_event(C_MOUSE, kind, window);
+        self.put_param(e, P_MLOC, T_QDPOINT, point(v, h));
+        self.put_param(e, P_MDTA, T_QDPOINT, point(v.wrapping_sub(pv), h.wrapping_sub(ph)));
+        self.put_param(e, P_KMOD, T_UINT32, 0u32.to_be_bytes().to_vec());
+        if held { self.put_param(e, P_MBTN, T_MBTN, 1u16.to_be_bytes().to_vec()); }
+        self.put_param(e, P_DIRECT, T_WINDOW, window.to_be_bytes().to_vec());
+        Some(e)
+    }
+
+    /// The location the program last heard and whether the button is held, when the mouse has moved since and the program listens for that kind.
+    fn motion_due(&self) -> Option<((i16, i16), bool)> {
+        use heirloom_mac68k_engine::lowmem::{MB_STATE, MOUSE};
+        let (v, h) = (self.mac.mem.read_i16(MOUSE).ok()?, self.mac.mem.read_i16(MOUSE + 2).ok()?);
+        let last = self.rt.carbon.moved_at?;
+        if last == (v, h) { return None; }
+        let held = self.mac.mem.read_u8(MB_STATE).is_ok_and(|b| b & 0x80 == 0);
+        let kind = if held { K_MOUSE_DRAGGED } else { K_MOUSE_MOVED };
+        self.rt.carbon.handlers.iter().any(|x| x.specs.contains(&(C_MOUSE, kind))).then_some((last, held))
+    }
+
+    /// The parked Carbon event loop has a mouse move to hand out (the scheduler's wake test; a classic WaitNextEvent is not woken by it).
+    pub(crate) fn carbon_motion_wakes(&self) -> bool { self.rt.carbon.parked && self.motion_due().is_some() }
+
+    /// The parked call resumed (for any reason): a later classic park is not the Carbon loop's.
+    pub(crate) fn carbon_unpark(&mut self) { self.rt.carbon.parked = false; }
 
     /// Pull one classic event as a Carbon event (None: nothing pending).
     fn pull_event(&mut self) -> Result<Option<u32>, String> {
         // an event the program posted (PostEventToQueue) comes first, in posting order; the queue held a reference to it
         if let Some(ev) = self.rt.carbon.posted.pop_front() { return Ok(Some(ev)); }
+        // the mouse moved since the program last heard: its kEventMouseMoved/Dragged comes before the next classic event (a mouseDown queued
+        // with a new location is then pressed where the program already knows the mouse is)
+        if let Some(ev) = self.moved_event() { return Ok(Some(ev)); }
         let rec = self.cb_scratch()? + 16;
         let Some(op) = trap_opcode("WaitNextEvent") else { return Err(String::from("WaitNextEvent has no trap word")) };
         let r = self.mac.pascal_call(op, &[0xFFFF, rec, 0, 0]).map_err(|e| format!("event pull: {e}"))?;
@@ -296,6 +344,8 @@ impl<U: GuestUi> MacPpc<U> {
                 for i in 0..n { specs.push((self.mac.mem.read_u32(list + 8 * i).map_err(|_| String::from("InstallEventHandler: the EventTypeSpec list leaves guest RAM"))?, self.mac.mem.read_u32(list + 8 * i + 4).map_err(|_| String::from("InstallEventHandler: the EventTypeSpec list leaves guest RAM"))?)); }
                 let tv = self.proc_tvector(handler)?;
                 let id = self.cb_id();
+                let named: Vec<String> = specs.iter().map(|(c, k)| format!("{}/{k}", String::from_utf8_lossy(&c.to_be_bytes()))).collect();
+                self.mac.log.push(format!("[carbon] InstallEventHandler target {target:#x} handler {id:#x}: {}", named.join(" ")));
                 self.rt.carbon.handlers.push(Handler { id, target: if target == DISPATCHER_TARGET { APP_TARGET } else { target }, tv, specs, user });
                 self.put32(out, id, "InstallEventHandler")?;
                 0
@@ -327,10 +377,12 @@ impl<U: GuestUi> MacPpc<U> {
             }
             GetEventParameter => { // (event, name, desiredType, &actualType, bufferSize, &actualSize, &data)
                 let (actual_type_p, buf, actual_size_p, data_p) = (a3, a(self, 4)?, a(self, 5)?, a(self, 6)?);
+                let fcc = |v: u32| String::from_utf8_lossy(&v.to_be_bytes()).into_owned();
+                let what = self.rt.carbon.events.get(&a0).map_or_else(|| String::from("no such event"), |e| format!("{}/{}", fcc(e.class), e.kind));
                 match self.rt.carbon.events.get(&a0).and_then(|e| e.params.get(&a1)).cloned() {
-                    None => EVENT_PARAMETER_NOT_FOUND,
+                    None => { self.mac.log.push(format!("[carbon] GetEventParameter {what} '{}' as '{}': eventParameterNotFoundErr", fcc(a1), fcc(a2))); EVENT_PARAMETER_NOT_FOUND }
                     Some((ty, bytes)) => {
-                        if a2 != 0 && a2 != ty { COERCION_FAIL } else {
+                        if a2 != 0 && a2 != ty { self.mac.log.push(format!("[carbon] GetEventParameter {what} '{}' held as '{}', asked as '{}': errAECoercionFail", fcc(a1), fcc(ty), fcc(a2))); COERCION_FAIL } else {
                             self.put32(actual_type_p, ty, "GetEventParameter")?;
                             self.put32(actual_size_p, bytes.len() as u32, "GetEventParameter")?;
                             if data_p != 0 { if buf < bytes.len() as u32 { cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); } self.put_bytes(data_p, &bytes, "GetEventParameter")?; }

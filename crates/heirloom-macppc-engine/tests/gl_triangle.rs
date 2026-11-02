@@ -473,6 +473,15 @@ fn wc3_host_run_with_a_gl_worker() {
     m.start_file(&app, "Warcraft III").unwrap();
     let mut t = 0u64;
     let slices: u32 = std::env::var("WC3_SLICES").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
+    use heirloom_ui_abi::{GuestUiEvent, PointerButton, PointerPhase, UiCall};
+    let click: Option<(i32, i32, usize)> = std::env::var("WC3_CLICK").ok().and_then(|s| {
+        let (xy, at) = s.split_once('@')?;
+        let (x, y) = xy.split_once(',')?;
+        Some((x.parse().ok()?, y.parse().ok()?, at.parse().ok()?))
+    });
+    let (mut click_phase, mut click_win, mut click_kinds) = (0u8, None, 0usize);
+    let hover: usize = std::env::var("WC3_HOVER_SWAPS").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let mut hover_at: Option<usize> = None;
     for i in 0..slices {
         let (st, stats) = GuestMachine::step(&mut m, 5_000_000);
         if matches!(st, Step::Fault(_) | Step::Exited) {
@@ -488,6 +497,39 @@ fn wc3_host_run_with_a_gl_worker() {
         if std::env::var("WC3_STEPS").is_ok() && i % 50 == 0 { eprintln!("STEP {i}: {st:?} {stats:?} pc={:#x} lr={:#x} cb={}", m.cpu().map_or(0, |c| c.pc), m.cpu().map_or(0, |c| c.lr), m.callback_depth()); }
         t += 20_000;
         GuestMachine::advance_clock_to(&mut m, t).unwrap();
+        // `WC3_CLICK=x,y@swap`: once the game has swapped `swap` frames, a primary click at window point (x, y) in the window its last
+        // aglSetDrawable names (the GL picture's window, as the Z83 host routes a click on it), Down this slice and Up the next.
+        // `WC3_HOVER_SWAPS=n`: first a buttonless Move to (x, y) at `swap`, and the click n swaps later (the pointer arrives before it presses).
+        if let Some((cx, cy, at)) = click {
+            let swaps = seen.lock().unwrap().kinds.iter().filter(|k| *k == "Swap").count();
+            if click_phase == 0 && hover > 0 && swaps >= at && hover_at.is_none() {
+                let host = seen.lock().unwrap().drawables.last().and_then(|d| d.get(2).copied()).unwrap_or(0) as u32;
+                let win = m.mac.windows.values().filter_map(|w| w.native).find(|n| n.id == host).expect("the drawable's window");
+                m.mac.ui.events.push_back(GuestUiEvent::Pointer { win, x: cx, y: cy, button: PointerButton::None, phase: PointerPhase::Move, clicks: 0 });
+                eprintln!("CLICK-HOVER slice {i} swaps {swaps} at ({cx},{cy}) in native window {}", win.id);
+                hover_at = Some(swaps);
+            } else if click_phase == 0 && swaps >= at + hover {
+                for (p, w) in &m.mac.windows {
+                    let id = w.native.map_or(0, |n| n.id);
+                    let contents = m.ui().calls.iter().filter(|c| matches!(c, UiCall::PresentContent { win, .. } if win.id == id)).count();
+                    let planes = m.ui().calls.iter().filter(|c| matches!(c, UiCall::PresentPlane(win, _) if win.id == id)).count();
+                    eprintln!("CLICK-WINDOWS ptr={p:#x} native={id} visible={} rect={:?} contents={contents} planes={planes} z={:?}", w.visible, (w.rect.top, w.rect.left, w.rect.bottom, w.rect.right), m.mac.z.iter().position(|z| z == p));
+                }
+                eprintln!("CLICK-DRAWABLES {:?}", seen.lock().unwrap().drawables);
+                let host = seen.lock().unwrap().drawables.last().and_then(|d| d.get(2).copied()).unwrap_or(0) as u32;
+                let win = m.mac.windows.values().filter_map(|w| w.native).find(|n| n.id == host).or_else(|| m.mac.z.first().and_then(|p| m.mac.windows[p].native));
+                let win = win.expect("a shown window to click in");
+                eprintln!("CLICK-DOWN slice {i} swaps {swaps} at ({cx},{cy}) in native window {}", win.id);
+                m.mac.ui.events.push_back(GuestUiEvent::Pointer { win, x: cx, y: cy, button: PointerButton::Primary, phase: PointerPhase::Down, clicks: 1 });
+                click_win = Some(win);
+                click_kinds = seen.lock().unwrap().kinds.len();
+                click_phase = 1;
+            } else if click_phase == 1 {
+                m.mac.ui.events.push_back(GuestUiEvent::Pointer { win: click_win.unwrap(), x: cx, y: cy, button: PointerButton::Primary, phase: PointerPhase::Up, clicks: 0 });
+                eprintln!("CLICK-UP slice {i}");
+                click_phase = 2;
+            }
+        }
         if ring_out.is_some() && seen.lock().unwrap().kinds.iter().filter(|k| *k == "Swap").count() >= ring_swaps {
             eprintln!("slice {i}: {ring_swaps} swaps kept for the ring image");
             break;
@@ -515,6 +557,11 @@ fn wc3_host_run_with_a_gl_worker() {
         eprintln!("UI {}", format!("{c:?}").chars().take(300).collect::<String>());
     }
     let s = seen.lock().unwrap();
+    if click_phase > 0 {
+        let mut after = std::collections::BTreeMap::new();
+        for k in &s.kinds[click_kinds..] { *after.entry(k.as_str()).or_insert(0u32) += 1; }
+        eprintln!("CLICK-AFTER GL kind counts since the click: {after:?}");
+    }
     eprintln!("GL kinds: {:?}", s.kinds.iter().take(60).collect::<Vec<_>>());
     let mut counts = std::collections::BTreeMap::new();
     for k in &s.kinds { *counts.entry(k.as_str()).or_insert(0u32) += 1; }

@@ -312,3 +312,33 @@ fn an_item_without_an_id_arrives_with_command_zero_and_bad_items_and_empty_choic
     assert_eq!(run(&mut m), Step::Blocked, "{:?}", m.fault());
     assert_eq!(rd(&m, b, R + 12), 0);
 }
+
+/// Warcraft III tracks its cursor and hit-tests its own menu from kEventMouseMoved (it installs mous/5 and mous/6 and never polls for a hover):
+/// without these events its main menu's buttons never lit and a click landed where the game last saw the mouse (2026-11-02, Z83 + host harness).
+#[test]
+fn the_pointer_moving_over_a_window_is_a_mouse_moved_event_for_a_program_that_listens_for_it() {
+    use heirloom_ui_abi::{GuestUiEvent, PointerButton, PointerPhase};
+    let bytes = build(&window_main(8), &recording_handler(0), &Asm::new(), &data((fc(b"mous"), 5), 1 | (1 << 25)));
+    let mut m = boot(&bytes);
+    let b = m.cpu().unwrap().gpr[2];
+    assert_eq!(run(&mut m), Step::Blocked, "{:?}", m.fault());
+    assert_eq!(rd(&m, b, R + 12), 0, "the mouse has not moved: nothing is dispatched");
+    let win = rd(&m, b, WIN) as u32;
+    let native = m.mac.windows[&win].native.expect("a shown window");
+    m.mac.ui.events.push_back(GuestUiEvent::Pointer { win: native, x: 30, y: 20, button: PointerButton::None, phase: PointerPhase::Move, clicks: 0 });
+    let step = pump(&mut m);
+    assert_eq!(step, Step::Exited, "{:?} {:#?}", m.fault(), m.mac.log);
+    assert_eq!((rd(&m, b, R + 12) as u32, rd(&m, b, R + 16)), (fc(b"mous"), 5), "kEventMouseMoved");
+    assert_eq!(rd(&m, b, R + 24) as u32, (70 << 16) | 70, "kEventParamMouseLocation: the window point (30, 20) in global coordinates (content at 50, 40)");
+    // NEGATIVE CONTROL: a program listening only for mouse-down hears nothing from a move
+    let bytes = build(&window_main(8), &recording_handler(0), &Asm::new(), &data((fc(b"mous"), 1), 1 | (1 << 25)));
+    let mut m = boot(&bytes);
+    assert_eq!(run(&mut m), Step::Blocked);
+    let native = m.mac.windows[&(rd(&m, b, WIN) as u32)].native.unwrap();
+    m.mac.ui.events.push_back(GuestUiEvent::Pointer { win: native, x: 30, y: 20, button: PointerButton::None, phase: PointerPhase::Move, clicks: 0 });
+    assert_eq!(pump(&mut m), Step::Blocked);
+    assert_eq!(rd(&m, b, R + 12), 0, "no mous/5 handler: no moved event");
+}
+
+/// The host's pump (what Heirloom.app runs): the GuestUi's queued events reach the machine, then it steps.
+fn pump(m: &mut M) -> Step { heirloom_common::GuestMachine::step(m, 2_000_000).0 }
