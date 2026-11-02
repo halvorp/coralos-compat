@@ -187,9 +187,9 @@ fn pointer_and_keys_become_the_events_a_mac_program_handles() {
     key(&mut g, 38, "a", 0, true).unwrap();
     assert_eq!(queued(&g).iter().map(|e| (e.0, e.1, e.4)).collect::<Vec<_>>(), vec![(3, 0x61, 0x0300), (5, 0x61, 0), (3, 0x61, 0)]);
     key(&mut g, 36, "\n", 0, true).unwrap();
-    assert_eq!(queued(&g).last().unwrap().1, 0x0D, "Return is CR");
-    // named refusals: a key without a character, a character outside ASCII
-    assert!(key(&mut g, 123, "", 0, true).unwrap_err().0.contains("no character"));
+    assert_eq!(queued(&g).last().unwrap().1, 0x240D, "Return is CR, on the Return key (0x24)");
+    // named refusals: a code that types nothing and is no Mac key (tests/held_keys.rs maps the ones that are), a character outside ASCII
+    assert!(key(&mut g, 123, "", 0, true).unwrap_err().0.contains("no key the Mac keyboard has"));
     assert!(key(&mut g, 200, "é", 0, true).unwrap_err().0.contains("outside ASCII"));
     assert_eq!(g.m.ev.queue.len(), 4);
 }

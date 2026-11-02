@@ -188,12 +188,13 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register_os(0xA032, flush_events::<U>)
 }
 
-/// `GetKeys(VAR theKeys: KeyMap)`: the 128 key-down bits (16 bytes, Inside Macintosh: Toolbox Event Manager). This engine
-/// does not follow key RELEASES (a key press arrives as `keyDown`/`autoKey`; the release is `Ignored`), so it cannot claim
-/// any key is held: the map is all zero, and the log says that is the answer rather than a measurement.
+/// `GetKeys(VAR theKeys: KeyMap)`: the 128 key-down bits (16 bytes, Inside Macintosh: Toolbox Event Manager): the keys the host holds down
+/// now, from their key downs and ups ([`Mac::key_map`]).
 fn get_keys<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    m.mem.zero(c.args.get(0), 16).map_err(Refusal::mem("KeyMap"))?;
-    Ok(Done { result: 0, log: String::from("[event] GetKeys -> no key held (key releases are not tracked)") })
+    let map = m.key_map();
+    m.mem.write_bytes(c.args.get(0), &map).map_err(Refusal::mem("KeyMap"))?;
+    let n: u32 = map.iter().map(|b| b.count_ones()).sum();
+    Ok(Done { result: 0, log: format!("[event] GetKeys -> {n} keys held") })
 }
 
 const GET_LAYOUT: [Arg; 2] = [Arg::W, Arg::L];

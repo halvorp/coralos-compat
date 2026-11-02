@@ -60,7 +60,7 @@ fn data(spec: (u32, u32), attrs: u32) -> Vec<u8> {
     v.extend(t);
     v.extend(words(&[attrs]));
     v.resize((K - D) as usize, 0);
-    v.extend(words(&[fc(b"mloc"), fc(b"QDpt"), fc(b"zzzz"), fc(b"magn"), fc(b"----"), fc(b"hcmd"), fc(b"kcod"), fc(b"kchr"), fc(b"TEXT")]));
+    v.extend(words(&[fc(b"mloc"), fc(b"QDpt"), fc(b"zzzz"), fc(b"magn"), fc(b"----"), fc(b"hcmd"), fc(b"kcod"), fc(b"kchr"), fc(b"TEXT"), fc(b"kmod")]));
     v
 }
 fn boot(bytes: &[u8]) -> M {
@@ -353,6 +353,7 @@ fn key_handler() -> Asm {
     h.lwz(3, EVSAVE, 2).call_toc(toc(GKIND)).stw(3, R + 16, 2);
     h.lwz(3, EVSAVE, 2).lwz(4, K + 24, 2).lwz(5, K + 12, 2).li(6, 0).li(7, 4).li(8, 0).addi(9, 2, R + 24).call_toc(toc(GPARAM)).stw(3, R + 28, 2);  // 'kcod' as 'magn'
     h.lwz(3, EVSAVE, 2).lwz(4, K + 28, 2).lwz(5, K + 32, 2).li(6, 0).li(7, 1).li(8, 0).addi(9, 2, R + 40).call_toc(toc(GPARAM)).stw(3, R + 32, 2); // 'kchr' as 'TEXT'
+    h.lwz(3, EVSAVE, 2).lwz(4, K + 36, 2).lwz(5, K + 12, 2).li(6, 0).li(7, 4).li(8, 0).addi(9, 2, R + 44).call_toc(toc(GPARAM)).stw(3, R + 48, 2); // 'kmod' as 'magn'
     h.call_toc(toc(QUIT));
     h.li(3, 0);
     epilogue(&mut h);
@@ -364,6 +365,25 @@ fn type_key(m: &mut M, b: u32, c: char, down: bool) {
     use heirloom_ui_abi::{GuestUiEvent, Modifiers};
     let native = m.mac.windows[&(rd(m, b, WIN) as u32)].native.expect("a shown window");
     m.mac.ui.events.push_back(GuestUiEvent::Key { win: native, code: c as u32, text: c.to_string(), modifiers: Modifiers::default(), down });
+}
+
+/// An arrow - the host's key with no text (heirloom_ui_abi::host_key::UP) - is a kEventRawKeyDown of the Up Arrow key (0x7E) typing 0x1E,
+/// with the Shift the host held in kEventParamKeyModifiers: Warcraft III pans its camera on the arrow keys and reads Shift from 'kmod'
+/// (game FUN_10004fb0). Before h86 the host's C0 byte (0x10) arrived as the character, i.e. the F1 key (h86 KNOWN LIMITS (a), (b)).
+#[test]
+fn an_arrow_is_a_raw_key_event_of_its_mac_key_with_the_modifiers_held() {
+    use heirloom_ui_abi::{host_key, GuestUiEvent, Modifiers};
+    let bytes = build(&window_main(8), &key_handler(), &Asm::new(), &data((fc(b"keyb"), 1), 1 | (1 << 25)));
+    let mut m = boot(&bytes);
+    let b = m.cpu().unwrap().gpr[2];
+    assert_eq!(run(&mut m), Step::Blocked, "{:?}", m.fault());
+    let native = m.mac.windows[&(rd(&m, b, WIN) as u32)].native.expect("a shown window");
+    m.mac.ui.events.push_back(GuestUiEvent::Key { win: native, code: host_key::UP, text: String::new(), modifiers: Modifiers(Modifiers::SHIFT), down: true });
+    assert_eq!(pump(&mut m), Step::Exited, "{:?} {:#?}", m.fault(), m.mac.log);
+    assert_eq!((rd(&m, b, R + 12) as u32, rd(&m, b, R + 16)), (fc(b"keyb"), 1), "kEventRawKeyDown");
+    assert_eq!((rd(&m, b, R + 28), rd(&m, b, R + 24)), (0, 0x7E), "kEventParamKeyCode: the Up Arrow key");
+    assert_eq!((rd(&m, b, R + 32), m.mac.mem.read_u8(b + (R + 40) as u32).unwrap()), (0, 0x1E), "the Up Arrow's character");
+    assert_eq!((rd(&m, b, R + 48), rd(&m, b, R + 44)), (0, 0x0200), "kEventParamKeyModifiers: shiftKey");
 }
 
 /// A typed character is a kEventRawKeyDown whose key code is the key that types it on the installed (British) layout, not 0: Storm turns the key code

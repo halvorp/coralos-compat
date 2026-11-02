@@ -47,12 +47,12 @@ const CONTROL_KEYS: &[(u8, u8)] = &[
     (0x24, 0x0D), (0x30, 0x09), (0x33, 0x08), (0x34, 0x03), (0x35, 0x1B), (0x41, b'.'), (0x43, b'*'), (0x45, b'+'), (0x47, 0x1B),
     (0x4B, b'/'), (0x4C, 0x03), (0x4E, b'-'), (0x51, b'='), (0x52, b'0'), (0x53, b'1'), (0x54, b'2'), (0x55, b'3'), (0x56, b'4'),
     (0x57, b'5'), (0x58, b'6'), (0x59, b'7'), (0x5B, b'8'), (0x5C, b'9'),
-    // F1..F15 type the function-key character 0x10
-    (0x7A, 0x10), (0x78, 0x10), (0x63, 0x10), (0x76, 0x10), (0x60, 0x10), (0x61, 0x10), (0x62, 0x10), (0x64, 0x10), (0x65, 0x10),
-    (0x6D, 0x10), (0x67, 0x10), (0x6F, 0x10), (0x69, 0x10), (0x6B, 0x10), (0x71, 0x10),
     // Help, Home, Page Up, forward Delete, End, Page Down, and the arrows left / right / down / up
     (0x72, 0x05), (0x73, 0x01), (0x74, 0x0B), (0x75, 0x7F), (0x77, 0x04), (0x79, 0x0C), (0x7B, 0x1C), (0x7C, 0x1D), (0x7D, 0x1F), (0x7E, 0x1E),
 ];
+
+/// F1..F15, in order: each types the function-key character 0x10.
+const FUNCTION_KEYS: [u8; 15] = [0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F, 0x69, 0x6B, 0x71];
 
 /// The table a modifier byte (`modifiers >> 8`: bit 0 cmd, 1 shift, 2 caps lock, 3 option, 4 control, 5..7 the right-hand shift,
 /// option, control) selects. Command selects no table of its own (a Command-key character is the plain or shifted one).
@@ -63,6 +63,7 @@ fn table_for(m: u8) -> u8 {
 /// The layout's character for virtual key `k` in table `t` (0 = none).
 fn char_in(t: u8, k: u8) -> u8 {
     if let Some(&(_, c)) = CONTROL_KEYS.iter().find(|e| e.0 == k) { return c; }
+    if FUNCTION_KEYS.contains(&k) { return 0x10; }
     let Some(&(_, plain, shifted)) = KEYS.iter().find(|e| e.0 == k) else { return 0 };
     match t {
         PLAIN => plain,
@@ -89,6 +90,40 @@ pub fn kchr() -> Vec<u8> {
 pub fn virtual_key(ch: u8) -> Option<(u8, u16)> {
     [(PLAIN, 0), (SHIFT, SHIFT_KEY), (OPTION, OPTION_KEY)].iter()
         .find_map(|&(t, mods)| (0..128u8).find(|&k| char_in(t, k) == ch && ch != 0).map(|k| (k, mods)))
+}
+
+/// The Mac key for a host key that types nothing ([`heirloom_ui_abi::host_key`]): `(virtual key, the character it types)`. These keys type
+/// the same character in every table ([`CONTROL_KEYS`]: the arrows 0x1C..0x1F, Home 0x01, End 0x04, Page Up / Down 0x0B / 0x0C, forward
+/// Delete 0x7F, every function key 0x10). Insert is the Help key (0x72), which sits where a PC keyboard has Insert on Apple's extended
+/// keyboards. `None` for a code that is no key a Mac keyboard has.
+pub fn host_key(code: u32) -> Option<(u8, u8)> {
+    use heirloom_ui_abi::host_key as h;
+    let k = match code {
+        h::UP => 0x7E,
+        h::DOWN => 0x7D,
+        h::LEFT => 0x7B,
+        h::RIGHT => 0x7C,
+        h::HOME => 0x73,
+        h::END => 0x77,
+        h::PAGE_UP => 0x74,
+        h::PAGE_DOWN => 0x79,
+        h::DELETE => 0x75,
+        h::INSERT => 0x72,
+        c => FUNCTION_KEYS[usize::from(h::function_number(c)?) - 1],
+    };
+    Some((k, char_in(PLAIN, k)))
+}
+
+/// The Mac Roman byte of a character the installed layout types: ASCII, and the three non-ASCII characters of the British table (the
+/// pound sign on Shift-3, section and plus-minus on the ISO key). `None` for anything else.
+pub fn mac_roman(c: char) -> Option<u8> {
+    match c {
+        c if (c as u32) < 0x80 => Some(c as u8),
+        '\u{A3}' => Some(0xA3),
+        '\u{A7}' => Some(0xA4),
+        '\u{B1}' => Some(0xB1),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

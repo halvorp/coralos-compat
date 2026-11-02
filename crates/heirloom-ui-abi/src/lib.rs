@@ -15,6 +15,7 @@
 extern crate alloc;
 mod audio;
 mod event;
+pub mod host_key; // the host's key codes for the keys that type nothing (arrows, Home/End, Page Up/Down, Delete, F-keys)
 mod model;
 mod plane;
 mod recording;

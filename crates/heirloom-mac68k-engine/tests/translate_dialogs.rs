@@ -75,12 +75,12 @@ fn dialog_negative_controls() {
     assert!(m.refused[0].contains("StaticText") && m.refused[1].contains("pushButProc") && m.refused[2].contains("generation 9"), "{:?}", m.refused);
     assert!(m.tr.dlg.hits.is_empty(), "no refused intent became an item hit");
     assert_eq!(m.step(1_000_000).0, Step::Blocked, "the dialog is still waiting");
-    // a disabled item's hit is ignored by name (item 6 is disabled); a key that is not a character is refused
+    // a disabled item's hit is ignored by name (item 6 is disabled); a key that types nothing and is no Mac key is refused
     m.dialog_hit(win, 6);
     assert!(m.tr.dlg.hits.is_empty() && m.log.iter().any(|l| l.contains("item 6") && l.contains("disabled")));
     m.ui.events.push_back(GuestUiEvent::Key { win: nwin, code: 123, text: String::new(), modifiers: Modifiers::default(), down: true });
     m.pump_ui();
-    assert!(m.refused.last().unwrap().contains("no character"), "{:?}", m.refused);
+    assert!(m.refused.last().unwrap().contains("no key the Mac keyboard has"), "{:?}", m.refused);
     // positive control: the real OK click ends the wait with itemHit 1
     m.ui.push_intent(nwin, ok, Intent::Activate).unwrap();
     assert_eq!(m.step(1_000_000).0, Step::Exited);

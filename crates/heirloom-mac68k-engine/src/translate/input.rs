@@ -5,22 +5,32 @@
 //! * `Pointer` primary `Down`/`Up` -> `mouseDown`/`mouseUp`; the secondary button is a control-click (`controlKey` in the
 //!   modifiers, the Mac convention for the contextual click); the middle button has no classic meaning: refused by name.
 //!   Motion produces no event (a Mac program polls `GetMouse`/`Button`): it only updates the low-memory `Mouse` point.
-//! * `Key` down -> `keyDown`, the same code again before its release -> `autoKey`; release produces nothing (`keyUp` is
+//! * `Key` down -> `keyDown`, the same key again before its release -> `autoKey`; release produces nothing (`keyUp` is
 //!   outside the default system event mask) unless the program listens for key releases ([`Mac::hear_key_ups`]: a Carbon program
-//!   with a `kEventRawKeyUp` handler), then `keyUp`. The message is the character code (ASCII) with, in the key-code byte, the
-//!   virtual key that types it on the installed layout ([`crate::keyboard::virtual_key`]; the host's key code is not a Mac one):
-//!   Storm (Warcraft III) turns that key code into a Windows virtual key through `KeyTranslate`, so a 0 there made every key 'A'.
-//!   A key without a character, or one outside ASCII, is refused by name. Return/Enter in a dialog is the default item's hit.
+//!   with a `kEventRawKeyUp` handler), then `keyUp`. The message is the character (Mac Roman) with, in the key-code byte, the Mac
+//!   virtual key: for a character, the key that types it on the installed layout ([`crate::keyboard::virtual_key`]; with Control held
+//!   a letter's control character is that letter's key); for a key that types nothing (empty text: the arrows, Home, End, Page Up /
+//!   Down, forward Delete, the F-keys - [`heirloom_ui_abi::host_key`]) the Mac key itself and the character it types on a Mac
+//!   ([`crate::keyboard::host_key`]). Storm (Warcraft III) turns the key code into a Windows virtual key through `KeyTranslate`, so a 0
+//!   there made every key 'A', and before h86 an arrow arrived as the host's C0 byte taken for a character (Up = the F-key character).
+//!   The modifiers are the event's `modifiers` (Shift, Option = Alt, Control, Command). A code that is no Mac key, or a character the
+//!   layout does not type, is refused by name. Return/Enter in a dialog is the default item's hit.
+//! * every key down and up also keeps the KEY MAP `GetKeys` reads ([`Mac::key_map`]): the keys held, and the modifier keys held with them.
 use crate::events::{Delivered, AUTO_KEY, KEY_DOWN, KEY_UP, MOUSE_DOWN, MOUSE_UP};
 use crate::lowmem::{MB_STATE, MOUSE, RAW_MOUSE};
 use crate::machine::Mac;
 use crate::pascal::Rect;
 use crate::Refusal;
+use alloc::collections::BTreeMap;
 use alloc::format;
 use heirloom_ui_abi::{GuestUi, Modifiers, PointerButton, PointerPhase, UiObjectRef};
 
 #[derive(Default)]
-pub struct State { held: Option<u32>, key_ups: bool }
+pub struct State {
+    /// The Mac keys held (virtual key -> the `EventRecord.modifiers` they went down with).
+    keys: BTreeMap<u8, u16>,
+    key_ups: bool,
+}
 
 /// Mac `EventRecord.modifiers` bits: cmdKey, shiftKey, optionKey, controlKey.
 const CMD: u16 = 0x0100;
@@ -73,23 +83,19 @@ impl<U: GuestUi> Mac<U> {
 
     pub(crate) fn deliver_key(&mut self, win: UiObjectRef, code: u32, text: &str, mods: Modifiers, down: bool) -> Result<Delivered, Refusal> {
         let Some((ptr, _)) = self.guest_window(win) else { return Ok(Delivered::NotForAGuestWindow) };
+        let modifiers = mac_modifiers(mods);
+        let (v, h) = (self.mem.read_i16(MOUSE).unwrap_or(0), self.mem.read_i16(MOUSE + 2).unwrap_or(0));
         if !down {
-            let was_held = self.tr.input.held == Some(code);
-            if was_held { self.tr.input.held = None; }
+            // a release of a key the Mac has no key for was refused at its press: nothing to let go
+            let Ok((vk, ch)) = mac_key(code, text, mods) else { return Ok(Delivered::Ignored) };
+            self.tr.input.keys.remove(&vk);
             // a release is an event only to a program that listens for one (and never inside a dialog: the Dialog Manager's keys)
             if !self.tr.input.key_ups || self.tr.dlg.dialogs.contains_key(&ptr) { return Ok(Delivered::Ignored); }
-            let Some(ch) = text.chars().next().filter(|c| (*c as u32) < 0x80) else { return Ok(Delivered::Ignored) };
-            let ch = if matches!(ch, '\n' | '\r') { 0x0D } else { ch as u8 };
-            let (v, h) = (self.mem.read_i16(MOUSE).unwrap_or(0), self.mem.read_i16(MOUSE + 2).unwrap_or(0));
-            self.post_with(KEY_UP, key_message(ch), v, h, mac_modifiers(mods));
+            self.post_with(KEY_UP, u32::from(vk) << 8 | u32::from(ch), v, h, modifiers);
             return Ok(Delivered::Queued);
         }
-        let ch = match text.chars().next() {
-            None => return Err(Refusal(format!("Key: host code {code} has no character; keys without one are not mapped to classic Mac key codes"))),
-            Some('\n' | '\r') => 0x0D,
-            Some(c) if (c as u32) < 0x80 => c as u8,
-            Some(c) => return Err(Refusal(format!("Key: U+{:04X} is outside ASCII; Mac Roman input is not mapped", c as u32))),
-        };
+        let (vk, ch) = mac_key(code, text, mods)?;
+        let repeat = self.tr.input.keys.insert(vk, modifiers).is_some();
         self.tr.supersede();
         if self.tr.dlg.dialogs.contains_key(&ptr) {
             if matches!(ch, 0x0D | 0x03) {
@@ -100,11 +106,23 @@ impl<U: GuestUi> Mac<U> {
             // a dialog's keys are the Dialog Manager's: they never reach the program's own event loop
             return Ok(if self.dialog_key(ptr, ch, mods.has(Modifiers::META))? { Delivered::Queued } else { Delivered::Ignored });
         }
-        let what = if self.tr.input.held == Some(code) { AUTO_KEY } else { KEY_DOWN };
-        self.tr.input.held = Some(code);
-        let (v, h) = (self.mem.read_i16(MOUSE).unwrap_or(0), self.mem.read_i16(MOUSE + 2).unwrap_or(0));
-        self.post_with(what, key_message(ch), v, h, mac_modifiers(mods));
+        self.post_with(if repeat { AUTO_KEY } else { KEY_DOWN }, u32::from(vk) << 8 | u32::from(ch), v, h, modifiers);
         Ok(Delivered::Queued)
+    }
+
+    /// The 128 key-down bits `GetKeys` returns (key k = bit k % 8 of byte k / 8): every key held, and the modifier keys (Command 0x37,
+    /// Shift 0x38, Option 0x3A, Control 0x3B) held with any of them. The host reports modifiers only with a key, so a modifier pressed
+    /// alone is not seen.
+    pub fn key_map(&self) -> [u8; 16] {
+        let mut map = [0u8; 16];
+        let mut set = |k: u8| map[usize::from(k >> 3)] |= 1 << (k & 7);
+        for (&vk, &m) in &self.tr.input.keys {
+            set(vk);
+            for (bit, k) in [(CMD, 0x37), (SHIFT, 0x38), (OPTION, 0x3A), (CONTROL, 0x3B)] {
+                if m & bit != 0 { set(k); }
+            }
+        }
+        map
     }
 
     /// From now on a key release is a `keyUp` event (the program listens for releases: a Carbon `kEventRawKeyUp` handler). Without it a
@@ -112,9 +130,18 @@ impl<U: GuestUi> Mac<U> {
     pub fn hear_key_ups(&mut self) { self.tr.input.key_ups = true; }
 }
 
-/// A key event's message: the character code, and the virtual key that types it on the installed layout in the key-code byte (0 when
-/// no key on the layout types it).
-fn key_message(ch: u8) -> u32 {
-    let key = crate::keyboard::virtual_key(ch).map_or(0, |(k, _)| k);
-    u32::from(key) << 8 | u32::from(ch)
+/// The Mac key a host key event is: `(virtual key, Mac Roman character)`. A key with no text is [`crate::keyboard::host_key`]; a character
+/// is the key that types it on the installed layout - with Control held, a letter's control character is that letter's key (Ctrl-A types
+/// 0x01 on the A key, not Home), except Backspace, Tab and Return, which are their own keys. 0 = no key on the layout types it.
+fn mac_key(code: u32, text: &str, mods: Modifiers) -> Result<(u8, u8), Refusal> {
+    let Some(c) = text.chars().next() else {
+        return crate::keyboard::host_key(code).ok_or_else(|| Refusal(format!("Key: host code {code:#x} types nothing and is no key the Mac keyboard has")));
+    };
+    let ch = match c {
+        '\n' | '\r' => 0x0D,
+        c => crate::keyboard::mac_roman(c).ok_or_else(|| Refusal(format!("Key: U+{:04X} is outside ASCII and the British layout's keys; Mac Roman input is not mapped", c as u32)))?,
+    };
+    let letter = mods.has(Modifiers::CTRL) && (0x01..=0x1A).contains(&ch) && !matches!(ch, 0x08 | 0x09 | 0x0D);
+    let vk = crate::keyboard::virtual_key(if letter { ch | 0x60 } else { ch }).map_or(0, |(k, _)| k);
+    Ok((vk, ch))
 }
