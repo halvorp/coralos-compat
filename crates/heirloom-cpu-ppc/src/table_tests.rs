@@ -208,3 +208,87 @@ fn a_null_or_malformed_argument_is_refused_by_name() {
     assert_eq!((vtable().run)(r.inst, &mut c, 1, core::ptr::null_mut()), -1);
     assert_eq!((vtable().bind_native)(core::ptr::null_mut(), 0), -1);
 }
+
+/// The engine's executable memory for tier 2, as CPU ABI v3's `PpcCodeMem` carries it (on CoralOS: libcoral::codemem over
+/// syscalls 132/133; here the host's mmap/mprotect). It counts what the library asked.
+#[cfg(target_arch = "x86_64")]
+#[derive(Default)]
+struct Provider { mem: crate::HostCodeMem, reserves: u32, publishes: u32, resets: u32 }
+
+#[cfg(target_arch = "x86_64")]
+extern "C" fn p_reserve(ctx: *mut c_void, len: usize, out: *mut *mut u8) -> i32 {
+    use crate::CodeMem;
+    // SAFETY: ctx is the test's Provider, live for the instance's life.
+    let p = unsafe { &mut *(ctx as *mut Provider) };
+    p.reserves += 1;
+    match p.mem.reserve(len) {
+        // SAFETY: out is the library's slot.
+        Some(ptr) => { unsafe { *out = ptr }; 0 }
+        None => -1,
+    }
+}
+#[cfg(target_arch = "x86_64")]
+extern "C" fn p_publish(ctx: *mut c_void, ptr: *mut u8, len: usize) -> i32 {
+    use crate::CodeMem;
+    // SAFETY: as above.
+    let p = unsafe { &mut *(ctx as *mut Provider) };
+    p.publishes += 1;
+    if p.mem.publish(ptr, len) { 0 } else { -1 }
+}
+#[cfg(target_arch = "x86_64")]
+extern "C" fn p_reset(ctx: *mut c_void, ptr: *mut u8, len: usize) -> i32 {
+    use crate::CodeMem;
+    // SAFETY: as above.
+    let p = unsafe { &mut *(ctx as *mut Provider) };
+    p.resets += 1;
+    if p.mem.reset(ptr, len) { 0 } else { -1 }
+}
+
+/// `li r3,0 ; loop: addi r3,r3,1 ; b loop` — a hot block the JIT compiles.
+#[cfg(target_arch = "x86_64")]
+fn count_loop(r: &mut Rig, total: u64) -> PpcContext {
+    const B_BACK_4: u32 = 0x4BFF_FFFC;
+    r.code(CODE, &[0x3860_0000, ADDI_R3_1, B_BACK_4]);
+    let mut c = PpcContext::new(CODE, 0x8_0000);
+    let mut left = total;
+    while left > 0 {
+        let n = left.min(100_000);
+        let x = r.run(&mut c, n);
+        assert_eq!((x.code, x.retired), (EXIT_BUDGET, n));
+        left -= n;
+    }
+    c
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn tier_2_runs_in_the_engines_executable_memory_through_set_code_mem() {
+    let mut r = Rig::new();
+    let mut prov = Box::new(Provider::default());
+    let rec = PpcCodeMem { size: core::mem::size_of::<PpcCodeMem>() as u32, flags: 0, ctx: (&mut *prov as *mut Provider).cast(), reserve: p_reserve, publish: p_publish, reset: p_reset };
+    assert_eq!((vtable().set_code_mem)(r.inst, core::ptr::null()), -1);
+    assert_eq!((vtable().set_code_mem)(r.inst, &PpcCodeMem { size: 3, ..rec }), -1);
+    assert_eq!((vtable().set_code_mem)(r.inst, &PpcCodeMem { flags: 1, ..rec }), -1, "an unknown flag is refused");
+    assert_eq!((vtable().set_code_mem)(core::ptr::null_mut(), &rec), -1);
+    assert_eq!((vtable().set_code_mem)(r.inst, &rec), 0);
+    assert_eq!((vtable().set_tier)(r.inst, TIER_JIT), 0);
+    let c = count_loop(&mut r, 3_000_000);
+    // 1 for `li`, then addi, b, addi, ... : the 2_999_999 after it hold 1_500_000 addi
+    assert_eq!(c.regs.gpr[3], 1_500_000);
+    let mut p = PpcProf::default();
+    assert_eq!((vtable().read_prof)(r.inst, &mut p), 0);
+    assert_eq!(p.tier, TIER_JIT);
+    assert_eq!(prov.reserves, 1, "one reservation, asked of the ENGINE's provider");
+    assert!(prov.publishes >= 2, "the trampoline and the compiled loop were published through it ({})", prov.publishes);
+    drop(r); // the instance (and its JIT) before the provider it borrows
+}
+
+/// Without executable memory TIER_JIT runs tier 1 (named in JitStats::refused inside the library), with the same registers.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn tier_jit_without_a_provider_still_runs_and_gives_the_same_registers() {
+    let mut r = Rig::new();
+    assert_eq!((vtable().set_tier)(r.inst, TIER_JIT), 0);
+    let c = count_loop(&mut r, 300_001);
+    assert_eq!(c.regs.gpr[3], 150_000);
+}
