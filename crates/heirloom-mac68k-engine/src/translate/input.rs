@@ -6,10 +6,12 @@
 //!   modifiers, the Mac convention for the contextual click); the middle button has no classic meaning: refused by name.
 //!   Motion produces no event (a Mac program polls `GetMouse`/`Button`): it only updates the low-memory `Mouse` point.
 //! * `Key` down -> `keyDown`, the same code again before its release -> `autoKey`; release produces nothing (`keyUp` is
-//!   outside `everyEvent`). The message is the character code (ASCII; the host's key code is not a Mac virtual key code,
-//!   so the key-code byte is 0 and a program that reads `charCode`, as Inside Macintosh tells them to, is exact). A key
-//!   without a character, or one outside ASCII, is refused by name. Return/Enter in a dialog is the default item's hit.
-use crate::events::{Delivered, AUTO_KEY, KEY_DOWN, MOUSE_DOWN, MOUSE_UP};
+//!   outside the default system event mask) unless the program listens for key releases ([`Mac::hear_key_ups`]: a Carbon program
+//!   with a `kEventRawKeyUp` handler), then `keyUp`. The message is the character code (ASCII) with, in the key-code byte, the
+//!   virtual key that types it on the installed layout ([`crate::keyboard::virtual_key`]; the host's key code is not a Mac one):
+//!   Storm (Warcraft III) turns that key code into a Windows virtual key through `KeyTranslate`, so a 0 there made every key 'A'.
+//!   A key without a character, or one outside ASCII, is refused by name. Return/Enter in a dialog is the default item's hit.
+use crate::events::{Delivered, AUTO_KEY, KEY_DOWN, KEY_UP, MOUSE_DOWN, MOUSE_UP};
 use crate::lowmem::{MB_STATE, MOUSE, RAW_MOUSE};
 use crate::machine::Mac;
 use crate::pascal::Rect;
@@ -18,7 +20,7 @@ use alloc::format;
 use heirloom_ui_abi::{GuestUi, Modifiers, PointerButton, PointerPhase, UiObjectRef};
 
 #[derive(Default)]
-pub struct State { held: Option<u32> }
+pub struct State { held: Option<u32>, key_ups: bool }
 
 /// Mac `EventRecord.modifiers` bits: cmdKey, shiftKey, optionKey, controlKey.
 const CMD: u16 = 0x0100;
@@ -72,8 +74,15 @@ impl<U: GuestUi> Mac<U> {
     pub(crate) fn deliver_key(&mut self, win: UiObjectRef, code: u32, text: &str, mods: Modifiers, down: bool) -> Result<Delivered, Refusal> {
         let Some((ptr, _)) = self.guest_window(win) else { return Ok(Delivered::NotForAGuestWindow) };
         if !down {
-            if self.tr.input.held == Some(code) { self.tr.input.held = None; }
-            return Ok(Delivered::Ignored);
+            let was_held = self.tr.input.held == Some(code);
+            if was_held { self.tr.input.held = None; }
+            // a release is an event only to a program that listens for one (and never inside a dialog: the Dialog Manager's keys)
+            if !self.tr.input.key_ups || self.tr.dlg.dialogs.contains_key(&ptr) { return Ok(Delivered::Ignored); }
+            let Some(ch) = text.chars().next().filter(|c| (*c as u32) < 0x80) else { return Ok(Delivered::Ignored) };
+            let ch = if matches!(ch, '\n' | '\r') { 0x0D } else { ch as u8 };
+            let (v, h) = (self.mem.read_i16(MOUSE).unwrap_or(0), self.mem.read_i16(MOUSE + 2).unwrap_or(0));
+            self.post_with(KEY_UP, key_message(ch), v, h, mac_modifiers(mods));
+            return Ok(Delivered::Queued);
         }
         let ch = match text.chars().next() {
             None => return Err(Refusal(format!("Key: host code {code} has no character; keys without one are not mapped to classic Mac key codes"))),
@@ -94,7 +103,18 @@ impl<U: GuestUi> Mac<U> {
         let what = if self.tr.input.held == Some(code) { AUTO_KEY } else { KEY_DOWN };
         self.tr.input.held = Some(code);
         let (v, h) = (self.mem.read_i16(MOUSE).unwrap_or(0), self.mem.read_i16(MOUSE + 2).unwrap_or(0));
-        self.post_with(what, u32::from(ch), v, h, mac_modifiers(mods));
+        self.post_with(what, key_message(ch), v, h, mac_modifiers(mods));
         Ok(Delivered::Queued)
     }
+
+    /// From now on a key release is a `keyUp` event (the program listens for releases: a Carbon `kEventRawKeyUp` handler). Without it a
+    /// game that tracks held keys from the raw key events (Storm's key state, Warcraft III's camera keys) never sees a key let go.
+    pub fn hear_key_ups(&mut self) { self.tr.input.key_ups = true; }
+}
+
+/// A key event's message: the character code, and the virtual key that types it on the installed layout in the key-code byte (0 when
+/// no key on the layout types it).
+fn key_message(ch: u8) -> u32 {
+    let key = crate::keyboard::virtual_key(ch).map_or(0, |(k, _)| k);
+    u32::from(key) << 8 | u32::from(ch)
 }

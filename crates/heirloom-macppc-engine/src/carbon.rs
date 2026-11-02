@@ -346,6 +346,8 @@ impl<U: GuestUi> MacPpc<U> {
                 let id = self.cb_id();
                 let named: Vec<String> = specs.iter().map(|(c, k)| format!("{}/{k}", String::from_utf8_lossy(&c.to_be_bytes()))).collect();
                 self.mac.log.push(format!("[carbon] InstallEventHandler target {target:#x} handler {id:#x}: {}", named.join(" ")));
+                // a kEventRawKeyUp handler hears key releases: the classic queue posts keyUp from now on
+                if specs.contains(&(C_KEY, 3)) { self.mac.hear_key_ups(); }
                 self.rt.carbon.handlers.push(Handler { id, target: if target == DISPATCHER_TARGET { APP_TARGET } else { target }, tv, specs, user });
                 self.put32(out, id, "InstallEventHandler")?;
                 0

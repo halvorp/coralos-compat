@@ -60,7 +60,7 @@ fn data(spec: (u32, u32), attrs: u32) -> Vec<u8> {
     v.extend(t);
     v.extend(words(&[attrs]));
     v.resize((K - D) as usize, 0);
-    v.extend(words(&[fc(b"mloc"), fc(b"QDpt"), fc(b"zzzz"), fc(b"magn"), fc(b"----"), fc(b"hcmd")]));
+    v.extend(words(&[fc(b"mloc"), fc(b"QDpt"), fc(b"zzzz"), fc(b"magn"), fc(b"----"), fc(b"hcmd"), fc(b"kcod"), fc(b"kchr"), fc(b"TEXT")]));
     v
 }
 fn boot(bytes: &[u8]) -> M {
@@ -342,3 +342,54 @@ fn the_pointer_moving_over_a_window_is_a_mouse_moved_event_for_a_program_that_li
 
 /// The host's pump (what Heirloom.app runs): the GuestUi's queued events reach the machine, then it steps.
 fn pump(m: &mut M) -> Step { heirloom_common::GuestMachine::step(m, 2_000_000).0 }
+
+/// A raw-key handler the way Warcraft III's reads its events (game FUN_10004fb0): kEventParamKeyCode as typeUInt32 into R+24, kEventParamKeyMacCharCodes as typeChar
+/// (one byte) into R+40; class and kind into R+12 / R+16; then the loop ends.
+fn key_handler() -> Asm {
+    let mut h = Asm::new();
+    prologue(&mut h);
+    h.stw(4, EVSAVE, 2);
+    h.lwz(3, EVSAVE, 2).call_toc(toc(GCLASS)).stw(3, R + 12, 2);
+    h.lwz(3, EVSAVE, 2).call_toc(toc(GKIND)).stw(3, R + 16, 2);
+    h.lwz(3, EVSAVE, 2).lwz(4, K + 24, 2).lwz(5, K + 12, 2).li(6, 0).li(7, 4).li(8, 0).addi(9, 2, R + 24).call_toc(toc(GPARAM)).stw(3, R + 28, 2);  // 'kcod' as 'magn'
+    h.lwz(3, EVSAVE, 2).lwz(4, K + 28, 2).lwz(5, K + 32, 2).li(6, 0).li(7, 1).li(8, 0).addi(9, 2, R + 40).call_toc(toc(GPARAM)).stw(3, R + 32, 2); // 'kchr' as 'TEXT'
+    h.call_toc(toc(QUIT));
+    h.li(3, 0);
+    epilogue(&mut h);
+    h
+}
+
+/// The host types a character into the window (Heirloom.app: Key down then Key up, code = the character, no modifiers).
+fn type_key(m: &mut M, b: u32, c: char, down: bool) {
+    use heirloom_ui_abi::{GuestUiEvent, Modifiers};
+    let native = m.mac.windows[&(rd(m, b, WIN) as u32)].native.expect("a shown window");
+    m.mac.ui.events.push_back(GuestUiEvent::Key { win: native, code: c as u32, text: c.to_string(), modifiers: Modifiers::default(), down });
+}
+
+/// A typed character is a kEventRawKeyDown whose key code is the key that types it on the installed (British) layout, not 0: Storm turns the key code
+/// into a Windows virtual key through KeyTranslate, so with 0 every key Warcraft III's profile-name box heard was 'A' (2026-11-02). A program with a
+/// kEventRawKeyUp handler hears the release too (the game's held-key state); one without hears no keyUp.
+#[test]
+fn a_typed_character_is_a_raw_key_event_with_the_layouts_key_code_and_its_release_reaches_a_key_up_handler() {
+    let bytes = build(&window_main(8), &key_handler(), &Asm::new(), &data((fc(b"keyb"), 1), 1 | (1 << 25)));
+    let mut m = boot(&bytes);
+    let b = m.cpu().unwrap().gpr[2];
+    assert_eq!(run(&mut m), Step::Blocked, "{:?}", m.fault());
+    type_key(&mut m, b, 'P', true);
+    type_key(&mut m, b, 'P', false);
+    assert_eq!(pump(&mut m), Step::Exited, "{:?} {:#?}", m.fault(), m.mac.log);
+    assert_eq!((rd(&m, b, R + 12) as u32, rd(&m, b, R + 16)), (fc(b"keyb"), 1), "kEventRawKeyDown");
+    assert_eq!((rd(&m, b, R + 28), rd(&m, b, R + 24)), (0, 0x23), "kEventParamKeyCode: the P key (0x23)");
+    assert_eq!((rd(&m, b, R + 32), m.mac.mem.read_u8(b + (R + 40) as u32).unwrap()), (0, b'P'), "kEventParamKeyMacCharCodes");
+    // NEGATIVE CONTROL: no kEventRawKeyUp handler - the release is no event (keyUp stays outside the system event mask)
+    assert!(!m.mac.ev.queue.iter().any(|e| e.what == 4), "no keyUp queued: {:?}", m.mac.ev.queue);
+    // a program listening for kEventRawKeyUp hears the release, with the same key code
+    let bytes = build(&window_main(8), &key_handler(), &Asm::new(), &data((fc(b"keyb"), 3), 1 | (1 << 25)));
+    let mut m = boot(&bytes);
+    assert_eq!(run(&mut m), Step::Blocked, "{:?}", m.fault());
+    type_key(&mut m, b, '\u{8}', true);
+    type_key(&mut m, b, '\u{8}', false);
+    assert_eq!(pump(&mut m), Step::Exited, "{:?} {:#?}", m.fault(), m.mac.log);
+    assert_eq!((rd(&m, b, R + 12) as u32, rd(&m, b, R + 16)), (fc(b"keyb"), 3), "kEventRawKeyUp");
+    assert_eq!(rd(&m, b, R + 24), 0x33, "Delete's key code (0x33) on the release too");
+}

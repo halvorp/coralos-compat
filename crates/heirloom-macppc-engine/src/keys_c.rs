@@ -2,8 +2,8 @@
 //! (src/toolevent.cpp, MIT; the KCHR layout from src/include/rsys/keyboard.h): `keycode` = modifiers >> 8 in the high byte (index into the 256-byte modifier table at +2), virtual key in
 //! the low 7 bits (bit 7 = key UP); tables of 128 characters follow the table count at +258; dead-key records follow the tables. The result is the character; a dead key sets `*state`
 //! to the record's offset, and the key that completes it returns the replacement, or the character with the record's no-match character in bits 16..23.
-//! There is NO installed layout on this machine (the host delivers characters, not key codes: translate/input.rs), so `transData == NULL` -- "the current KCHR" -- is refused BY NAME
-//! rather than answered from a US table (a British/European default layout is a separate decision); a program that passes its own `'KCHR'` handle's data gets the real answer.
+//! The INSTALLED layout is the engine's own British `'KCHR'` (`heirloom_mac68k_engine::keyboard`, the CoralOS default region), copied into guest memory once: its address is
+//! smKCHRCache (`GetScriptManagerVariable(38)`, script_c.rs), which Storm (Warcraft III) passes here for every key. `transData == NULL` is that installed layout too; a program that passes its own `'KCHR'` handle's data gets its own layout's answer.
 use crate::clib::arg;
 use crate::machine::MacPpc;
 use alloc::format;
@@ -14,7 +14,7 @@ use crate::cpu::Cpu;
 impl<U: GuestUi> MacPpc<U> {
     pub(crate) fn key_translate(&mut self, cpu: &mut Cpu) -> Result<(), String> {
         let (kchr, code, state_p) = (arg(self, cpu, 0)?, arg(self, cpu, 1)? as u16, arg(self, cpu, 2)?);
-        if kchr == 0 { return Err(String::from("KeyTranslate(NULL, ..): no keyboard layout ('KCHR') is installed on this machine; pass a KCHR resource's data")); }
+        let kchr = if kchr == 0 { self.installed_kchr()? } else { kchr };
         let e = |_| format!("KeyTranslate: the KCHR at {kchr:#x} leaves guest RAM");
         let m = &self.mac.mem;
         let virt = u32::from(code & 0x7F);
@@ -53,5 +53,15 @@ impl<U: GuestUi> MacPpc<U> {
         }
         cpu.gpr[3] = ascii;
         Ok(())
+    }
+
+    /// The installed keyboard layout's `'KCHR'` data in guest memory (copied on first use; it stays for the life of the machine).
+    pub(crate) fn installed_kchr(&mut self) -> Result<u32, String> {
+        if self.sc.kchr != 0 { return Ok(self.sc.kchr); }
+        let b = heirloom_mac68k_engine::keyboard::kchr();
+        let p = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, b.len() as u32, false).map_err(|e| format!("the installed 'KCHR': no memory (memory error {e})"))?;
+        self.mac.mem.write_bytes(p, &b).map_err(|_| String::from("the installed 'KCHR' leaves guest RAM"))?;
+        self.sc.kchr = p;
+        Ok(p)
     }
 }

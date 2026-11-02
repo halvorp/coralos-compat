@@ -34,6 +34,7 @@ use crate::cpu::Cpu;
 pub const MOUSE_DOWN: u16 = 1;
 pub const MOUSE_UP: u16 = 2;
 pub const KEY_DOWN: u16 = 3;
+pub const KEY_UP: u16 = 4;
 pub const AUTO_KEY: u16 = 5;
 pub const UPDATE_EVT: u16 = 6;
 pub const ACTIVATE_EVT: u16 = 8;

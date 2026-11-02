@@ -34,6 +34,7 @@ pub mod gestalt;
 pub mod guestcall;
 pub mod helpmgr;
 pub mod intl;
+pub mod keyboard; // the installed 'KCHR' (British): KeyTranslate's layout and the key code a host character is typed with
 #[cfg(feature = "fixtures")]
 pub mod fixture;
 pub mod lowmem;

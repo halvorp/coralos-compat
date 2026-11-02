@@ -134,6 +134,24 @@ fn memory_manager_calls_by_register_values_run_the_68k_handlers() {
     assert!(m.mac.log.iter().any(|l| l.contains("GetNewWindow 999: no WIND resource")), "{:?}", m.mac.log);
 }
 
+/// The Sharing Setup names every Mac OS 9 System file has: 'STR ' -16413 (the computer name) and -16096 (the owner name), EMPTY until the user names
+/// the machine. Storm (Warcraft III) reads -16413 through GetResource and makes a CFString of it without checking: a missing one is a NULL CFString.
+#[test]
+fn the_system_file_has_the_empty_sharing_setup_names() {
+    let mut m = machine();
+    let frag = load(&mut m, &fixture::startup_app());
+    for id in [-16413i16, -16096] {
+        let (o, h) = call(&mut m, &frag, "GetResource", &[u32::from_be_bytes(*b"STR "), id as u16 as u32]);
+        assert_eq!(o, GlueOutcome::Return);
+        assert_ne!(h, 0, "'STR ' {id}");
+        let p = m.mac.mem.read_u32(h).unwrap();
+        assert_eq!(m.mac.mem.read_u8(p).unwrap(), 0, "'STR ' {id} is an empty Pascal string");
+    }
+    // NEGATIVE CONTROL: a System string that is not there is still resNotFound
+    let (_, r) = call(&mut m, &frag, "GetResource", &[u32::from_be_bytes(*b"STR "), (-16414i16) as u16 as u32]);
+    assert_eq!(r, 0);
+}
+
 /// The proof of reuse across the seam: the PowerPC glue call and the 68k program HELLO run the same NewWindow handler.
 #[test]
 fn new_window_through_glue_is_the_68k_new_window() {

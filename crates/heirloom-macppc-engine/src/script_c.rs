@@ -1,6 +1,7 @@
 //! The Script Manager by C name (`GetScriptManagerVariable`, `SetScriptManagerVariable`, `KeyScript`, `FontScript`, `IntlScript`, `FontToScript`, `GetScriptVariable`) for a Mac with the
 //! Roman script only. The answers are the 68k `_ScriptUtil` ones (`heirloom_mac68k_engine::script::manager_variable`): one table for both CPUs. `GetScriptManagerVariable`
-//! follows the spec (macos9-specs/InterfaceLib/GetScriptManagerVariable): a stored value, else the table (smRegionCode 40 is 2 = verBritain, the CoralOS default region), else 0.
+//! follows the spec (macos9-specs/InterfaceLib/GetScriptManagerVariable): a stored value, else the table (smRegionCode 40 is 2 = verBritain, the CoralOS default region), else 0;
+//! smKCHRCache (38) is the installed keyboard layout's data in guest memory (`keys_c.rs`; the layout is `heirloom_mac68k_engine::keyboard`, British).
 //! `SetScriptManagerVariable` stores and answers noErr; paramErr for the read-only verbs (smVersion, smEnabled, smSysRef). `GetScriptVariable` has no verified Roman-only table yet and refuses every selector.
 use crate::clib::arg;
 use crate::machine::MacPpc;
@@ -9,8 +10,11 @@ use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use crate::cpu::Cpu;
 
+/// `smKCHRCache` (Script.h): the current keyboard layout's 'KCHR' data.
+pub const SM_KCHR_CACHE: i16 = 38;
+
 #[derive(Default)]
-pub struct ScriptState { vars: alloc::collections::BTreeMap<i16, u32> }
+pub struct ScriptState { vars: alloc::collections::BTreeMap<i16, u32>, pub(crate) kchr: u32 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScFn { GetScriptManagerVariable, SetScriptManagerVariable, KeyScript, FontScript, IntlScript, FontToScript, GetScriptVariable }
@@ -35,7 +39,12 @@ impl<U: GuestUi> MacPpc<U> {
             // region); a verb outside the table answers 0 (the ROM sets ScriptMgrError and returns 0)
             GetScriptManagerVariable => {
                 let sel = a0 as u16 as i16;
-                self.sc.vars.get(&sel).copied().or_else(|| heirloom_mac68k_engine::script::manager_variable(sel).map(|(v, _)| v)).unwrap_or(0)
+                match self.sc.vars.get(&sel).copied() {
+                    Some(v) => v,
+                    // smKCHRCache: the installed keyboard layout's 'KCHR' data, the transData a program passes to KeyTranslate
+                    None if sel == SM_KCHR_CACHE => self.installed_kchr()?,
+                    None => heirloom_mac68k_engine::script::manager_variable(sel).map(|(v, _)| v).unwrap_or(0),
+                }
             }
             // SetScriptManagerVariable(verb, param) -> OSErr: stores the value; the read-only verbs smVersion (0), smEnabled (4) and smSysRef (24) are paramErr (-50)
             SetScriptManagerVariable => {

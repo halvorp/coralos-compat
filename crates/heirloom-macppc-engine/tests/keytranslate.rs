@@ -1,4 +1,5 @@
-//! KeyTranslate through a program-supplied 'KCHR': tables, modifier index, key-up, dead keys with a completer and a no-match character (Executor's C_KeyTranslate algorithm).
+//! KeyTranslate through a program-supplied 'KCHR': tables, modifier index, key-up, dead keys with a completer and a no-match character (Executor's C_KeyTranslate algorithm);
+//! and through the installed (British) layout that smKCHRCache names.
 use heirloom_ui_abi::RecordingGuestUi;
 use heirloom_macppc_engine::{GlueOutcome, MacPpc, PpcHost};
 
@@ -20,14 +21,16 @@ fn kchr(m: &mut M) {
     mem.write_u16(d, 1).unwrap();
     mem.write_bytes(d + 2, &[0, 1, 0, 1, b'a', 0x87, 0, b'`']).unwrap();
 }
-fn kt(m: &mut M, code: u32, state: u32) -> Result<u32, String> {
+fn kt(m: &mut M, code: u32, state: u32) -> Result<u32, String> { kt_with(m, K, code, state) }
+/// KeyTranslate(kchr, code, state) through the glue.
+fn kt_with(m: &mut M, kchr: u32, code: u32, state: u32) -> Result<u32, String> {
     m.bind("KeyTranslate");
     let mut regs = [0u32; 32];
-    regs[3] = K; regs[4] = code; regs[5] = state;
+    regs[3] = kchr; regs[4] = code; regs[5] = state;
     match m.glue_call("KeyTranslate", &mut regs) { GlueOutcome::Return => Ok(regs[3]), GlueOutcome::Refused(w) => Err(w), o => panic!("{o:?}") }
 }
 #[test]
-fn layout_lookup_modifiers_dead_keys_and_the_missing_layout() {
+fn layout_lookup_modifiers_and_dead_keys_through_a_programs_own_kchr() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     kchr(&mut m);
     m.mac.mem.write_u32(STATE, 0).unwrap();
@@ -43,8 +46,32 @@ fn layout_lookup_modifiers_dead_keys_and_the_missing_layout() {
     assert_eq!(kt(&mut m, 2, STATE), Ok(u32::from(b'b') | u32::from(b'`') << 16));
     // key-up of the dead key yields its no-match character; NEGATIVE control: the key-DOWN did not
     assert_eq!(kt(&mut m, 0x81, STATE), Ok(u32::from(b'`')));
-    // NEGATIVE control: no layout installed -> refused by name, not answered from a US table
-    m.bind("KeyTranslate");
+}
+
+/// The installed layout (British, the CoralOS default region): smKCHRCache names its data, and KeyTranslate through it - or through NULL, "the current
+/// layout" - answers. Storm (Warcraft III) asks GetScriptManagerVariable(smKCHRCache) and KeyTranslates every key through it.
+#[test]
+fn the_installed_british_layout_is_smkchrcache_and_keytranslate_reads_it() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    m.bind("GetScriptManagerVariable");
     let mut regs = [0u32; 32];
-    assert!(matches!(m.glue_call("KeyTranslate", &mut regs), GlueOutcome::Refused(w) if w.contains("no keyboard layout")));
+    regs[3] = 38; // smKCHRCache
+    assert!(matches!(m.glue_call("GetScriptManagerVariable", &mut regs), GlueOutcome::Return));
+    let cache = regs[3];
+    assert_ne!(cache, 0, "a layout is installed");
+    assert_eq!(kt_with(&mut m, cache, 0x23, 0), Ok(u32::from(b'p')), "the P key");
+    assert_eq!(kt_with(&mut m, cache, 0x0200 | 0x23, 0), Ok(u32::from(b'P')), "Shift-P");
+    assert_eq!(kt_with(&mut m, cache, 0x0200 | 0x14, 0), Ok(0xA3), "British: Shift-3 is the pound sign (Mac Roman 0xA3)");
+    assert_eq!(kt_with(&mut m, cache, 0x24, 0), Ok(0x0D), "Return");
+    assert_eq!(kt_with(&mut m, 0, 0x33, 0), Ok(0x08), "NULL is the installed layout: Delete");
+    // the same layout every time (one copy for the life of the machine)
+    m.bind("GetScriptManagerVariable");
+    let mut regs = [0u32; 32];
+    regs[3] = 38;
+    m.glue_call("GetScriptManagerVariable", &mut regs);
+    assert_eq!(regs[3], cache);
+    // NEGATIVE CONTROL: a program's own layout still wins over the installed one
+    kchr(&mut m);
+    assert_eq!(kt_with(&mut m, K, 0x0200, 0), Ok(u32::from(b'A')));
+    assert_eq!(kt_with(&mut m, K, 0x23, 0), Ok(0), "the test layout has no P key");
 }
