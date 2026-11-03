@@ -101,11 +101,9 @@ impl Exec {
     pub fn set_jit_movbe(&mut self, on: bool) {
         self.jit_movbe = Some(on);
     }
-    /// NEGATIVE CONTROL ONLY: plant JIT mutant `m` (1 subfic CA inverted, 2 no XER[SO] in CR, 3 no code-watch test on
-    /// stores, 4 one instruction too many retired at a helper exit, 5 single-precision FP arithmetic not rounded to single,
-    /// 6 sraw's count > 31 path dropped, 7 the carry chain ignoring XER[CA] in, 8 an exit not storing one dirty cached
-    /// register, 9 no register-cache reload after a helper, 10 `add.`'s CR0 read from the add's own flags, 11 evicted blocks
-    /// left reachable, 12 fmadds rounded twice). The JIT gates must go RED with each.
+    /// NEGATIVE CONTROL ONLY: plant JIT mutant `m` - one of the `MUT_*` constants of jit_emit.rs (1-20: e.g. 3 no code-watch
+    /// test on stores, 8 / 9 the global pins not loaded after a helper / not stored at the exit, 19 a store map that stops
+    /// mirroring the watch), each documented there. The JIT gates must go RED with each.
     #[doc(hidden)]
     pub fn plant_jit_mutant(&mut self, m: u8) {
         self.jit_mutant = m;

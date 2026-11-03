@@ -390,6 +390,11 @@ pub struct PpcProf {
     pub withdraws: u64,
     pub withdraw_pages: u64,
     pub codemem_failures: u64,
+    // ---- appended 2026-11-03 (h86 ppc-jit4) ----
+    /// Indirect branches (blr / bctr / a native's return) that found their target in tier 2's indirect branch target cache, and
+    /// those that went to the dispatcher.
+    pub ibtc_hits: u64,
+    pub ibtc_misses: u64,
 }
 
 /// `PpcProf`'s size before the tier counters were appended: what a `size` of 0 asks for.

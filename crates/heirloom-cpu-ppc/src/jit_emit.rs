@@ -1,9 +1,9 @@
 //! Tier 2's block compiler: one tier-1 block (t1cache boundaries, t1op decode) to x86-64.
 //!
-//! Register model: rbx = &Cpu (a guest register the block does not cache is a memory operand at its `offset_of!`), r12 =
-//! guest RAM base, r13 = &Ctx (the remaining budget included), r15 = the instructions retired so far (across chained
-//! blocks); r9 r10 r11 rbp r14 are the register cache's (jit_regs: the GPRs / CR / XER / LR / CTR a block uses most, stored
-//! at every exit and helper call, reloaded after a helper). rax, rcx, rdx, rsi, rdi, r8 are scratch. Code size matters
+//! Register model: rbx = &Cpu (a guest field that is not a global pin is a memory operand at its `offset_of!`), r12 = guest
+//! RAM base, r13 = &Ctx (the remaining budget included), r15 = the instructions retired so far (across chained blocks); r9
+//! r10 r11 rbp r14 hold the GLOBAL pins (jit_regs: CR, r0, r3, r4, XER across all JIT code, stored only where Rust can read
+//! the Cpu). rax, rcx, rdx, rsi, rdi, r8 are scratch. Code size matters
 //! (the WC3 working set is tens of thousands of blocks): every slow path is one
 //! `call [r13 + slow]` into the shared stub (jit.rs), which calls the helper and either returns or leaves.
 //!
@@ -31,10 +31,10 @@ pub(crate) const MUT_FP_SINGLE: u8 = 5;
 pub(crate) const MUT_SRAW_BIG: u8 = 6;
 /// adde / addze / subfe / subfze ignore XER[CA] as their carry in (jit_inline).
 pub(crate) const MUT_CA_IN: u8 = 7;
-/// An exit stores every dirty cached register but the last one (jit_regs).
-pub(crate) const MUT_NO_SPILL: u8 = 8;
-/// The cached registers are not reloaded after a helper call (jit_regs).
-pub(crate) const MUT_NO_RELOAD: u8 = 9;
+/// The slow stub does not load the global pins back after the helper (jit.rs): a field tier 1's handler wrote is lost.
+pub(crate) const MUT_GLOBAL_NO_RELOAD: u8 = 8;
+/// The common exit does not store the global pins (jit.rs): the Cpu keeps stale CR / r0 / r3 / r4 / XER after JIT code.
+pub(crate) const MUT_GLOBAL_NO_EXIT_STORE: u8 = 9;
 /// CR0 of `add.` read from the add's own flags (its OF is not the result's sign test) instead of `test`.
 pub(crate) const MUT_LAZY_FLAGS: u8 = 10;
 /// Eviction leaves the dropped segment's blocks in the block map and the dispatch table (jit.rs): the dispatcher then
@@ -48,9 +48,8 @@ pub(crate) const MUT_NATIVE_COUNT: u8 = 13;
 pub(crate) const MUT_TABLE_STALE: u8 = 14;
 /// A native that changed the natives set or guest RAM does not make JIT code leave for the dispatcher's resync (jit.rs).
 pub(crate) const MUT_NO_RESYNC: u8 = 15;
-/// A superblock's side exit (the taken edge of a conditional branch inside it) stores none of the cached registers that
-/// are dirty there: the target block reads the guest fields' stale values from the Cpu.
-pub(crate) const MUT_SIDE_NO_SPILL: u8 = 16;
+/// A native block does not store the global pins before h_native (jit_emit): the host's native reads stale r3 / r4 / ...
+pub(crate) const MUT_NATIVE_GLOBALS: u8 = 16;
 /// A chained jump from the target's own page lands past its page-generation check even when the two blocks were compiled
 /// at different generations (jit.rs): a block left stale by a write to its page runs.
 pub(crate) const MUT_INNER_ANY_GEN: u8 = 17;
@@ -60,6 +59,8 @@ pub(crate) const MUT_FLUSH_ON_REFUSAL: u8 = 18;
 /// The store map stops mirroring the code watch after it is built (jit_smap): a page decoded later stays "store inline", so a
 /// store into fresh code never bumps its generation.
 pub(crate) const MUT_SMAP_STALE: u8 = 19;
+/// A helper call does not store the global pins first (jit_emit): tier 1's handler reads stale CR / r0 / r3 / r4 / XER.
+pub(crate) const MUT_GLOBAL_STALE: u8 = 20;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -102,31 +103,21 @@ pub(crate) struct E<'a, 'b> {
     pub(crate) a: Asm,
     pub(crate) env: &'a mut Env<'b>,
     pc: u32,
-    /// Inline fast paths that fell back: (jcc to patch, instruction index, the cached registers dirty at the jump); each
-    /// gets a slow stub after the body.
-    slow: Vec<(Fix, usize, u8)>,
-    /// Superblock side exits: (the jumps taken to it, the branch's instruction index, the cached registers dirty at the
-    /// branch, its target); each gets an out-of-line exit after the body.
-    sides: Vec<(Vec<Fix>, usize, u8, u32)>,
+    /// Inline fast paths that fell back: (jcc to patch, instruction index); each gets a slow stub after the body.
+    slow: Vec<(Fix, usize)>,
+    /// Superblock side exits: (the jumps taken to it, the branch's instruction index, its target); each gets an out-of-line
+    /// chained exit after the body.
+    sides: Vec<(Vec<Fix>, usize, u32)>,
     /// Instructions in the (super)block: a conditional branch before the last one is a side exit, not the end.
     n: usize,
     resume: Vec<usize>,
     words: Vec<u32>,
-    /// The register cache (jit_regs): the Cpu fields held in host registers for this block, which of them hold a value
-    /// not yet stored, and - in the counting pass - how often each field is used.
-    pub(crate) regs: crate::jit_regs::Regs,
 }
 
-/// Compile `ops` (a whole tier-1 block or a superblock at `pc`, decoded from code page `page` at generation `gen`): a counting pass picks
-/// the Cpu fields the register cache holds, then the real pass emits. Answers the code and how many fields were pinned.
-pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env) -> (Vec<u8>, usize, usize) {
-    let pins = {
-        let mut e = E::new(ops, pc, env, crate::jit_regs::Regs::counting());
-        e.body(ops);
-        core::mem::replace(&mut e.regs, crate::jit_regs::Regs::pinned(Vec::new())).choose()
-    };
-    let pinned = pins.len();
-    let mut e = E::new(ops, pc, env, crate::jit_regs::Regs::pinned(pins));
+/// Compile `ops` (a whole tier-1 block or a superblock at `pc`, decoded from code page `page` at generation `gen`), one pass
+/// (the global pins are fixed: jit_regs). Answers the code and the offset of its INNER entry.
+pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env) -> (Vec<u8>, usize) {
+    let mut e = E::new(ops, pc, env);
     let a = &mut e.a;
     // entry checks: the page generation (skipped by a chained jump from this page at this generation: the INNER entry),
     // then the budget
@@ -138,7 +129,6 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     a.lea64(RAX, m(R15, ops.len() as i32));
     a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
     let b1 = a.jcc(Cc::A);
-    e.reload(true);
     e.body(ops);
     e.tails();
     let a = &mut e.a;
@@ -146,11 +136,13 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     a.here(b2);
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
-    (e.a.b, pinned, inner)
+    (e.a.b, inner)
 }
 
 /// Jump to the published block at the guest pc in r8d if the dispatch table's slot for it holds that block; else fall
 /// through (rax clobbered).
+/// The table is the INDIRECT BRANCH TARGET CACHE of blr / bctr (and of a native's return): hits and misses are counted
+/// (Ctx.ibtc_hits / ibtc_misses -> JitStats -> PpcProf).
 fn probe(a: &mut Asm, table_mask: u32) {
     a.mov_rr(RAX, R8);
     a.sh_ri(Sh::Shr, RAX, 2);
@@ -159,8 +151,10 @@ fn probe(a: &mut Asm, table_mask: u32) {
     a.alu_rm64(Alu::Add, RAX, ctx(offset_of!(Ctx, table)));
     a.alu_rm(Alu::Cmp, R8, m(RAX, offset_of!(Slot, pc) as i32));
     let miss = a.jcc(Cc::Ne);
+    a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, ibtc_hits)), 1);
     a.jmp_m(m(RAX, offset_of!(Slot, entry) as i32));
     a.here(miss);
+    a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, ibtc_misses)), 1);
 }
 
 /// The block of a bound NATIVE address: the host's native through `jit::h_native` (one retired instruction, as tier 0
@@ -177,7 +171,10 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
     a.mov_rr64(RDI, R13);
     a.mov_ri(RSI, pc);
     a.mov_rr64(RDX, R15);
+    // the native reads and writes the Cpu: the global pins go there first and come back after (rax untouched)
+    if env.mutant != MUT_NATIVE_GLOBALS { crate::jit_regs::store_globals(&mut a); }
     a.call_m(ctx(offset_of!(Ctx, native)));
+    crate::jit_regs::load_globals(&mut a);
     a.test_rr(RAX, RAX);
     let out = a.jcc(Cc::Ne);
     a.alu_ri64(Alu::Add, R15, if env.mutant == MUT_NATIVE_COUNT { 2 } else { 1 });
@@ -203,8 +200,8 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 }
 
 impl<'a, 'b> E<'a, 'b> {
-    fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>, regs: crate::jit_regs::Regs) -> Self {
-        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), regs }
+    fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
+        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect() }
     }
 
     /// The instructions, and the fall-through exit when the last one does not end the block.
@@ -224,12 +221,9 @@ impl E<'_, '_> {
 
     /// Leave for `target` (a constant), `n` instructions of this block retired.
     fn chain(&mut self, target: u32, n: usize) {
-        self.spill(true);
         self.a.alu_ri64(Alu::Add, R15, n as i32);
         self.a.st32i(cpu(PC), target);
-        if self.counting() {
-            self.exit_normal();
-        } else if self.env.chain {
+        if self.env.chain {
             let slot = (self.env.link)(target);
             self.a.mov_ri64(RAX, slot as u64);
             self.a.jmp_m(m(RAX, 0));
@@ -243,7 +237,6 @@ impl E<'_, '_> {
     }
     /// Leave for the target in r8d, `n` retired: through the dispatch table when chaining.
     fn chain_dyn(&mut self, n: usize) {
-        self.spill(true);
         let a = &mut self.a;
         a.alu_ri64(Alu::Add, R15, n as i32);
         a.st32(cpu(PC), R8);
@@ -252,17 +245,16 @@ impl E<'_, '_> {
     }
 
     /// Run instruction `i` through tier 1's handler (the shared slow stub: it returns here when the block goes on, else
-    /// leaves with the exact retired count). The register cache is stored first (the handler reads, and the stub may leave
-    /// with, the Cpu) and reloaded after (the handler may have written any of it).
+    /// leaves with the exact retired count). The global pins are stored first (the handler reads the Cpu); the stub loads
+    /// them back after it (the handler may have written any field).
     pub(crate) fn helper(&mut self, i: usize) {
-        self.spill(false);
+        if self.env.mutant != MUT_GLOBAL_STALE { crate::jit_regs::store_globals(&mut self.a); }
         let (ipc, w) = (self.ipc(i), self.words[i]);
         let a = &mut self.a;
         a.mov_ri(RSI, w);
         a.mov_ri(RDX, ipc);
         a.mov_ri(RCX, i as u32);
         a.call_m(ctx(offset_of!(Ctx, slow)));
-        if self.env.mutant == MUT_NO_RELOAD { self.regs.dirty = 0; } else { self.reload(false); }
     }
 
     /// edx (rdx for 8) = the big-endian `n`-byte value at [r12 + rax], zero- or sign-extended (16 bits).
@@ -295,21 +287,18 @@ impl E<'_, '_> {
     /// A conditional jump to instruction `i`'s slow path (tier 1's handler for it, then back after it).
     pub(crate) fn slow_if(&mut self, cc: Cc, i: usize) {
         let f = self.a.jcc(cc);
-        self.slow.push((f, i, self.regs.dirty));
+        self.slow.push((f, i));
     }
 
-    /// The slow paths of the inline forms: store what the cache held dirty AT THE JUMP (every fast path leaves before
-    /// writing guest state), the helper, reload, then back after the instruction. Then the superblock side exits: the
-    /// registers dirty at their branch stored, and a chained exit to the branch target.
+    /// The slow paths of the inline forms (every fast path leaves before writing guest state): the helper, then back after
+    /// the instruction. Then the superblock side exits: a chained exit to the branch target.
     fn tails(&mut self) {
-        for (fixes, i, dirty, target) in core::mem::take(&mut self.sides) {
+        for (fixes, i, target) in core::mem::take(&mut self.sides) {
             for f in fixes { self.a.here(f); }
-            self.regs.dirty = if self.env.mutant == MUT_SIDE_NO_SPILL { 0 } else { dirty };
             self.chain(target, i + 1);
         }
-        for (f, i, dirty) in core::mem::take(&mut self.slow) {
+        for (f, i) in core::mem::take(&mut self.slow) {
             self.a.here(f);
-            self.regs.dirty = dirty;
             self.helper(i);
             let back = self.a.jmp();
             let r = self.resume[i];
@@ -568,7 +557,7 @@ impl E<'_, '_> {
                 // inside a superblock: the taken edge leaves through an out-of-line side exit, the not-taken one runs on
                 if op.k == K::Bcl { self.set_lr(i); }
                 let taken = self.cond_taken(d, s);
-                self.sides.push((taken, i, self.regs.dirty, op.imm));
+                self.sides.push((taken, i, op.imm));
             }
             K::Bc | K::Bcl => {
                 if op.k == K::Bcl { self.set_lr(i); }

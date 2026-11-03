@@ -37,7 +37,7 @@ pub(crate) const HOT_AFTER: u32 = 2;
 pub(crate) const ARENA_BYTES: usize = 32 << 20;
 /// Segments of the arena (2 MiB each at the default size): one is dropped at a time.
 pub(crate) const SEGMENTS: usize = 16;
-const TABLE_BITS: u32 = 16;
+const TABLE_BITS: u32 = 14;
 /// Longest superblock (guest instructions): a block ending in a conditional branch goes on through the NOT-taken path into
 /// the next tier-1 block on the same code page, the taken edge a side exit (jit_emit). A new constant of this tier (WC3
 /// blocks average 3.8 instructions; tuned only by measurement).
@@ -102,6 +102,9 @@ pub(crate) struct Ctx {
     pub(crate) natives: u64,
     /// h_one calls this entry.
     pub(crate) helpers: u64,
+    /// Indirect branches (blr / bctr / a native's return) that found their target in the dispatch table, and that did not.
+    pub(crate) ibtc_hits: u64,
+    pub(crate) ibtc_misses: u64,
     pub(crate) resync: bool,
     /// Planted mutant MUT_NO_RESYNC: h_native never asks for the resync.
     pub(crate) no_resync: bool,
@@ -164,7 +167,7 @@ pub(crate) struct Jit {
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
         let arena = Arena::new(mem, arena_bytes, SEGMENTS)?;
-        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, resync: false, no_resync: false, census: None });
+        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, resync: false, no_resync: false, census: None });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
@@ -184,8 +187,11 @@ impl Jit {
         a.ld64(RBX, m(R13, offset_of!(Ctx, cpu) as i32));
         a.ld64(R12, m(R13, offset_of!(Ctx, ram) as i32));
         a.alu_rr(Alu::Xor, R15, R15);
+        crate::jit_regs::load_globals(&mut a);
         a.jmp_r(RSI);
         let exit = a.pos();
+        // every way out of JIT code passes here: the global pins go back to the Cpu
+        if self.mutant != crate::jit_emit::MUT_GLOBAL_NO_EXIT_STORE { crate::jit_regs::store_globals(&mut a); }
         a.st64(m(R13, offset_of!(Ctx, retired) as i32), R15);
         a.alu_ri64(Alu::Add, RSP, 8);
         for r in [R15, R14, R13, R12, RBP, RBX] { a.pop(r); }
@@ -194,13 +200,15 @@ impl Jit {
         a.mov_ri(RAX, EXIT_NORMAL);
         a.jmp_m(m(R13, offset_of!(Ctx, exit) as i32));
         // the shared slow stub: called from a block with esi = word, edx = pc, ecx = block-relative index i (kept on the
-        // stack across the call: rbp and r14 belong to the register cache); runs h_one and returns to the block (answer 0)
+        // stack across the call: rbp and r14 hold global pins); runs h_one and returns to the block (answer 0)
         // or leaves with i (trap) or i + 1 (anything else) instructions of it retired
         let slow = a.pos();
         a.push(RCX);
         a.mov_rr64(RDI, R13);
         a.lea64(RCX, mx(R15, RCX, 1));
         a.call_m(m(R13, offset_of!(Ctx, helper) as i32));
+        // the handler may have written any field: the global pins come back from the Cpu (rax, the answer, untouched)
+        if self.mutant != crate::jit_emit::MUT_GLOBAL_NO_RELOAD { crate::jit_regs::load_globals(&mut a); }
         a.pop(RCX);
         a.test_rr(RAX, RAX);
         let out = a.jcc(Cc::Ne);
@@ -332,7 +340,7 @@ impl Jit {
             &links[i] as *const u64
         };
         let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
-        let (code, pinned, inner) = jit_emit::compile(ops, pc, gen, page, &mut env);
+        let (code, inner) = jit_emit::compile(ops, pc, gen, page, &mut env);
         if out_of_links { self.drop_code(); return true; }
         if may_refuse && code.len() > self.arena.segment_bytes() {
             for (i, target) in taken {
@@ -344,13 +352,13 @@ impl Jit {
             }
             return false;
         }
-        self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, ops.len() as u32, gen, pinned, at);
+        self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, ops.len() as u32, gen, at);
         true
     }
 
     /// Put compiled code in the arena (reusing the oldest segment when full) and queue it for publishing; `taken` = the
     /// link slots its code jumps through.
-    fn place(&mut self, code: &[u8], inner: usize, taken: Vec<u32>, pc: u32, len: u32, gen: u64, pinned: usize, at: u64) {
+    fn place(&mut self, code: &[u8], inner: usize, taken: Vec<u32>, pc: u32, len: u32, gen: u64, at: u64) {
         let p = match self.arena.put(code) {
             Some(p) => p,
             None => {
@@ -365,7 +373,6 @@ impl Jit {
         let seg = self.arena.segment_of(p as u64).map_or(0, |s| s as u8 + 1);
         for i in taken { self.link_owner[i as usize] = seg; }
         self.stats.compiled += 1;
-        self.stats.pinned += pinned as u64;
         self.stats.movbe = self.movbe;
         if self.blocks.contains(pc) { self.stats.recompiled += 1; }
         self.stats.code_bytes = self.arena.used() as u64;
@@ -381,7 +388,7 @@ impl Jit {
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
         let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
         let code = jit_emit::compile_native(pc, &mut env);
-        self.place(&code, 0, Vec::new(), pc, 1, gen, 0, at);
+        self.place(&code, 0, Vec::new(), pc, 1, gen, at);
         self.stats.natives_compiled += 1;
         if let (Some(c), Some(t0)) = (self.timer, t0) { self.stats.translate_time += c().wrapping_sub(t0); }
     }
@@ -477,6 +484,8 @@ impl Jit {
         c.native = h_native::<H> as HNative as usize as u64;
         c.natives = 0;
         c.helpers = 0;
+        c.ibtc_hits = 0;
+        c.ibtc_misses = 0;
         c.resync = false;
         c.no_resync = self.mutant == crate::jit_emit::MUT_NO_RESYNC;
         // SAFETY: `enter` is the trampoline this Jit emitted and published (RX) at the arena's start, with the System V
@@ -487,6 +496,8 @@ impl Jit {
         let st = f(&mut *self.ctx, entry);
         let r = self.ctx.retired;
         self.stats.helpers += self.ctx.helpers;
+        self.stats.ibtc_hits += self.ctx.ibtc_hits;
+        self.stats.ibtc_misses += self.ctx.ibtc_misses;
         cpu.tb = self.ctx.tb0.wrapping_add(r);
         self.stats.entries += 1;
         self.stats.insns += r;

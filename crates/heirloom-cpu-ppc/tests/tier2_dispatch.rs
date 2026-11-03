@@ -1,10 +1,12 @@
 //! Tier 2's dispatcher and NATIVE BLOCKS against tier 0: a guest loop calling natives that do everything a native may do -
 //! write guest RAM and the loop's own code, write the time base, bind and unbind a native over guest code that was already
 //! compiled, grow guest RAM, redirect the return, block the CPU, trap - ends in tier 0's state in every slicing, with the
-//! natives really run from JIT code; and the planted dispatcher mutants go RED (a native counted twice, a dispatch table
-//! kept across a flush, no resync after a native changed the natives set or RAM). Also how control leaves a SUPERBLOCK: a
-//! side exit stores the registers dirty at its branch (mutant 16 RED); and a chained jump skips its target's page-generation
-//! check only from the same page at the same generation (mutant 17 RED). Host only (HostCodeMem).
+//! natives really run from JIT code; and the planted dispatcher mutants go RED (13 a native counted twice, 14 a dispatch
+//! table kept across a flush, 15 no resync after a native changed the natives set or RAM, 16 a native block that leaves the
+//! global pins unstored). Also: a SUPERBLOCK side exit leaves the global pins exact; a chained jump skips its target's
+//! page-generation check only from the same page at the same generation (17 RED); a refused publish drops only its batch
+//! (18 RED); an inline store into code decoded after the store map was built takes the slow path (19 and 3 RED). Host only
+//! (HostCodeMem).
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use heirloom_cpu_ppc::{CodeMem, Cpu, Exec, Host, HostCodeMem, RunStats, Tier};
 use heirloom_mem_flat32::GuestMem;
@@ -60,6 +62,8 @@ impl Host for M {
 }
 
 fn d(op: u32, rt: u32, ra: u32, imm: u32) -> u32 { op << 26 | rt << 21 | ra << 16 | (imm & 0xFFFF) }
+/// add rt,ra,rb
+fn x31_add(rt: u32, ra: u32, rb: u32) -> u32 { 31 << 26 | rt << 21 | ra << 16 | rb << 11 | 266 << 1 }
 fn bc(bo: u32, bi: u32, rel: i32) -> u32 { 16 << 26 | bo << 21 | bi << 16 | (rel as u32 & 0xFFFC) }
 fn mtspr(spr: u32, rs: u32) -> u32 { 31 << 26 | rs << 21 | (spr & 31) << 16 | (spr >> 5) << 11 | 467 << 1 }
 const BCTRL: u32 = 0x4E80_0421;
@@ -159,6 +163,9 @@ fn negative_control_a_native_counted_twice_or_no_resync_goes_red() {
     // 15: JIT code goes on after a native bound a native over compiled guest code (or grew RAM)
     let (got, _) = run(Tier::Jit, 15, &prog, 1_000_000);
     assert!(got != want, "mutant 15 (no resync after a native changed the natives set / RAM) stayed GREEN");
+    // 16: a native block calls the native without storing the global pins (N_ADD reads r3, a global)
+    let (got, _) = run(Tier::Jit, 16, &prog, 1_000);
+    assert!(got != want, "mutant 16 (a native block leaves the global pins unstored) stayed GREEN");
 }
 
 /// Negative control for the dispatch table, in a child process (the mutant leaves table entries pointing into code that a
@@ -186,13 +193,13 @@ fn table_child() {
 }
 
 /// SUPERBLOCKS: a loop whose block runs on through a conditional branch's not-taken path. The branch is taken every 4th
-/// trip with r3 written just before it (held dirty in a host register by the register cache), and the taken target reads
-/// r3 from the Cpu: the side exit must store it. Tier 0's state in every slicing and under lockstep, superblocks really
-/// compiled; mutant 16 (side exits store nothing) RED.
+/// trip with r3 written just before it (a global pin: only in its host register while JIT code runs) and r7 (a memory
+/// field), and the taken target reads both: the chained side exit keeps r3 in its register, an exit to the dispatcher stores
+/// it. Tier 0's state in every slicing and under lockstep, superblocks really compiled.
 fn side_exit_program() -> Vec<u32> {
     let mut p = vec![d(14, 31, 0, 120)]; // li r31,120
     let top = p.len();
-    p.extend([d(14, 3, 3, 1), d(14, 3, 3, 1), d(14, 3, 3, 1)]); // r3 += 3 (dirty)
+    p.extend([d(14, 7, 7, 1), d(14, 3, 3, 1), d(14, 3, 3, 2)]); // r7 += 1 (memory), r3 += 3 (a global pin)
     p.push(d(28, 31, 8, 3)); // andi. r8,r31,3
     p.push(bc(12, 2, 4 * 5)); // beq side (5 instructions on)
     p.push(d(14, 4, 4, 1)); // not taken: addi r4,r4,1
@@ -200,7 +207,7 @@ fn side_exit_program() -> Vec<u32> {
     p.push(bc(4, 2, -(4 * (p.len() - top) as i32))); // bne top
     p.push(18 << 26 | 4 * 5); // b out
     // side:
-    p.push(d(14, 5, 3, 0)); // addi r5,r3,0: r3 as the side exit left it
+    p.push(x31_add(5, 7, 3)); // add r5,r7,r3: both as the side exit left them
     p.push(d(13, 31, 31, 0xFFFF));
     p.push(bc(4, 2, -(4 * (p.len() - top) as i32)));
     // out:
@@ -212,19 +219,17 @@ fn side_exit_program() -> Vec<u32> {
 }
 
 #[test]
-fn a_superblock_side_exit_stores_the_registers_dirty_at_its_branch() {
+fn a_superblock_side_exit_leaves_the_global_pins_and_memory_fields_exact() {
     let prog = side_exit_program();
     let (want, _) = run(Tier::Interp, 0, &prog, 1_000_000);
     assert!(want.last.halted && want.gpr[5] != 0, "the reference run takes the side exit: {:?}", want.last);
     for slice in [1, 5, 37, 1_000_000] {
         let (got, e) = run(Tier::Jit, 0, &prog, slice);
-        assert!(got == want, "slice {slice}: r3 {:#x}/{:#x} r5 {:#x}/{:#x} {:?}", got.gpr[3], want.gpr[3], got.gpr[5], want.gpr[5], e.jit_stats());
+        assert!(got == want, "slice {slice}: r7 {:#x}/{:#x} r5 {:#x}/{:#x} {:?}", got.gpr[7], want.gpr[7], got.gpr[5], want.gpr[5], e.jit_stats());
         if slice > 5 { assert!(e.jit_stats().superblocks > 0, "slice {slice}: a superblock was compiled: {:?}", e.jit_stats()); }
     }
     let (got, e) = run(Tier::JitLockstep, 0, &prog, 50);
     assert!(e.divergence().is_none() && got == want, "lockstep: {:?}", e.divergence());
-    let (got, _) = run(Tier::Jit, 16, &prog, 1_000_000);
-    assert!(got != want, "mutant 16 (a side exit stores no dirty register) stayed GREEN");
 }
 
 /// CHAINED ENTRIES PAST THE GENERATION CHECK: a chained jump from a block on the same code page compiled at the same

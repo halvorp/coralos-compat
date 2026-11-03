@@ -1,91 +1,47 @@
-//! Tier 2's register cache: the Cpu fields a block uses most (GPRs, CR, XER, LR, CTR - every one a 32-bit field at
-//! `rbx + offset`) live in host registers for the block's whole body.
+//! Tier 2's register model: the GLOBAL pins. Five guest fields (32-bit Cpu fields at `rbx + offset`) live in host registers
+//! across ALL JIT code - every block and every chained jump between blocks - so no block loads them at its entry or stores
+//! them at its exits; every other guest field is a memory operand at `rbx + offset`.
 //!
-//! A block is compiled twice: the COUNTING pass runs the same emitter with every guest-register access answered by memory
-//! and tallied per field (its code is thrown away, and it makes no link slots); then up to [`HOST`].len() fields are
-//! PINNED, each to one host register, those whose memory accesses a register saves the most: a pinned field costs one load
-//! at entry if its first access reads it and one store per exit taken if it is written, against one memory access per use
-//! (a field is pinned only when that saves at least one). Then the real pass emits:
-//! - after the entry checks, every pinned field whose first access reads it is loaded (nothing is pinned on the bail paths;
-//!   a field written first needs no load: until it is written it is not dirty, so no exit stores it);
-//! - an access to a pinned field is a register operand; a write marks it DIRTY (a compile-time set: code inside a block is
-//!   straight-line, its only joins are the slow tails, which carry the dirty set of their jump);
-//! - before every exit (a chained or dynamic jump, the dispatcher) and every helper call, the dirty fields are stored; after
-//!   a helper call - the handler may have written any field - every pinned field is reloaded and nothing is dirty.
-//! So at every point where code outside the block can see the Cpu (an exit, a helper, a trap the slow stub raises), memory
-//! holds exactly what the memory-operand compiler would have left there: tier 1's exactness contract is unchanged.
-//! CR and XER are fields like any other, so a compare's CR field and a carry's XER[CA] are register operations,
-//! materialised in the Cpu only at exits and helpers ("lazy" CR / XER, as far as exactness allows: every exit and helper
-//! sees them exact).
+//! WHICH FIVE, by measurement (WC3 gameplay, h86 2026-11-03, the block-boundary loads + stores of each field a per-block cache
+//! paid): CR 13.2%, r3 8.7%, XER 7.6%, r0 6.8%, r4 6.8% of the boundary traffic (then LR 5.2%, r1 4.5%; r2 2.0%, r12 1.8%).
+//! Pinning them globally beat the per-block cache this module was before (a counting pass per block choosing up to five fields,
+//! loaded at entry, stored at exits), and three globals + two per-block registers, and four + one: JIT host instructions per
+//! native call 4,024 (per-block) -> 3,946 (3 + 2) -> 3,918 (4 + 1) -> 3,874 (5 + 0); and with no per-block registers left the
+//! counting pass (half of every compile) is gone.
 //!
-//! Host registers: r9 r10 r11 (caller-saved: the lockstep journal call `h_note` keeps them on the stack) and rbp, r14
-//! (callee-saved; the trampoline saves them; nothing else in tier 2 uses them - the budget is read from the Ctx).
+//! EXACTNESS: the Cpu holds a global's value wherever Rust can see it. The trampoline loads them; the common exit stores them
+//! (every way out of JIT code passes there: chained-exit misses, bails, traps, the slow stub's leaving paths); a call into
+//! Rust - the slow stub's helper (tier 1's handler for one instruction), a native block's h_native - is preceded by a store
+//! and followed by a load (the handler may write any field). The lockstep journal call `h_note` reads no Cpu field: the
+//! caller-saved globals are kept on the stack around it. In JitLockstep every block is entered through the trampoline, so the
+//! globals are flushed at every block boundary there.
+//!
+//! Host registers: r9 r10 r11 (caller-saved) and rbp, r14 (callee-saved; the trampoline saves them). Nothing else in tier 2
+//! uses them (scratch is rax rcx rdx rsi rdi r8).
 use crate::jit_asm::*;
-use crate::jit_emit::{gpr, E, LR, MUT_NO_SPILL};
-use alloc::vec::Vec;
+use crate::jit_emit::{gpr, CR, E, LR, XER};
 
-/// The host registers a block may pin guest fields to, in the order fields are given them.
-pub(crate) const HOST: [u8; 5] = [R9, R10, R11, RBP, R14];
+/// The global pins: (Cpu field offset, host register).
+pub(crate) const GLOBALS: [(usize, u8); 5] = [(CR, R14), (gpr(3) as usize, RBP), (XER, R11), (gpr(0) as usize, R10), (gpr(4) as usize, R9)];
 /// The caller-saved ones (pushed around the lockstep journal call).
 pub(crate) const CALLER_SAVED: [u8; 3] = [R9, R10, R11];
 
-/// How the counting pass saw one field.
-#[derive(Clone, Copy)]
-struct Use { off: usize, uses: u32, read_first: bool, written: bool }
-
-/// An access: a read, a write that reads nothing (the whole field replaced), or both.
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum Acc { R, W, Rw }
-
-pub(crate) struct Regs {
-    /// Counting pass: every field used, in order of first use.
-    count: Option<Vec<Use>>,
-    /// (Cpu field offset, host register, loaded at entry), by pin index.
-    pins: Vec<(usize, u8, bool)>,
-    /// Pin indices whose host register holds a value memory does not have yet.
-    pub(crate) dirty: u8,
-}
-
-impl Regs {
-    pub(crate) fn counting() -> Regs { Regs { count: Some(Vec::new()), pins: Vec::new(), dirty: 0 } }
-    pub(crate) fn pinned(pins: Vec<(usize, u8, bool)>) -> Regs { Regs { count: None, pins, dirty: 0 } }
-    pub(crate) fn counting_pass(&self) -> bool { self.count.is_some() }
-
-    /// After the counting pass: the fields a register saves the most memory accesses for (at least one), each with its host
-    /// register and whether the entry loads it.
-    pub(crate) fn choose(self) -> Vec<(usize, u8, bool)> {
-        let saved = |u: &Use| u.uses as i32 - u.read_first as i32 - u.written as i32;
-        let mut c = self.count.unwrap_or_default();
-        c.retain(|u| saved(u) >= 1);
-        // most saved first; ties by offset, so a block always compiles to the same code
-        c.sort_by(|x, y| saved(y).cmp(&saved(x)).then(x.off.cmp(&y.off)));
-        c.iter().zip(HOST).map(|(u, h)| (u.off, h, u.read_first)).collect()
-    }
-
-    fn at(&mut self, off: usize, acc: Acc) -> O {
-        if let Some(c) = self.count.as_mut() {
-            match c.iter_mut().find(|u| u.off == off) {
-                Some(u) => { u.uses += 1; u.written |= acc != Acc::R; }
-                None => c.push(Use { off, uses: 1, read_first: acc != Acc::W, written: acc != Acc::R }),
-            }
-            return O::M(m(RBX, off as i32));
-        }
-        match self.pins.iter().position(|p| p.0 == off) {
-            Some(k) => {
-                if acc != Acc::R { self.dirty |= 1 << k; }
-                O::R(self.pins[k].1)
-            }
-            None => O::M(m(RBX, off as i32)),
-        }
-    }
-}
+/// The global pin of field `off`, if it is one.
+#[inline(always)]
+fn global(off: usize) -> Option<u8> { GLOBALS.iter().find(|g| g.0 == off).map(|g| g.1) }
+/// Store every global pin into the Cpu (before Rust can read it).
+pub(crate) fn store_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.st32(m(RBX, off as i32), h); } }
+/// Load every global pin from the Cpu (after Rust may have written it).
+pub(crate) fn load_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.ld32(h, m(RBX, off as i32)); } }
 
 impl E<'_, '_> {
-    pub(crate) fn counting(&self) -> bool { self.regs.counting_pass() }
-    /// The Cpu field at `off` (a 32-bit one), to read / to write / to read and write.
-    pub(crate) fn r(&mut self, off: usize) -> O { self.regs.at(off, Acc::R) }
-    pub(crate) fn w(&mut self, off: usize) -> O { self.regs.at(off, Acc::W) }
-    pub(crate) fn rw(&mut self, off: usize) -> O { self.regs.at(off, Acc::Rw) }
+    /// The Cpu field at `off` (a 32-bit one): its host register when it is a global pin, else the memory operand.
+    #[inline(always)]
+    fn field(&self, off: usize) -> O { global(off).map_or(O::M(m(RBX, off as i32)), O::R) }
+    /// The Cpu field at `off`, to read / to write / to read and write (the same operand: named for the reader).
+    pub(crate) fn r(&mut self, off: usize) -> O { self.field(off) }
+    pub(crate) fn w(&mut self, off: usize) -> O { self.field(off) }
+    pub(crate) fn rw(&mut self, off: usize) -> O { self.field(off) }
     /// GPR n, to read / to write.
     pub(crate) fn gr(&mut self, n: u8) -> O { self.r(gpr(n) as usize) }
     pub(crate) fn gw(&mut self, n: u8) -> O { self.w(gpr(n) as usize) }
@@ -98,21 +54,5 @@ impl E<'_, '_> {
         let v = self.ipc(i).wrapping_add(4);
         let o = self.w(LR);
         self.a.st32io(o, v);
-    }
-
-    /// Store every dirty pinned field (before an exit when `exit`, else before a helper call). The dirty set is left as
-    /// it is: the code after a conditional exit still has those values only in registers.
-    pub(crate) fn spill(&mut self, exit: bool) {
-        let mut d = self.regs.dirty;
-        if exit && self.env.mutant == MUT_NO_SPILL && d != 0 { d &= !(1 << (7 - d.leading_zeros())); }
-        for (k, &(off, h, _)) in self.regs.pins.iter().enumerate() {
-            if d & 1 << k != 0 { self.a.st32(m(RBX, off as i32), h); }
-        }
-    }
-    /// Load every pinned field (after a helper call; at the block entry only those read before written): nothing is dirty
-    /// after it.
-    pub(crate) fn reload(&mut self, entry: bool) {
-        for &(off, h, read_first) in &self.regs.pins { if read_first || !entry { self.a.ld32(h, m(RBX, off as i32)); } }
-        self.regs.dirty = 0;
     }
 }

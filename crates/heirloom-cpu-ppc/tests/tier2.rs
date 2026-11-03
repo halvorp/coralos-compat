@@ -313,7 +313,7 @@ fn fuzz_setup(seed: u64) -> impl Fn(&mut Cpu, &mut M) {
 
 #[test]
 fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
-    let (mut compared, mut pinned, mut compiled, mut superblocks) = (0u64, 0u64, 0u64, 0u64);
+    let (mut compared, mut compiled, mut superblocks) = (0u64, 0u64, 0u64);
     for seed in 0..400u64 {
         let prog = random_program(seed);
         let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, fuzz_setup(seed));
@@ -321,7 +321,7 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
         // a run slice publishes what it compiled: short slices make the fuzz's short loops run in JIT code
         for slice in [37, 1_000, 1_000_000] {
             let (got, e) = run_on(Tier::Jit, 0, &prog, slice, fuzz_setup(seed));
-            (pinned, compiled, superblocks) = (pinned + e.jit_stats().pinned, compiled + e.jit_stats().compiled, superblocks + e.jit_stats().superblocks);
+            (compiled, superblocks) = (compiled + e.jit_stats().compiled, superblocks + e.jit_stats().superblocks);
             assert!(got == want, "seed {seed} slice {slice}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} tb {}/{} last {:?}/{:?} ram equal {} {:?}",
                 got.gpr, want.gpr, got.cr, want.cr, got.xer, want.xer, got.tb, want.tb, got.last, want.last, got.ram == want.ram, e.jit_stats());
         }
@@ -338,8 +338,6 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
     }
     // a floor that proves JIT code ran (~100k with this generator: programs that trap early compare less)
     assert!(compared > 50_000, "the fuzz really compared JIT code: {compared}");
-    // and the register cache really held guest fields in host registers (blocks pin ~2-5 of them)
-    assert!(pinned > compiled, "the register cache engaged: {pinned} fields pinned over {compiled} blocks");
     // and superblocks (the generator's skip-the-next bc and the loop's own) were compiled and fuzzed
     assert!(superblocks > 100, "superblocks were fuzzed: {superblocks} of {compiled} blocks");
 }
@@ -483,7 +481,7 @@ fn rc_forms_set_cr0_from_the_result_even_when_the_add_overflows() {
 /// programs for the store-watch and exit-count ones. A gate that stays green with a mutant proves nothing.
 #[test]
 fn negative_control_every_planted_jit_mutant_goes_red() {
-    for mutant in (1..=10u8).chain([12, 16]) {
+    for mutant in (1..=10u8).chain([12, 20]) {
         let mut red = false;
         for seed in 0..400u64 {
             let prog = random_program(seed);

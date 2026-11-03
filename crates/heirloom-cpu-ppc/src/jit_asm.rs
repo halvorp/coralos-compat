@@ -1,6 +1,6 @@
 //! Tier 2's x86-64 encoder: only the instruction forms `jit_emit` / `jit_inline` / `jit_regs` use, base x86-64 (nothing
 //! past x86-64-v2: no VEX, no BMI; MOVBE only behind the runtime CPUID check `cpu_has_movbe`). Memory forms take an `M`, and
-//! the register cache's forms an `O` (a register or memory: a guest register the block holds in a host register, or not).
+//! the register model's forms an `O` (a register or memory: a guest field that is a global pin in a host register, or not).
 //! Encodings follow the Intel SDM vol. 2 opcode tables; the unit tests at the bottom pin each form against bytes an
 //! assembler produces.
 use alloc::vec::Vec;
@@ -45,7 +45,7 @@ pub(crate) fn m(base: u8, disp: i32) -> M { M { base, index: None, disp } }
 pub(crate) fn mx(base: u8, index: u8, scale: u8) -> M { M { base, index: Some((index, scale)), disp: 0 } }
 pub(crate) fn mxd(base: u8, index: u8, scale: u8, disp: i32) -> M { M { base, index: Some((index, scale)), disp } }
 
-/// An r/m operand: a register or memory (the register cache hands out either for a guest register: jit_emit `Loc`).
+/// An r/m operand: a register or memory (jit_regs hands out either for a guest field: a global pin's register, else memory).
 #[derive(Clone, Copy)]
 pub(crate) enum O { R(u8), M(M) }
 
@@ -104,7 +104,7 @@ impl Asm {
         }
     }
 
-    // ---- r/m forms over a register-or-memory operand (the register cache's guest registers) ----
+    // ---- r/m forms over a register-or-memory operand (jit_regs' guest fields) ----
     /// mov r32, r/m32.
     pub(crate) fn ld32o(&mut self, r: u8, o: O) { if let O::R(s) = o { if s == r { return } } self.op_o(false, &[0x8B], r, o) }
     /// mov r/m32, r32.
@@ -219,9 +219,6 @@ impl Asm {
     }
     pub(crate) fn setcc(&mut self, cc: Cc, r: u8) { self.op_r(false, &[0x0F, 0x90 + cc as u8], 0, r, r >= 4) }
     pub(crate) fn cmov(&mut self, cc: Cc, d: u8, s: u8) { self.op_r(false, &[0x0F, 0x40 + cc as u8], d, s, false) }
-    /// bt r64, r64 (bit index mod 64).
-    pub(crate) fn bt_rr64(&mut self, r: u8, bit: u8) { self.op_r(true, &[0x0F, 0xA3], bit, r, false) }
-
     pub(crate) fn sh_ri64(&mut self, op: Sh, d: u8, n: u8) {
         self.op_r(true, &[0xC1], op as u8, d, false);
         self.u8(n);
@@ -344,7 +341,6 @@ mod tests {
         assert_eq!(enc(|a| a.movzx8_rr(RAX, RAX)), [0x0F, 0xB6, 0xC0]); // movzx eax,al
         assert_eq!(enc(|a| a.cmov(Cc::Ne, RDX, RAX)), [0x0F, 0x45, 0xD0]); // cmovne edx,eax
         assert_eq!(enc(|a| a.bt_oi(O::M(m(RBX, 0x100)), 5)), [0x0F, 0xBA, 0xA3, 0x00, 0x01, 0, 0, 5]); // bt dword [rbx+0x100],5
-        assert_eq!(enc(|a| a.bt_rr64(RDX, RCX)), [0x48, 0x0F, 0xA3, 0xCA]); // bt rdx,rcx
         assert_eq!(enc(|a| a.cmp8_mi(mx(RDI, RCX, 1), 0)), [0x80, 0x3C, 0x0F, 0x00]); // cmp byte [rdi+rcx],0
         assert_eq!(enc(|a| a.cmp8_mi(mx(R12, R9, 1), 7)), [0x43, 0x80, 0x3C, 0x0C, 0x07]); // cmp byte [r12+r9],7
         assert_eq!(enc(|a| a.jmp_m(m(R13, 8))), [0x41, 0xFF, 0x65, 0x08]); // jmp [r13+8]
