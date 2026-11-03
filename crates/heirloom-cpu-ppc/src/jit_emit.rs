@@ -15,7 +15,7 @@
 //! whole block; its code page is still at the generation it was decoded at) and BAILS to the dispatcher otherwise, so a
 //! chained jump to a stale or over-budget block is safe without unlinking anything.
 use crate::cpu::{Cpu, XER_CA};
-use crate::jit::{Ctx, Slot, EXIT_BAIL, EXIT_NORMAL};
+use crate::jit::{Ctx, EXIT_BAIL, EXIT_NORMAL};
 use crate::jit_asm::*;
 use crate::t1op::{Op, K};
 use alloc::vec::Vec;
@@ -82,6 +82,9 @@ pub(crate) const MUT_CR_LIVE_OUT: u8 = 27;
 /// (28: measured, not shipped - forward chained jumps landing past the entry counter, h86 ppc-jit5 lever 1.)
 /// A chained exit's tail stores the wrong pc (target + 4) when its target is not published (the dispatcher resumes there).
 pub(crate) const MUT_TAIL_PC: u8 = 29;
+/// The IBTC probe indexes with 14 bits (the 16K entries of 4bf4dfb's table) instead of 16: the Z83 regression of 2026-11-03,
+/// dispatcher entries 4.4x per guest instruction.
+pub(crate) const MUT_IBTC_SMALL: u8 = 30;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -260,20 +263,22 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
     Emitted { e, inner, uses, writes }
 }
 
-/// Jump to the published block at the guest pc in r8d if the dispatch table's slot for it holds that block; else fall
-/// through (rax clobbered).
+/// Jump to the published block at the guest pc in r8d if the IBTC's entry for it holds that block; else fall through (rax,
+/// rcx clobbered).
 /// The table is the INDIRECT BRANCH TARGET CACHE of blr / bctr (and of a native's return): hits and misses are counted
 /// (Ctx.ibtc_hits / ibtc_misses -> JitStats -> PpcProf).
 fn probe(a: &mut Asm, table_mask: u32) {
+    // the IBTC (jit.rs): 8-byte entries, guest pc then the entry's offset in the arena (rax, rcx clobbered)
     a.mov_rr(RAX, R8);
     a.sh_ri(Sh::Shr, RAX, 2);
     a.alu_ri(Alu::And, RAX, table_mask);
-    a.sh_ri(Sh::Shl, RAX, core::mem::size_of::<Slot>().trailing_zeros() as u8);
-    a.alu_rm64(Alu::Add, RAX, ctx(offset_of!(Ctx, table)));
-    a.alu_rm(Alu::Cmp, R8, m(RAX, offset_of!(Slot, pc) as i32));
+    a.ld64(RCX, ctx(offset_of!(Ctx, ibtc)));
+    a.alu_rm(Alu::Cmp, R8, mxd(RCX, RAX, 8, 0));
     let miss = a.jcc(Cc::Ne);
+    a.ld32(RCX, mxd(RCX, RAX, 8, 4));
+    a.alu_rm64(Alu::Add, RCX, ctx(offset_of!(Ctx, abase)));
     a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, ibtc_hits)), 1);
-    a.jmp_m(m(RAX, offset_of!(Slot, entry) as i32));
+    a.jmp_r(RCX);
     a.here(miss);
     a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, ibtc_misses)), 1);
 }

@@ -248,7 +248,7 @@ extern "C" fn read_prof(inst: *mut CpuInstance, out: *mut PpcProf) -> i32 {
         jit_insns: j.insns, jit_entries: j.entries, jit_bails: j.bails, jit_compiled: j.compiled, jit_natives: j.natives, jit_helpers: j.helpers,
         interp_insns: c.interp_insns, jit_refused: (matches!(e.tier, Tier::Jit | Tier::JitBlocks) && j.refused) as u64, publishes: j.publishes,
         publish_pages: j.publish_pages, withdraws: j.withdraws, withdraw_pages: j.withdraw_pages, codemem_failures: j.codemem_failures,
-        ibtc_hits: j.ibtc_hits, ibtc_misses: j.ibtc_misses,
+        ibtc_hits: j.ibtc_hits, ibtc_misses: j.ibtc_misses, arena_bytes: j.arena_bytes, jit_regions: j.regions,
     };
     // the caller's size (0 = the first version's fields), never more than this record
     // SAFETY: `out` is non-null and the caller's record, at least as large as the size it states (PpcProf's contract).

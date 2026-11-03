@@ -58,6 +58,8 @@ pub(crate) struct Arena {
     pub(crate) io: CodeMemStats,
     /// Opt-in clock for `io.time` (the JIT's translation clock); None = no clock reads.
     pub(crate) timer: Option<fn() -> u64>,
+    /// A segment has been reused since the last whole reset: every page written now costs older code.
+    pub(crate) wrapped: bool,
 }
 
 /// The provider calls an arena made: on CoralOS each call is one EXEC_CODE_PROTECT syscall and each page that changes
@@ -89,7 +91,7 @@ impl Arena {
             len = (len / 2) & !(PAGE - 1);
         };
         let seg_len = ((len - STUB_BYTES) / nseg) & !(PAGE - 1);
-        Some(Arena { mem, base, len, seg_len, nseg, seg: None, used: 0, published: 0, cur: 0, limit: STUB_BYTES, rw_end: STUB_BYTES, withdraw_failed: false, io: CodeMemStats::default(), timer: None })
+        Some(Arena { mem, base, len, seg_len, nseg, seg: None, used: 0, published: 0, cur: 0, limit: STUB_BYTES, rw_end: STUB_BYTES, withdraw_failed: false, io: CodeMemStats::default(), timer: None, wrapped: false })
     }
     fn seg_start(&self, s: usize) -> usize { STUB_BYTES + s * self.seg_len }
     /// One provider call, counted and timed: `publish` (RX) or not (back to RW).
@@ -162,6 +164,7 @@ impl Arena {
     /// published first.
     pub(crate) fn reuse(&mut self) {
         let s = self.next_segment();
+        self.wrapped = true;
         let held_code = self.used & (1 << s) != 0;
         self.used &= !(1 << s);
         self.enter(s);
@@ -170,6 +173,7 @@ impl Arena {
     /// Withdraw every published page (back to RW) and start writing the stubs again.
     pub(crate) fn reset(&mut self) -> bool {
         self.seg = None;
+        self.wrapped = false;
         self.used = 0;
         self.published = 0;
         self.cur = 0;

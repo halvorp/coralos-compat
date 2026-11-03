@@ -686,3 +686,41 @@ fn tier_jitblocks_runs_tier_2_without_regions() {
     assert!(compiled > 20, "JIT code ran: {compiled} blocks compiled");
 }
 
+
+/// The IBTC (blr / bctr targets) has 64K entries: two callers 64 KiB apart (F1, F2) call one leaf, so its two return
+/// addresses fall on the same entry of a 16K-entry table but not of 64K. Every return must hit after warm-up - the Z83
+/// regression of 2026-11-03 was the 16K table (dispatcher entries 4.4x per guest instruction); mutant 30 restores it: RED.
+const F1: u32 = 0x2_0000;
+const F2: u32 = 0x3_0000;
+const LEAF: u32 = 0x4_0000;
+fn ibtc_program() -> Vec<u32> {
+    let bl = |from: u32, to: u32| 18 << 26 | (to.wrapping_sub(from) & 0x03FF_FFFC) | 1;
+    vec![
+        d(14, 31, 0, 2000), d(14, 5, 0, 0), // li r31,2000; li r5,0
+        bl(CODE + 8, F1), bl(CODE + 12, F2), d(13, 31, 31, 0xFFFF), bc(4, 2, -12), // loop: bl F1; bl F2; addic.; bne loop
+        d(15, 24, 0, EXIT >> 16), d(24, 24, 24, EXIT & 0xFFFF), mtspr(8, 24),
+    ]
+}
+fn ibtc_setup(_: &mut Cpu, m: &mut M) {
+    let bl = |from: u32, to: u32| 18 << 26 | (to.wrapping_sub(from) & 0x03FF_FFFC) | 1;
+    for f in [F1, F2] {
+        // mflr r29; bl LEAF; mtlr r29; blr
+        for (i, w) in [x(29, 8, 0, 339, false) | 0, bl(f + 4, LEAF), mtspr(8, 29), 0x4E80_0020].iter().enumerate() { m.mem.write_u32(f + 4 * i as u32, *w).unwrap(); }
+    }
+    m.mem.write_u32(LEAF, ADDI_1).unwrap();
+    m.mem.write_u32(LEAF + 4, 0x4E80_0020).unwrap();
+}
+
+#[test]
+fn returns_whose_addresses_collide_in_a_16k_table_hit_the_64k_ibtc() {
+    let prog = ibtc_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, ibtc_setup);
+    assert_eq!(want.gpr[5], 4000, "tier 0: 2000 trips, two leaf calls each");
+    let (got, e) = run_on(Tier::Jit, 0, &prog, 1_000_000, ibtc_setup);
+    let s = e.jit_stats();
+    assert!(got == want, "{s:?}");
+    assert!(s.ibtc_hits > 7_000 && s.ibtc_misses < 200, "the returns hit the IBTC: {s:?}");
+    let (got, e) = run_on(Tier::Jit, 30, &prog, 1_000_000, ibtc_setup);
+    assert!(got == want, "mutant 30 changes no state");
+    assert!(e.jit_stats().ibtc_misses > 2_000, "mutant 30 (a 16K-entry IBTC) stayed GREEN: {:?}", e.jit_stats());
+}

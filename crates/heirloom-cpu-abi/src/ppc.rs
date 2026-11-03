@@ -395,6 +395,12 @@ pub struct PpcProf {
     /// those that went to the dispatcher.
     pub ibtc_hits: u64,
     pub ibtc_misses: u64,
+    // ---- appended 2026-11-03 (h86 ppc-jit5) ----
+    /// Bytes of executable memory tier 2's arena reserved (64 MiB, or less when the provider refused that and it halved down
+    /// to 8 MiB); 0 before the JIT ran.
+    pub arena_bytes: u64,
+    /// Regions tier 2 compiled (its region tier; 0 with TIER_JIT_BLOCKS).
+    pub jit_regions: u64,
 }
 
 /// `PpcProf`'s size before the tier counters were appended: what a `size` of 0 asks for.

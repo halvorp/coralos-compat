@@ -53,6 +53,12 @@ pub(crate) const ARENA_MIN: usize = 8 << 20;
 /// Segments of the arena (4 MiB each at the default size): one is dropped at a time.
 pub(crate) const SEGMENTS: usize = 16;
 const TABLE_BITS: u32 = 14;
+/// The INDIRECT BRANCH TARGET CACHE that blr / bctr / a native's return probe (jit_emit `probe`): 64K direct-mapped entries
+/// of 8 bytes (guest pc, entry offset in the arena) - 512 KiB, the dispatch table's size, 4x its entries. Z83 2026-11-03
+/// (tag blue forest peak): with the probe on the 16K-entry dispatch table (4bf4dfb), dispatcher entries rose 4.4x per guest
+/// instruction (1 per ~3.1k, IBTC misses ~all of them); host repro 1 per ~2.8k. ppc-jit4's own census: 64K hits 99.6%.
+pub(crate) const IBTC_BITS: u32 = 16;
+const IBTC_EMPTY: u64 = EMPTY_PC as u64;
 /// Longest superblock (guest instructions): a block ending in a conditional branch goes on through the NOT-taken path into
 /// the next tier-1 block on the same code page, the taken edge a side exit (jit_emit). A new constant of this tier (WC3
 /// blocks average 3.8 instructions; tuned only by measurement).
@@ -67,11 +73,17 @@ const PUBLISH_BYTES: usize = 8 * 4096 - 1024;
 /// never run, so a provider that keeps refusing would only make the JIT compile code that never runs.
 const PUBLISH_REFUSALS: u32 = 8;
 pub(crate) const PUBLISH_AFTER: u64 = 2_000_000;
+/// Once the arena has wrapped, a batch smaller than this waits SMALL_WAIT x publish_after before it is published: in steady WC3
+/// gameplay single blocks
+/// trickle in (~60 per 100M guest instructions) and each publish rounded one up to a whole 4 KiB page - ~1 page per block,
+/// which kept the wrapped 64 MiB arena cycling (Z83 2026-11-03: publish = withdraw pages, 30-60 per 5 s, every window).
+const PUBLISH_SMALL: usize = 2048;
+const SMALL_WAIT: u64 = 8;
 const EMPTY_PC: u32 = 1; // never a PowerPC instruction address (not word aligned)
 /// `link_owner` of a slot the block being compiled took (its segment is known once its code is placed).
 const LINK_NEW: u8 = 0xFF;
 
-/// One dispatch-table entry: a published block (32 bytes; jit_emit's indirect probe shifts by its size).
+/// One dispatch-table entry: a published block (the dispatcher's; JIT code's indirect branches probe the IBTC instead).
 #[repr(C)]
 #[derive(Clone, Copy)]
 /// `inner` = the entry past the page-generation check: where a chained jump from a block on the SAME code page compiled at
@@ -120,6 +132,9 @@ pub(crate) struct Ctx {
     /// Indirect branches (blr / bctr / a native's return) that found their target in the dispatch table, and that did not.
     pub(crate) ibtc_hits: u64,
     pub(crate) ibtc_misses: u64,
+    /// The IBTC (Jit::ibtc) and the arena base its entry offsets are relative to.
+    pub(crate) ibtc: *const u64,
+    pub(crate) abase: u64,
     pub(crate) resync: bool,
     /// Planted mutant MUT_NO_RESYNC: h_native never asks for the resync.
     pub(crate) no_resync: bool,
@@ -159,10 +174,14 @@ pub(crate) struct Jit {
     /// published.
     link_home: Box<[u64]>,
     by_target: BTreeMap<u32, Vec<u32>>,
+    /// The IBTC: per entry, guest pc (low half) and the block's entry offset in the arena (high half); IBTC_EMPTY = none.
+    ibtc: Box<[u64]>,
     /// Every published block by pc (the dispatch table is a direct-mapped cache in front of it: a colliding block is
     /// refilled from here, never recompiled). Hashed: every dispatcher miss probes it, and in WC3 gameplay most misses are
     /// native calls (pcs that are never a block), ~1 per 500 guest instructions.
     blocks: PcMap<Slot>,
+    /// Tier-1 whole-block runs per pc (direct-mapped, IBTC_BITS: at 16K entries two hot blocks 64 KiB apart reset each
+    /// other's count and never compiled).
     hot: Box<[(u32, u32)]>,
     pending: Vec<Slot>,
     pending_pcs: PcMap<()>,
@@ -211,10 +230,10 @@ pub(crate) struct Jit {
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
         let arena = Arena::new(mem, arena_bytes, ARENA_MIN.min(arena_bytes), SEGMENTS)?;
-        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, resync: false, no_resync: false, census: None, hot: EMPTY_PC, counters: [crate::jit_region::REGION_AFTER; 1 << TABLE_BITS], crk: core::array::from_fn(|f| [8 << (28 - 4 * f), 4 << (28 - 4 * f)]), rentries: 0, redges: 0 });
+        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, ibtc: core::ptr::null(), abase: 0, resync: false, no_resync: false, census: None, hot: EMPTY_PC, counters: [crate::jit_region::REGION_AFTER; 1 << TABLE_BITS], crk: core::array::from_fn(|f| [8 << (28 - 4 * f), 4 << (28 - 4 * f)]), rentries: 0, redges: 0 });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
-            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
+            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![IBTC_EMPTY; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << IBTC_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(),
             region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false,
@@ -313,7 +332,7 @@ impl Jit {
     /// segments are withdrawn when the FIFO reuses them, as always. For a natives-set, RAM or link-table change.
     fn drop_code(&mut self) {
         self.stats.flushes += 1;
-        if self.mutant != crate::jit_emit::MUT_TABLE_STALE { self.table.fill(EMPTY); }
+        if self.mutant != crate::jit_emit::MUT_TABLE_STALE { self.table.fill(EMPTY); self.ibtc.fill(IBTC_EMPTY); }
         self.hot.fill((EMPTY_PC, 0));
         self.links.fill(self.exit_stub);
         self.link_owner.fill(0);
@@ -349,14 +368,21 @@ impl Jit {
         if s.pc != pc {
             s = *self.blocks.get(pc)?;
             self.table[i] = s;
+            self.ibtc_set(&s);
         }
         (s.gen == gen_now && s.len as u64 <= left).then_some((s.entry, s.len))
+    }
+
+    /// Point the IBTC at published block `s`.
+    #[inline(always)]
+    fn ibtc_set(&mut self, s: &Slot) {
+        self.ibtc[(s.pc >> 2) as usize & ((1 << IBTC_BITS) - 1)] = s.pc as u64 | (s.entry - self.arena.base as u64) << 32;
     }
 
     /// Count a whole-block tier-1 run at `pc`; true when it should be compiled now (also when the published code there is a
     /// region one of whose other pages was written: its entry bails, tier 1 runs, and a block replaces it).
     fn hot(&mut self, pc: u32, gen_now: u64, mem: &heirloom_mem_flat32::GuestMem) -> bool {
-        let h = &mut self.hot[(pc >> 2) as usize & ((1 << TABLE_BITS) - 1)];
+        let h = &mut self.hot[(pc >> 2) as usize & ((1 << IBTC_BITS) - 1)];
         if h.0 != pc { *h = (pc, 1); return HOT_AFTER <= 1; }
         h.1 = h.1.saturating_add(1);
         if h.1 < HOT_AFTER || self.pending_pcs.contains(pc) { return false; }
@@ -442,7 +468,7 @@ impl Jit {
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None, census: self.region_census, homes: Vec::new() };
+        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { (1 << IBTC_BITS) - 1 }, movbe: self.movbe, counter: None, census: self.region_census, homes: Vec::new() };
         let (code, inner) = emit(&mut env);
         let homes = core::mem::take(&mut env.homes);
         if out_of_links { self.drop_code(); return None; }
@@ -505,7 +531,7 @@ impl Jit {
     fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
         let t0 = self.timer.map(|c| c());
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
-        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None, census: false, homes: Vec::new() };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { (1 << IBTC_BITS) - 1 }, movbe: self.movbe, counter: None, census: false, homes: Vec::new() };
         let code = jit_emit::compile_native(pc, &mut env);
         self.place(&code, 0, Vec::new(), pc, 1, gen, at);
         self.stats.natives_compiled += 1;
@@ -522,7 +548,11 @@ impl Jit {
         let mut gone = Vec::new();
         let stale = self.mutant == crate::jit_emit::MUT_EVICT_STALE;
         self.blocks.retain(|pc, slot| { let k = inside(slot.entry); if k { gone.push(pc); } !k || stale });
-        if !stale { for t in self.table.iter_mut() { if inside(t.entry) { *t = EMPTY; } } }
+        if !stale {
+            for t in self.table.iter_mut() { if inside(t.entry) { *t = EMPTY; } }
+            let base = self.arena.base as u64;
+            for v in self.ibtc.iter_mut() { if *v != IBTC_EMPTY && inside(base + (*v >> 32)) { *v = IBTC_EMPTY; } }
+        }
         for pc in &gone {
             if let Some(v) = self.by_target.get(pc) { for &i in v { self.links[i as usize] = self.link_home[i as usize]; } }
         }
@@ -542,7 +572,12 @@ impl Jit {
     /// Is waiting code due to be published (`n` = instructions run so far in this run)?
     #[inline(always)]
     fn due(&self, n: u64) -> bool {
-        self.arena.pending() && (self.arena.unpublished() >= PUBLISH_BYTES || (self.clock + n).saturating_sub(self.pending_at) >= self.publish_after)
+        if !self.arena.pending() { return false; }
+        let (bytes, age) = (self.arena.unpublished(), (self.clock + n).saturating_sub(self.pending_at));
+        // a publish rounds up to a whole page that is never written again: once the arena has wrapped (every page then costs
+        // older code), a batch under half a page waits longer
+        let small_ok = bytes >= PUBLISH_SMALL || !self.arena.wrapped || age >= SMALL_WAIT * self.publish_after;
+        bytes >= PUBLISH_BYTES || (age >= self.publish_after && small_ok)
     }
 
     /// Publish what was compiled during this run and make it reachable (dispatch table + every link slot naming it).
@@ -570,6 +605,7 @@ impl Jit {
         for s in core::mem::take(&mut self.pending) {
             if !self.blocks.insert(s.pc, s) { grown = false; break; }
             self.table[(s.pc >> 2) as usize & ((1 << TABLE_BITS) - 1)] = s;
+            self.ibtc_set(&s);
             if let Some(v) = self.by_target.get(&s.pc) { for &i in v { self.links[i as usize] = landing(&s, self.link_gen[i as usize], self.mutant); } }
         }
         self.pending_pcs.clear();
@@ -600,6 +636,8 @@ impl Jit {
         c.tb0 = cpu.tb;
         c.host = host as *mut H as *mut u8;
         c.table = self.table.as_ptr();
+        c.ibtc = self.ibtc.as_ptr();
+        c.abase = self.arena.base as u64;
         c.trap = None;
         c.native = h_native::<H> as HNative as usize as u64;
         c.natives = 0;

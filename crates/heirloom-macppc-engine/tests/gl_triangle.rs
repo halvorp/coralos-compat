@@ -572,11 +572,12 @@ fn wc3_host_run_with_a_gl_worker() {
             if swaps != jf_swaps {
                 use std::io::Write;
                 #[cfg(not(feature = "cpu-library"))]
-                let (now, tr, n, fl, ev) = { let js = m.exec().jit_stats(); (host_ns(), js.translate_time, js.compiled, js.flushes, js.evictions) };
+                let (now, tr, n, fl, ev, js) = { let js = m.exec().jit_stats(); (host_ns(), js.translate_time, js.compiled, js.flushes, js.evictions, js) };
                 #[cfg(feature = "cpu-library")]
-                let (now, tr, n, fl, ev) = (host_ns(), 0u64, 0u64, 0u64, 0u64);
-                // the last two columns: the JIT's cumulative whole-code drops and segment evictions (a burst's cause)
-                writeln!(w, "{swaps},{},{},{},{},{fl},{ev}", swaps - jf_swaps, now - jf_t, tr - jf_tr, n - jf_n).unwrap();
+                let (now, tr, n, fl, ev, js) = (host_ns(), 0u64, 0u64, 0u64, 0u64, heirloom_cpu_ppc::JitStats::default());
+                // then the JIT's cumulative whole-code drops and segment evictions (a burst's cause), and the counters the Z83's
+                // [HEIRLOOM-ENGINE-PERF] line shows: JIT insns, dispatcher entries, IBTC misses, publish / withdraw pages
+                writeln!(w, "{swaps},{},{},{},{},{fl},{ev},{},{},{},{},{}", swaps - jf_swaps, now - jf_t, tr - jf_tr, n - jf_n, js.insns, js.entries, js.ibtc_misses, js.publish_pages, js.withdraw_pages).unwrap();
                 (jf_swaps, jf_t, jf_tr, jf_n) = (swaps, now, tr, n);
             }
         }

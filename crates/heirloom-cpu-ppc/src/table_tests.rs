@@ -286,6 +286,8 @@ fn tier_2_runs_in_the_engines_executable_memory_through_set_code_mem() {
     assert!(p.jit_insns > 900_000 && p.jit_insns + p.blocks <= p.insns && p.jit_entries > 0 && p.jit_compiled > 0 && p.jit_refused == 0, "{p:?}");
     assert_eq!((p.publishes, p.publish_pages > 0), (prov.publishes as u64, true), "the provider calls as the provider saw them: {p:?}");
     assert_eq!(prov.reserves, 1, "one reservation, asked of the ENGINE's provider");
+    // the arena size it got (64 MiB asked, halved while refused, 8 MiB at least): the Z83 must be able to read which
+    assert!(p.arena_bytes >= 8 << 20 && p.arena_bytes <= 64 << 20, "arena_bytes reported: {p:?}");
     assert!(prov.publishes >= 2, "the trampoline and the compiled loop were published through it ({})", prov.publishes);
     drop(r); // the instance (and its JIT) before the provider it borrows
 }
