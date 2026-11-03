@@ -45,6 +45,9 @@ pub struct Window {
     /// snapshotted) and their time, a part of the GL class's.
     pub draw_time: u64,
     pub draws: u64,
+    /// Inside the draws: the capture alone (guest bytes copied into the batch and byte-swapped) and the bytes it queued.
+    pub capture_time: u64,
+    pub capture_bytes: u64,
     pub clock_reads: u64,
     pub poll_insns: u64,
     /// Swap-to-swap durations of the frames in this window.
@@ -81,6 +84,7 @@ impl Perf {
         self.win.insns += insns;
     }
     pub(crate) fn add_gl_ring(&mut self, dt: u64) { self.win.gl_ring_time += dt; }
+    pub(crate) fn add_capture(&mut self, dt: u64, bytes: u64) { (self.win.capture_time, self.win.capture_bytes) = (self.win.capture_time + dt, self.win.capture_bytes + bytes); }
 
     /// A read of the Mac clock at `tick` (the engine's tick count) when the CPU's timebase (instructions retired) is `tb`.
     pub(crate) fn clock_read(&mut self, tick: u64, tb: u64, site: [u32; 3]) {
@@ -132,13 +136,13 @@ pub fn report(w: &Window, per_us: u64, frames_total: u64) -> String {
     let classes: String = (0..CLASSES).map(|i| format!(" {}={}%/{}", CLASS_NAMES[i], pct(w.native_time[i], wall), w.native_calls[i] / n as u64)).collect();
     format!("[HEIRLOOM-PERF frames={frames_total} n={n} frame_ms p50={} p95={} fps={}] insns/frame={} mips_step={} mips_wall={} steps/frame={} \
 interp={}% native={}% outside_step={}% gl_ring={}%{classes} clock_reads/frame={} clock_poll={}% of insns \
-| per frame: gl_ring_us={} outside_us={} gl_us={} draw_us={} draws={} | per gl call: ns={} | per slice: step_us={} gap_us={}",
+| per frame: gl_ring_us={} outside_us={} gl_us={} draw_us={} draws={} capture_us={} draw_kib={} | per gl call: ns={} | per slice: step_us={} gap_us={}",
         at(50) / per_ms, at(95) / per_ms, if wall == 0 { 0 } else { (n as u64) * per_ms * 1000 / wall },
         w.insns / n as u64, mips(w.step_time), mips(wall), w.steps / n as u64,
         pct(interp, wall), pct(native, wall), pct(outside, wall), pct(w.gl_ring_time, wall),
         w.clock_reads / n as u64, pct(w.poll_insns, w.insns),
         w.gl_ring_time / per_us.max(1) / n as u64, outside / per_us.max(1) / n as u64, gl_own / per_us.max(1) / n as u64,
-        w.draw_time / per_us.max(1) / n as u64, w.draws / n as u64,
+        w.draw_time / per_us.max(1) / n as u64, w.draws / n as u64, w.capture_time / per_us.max(1) / n as u64, w.capture_bytes / 1024 / n as u64,
         gl_own.saturating_mul(1000) / per_us.max(1) / w.native_calls[Class::Gl as usize].max(1),
         w.step_time / per_us.max(1) / w.steps.max(1), outside / per_us.max(1) / w.steps.max(1))
 }
@@ -240,7 +244,7 @@ mod tests {
         assert!(line.contains(" gl=10%/0"), "{line}");
         // the absolute times that tell a slow GL round trip from slow slicing on the Z83: 2_525_000 units outside step over 100
         // frames and 1000 slices; nothing in gl_ring
-        assert!(line.ends_with("| per frame: gl_ring_us=0 outside_us=25250 gl_us=5050 draw_us=0 draws=0 | per gl call: ns=505000000 | per slice: step_us=2525 gap_us=2525"), "{line}");
+        assert!(line.ends_with("| per frame: gl_ring_us=0 outside_us=25250 gl_us=5050 draw_us=0 draws=0 capture_us=0 draw_kib=0 | per gl call: ns=505000000 | per slice: step_us=2525 gap_us=2525"), "{line}");
     }
 
     #[test]
@@ -254,7 +258,8 @@ mod tests {
         w.gl_ring_time = 1_000;
         w.draw_time = 4_000; // 1 ms of draws a frame, 200 draws a frame
         w.draws = 800;
+        (w.capture_time, w.capture_bytes) = (2_000, 4 * 470 * 1024); // half the draws' time capturing, 470 KiB a frame
         let line = report(&w, 1, 4);
-        assert!(line.contains("| per frame: gl_ring_us=250 outside_us=0 gl_us=2000 draw_us=1000 draws=200 | per gl call: ns=2000 |"), "{line}");
+        assert!(line.contains("| per frame: gl_ring_us=250 outside_us=0 gl_us=2000 draw_us=1000 draws=200 capture_us=500 draw_kib=470 | per gl call: ns=2000 |"), "{line}");
     }
 }

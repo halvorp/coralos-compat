@@ -106,7 +106,15 @@ impl<U: GuestUi> MacPpc<U> {
     pub(super) fn gl_queue_draw_elements(&mut self, token: Token, who: &str, mode: u32, off: usize, count: u32, ty: ElemType, descs: &[Descriptor]) -> Result<(), String> {
         let len = self.mac.mem.len().min(u32::MAX as usize) as u32;
         let mem = self.mac.mem.span(0, len).and_then(|s| self.mac.mem.bytes(s)).map_err(|_| format!("{who}: guest RAM is not addressable"))?;
-        if let Err(e) = Frame::encode_draw_elements_into(&mut self.gl.pending, token, mem, mode, off, count, ty, descs) {
+        // the capture alone (copy + byte swap of the referenced guest bytes) and the bytes it queued: the perf line's
+        // capture_us / draw_kib, which tell a per-byte cost (memory) from a per-draw one (code) on silicon
+        let (t0, at) = (self.perf.as_ref().map(|p| p.now()), self.gl.pending.len());
+        let r = Frame::encode_draw_elements_into(&mut self.gl.pending, token, mem, mode, off, count, ty, descs);
+        if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) {
+            let dt = p.now().wrapping_sub(t0);
+            p.add_capture(dt, (self.gl.pending.len() - at) as u64);
+        }
+        if let Err(e) = r {
             self.gl_set_error(GL_INVALID_VALUE);
             self.gl_note(format!("[HEIRLOOM-GL] {who} refused: {e:?}"));
         }
