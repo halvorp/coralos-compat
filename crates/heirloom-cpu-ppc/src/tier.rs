@@ -35,6 +35,7 @@ pub struct Exec {
     jit_arena: Option<usize>,
     jit_region_after: Option<u32>,
     jit_region_shape: Option<crate::RegionShape>,
+    jit_region_census: bool,
 }
 
 /// Per native address: (calls, time inside), timed by a host-supplied clock.
@@ -53,7 +54,7 @@ impl Exec {
             code_mem: None,
             #[cfg(target_arch = "x86_64")]
             jit: None,
-            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_region_shape: None,
+            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_region_shape: None, jit_region_census: false,
         }
     }
     /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
@@ -91,6 +92,13 @@ impl Exec {
         self.jit_region_shape = Some(s);
         #[cfg(target_arch = "x86_64")]
         if let Some(j) = self.jit.as_mut() { j.region_shape = s; }
+    }
+    /// Diagnostics: regions compiled from now on count their entries and internal edges (JitStats::region_entries / _edges).
+    #[doc(hidden)]
+    pub fn set_jit_region_census(&mut self, on: bool) {
+        self.jit_region_census = on;
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_mut() { j.region_census = on; }
     }
     /// Per region compiled while a clock was set (`set_jit_clock`), its translation time in that clock's units.
     #[doc(hidden)]
@@ -197,6 +205,7 @@ impl Exec {
                     if let Some(j) = self.jit.as_mut() { j.timer = self.jit_clock; }
                     if let (Some(j), Some(n)) = (self.jit.as_mut(), self.jit_region_after) { j.set_region_after(n); }
                     if let (Some(j), Some(s)) = (self.jit.as_mut(), self.jit_region_shape) { j.region_shape = s; }
+                    if let Some(j) = self.jit.as_mut() { j.region_census = self.jit_region_census; }
                 }
             }
             // lockstep journaling, a planted mutant or MOVBE changed since the code was made: it is dropped and remade

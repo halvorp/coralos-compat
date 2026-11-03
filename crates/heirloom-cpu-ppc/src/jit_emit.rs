@@ -75,6 +75,10 @@ pub(crate) const MUT_REGION_BACK_BUDGET: u8 = 24;
 /// A region's `blr` goes to its first return point without the inline check (the wrong return taken in region: jit_region's
 /// call following).
 pub(crate) const MUT_REGION_RET: u8 = 25;
+/// A region's exits do not store its locals (jit_regs): a side exit drops a dirty value.
+pub(crate) const MUT_REGION_LOCAL_EXIT: u8 = 26;
+/// A compare is fused with its branch (CR field never written: jit_rflow) even when the field is live after the branch.
+pub(crate) const MUT_CR_LIVE_OUT: u8 = 27;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -94,6 +98,8 @@ pub(crate) struct Env<'a> {
     pub(crate) movbe: bool,
     /// The Ctx offset of this block's entry counter (jit_region: a region forms when it runs out); None = no counter.
     pub(crate) counter: Option<i32>,
+    /// Region census (diagnostics): count region entries and internal edges taken in the Ctx.
+    pub(crate) census: bool,
 }
 
 pub(crate) const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
@@ -106,7 +112,7 @@ pub(crate) const LR: usize = offset_of!(Cpu, lr);
 pub(crate) const CTR: usize = offset_of!(Cpu, ctr);
 pub(crate) const PC: usize = offset_of!(Cpu, pc);
 
-/// How an access forms its EA: (rA|0) + rB, or rA + imm (rA != 0); `update` keeps the unmasked EA in esi for rA.
+/// How an access forms its EA: (rA|0) + rB, or rA + imm (rA != 0); `update` keeps the unmasked EA in r8d for rA.
 #[derive(Clone, Copy)]
 pub(crate) struct Ea { pub(crate) ra: u8, pub(crate) rb: Option<u8>, pub(crate) imm: u32, pub(crate) update: bool }
 impl Ea {
@@ -130,6 +136,17 @@ pub(crate) struct E<'a, 'b> {
     words: Vec<u32>,
     /// Compiling a region: its nodes, labels and internal jumps.
     rg: Option<Rg>,
+    /// Region locals (jit_regs): (Cpu offset, host register, written in the region).
+    pub(crate) locals: Vec<(usize, u8, bool)>,
+    /// GPR accesses / writes emitted so far (the dry run that picks the locals reads them).
+    pub(crate) uses: [u32; 32],
+    pub(crate) writes: [u32; 32],
+    /// A dry run: no link slot is taken (the code is thrown away).
+    dry: bool,
+    /// The current region node's fused compares (jit_rflow), and a fused compare's flags waiting for its branch
+    /// (Some(signed)).
+    fuse: Vec<bool>,
+    flags: Option<bool>,
 }
 
 /// A region being compiled (jit_region): the node pcs in layout order, each node's longest forward path, where each node's
@@ -178,7 +195,22 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
 /// past that one) and the budget for the longest forward path, then the nodes in layout order, each followed by its own
 /// slow paths and side exits; internal edges are direct jumps (`go`). Answers the code and the offset of its inner entry.
 pub(crate) fn compile_region(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], env: &mut Env) -> (Vec<u8>, usize) {
+    // a dry run counts the GPR accesses: the most-used ones become locals for the real one
+    let fuse = crate::jit_rflow::fuse_marks(nodes, rets, env.mutant == MUT_CR_LIVE_OUT);
+    let locals = {
+        let dry = emit_region(nodes, maxfwd, pages, rets, &fuse, env, Vec::new(), true);
+        crate::jit_regs::pick_locals(&dry.uses, &dry.writes)
+    };
+    let e = emit_region(nodes, maxfwd, pages, rets, &fuse, env, locals, false);
+    let inner = e.inner;
+    (e.e.a.b, inner)
+}
+
+struct Emitted<'a, 'b> { e: E<'a, 'b>, inner: usize, uses: [u32; 32], writes: [u32; 32] }
+
+fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], fuse: &[Vec<bool>], env: &'a mut Env<'b>, locals: Vec<(usize, u8, bool)>, dry: bool) -> Emitted<'a, 'b> {
     let mut e = E::new(&nodes[0].1, nodes[0].0, env);
+    e.dry = dry;
     e.rg = Some(Rg { pcs: nodes.iter().map(|n| n.0).collect(), maxfwd: maxfwd.to_vec(), labels: alloc::vec![None; nodes.len()], fwd: Vec::new(), backs: Vec::new(), cur: 0, rets: rets.to_vec() });
     let mut bails = Vec::new();
     let checked = if e.env.mutant == MUT_REGION_PAGES { 1 } else { pages.len() };
@@ -195,8 +227,11 @@ pub(crate) fn compile_region(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[
     a.lea64(RAX, m(R15, maxfwd[0] as i32));
     a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
     bails.push(a.jcc(Cc::A));
+    e.locals = locals;
+    if e.env.census { e.a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, rentries)), 1); }
+    e.load_locals();
     for (k, (pc, ops)) in nodes.iter().enumerate() {
-        e.start_node(k, *pc, ops);
+        e.start_node(k, *pc, ops, &fuse[k]);
         e.body(ops);
         e.tails();
     }
@@ -208,7 +243,8 @@ pub(crate) fn compile_region(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[
     for f in bails { a.here(f); }
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
-    (e.a.b, inner)
+    let (uses, writes) = (e.uses, e.writes);
+    Emitted { e, inner, uses, writes }
 }
 
 /// Jump to the published block at the guest pc in r8d if the dispatch table's slot for it holds that block; else fall
@@ -273,12 +309,14 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
-        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None }
+        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None }
     }
 
     /// Start region node `k` (its code begins here: forward jumps waiting for it land here).
-    fn start_node(&mut self, k: usize, pc: u32, ops: &[Op]) {
+    fn start_node(&mut self, k: usize, pc: u32, ops: &[Op], fuse: &[bool]) {
         (self.pc, self.n) = (pc, ops.len());
+        self.fuse.clear();
+        self.fuse.extend_from_slice(fuse);
         self.resume.clear();
         self.words.clear();
         self.words.extend(ops.iter().map(|o| o.w));
@@ -315,6 +353,7 @@ impl E<'_, '_> {
         let mutant = self.env.mutant;
         let a = &mut self.a;
         if mutant != MUT_REGION_COUNT { a.alu_ri64(Alu::Add, R15, n as i32); }
+        if self.env.census { a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, redges)), 1); }
         let rg = self.rg.as_mut().expect("a region");
         if j <= rg.cur {
             if mutant != MUT_REGION_BACK_BUDGET {
@@ -347,10 +386,11 @@ impl E<'_, '_> {
 
     /// Leave for `target` (a constant), `n` instructions of this block retired.
     fn chain(&mut self, target: u32, n: usize) {
+        self.store_locals();
         if n != 0 { self.a.alu_ri64(Alu::Add, R15, n as i32); }
         self.a.st32i(cpu(PC), target);
         if self.env.chain {
-            let slot = (self.env.link)(target);
+            let slot = if self.dry { core::ptr::null() } else { (self.env.link)(target) };
             self.a.mov_ri64(RAX, slot as u64);
             self.a.jmp_m(m(RAX, 0));
         } else {
@@ -363,6 +403,7 @@ impl E<'_, '_> {
     }
     /// Leave for the target in r8d, `n` retired: through the dispatch table when chaining.
     fn chain_dyn(&mut self, n: usize) {
+        self.store_locals();
         let a = &mut self.a;
         a.alu_ri64(Alu::Add, R15, n as i32);
         a.st32(cpu(PC), R8);
@@ -375,25 +416,29 @@ impl E<'_, '_> {
     /// them back after it (the handler may have written any field).
     pub(crate) fn helper(&mut self, i: usize) {
         if self.env.mutant != MUT_GLOBAL_STALE { crate::jit_regs::store_globals(&mut self.a); }
+        self.store_locals();
         let (ipc, w) = (self.ipc(i), self.words[i]);
         let a = &mut self.a;
         a.mov_ri(RSI, w);
         a.mov_ri(RDX, ipc);
         a.mov_ri(RCX, i as u32);
         a.call_m(ctx(offset_of!(Ctx, slow)));
+        self.load_locals();
     }
 
     /// edx (rdx for 8) = the big-endian `n`-byte value at [r12 + rax], zero- or sign-extended (16 bits).
-    pub(crate) fn ld_be(&mut self, n: u8, sign: bool) {
+    pub(crate) fn ld_be(&mut self, n: u8, sign: bool) { self.ld_be_to(RDX, n, sign) }
+    /// Host register `r` = the big-endian `n`-byte value at [r12 + rax] (a guest field's own register: no copy after).
+    pub(crate) fn ld_be_to(&mut self, r: u8, n: u8, sign: bool) {
         let (a, at) = (&mut self.a, mx(R12, RAX, 1));
         match (n, self.env.movbe) {
-            (8, true) => a.movbe_ld(64, RDX, at),
-            (8, false) => { a.ld64(RDX, at); a.bswap64(RDX); }
-            (4, true) => a.movbe_ld(32, RDX, at),
-            (4, false) => { a.ld32(RDX, at); a.bswap32(RDX); }
-            (2, true) => { a.movbe_ld(16, RDX, at); if sign { a.movsx16_rr(RDX, RDX) } else { a.movzx16_rr(RDX, RDX) } }
-            (2, false) => { a.movzx16(RDX, at); a.bswap32(RDX); a.sh_ri(if sign { Sh::Sar } else { Sh::Shr }, RDX, 16); }
-            _ => a.movzx8(RDX, at),
+            (8, true) => a.movbe_ld(64, r, at),
+            (8, false) => { a.ld64(r, at); a.bswap64(r); }
+            (4, true) => a.movbe_ld(32, r, at),
+            (4, false) => { a.ld32(r, at); a.bswap32(r); }
+            (2, true) => { a.movbe_ld(16, r, at); if sign { a.movsx16_rr(r, r) } else { a.movzx16_rr(r, r) } }
+            (2, false) => { a.movzx16(r, at); a.bswap32(r); a.sh_ri(if sign { Sh::Sar } else { Sh::Shr }, r, 16); }
+            _ => a.movzx8(r, at),
         }
     }
     /// Store edx (rdx for 8) big-endian as `n` bytes at [r12 + rax] (edx is clobbered).
@@ -408,6 +453,43 @@ impl E<'_, '_> {
             (2, false) => { a.bswap32(RDX); a.sh_ri(Sh::Shr, RDX, 16); a.st16(at, RDX); }
             _ => a.st8(at, RDX),
         }
+    }
+    /// Store GPR `n` big-endian as `bytes` (1, 2 or 4) at [r12 + rax]: straight from its host register where the store needs
+    /// no byte swap in a scratch register (MOVBE, or one byte), else through edx.
+    fn st_gpr(&mut self, n: u8, bytes: u8) {
+        match self.gr(n) {
+            O::R(r) if bytes == 1 || self.env.movbe => {
+                let at = mx(R12, RAX, 1);
+                if bytes == 1 { self.a.st8(at, r) } else { self.a.movbe_st(8 * bytes, at, r) }
+            }
+            o => { self.a.ld32o(RDX, o); self.st_be(bytes) }
+        }
+    }
+    /// The host register of GPR `n` when it has one (a global pin or a region local).
+    pub(crate) fn greg(&mut self, n: u8) -> Option<u8> { if let O::R(r) = self.gw(n) { Some(r) } else { None } }
+    /// rD = rS op imm (addi / ori / xori): in place in rD's register when it has one (`lea` for an add: no flags needed).
+    fn op_imm(&mut self, alu: Alu, d: u8, s: u8, imm: u32) {
+        match (self.greg(d), self.gr(s)) {
+            (Some(rd), O::R(rs)) if matches!(alu, Alu::Add) => { if rd != rs || imm != 0 { self.a.lea32(rd, m(rs, imm as i32)) } }
+            (Some(rd), os) => { self.a.ld32o(rd, os); self.a.alu_ri(alu, rd, imm); }
+            (None, O::R(rs)) if matches!(alu, Alu::Add) => { self.a.lea32(RDX, m(rs, imm as i32)); self.stg(d, RDX); }
+            _ => { self.ldg(RDX, s); self.a.alu_ri(alu, RDX, imm); self.stg(d, RDX); }
+        }
+    }
+    /// rD = rS op rB for or / and / xor / add (+ Rc: CR0 from the result, the flags of the op itself): in rD's register when
+    /// it has one - starting from rB instead when rD is rB's register (all four commute). Answers the result's register.
+    fn op_rr(&mut self, alu: Alu, d: u8, s: u8, b: u8) -> u8 {
+        let (rd, rb) = (self.greg(d), self.greg(b));
+        let r = match rd {
+            Some(r) if Some(r) == rb && s != b => { let os = self.gr(s); self.a.alu_ro(alu, r, os); return r }
+            Some(r) => r,
+            None => RDX,
+        };
+        let os = self.gr(s);
+        self.a.ld32o(r, os);
+        self.alug(alu, r, b);
+        if r == RDX { self.stg(d, RDX) }
+        r
     }
 
     /// A conditional jump to instruction `i`'s slow path (tier 1's handler for it, then back after it).
@@ -432,30 +514,36 @@ impl E<'_, '_> {
         }
     }
 
-    /// CR field `bf` from the flags of a compare: LT / GT by `lt` / `gt`, EQ otherwise, SO from XER. Flag-free moves and
-    /// CMOVs first (the compare's flags are read once, here), then BT / ADC for SO into bit 0.
+    /// CR field `bf` from the flags of a compare: LT / GT by `lt` / `gt`, EQ otherwise, SO from XER. The field's nibble is
+    /// built in place by a move and two CMOVs from the Ctx's per-field constants (flag-free: the compare's flags are read
+    /// here only), then SO (XER bit 31, the sign of XER's register) is or-ed in on the rarely taken path.
     pub(crate) fn cr_set(&mut self, bf: u8, lt: Cc, gt: Cc) {
         let no_so = self.env.mutant == MUT_NO_SO;
+        let f = bf as usize & 7;
+        let sh = 28 - 4 * f as u32;
+        let k = offset_of!(Ctx, crk) + 8 * f;
         let a = &mut self.a;
-        a.mov_ri(RAX, 0b0010);
-        a.mov_ri(RCX, 0b1000);
-        a.cmov(lt, RAX, RCX);
-        a.mov_ri(RCX, 0b0100);
-        a.cmov(gt, RAX, RCX);
+        a.mov_ri(RAX, 0b0010 << sh);
+        a.cmov_rm(lt, RAX, ctx(k));
+        a.cmov_rm(gt, RAX, ctx(k + 4));
         if !no_so {
-            let x = self.r(XER);
-            self.a.bt_oi(x, 31);
-            self.a.adc_ri(RAX, 0);
+            match self.r(XER) {
+                O::R(x) => self.a.test_rr(x, x),
+                o => { self.a.ld32o(RCX, o); self.a.test_rr(RCX, RCX) }
+            }
+            let clear = self.a.jcc(Cc::Ns);
+            self.a.alu_ri(Alu::Or, RAX, 1 << sh);
+            self.a.here(clear);
         }
-        let sh = 28 - 4 * (bf as u32 & 7);
-        if sh != 0 { self.a.sh_ri(Sh::Shl, RAX, sh as u8); }
         let c = self.rw(CR);
         self.a.alu_oi(Alu::And, c, !(0xF << sh));
         self.a.alu_or(Alu::Or, c, RAX);
     }
     /// CR0 from the signed value in edx.
-    pub(crate) fn cr0_of_edx(&mut self) {
-        self.a.test_rr(RDX, RDX);
+    pub(crate) fn cr0_of_edx(&mut self) { self.cr0_of(RDX) }
+    /// CR0 from the signed value in host register `r`.
+    pub(crate) fn cr0_of(&mut self, r: u8) {
+        self.a.test_rr(r, r);
         self.cr_set(0, Cc::L, Cc::G);
     }
     /// CR0 from the flags the instruction that produced edx left (AND / OR / XOR: SF and ZF of the result, OF = 0, so
@@ -481,18 +569,20 @@ impl E<'_, '_> {
         self.slow_if(Cc::A, i);
     }
     pub(crate) fn ea_regs(&mut self, e: Ea) {
-        let r = if e.update { RSI } else { RAX };
+        let r = if e.update { R8 } else { RAX };
         match (e.ra, e.rb) {
             (0, Some(rb)) => { let o = self.gr(rb); self.a.ld32o(r, o) }
-            (ra, Some(rb)) => {
-                let (oa, ob) = (self.gr(ra), self.gr(rb));
-                self.a.ld32o(r, oa);
-                self.a.alu_ro(Alu::Add, r, ob);
-            }
-            (ra, None) => { let o = self.gr(ra); self.a.ld32o(r, o); if e.imm != 0 { self.a.alu_ri(Alu::Add, r, e.imm); } }
+            (ra, Some(rb)) => match (self.gr(ra), self.gr(rb)) {
+                (O::R(x), O::R(y)) => self.a.lea32(r, mx(x, y, 1)),
+                (oa, ob) => { self.a.ld32o(r, oa); self.a.alu_ro(Alu::Add, r, ob); }
+            },
+            (ra, None) => match self.gr(ra) {
+                O::R(x) => self.a.lea32(r, m(x, e.imm as i32)),
+                o => { self.a.ld32o(r, o); if e.imm != 0 { self.a.alu_ri(Alu::Add, r, e.imm); } }
+            },
         }
         let a = &mut self.a;
-        if e.update { a.mov_rr(RAX, RSI); }
+        if e.update { a.mov_rr(RAX, R8); }
         if self.env.mask != u32::MAX { a.alu_rm(Alu::And, RAX, ctx(offset_of!(Ctx, mask))); }
     }
     /// The store guards after `ea_regs` (eax = the masked EA; no bounds test: the store map covers it): the store stays in
@@ -524,8 +614,8 @@ impl E<'_, '_> {
         if self.env.mutant != MUT_NO_WATCH {
             a.mov_rr(RCX, RAX);
             a.sh_ri(Sh::Shr, RCX, 12);
-            a.ld64(RDI, ctx(offset_of!(Ctx, smap)));
-            a.cmp8_mi(mx(RDI, RCX, 1), 0);
+            a.alu_rm64(Alu::Add, RCX, ctx(offset_of!(Ctx, smap)));
+            a.cmp8_mi(m(RCX, 0), 0);
             self.slow_if(Cc::E, i);
         } else {
             // the planted mutant drops the watch test only: RAM bounds still hold (the map was both)
@@ -536,7 +626,7 @@ impl E<'_, '_> {
         if self.env.logged {
             // h_note is a C call: the cache's caller-saved registers are kept across it (rsp stays 16-byte aligned)
             let a = &mut self.a;
-            for r in crate::jit_regs::CALLER_SAVED { a.push(r); }
+            for r in crate::jit_regs::CALLER_SAVED.iter().chain(&crate::jit_regs::LOCAL_REGS) { a.push(*r); }
             a.alu_ri64(Alu::Sub, RSP, 8);
             a.mov_rr64(RDI, R13);
             a.mov_rr(RSI, RAX);
@@ -544,7 +634,7 @@ impl E<'_, '_> {
             a.mov_ri64(RAX, self.env.note);
             a.call_r(RAX);
             a.alu_ri64(Alu::Add, RSP, 8);
-            for r in crate::jit_regs::CALLER_SAVED.iter().rev() { a.pop(*r); }
+            for r in crate::jit_regs::CALLER_SAVED.iter().chain(&crate::jit_regs::LOCAL_REGS).rev() { a.pop(*r); }
         }
     }
 
@@ -556,9 +646,7 @@ impl E<'_, '_> {
             K::Li => { let o = self.gw(d); self.a.st32io(o, op.imm) }
             K::Addi | K::Ori | K::Xori => {
                 let alu = match op.k { K::Addi => Alu::Add, K::Ori => Alu::Or, _ => Alu::Xor };
-                self.ldg(RDX, s);
-                self.a.alu_ri(alu, RDX, op.imm);
-                self.stg(d, RDX);
+                self.op_imm(alu, d, s, op.imm);
             }
             K::AndiRc => {
                 self.ldg(RDX, s);
@@ -585,32 +673,36 @@ impl E<'_, '_> {
             }
             K::Mulli => { let o = self.gr(s); self.a.imul_roi(RDX, o, op.imm); self.stg(d, RDX); }
             K::Rlwinm | K::RlwinmRc => {
-                self.ldg(RDX, s);
-                if b & 31 != 0 { self.a.sh_ri(Sh::Rol, RDX, b & 31); }
-                self.a.alu_ri(Alu::And, RDX, op.imm);
-                self.stg(d, RDX);
+                let r = self.greg(d).unwrap_or(RDX);
+                self.ldg(r, s);
+                if b & 31 != 0 { self.a.sh_ri(Sh::Rol, r, b & 31); }
+                self.a.alu_ri(Alu::And, r, op.imm);
+                self.stg(d, r);
                 if op.k == K::RlwinmRc { self.cr0_of_logic_flags(); }
             }
-            K::Cmpi | K::Cmpli => {
-                let o = self.gr(s);
-                self.a.alu_oi(Alu::Cmp, o, op.imm);
-                if op.k == K::Cmpi { self.cr_set(d, Cc::L, Cc::G) } else { self.cr_set(d, Cc::B, Cc::A) }
+            K::Cmpi | K::Cmpli | K::Cmp | K::Cmpl => {
+                if matches!(op.k, K::Cmpi | K::Cmpli) {
+                    let o = self.gr(s);
+                    self.a.alu_oi(Alu::Cmp, o, op.imm);
+                } else {
+                    self.ldg(RDX, s);
+                    self.alug(Alu::Cmp, RDX, b);
+                }
+                let signed = matches!(op.k, K::Cmpi | K::Cmp);
+                // fused (jit_rflow): the branch right after reads the flags; the field is never written
+                if self.fuse.get(i) == Some(&true) { self.flags = Some(signed); }
+                else if signed { self.cr_set(d, Cc::L, Cc::G) } else { self.cr_set(d, Cc::B, Cc::A) }
             }
-            K::Cmp | K::Cmpl => {
-                self.ldg(RDX, s);
-                self.alug(Alu::Cmp, RDX, b);
-                if op.k == K::Cmp { self.cr_set(d, Cc::L, Cc::G) } else { self.cr_set(d, Cc::B, Cc::A) }
-            }
+            // mr: a move (no flags needed)
+            K::Or if s == b => { let o = self.gr(s); match self.greg(d) { Some(r) => self.a.ld32o(r, o), None => { self.a.ld32o(RDX, o); self.stg(d, RDX) } } }
             K::Or | K::OrRc | K::And | K::AndRc | K::Xor | K::Add | K::AddRc => {
                 let alu = match op.k { K::Or | K::OrRc => Alu::Or, K::And | K::AndRc => Alu::And, K::Xor => Alu::Xor, _ => Alu::Add };
-                self.ldg(RDX, s);
-                self.alug(alu, RDX, b);
-                self.stg(d, RDX);
+                let r = self.op_rr(alu, d, s, b);
                 match op.k {
                     K::OrRc | K::AndRc => self.cr0_of_logic_flags(),
                     // an add's OF is not the result's sign test: only the planted mutant reads CR0 from it
                     K::AddRc if self.env.mutant == MUT_LAZY_FLAGS => self.cr0_of_logic_flags(),
-                    K::AddRc => self.cr0_of_edx(),
+                    K::AddRc => self.cr0_of(r),
                     _ => {}
                 }
             }
@@ -659,9 +751,10 @@ impl E<'_, '_> {
             K::Lwz | K::Lbz | K::Lhz | K::Lha | K::Lwzu | K::Lbzu | K::Lwzx | K::Lbzx => {
                 let n = match op.k { K::Lwz | K::Lwzu | K::Lwzx => 4, K::Lhz | K::Lha => 2, _ => 1 };
                 self.ea(i, Ea::of(op, matches!(op.k, K::Lwzx | K::Lbzx)), n);
-                self.ld_be(n, op.k == K::Lha);
-                self.stg(d, RDX);
-                if matches!(op.k, K::Lwzu | K::Lbzu) { self.stg(s, RSI); }
+                let r = self.greg(d).unwrap_or(RDX);
+                self.ld_be_to(r, n, op.k == K::Lha);
+                self.stg(d, r);
+                if matches!(op.k, K::Lwzu | K::Lbzu) { self.stg(s, R8); }
             }
             K::Lfd => {
                 self.ea(i, Ea::of(op, false), 8);
@@ -673,9 +766,8 @@ impl E<'_, '_> {
                 let indexed = matches!(op.k, K::Stwx | K::Stbx);
                 self.ea_regs(Ea::of(op, indexed));
                 self.store_guard(i, Ea::of(op, indexed), n);
-                if n == 8 { self.a.ld64(RDX, m(RBX, fpr(d))) } else { self.ldg(RDX, d) }
-                self.st_be(n);
-                if matches!(op.k, K::Stwu | K::Stbu) { self.stg(s, RSI); }
+                if n == 8 { self.a.ld64(RDX, m(RBX, fpr(d))); self.st_be(n); } else { self.st_gpr(d, n) }
+                if matches!(op.k, K::Stwu | K::Stbu) { self.stg(s, R8); }
             }
             K::B => { self.go(op.imm, i + 1); return true; }
             K::Bl => { self.set_lr(i); self.go(op.imm, i + 1); return true; }
@@ -725,9 +817,18 @@ impl E<'_, '_> {
         self.exit_normal();
     }
 
+    /// A branch fused with the compare before it (jit_rflow: no CTR, a LT / GT / EQ bit of the compared field): the condition
+    /// under which it is TAKEN, on the compare's flags.
+    fn fused_cc(&mut self, bo: u8, bi: u8) -> Option<Cc> {
+        let signed = self.flags.take()?;
+        let cc = match (bi & 3, signed) { (0, true) => Cc::L, (1, true) => Cc::G, (0, false) => Cc::B, (1, false) => Cc::A, _ => Cc::E };
+        Some(if bo & 0x08 != 0 { cc } else { cc.not() })
+    }
+
     /// The BO / BI tests of a conditional branch (CTR decremented first unless BO says not); the returned jumps go to
     /// the NOT-taken path.
     fn cond(&mut self, bo: u8, bi: u8) -> Vec<Fix> {
+        if let Some(cc) = self.fused_cc(bo, bi) { return alloc::vec![self.a.jcc(cc.not())]; }
         let mut not = Vec::new();
         if bo & 0x04 == 0 {
             let o = self.rw(CTR);
@@ -745,6 +846,7 @@ impl E<'_, '_> {
     /// The same tests as [`Self::cond`], but the returned jumps go to the TAKEN path (the not-taken one falls through):
     /// one inverted jcc when only CTR or only a CR bit is tested.
     fn cond_taken(&mut self, bo: u8, bi: u8) -> Vec<Fix> {
+        if let Some(cc) = self.fused_cc(bo, bi) { return alloc::vec![self.a.jcc(cc)]; }
         match (bo & 0x04 == 0, bo & 0x10 == 0) {
             (true, true) => {
                 let not = self.cond(bo, bi);

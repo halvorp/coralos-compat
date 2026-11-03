@@ -68,6 +68,8 @@ mod pc_map;
 mod jit_smap;
 #[cfg(target_arch = "x86_64")]
 mod jit_region;
+#[cfg(target_arch = "x86_64")]
+mod jit_rflow;
 mod jit_stats;
 pub use jit_stats::{JitStats, RegionShape};
 #[cfg(target_arch = "x86_64")]

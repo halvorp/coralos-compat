@@ -17,7 +17,12 @@
 //! globals are flushed at every block boundary there.
 //!
 //! Host registers: r9 r10 r11 (caller-saved) and rbp, r14 (callee-saved; the trampoline saves them). Nothing else in tier 2
-//! uses them (scratch is rax rcx rdx rsi rdi r8).
+//! uses them (scratch is rax rcx rdx r8; rsi and rdi hold a region's locals, below, and call arguments).
+//!
+//! REGION LOCALS (increment 2 of the region tier): inside a region two more GPRs - the two the region's code accesses most,
+//! counted by a dry run of the same emitter - live in rsi and rdi. They are loaded after the region's entry checks, kept
+//! across its internal edges, stored at every exit (each one the region writes anywhere: an exit cannot know the path), and
+//! around every helper call (stored before, reloaded after: the handler may write any field).
 use crate::jit_asm::*;
 use crate::jit_emit::{gpr, CR, E, LR, XER};
 
@@ -29,6 +34,18 @@ pub(crate) const CALLER_SAVED: [u8; 3] = [R9, R10, R11];
 /// The global pin of field `off`, if it is one.
 #[inline(always)]
 fn global(off: usize) -> Option<u8> { GLOBALS.iter().find(|g| g.0 == off).map(|g| g.1) }
+/// The host registers a region's locals live in.
+pub(crate) const LOCAL_REGS: [u8; 2] = [RSI, RDI];
+/// A GPR becomes a region local when the region's code accesses it at least this often (a load at entry and a store per
+/// exit must pay off).
+const LOCAL_MIN_USES: u32 = 4;
+
+/// The region's locals from a dry run's GPR access counts: the most-used GPRs that are not global pins.
+pub(crate) fn pick_locals(uses: &[u32; 32], writes: &[u32; 32]) -> alloc::vec::Vec<(usize, u8, bool)> {
+    let mut v: alloc::vec::Vec<(u32, u8)> = (0..32u8).filter(|&n| global(gpr(n) as usize).is_none() && uses[n as usize] >= LOCAL_MIN_USES).map(|n| (uses[n as usize], n)).collect();
+    v.sort_unstable_by(|a, b| b.cmp(a));
+    v.iter().zip(LOCAL_REGS).map(|(&(_, n), r)| (gpr(n) as usize, r, writes[n as usize] != 0)).collect()
+}
 /// Store every global pin into the Cpu (before Rust can read it).
 pub(crate) fn store_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.st32(m(RBX, off as i32), h); } }
 /// Load every global pin from the Cpu (after Rust may have written it).
@@ -37,14 +54,24 @@ pub(crate) fn load_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.ld32(h, m(
 impl E<'_, '_> {
     /// The Cpu field at `off` (a 32-bit one): its host register when it is a global pin, else the memory operand.
     #[inline(always)]
-    fn field(&self, off: usize) -> O { global(off).map_or(O::M(m(RBX, off as i32)), O::R) }
+    fn field(&self, off: usize) -> O {
+        if let Some(h) = global(off) { return O::R(h) }
+        self.locals.iter().find(|l| l.0 == off).map_or(O::M(m(RBX, off as i32)), |l| O::R(l.1))
+    }
+    /// Load every region local from the Cpu (region entry; after a helper call).
+    pub(crate) fn load_locals(&mut self) { for &(off, h, _) in &self.locals { self.a.ld32(h, m(RBX, off as i32)); } }
+    /// Store every region local the region writes into the Cpu (every exit; before a helper call).
+    pub(crate) fn store_locals(&mut self) {
+        if self.env.mutant == crate::jit_emit::MUT_REGION_LOCAL_EXIT { return; }
+        for &(off, h, w) in &self.locals { if w { self.a.st32(m(RBX, off as i32), h); } }
+    }
     /// The Cpu field at `off`, to read / to write / to read and write (the same operand: named for the reader).
     pub(crate) fn r(&mut self, off: usize) -> O { self.field(off) }
     pub(crate) fn w(&mut self, off: usize) -> O { self.field(off) }
     pub(crate) fn rw(&mut self, off: usize) -> O { self.field(off) }
     /// GPR n, to read / to write.
-    pub(crate) fn gr(&mut self, n: u8) -> O { self.r(gpr(n) as usize) }
-    pub(crate) fn gw(&mut self, n: u8) -> O { self.w(gpr(n) as usize) }
+    pub(crate) fn gr(&mut self, n: u8) -> O { self.uses[n as usize & 31] += 1; self.r(gpr(n) as usize) }
+    pub(crate) fn gw(&mut self, n: u8) -> O { self.uses[n as usize & 31] += 1; self.writes[n as usize & 31] += 1; self.w(gpr(n) as usize) }
     /// host `d` = GPR n; GPR n = host `s`; host `d` op= GPR n.
     pub(crate) fn ldg(&mut self, d: u8, n: u8) { let o = self.gr(n); self.a.ld32o(d, o) }
     pub(crate) fn stg(&mut self, n: u8, s: u8) { let o = self.gw(n); self.a.st32o(o, s) }

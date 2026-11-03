@@ -25,7 +25,13 @@ pub(crate) const R15: u8 = 15;
 /// Condition codes (the low nibble of Jcc / SETcc / CMOVcc).
 #[derive(Clone, Copy)]
 #[repr(u8)]
-pub(crate) enum Cc { B = 2, Ae = 3, E = 4, Ne = 5, A = 7, S = 8, Ns = 9, P = 10, L = 12, G = 15 }
+pub(crate) enum Cc { B = 2, Ae = 3, E = 4, Ne = 5, Be = 6, A = 7, S = 8, Ns = 9, P = 10, Np = 11, L = 12, Ge = 13, Le = 14, G = 15 }
+impl Cc {
+    /// The opposite condition (x86 encodes it in the low bit).
+    pub(crate) fn not(self) -> Cc {
+        match self { Cc::B => Cc::Ae, Cc::Ae => Cc::B, Cc::E => Cc::Ne, Cc::Ne => Cc::E, Cc::Be => Cc::A, Cc::A => Cc::Be, Cc::S => Cc::Ns, Cc::Ns => Cc::S, Cc::L => Cc::Ge, Cc::Ge => Cc::L, Cc::Le => Cc::G, Cc::G => Cc::Le, Cc::P => Cc::Np, Cc::Np => Cc::P }
+    }
+}
 
 /// ALU group-1 operations: the /digit of 0x81 and (digit << 3) | 1 is the `r/m, reg` opcode.
 #[derive(Clone, Copy)]
@@ -167,6 +173,8 @@ impl Asm {
         self.u32(v);
     }
     pub(crate) fn lea64(&mut self, r: u8, mm: M) { self.op_m(None, true, &[0x8D], r, mm, false) }
+    /// lea r32, [m] (the 32-bit sum: a guest add that wraps, with no flags).
+    pub(crate) fn lea32(&mut self, r: u8, mm: M) { self.op_m(None, false, &[0x8D], r, mm, false) }
 
     // ---- ALU ----
     pub(crate) fn alu_rr(&mut self, op: Alu, d: u8, s: u8) { self.op_r(false, &[(op as u8) << 3 | 1], s, d, false) }
@@ -219,6 +227,8 @@ impl Asm {
     }
     pub(crate) fn setcc(&mut self, cc: Cc, r: u8) { self.op_r(false, &[0x0F, 0x90 + cc as u8], 0, r, r >= 4) }
     pub(crate) fn cmov(&mut self, cc: Cc, d: u8, s: u8) { self.op_r(false, &[0x0F, 0x40 + cc as u8], d, s, false) }
+    /// cmovcc r32, [m].
+    pub(crate) fn cmov_rm(&mut self, cc: Cc, d: u8, mm: M) { self.op_m(None, false, &[0x0F, 0x40 + cc as u8], d, mm, false) }
     pub(crate) fn sh_ri64(&mut self, op: Sh, d: u8, n: u8) {
         self.op_r(true, &[0xC1], op as u8, d, false);
         self.u8(n);

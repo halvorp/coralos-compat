@@ -512,6 +512,9 @@ fn wc3_host_run_with_a_gl_worker() {
     // `WC3_REGION_AFTER=<n>`: tier 2's region threshold (block entries before a hot head forms a region; 0 = no regions)
     #[cfg(not(feature = "cpu-library"))]
     if let Some(n) = std::env::var("WC3_REGION_AFTER").ok().and_then(|s| s.parse().ok()) { m.exec().set_jit_region_after(n); }
+    // `WC3_REGION_CENSUS`: regions count their entries and internal edges (JitStats region_entries / region_edges)
+    #[cfg(not(feature = "cpu-library"))]
+    if std::env::var("WC3_REGION_CENSUS").is_ok() { m.exec().set_jit_region_census(true); }
     // `WC3_REGION_SHAPE=<nodes>/<insns>/<pages>/<follow calls 0|1>/<spend 0|1>` (or comma-separated): the region tier's shape (tuning)
     #[cfg(not(feature = "cpu-library"))]
     if let Ok(v) = std::env::var("WC3_REGION_SHAPE") {

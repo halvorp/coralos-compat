@@ -550,7 +550,7 @@ fn regions_end_in_tier_0s_state_in_any_slicing_and_lockstep() {
 /// Tier::Jit at two slicings and without MOVBE, and no divergence in JitLockstep.
 #[test]
 fn a_random_program_fuzz_agrees_with_tier_0_with_regions() {
-    let (mut regions, mut nodes, mut compared) = (0u64, 0u64, 0u64);
+    let (mut regions, mut nodes, mut compared, mut fused) = (0u64, 0u64, 0u64, 0u64);
     for seed in 0..400u64 {
         let prog = random_program(seed);
         let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, fuzz_setup(seed));
@@ -558,7 +558,7 @@ fn a_random_program_fuzz_agrees_with_tier_0_with_regions() {
             let (got, e) = run_shape(Tier::Jit, 0, &prog, slice, fuzz_setup(seed), Some(REGION_TEST), shape);
             assert!(got == want, "seed {seed} slice {slice}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} tb {}/{} over {} {:?}",
                 got.gpr, want.gpr, got.cr, want.cr, got.xer, want.xer, got.tb, want.tb, got.over_budget, e.jit_stats());
-            (regions, nodes) = (regions + e.jit_stats().regions, nodes + e.jit_stats().region_nodes);
+            (regions, nodes, fused) = (regions + e.jit_stats().regions, nodes + e.jit_stats().region_nodes, fused + e.jit_stats().region_fused);
         }
         let (mut c, mut m) = load(&prog, fuzz_setup(seed));
         let mut e = exec(Tier::Jit, 0);
@@ -574,6 +574,38 @@ fn a_random_program_fuzz_agrees_with_tier_0_with_regions() {
     }
     assert!(regions > 400 && nodes > regions + 200, "regions, many of several nodes, were fuzzed: {regions} regions, {nodes} nodes");
     assert!(compared > 50_000, "the fuzz really compared JIT code: {compared}");
+    eprintln!("fuzz with regions: {regions} regions, {nodes} nodes, {fused} fused compares");
+}
+
+/// A loop whose `cmpwi cr0; blt` leaves cr0 dead on both edges (each reaches `addic.` before anything reads CR or leaves):
+/// the region fuses them - the compare only sets the flags, the branch is a jcc - and still ends in tier 0's state in every
+/// slicing and in lockstep. (Mutant 27 fuses where the field is live: RED in the region mutant test.)
+fn fused_compare_program() -> Vec<u32> {
+    vec![
+        d(14, 5, 0, 0), d(14, 6, 0, 0), d(14, 31, 0, 300), // li r5,0; li r6,0; li r31,300
+        d(14, 5, 5, 7), d(11, 0, 5, 100), bc(12, 0, 8), // top: addi r5,r5,7; cmpwi r5,100; blt +8
+        d(14, 6, 6, 1), // addi r6,r6,1
+        rlwinm(5, 5, 0, 25, 31, false), d(13, 31, 31, 0xFFFF), bc(4, 2, -24), // rlwinm r5,r5,0,25,31; addic. r31,r31,-1; bne top
+        d(15, 24, 0, EXIT >> 16), d(24, 24, 24, EXIT & 0xFFFF), mtspr(8, 24),
+    ]
+}
+
+#[test]
+fn a_compare_fused_with_its_branch_ends_in_tier_0s_state() {
+    let prog = fused_compare_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, |_, _| {});
+    // threshold 16: the loop head (entered every trip) runs out before the skip block (~3 trips in 4), so the region is headed
+    // by the loop head and the branch's taken edge is a FORWARD one (a back edge may leave on its budget check: never fused)
+    for slice in [1_000_000, 1_000, 13, 3] {
+        let (got, e) = run_region(Tier::Jit, 0, &prog, slice, |_, _| {}, Some(16));
+        assert!(got == want, "slice {slice}: r5 {} r6 {} cr {:#x}/{:#x} {:?}", got.gpr[5], got.gpr[6], got.cr, want.cr, e.jit_stats());
+        // (a 3-instruction slice is shorter than the region's longest path: it never enters, it is refused)
+        assert!(slice < 13 || e.jit_stats().region_fused > 0, "slice {slice}: the compare was fused: {:?}", e.jit_stats());
+    }
+    for region in [REGION_TEST, 16] {
+        let (got, e) = run_region(Tier::JitLockstep, 0, &prog, 13, |_, _| {}, Some(region));
+        assert!(got == want && e.divergence().is_none(), "threshold {region}: {:?}", e.divergence());
+    }
 }
 
 /// A loop whose region spans two code pages (the head's and P2's: `b P2` ... `b top`), where the loop itself rewrites P2's
@@ -612,10 +644,11 @@ fn a_region_spanning_a_page_written_since_it_formed_is_not_run_stale() {
 
 /// Each planted REGION mutant goes RED on the region gates: 21 an internal forward edge to the wrong node, 22 only the head's
 /// page generation checked, 23 an internal edge dropping the retired count, 24 a back edge that skips the budget check, 25 an
-/// inline return check that takes the wrong return (calls followed).
+/// inline return check that takes the wrong return (calls followed), 26 exits that do not store the region's locals, 27 a
+/// compare fused with its branch while its CR field is still live.
 #[test]
 fn negative_control_every_planted_region_mutant_goes_red() {
-    for mutant in 21..=25u8 {
+    for mutant in 21..=27u8 {
         let shape = shapes()[(mutant == 25) as usize];
         let mut red = false;
         let (xp, ties) = (cross_page_program(), fma_ties_program());

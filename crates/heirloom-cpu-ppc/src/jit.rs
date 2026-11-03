@@ -131,6 +131,12 @@ pub(crate) struct Ctx {
     /// from the region threshold; a block's counter is reset when it is compiled. Inline: JIT code reaches one with a
     /// single `sub [r13 + disp32], 1`.
     pub(crate) counters: [u32; 1 << TABLE_BITS],
+    /// Per CR field f: the field's LT and GT nibbles already in place (8 << s, 4 << s; s = 28 - 4f) - the CMOV sources of
+    /// jit_emit's cr_set.
+    pub(crate) crk: [[u32; 2]; 8],
+    /// Opt-in region census (Exec::set_jit_region_census): region entries and internal edges taken.
+    pub(crate) rentries: u64,
+    pub(crate) redges: u64,
 }
 
 
@@ -186,6 +192,8 @@ pub(crate) struct Jit {
     /// Block entries after which a block's head forms a region (jit_region::REGION_AFTER; 0 = no regions).
     pub(crate) region_after: u32,
     pub(crate) region_shape: crate::jit_region::RegionShape,
+    /// Regions compiled from now on count their entries and internal edges (diagnostics: two `add [r13+..], 1` more).
+    pub(crate) region_census: bool,
     /// Per published or pending REGION (by its entry address): the code pages it was decoded from, (page, generation, a pc
     /// on it) - the dispatcher's entry test reads the head's page only, so a region left stale by a write to another of its
     /// pages is found here (and recompiled as a block) instead of bailing at every entry.
@@ -199,13 +207,13 @@ pub(crate) struct Jit {
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
         let arena = Arena::new(mem, arena_bytes, ARENA_MIN.min(arena_bytes), SEGMENTS)?;
-        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, resync: false, no_resync: false, census: None, hot: EMPTY_PC, counters: [crate::jit_region::REGION_AFTER; 1 << TABLE_BITS] });
+        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, resync: false, no_resync: false, census: None, hot: EMPTY_PC, counters: [crate::jit_region::REGION_AFTER; 1 << TABLE_BITS], crk: core::array::from_fn(|f| [8 << (28 - 4 * f), 4 << (28 - 4 * f)]), rentries: 0, redges: 0 });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(),
-            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false,
+            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false,
         };
         j.stats.arena_bytes = j.arena.len as u64;
         if !j.stubs() { return None; }
@@ -374,6 +382,7 @@ impl Jit {
             self.stats.regions += 1;
             self.stats.region_nodes += plan.nodes.len() as u64;
             self.stats.region_insns += plan.nodes.iter().map(|n| n.1.len() as u64).sum::<u64>();
+            self.stats.region_fused += crate::jit_rflow::fuse_marks(&plan.nodes, &plan.rets, false).iter().flatten().filter(|&&f| f).count() as u64;
         }
         if let (Some(c), Some(t0)) = (self.timer, t0) {
             let d = c().wrapping_sub(t0);
@@ -429,7 +438,7 @@ impl Jit {
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None };
+        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None, census: self.region_census };
         let (code, inner) = emit(&mut env);
         if out_of_links { self.drop_code(); return None; }
         if may_refuse && code.len() > self.arena.segment_bytes() {
@@ -482,7 +491,7 @@ impl Jit {
     fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
         let t0 = self.timer.map(|c| c());
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
-        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None, census: false };
         let code = jit_emit::compile_native(pc, &mut env);
         self.place(&code, 0, Vec::new(), pc, 1, gen, at);
         self.stats.natives_compiled += 1;
@@ -595,6 +604,7 @@ impl Jit {
         self.stats.helpers += self.ctx.helpers;
         self.stats.ibtc_hits += self.ctx.ibtc_hits;
         self.stats.ibtc_misses += self.ctx.ibtc_misses;
+        (self.stats.region_entries, self.stats.region_edges) = (self.ctx.rentries, self.ctx.redges);
         cpu.tb = self.ctx.tb0.wrapping_add(r);
         self.stats.entries += 1;
         self.stats.insns += r;
