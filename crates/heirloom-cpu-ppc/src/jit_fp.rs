@@ -14,7 +14,7 @@ use crate::cpu::Cpu;
 use core::mem::offset_of;
 
 const FPSCR: usize = offset_of!(Cpu, fpscr);
-fn f(n: usize) -> M { m(RBX, fpr(n as u8)) }
+fn f(n: usize) -> M { crate::jit_emit::cpu_m(fpr(n as u8)) }
 const SIGN: u64 = 1 << 63;
 
 impl E<'_, '_> {

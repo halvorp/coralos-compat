@@ -58,14 +58,24 @@ pub(crate) enum O { R(u8), M(M) }
 /// A forward jump whose rel32 is patched when its target is known.
 #[derive(Clone, Copy)]
 pub(crate) struct Fix(usize);
+/// A SHORT forward jump (rel8) over a few instructions of known small size; `here8` asserts it reaches.
+#[derive(Clone, Copy)]
+pub(crate) struct Fix8(usize);
 
+/// `wide`: every displacement and immediate in its 32-bit form (the pre-h86-ppc-jit6 code size and more), never the short
+/// ones - the same instructions in more bytes. Tier::JitWide's A/B switch: on silicon it isolates what CODE SIZE costs (the
+/// instruction cache and L2 footprint) from what the instructions cost.
 #[derive(Default)]
-pub(crate) struct Asm { pub(crate) b: Vec<u8> }
+pub(crate) struct Asm { pub(crate) b: Vec<u8>, pub(crate) wide: bool }
 
 impl Asm {
     pub(crate) fn pos(&self) -> usize { self.b.len() }
     fn u8(&mut self, v: u8) { self.b.push(v) }
     fn u32(&mut self, v: u32) { self.b.extend_from_slice(&v.to_le_bytes()) }
+    /// The sign-extended imm8 form serves `v` (and the code is not wide).
+    fn imm8(&self, v: u32) -> bool { !self.wide && i8::try_from(v as i32).is_ok() }
+    /// Group 1 (`/ext`) with an immediate: 0x83 ib when it fits a sign-extended byte, else 0x81 id.
+    fn grp1_tail(&mut self, v: u32, short: bool) { if short { self.u8(v as u8) } else { self.u32(v) } }
 
     /// REX with W/R/X/B; `byte_reg` forces one for spl/bpl/sil/dil as 8-bit operands.
     fn rex(&mut self, w: bool, r: u8, x: u8, b: u8, byte_reg: bool) {
@@ -75,7 +85,7 @@ impl Asm {
     fn modrm_mem(&mut self, reg: u8, mm: M) {
         let base = mm.base & 7;
         // mod 00 has no displacement except with base rbp/r13 (that encoding means rip/disp32)
-        let md = if mm.disp == 0 && base != 5 { 0 } else if i8::try_from(mm.disp).is_ok() { 1 } else { 2 };
+        let md = if self.wide { 2 } else if mm.disp == 0 && base != 5 { 0 } else if i8::try_from(mm.disp).is_ok() { 1 } else { 2 };
         match mm.index {
             None => {
                 self.u8(md << 6 | (reg & 7) << 3 | base);
@@ -116,16 +126,29 @@ impl Asm {
     /// mov r/m32, r32.
     pub(crate) fn st32o(&mut self, o: O, r: u8) { if let O::R(d) = o { if d == r { return } } self.op_o(false, &[0x89], r, o) }
     /// mov r/m32, imm32.
-    pub(crate) fn st32io(&mut self, o: O, v: u32) { self.op_o(false, &[0xC7], 0, o); self.u32(v) }
+    pub(crate) fn st32io(&mut self, o: O, v: u32) {
+        match o {
+            O::R(r) if !self.wide => self.mov_ri(r, v),
+            _ => { self.op_o(false, &[0xC7], 0, o); self.u32(v) }
+        }
+    }
     /// op r32, r/m32.
     pub(crate) fn alu_ro(&mut self, op: Alu, d: u8, o: O) { self.op_o(false, &[(op as u8) << 3 | 3], d, o) }
     /// op r/m32, r32.
     pub(crate) fn alu_or(&mut self, op: Alu, o: O, s: u8) { self.op_o(false, &[(op as u8) << 3 | 1], s, o) }
     /// op r/m32, imm32.
-    pub(crate) fn alu_oi(&mut self, op: Alu, o: O, v: u32) { self.op_o(false, &[0x81], op as u8, o); self.u32(v) }
+    pub(crate) fn alu_oi(&mut self, op: Alu, o: O, v: u32) {
+        let short = self.imm8(v);
+        self.op_o(false, &[if short { 0x83 } else { 0x81 }], op as u8, o);
+        self.grp1_tail(v, short)
+    }
     /// imul r32, r/m32 / imul r32, r/m32, imm32.
     pub(crate) fn imul_ro(&mut self, d: u8, o: O) { self.op_o(false, &[0x0F, 0xAF], d, o) }
-    pub(crate) fn imul_roi(&mut self, d: u8, o: O, v: u32) { self.op_o(false, &[0x69], d, o); self.u32(v) }
+    pub(crate) fn imul_roi(&mut self, d: u8, o: O, v: u32) {
+        let short = self.imm8(v);
+        self.op_o(false, &[if short { 0x6B } else { 0x69 }], d, o);
+        self.grp1_tail(v, short)
+    }
     /// movsx r32, r/m16 (a register source is its low 16 bits) / movsx r32, r/m8 (a register source is its low byte:
     /// spl..dil need a REX, which op_r gives a register >= 4 here).
     pub(crate) fn movsx16o(&mut self, d: u8, o: O) { self.op_o(false, &[0x0F, 0xBF], d, o) }
@@ -184,12 +207,19 @@ impl Asm {
     /// op r64, [m].
     pub(crate) fn alu_rm64(&mut self, op: Alu, d: u8, mm: M) { self.op_m(None, true, &[(op as u8) << 3 | 3], d, mm, false) }
     pub(crate) fn alu_ri(&mut self, op: Alu, d: u8, v: u32) {
-        self.op_r(false, &[0x81], op as u8, d, false);
-        self.u32(v);
+        let short = self.imm8(v);
+        if d == RAX && !short && !self.wide {
+            // op eax, imm32 (no ModRM)
+            self.u8((op as u8) << 3 | 5);
+            return self.u32(v);
+        }
+        self.op_r(false, &[if short { 0x83 } else { 0x81 }], op as u8, d, false);
+        self.grp1_tail(v, short)
     }
     pub(crate) fn alu_ri64(&mut self, op: Alu, d: u8, v: i32) {
-        self.op_r(true, &[0x81], op as u8, d, false);
-        self.u32(v as u32);
+        let short = self.imm8(v as u32);
+        self.op_r(true, &[if short { 0x83 } else { 0x81 }], op as u8, d, false);
+        self.grp1_tail(v as u32, short)
     }
     /// op qword [m], imm32 (sign-extended).
     /// cmp byte [mm], imm8.
@@ -198,8 +228,9 @@ impl Asm {
         self.u8(v);
     }
     pub(crate) fn alu_mi64(&mut self, op: Alu, mm: M, v: u32) {
-        self.op_m(None, true, &[0x81], op as u8, mm, false);
-        self.u32(v);
+        let short = self.imm8(v);
+        self.op_m(None, true, &[if short { 0x83 } else { 0x81 }], op as u8, mm, false);
+        self.grp1_tail(v, short)
     }
     /// and r8, r8 (8-bit).
     pub(crate) fn and8_rr(&mut self, d: u8, s: u8) { self.op_r(false, &[0x20], s, d, d >= 4 || s >= 4) }
@@ -221,7 +252,15 @@ impl Asm {
     pub(crate) fn not(&mut self, r: u8) { self.op_r(false, &[0xF7], 2, r, false) }
     pub(crate) fn test_rr(&mut self, a: u8, b: u8) { self.op_r(false, &[0x85], b, a, false) }
     pub(crate) fn test_rr64(&mut self, a: u8, b: u8) { self.op_r(true, &[0x85], b, a, false) }
+    /// test r32, imm32 - or, when the mask fits the low byte, test r8, imm8 (the same ZF / SF-of-the-low-byte... so only
+    /// where SF / OF / CF are not read: the flags this crate tests after `test_ri` are ZF (jz / jnz / setz) and, from a
+    /// bit-31 mask, SF - which needs the 32-bit form; a mask below 0x80 has bit 7 clear, so SF = 0 in both forms).
     pub(crate) fn test_ri(&mut self, r: u8, v: u32) {
+        if !self.wide && v < 0x80 {
+            if r == RAX { self.u8(0xA8); } else { self.op_r(false, &[0xF6], 0, r, r >= 4); }
+            self.u8(v as u8);
+            return;
+        }
         self.op_r(false, &[0xF7], 0, r, false);
         self.u32(v);
     }
@@ -236,8 +275,9 @@ impl Asm {
 
     /// adc r32, imm32 (CF in).
     pub(crate) fn adc_ri(&mut self, d: u8, v: u32) {
-        self.op_r(false, &[0x81], 2, d, false);
-        self.u32(v);
+        let short = self.imm8(v);
+        self.op_r(false, &[if short { 0x83 } else { 0x81 }], 2, d, false);
+        self.grp1_tail(v, short)
     }
     pub(crate) fn stc(&mut self) { self.u8(0xF9) }
     /// cdq (sign-extend eax into edx).
@@ -287,6 +327,23 @@ impl Asm {
         self.b[f.0 - 4..f.0].copy_from_slice(&rel.to_le_bytes());
     }
     pub(crate) fn here(&mut self, f: Fix) { let p = self.pos(); self.patch(f, p) }
+    /// jcc rel8 over a short run of code (the wide form when the code is wide).
+    pub(crate) fn jcc8(&mut self, cc: Cc) -> Result<Fix8, Fix> {
+        if self.wide { return Err(self.jcc(cc)); }
+        self.b.extend_from_slice(&[0x70 + cc as u8, 0]);
+        Ok(Fix8(self.pos()))
+    }
+    /// Land a short jump here: what it skips must be under 128 bytes (a few fixed instructions; never a guest operand's size).
+    pub(crate) fn here8(&mut self, f: Result<Fix8, Fix>) {
+        match f {
+            Ok(Fix8(at)) => {
+                let rel = self.pos() - at;
+                assert!(rel < 128, "a short jump over {rel} bytes");
+                self.b[at - 1] = rel as u8;
+            }
+            Err(f) => self.here(f),
+        }
+    }
     /// jmp qword [m].
     pub(crate) fn jmp_m(&mut self, mm: M) { self.op_m(None, false, &[0xFF], 4, mm, false) }
     pub(crate) fn jmp_r(&mut self, r: u8) { self.op_r(false, &[0xFF], 4, r, false) }
@@ -314,6 +371,17 @@ mod tests {
         assert_eq!(cpu_has_movbe(), std::is_x86_feature_detected!("movbe"));
     }
 
+    /// Tier::JitWide's assembler: the same instructions with every displacement and immediate in its 4-byte form.
+    #[test]
+    fn wide_code_keeps_the_instruction_and_widens_its_operands() {
+        let w = |f: &dyn Fn(&mut Asm)| { let mut a = Asm { wide: true, ..Asm::default() }; f(&mut a); a.b };
+        assert_eq!(w(&|a| a.ld32(RDX, m(RBX, 0x10))), [0x8B, 0x93, 0x10, 0, 0, 0]); // mov edx,[rbx+0x10] (disp32)
+        assert_eq!(w(&|a| a.ld32(RAX, m(R12, 0))), [0x41, 0x8B, 0x84, 0x24, 0, 0, 0, 0]); // mov eax,[r12+0] (disp32)
+        assert_eq!(w(&|a| a.alu_ri(Alu::Add, RDX, 1)), [0x81, 0xC2, 1, 0, 0, 0]); // add edx,1 (imm32)
+        assert_eq!(w(&|a| a.test_ri(RAX, 3)), [0xF7, 0xC0, 3, 0, 0, 0]); // test eax,3
+        assert_eq!(w(&|a| a.st32io(O::R(R10), 7)), [0x41, 0xC7, 0xC2, 7, 0, 0, 0]); // mov r10d,7 (C7 /0)
+    }
+
     /// Each expected byte string is what GNU as (Intel syntax) assembles for the comment beside it, or (where the comment
     /// says so) another valid encoding of it that llvm-mc --disassemble reads back as the comment.
     #[test]
@@ -336,15 +404,18 @@ mod tests {
         assert_eq!(enc(|a| a.lea64(R15, m(R15, 3))), [0x4D, 0x8D, 0x7F, 0x03]); // lea r15,[r15+3]
         assert_eq!(enc(|a| a.alu_rm(Alu::Add, RDX, m(RBX, 8))), [0x03, 0x53, 0x08]); // add edx,[rbx+8]
         assert_eq!(enc(|a| a.alu_rm64(Alu::Cmp, RCX, m(R13, 16))), [0x49, 0x3B, 0x4D, 0x10]); // cmp rcx,[r13+16]
-        assert_eq!(enc(|a| a.alu_ri(Alu::And, RAX, 0xFFF)), [0x81, 0xE0, 0xFF, 0x0F, 0, 0]); // and eax,0xfff
+        assert_eq!(enc(|a| a.alu_ri(Alu::And, RAX, 0xFFF)), [0x25, 0xFF, 0x0F, 0, 0]); // and eax,0xfff (the eax form)
+        assert_eq!(enc(|a| a.alu_ri(Alu::Or, RAX, 0x1000_0000)), [0x0D, 0, 0, 0, 0x10]); // or eax,0x10000000
+        assert_eq!(enc(|a| a.alu_ri(Alu::And, RCX, 0xFFF)), [0x81, 0xE1, 0xFF, 0x0F, 0, 0]); // and ecx,0xfff
+        assert_eq!(enc(|a| { let f = a.jcc8(Cc::Ns); a.alu_ri(Alu::Or, RAX, 1); a.here8(f); }), [0x79, 3, 0x83, 0xC8, 1]); // jns +3; or eax,1
         assert_eq!(enc(|a| a.alu_rr64(Alu::Cmp, RAX, R14)), [0x4C, 0x39, 0xF0]); // cmp rax,r14
-        assert_eq!(enc(|a| a.alu_oi(Alu::Cmp, O::M(m(RBX, 12)), 9)), [0x81, 0x7B, 0x0C, 9, 0, 0, 0]); // cmp dword [rbx+12],9
+        assert_eq!(enc(|a| a.alu_oi(Alu::Cmp, O::M(m(RBX, 12)), 9)), [0x83, 0x7B, 0x0C, 9]); // cmp dword [rbx+12],9
         assert_eq!(enc(|a| a.and8_rr(RAX, RCX)), [0x20, 0xC8]); // and al,cl
         assert_eq!(enc(|a| a.sh_ri(Sh::Rol, RDX, 3)), [0xC1, 0xC2, 3]); // rol edx,3
         assert_eq!(enc(|a| a.sh_cl(Sh::Shl, RDX)), [0xD3, 0xE2]); // shl edx,cl
         assert_eq!(enc(|a| a.bswap32(RDX)), [0x0F, 0xCA]);
         assert_eq!(enc(|a| a.bswap64(RDX)), [0x48, 0x0F, 0xCA]);
-        assert_eq!(enc(|a| a.imul_roi(RDX, O::M(m(RBX, 8)), 3)), [0x69, 0x53, 0x08, 3, 0, 0, 0]); // imul edx,[rbx+8],3
+        assert_eq!(enc(|a| a.imul_roi(RDX, O::M(m(RBX, 8)), 3)), [0x6B, 0x53, 0x08, 3]); // imul edx,[rbx+8],3
         assert_eq!(enc(|a| a.imul_ro(RDX, O::M(m(RBX, 8)))), [0x0F, 0xAF, 0x53, 0x08]);
         assert_eq!(enc(|a| a.setcc(Cc::L, RAX)), [0x0F, 0x9C, 0xC0]); // setl al
         assert_eq!(enc(|a| a.setcc(Cc::B, R8)), [0x41, 0x0F, 0x92, 0xC0]); // setb r8b
@@ -357,12 +428,15 @@ mod tests {
         assert_eq!(enc(|a| a.jmp_m(m(RAX, 0))), [0xFF, 0x20]); // jmp [rax]
         assert_eq!(enc(|a| a.call_r(RAX)), [0xFF, 0xD0]);
         assert_eq!(enc(|a| a.call_m(m(R13, 0x58))), [0x41, 0xFF, 0x55, 0x58]); // call [r13+0x58]
-        assert_eq!(enc(|a| a.alu_mi64(Alu::Cmp, m(RAX, 0x100), 7)), [0x48, 0x81, 0xB8, 0x00, 0x01, 0, 0, 7, 0, 0, 0]); // cmp qword [rax+0x100],7
+        assert_eq!(enc(|a| a.alu_mi64(Alu::Cmp, m(RAX, 0x100), 7)), [0x48, 0x83, 0xB8, 0x00, 0x01, 0, 0, 7]); // cmp qword [rax+0x100],7
         assert_eq!(enc(|a| a.lea64(R15, mxd(R15, RBP, 1, 1))), [0x4D, 0x8D, 0x7C, 0x2F, 0x01]); // lea r15,[r15+rbp+1]
         assert_eq!(enc(|a| a.lea64(RCX, mx(R15, RBP, 1))), [0x49, 0x8D, 0x0C, 0x2F]); // lea rcx,[r15+rbp]
         assert_eq!(enc(|a| a.push(R15)), [0x41, 0x57]);
         assert_eq!(enc(|a| a.pop(RBX)), [0x5B]);
-        assert_eq!(enc(|a| a.test_ri(R8, 0x20)), [0x41, 0xF7, 0xC0, 0x20, 0, 0, 0]); // test r8d,0x20
+        assert_eq!(enc(|a| a.test_ri(R8, 0x20)), [0x41, 0xF6, 0xC0, 0x20]); // test r8b,0x20 (a mask below 0x80: ZF as the 32-bit form)
+        assert_eq!(enc(|a| a.test_ri(RAX, 3)), [0xA8, 3]); // test al,3
+        assert_eq!(enc(|a| a.test_ri(RSI, 3)), [0x40, 0xF6, 0xC6, 3]); // test sil,3
+        assert_eq!(enc(|a| a.test_ri(RCX, 0x80)), [0xF7, 0xC1, 0x80, 0, 0, 0]); // test ecx,0x80 (bit 7: the 32-bit form)
         assert_eq!(enc(|a| a.movsx16o(RDX, O::M(m(RBX, 8)))), [0x0F, 0xBF, 0x53, 0x08]);
         assert_eq!(enc(|a| a.sse_m(0xF2, 0x10, 0, m(RBX, 0x80))), [0xF2, 0x0F, 0x10, 0x83, 0x80, 0, 0, 0]); // movsd xmm0,[rbx+0x80]
         assert_eq!(enc(|a| a.sse_m(0x66, 0x2E, 0, m(RBX, 8))), [0x66, 0x0F, 0x2E, 0x43, 0x08]); // ucomisd xmm0,[rbx+8]
@@ -378,7 +452,7 @@ mod tests {
         assert_eq!(enc(|a| a.cvttsd2si(RAX, 0)), [0xF2, 0x0F, 0x2C, 0xC0]); // cvttsd2si eax,xmm0
         assert_eq!(enc(|a| a.cvtsi2sd(1, RAX)), [0xF2, 0x0F, 0x2A, 0xC8]); // cvtsi2sd xmm1,eax
         assert_eq!(enc(|a| a.adc_ro(RDX, O::M(m(RBX, 8)))), [0x13, 0x53, 0x08]); // adc edx,[rbx+8]
-        assert_eq!(enc(|a| a.adc_ri(RDX, 0)), [0x81, 0xD2, 0, 0, 0, 0]); // adc edx,0
+        assert_eq!(enc(|a| a.adc_ri(RDX, 0)), [0x83, 0xD2, 0]); // adc edx,0
         assert_eq!(enc(|a| a.bsr_ro(RDX, O::M(m(RBX, 8)))), [0x0F, 0xBD, 0x53, 0x08]); // bsr edx,[rbx+8]
         assert_eq!(enc(|a| a.grp3_o(4, O::M(m(RBX, 8)))), [0xF7, 0x63, 0x08]); // mul dword [rbx+8]
         assert_eq!(enc(|a| a.grp3_o(7, O::M(m(RBX, 8)))), [0xF7, 0x7B, 0x08]); // idiv dword [rbx+8]
@@ -390,14 +464,17 @@ mod tests {
         assert_eq!(enc(|a| a.ld32o(RDX, O::R(RDX))), []); // mov edx,edx is dropped
         assert_eq!(enc(|a| a.st32o(O::R(RBP), RDX)), [0x89, 0xD5]); // mov ebp,edx
         assert_eq!(enc(|a| a.st32o(O::R(R14), RSI)), [0x41, 0x89, 0xF6]); // mov r14d,esi
-        assert_eq!(enc(|a| a.st32io(O::R(R10), 7)), [0x41, 0xC7, 0xC2, 7, 0, 0, 0]); // mov r10d,7 (the C7 /0 form; as picks B8+r)
+        assert_eq!(enc(|a| a.st32io(O::R(R10), 7)), [0x41, 0xBA, 7, 0, 0, 0]); // mov r10d,7
         assert_eq!(enc(|a| a.alu_ro(Alu::Add, RDX, O::R(R11))), [0x41, 0x03, 0xD3]); // add edx,r11d (the 03 /r form)
         assert_eq!(enc(|a| a.alu_or(Alu::Or, O::R(R9), RAX)), [0x41, 0x09, 0xC1]); // or r9d,eax
         assert_eq!(enc(|a| a.alu_or(Alu::Or, O::M(m(RBX, 0x80)), RAX)), [0x09, 0x83, 0x80, 0, 0, 0]); // or [rbx+0x80],eax
         assert_eq!(enc(|a| a.alu_oi(Alu::And, O::R(RBP), 0x0FFF_FFFF)), [0x81, 0xE5, 0xFF, 0xFF, 0xFF, 0x0F]); // and ebp,0xfffffff
-        assert_eq!(enc(|a| a.alu_oi(Alu::Cmp, O::R(R14), 9)), [0x41, 0x81, 0xFE, 9, 0, 0, 0]); // cmp r14d,9 (imm32; as picks imm8)
+        assert_eq!(enc(|a| a.alu_oi(Alu::Cmp, O::R(R14), 9)), [0x41, 0x83, 0xFE, 9]); // cmp r14d,9
+        assert_eq!(enc(|a| a.alu_ri(Alu::Add, RDX, 0xFFFF_FFFF)), [0x83, 0xC2, 0xFF]); // add edx,-1
+        assert_eq!(enc(|a| a.alu_ri(Alu::Add, RDX, 0x80)), [0x81, 0xC2, 0x80, 0, 0, 0]); // add edx,0x80 (not a sign-extended byte)
+        assert_eq!(enc(|a| a.alu_ri64(Alu::Add, R15, 5)), [0x49, 0x83, 0xC7, 5]); // add r15,5
         assert_eq!(enc(|a| a.imul_ro(RDX, O::R(R10))), [0x41, 0x0F, 0xAF, 0xD2]); // imul edx,r10d
-        assert_eq!(enc(|a| a.imul_roi(RDX, O::R(RBP), 3)), [0x69, 0xD5, 3, 0, 0, 0]); // imul edx,ebp,3 (imm32; as picks 6B imm8)
+        assert_eq!(enc(|a| a.imul_roi(RDX, O::R(RBP), 3)), [0x6B, 0xD5, 3]); // imul edx,ebp,3
         assert_eq!(enc(|a| a.movsx16o(RDX, O::R(R9))), [0x41, 0x0F, 0xBF, 0xD1]); // movsx edx,r9w
         assert_eq!(enc(|a| a.movsx8o(RDX, O::R(RBP))), [0x40, 0x0F, 0xBE, 0xD5]); // movsx edx,bpl
         assert_eq!(enc(|a| a.movsx8o(RDX, O::R(R11))), [0x41, 0x0F, 0xBE, 0xD3]); // movsx edx,r11b

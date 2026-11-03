@@ -97,44 +97,55 @@ const ANY_GEN: u64 = u64::MAX;
 
 /// What JIT code reads through r13, and what its helpers find. Rebuilt before every entry.
 #[repr(C)]
+/// FIELD ORDER (h86 ppc-jit6): what JIT code reads on its hot paths comes first - the page generations, the budget, the common
+/// exit, the store map, the four RAM limits and the CR-field constants fill the first 128 bytes, so each is `[r13 + disp8]`
+/// (one byte) instead of a 4-byte displacement; WC3's hot JIT code read crk at 0x1011c past the 64K-entry counters.
 pub(crate) struct Ctx {
-    pub(crate) cpu: *mut Cpu,
-    pub(crate) ram: *mut u8,
-    pub(crate) len: u64,
-    pub(crate) mask: u32,
-    pad: u32,
-    pub(crate) marked: *const u64,
-    /// The store map (jit_smap): one byte per guest page, 1 = an inline store may write there.
-    pub(crate) smap: *const u8,
-    pub(crate) budget: u64,
-    pub(crate) retired: u64,
-    pub(crate) tb0: u64,
-    pub(crate) host: *mut u8,
-    pub(crate) table: *const Slot,
-    pub(crate) exit: u64,
     /// The code watch's generation array (block entries compare their page's element).
     pub(crate) gen: *const u64,
+    pub(crate) budget: u64,
+    pub(crate) exit: u64,
+    /// The store map (jit_smap): one byte per guest page, 1 = an inline store may write there.
+    pub(crate) smap: *const u8,
     /// `len - n` for the n-byte accesses: an access at a (masked) EA is inside RAM iff EA <= lim_n.
     pub(crate) lim1: u64,
     pub(crate) lim2: u64,
     pub(crate) lim4: u64,
     pub(crate) lim8: u64,
+    /// Per CR field f: the field's LT and GT nibbles already in place (8 << s, 4 << s; s = 28 - 4f) - the CMOV sources of
+    /// jit_emit's cr_set.
+    pub(crate) crk: [[u32; 2]; 8],
+    // ---- 128 bytes: below, a 4-byte displacement ----
+    /// The IBTC (Jit::ibtc) and the arena base its entry offsets are relative to.
+    pub(crate) ibtc: *const u64,
+    pub(crate) abase: u64,
+    /// Indirect branches (blr / bctr / a native's return) that found their target in the dispatch table, and that did not.
+    pub(crate) ibtc_hits: u64,
+    pub(crate) ibtc_misses: u64,
+    /// The shared code stubs JIT code calls (jit_inline): FPSCR[FPRF] of a single / double result, stfs's bits.
+    pub(crate) fprf_s: u64,
+    pub(crate) fprf_d: u64,
+    pub(crate) stfs: u64,
     /// The shared slow stub, and `h_one::<H>` it calls.
     pub(crate) slow: u64,
     pub(crate) helper: u64,
-    pub(crate) trap: Option<Trap>,
     /// `h_native::<H>` (native blocks call it), the natives it ran this entry, and whether one changed what the dispatcher
     /// must resync (the natives set, guest RAM).
     pub(crate) native: u64,
     pub(crate) natives: u64,
     /// h_one calls this entry.
     pub(crate) helpers: u64,
-    /// Indirect branches (blr / bctr / a native's return) that found their target in the dispatch table, and that did not.
-    pub(crate) ibtc_hits: u64,
-    pub(crate) ibtc_misses: u64,
-    /// The IBTC (Jit::ibtc) and the arena base its entry offsets are relative to.
-    pub(crate) ibtc: *const u64,
-    pub(crate) abase: u64,
+    pub(crate) cpu: *mut Cpu,
+    pub(crate) ram: *mut u8,
+    pub(crate) len: u64,
+    pub(crate) mask: u32,
+    pad: u32,
+    pub(crate) marked: *const u64,
+    pub(crate) retired: u64,
+    pub(crate) tb0: u64,
+    pub(crate) host: *mut u8,
+    pub(crate) table: *const Slot,
+    pub(crate) trap: Option<Trap>,
     pub(crate) resync: bool,
     /// Planted mutant MUT_NO_RESYNC: h_native never asks for the resync.
     pub(crate) no_resync: bool,
@@ -147,17 +158,16 @@ pub(crate) struct Ctx {
     /// from the region threshold; a block's counter is reset when it is compiled. Inline: JIT code reaches one with a
     /// single `sub [r13 + disp32], 1`.
     pub(crate) counters: [u32; 1 << TABLE_BITS],
-    /// Per CR field f: the field's LT and GT nibbles already in place (8 << s, 4 << s; s = 28 - 4f) - the CMOV sources of
-    /// jit_emit's cr_set.
-    pub(crate) crk: [[u32; 2]; 8],
     /// Opt-in region census (Exec::set_jit_region_census): region entries and internal edges taken.
     pub(crate) rentries: u64,
     pub(crate) redges: u64,
 }
 
 
+const _: () = assert!(offset_of!(Ctx, crk) + core::mem::size_of::<[[u32; 2]; 8]>() <= 128, "Ctx's hot fields must stay within a one-byte displacement of r13");
+
 pub(crate) struct Jit {
-    arena: Arena,
+    pub(crate) arena: Arena,
     enter: u64,
     exit_stub: u64,
     table: Box<[Slot]>,
@@ -202,6 +212,8 @@ pub(crate) struct Jit {
     mask: u32,
     /// Big-endian accesses by MOVBE (CPUID, at creation; Exec::set_jit_movbe(false) forces the BSWAP forms).
     pub(crate) movbe: bool,
+    /// Tier::JitWide: code with every displacement and immediate 4 bytes long (jit_asm::Asm::wide).
+    pub(crate) wide: bool,
     /// The CPU has MOVBE (CPUID once, at creation).
     hw_movbe: bool,
     /// Opt-in clock timing translation (JitStats.translate_time); None = untimed, no clock reads.
@@ -230,12 +242,12 @@ pub(crate) struct Jit {
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
         let arena = Arena::new(mem, arena_bytes, ARENA_MIN.min(arena_bytes), SEGMENTS)?;
-        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, ibtc: core::ptr::null(), abase: 0, resync: false, no_resync: false, census: None, hot: EMPTY_PC, counters: [crate::jit_region::REGION_AFTER; 1 << TABLE_BITS], crk: core::array::from_fn(|f| [8 << (28 - 4 * f), 4 << (28 - 4 * f)]), rentries: 0, redges: 0 });
+        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, fprf_s: 0, fprf_d: 0, stfs: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, ibtc: core::ptr::null(), abase: 0, resync: false, no_resync: false, census: None, hot: EMPTY_PC, counters: [crate::jit_region::REGION_AFTER; 1 << TABLE_BITS], crk: core::array::from_fn(|f| [8 << (28 - 4 * f), 4 << (28 - 4 * f)]), rentries: 0, redges: 0 });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![IBTC_EMPTY; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << IBTC_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
-            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(),
+            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(),
             region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false,
         };
         j.stats.arena_bytes = j.arena.len as u64;
@@ -250,6 +262,7 @@ impl Jit {
         a.alu_ri64(Alu::Sub, RSP, 8);
         a.mov_rr64(R13, RDI);
         a.ld64(RBX, m(R13, offset_of!(Ctx, cpu) as i32));
+        a.lea64(RBX, m(RBX, crate::jit_emit::CPU_BIAS));
         a.ld64(R12, m(R13, offset_of!(Ctx, ram) as i32));
         a.alu_rr(Alu::Xor, R15, R15);
         crate::jit_regs::load_globals(&mut a);
@@ -289,7 +302,14 @@ impl Jit {
         a.alu_rr64(Alu::Add, R15, RCX);
         a.mov_ri(RAX, EXIT_TRAP);
         a.jmp_m(m(R13, offset_of!(Ctx, exit) as i32));
+        let fprf_s = a.pos();
+        crate::jit_inline::emit_fprf(&mut a, true);
+        let fprf_d = a.pos();
+        crate::jit_inline::emit_fprf(&mut a, false);
+        let stfs = a.pos();
+        crate::jit_inline::emit_stfs_bits(&mut a);
         let Some(p) = self.arena.put(&a.b) else { return false };
+        (self.ctx.fprf_s, self.ctx.fprf_d, self.ctx.stfs) = (p as u64 + fprf_s as u64, p as u64 + fprf_d as u64, p as u64 + stfs as u64);
         self.enter = p as u64;
         self.ctx.exit = p as u64 + exit as u64;
         self.exit_stub = p as u64 + stub as u64;
@@ -307,13 +327,14 @@ impl Jit {
     }
 
     /// Change how code is made (lockstep journaling, a planted mutant, MOVBE): everything compiled is dropped.
-    pub(crate) fn reconfigure(&mut self, logged: bool, mutant: u8, movbe: bool) {
+    pub(crate) fn reconfigure(&mut self, logged: bool, mutant: u8, movbe: bool, wide: bool) {
         let movbe = movbe && self.hw_movbe;
-        if (logged, mutant, movbe) == (self.logged, self.mutant, self.movbe) { return; }
+        if (logged, mutant, movbe, wide) == (self.logged, self.mutant, self.movbe, self.wide) { return; }
         let stubs_change = mutant != self.mutant; // the stubs depend on the mutant only (MUT_EXIT_COUNT)
         self.logged = logged;
         self.mutant = mutant;
         self.movbe = movbe;
+        self.wide = wide;
         if stubs_change { self.flush(); } else if self.stats.compiled != 0 { self.drop_code(); }
     }
 
@@ -468,7 +489,7 @@ impl Jit {
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { (1 << IBTC_BITS) - 1 }, movbe: self.movbe, counter: None, census: self.region_census, homes: Vec::new() };
+        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { (1 << IBTC_BITS) - 1 }, movbe: self.movbe, wide: self.wide, counter: None, census: self.region_census, homes: Vec::new() };
         let (code, inner) = emit(&mut env);
         let homes = core::mem::take(&mut env.homes);
         if out_of_links { self.drop_code(); return None; }
@@ -520,6 +541,7 @@ impl Jit {
         self.stats.movbe = self.movbe;
         if self.blocks.contains(pc) { self.stats.recompiled += 1; }
         self.stats.code_bytes = self.arena.used() as u64;
+        self.stats.emitted_bytes = self.arena.put_bytes;
         if self.pending.is_empty() { self.pending_at = self.clock + at; }
         self.pending.push(Slot { pc, len, entry: p as u64, gen, inner: p as u64 + inner as u64 });
         if !self.pending_pcs.insert(pc, ()) { self.drop_code(); return None; }
@@ -531,7 +553,7 @@ impl Jit {
     fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
         let t0 = self.timer.map(|c| c());
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
-        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { (1 << IBTC_BITS) - 1 }, movbe: self.movbe, counter: None, census: false, homes: Vec::new() };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { (1 << IBTC_BITS) - 1 }, movbe: self.movbe, wide: self.wide, counter: None, census: false, homes: Vec::new() };
         let code = jit_emit::compile_native(pc, &mut env);
         self.place(&code, 0, Vec::new(), pc, 1, gen, at);
         self.stats.natives_compiled += 1;
@@ -857,6 +879,7 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
     if !jit.dead && jit.due(n) { jit.publish(); }
     jit.clock += n;
     jit.stats.code_bytes = jit.arena.used() as u64;
+    jit.stats.emitted_bytes = jit.arena.put_bytes;
     let io = jit.arena.io;
     (jit.stats.publishes, jit.stats.publish_pages, jit.stats.withdraws, jit.stats.withdraw_pages, jit.stats.codemem_failures, jit.stats.codemem_time) =
         (io.publishes, io.publish_pages, io.withdraws, io.withdraw_pages, io.failures, io.time);

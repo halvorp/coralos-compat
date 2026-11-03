@@ -60,6 +60,8 @@ pub(crate) struct Arena {
     pub(crate) timer: Option<fn() -> u64>,
     /// A segment has been reused since the last whole reset: every page written now costs older code.
     pub(crate) wrapped: bool,
+    /// Bytes `put` since the arena was made.
+    pub(crate) put_bytes: u64,
 }
 
 /// The provider calls an arena made: on CoralOS each call is one EXEC_CODE_PROTECT syscall and each page that changes
@@ -91,7 +93,7 @@ impl Arena {
             len = (len / 2) & !(PAGE - 1);
         };
         let seg_len = ((len - STUB_BYTES) / nseg) & !(PAGE - 1);
-        Some(Arena { mem, base, len, seg_len, nseg, seg: None, used: 0, published: 0, cur: 0, limit: STUB_BYTES, rw_end: STUB_BYTES, withdraw_failed: false, io: CodeMemStats::default(), timer: None, wrapped: false })
+        Some(Arena { mem, base, len, seg_len, nseg, seg: None, used: 0, published: 0, cur: 0, limit: STUB_BYTES, rw_end: STUB_BYTES, withdraw_failed: false, io: CodeMemStats::default(), timer: None, wrapped: false, put_bytes: 0 })
     }
     fn seg_start(&self, s: usize) -> usize { STUB_BYTES + s * self.seg_len }
     /// One provider call, counted and timed: `publish` (RX) or not (back to RW).
@@ -124,6 +126,7 @@ impl Arena {
         let p = unsafe { self.base.add(self.cur) };
         unsafe { core::ptr::copy_nonoverlapping(code.as_ptr(), p, code.len()) };
         self.cur += code.len();
+        self.put_bytes += code.len() as u64;
         Some(p)
     }
     /// True when there is written code not yet published.

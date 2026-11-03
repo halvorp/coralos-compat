@@ -102,6 +102,8 @@ pub(crate) struct Env<'a> {
     pub(crate) table_mask: u32,
     /// Use MOVBE for big-endian loads and stores (CPUID-dispatched: jit_asm::cpu_has_movbe).
     pub(crate) movbe: bool,
+    /// Every displacement and immediate in its 4-byte form (Tier::JitWide, jit_asm::Asm::wide).
+    pub(crate) wide: bool,
     /// The Ctx offset of this block's entry counter (jit_region: a region forms when it runs out); None = no counter.
     pub(crate) counter: Option<i32>,
     /// Region census (diagnostics): count region entries and internal edges taken in the Ctx.
@@ -113,7 +115,12 @@ pub(crate) struct Env<'a> {
 
 pub(crate) const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
 pub(crate) const fn fpr(n: u8) -> i32 { (offset_of!(Cpu, fpr) + 8 * (n as usize & 31)) as i32 }
-pub(crate) fn cpu(off: usize) -> M { m(RBX, off as i32) }
+/// rbx = &Cpu + CPU_BIAS in JIT code (the trampoline adds it): with the repr(C) Cpu (cpu.rs) the GPRs, the SPRs and the first
+/// FPRs are then within a one-byte displacement of rbx.
+pub(crate) const CPU_BIAS: i32 = 128;
+/// The Cpu field at byte offset `off` (offset_of!), as JIT code addresses it.
+pub(crate) fn cpu_m(off: i32) -> M { m(RBX, off - CPU_BIAS) }
+pub(crate) fn cpu(off: usize) -> M { cpu_m(off as i32) }
 pub(crate) fn ctx(off: usize) -> M { m(R13, off as i32) }
 pub(crate) const CR: usize = offset_of!(Cpu, cr);
 pub(crate) const XER: usize = offset_of!(Cpu, xer);
@@ -271,7 +278,7 @@ fn probe(a: &mut Asm, table_mask: u32) {
     // the IBTC (jit.rs): 8-byte entries, guest pc then the entry's offset in the arena (rax, rcx clobbered)
     a.mov_rr(RAX, R8);
     a.sh_ri(Sh::Shr, RAX, 2);
-    a.alu_ri(Alu::And, RAX, table_mask);
+    if table_mask == 0xFFFF && !a.wide { a.movzx16_rr(RAX, RAX) } else { a.alu_ri(Alu::And, RAX, table_mask) }
     a.ld64(RCX, ctx(offset_of!(Ctx, ibtc)));
     a.alu_rm(Alu::Cmp, R8, mxd(RCX, RAX, 8, 0));
     let miss = a.jcc(Cc::Ne);
@@ -290,7 +297,7 @@ fn probe(a: &mut Asm, table_mask: u32) {
 /// blocked, the natives set or guest RAM changed: the dispatcher must resync first), 2 = trap (nothing retired).
 /// Every cached register was stored by the exit that got here, so the call clobbers nothing a block holds.
 pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
-    let mut a = Asm::default();
+    let mut a = Asm { wide: env.wide, ..Asm::default() };
     a.lea64(RAX, m(R15, 1));
     a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
     let bail = a.jcc(Cc::A);
@@ -328,7 +335,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
-        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new() }
+        E { a: Asm { wide: env.wide, ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new() }
     }
 
     /// Start region node `k` (its code begins here: forward jumps waiting for it land here).
@@ -561,9 +568,9 @@ impl E<'_, '_> {
                 O::R(x) => self.a.test_rr(x, x),
                 o => { self.a.ld32o(RCX, o); self.a.test_rr(RCX, RCX) }
             }
-            let clear = self.a.jcc(Cc::Ns);
+            let clear = self.a.jcc8(Cc::Ns);
             self.a.alu_ri(Alu::Or, RAX, 1 << sh);
-            self.a.here(clear);
+            self.a.here8(clear);
         }
         let c = self.rw(CR);
         self.a.alu_oi(Alu::And, c, !(0xF << sh));
@@ -789,14 +796,14 @@ impl E<'_, '_> {
             K::Lfd => {
                 self.ea(i, Ea::of(op, false), 8);
                 self.ld_be(8, false);
-                self.a.st64(m(RBX, fpr(d)), RDX);
+                self.a.st64(cpu_m(fpr(d)), RDX);
             }
             K::Stw | K::Stb | K::Sth | K::Stwu | K::Stbu | K::Stwx | K::Stbx | K::Stfd => {
                 let n = match op.k { K::Stw | K::Stwu | K::Stwx => 4, K::Sth => 2, K::Stfd => 8, _ => 1 };
                 let indexed = matches!(op.k, K::Stwx | K::Stbx);
                 self.ea_regs(Ea::of(op, indexed));
                 self.store_guard(i, Ea::of(op, indexed), n);
-                if n == 8 { self.a.ld64(RDX, m(RBX, fpr(d))); self.st_be(n); } else { self.st_gpr(d, n) }
+                if n == 8 { self.a.ld64(RDX, cpu_m(fpr(d))); self.st_be(n); } else { self.st_gpr(d, n) }
                 if matches!(op.k, K::Stwu | K::Stbu) { self.stg(s, R8); }
             }
             K::B => { self.go(op.imm, i + 1); return true; }

@@ -622,6 +622,10 @@ fn wc3_host_run_with_a_gl_worker() {
             let total: u64 = v.iter().map(|x| x.0).sum();
             eprintln!("JIT-HELPER total={total} top: {}", v.iter().take(30).map(|(n, k)| format!("op{}/xo{}={n}", k >> 26, (k >> 1) & 0x3FF)).collect::<Vec<_>>().join(" "));
         }
+        if let (Ok(path), Some((base, code))) = (std::env::var("WC3_ARENA_DUMP"), e.jit_arena_bytes()) {
+            std::fs::write(&path, code).expect("WC3_ARENA_DUMP");
+            eprintln!("ARENA-DUMP base={base:#x} len={} -> {path}", code.len());
+        }
         eprintln!("PPC-TIER {:?} prof={:?} jit={:?} cache={:?} lockstep={:?} divergence={:?}", e.tier, e.prof, e.jit_stats(), e.cache_stats(), e.lockstep_stats(), e.divergence());
         // the region compile-time tail (host ns, timed only with WC3_JIT_FRAMES): the council's p99 <= 4 ms proxy
         let mut rt = e.jit_region_times().to_vec();

@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 use heirloom_cpu_abi::ppc::{
     FlatRam, PpcContext, PpcCreate, PpcExit, PpcHostCallbacks, PpcProf, PpcVTable, ABI_FAMILY_PPC_FLAT, CTX_HALTED, HOST_BLOCK,
     HOST_HALT, HOST_HANDLED, HOST_REDIRECTED, HOST_UNHANDLED, LAYOUT, PPC_ABI_VERSION, REFUSE_CONTEXT, REFUSE_INSTANCE, REFUSE_RAM,
-    SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP, TIER_JIT, TIER_JIT_BLOCKS,
+    SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP, TIER_JIT, TIER_JIT_BLOCKS, TIER_JIT_WIDE,
 };
 use heirloom_cpu_abi::{CpuInstance, ARCH_PPC};
 use heirloom_mem_flat32::GuestMem;
@@ -204,7 +204,7 @@ extern "C" fn unbind_native(inst: *mut CpuInstance, addr: u32) -> i32 {
 extern "C" fn set_tier(inst: *mut CpuInstance, tier: u32) -> i32 {
     let Some(e) = instance(inst).and_then(|i| i.exec.as_mut()) else { return -1 };
     // TIER_JIT without executable memory runs tier 1 and is named (JitStats::refused), as the static core does
-    e.tier = match tier { TIER_INTERP => Tier::Interp, TIER_BLOCKS => Tier::Blocks, TIER_JIT => Tier::Jit, TIER_JIT_BLOCKS => Tier::JitBlocks, _ => return -1 };
+    e.tier = match tier { TIER_INTERP => Tier::Interp, TIER_BLOCKS => Tier::Blocks, TIER_JIT => Tier::Jit, TIER_JIT_BLOCKS => Tier::JitBlocks, TIER_JIT_WIDE => Tier::JitWide, _ => return -1 };
     0
 }
 
@@ -246,7 +246,7 @@ extern "C" fn read_prof(inst: *mut CpuInstance, out: *mut PpcProf) -> i32 {
         blocks: e.prof.blocks, cache_hits: e.prof.blocks.saturating_sub(c.decodes), cache_misses: c.decodes,
         cache_invalidations: c.stale + c.flushes,
         jit_insns: j.insns, jit_entries: j.entries, jit_bails: j.bails, jit_compiled: j.compiled, jit_natives: j.natives, jit_helpers: j.helpers,
-        interp_insns: c.interp_insns, jit_refused: (matches!(e.tier, Tier::Jit | Tier::JitBlocks) && j.refused) as u64, publishes: j.publishes,
+        interp_insns: c.interp_insns, jit_refused: (matches!(e.tier, Tier::Jit | Tier::JitBlocks | Tier::JitWide) && j.refused) as u64, publishes: j.publishes,
         publish_pages: j.publish_pages, withdraws: j.withdraws, withdraw_pages: j.withdraw_pages, codemem_failures: j.codemem_failures,
         ibtc_hits: j.ibtc_hits, ibtc_misses: j.ibtc_misses, arena_bytes: j.arena_bytes, jit_regions: j.regions,
     };

@@ -415,6 +415,9 @@ pub const TIER_JIT: u32 = 2;
 /// Tier 2 with its REGION tier off (appended 2026-11-03, h86): blocks and superblocks only, as before regions - the A/B switch
 /// for silicon without a rebuild. A library that predates it answers -1 and keeps running the tier it had.
 pub const TIER_JIT_BLOCKS: u32 = 3;
+/// Tier 2 with WIDE code (appended 2026-11-03, h86 ppc-jit6): every displacement and immediate 4 bytes long, the instructions
+/// unchanged - the silicon A/B for what code size costs. A library that predates it answers -1 and keeps its tier.
+pub const TIER_JIT_WIDE: u32 = 4;
 
 /// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
 /// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;
@@ -590,16 +593,19 @@ pub enum Tier {
     JitLockstep,
     /// Tier 2 without regions (heirloom-cpu-ppc's jit_region off): blocks and superblocks only. An A/B switch.
     JitBlocks,
+    /// Tier 2 whose code has every displacement and immediate in its 4-byte form: the same instructions in more bytes. An A/B
+    /// switch that isolates what CODE SIZE costs on a CPU (instruction cache, L2) from what the instructions cost.
+    JitWide,
 }
 
 impl Tier {
     /// The number a `[PPC-PROF ... tier=]` line prints.
-    pub fn number(self) -> u32 { match self { Tier::Interp => 0, Tier::Blocks | Tier::Lockstep => 1, Tier::Jit | Tier::JitLockstep | Tier::JitBlocks => 2 } }
-    /// Parse `0` / `interp`, `1` / `blocks`, `lockstep`, `2` / `jit`, `jitlockstep`, `jitblocks`; None for anything else.
+    pub fn number(self) -> u32 { match self { Tier::Interp => 0, Tier::Blocks | Tier::Lockstep => 1, Tier::Jit | Tier::JitLockstep | Tier::JitBlocks | Tier::JitWide => 2 } }
+    /// Parse `0` / `interp`, `1` / `blocks`, `lockstep`, `2` / `jit`, `jitlockstep`, `jitblocks`, `jitwide`; None for anything else.
     pub fn parse(s: &str) -> Option<Tier> {
         match s {
             "0" | "interp" => Some(Tier::Interp), "1" | "blocks" => Some(Tier::Blocks), "lockstep" => Some(Tier::Lockstep),
-            "2" | "jit" => Some(Tier::Jit), "jitlockstep" => Some(Tier::JitLockstep), "jitblocks" => Some(Tier::JitBlocks), _ => None,
+            "2" | "jit" => Some(Tier::Jit), "jitlockstep" => Some(Tier::JitLockstep), "jitblocks" => Some(Tier::JitBlocks), "jitwide" => Some(Tier::JitWide), _ => None,
         }
     }
 }

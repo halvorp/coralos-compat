@@ -12,17 +12,23 @@ pub use heirloom_cpu_abi::ppc::{Reg, RunStats, Trap, XER_CA, XER_MASK, XER_OV, X
 
 /// One PowerPC hardware thread. It is also the saved context: the interpreter has no global state, so any number of
 /// guests can run in one process (unlike heirloom-cpu-68k's Musashi).
+///
+/// `repr(C)` in this order for tier 2's code size (h86 ppc-jit6): JIT code addresses the Cpu as `[rbx + disp]` with rbx =
+/// &Cpu + 128 (jit_emit::CPU_BIAS), so the GPRs, CR, LR, CTR, XER, FPSCR, PC and the first FPRs are all within a one-byte
+/// displacement (-128..127). Rust's own layout had put the GPRs at 48 and the FPRs and SPRs past 176: a 4-byte displacement
+/// on ~6% of WC3's hot JIT bytes.
 #[derive(Clone)]
+#[repr(C)]
 pub struct Cpu {
     pub gpr: [u32; 32],
-    /// FPRs as raw IEEE-754 double bit patterns.
-    pub fpr: [u64; 32],
     pub cr: u32,
     pub lr: u32,
     pub ctr: u32,
     pub xer: u32,
     pub fpscr: u32,
     pub pc: u32,
+    /// FPRs as raw IEEE-754 double bit patterns.
+    pub fpr: [u64; 32],
     /// Time base, advanced one tick per retired instruction.
     pub tb: u64,
     pub(crate) reservation: Option<u32>,

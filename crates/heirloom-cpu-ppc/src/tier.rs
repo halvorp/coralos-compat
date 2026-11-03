@@ -107,6 +107,15 @@ impl Exec {
         if let Some(j) = self.jit.as_ref() { return &j.region_times; }
         &[]
     }
+    /// Diagnostics: tier 2's code arena as it stands (its base address and every byte, published or not), for a host tool
+    /// that maps profiler addresses to the code there. None before the JIT ran.
+    #[cfg(target_arch = "x86_64")]
+    #[doc(hidden)]
+    pub fn jit_arena_bytes(&self) -> Option<(u64, &[u8])> {
+        let j = self.jit.as_ref()?;
+        // SAFETY: the reservation is readable in every state (RW or R+X) for the arena's lifetime, which `&self` spans.
+        Some((j.arena.base as u64, unsafe { core::slice::from_raw_parts(j.arena.base, j.arena.len) }))
+    }
     /// Tests: the code arena's size in bytes (default 32 MiB: the stub page and 16 segments), so a test can make segments
     /// fill and be reused. Takes effect for a JIT made after the call.
     #[doc(hidden)]
@@ -173,7 +182,7 @@ impl Exec {
                     let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));
                     t1::run(host, cpu, budget, &mut self.prof, cache)
                 }
-                Tier::Jit | Tier::JitLockstep | Tier::JitBlocks => {
+                Tier::Jit | Tier::JitLockstep | Tier::JitBlocks | Tier::JitWide => {
                     if self.divergence.is_some() { cpu.halt(); return RunStats { insns: 0, halted: true, blocked: false, trap: None }; }
                     self.run_jit(host, cpu, budget)
                 }
@@ -210,7 +219,7 @@ impl Exec {
             }
             // lockstep journaling, a planted mutant or MOVBE changed since the code was made: it is dropped and remade
             if let Some(j) = self.jit.as_mut() {
-                j.reconfigure(lock, self.jit_mutant, self.jit_movbe != Some(false));
+                j.reconfigure(lock, self.jit_mutant, self.jit_movbe != Some(false), self.tier == Tier::JitWide);
                 // Tier::JitBlocks: no new regions (those already formed stay until evicted or replaced)
                 let after = if self.tier == Tier::JitBlocks { 0 } else { self.jit_region_after.unwrap_or(crate::jit::REGION_AFTER) };
                 if j.region_after != after { j.set_region_after(after); }

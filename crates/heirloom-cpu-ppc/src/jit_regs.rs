@@ -47,23 +47,23 @@ pub(crate) fn pick_locals(uses: &[u32; 32], writes: &[u32; 32]) -> alloc::vec::V
     v.iter().zip(LOCAL_REGS).map(|(&(_, n), r)| (gpr(n) as usize, r, writes[n as usize] != 0)).collect()
 }
 /// Store every global pin into the Cpu (before Rust can read it).
-pub(crate) fn store_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.st32(m(RBX, off as i32), h); } }
+pub(crate) fn store_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.st32(crate::jit_emit::cpu_m(off as i32), h); } }
 /// Load every global pin from the Cpu (after Rust may have written it).
-pub(crate) fn load_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.ld32(h, m(RBX, off as i32)); } }
+pub(crate) fn load_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.ld32(h, crate::jit_emit::cpu_m(off as i32)); } }
 
 impl E<'_, '_> {
     /// The Cpu field at `off` (a 32-bit one): its host register when it is a global pin, else the memory operand.
     #[inline(always)]
     fn field(&self, off: usize) -> O {
         if let Some(h) = global(off) { return O::R(h) }
-        self.locals.iter().find(|l| l.0 == off).map_or(O::M(m(RBX, off as i32)), |l| O::R(l.1))
+        self.locals.iter().find(|l| l.0 == off).map_or(O::M(crate::jit_emit::cpu_m(off as i32)), |l| O::R(l.1))
     }
     /// Load every region local from the Cpu (region entry; after a helper call).
-    pub(crate) fn load_locals(&mut self) { for &(off, h, _) in &self.locals { self.a.ld32(h, m(RBX, off as i32)); } }
+    pub(crate) fn load_locals(&mut self) { for &(off, h, _) in &self.locals { self.a.ld32(h, crate::jit_emit::cpu_m(off as i32)); } }
     /// Store every region local the region writes into the Cpu (every exit; before a helper call).
     pub(crate) fn store_locals(&mut self) {
         if self.env.mutant == crate::jit_emit::MUT_REGION_LOCAL_EXIT { return; }
-        for &(off, h, w) in &self.locals { if w { self.a.st32(m(RBX, off as i32), h); } }
+        for &(off, h, w) in &self.locals { if w { self.a.st32(crate::jit_emit::cpu_m(off as i32), h); } }
     }
     /// The Cpu field at `off`, to read / to write / to read and write (the same operand: named for the reader).
     pub(crate) fn r(&mut self, off: usize) -> O { self.field(off) }

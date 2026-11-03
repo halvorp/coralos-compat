@@ -28,7 +28,7 @@ use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use heirloom_cpu_abi::ppc::{
     check_ppc, PpcContext, PpcCreate, PpcExit, PpcHostCallbacks, PpcOpenRefusal, PpcProf, CTX_HALTED, CTX_RUNNABLE,
     EXIT_BLOCK, EXIT_BUDGET, EXIT_HALT, EXIT_TRAP, HOST_BLOCK, HOST_HALT, HOST_HANDLED, HOST_REDIRECTED, HOST_UNHANDLED,
-    REFUSED_CREATE, REFUSED_NO_FLAT_RAM, REFUSED_UNBOUND, SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP, TIER_JIT, TIER_JIT_BLOCKS, WHAT_UNLISTED, refusal_of,
+    REFUSED_CREATE, REFUSED_NO_FLAT_RAM, REFUSED_UNBOUND, SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP, TIER_JIT, TIER_JIT_BLOCKS, TIER_JIT_WIDE, WHAT_UNLISTED, refusal_of,
 };
 pub use heirloom_cpu_abi::ppc::PpcCodeMem;
 use heirloom_cpu_abi::CpuInstance;
@@ -304,7 +304,8 @@ impl Exec {
             Tier::Interp => TIER_INTERP, Tier::Blocks => TIER_BLOCKS,
             Tier::Jit if self.code_mem.is_some() && !self.code_mem_refused => TIER_JIT,
             Tier::JitBlocks if self.code_mem.is_some() && !self.code_mem_refused => TIER_JIT_BLOCKS,
-            Tier::Lockstep | Tier::Jit | Tier::JitLockstep | Tier::JitBlocks => { self.lockstep_refused = true; TIER_BLOCKS }
+            Tier::JitWide if self.code_mem.is_some() && !self.code_mem_refused => TIER_JIT_WIDE,
+            Tier::Lockstep | Tier::Jit | Tier::JitLockstep | Tier::JitBlocks | Tier::JitWide => { self.lockstep_refused = true; TIER_BLOCKS }
         };
         if self.tier_set != Some(tier) { (t.set_tier)(self.inst, tier); self.tier_set = Some(tier); }
         self.bound.sync(t, self.inst, cpu);

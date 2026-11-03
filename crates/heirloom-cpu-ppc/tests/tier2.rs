@@ -345,6 +345,11 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
             assert!(got == want, "seed {seed} slice {slice}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} tb {}/{} last {:?}/{:?} ram equal {} {:?}",
                 got.gpr, want.gpr, got.cr, want.cr, got.xer, want.xer, got.tb, want.tb, got.last, want.last, got.ram == want.ram, e.jit_stats());
         }
+        // WIDE code (Tier::JitWide: every displacement and immediate 4 bytes long, the silicon code-size A/B): the same state
+        for slice in [37, 1_000_000] {
+            let (got, e) = run_on(Tier::JitWide, 0, &prog, slice, fuzz_setup(seed));
+            assert!(got == want && e.jit_stats().compiled > 0 || got == want && want.last.trap.is_some(), "seed {seed} slice {slice}: jitwide {:?}", e.jit_stats());
+        }
         // the BSWAP forms too (a CPU without MOVBE): the same state
         let (mut c, mut m) = load(&prog, fuzz_setup(seed));
         let mut e = exec(Tier::Jit, 0);
@@ -684,6 +689,22 @@ fn tier_jitblocks_runs_tier_2_without_regions() {
         compiled += s.compiled;
     }
     assert!(compiled > 20, "JIT code ran: {compiled} blocks compiled");
+}
+
+/// Tier::JitWide (cpu-tier "jitwide", TIER_JIT_WIDE: the silicon code-size A/B) runs the same instructions as Tier::Jit in more
+/// bytes: the same end state on every program, and more code for the same blocks.
+#[test]
+fn tier_jitwide_runs_the_same_code_in_more_bytes() {
+    let (mut narrow, mut wide) = (0, 0);
+    for (name, prog, setup) in programs_under_test() {
+        let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
+        let (got, e) = run_on(Tier::JitWide, 0, prog, 1_000, setup);
+        assert!(got == want, "{name}: jitwide ends in tier 0's state");
+        let (_, j) = run_on(Tier::Jit, 0, prog, 1_000, setup);
+        assert_eq!(e.jit_stats().compiled, j.jit_stats().compiled, "{name}: the same blocks");
+        (narrow, wide) = (narrow + j.jit_stats().emitted_bytes, wide + e.jit_stats().emitted_bytes);
+    }
+    assert!(wide * 100 > narrow * 115, "wide code is longer: {wide} vs {narrow} bytes");
 }
 
 

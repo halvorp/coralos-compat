@@ -23,7 +23,7 @@ use crate::t1op::{Op, K};
 use core::mem::offset_of;
 
 const FPSCR: usize = offset_of!(Cpu, fpscr);
-fn f(n: usize) -> M { m(RBX, fpr(n as u8)) }
+fn f(n: usize) -> M { crate::jit_emit::cpu_m(fpr(n as u8)) }
 
 impl E<'_, '_> {
     /// Inline code for instruction `i` if this form has it; false = the caller uses the slow stub.
@@ -56,28 +56,19 @@ impl E<'_, '_> {
     }
 
     fn stfs(&mut self, i: usize, e: Ea, s: usize) {
-        // the value first: a single denormal (exponent <= 896 and not +-0) is the slow path's
+        // the value first, through the shared stub (emit_stfs_bits): a single denormal is the slow path's
         let a = &mut self.a;
         a.ld64(RDX, f(s));
-        a.mov_rr64(RCX, RDX);
-        a.sh_ri64(Sh::Shr, RCX, 52);
-        a.alu_ri(Alu::And, RCX, 0x7FF);
-        a.alu_ri(Alu::Cmp, RCX, 896);
-        let ok = a.jcc(Cc::A);
-        a.mov_rr64(RCX, RDX);
-        a.alu_rr64(Alu::Add, RCX, RCX);
+        a.call_m(crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, stfs)));
         self.slow_if(Cc::Ne, i);
-        self.a.here(ok);
         self.ea_regs(e);
         self.store_guard(i, e, 4);
-        let a = &mut self.a;
-        a.ld64(RDX, f(s));
-        a.mov_rr64(RCX, RDX);
-        a.sh_ri64(Sh::Shr, RCX, 32);
-        a.alu_ri(Alu::And, RCX, 0xC000_0000);
-        a.sh_ri64(Sh::Shr, RDX, 29);
-        a.alu_ri(Alu::And, RDX, 0x3FFF_FFFF);
-        a.alu_rr(Alu::Or, RDX, RCX);
+        // edx survives the guards (eax / r8 / ecx), except lockstep's journal call: the value again then
+        if self.env.logged {
+            let a = &mut self.a;
+            a.ld64(RDX, f(s));
+            a.call_m(crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, stfs)));
+        }
         self.st_be(4);
     }
 
@@ -140,40 +131,73 @@ impl E<'_, '_> {
         true
     }
 
-    /// FPSCR[FPRF] = the class of the finite result in rax (fpscr::classify): +-zero, +-denormal (below the single or the
-    /// double normal range), +-normal.
+    /// FPSCR[FPRF] = the class of the finite result in rax: one call of the shared stub (emit_fprf; rax, rcx, rdx clobbered).
     pub(crate) fn fprf(&mut self, single: bool) {
-        let a = &mut self.a;
-        a.mov_rr64(RDX, RAX);
-        a.sh_ri64(Sh::Shr, RDX, 63);
-        a.mov_rr64(RCX, RAX);
-        a.alu_rr64(Alu::Add, RCX, RCX);
-        let zero = a.jcc(Cc::E);
-        a.sh_ri64(Sh::Shr, RCX, 53);
-        a.alu_ri(Alu::Cmp, RCX, if single { 897 } else { 1 });
-        let den = a.jcc(Cc::B);
-        a.mov_rr(RAX, RDX);
-        a.sh_ri(Sh::Shl, RAX, 2);
-        a.alu_ri(Alu::Add, RAX, 0b00100);
-        let d1 = a.jmp();
-        a.here(den);
-        a.mov_rr(RAX, RDX);
-        a.sh_ri(Sh::Shl, RAX, 2);
-        a.alu_ri(Alu::Add, RAX, 0b10100);
-        let d2 = a.jmp();
-        a.here(zero);
-        a.mov_rr(RAX, RDX);
-        a.sh_ri(Sh::Shl, RAX, 4);
-        a.alu_ri(Alu::Add, RAX, 0b00010);
-        a.here(d1);
-        a.here(d2);
-        a.sh_ri(Sh::Shl, RAX, 12);
-        a.ld32(RCX, cpu(FPSCR));
-        a.alu_ri(Alu::And, RCX, !0x1F000);
-        a.alu_rr(Alu::Or, RCX, RAX);
-        a.st32(cpu(FPSCR), RCX);
+        let at = if single { offset_of!(crate::jit::Ctx, fprf_s) } else { offset_of!(crate::jit::Ctx, fprf_d) };
+        self.a.call_m(crate::jit_emit::ctx(at));
     }
+}
 
+/// The shared stub `stfs` calls (jit.rs `stubs`): rdx = the double's bits in; edx = stfs's single (the PowerPC's bit
+/// selection, no rounding) and ZF = 1, or ZF = 0 when the value is a single denormal (exponent <= 896, not +-0: the slow
+/// path's). rcx clobbered.
+pub(crate) fn emit_stfs_bits(a: &mut Asm) {
+    a.mov_rr64(RCX, RDX);
+    a.sh_ri64(Sh::Shr, RCX, 52);
+    a.alu_ri(Alu::And, RCX, 0x7FF);
+    a.alu_ri(Alu::Cmp, RCX, 896);
+    let ok = a.jcc(Cc::A);
+    a.mov_rr64(RCX, RDX);
+    a.alu_rr64(Alu::Add, RCX, RCX);
+    let out = a.jcc(Cc::Ne);
+    a.here(ok);
+    a.mov_rr64(RCX, RDX);
+    a.sh_ri64(Sh::Shr, RCX, 32);
+    a.alu_ri(Alu::And, RCX, 0xC000_0000);
+    a.sh_ri64(Sh::Shr, RDX, 29);
+    a.alu_ri(Alu::And, RDX, 0x3FFF_FFFF);
+    a.alu_rr(Alu::Or, RDX, RCX);
+    a.alu_rr(Alu::Cmp, RCX, RCX); // ZF = 1
+    a.here(out);
+    a.ret();
+}
+
+/// The shared stub of FPSCR[FPRF] (jit.rs `stubs`, one for single and one for double results): the class of the finite
+/// result in rax (fpscr::classify): +-zero, +-denormal (below the single or the double normal range), +-normal. rax, rcx, rdx
+/// clobbered; reads and writes the Cpu's FPSCR through rbx.
+pub(crate) fn emit_fprf(a: &mut Asm, single: bool) {
+    a.mov_rr64(RDX, RAX);
+    a.sh_ri64(Sh::Shr, RDX, 63);
+    a.mov_rr64(RCX, RAX);
+    a.alu_rr64(Alu::Add, RCX, RCX);
+    let zero = a.jcc(Cc::E);
+    a.sh_ri64(Sh::Shr, RCX, 53);
+    a.alu_ri(Alu::Cmp, RCX, if single { 897 } else { 1 });
+    let den = a.jcc(Cc::B);
+    a.mov_rr(RAX, RDX);
+    a.sh_ri(Sh::Shl, RAX, 2);
+    a.alu_ri(Alu::Add, RAX, 0b00100);
+    let d1 = a.jmp();
+    a.here(den);
+    a.mov_rr(RAX, RDX);
+    a.sh_ri(Sh::Shl, RAX, 2);
+    a.alu_ri(Alu::Add, RAX, 0b10100);
+    let d2 = a.jmp();
+    a.here(zero);
+    a.mov_rr(RAX, RDX);
+    a.sh_ri(Sh::Shl, RAX, 4);
+    a.alu_ri(Alu::Add, RAX, 0b00010);
+    a.here(d1);
+    a.here(d2);
+    a.sh_ri(Sh::Shl, RAX, 12);
+    a.ld32(RCX, cpu(FPSCR));
+    a.alu_ri(Alu::And, RCX, !0x1F000);
+    a.alu_rr(Alu::Or, RCX, RAX);
+    a.st32(cpu(FPSCR), RCX);
+    a.ret();
+}
+
+impl E<'_, '_> {
     /// fcmpu / fcmpo of ordered operands: CR field `bf` and FPSCR[FPCC] = FL FG FE (FU 0); FPRF[C] untouched.
     fn fcmp(&mut self, i: usize, bf: u8, ra: usize, rb: usize) {
         let a = &mut self.a;
