@@ -79,6 +79,9 @@ pub(crate) const MUT_REGION_RET: u8 = 25;
 pub(crate) const MUT_REGION_LOCAL_EXIT: u8 = 26;
 /// A compare is fused with its branch (CR field never written: jit_rflow) even when the field is live after the branch.
 pub(crate) const MUT_CR_LIVE_OUT: u8 = 27;
+/// (28: measured, not shipped - forward chained jumps landing past the entry counter, h86 ppc-jit5 lever 1.)
+/// A chained exit's tail stores the wrong pc (target + 4) when its target is not published (the dispatcher resumes there).
+pub(crate) const MUT_TAIL_PC: u8 = 29;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -100,6 +103,9 @@ pub(crate) struct Env<'a> {
     pub(crate) counter: Option<i32>,
     /// Region census (diagnostics): count region entries and internal edges taken in the Ctx.
     pub(crate) census: bool,
+    /// OUT: per link slot taken (in `link` call order), the offset of its EXIT TAIL in the code: `mov [pc], target` and the
+    /// common exit. A slot whose target is not published points there (jit.rs), so the chained exit itself stores no pc.
+    pub(crate) homes: Vec<usize>,
 }
 
 pub(crate) const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
@@ -147,6 +153,8 @@ pub(crate) struct E<'a, 'b> {
     /// (Some(signed)).
     fuse: Vec<bool>,
     flags: Option<bool>,
+    /// The targets of the chained exits emitted so far, in link-slot order: each gets an exit tail (`exit_tails`).
+    tails_to: Vec<u32>,
 }
 
 /// A region being compiled (jit_region): the node pcs in layout order, each node's longest forward path, where each node's
@@ -175,6 +183,7 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     });
     e.body(ops);
     e.tails();
+    e.exit_tails();
     if let Some(f) = hot {
         let a = &mut e.a;
         a.here(f);
@@ -186,6 +195,8 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     let a = &mut e.a;
     a.here(b1);
     a.here(b2);
+    // a chained jump stores no pc (jit.rs exit tails): the bail names its own
+    a.st32i(cpu(PC), pc);
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
     (e.a.b, inner)
@@ -239,8 +250,10 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
         e.a.here(f);
         e.chain(target, 0);
     }
+    e.exit_tails();
     let a = &mut e.a;
     for f in bails { a.here(f); }
+    a.st32i(cpu(PC), nodes[0].0);
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
     let (uses, writes) = (e.uses, e.writes);
@@ -302,6 +315,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
     a.mov_ri(RAX, crate::jit::EXIT_TRAP);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
     a.here(bail);
+    a.st32i(cpu(PC), pc);
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
     a.b
@@ -309,7 +323,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
-        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None }
+        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new() }
     }
 
     /// Start region node `k` (its code begins here: forward jumps waiting for it land here).
@@ -388,12 +402,23 @@ impl E<'_, '_> {
     fn chain(&mut self, target: u32, n: usize) {
         self.store_locals();
         if n != 0 { self.a.alu_ri64(Alu::Add, R15, n as i32); }
-        self.a.st32i(cpu(PC), target);
         if self.env.chain {
+            // the pc is stored by the slot's own exit tail when its target is not published (a chained target needs none)
             let slot = if self.dry { core::ptr::null() } else { (self.env.link)(target) };
+            self.tails_to.push(target);
             self.a.mov_ri64(RAX, slot as u64);
             self.a.jmp_m(m(RAX, 0));
         } else {
+            self.a.st32i(cpu(PC), target);
+            self.exit_normal();
+        }
+    }
+    /// The exit tails of every chained exit emitted (out of line, after the code): store the target pc, leave.
+    fn exit_tails(&mut self) {
+        for t in core::mem::take(&mut self.tails_to) {
+            if !self.dry { self.env.homes.push(self.a.pos()); }
+            let pc = if self.env.mutant == MUT_TAIL_PC { t.wrapping_add(4) } else { t };
+            self.a.st32i(cpu(PC), pc);
             self.exit_normal();
         }
     }

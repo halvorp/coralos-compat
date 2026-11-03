@@ -645,10 +645,10 @@ fn a_region_spanning_a_page_written_since_it_formed_is_not_run_stale() {
 /// Each planted REGION mutant goes RED on the region gates: 21 an internal forward edge to the wrong node, 22 only the head's
 /// page generation checked, 23 an internal edge dropping the retired count, 24 a back edge that skips the budget check, 25 an
 /// inline return check that takes the wrong return (calls followed), 26 exits that do not store the region's locals, 27 a
-/// compare fused with its branch while its CR field is still live.
+/// compare fused with its branch while its CR field is still live, 29 a chained exit's tail that resumes at the wrong pc.
 #[test]
 fn negative_control_every_planted_region_mutant_goes_red() {
-    for mutant in 21..=27u8 {
+    for mutant in (21..=27u8).chain([29]) {
         let shape = shapes()[(mutant == 25) as usize];
         let mut red = false;
         let (xp, ties) = (cross_page_program(), fma_ties_program());
@@ -685,3 +685,4 @@ fn tier_jitblocks_runs_tier_2_without_regions() {
     }
     assert!(compiled > 20, "JIT code ran: {compiled} blocks compiled");
 }
+

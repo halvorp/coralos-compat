@@ -155,6 +155,9 @@ pub(crate) struct Jit {
     /// Per link slot: the generation its owner was compiled at when the target is on the owner's own code page (the slot
     /// then holds the target's INNER entry if the target was compiled at that generation too), else [`ANY_GEN`].
     link_gen: Box<[u64]>,
+    /// Per link slot: its owner's exit tail (stores the target pc, leaves) - where the slot points while its target is not
+    /// published.
+    link_home: Box<[u64]>,
     by_target: BTreeMap<u32, Vec<u32>>,
     /// Every published block by pc (the dispatch table is a direct-mapped cache in front of it: a colliding block is
     /// refilled from here, never recompiled). Hashed: every dispatcher miss probes it, and in WC3 gameplay most misses are
@@ -211,7 +214,7 @@ impl Jit {
         let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, resync: false, no_resync: false, census: None, hot: EMPTY_PC, counters: [crate::jit_region::REGION_AFTER; 1 << TABLE_BITS], crk: core::array::from_fn(|f| [8 << (28 - 4 * f), 4 << (28 - 4 * f)]), rentries: 0, redges: 0 });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
-            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
+            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(),
             region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false,
@@ -439,8 +442,9 @@ impl Jit {
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None, census: self.region_census };
+        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None, census: self.region_census, homes: Vec::new() };
         let (code, inner) = emit(&mut env);
+        let homes = core::mem::take(&mut env.homes);
         if out_of_links { self.drop_code(); return None; }
         if may_refuse && code.len() > self.arena.segment_bytes() {
             for (i, target) in taken {
@@ -453,7 +457,16 @@ impl Jit {
             self.refused_last = true;
             return None;
         }
-        self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, len, gen, at)
+        let p = self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, len, gen, at)?;
+        // each slot's home is its exit tail in the placed code; it lands in its target if that is published (after any
+        // eviction place() made), else at home
+        debug_assert_eq!(homes.len(), taken.len());
+        for (&(i, target), &off) in taken.iter().zip(&homes) {
+            let i = i as usize;
+            self.link_home[i] = p + off as u64;
+            self.links[i] = self.blocks.get(target).map_or(self.link_home[i], |s| landing(s, self.link_gen[i], self.mutant));
+        }
+        Some(p)
     }
 
     /// Put compiled code in the arena (reusing the oldest segment when full) and queue it for publishing; `taken` = the
@@ -492,7 +505,7 @@ impl Jit {
     fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
         let t0 = self.timer.map(|c| c());
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
-        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None, census: false };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None, census: false, homes: Vec::new() };
         let code = jit_emit::compile_native(pc, &mut env);
         self.place(&code, 0, Vec::new(), pc, 1, gen, at);
         self.stats.natives_compiled += 1;
@@ -511,7 +524,7 @@ impl Jit {
         self.blocks.retain(|pc, slot| { let k = inside(slot.entry); if k { gone.push(pc); } !k || stale });
         if !stale { for t in self.table.iter_mut() { if inside(t.entry) { *t = EMPTY; } } }
         for pc in &gone {
-            if let Some(v) = self.by_target.get(pc) { for &i in v { self.links[i as usize] = self.exit_stub; } }
+            if let Some(v) = self.by_target.get(pc) { for &i in v { self.links[i as usize] = self.link_home[i as usize]; } }
         }
         let tag = s as u8 + 1;
         for i in 1..self.nlinks {
