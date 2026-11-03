@@ -41,6 +41,7 @@ use crate::cpu::Cpu;
 use heirloom_gl_abi::pixel::Store;
 
 mod arrays;
+pub(crate) mod capture_probe;
 mod begin_end;
 mod bulk;
 mod client;
@@ -106,6 +107,8 @@ pub(crate) struct IndexArray {
 pub struct GlState {
     worker: Option<Box<dyn GlWorker>>,
     pending: Vec<u8>,
+    /// The capture probe's buffers (perf on only: capture_probe.rs).
+    probe: capture_probe::ProbeBufs,
     batch: u64,
     fences: FenceBook,
     /// fence name (what the program holds) -> the FenceBook id once set.
@@ -337,7 +340,7 @@ impl<U: GuestUi> MacPpc<U> {
             },
             "aglSwapBuffers" => match self.gl.ctxs.get(&a0).copied() {
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
-                Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); if let Some(p) = self.perf.as_mut() { p.swap(); } }
+                Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); if let Some(p) = self.perf.as_mut() { p.swap(); let l = p.take_capture_lines(); self.mac.log.extend(l); } }
             },
             "aglSetFullScreen" => match self.gl.ctxs.get(&a0).copied() {
                 // aglSetFullScreen(ctx, width, height, freq, device): the games-windowed rule - the drawable becomes a window of that size

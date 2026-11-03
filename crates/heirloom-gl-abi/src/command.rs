@@ -425,6 +425,12 @@ fn encode_draw_body(out: &mut Vec<u8>, token: Token, mem: &[u8], mode: u32, inde
     let range = indices_to_wire(ty, &mut out[at..]);
     if let Some((lo, hi)) = range {
         let n = (hi - lo).checked_add(1).ok_or(SnapshotError::Overflow)?;
+        // every array's lines asked for before the first is copied: the misses overlap instead of each copy waiting on its own
+        for d in arrays {
+            if let Some(r) = array_span(mem, d, lo, n) {
+                prefetch(&mem[r]);
+            }
+        }
         for d in arrays {
             encode_array(out, mem, d, lo, n)?;
         }
@@ -455,6 +461,27 @@ pub fn index_range(ty: ElemType, b: &[u8]) -> Option<(u32, u32)> {
 fn indices_to_wire(ty: ElemType, b: &mut [u8]) -> Option<(u32, u32)> {
     crate::snapshot::to_wire_order(ty, b);
     index_range(ty, b)
+}
+
+/// The guest bytes vertices `first .. first+count` of `d` span (first vertex to the end of the last), when they lie inside `mem`
+/// and the descriptor is well formed; None otherwise (then [`encode_array`] names the error).
+fn array_span(mem: &[u8], d: &Descriptor, first: u32, count: u32) -> Option<core::ops::Range<usize>> {
+    let vbytes = (d.size as usize).checked_mul(d.ty.bytes())?;
+    let stride = if d.stride == 0 { vbytes } else { d.stride as usize };
+    let begin = (first as usize).checked_mul(stride)?.checked_add(d.offset)?;
+    let end = (count as usize).checked_sub(1)?.checked_mul(stride)?.checked_add(begin)?.checked_add(vbytes)?;
+    (end <= mem.len()).then_some(begin..end)
+}
+
+/// Ask for `b`'s cache lines (a hint: no fault, no effect on any value; nothing on a target without one).
+fn prefetch(b: &[u8]) {
+    #[cfg(target_arch = "x86_64")]
+    for at in (0..b.len()).step_by(64) {
+        // SAFETY: PREFETCHT0 of an address inside `b` - a hint that reads nothing architecturally and never faults.
+        unsafe { core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(b.as_ptr().add(at).cast()) };
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = b;
 }
 
 /// One array's frame record and its vertices `first .. first+count` at the end of `out`, as `snapshot_array_into` + the draw's

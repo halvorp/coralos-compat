@@ -106,13 +106,48 @@ impl<U: GuestUi> MacPpc<U> {
     pub(super) fn gl_queue_draw_elements(&mut self, token: Token, who: &str, mode: u32, off: usize, count: u32, ty: ElemType, descs: &[Descriptor]) -> Result<(), String> {
         let len = self.mac.mem.len().min(u32::MAX as usize) as u32;
         let mem = self.mac.mem.span(0, len).and_then(|s| self.mac.mem.bytes(s)).map_err(|_| format!("{who}: guest RAM is not addressable"))?;
+        // a sampled draw (perf on, one in CAPTURE_SAMPLE): the batch's next bytes written first, timed (capture_probe.rs)
+        let sampled = self.perf.as_mut().is_some_and(|p| p.capture_sample());
+        let dst = match self.perf.as_ref().filter(|_| sampled) {
+            Some(p) => {
+                capture_probe::reserve(&mut self.gl.pending, capture_probe::DST_TOUCH);
+                let t = p.now();
+                let k = capture_probe::touch_spare(&mut self.gl.pending, capture_probe::DST_TOUCH);
+                Some((p.now().wrapping_sub(t), k as u64))
+            }
+            None => None,
+        };
         // the capture alone (copy + byte swap of the referenced guest bytes) and the bytes it queued: the perf line's
         // capture_us / draw_kib, which tell a per-byte cost (memory) from a per-draw one (code) on silicon
         let (t0, at) = (self.perf.as_ref().map(|p| p.now()), self.gl.pending.len());
         let r = Frame::encode_draw_elements_into(&mut self.gl.pending, token, mem, mode, off, count, ty, descs);
         if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) {
             let dt = p.now().wrapping_sub(t0);
-            p.add_capture(dt, (self.gl.pending.len() - at) as u64);
+            let bytes = (self.gl.pending.len() - at) as u64;
+            p.add_capture(dt, bytes);
+            if let Some((dst_t, dst_n)) = dst.filter(|_| r.is_ok()) {
+                // the same draw again into a pre-touched scratch buffer: source and destination in L1, the code alone
+                let s = &mut self.gl.probe.scratch;
+                s.clear();
+                capture_probe::reserve(s, bytes as usize);
+                capture_probe::touch_spare(s, bytes as usize);
+                let t = p.now();
+                let _ = Frame::encode_draw_elements_into(s, token, mem, mode, off, count, ty, descs);
+                let warm = p.now().wrapping_sub(t);
+                let w = &mut p.win.probe;
+                (w.draws, w.bytes, w.dst_time, w.dst_bytes, w.cold_time, w.warm_time) =
+                    (w.draws + 1, w.bytes + bytes, w.dst_time + dst_t, w.dst_bytes + dst_n, w.cold_time + dt, w.warm_time + warm);
+                // once a window: guest RAM around the first array and a heap block of the same size, each read twice
+                if let (0, Some(range)) = (w.read_bytes, descs.first().and_then(|d| capture_probe::ram_window(d.offset, mem.len()))) {
+                    let h = &mut self.gl.probe.heap;
+                    if h.is_empty() { h.resize(capture_probe::READ_BYTES, 1); }
+                    let pass = |b: &[u8]| { let t = p.now(); capture_probe::read_pass(b); p.now().wrapping_sub(t) };
+                    let (r1, r2) = (pass(&mem[range.clone()]), pass(&mem[range]));
+                    let (h1, h2) = (pass(h), pass(h));
+                    let w = &mut p.win.probe;
+                    (w.read_bytes, w.ram_first, w.ram_second, w.heap_first, w.heap_second) = (capture_probe::READ_BYTES as u64, r1, r2, h1, h2);
+                }
+            }
         }
         if let Err(e) = r {
             self.gl_set_error(GL_INVALID_VALUE);

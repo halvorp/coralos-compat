@@ -48,10 +48,47 @@ pub struct Window {
     /// Inside the draws: the capture alone (guest bytes copied into the batch and byte-swapped) and the bytes it queued.
     pub capture_time: u64,
     pub capture_bytes: u64,
+    /// The capture's cost per KiB, draw by draw, as a histogram: bucket `b` counts the draws whose capture took `[2^b, 2^(b+1))`
+    /// clock units a KiB, and sums their time - a uniformly slow capture (every byte costs: memory) and a few huge ones (a page
+    /// fault, an interrupt, a preemption inside one) give the same mean and different shapes. Per KiB, so a big draw is not a
+    /// stall; and the slowest single capture.
+    pub capture_hist: [u32; HIST],
+    pub capture_hist_time: [u64; HIST],
+    pub capture_max: u64,
+    /// The capture probe ([`CaptureProbe`]): sampled draws and the guest-RAM / heap read passes, this window.
+    pub probe: CaptureProbe,
     pub clock_reads: u64,
     pub poll_insns: u64,
     /// Swap-to-swap durations of the frames in this window.
     pub frames: Vec<u64>,
+}
+
+/// Buckets of [`Window::capture_hist`] (log2 of the clock units: 2^31 TSC cycles is ~1.5 s on the Z83).
+pub const HIST: usize = 32;
+/// One draw in this many is a SAMPLED draw ([`CaptureProbe`]): its capture is taken apart by three extra timed passes.
+pub const CAPTURE_SAMPLE: u64 = 32;
+
+/// What the sampled draws and the once-a-window read passes measured (clock units and bytes, summed over the window). On a
+/// sampled draw the batch's next [`crate::gl_c::capture_probe::DST_TOUCH`] bytes are written once first (`dst`: the destination's own cost,
+/// write-allocating lines last written a frame ago), then the capture runs as always (`cold`: its source as the game left it,
+/// its destination now in L1), then the same capture again into a pre-touched scratch buffer (`warm`: source and destination
+/// both in L1 - the capture's instructions alone). So per KiB: cold - warm = reading the guest's bytes; warm = the code; dst =
+/// writing the batch. Once a window the guest RAM around the first array and a heap block of the same size are each read
+/// twice (`ram_*`, `heap_*`): a first pass far over the second is DRAM (or TLB) latency; a SECOND pass as slow as the first
+/// means the memory is not being cached at all (an uncached or write-combining mapping).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CaptureProbe {
+    pub draws: u64,
+    pub bytes: u64,
+    pub dst_time: u64,
+    pub dst_bytes: u64,
+    pub cold_time: u64,
+    pub warm_time: u64,
+    pub read_bytes: u64,
+    pub ram_first: u64,
+    pub ram_second: u64,
+    pub heap_first: u64,
+    pub heap_second: u64,
 }
 
 pub struct Perf {
@@ -64,12 +101,16 @@ pub struct Perf {
     pub(crate) class_of: Vec<u8>,
     /// Closed windows (frames reported through it, the window), oldest first.
     done: Vec<(u64, Window)>,
+    /// Their `[HEIRLOOM-CAPTURE ...]` lines, not yet taken.
+    capture_done: Vec<String>,
     /// Per-frame instruction counts are `insns / frames`; the total frames reported so far names the line.
     pub frames_total: u64,
     /// Frames per line ([`REPORT_FRAMES`] unless the host asks otherwise).
     pub every: usize,
     /// Opt-in diagnostic: poll instructions by the clock read's call chain (LR and the two saved LRs above it).
     pub sites: Option<alloc::collections::BTreeMap<[u32; 3], u64>>,
+    /// Draws captured so far (the sampling's counter).
+    pub(crate) draw_seq: u64,
 }
 
 impl Perf {
@@ -84,7 +125,18 @@ impl Perf {
         self.win.insns += insns;
     }
     pub(crate) fn add_gl_ring(&mut self, dt: u64) { self.win.gl_ring_time += dt; }
-    pub(crate) fn add_capture(&mut self, dt: u64, bytes: u64) { (self.win.capture_time, self.win.capture_bytes) = (self.win.capture_time + dt, self.win.capture_bytes + bytes); }
+    pub(crate) fn add_capture(&mut self, dt: u64, bytes: u64) {
+        (self.win.capture_time, self.win.capture_bytes) = (self.win.capture_time + dt, self.win.capture_bytes + bytes);
+        let b = (63 - per_kib(dt, bytes.max(1)).max(1).leading_zeros() as usize).min(HIST - 1);
+        self.win.capture_max = self.win.capture_max.max(dt);
+        self.win.capture_hist[b] += 1;
+        self.win.capture_hist_time[b] += dt;
+    }
+    /// Count a draw; whether it is a sampled one ([`CAPTURE_SAMPLE`]).
+    pub(crate) fn capture_sample(&mut self) -> bool {
+        self.draw_seq += 1;
+        self.draw_seq % CAPTURE_SAMPLE == 0
+    }
 
     /// A read of the Mac clock at `tick` (the engine's tick count) when the CPU's timebase (instructions retired) is `tb`.
     pub(crate) fn clock_read(&mut self, tick: u64, tb: u64, site: [u32; 3]) {
@@ -108,8 +160,36 @@ impl Perf {
             self.frames_total += self.win.frames.len() as u64;
             let w = core::mem::take(&mut self.win);
             self.done.push((self.frames_total, w));
+            self.capture_done.push(capture_line(&self.done[self.done.len() - 1].1, self.frames_total));
         }
     }
+
+    /// The `[HEIRLOOM-CAPTURE ...]` lines of the windows closed since the last call (in clock units: they need no rate).
+    pub fn take_capture_lines(&mut self) -> Vec<String> { core::mem::take(&mut self.capture_done) }
+}
+
+/// Clock units per KiB of `bytes`.
+fn per_kib(t: u64, bytes: u64) -> u64 { if bytes == 0 { 0 } else { t.saturating_mul(1024) / bytes } }
+
+/// The `[HEIRLOOM-CAPTURE ...]` line of one window, in CLOCK UNITS (TSC cycles on CoralOS - the Z83's ~1,439 a microsecond; ns on
+/// a desktop host): the per-draw capture cost per KiB as percentiles over the draws (each the upper edge of its power-of-two
+/// bucket), the share of the capture time spent in draws 8x or more over the median's bucket and the slowest capture; the
+/// sampled draws' split per KiB; the read passes per KiB.
+pub fn capture_line(w: &Window, frames_total: u64) -> String {
+    let draws: u64 = w.capture_hist.iter().map(|&n| u64::from(n)).sum();
+    let edge = |q: u64| {
+        let want = (draws * q).div_ceil(100).max(1);
+        let mut seen = 0u64;
+        w.capture_hist.iter().position(|&n| { seen += u64::from(n); seen >= want }).map_or(0, |b| 1u64 << (b + 1))
+    };
+    let median_b = edge(50).max(2).trailing_zeros() as usize - 1;
+    let tail: u64 = w.capture_hist_time.iter().skip(median_b + 3).sum();
+    let p = &w.probe;
+    format!("[HEIRLOOM-CAPTURE frames={frames_total}] per draw clk/KiB: draws={draws} p50<={} p90<={} p99<={} tail8x={}% max_clk={} \
+| sampled 1/{CAPTURE_SAMPLE}: n={} kib={} clk/KiB dst={} cold={} warm={} | read kib={} clk/KiB guest_ram first={} second={} heap first={} second={}",
+        edge(50), edge(90), edge(99), pct(tail, w.capture_time), w.capture_max,
+        p.draws, p.bytes / 1024, per_kib(p.dst_time, p.dst_bytes), per_kib(p.cold_time, p.bytes), per_kib(p.warm_time, p.bytes),
+        p.read_bytes / 1024, per_kib(p.ram_first, p.read_bytes), per_kib(p.ram_second, p.read_bytes), per_kib(p.heap_first, p.read_bytes), per_kib(p.heap_second, p.read_bytes))
 }
 
 fn pct(part: u64, whole: u64) -> u64 { if whole == 0 { 0 } else { part.saturating_mul(100) / whole } }
@@ -151,7 +231,7 @@ impl<U: GuestUi> MacPpc<U> {
     /// Turn the stage clock on: `clock` is any monotonic host clock.
     pub fn perf_enable(&mut self, clock: fn() -> u64) {
         self.perf = Some(alloc::boxed::Box::new(Perf {
-            clock, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None,
+            clock, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), capture_done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0,
         }));
     }
     /// Report every `n` frames instead of [`REPORT_FRAMES`] (a host harness's finer view).
@@ -220,7 +300,7 @@ mod tests {
     #[test]
     fn reads_on_the_same_tick_close_together_are_a_poll_and_a_far_or_new_tick_read_is_not() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), capture_done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0 };
         p.clock_read(5, 100, [0; 3]);
         p.clock_read(5, 400, [0; 3]); // 300 insns later, same tick: a poll
         p.clock_read(6, 500, [0; 3]); // the tick moved: not a poll
@@ -261,5 +341,32 @@ mod tests {
         (w.capture_time, w.capture_bytes) = (2_000, 4 * 470 * 1024); // half the draws' time capturing, 470 KiB a frame
         let line = report(&w, 1, 4);
         assert!(line.contains("| per frame: gl_ring_us=250 outside_us=0 gl_us=2000 draw_us=1000 draws=200 capture_us=500 draw_kib=470 | per gl call: ns=2000 |"), "{line}");
+    }
+
+    /// The capture line: percentiles are the upper edges of their power-of-two buckets, the tail is the capture time in draws 8x
+    /// or more over the median's bucket, the sampled split and the read passes are per KiB; a window is closed with its line.
+    #[test]
+    fn the_capture_line_shows_the_draws_shape_the_sampled_split_and_the_read_passes() {
+        fn zero() -> u64 { 0 }
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), capture_done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0 };
+        for _ in 0..98 { p.add_capture(2000, 2048); } // 1000 a KiB: bucket 9 = [512, 1024), the edge 1024
+        p.add_capture(100_000, 1024); // two stalls: 100,000 a KiB, bucket 16 [65536, 131072)
+        p.add_capture(50_000, 512);
+        assert_eq!((p.win.capture_hist[9], p.win.capture_hist[16]), (98, 2));
+        assert_eq!((0..CAPTURE_SAMPLE * 2).filter(|_| p.capture_sample()).count(), 2, "one draw in CAPTURE_SAMPLE is sampled");
+        p.win.probe = CaptureProbe { draws: 2, bytes: 2048, dst_time: 300, dst_bytes: 32768, cold_time: 9000, warm_time: 1000, read_bytes: 262_144,
+            ram_first: 256_000, ram_second: 25_600, heap_first: 128_000, heap_second: 25_600 };
+        let line = capture_line(&p.win, 256);
+        assert!(line.starts_with("[HEIRLOOM-CAPTURE frames=256] per draw clk/KiB: draws=100 p50<=1024 p90<=1024 p99<=131072 tail8x=43% max_clk=100000 "), "{line}");
+        assert!(line.ends_with("| sampled 1/32: n=2 kib=2 clk/KiB dst=9 cold=4500 warm=500 | read kib=256 clk/KiB guest_ram first=1000 second=100 heap first=500 second=100"), "{line}");
+        // the window closes at the swap with its line, taken once
+        p.swap();
+        p.swap();
+        p.swap();
+        let lines = p.take_capture_lines();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("[HEIRLOOM-CAPTURE frames=2] per draw clk/KiB: draws=100 "), "{}", lines[0]);
+        assert!(p.take_capture_lines().is_empty());
+        assert_eq!(p.win.probe, CaptureProbe::default(), "the next window starts empty");
     }
 }
