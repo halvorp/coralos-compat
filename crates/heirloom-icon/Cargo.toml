@@ -1,0 +1,8 @@
+[package]
+name = "heirloom-icon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A guest application's own icon as ONE picture type every family's icon decoder returns (straight RGBA, or SVG text), and its SVG form for CoralOS's icon set (no_std)"
+
+[dependencies]

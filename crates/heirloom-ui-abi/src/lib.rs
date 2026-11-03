@@ -14,6 +14,7 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 mod audio;
+pub mod cpu_mode; // the CPU modes each guest engine offers: the one table the host's install choice and CPU Mode menu read
 mod event;
 pub mod host_key; // the host's key codes for the keys that type nothing (arrows, Home/End, Page Up/Down, Delete, F-keys)
 mod model;

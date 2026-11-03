@@ -25,15 +25,8 @@ use core::fmt;
 use heirloom_common::bytes::{be16, be32};
 use heirloom_fmt_resfork::container::{self, ContainerError};
 use heirloom_fmt_resfork::{ForkError, OsType, ResFork};
-
-/// One decoded icon: `w` x `h` straight-alpha RGBA8, row-major, and which member(s) it came from (`"it32+t8mk"`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IconImage {
-    pub w: u32,
-    pub h: u32,
-    pub rgba: Vec<u8>,
-    pub source: &'static str,
-}
+/// The picture every family's icon decoder returns (heirloom-icon: one type, one SVG writer).
+pub use heirloom_icon::IconImage;
 
 /// Why an application's icon could not be found.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,0 +1,12 @@
+[package]
+name = "heirloom-fmt-amiicon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Amiga Workbench icons (.info DiskObject) to straight RGBA: classic planar images (OS1.3 / OS2-3 palettes), NewIcons (tooltype-encoded), OS3.5 ColorIcons (IFF FORM ICON: FACE/IMAG, ARGB) and PNG icons (OS4 / AROS) (no_std)"
+
+[dependencies]
+heirloom-common = { path = "../heirloom-common" }
+heirloom-icon = { path = "../heirloom-icon" }
+# The PNG icon's IDAT and the OS4 ARGB chunk are zlib streams (the same inflater heirloom-fmt-sis uses).
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }

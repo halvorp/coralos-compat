@@ -1,0 +1,12 @@
+[package]
+name = "heirloom-fmt-symicon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Symbian application icons: the registration resource -> localisable resource -> icon file chain, the MIF container (binary SVG-T to SVG text, bitmap entries) and the MBM multi-bitmap file (colour + mask) (no_std)"
+
+[dependencies]
+heirloom-icon = { path = "../heirloom-icon" }
+heirloom-fmt-rsc = { path = "../heirloom-fmt-rsc" }
+# A MIF entry may be gzip-wrapped.
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }

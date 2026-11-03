@@ -1,0 +1,12 @@
+[package]
+name = "heirloom-appicon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The install step's icon extractor: a guest application's own icon (Mac, Amiga, Symbian) as the SVG CoralOS's icon set loads"
+
+[dependencies]
+heirloom-icon = { path = "../heirloom-icon" }
+heirloom-fmt-macicon = { path = "../heirloom-fmt-macicon" }
+heirloom-fmt-amiicon = { path = "../heirloom-fmt-amiicon" }
+heirloom-fmt-symicon = { path = "../heirloom-fmt-symicon" }

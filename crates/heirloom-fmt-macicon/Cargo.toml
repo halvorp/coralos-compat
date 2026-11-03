@@ -8,8 +8,5 @@ description = "Classic Mac application icons: the Finder's BNDL/FREF lookup and 
 [dependencies]
 heirloom-common = { path = "../heirloom-common" }
 heirloom-fmt-resfork = { path = "../heirloom-fmt-resfork" }
+heirloom-icon = { path = "../heirloom-icon" }
 
-[[bin]]
-# The install step's extractor: a Mac application file (MacBinary / AppleSingle / AppleDouble / raw fork) -> its icon as PNG + SVG.
-name = "heirloom-macicon"
-path = "src/bin/heirloom-macicon.rs"

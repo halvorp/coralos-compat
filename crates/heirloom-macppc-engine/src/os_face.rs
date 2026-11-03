@@ -105,8 +105,8 @@ impl OsFamily for MacPpcFamily {
     }
 }
 
-/// The named input that forces the PowerPC tier (heirloom-ui-abi Control::Input).
-pub const CPU_TIER: &str = "cpu-tier";
+/// The named input that forces the PowerPC tier (heirloom-ui-abi Control::Input): re-exported from its one home, heirloom-ui-abi cpu_mode.
+pub use heirloom_ui_abi::cpu_mode::CPU_TIER_INPUT as CPU_TIER;
 /// The named input that sets the program's own folder (a host's `(home ...)`; colon-separated, volume first).
 pub const HOME: &str = "home";
 
@@ -146,4 +146,26 @@ static TABLE: OsVTable = vtable2::<MacFamily, MacPpcFamily>();
 /// The table os-mac.library's `coral_lib_open` returns: both Mac families.
 pub fn os_mac_vtable() -> &'static OsVTable {
     &TABLE
+}
+
+#[cfg(test)]
+mod cpu_mode_tests {
+    use super::Tier;
+    use heirloom_ui_abi::cpu_mode::{offers, CpuMode};
+
+    /// THIS engine's row of the host-facing CPU mode table: every tier a mode sends is one this engine's parser accepts, and the
+    /// modes map to the tiers they name (amippc reuses the row).
+    #[test]
+    fn cpu_modes_are_the_tiers_tier_parse_accepts() {
+        for family in ["macppc", "amippc"] {
+            for o in offers(family).unwrap() {
+                if let Some(t) = o.sends {
+                    assert!(Tier::parse(t).is_some(), "{family} {:?} sends {t:?}, which Tier::parse refuses", o.mode);
+                }
+            }
+        }
+        let tier = |m: CpuMode| offers("macppc").unwrap().iter().find(|o| o.mode == m).and_then(|o| o.sends).and_then(Tier::parse);
+        assert_eq!((tier(CpuMode::Jit), tier(CpuMode::Compatible), tier(CpuMode::Aot)), (Some(Tier::Jit), Some(Tier::Interp), Some(Tier::Jit)));
+        assert_eq!(tier(CpuMode::Auto), None, "Automatic sends nothing: the engine's own choice");
+    }
 }

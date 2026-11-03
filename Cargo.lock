@@ -44,6 +44,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-appicon"
+version = "0.1.0"
+dependencies = [
+ "heirloom-fmt-amiicon",
+ "heirloom-fmt-macicon",
+ "heirloom-fmt-symicon",
+ "heirloom-icon",
+]
+
+[[package]]
 name = "heirloom-bind"
 version = "0.1.0"
 dependencies = [
@@ -140,6 +150,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-fmt-amiicon"
+version = "0.1.0"
+dependencies = [
+ "heirloom-common",
+ "heirloom-icon",
+ "miniz_oxide",
+]
+
+[[package]]
 name = "heirloom-fmt-e32"
 version = "0.1.0"
 
@@ -157,6 +176,7 @@ version = "0.1.0"
 dependencies = [
  "heirloom-common",
  "heirloom-fmt-resfork",
+ "heirloom-icon",
 ]
 
 [[package]]
@@ -185,7 +205,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-fmt-symicon"
+version = "0.1.0"
+dependencies = [
+ "heirloom-fmt-rsc",
+ "heirloom-icon",
+ "miniz_oxide",
+]
+
+[[package]]
 name = "heirloom-gl-abi"
+version = "0.1.0"
+
+[[package]]
+name = "heirloom-icon"
 version = "0.1.0"
 
 [[package]]
