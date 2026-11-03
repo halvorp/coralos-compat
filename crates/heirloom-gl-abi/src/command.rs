@@ -450,28 +450,11 @@ pub fn index_range(ty: ElemType, b: &[u8]) -> Option<(u32, u32)> {
     (lo <= hi).then_some((lo, hi))
 }
 
-/// Convert indices in place from the guest's order to the wire's and return their (min, max) - one pass.
+/// Convert indices in place from the guest's order to the wire's and return their (min, max) ([`index_range`], over the bytes
+/// just converted: they are in L1).
 fn indices_to_wire(ty: ElemType, b: &mut [u8]) -> Option<(u32, u32)> {
-    if b.is_empty() {
-        return None;
-    }
-    let (mut lo, mut hi) = (u32::MAX, 0u32);
-    match ty {
-        ElemType::U8 => b.iter().for_each(|&v| { lo = lo.min(u32::from(v)); hi = hi.max(u32::from(v)); }),
-        ElemType::U16 => b.chunks_exact_mut(2).for_each(|c| {
-            let v = u16::from_be_bytes([c[0], c[1]]);
-            c.copy_from_slice(&v.to_le_bytes());
-            lo = lo.min(u32::from(v));
-            hi = hi.max(u32::from(v));
-        }),
-        _ => b.chunks_exact_mut(4).for_each(|c| {
-            let v = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
-            c.copy_from_slice(&v.to_le_bytes());
-            lo = lo.min(v);
-            hi = hi.max(v);
-        }),
-    }
-    Some((lo, hi))
+    crate::snapshot::to_wire_order(ty, b);
+    index_range(ty, b)
 }
 
 /// One array's frame record and its vertices `first .. first+count` at the end of `out`, as `snapshot_array_into` + the draw's
