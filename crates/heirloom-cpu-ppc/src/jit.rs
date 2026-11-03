@@ -207,6 +207,8 @@ pub(crate) struct Jit {
     helper: u64,
     pub(crate) logged: bool,
     pub(crate) mutant: u8,
+    /// The ablation knobs the code is compiled with (heirloom_cpu_abi::ppc::KNOB_*).
+    pub(crate) knobs: u32,
     lock_seed: u32,
     /// The address mask the code was compiled for.
     mask: u32,
@@ -247,7 +249,7 @@ impl Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![IBTC_EMPTY; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << IBTC_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
-            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(),
+            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(), knobs: 0,
             region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false,
         };
         j.stats.arena_bytes = j.arena.len as u64;
@@ -327,9 +329,10 @@ impl Jit {
     }
 
     /// Change how code is made (lockstep journaling, a planted mutant, MOVBE): everything compiled is dropped.
-    pub(crate) fn reconfigure(&mut self, logged: bool, mutant: u8, movbe: bool, wide: bool) {
+    pub(crate) fn reconfigure(&mut self, logged: bool, mutant: u8, movbe: bool, wide: bool, knobs: u32) {
         let movbe = movbe && self.hw_movbe;
-        if (logged, mutant, movbe, wide) == (self.logged, self.mutant, self.movbe, self.wide) { return; }
+        if (logged, mutant, movbe, wide, knobs) == (self.logged, self.mutant, self.movbe, self.wide, self.knobs) { return; }
+        self.knobs = knobs;
         let stubs_change = mutant != self.mutant; // the stubs depend on the mutant only (MUT_EXIT_COUNT)
         self.logged = logged;
         self.mutant = mutant;
@@ -394,10 +397,16 @@ impl Jit {
         (s.gen == gen_now && s.len as u64 <= left).then_some((s.entry, s.len))
     }
 
+    /// The IBTC's index mask: KNOB_IBTC_BITS when set (8..=16), else the full table.
+    fn ibtc_mask(&self) -> u32 {
+        let b = self.knobs >> heirloom_cpu_abi::ppc::KNOB_IBTC_BITS_SHIFT & heirloom_cpu_abi::ppc::KNOB_IBTC_BITS_MASK;
+        if (8..=IBTC_BITS).contains(&b) { (1 << b) - 1 } else { (1 << IBTC_BITS) - 1 }
+    }
+
     /// Point the IBTC at published block `s`.
     #[inline(always)]
     fn ibtc_set(&mut self, s: &Slot) {
-        self.ibtc[(s.pc >> 2) as usize & ((1 << IBTC_BITS) - 1)] = s.pc as u64 | (s.entry - self.arena.base as u64) << 32;
+        self.ibtc[(s.pc >> 2) as usize & self.ibtc_mask() as usize] = s.pc as u64 | (s.entry - self.arena.base as u64) << 32;
     }
 
     /// Count a whole-block tier-1 run at `pc`; true when it should be compiled now (also when the published code there is a
@@ -469,6 +478,7 @@ impl Jit {
     /// covers). None when nothing was placed (`refused_last` = because `may_refuse` and it is longer than a segment).
     fn emit_place(&mut self, pc: u32, gen: u64, pages: &[(usize, u64)], at: u64, len: u32, may_refuse: bool, note: u64, emit: impl FnOnce(&mut Env) -> (Vec<u8>, usize)) -> Option<u64> {
         self.refused_last = false;
+        let ibtc_mask = self.ibtc_mask();
         let (blocks, links, by_target, owner, free, link_gen) = (&self.blocks, &mut self.links, &mut self.by_target, &mut self.link_owner, &mut self.free_links, &mut self.link_gen);
         let (mask, mutant) = (self.mask, self.mutant);
         let nlinks = &mut self.nlinks;
@@ -489,7 +499,7 @@ impl Jit {
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { (1 << IBTC_BITS) - 1 }, movbe: self.movbe, wide: self.wide, counter: None, census: self.region_census, homes: Vec::new() };
+        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { ibtc_mask }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: self.region_census, homes: Vec::new() };
         let (code, inner) = emit(&mut env);
         let homes = core::mem::take(&mut env.homes);
         if out_of_links { self.drop_code(); return None; }
@@ -553,7 +563,7 @@ impl Jit {
     fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
         let t0 = self.timer.map(|c| c());
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
-        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { (1 << IBTC_BITS) - 1 }, movbe: self.movbe, wide: self.wide, counter: None, census: false, homes: Vec::new() };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { self.ibtc_mask() }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: false, homes: Vec::new() };
         let code = jit_emit::compile_native(pc, &mut env);
         self.place(&code, 0, Vec::new(), pc, 1, gen, at);
         self.stats.natives_compiled += 1;

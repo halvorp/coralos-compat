@@ -119,6 +119,11 @@ pub trait OsFamily: 'static {
     fn cpu_prof(_m: &mut Self::Machine) -> Option<ppc::PpcProf> {
         None
     }
+    /// The engine's phase clock and counters for the machine's frame ledger ([`OsVTable::perf_attach`]). A family without a
+    /// ledger refuses it by name.
+    fn perf_attach(_m: &mut Self::Machine, _host: crate::perf::PerfHost) -> Result<(), String> {
+        Err(String::from("perf_attach: this guest machine keeps no frame ledger"))
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -180,12 +185,13 @@ pub struct FamilyHooks<M> {
     pub perf: fn(&mut M, u64) -> Result<Option<String>, String>,
     pub set_code_mem: fn(&mut M, ppc::PpcCodeMem) -> Result<(), String>,
     pub cpu_prof: fn(&mut M) -> Option<ppc::PpcProf>,
+    pub perf_attach: fn(&mut M, crate::perf::PerfHost) -> Result<(), String>,
 }
 
 impl<M> FamilyHooks<M> {
     /// The hooks of family `F`.
     pub fn of<F: OsFamily<Machine = M>>() -> Self {
-        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof }
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach }
     }
 }
 
@@ -347,6 +353,7 @@ trait AnySession {
     fn perf(&mut self, tsc_per_us: u64) -> Result<Option<String>, String>;
     fn set_code_mem(&mut self, mem: ppc::PpcCodeMem) -> Result<(), String>;
     fn cpu_prof(&mut self) -> Option<ppc::PpcProf>;
+    fn perf_attach(&mut self, host: crate::perf::PerfHost) -> Result<(), String>;
 }
 
 impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
@@ -364,6 +371,9 @@ impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
     }
     fn cpu_prof(&mut self) -> Option<ppc::PpcProf> {
         (self.hooks.cpu_prof)(&mut self.machine)
+    }
+    fn perf_attach(&mut self, host: crate::perf::PerfHost) -> Result<(), String> {
+        (self.hooks.perf_attach)(&mut self.machine, host)
     }
 }
 
@@ -575,6 +585,18 @@ extern "C" fn cpu_prof_impl(inst: *mut OsInstance, out: *mut ppc::PpcProf) -> i3
     CPU_PROF_OK
 }
 
+extern "C" fn perf_attach_impl(inst: *mut OsInstance, host: *const crate::perf::PerfHost) -> i32 {
+    if inst.is_null() || host.is_null() {
+        return crate::perf::PERF_ATTACH_REFUSED;
+    }
+    // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed; `host` points to a record the engine filled (copied).
+    let (session, host) = unsafe { (&mut **(inst as *mut Instance), *host) };
+    match session.perf_attach(host) {
+        Ok(()) => crate::perf::PERF_ATTACH_OK,
+        Err(_) => crate::perf::PERF_ATTACH_REFUSED,
+    }
+}
+
 /// The table for family `F`: `static TABLE: OsVTable = heirloom_os_abi::serve::vtable::<MyFamily>();`.
 pub const fn vtable<F: OsFamily>() -> OsVTable {
     vtable2::<F, F>()
@@ -598,5 +620,6 @@ pub const fn vtable2<F: OsFamily, G: OsFamily>() -> OsVTable {
         perf: perf_impl,
         set_code_mem: set_code_mem_impl,
         cpu_prof: cpu_prof_impl,
+        perf_attach: perf_attach_impl,
     }
 }

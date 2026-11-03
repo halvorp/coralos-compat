@@ -61,7 +61,20 @@ pub struct Window {
     pub poll_insns: u64,
     /// Swap-to-swap durations of the frames in this window.
     pub frames: Vec<u64>,
+    /// The ledger's frames of this window, the programmable pair they counted, and whether that pair was refused.
+    pub ledger: (Vec<crate::perf_ledger::Frame>, (usize, usize), bool),
+    /// The tier-2 ablation setting this window ran under (cpu-tier "jitablate": [`ABLATIONS`]); empty = none.
+    pub cfg: &'static str,
 }
+
+/// cpu-tier "jitablate" (h86 aot-ledger): tier 2 with its guards switched off in turn, each for [`ABLATE_WINDOWS`] perf windows
+/// (the first after a switch recompiles everything; the second is the warm one), so ONE Z83 deployment measures what each guard
+/// costs. Each knob drops a check that keeps the JIT exact for self-modifying code - a measurement setting, never a default.
+pub const ABLATIONS: [(&str, u32); 6] = {
+    use heirloom_os_abi::ppc::{KNOB_IBTC_BITS_SHIFT as I, KNOB_NO_ENTRY_GEN as G, KNOB_NO_SMC_STORE as S};
+    [("base", 0), ("nosmc", S), ("nogen", G), ("nosmc+nogen", S | G), ("ibtc12", 12 << I), ("ibtc14", 14 << I)]
+};
+pub const ABLATE_WINDOWS: u64 = 2;
 
 /// Buckets of [`Window::capture_hist`] (log2 of the clock units: 2^31 TSC cycles is ~1.5 s on the Z83).
 pub const HIST: usize = 32;
@@ -101,8 +114,6 @@ pub struct Perf {
     pub(crate) class_of: Vec<u8>,
     /// Closed windows (frames reported through it, the window), oldest first.
     done: Vec<(u64, Window)>,
-    /// Their `[HEIRLOOM-CAPTURE ...]` lines, not yet taken.
-    capture_done: Vec<String>,
     /// Per-frame instruction counts are `insns / frames`; the total frames reported so far names the line.
     pub frames_total: u64,
     /// Frames per line ([`REPORT_FRAMES`] unless the host asks otherwise).
@@ -111,10 +122,19 @@ pub struct Perf {
     pub sites: Option<alloc::collections::BTreeMap<[u32; 3], u64>>,
     /// Draws captured so far (the sampling's counter).
     pub(crate) draw_seq: u64,
+    /// The frame ledger (perf_ledger.rs): the exclusive per-frame account, the engine's half once attached.
+    pub(crate) ledger: crate::perf_ledger::Ledger,
+    /// Lines of a closed window not yet taken (the `[HEIRLOOM-PERF ...]` line first, then the ledger's).
+    pending: alloc::collections::VecDeque<String>,
+    /// Guest instructions retired at the last native's entry (the CPU's timebase): a swap is inside a native.
+    pub(crate) tb: u64,
+    /// cpu-tier "jitablate": rotate tier 2's knobs through [`ABLATIONS`] (the index of the running one).
+    pub(crate) ablate: Option<usize>,
 }
 
 impl Perf {
     pub fn now(&self) -> u64 { (self.clock)() }
+    pub(crate) fn clock_fn(&self) -> fn() -> u64 { self.clock }
     pub(crate) fn add_native(&mut self, class: Class, dt: u64) {
         self.win.native_time[class as usize] += dt;
         self.win.native_calls[class as usize] += 1;
@@ -152,20 +172,35 @@ impl Perf {
     }
 
     /// A guest swap: closes a frame; every [`REPORT_FRAMES`] frames queues a line and restarts the window.
-    pub(crate) fn swap(&mut self) {
+    /// `jit` = tier 2's cumulative events (blocks compiled, publishes, withdraws, bails) for the ledger's frame.
+    pub(crate) fn swap(&mut self, jit: [u64; 4]) {
         let now = self.now();
+        self.ledger.swap(self.clock, self.tb, jit);
         if let Some(prev) = self.last_swap { self.win.frames.push(now.wrapping_sub(prev)); }
         self.last_swap = Some(now);
         if self.win.frames.len() >= self.every.max(1) {
             self.frames_total += self.win.frames.len() as u64;
+            self.win.ledger = self.ledger.take_window();
+            self.win.cfg = self.ablate.map_or("", |k| ABLATIONS[k].0);
             let w = core::mem::take(&mut self.win);
             self.done.push((self.frames_total, w));
-            self.capture_done.push(capture_line(&self.done[self.done.len() - 1].1, self.frames_total));
         }
     }
 
-    /// The `[HEIRLOOM-CAPTURE ...]` lines of the windows closed since the last call (in clock units: they need no rate).
-    pub fn take_capture_lines(&mut self) -> Vec<String> { core::mem::take(&mut self.capture_done) }
+    /// The next line of the closed windows, at `per_us` clock units a microsecond: each window gives its `[HEIRLOOM-PERF ...]`
+    /// line, its `[HEIRLOOM-CAPTURE ...]` line (in clock units) and the frame ledger's lines (perf_ledger.rs), one per call. The
+    /// ONE output path: on CoralOS only what the engine takes here reaches the ring (the machine's log does not).
+    pub fn take_line(&mut self, per_us: u64) -> Option<String> {
+        if per_us == 0 { return None; }
+        if self.pending.is_empty() && !self.done.is_empty() {
+            let (n, w) = self.done.remove(0);
+            self.pending.push_back(report(&w, per_us, n));
+            self.pending.push_back(capture_line(&w, n));
+            let (frames, pair, refused) = &w.ledger;
+            self.pending.extend(crate::perf_ledger::lines(frames, *pair, *refused, per_us, n).into_iter().map(|l| if w.cfg.is_empty() { l } else { format!("{l} | ablate={}", w.cfg) }));
+        }
+        self.pending.pop_front()
+    }
 }
 
 /// Clock units per KiB of `bytes`.
@@ -231,7 +266,8 @@ impl<U: GuestUi> MacPpc<U> {
     /// Turn the stage clock on: `clock` is any monotonic host clock.
     pub fn perf_enable(&mut self, clock: fn() -> u64) {
         self.perf = Some(alloc::boxed::Box::new(Perf {
-            clock, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), capture_done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0,
+            clock, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0,
+            ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None,
         }));
     }
     /// Report every `n` frames instead of [`REPORT_FRAMES`] (a host harness's finer view).
@@ -242,11 +278,40 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn perf(&self) -> Option<&Perf> { self.perf.as_deref() }
     /// The next closed window as its `[HEIRLOOM-PERF ...]` line (one per [`REPORT_FRAMES`] frames), with the clock's `per_us`
     /// units per microsecond; None when no window is closed, or `per_us` is 0 (not measured yet: the window waits).
+    /// Each closed window gives its `[HEIRLOOM-PERF ...]` line, then its capture and ledger lines ([`Perf::take_line`]).
     pub fn perf_take_line(&mut self, per_us: u64) -> Option<String> {
-        let p = self.perf.as_mut()?;
-        if p.done.is_empty() || per_us == 0 { return None; }
-        let (n, w) = p.done.remove(0);
-        Some(report(&w, per_us, n))
+        self.perf.as_mut()?.take_line(per_us)
+    }
+    /// The engine's half of the frame ledger ([`heirloom_os_abi::perf::PerfHost`]): turns the stage clock on (on `clock`).
+    pub fn perf_attach(&mut self, clock: fn() -> u64, host: heirloom_os_abi::perf::PerfHost) {
+        if self.perf.is_none() { self.perf_enable(clock); }
+        if let Some(p) = self.perf.as_mut() { p.ledger.attach(host); }
+    }
+
+    /// cpu-tier "jitablate": after a swap that closed a perf window, the next [`ABLATIONS`] setting every [`ABLATE_WINDOWS`].
+    pub(crate) fn ablate_after_swap(&mut self, windows_before: u64) {
+        let Some(p) = self.perf.as_mut() else { return };
+        let Some(k) = p.ablate else { return };
+        let w = p.ledger.windows;
+        if w == windows_before || w % ABLATE_WINDOWS != 0 { return; }
+        let next = (k + 1) % ABLATIONS.len();
+        p.ablate = Some(next);
+        self.rt.exec.set_jit_knobs(ABLATIONS[next].1);
+    }
+    /// Turn the rotation on (cpu-tier "jitablate"): the stage clock goes on, the first setting runs now.
+    pub fn perf_ablate(&mut self, clock: fn() -> u64) {
+        if self.perf.is_none() { self.perf_enable(clock); }
+        if let Some(p) = self.perf.as_mut() { p.ablate = Some(0); }
+        self.rt.exec.set_jit_knobs(ABLATIONS[0].1);
+    }
+
+    /// Tier 2's cumulative events for the frame ledger: blocks compiled, publishes, withdraws (arena reuse), bails - from the CPU
+    /// library's last `read_prof` (cpu-library) or the static core's own counters.
+    pub(crate) fn jit_events(&self) -> [u64; 4] {
+        #[cfg(feature = "cpu-library")]
+        { let t = &self.rt.exec.tiers; [t.jit_compiled, t.publishes, t.withdraws, t.jit_bails] }
+        #[cfg(not(feature = "cpu-library"))]
+        { let t = self.rt.exec.jit_stats(); [t.compiled, t.publishes, t.withdraws, t.bails] }
     }
 
     /// The class of the glue call whose stub is at `addr` (cached by its glue id).
@@ -300,7 +365,7 @@ mod tests {
     #[test]
     fn reads_on_the_same_tick_close_together_are_a_poll_and_a_far_or_new_tick_read_is_not() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), capture_done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0 };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None };
         p.clock_read(5, 100, [0; 3]);
         p.clock_read(5, 400, [0; 3]); // 300 insns later, same tick: a poll
         p.clock_read(6, 500, [0; 3]); // the tick moved: not a poll
@@ -348,7 +413,7 @@ mod tests {
     #[test]
     fn the_capture_line_shows_the_draws_shape_the_sampled_split_and_the_read_passes() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), capture_done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0 };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None };
         for _ in 0..98 { p.add_capture(2000, 2048); } // 1000 a KiB: bucket 9 = [512, 1024), the edge 1024
         p.add_capture(100_000, 1024); // two stalls: 100,000 a KiB, bucket 16 [65536, 131072)
         p.add_capture(50_000, 512);
@@ -360,13 +425,14 @@ mod tests {
         assert!(line.starts_with("[HEIRLOOM-CAPTURE frames=256] per draw clk/KiB: draws=100 p50<=1024 p90<=1024 p99<=131072 tail8x=43% max_clk=100000 "), "{line}");
         assert!(line.ends_with("| sampled 1/32: n=2 kib=2 clk/KiB dst=9 cold=4500 warm=500 | read kib=256 clk/KiB guest_ram first=1000 second=100 heap first=500 second=100"), "{line}");
         // the window closes at the swap with its line, taken once
-        p.swap();
-        p.swap();
-        p.swap();
-        let lines = p.take_capture_lines();
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(lines[0].starts_with("[HEIRLOOM-CAPTURE frames=2] per draw clk/KiB: draws=100 "), "{}", lines[0]);
-        assert!(p.take_capture_lines().is_empty());
+        p.swap([0; 4]);
+        p.swap([0; 4]);
+        p.swap([0; 4]);
+        let lines: Vec<String> = core::iter::from_fn(|| p.take_line(1)).collect();
+        assert!(lines[0].starts_with("[HEIRLOOM-PERF frames=2 "), "{lines:?}");
+        assert!(lines[1].starts_with("[HEIRLOOM-CAPTURE frames=2] per draw clk/KiB: draws=100 "), "the capture line takes the one output path: {lines:?}");
+        assert!(lines.iter().filter(|l| l.starts_with("[HEIRLOOM-CAPTURE")).count() == 1, "{lines:?}");
+        assert!(p.take_line(1).is_none());
         assert_eq!(p.win.probe, CaptureProbe::default(), "the next window starts empty");
     }
 }

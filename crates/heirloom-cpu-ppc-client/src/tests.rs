@@ -265,3 +265,16 @@ fn switching_between_threads_with_equal_native_sets_allocates_nothing() {
     let _ = e.resume(&mut h, &mut a, 2);
     assert_eq!(h.calls.len(), calls + 1, "a, without it, executed the code instead");
 }
+
+/// Tier 2's ablation knobs (h86 aot-ledger, cpu-tier "jitablate") cross above the tier's low byte, and the library takes them.
+#[test]
+fn jit_knobs_cross_set_tier_above_the_tier_byte() {
+    let mut h = host(|_, _, _| true);
+    let ok = PpcCodeMem { size: core::mem::size_of::<PpcCodeMem>() as u32, flags: 0, ctx: ptr::null_mut(), reserve: refuse_reserve, publish: refuse_range, reset: refuse_range };
+    let mut e = Exec::new(Tier::Jit);
+    e.set_code_mem(ok);
+    e.set_jit_knobs(heirloom_cpu_abi::ppc::KNOB_NO_SMC_STORE);
+    let mut cpu = Cpu::new(CODE, 0x8_0000);
+    let _ = e.resume(&mut h, &mut cpu, 3);
+    assert_eq!(e.tier_set, Some(TIER_JIT | heirloom_cpu_abi::ppc::KNOB_NO_SMC_STORE << heirloom_cpu_abi::ppc::TIER_KNOB_SHIFT));
+}

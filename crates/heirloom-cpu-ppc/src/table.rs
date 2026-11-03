@@ -204,7 +204,10 @@ extern "C" fn unbind_native(inst: *mut CpuInstance, addr: u32) -> i32 {
 extern "C" fn set_tier(inst: *mut CpuInstance, tier: u32) -> i32 {
     let Some(e) = instance(inst).and_then(|i| i.exec.as_mut()) else { return -1 };
     // TIER_JIT without executable memory runs tier 1 and is named (JitStats::refused), as the static core does
-    e.tier = match tier { TIER_INTERP => Tier::Interp, TIER_BLOCKS => Tier::Blocks, TIER_JIT => Tier::Jit, TIER_JIT_BLOCKS => Tier::JitBlocks, TIER_JIT_WIDE => Tier::JitWide, _ => return -1 };
+    let knobs = tier >> heirloom_cpu_abi::ppc::TIER_KNOB_SHIFT;
+    if knobs & !heirloom_cpu_abi::ppc::KNOBS_KNOWN != 0 { return -1; }
+    e.tier = match tier & 0xFF { TIER_INTERP => Tier::Interp, TIER_BLOCKS => Tier::Blocks, TIER_JIT => Tier::Jit, TIER_JIT_BLOCKS => Tier::JitBlocks, TIER_JIT_WIDE => Tier::JitWide, _ => return -1 };
+    e.set_jit_knobs(knobs);
     0
 }
 

@@ -51,10 +51,16 @@ impl OsFamily for MacPpcFamily {
             m.perf_enable(tsc);
         }
         Ok(m.perf_take_line(tsc_per_us).map(|l| {
+            if !l.starts_with("[HEIRLOOM-PERF ") { return l; } // the ledger's lines follow the window's perf line as they are
             // which tier ran: the one asked for, and whether the library had to run tier 1 instead (no or a refused provider)
             let e = m.exec();
             format!("{l} | cpu: tier={} fell_back={}", tier_name(e.tier), e.lockstep_refused())
         }))
+    }
+    /// The engine's phase clock and counters (OS ABI v3 `perf_attach`): the stage clock goes on, with its frame ledger whole.
+    fn perf_attach(m: &mut MacPpc<LibUi>, host: heirloom_os_abi::perf::PerfHost) -> Result<(), String> {
+        m.perf_attach(tsc, host);
+        Ok(())
     }
     /// cpu-ppc.library's counters for the engine's perf line (OsVTable::cpu_prof): where the instructions ran.
     fn cpu_prof(m: &mut MacPpc<LibUi>) -> Option<heirloom_os_abi::ppc::PpcProf> {
@@ -81,7 +87,13 @@ impl OsFamily for MacPpcFamily {
         if name != CPU_TIER {
             return Err(format!("input {name:?}: the PowerPC Mac takes {CPU_TIER:?} and {HOME:?}"));
         }
-        let t = core::str::from_utf8(&bytes).ok().and_then(Tier::parse).ok_or_else(|| format!("{CPU_TIER}: {:?} is not a tier (interp, blocks, jit, jitblocks or jitwide)", String::from_utf8_lossy(&bytes)))?;
+        // "jitablate": tier 2 with its guards rotated off per perf window (perf.rs ABLATIONS) - the Z83's one-deployment A/B
+        if bytes == b"jitablate" {
+            m.exec().tier = Tier::Jit;
+            m.perf_ablate(tsc);
+            return Ok(());
+        }
+        let t = core::str::from_utf8(&bytes).ok().and_then(Tier::parse).ok_or_else(|| format!("{CPU_TIER}: {:?} is not a tier (interp, blocks, jit, jitblocks, jitwide or jitablate)", String::from_utf8_lossy(&bytes)))?;
         m.exec().tier = t;
         Ok(())
     }

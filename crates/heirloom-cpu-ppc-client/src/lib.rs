@@ -254,6 +254,8 @@ pub struct Exec {
     /// The library's last `read_prof` (after every run): where the instructions ran - tier 2 / tier 0 / natives, the rest on
     /// tier 1 - and tier 2's executable-memory calls. For the engine's perf line.
     pub tiers: PpcProf,
+    /// Tier 2's ablation knobs (`KNOB_*`, crossing `set_tier` above its low byte): the Z83's guard-cost A/B. Measurement only.
+    pub knobs: u32,
 }
 
 // SAFETY: the instance and the callbacks box are owned by this Exec alone and used only through `&mut self`; moving the Exec moves
@@ -274,12 +276,14 @@ fn refused(why: &'static str) -> RunStats { RunStats { insns: 0, halted: false, 
 impl Exec {
     pub fn new(tier: Tier) -> Exec {
         let host = Box::new(PpcHostCallbacks { size: core::mem::size_of::<PpcHostCallbacks>() as u32, flags: 0, ctx: ptr::null_mut(), on_native, on_syscall });
-        Exec { tier, prof: Prof::default(), inst: ptr::null_mut(), host, bound: BoundSet::default(), tier_set: None, lockstep_refused: false, code_mem: None, code_mem_refused: false, tiers: PpcProf::default() }
+        Exec { tier, prof: Prof::default(), inst: ptr::null_mut(), host, bound: BoundSet::default(), tier_set: None, lockstep_refused: false, code_mem: None, code_mem_refused: false, tiers: PpcProf::default(), knobs: 0 }
     }
     /// True once a resume was asked for [`Tier::Lockstep`] or [`Tier::JitLockstep`] (cpu-ppc.library serves neither: the static
     /// core does), or for [`Tier::Jit`] with no executable memory given or with the provider refused: the run used tier 1 - named
     /// here, never silent.
     pub fn lockstep_refused(&self) -> bool { self.lockstep_refused }
+    /// Tier 2's ablation knobs (`heirloom_cpu_abi::ppc::KNOB_*`), sent with the tier at the next run (the static core's name).
+    pub fn set_jit_knobs(&mut self, knobs: u32) { self.knobs = knobs; }
     /// Tier 2's executable memory (CPU ABI v3 [`PpcCodeMem`]; on CoralOS macppc.engine fills it from libcoral::codemem, behind
     /// its CapKind::ExecRegion). The record's `ctx` and functions must outlive this Exec. Without it [`Tier::Jit`] runs tier 1.
     pub fn set_code_mem(&mut self, mem: PpcCodeMem) {
@@ -307,7 +311,12 @@ impl Exec {
             Tier::JitWide if self.code_mem.is_some() && !self.code_mem_refused => TIER_JIT_WIDE,
             Tier::Lockstep | Tier::Jit | Tier::JitLockstep | Tier::JitBlocks | Tier::JitWide => { self.lockstep_refused = true; TIER_BLOCKS }
         };
-        if self.tier_set != Some(tier) { (t.set_tier)(self.inst, tier); self.tier_set = Some(tier); }
+        // the knobs ride above the tier's low byte (tier 2 only; a library that predates them refuses the word: tier alone then)
+        let word = if tier >= TIER_JIT && self.knobs != 0 { tier | self.knobs << heirloom_cpu_abi::ppc::TIER_KNOB_SHIFT } else { tier };
+        if self.tier_set != Some(word) {
+            if (t.set_tier)(self.inst, word) != 0 && word != tier { (t.set_tier)(self.inst, tier); }
+            self.tier_set = Some(word);
+        }
         self.bound.sync(t, self.inst, cpu);
         if cpu.trace_cap != 0 || !cpu.last.is_null() { (t.trace_pcs)(self.inst, cpu.trace_cap as u32); }
         cpu.last = self.inst;

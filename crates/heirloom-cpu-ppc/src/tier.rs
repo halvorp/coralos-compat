@@ -28,6 +28,8 @@ pub struct Exec {
     #[cfg(target_arch = "x86_64")]
     jit: Option<Box<crate::jit::Jit>>,
     jit_mutant: u8,
+    /// Tier 2's ablation knobs (heirloom_cpu_abi::ppc::KNOB_*): measurement settings only.
+    jit_knobs: u32,
     jit_refused: bool,
     jit_publish_after: Option<u64>,
     jit_movbe: Option<bool>,
@@ -54,7 +56,7 @@ impl Exec {
             code_mem: None,
             #[cfg(target_arch = "x86_64")]
             jit: None,
-            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_region_shape: None, jit_region_census: false,
+            jit_mutant: 0, jit_knobs: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_region_shape: None, jit_region_census: false,
         }
     }
     /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
@@ -146,6 +148,10 @@ impl Exec {
     /// test on stores, 8 / 9 the global pins not loaded after a helper / not stored at the exit, 19 a store map that stops
     /// mirroring the watch), each documented there. The JIT gates must go RED with each.
     #[doc(hidden)]
+    /// Tier 2's ABLATION knobs (`heirloom_cpu_abi::ppc::KNOB_*`, the Z83's guard-cost A/B): a change drops the compiled code.
+    pub fn set_jit_knobs(&mut self, knobs: u32) {
+        self.jit_knobs = knobs;
+    }
     pub fn plant_jit_mutant(&mut self, m: u8) {
         self.jit_mutant = m;
     }
@@ -219,7 +225,7 @@ impl Exec {
             }
             // lockstep journaling, a planted mutant or MOVBE changed since the code was made: it is dropped and remade
             if let Some(j) = self.jit.as_mut() {
-                j.reconfigure(lock, self.jit_mutant, self.jit_movbe != Some(false), self.tier == Tier::JitWide);
+                j.reconfigure(lock, self.jit_mutant, self.jit_movbe != Some(false), self.tier == Tier::JitWide, self.jit_knobs);
                 // Tier::JitBlocks: no new regions (those already formed stay until evicted or replaced)
                 let after = if self.tier == Tier::JitBlocks { 0 } else { self.jit_region_after.unwrap_or(crate::jit::REGION_AFTER) };
                 if j.region_after != after { j.set_region_after(after); }

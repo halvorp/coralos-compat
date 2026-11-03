@@ -448,7 +448,6 @@ fn wc3_host_run_with_a_gl_worker() {
     // `WC3_HEAP=lla`: everything from here on allocates through linked_list_allocator, as a CoralOS process does (tests/wc3_heap)
     if std::env::var("WC3_HEAP").as_deref() == Ok("lla") { wc3_heap::enable(8 << 30); }
     let mut heap_at = wc3_heap::counts();
-    let mut capture_at = 0usize;
     let mut ui = RecordingGuestUi::new();
     ui.refuse_audio = std::env::var("WC3_NO_AUDIO").is_ok();
     let mut m = MacPpc::for_program(ui, &app).unwrap();
@@ -556,10 +555,9 @@ fn wc3_host_run_with_a_gl_worker() {
             break;
         }
         if std::env::var("WC3_STEPS").is_ok() && i % 50 == 0 { eprintln!("STEP {i}: {st:?} {stats:?} pc={:#x} lr={:#x} cb={}", m.cpu().map_or(0, |c| c.pc), m.cpu().map_or(0, |c| c.lr), m.callback_depth()); }
-        // the capture probe's lines (perf on: one per window, into the machine's log - the engine's ring on CoralOS)
-        for l in m.mac.log.iter().skip(capture_at).filter(|l| l.starts_with("[HEIRLOOM-CAPTURE")) { eprintln!("{l} (slice {i})"); }
-        capture_at = m.mac.log.len();
+        // the stage clock's lines: per window the perf line, the capture probe's and the frame ledger's (the one output path)
         while let Some(l) = m.perf_take_line(1000) {
+            if !l.starts_with("[HEIRLOOM-PERF ") { eprintln!("{l} (slice {i})"); continue; }
             let h = wc3_heap::counts();
             eprintln!("{l} (slice {i}) | heap: calls={} kcycles={}", h.0 - heap_at.0, (h.1 - heap_at.1) / 1000);
             heap_at = h;

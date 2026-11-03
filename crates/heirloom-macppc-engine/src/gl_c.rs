@@ -197,12 +197,12 @@ impl<U: GuestUi> MacPpc<U> {
         let mut req = core::mem::take(&mut self.gl.pending);
         self.gl.sent_bytes += req.len() as u64;
         let Some(w) = self.gl.worker.as_mut() else { return Vec::new() };
-        let t0 = self.perf.as_ref().map(|p| p.now());
+        let t0 = self.perf.as_mut().map(|p| { let t = p.now(); p.ledger.clock.enter(crate::perf_ledger::L_GL_RING, t); t });
         let reply = w.transact(&req);
         // the next batch reuses this one's capacity (a gameplay frame is ~470 KB: no regrowth from zero every flush)
         req.clear();
         self.gl.pending = req;
-        if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let dt = p.now().wrapping_sub(t0); p.add_gl_ring(dt); }
+        if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let t1 = p.now(); p.ledger.clock.exit(t1); p.add_gl_ring(t1.wrapping_sub(t0)); }
         let mut out = Vec::new();
         let mut at = 0;
         while at < reply.len() {
@@ -340,7 +340,7 @@ impl<U: GuestUi> MacPpc<U> {
             },
             "aglSwapBuffers" => match self.gl.ctxs.get(&a0).copied() {
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
-                Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); if let Some(p) = self.perf.as_mut() { p.swap(); let l = p.take_capture_lines(); self.mac.log.extend(l); } }
+                Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); let jit = self.jit_events(); let w0 = self.perf.as_ref().map_or(0, |p| p.ledger.windows); if let Some(p) = self.perf.as_mut() { p.swap(jit); } self.ablate_after_swap(w0); }
             },
             "aglSetFullScreen" => match self.gl.ctxs.get(&a0).copied() {
                 // aglSetFullScreen(ctx, width, height, freq, device): the games-windowed rule - the drawable becomes a window of that size

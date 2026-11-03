@@ -745,3 +745,50 @@ fn returns_whose_addresses_collide_in_a_16k_table_hit_the_64k_ibtc() {
     assert!(got == want, "mutant 30 changes no state");
     assert!(e.jit_stats().ibtc_misses > 2_000, "mutant 30 (a 16K-entry IBTC) stayed GREEN: {:?}", e.jit_stats());
 }
+
+/// Tier 2 with ablation knobs (h86 aot-ledger: cpu-tier "jitablate", the Z83's guard-cost A/B): the knobs `knobs`, regions on
+/// (REGION_TEST) so both entry kinds are compiled under them.
+fn run_knobs(knobs: u32, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut M)) -> (End, Exec) {
+    let (mut c, mut m) = load(prog, &setup);
+    let mut e = exec(Tier::Jit, 0);
+    e.set_jit_region_after(REGION_TEST);
+    e.set_jit_knobs(knobs);
+    let end = finish(&mut e, &mut c, &mut m, slice);
+    (end, e)
+}
+
+/// Every knob setting runs every program that does not rewrite its code exactly as tier 0 (the knobs remove checks, never
+/// semantics); a smaller IBTC still hits after warm-up on the collision program's two callers 64 KiB apart (12 bits = 4K
+/// entries: F1 and F2's return addresses map apart there too).
+#[test]
+fn every_ablation_knob_keeps_code_that_does_not_rewrite_itself_exact() {
+    use heirloom_cpu_abi::ppc::{KNOB_IBTC_BITS_SHIFT as I, KNOB_NO_ENTRY_GEN as G, KNOB_NO_SMC_STORE as S};
+    for knobs in [S, G, S | G, 12 << I, 14 << I, 8 << I] {
+        // bench_smc / smc_native rewrite their own code: exactly what the guard knobs stop seeing (the negative control below)
+        for (name, prog, setup) in programs_under_test().into_iter().filter(|p| !p.0.contains("smc") || knobs & (S | G) == 0) {
+            let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
+            for slice in [1_000_000, 1_000, 13] {
+                let (got, e) = run_knobs(knobs, prog, slice, setup);
+                assert!(got == want, "{name} knobs {knobs:#x} slice {slice}: {:?}", e.jit_stats());
+            }
+        }
+    }
+    let prog = ibtc_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, ibtc_setup);
+    let (got, e) = run_knobs(12 << I, &prog, 1_000_000, ibtc_setup);
+    assert!(got == want);
+    assert!(e.jit_stats().ibtc_hits > 3_000, "a 4K-entry IBTC still serves the returns: {:?}", e.jit_stats());
+}
+
+/// NEGATIVE CONTROL: each guard knob really removes its check - with it, a store into code with no icbi leaves the stale
+/// block running (tier 0's end state is missed), so a Z83 A/B under it measures the guard's absence, not a no-op.
+#[test]
+fn negative_control_the_guard_knobs_miss_a_store_into_code() {
+    use heirloom_cpu_abi::ppc::{KNOB_NO_ENTRY_GEN as G, KNOB_NO_SMC_STORE as S};
+    let prog = smc_store_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, smc_store_setup);
+    for knobs in [S, G] {
+        let (got, _) = run_knobs(knobs, &prog, 1_000_000, smc_store_setup);
+        assert!(got != want, "knobs {knobs:#x}: the store into code went unseen (r5 {} vs {})", got.gpr[5], want.gpr[5]);
+    }
+}

@@ -100,6 +100,9 @@ pub(crate) struct Env<'a> {
     pub(crate) logged: bool,
     pub(crate) mutant: u8,
     pub(crate) table_mask: u32,
+    /// Ablation knobs (heirloom_cpu_abi::ppc::KNOB_*): KNOB_NO_SMC_STORE drops the store map's watch test, KNOB_NO_ENTRY_GEN
+    /// the entry's page-generation test - measurement settings only.
+    pub(crate) knobs: u32,
     /// Use MOVBE for big-endian loads and stores (CPUID-dispatched: jit_asm::cpu_has_movbe).
     pub(crate) movbe: bool,
     /// Every displacement and immediate in its 4-byte form (Tier::JitWide, jit_asm::Asm::wide).
@@ -178,10 +181,12 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     let a = &mut e.a;
     // entry checks: the page generation (skipped by a chained jump from this page at this generation: the INNER entry),
     // then the budget
-    a.ld64(RAX, ctx(offset_of!(Ctx, gen)));
-    let at = m(RAX, (8 * page) as i32);
-    if gen <= i32::MAX as u64 { a.alu_mi64(Alu::Cmp, at, gen as u32); } else { a.mov_ri64(RCX, gen); a.alu_rm64(Alu::Cmp, RCX, at); }
-    let b2 = a.jcc(Cc::Ne);
+    let b2 = if e.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_ENTRY_GEN == 0 {
+        a.ld64(RAX, ctx(offset_of!(Ctx, gen)));
+        let at = m(RAX, (8 * page) as i32);
+        if gen <= i32::MAX as u64 { a.alu_mi64(Alu::Cmp, at, gen as u32); } else { a.mov_ri64(RCX, gen); a.alu_rm64(Alu::Cmp, RCX, at); }
+        Some(a.jcc(Cc::Ne))
+    } else { None };
     let inner = a.pos();
     a.lea64(RAX, m(R15, ops.len() as i32));
     a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
@@ -204,7 +209,7 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     }
     let a = &mut e.a;
     a.here(b1);
-    a.here(b2);
+    if let Some(b2) = b2 { a.here(b2); }
     // a chained jump stores no pc (jit.rs exit tails): the bail names its own
     a.st32i(cpu(PC), pc);
     a.mov_ri(RAX, EXIT_BAIL);
@@ -234,7 +239,7 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
     e.dry = dry;
     e.rg = Some(Rg { pcs: nodes.iter().map(|n| n.0).collect(), maxfwd: maxfwd.to_vec(), labels: alloc::vec![None; nodes.len()], fwd: Vec::new(), backs: Vec::new(), cur: 0, rets: rets.to_vec() });
     let mut bails = Vec::new();
-    let checked = if e.env.mutant == MUT_REGION_PAGES { 1 } else { pages.len() };
+    let checked = if e.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_ENTRY_GEN != 0 { 0 } else if e.env.mutant == MUT_REGION_PAGES { 1 } else { pages.len() };
     let mut inner = 0;
     for (k, &(page, gen, _)) in pages[..checked].iter().enumerate() {
         let a = &mut e.a;
@@ -648,7 +653,7 @@ impl E<'_, '_> {
     /// generation); in lockstep the old bytes are journaled first (eax is then clobbered: the caller recomputes it).
     pub(crate) fn store_guard_n(&mut self, i: usize, bytes: u32) {
         let a = &mut self.a;
-        if self.env.mutant != MUT_NO_WATCH {
+        if self.env.mutant != MUT_NO_WATCH && self.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_SMC_STORE == 0 {
             a.mov_rr(RCX, RAX);
             a.sh_ri(Sh::Shr, RCX, 12);
             a.alu_rm64(Alu::Add, RCX, ctx(offset_of!(Ctx, smap)));

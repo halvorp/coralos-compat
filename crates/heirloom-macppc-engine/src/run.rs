@@ -150,6 +150,14 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// Run at most `budget` instructions.
     pub fn step(&mut self, budget: u64) -> (Step, RunStats) {
+        // the frame ledger's `step_other`: everything in a step but the CPU library's run (perf_ledger.rs)
+        if let Some(p) = self.perf.as_mut() { let t = p.now(); p.ledger.clock.enter(crate::perf_ledger::L_STEP_OTHER, t); }
+        let r = self.step_inner(budget);
+        if let Some(p) = self.perf.as_mut() { let t = p.now(); p.ledger.clock.exit(t); }
+        r
+    }
+
+    fn step_inner(&mut self, budget: u64) -> (Step, RunStats) {
         let gone = RunStats { halted: true, blocked: false, ..idle() };
         if let Some(f) = &self.rt.fault { return (Step::Fault(f.clone()), gone); }
         let Some(mut cpu) = self.rt.cpu.take() else { return (Step::Exited, gone) };
@@ -181,10 +189,10 @@ impl<U: GuestUi> MacPpc<U> {
         }
         self.sync_natives(&mut cpu);
         let mut exec = core::mem::take(&mut self.rt.exec);
-        let t0 = self.perf.as_ref().map(|p| p.now());
+        let t0 = self.perf.as_mut().map(|p| { p.ledger.run_begin(p.clock_fn()); p.now() });
         let stats = exec.resume(self, &mut cpu, budget);
         self.rt.exec = exec;
-        if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let dt = p.now().wrapping_sub(t0); p.add_step(dt, stats.insns); }
+        if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let dt = p.now().wrapping_sub(t0); p.add_step(dt, stats.insns); p.ledger.run_end(p.clock_fn()); }
         heirloom_mac68k_engine::qd::flush(&mut self.mac);
         if let Some(t) = stats.trap {
             let mut why = format!("PowerPC fault: {t}");
@@ -265,9 +273,13 @@ impl<U: GuestUi> Host for MacPpc<U> {
         let Some(p) = self.perf.as_mut() else { return self.native_call(cpu, addr) };
         if class == crate::perf::Class::Clock { p.clock_read(tick, cpu.tb, site); }
         let t0 = p.now();
+        p.tb = cpu.tb;
+        p.ledger.clock.enter(1 + class as usize, t0);
         let served = self.native_call(cpu, addr);
         if let Some(p) = self.perf.as_mut() {
-            let dt = p.now().wrapping_sub(t0);
+            let t1 = p.now();
+            p.ledger.clock.exit(t1);
+            let dt = t1.wrapping_sub(t0);
             p.add_native(class, dt);
             if draw { (p.win.draw_time, p.win.draws) = (p.win.draw_time + dt, p.win.draws + 1); }
         }

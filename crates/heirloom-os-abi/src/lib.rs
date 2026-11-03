@@ -24,6 +24,7 @@ pub use heirloom_cpu_abi as cpu_abi;
 /// The PowerPC CPU contract (CPU ABI v3) a PowerPC family binds.
 pub use heirloom_cpu_abi::ppc;
 
+pub mod perf; // the engine's half of the machine's frame ledger (perf_attach): its phase clock and its thread's counters
 #[cfg(feature = "serve")]
 extern crate alloc;
 #[cfg(feature = "serve")]
@@ -185,6 +186,10 @@ pub struct OsVTable {
     /// tier 2 / tier 1 / tier 0, the executable-memory calls), into the engine's record under [`ppc::PpcProf`]'s size contract
     /// (the caller sets `size`; 0 = the first version's fields). See CPU_PROF_*.
     pub cpu_prof: extern "C" fn(inst: *mut OsInstance, out: *mut ppc::PpcProf) -> i32,
+    /// APPENDED 2026-11-03 (h86 aot-ledger), present when [`has_perf_attach`] (the version stays 3): the engine's phase clock and
+    /// its thread's hardware counters for the machine's frame ledger ([`perf::PerfHost`], copied; its pointers must outlive the
+    /// instance). Turns the stage clock on. See `perf::PERF_ATTACH_*`.
+    pub perf_attach: extern "C" fn(inst: *mut OsInstance, host: *const perf::PerfHost) -> i32,
 }
 
 /// The byte size of a version-1 table (the four header words' entries up to `apply`).
@@ -196,6 +201,8 @@ pub const OS_TABLE_V2_SIZE: u32 = core::mem::offset_of!(OsVTable, attach_gl) as 
 pub const OS_TABLE_V3_SIZE: u32 = core::mem::offset_of!(OsVTable, cpu_prof) as u32;
 /// Whether a table checked by [`check_ptr`] carries [`OsVTable::cpu_prof`].
 pub fn has_cpu_prof(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, cpu_prof) + core::mem::size_of::<usize>() }
+/// Whether a table checked by [`check_ptr`] carries [`OsVTable::perf_attach`].
+pub fn has_perf_attach(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, perf_attach) + core::mem::size_of::<usize>() }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenRefusal {
@@ -290,9 +297,10 @@ mod tests {
     extern "C" fn perf(_: *mut OsInstance, _: u64, _: *mut u8, _: usize, _: *mut usize) -> i32 { PERF_REFUSED }
     extern "C" fn code_mem(_: *mut OsInstance, _: *const ppc::PpcCodeMem) -> i32 { CODE_MEM_REFUSED }
     extern "C" fn cpu_prof(_: *mut OsInstance, _: *mut ppc::PpcProf) -> i32 { CPU_PROF_REFUSED }
+    extern "C" fn perf_attach(_: *mut OsInstance, _: *const perf::PerfHost) -> i32 { perf::PERF_ATTACH_REFUSED }
 
     fn table(version: u32, size: u32, family: u32) -> OsVTable {
-        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof }
+        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof, perf_attach }
     }
 
     /// `cpu_prof` was appended to version 3: a v3 library built before it still opens (its size is OS_TABLE_V3_SIZE) and an
@@ -304,6 +312,9 @@ mod tests {
         assert!(!has_cpu_prof(&before));
         let now = table(OS_ABI_VERSION, core::mem::size_of::<OsVTable>() as u32, FAMILY_MAC68K);
         assert!(has_cpu_prof(&now));
+        assert!(has_perf_attach(&now));
+        let before_attach = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, perf_attach) as u32, FAMILY_MAC68K);
+        assert!(has_cpu_prof(&before_attach) && !has_perf_attach(&before_attach), "a library from before perf_attach is never called past its end");
         let short = table(OS_ABI_VERSION, OS_TABLE_V3_SIZE - 8, FAMILY_MAC68K);
         assert_eq!(unsafe { check_ptr(&short, OS_ABI_VERSION, FAMILY_MACPPC) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V3_SIZE - 8, required: OS_TABLE_V3_SIZE }));
     }

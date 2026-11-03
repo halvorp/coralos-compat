@@ -57,6 +57,7 @@ pub mod source;
 pub mod mp;
 pub mod sched;
 pub mod perf; // the opt-in stage clock: where a guest frame's time goes ([HEIRLOOM-PERF] lines)
+pub mod perf_ledger; // the stage clock's frame ledger: one exclusive account per guest frame ([HEIRLOOM-LEDGER] / [HEIRLOOM-HW])
 pub mod stdclib;
 pub mod threads;
 pub mod alias_c;

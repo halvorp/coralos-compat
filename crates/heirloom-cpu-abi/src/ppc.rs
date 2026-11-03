@@ -418,6 +418,20 @@ pub const TIER_JIT_BLOCKS: u32 = 3;
 /// Tier 2 with WIDE code (appended 2026-11-03, h86 ppc-jit6): every displacement and immediate 4 bytes long, the instructions
 /// unchanged - the silicon A/B for what code size costs. A library that predates it answers -1 and keeps its tier.
 pub const TIER_JIT_WIDE: u32 = 4;
+/// `set_tier`'s word above its low byte (appended 2026-11-03, h86 aot-ledger): tier 2's ABLATION KNOBS, `tier | knobs << 8` - the
+/// Z83's A/B switches for what each guard costs, measured in one deployment (the engine rotates them per perf window). Every
+/// knob drops a check that keeps the JIT exact for self-modifying code, so each is a MEASUREMENT setting, never a default; a
+/// library that predates them answers -1 and keeps its tier.
+pub const TIER_KNOB_SHIFT: u32 = 8;
+/// Guest stores check RAM bounds only, not the per-page store map's watch bit (stores into decoded code go unseen).
+pub const KNOB_NO_SMC_STORE: u32 = 1;
+/// Block and region entries skip the code-page generation check (a rewritten page's stale block runs).
+pub const KNOB_NO_ENTRY_GEN: u32 = 2;
+/// Bits 8..12 of the knobs: the IBTC's index bits (8..=16 entries' log2; 0 = the default 16, 64K entries / 512 KiB).
+pub const KNOB_IBTC_BITS_SHIFT: u32 = 8;
+pub const KNOB_IBTC_BITS_MASK: u32 = 0x1F;
+/// The knob bits a library may be asked for (anything else: -1).
+pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
 
 /// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
 /// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;
