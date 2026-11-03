@@ -82,14 +82,20 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// Queue a draw command captured from guest memory (without copying the memory).
-    pub(super) fn gl_queue_draw(&mut self, token: Token, who: &str, cap: impl FnOnce(&[u8]) -> Result<DrawCommand, heirloom_gl_abi::snapshot::SnapshotError>) -> Result<(), String> {
+    /// Capture a draw into the engine's reused draw buffer (`cap` fills it from guest RAM) and queue it; a capture that fails is
+    /// GL_INVALID_VALUE and sends nothing.
+    pub(super) fn gl_queue_draw(&mut self, token: Token, who: &str, cap: impl FnOnce(&[u8], &mut DrawCommand, &mut Vec<heirloom_gl_abi::snapshot::ArraySnapshot>) -> Result<(), heirloom_gl_abi::snapshot::SnapshotError>) -> Result<(), String> {
         let len = self.mac.mem.len().min(u32::MAX as usize) as u32;
         let r = {
             let mem = self.mac.mem.span(0, len).and_then(|s| self.mac.mem.bytes(s)).map_err(|_| format!("{who}: guest RAM is not addressable"))?;
-            cap(mem)
+            cap(mem, &mut self.gl.draw, &mut self.gl.spare)
         };
         match r {
-            Ok(d) => self.gl_queue(token, Command::Draw(d)),
+            Ok(()) => {
+                let f = Frame { token, command: Command::Draw(core::mem::take(&mut self.gl.draw)) };
+                f.encode_into(&mut self.gl.pending);
+                if let Command::Draw(d) = f.command { self.gl.draw = d; }
+            }
             Err(e) => { self.gl_set_error(GL_INVALID_VALUE); self.gl_note(format!("[HEIRLOOM-GL] {who} refused: {e:?}")); }
         }
         Ok(())
@@ -138,7 +144,7 @@ impl<U: GuestUi> MacPpc<U> {
                 if a0 > 9 { self.gl_set_error(GL_INVALID_ENUM); return Ok(Some(0)); }
                 if (a2 as i32) < 0 || (a1 as i32) < 0 { self.gl_set_error(GL_INVALID_VALUE); return Ok(Some(0)); }
                 let Some(descs) = self.gl_enabled_descriptors() else { return Ok(Some(0)); };
-                self.gl_queue_draw(t, name, |mem| DrawCommand::capture_arrays(mem, a0, a1, a2, &descs))?;
+                self.gl_queue_draw(t, name, |mem, d, _| { *d = DrawCommand::capture_arrays(mem, a0, a1, a2, &descs)?; Ok(()) })?;
             }
             "glDrawRangeElements" => {
                 // glDrawRangeElements(mode, start, end, count, type, indices) = glDrawElements for indices within [start, end] (§2.8)
@@ -149,7 +155,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let it = match ElemType::from_gl(ty) { Some(t @ (ElemType::U8 | ElemType::U16 | ElemType::U32)) => t, _ => { self.gl_set_error(GL_INVALID_ENUM); return Ok(Some(0)); } };
                 let Some(descs) = self.gl_enabled_descriptors() else { return Ok(Some(0)); };
                 let off = self.mac.mem.strip(ptr) as usize;
-                self.gl_queue_draw(t, name, |mem| DrawCommand::capture(mem, a0, off, count, it, &descs))?;
+                self.gl_queue_draw(t, name, |mem, d, spare| d.capture_into(spare, mem, a0, off, count, it, &descs))?;
             }
             "glArrayElement" => return self.gl_array_element(a0 as i32).map(|()| Some(0)),
             "glPushClientAttrib" => {

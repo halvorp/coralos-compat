@@ -147,6 +147,11 @@ pub struct GlState {
     sigs: Vec<Option<&'static heirloom_gl_abi::family::Sig>>,
     /// Per contract entry: how `gl_call` dispatches it (`hot::Hot`), made once at the first call.
     routes: Vec<hot::Hot>,
+    /// The draw being captured, the array snapshots it does not use now, and its enabled arrays' descriptors: buffers reused draw
+    /// after draw (`gl_queue_draw`), so a frame's draws allocate nothing once warm.
+    draw: DrawCommand,
+    spare: Vec<heirloom_gl_abi::snapshot::ArraySnapshot>,
+    descs: Vec<Descriptor>,
     /// The argument words of the call being encoded: one buffer reused call after call ([`MacPpc::gl_words`]), not a `Vec` each.
     words: Vec<u64>,
 }

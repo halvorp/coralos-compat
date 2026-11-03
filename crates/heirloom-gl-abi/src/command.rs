@@ -1,7 +1,7 @@
 //! Ring frames. Layout, every field little-endian:
 //! `u16 abi_version | u16 kind | u32 payload_len | u32 token.slot | u32 token.incarnation | payload`.
 //! The version is FIRST so a reader refuses an unknown layout before it parses anything else.
-use crate::snapshot::{snapshot_array, snapshot_indices, ArraySnapshot, Descriptor, ElemType, Role, SnapshotError};
+use crate::snapshot::{snapshot_array, snapshot_array_into, snapshot_indices_into, ArraySnapshot, Descriptor, ElemType, Role, SnapshotError};
 use crate::token::Token;
 use crate::wire::{Reader, WireError, Writer, ABI_VERSION};
 use alloc::string::String;
@@ -41,16 +41,44 @@ impl DrawCommand {
 
     /// Capture a `glDrawElements` NOW: indices converted, arrays snapshotted over exactly `min..=max` index.
     pub fn capture(mem: &[u8], mode: u32, index_off: usize, count: u32, ty: ElemType, arrays: &[Descriptor]) -> Result<DrawCommand, SnapshotError> {
-        let indices = snapshot_indices(mem, index_off, count, ty)?;
-        let mut snaps = Vec::new();
-        if let Some((lo, hi)) = indices.range {
-            let n = (hi - lo).checked_add(1).ok_or(SnapshotError::Overflow)?;
-            for d in arrays {
-                snaps.push(snapshot_array(mem, d, lo, n)?);
-            }
-        }
-        Ok(DrawCommand { mode, indices, arrays: snaps })
+        let mut d = DrawCommand::empty();
+        d.capture_into(&mut Vec::new(), mem, mode, index_off, count, ty, arrays)?;
+        Ok(d)
     }
+
+    /// A draw with no indices and no arrays (also its `Default`): the reusable buffer [`DrawCommand::capture_into`] fills.
+    pub fn empty() -> DrawCommand {
+        DrawCommand { mode: 0, indices: crate::snapshot::IndexSnapshot { ty: ElemType::U16, count: 0, data: Vec::new(), range: None }, arrays: Vec::new() }
+    }
+
+    /// [`DrawCommand::capture`] into this draw, reusing its buffers: array snapshots it no longer needs go to `spare` and are taken
+    /// back from it, so a draw path that captures every frame allocates nothing once warm. On an error the draw is unspecified.
+    pub fn capture_into(&mut self, spare: &mut Vec<ArraySnapshot>, mem: &[u8], mode: u32, index_off: usize, count: u32, ty: ElemType, arrays: &[Descriptor]) -> Result<(), SnapshotError> {
+        self.mode = mode;
+        snapshot_indices_into(mem, index_off, count, ty, &mut self.indices)?;
+        let used = match self.indices.range {
+            Some((lo, hi)) => {
+                let n = (hi - lo).checked_add(1).ok_or(SnapshotError::Overflow)?;
+                for (k, d) in arrays.iter().enumerate() {
+                    if self.arrays.len() <= k {
+                        let blank = || ArraySnapshot { role: d.role, unit: 0, size: 1, ty: d.ty, first: 0, count: 0, data: Vec::new() };
+                        self.arrays.push(spare.pop().unwrap_or_else(blank));
+                    }
+                    snapshot_array_into(mem, d, lo, n, &mut self.arrays[k])?;
+                }
+                arrays.len()
+            }
+            None => 0,
+        };
+        while self.arrays.len() > used {
+            spare.extend(self.arrays.pop());
+        }
+        Ok(())
+    }
+}
+
+impl Default for DrawCommand {
+    fn default() -> DrawCommand { DrawCommand::empty() }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

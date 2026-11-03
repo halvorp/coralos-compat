@@ -1,7 +1,7 @@
 //! The engine's per-call GL path does not allocate: the hottest calls of a game frame (Warcraft III gameplay: glActiveTextureARB,
-//! glEnable/glDisable, glMatrixMode + glLoadMatrixf, glBindTexture, glTexEnvi, glBlendFunc, glMaterialfv) encode their words into
-//! one reused buffer and the batch, so the allocator is reached only when the batch itself grows (amortised, a handful of times
-//! for thousands of calls). Counted with a counting global allocator around the calls alone.
+//! glEnable/glDisable, glMatrixMode + glLoadMatrixf, glBindTexture, glTexEnvi, glBlendFunc, glMaterialfv, and glDrawElements over
+//! client arrays) encode their words, and capture their draws, into reused buffers and the batch, so the allocator is reached
+//! only when the batch itself grows (amortised, a handful of times for thousands of calls). Counted with a counting global allocator around the calls alone.
 use heirloom_gl_abi::command::peek_len;
 use heirloom_gl_abi::{Command, Frame, Token, TokenTable};
 use heirloom_macppc_engine::cpu::{Cpu, Host};
@@ -68,11 +68,11 @@ fn gl(m: &mut MacPpc<RecordingGuestUi>, cpu: &mut Cpu, stub: u32, args: &[u32]) 
 }
 
 #[test]
-fn the_hot_gl_calls_of_a_frame_do_not_allocate_per_call() {
+fn the_hot_gl_calls_and_draws_of_a_frame_do_not_allocate_per_call() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     m.gl_attach(Box::new(Mock(TokenTable::default())));
     let names = ["aglChoosePixelFormat", "aglCreateContext", "aglSetCurrentContext", "glActiveTextureARB", "glEnable", "glDisable", "glMatrixMode",
-        "glLoadMatrixf", "glBindTexture", "glTexEnvi", "glBlendFunc", "glMaterialfv"];
+        "glLoadMatrixf", "glBindTexture", "glTexEnvi", "glBlendFunc", "glMaterialfv", "glVertexPointer", "glEnableClientState", "glDrawElements"];
     let k: Vec<u32> = names.iter().map(|n| {
         m.bind_from("OpenGLLibrary", n);
         let id = m.glue.intern(&mut m.mac, "OpenGLLibrary", n).unwrap();
@@ -93,13 +93,18 @@ fn the_hot_gl_calls_of_a_frame_do_not_allocate_per_call() {
         gl(m, cpu, k[9], &[0x2300, 0x2200, 0x2100]);
         gl(m, cpu, k[10], &[0x0302, 0x0303]);
         gl(m, cpu, k[11], &[0x0408, 0x1201, MATRIX]);
+        gl(m, cpu, k[14], &[4, 3, 0x1403, MATRIX + 0x80]);
     };
+    // three vertices of 3 floats (big-endian zeros are valid floats) after the matrix, and indices 0, 1, 2
+    for (k, i) in [0u16, 1, 2].iter().enumerate() { m.mac.mem.write_u16(MATRIX + 0x80 + 2 * k as u32, *i).unwrap(); }
+    gl(&mut m, &mut cpu, k[12], &[3, 0x1406, 0, MATRIX + 0x40]);
+    gl(&mut m, &mut cpu, k[13], &[0x8074]);
     frame(&mut m, &mut cpu); // warm: the reused buffers exist
     ALLOCS.store(0, Ordering::Relaxed);
     ON.with(|o| o.set(true));
     for _ in 0..1000 { frame(&mut m, &mut cpu); }
     ON.with(|o| o.set(false));
     let n = ALLOCS.load(Ordering::Relaxed);
-    // 9,000 calls; only the batch's own amortised growth may allocate (~log2 of its final size)
-    assert!(n < 64, "{n} allocations for 9,000 GL calls");
+    // 10,000 calls incl. 1,000 draws; only the batch's own amortised growth may allocate (~log2 of its final size)
+    assert!(n < 64, "{n} allocations for 10,000 GL calls");
 }

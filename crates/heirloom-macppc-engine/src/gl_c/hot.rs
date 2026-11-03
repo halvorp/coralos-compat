@@ -108,10 +108,14 @@ impl<U: GuestUi> MacPpc<U> {
                 let Some(t) = self.gl_ctx_token() else { self.gl_set_error(GL_INVALID_OPERATION); return Ok(()); };
                 if mode > 9 || (count as i32) < 0 { self.gl_set_error(if mode > 9 { GL_INVALID_ENUM } else { GL_INVALID_VALUE }); return Ok(()); }
                 let it = match ElemType::from_gl(ty) { Some(t @ (ElemType::U8 | ElemType::U16 | ElemType::U32)) => t, _ => { self.gl_set_error(GL_INVALID_ENUM); return Ok(()); } };
-                let descs: Vec<Descriptor> = self.gl.enabled.iter().filter_map(|k| self.gl.arrays.get(k).copied()).collect();
-                if descs.len() != self.gl.enabled.len() { self.gl_set_error(GL_INVALID_OPERATION); return Ok(()); } // enabled with no pointer set
+                let mut descs = core::mem::take(&mut self.gl.descs);
+                descs.clear();
+                descs.extend(self.gl.enabled.iter().filter_map(|k| self.gl.arrays.get(k).copied()));
+                if descs.len() != self.gl.enabled.len() { self.gl.descs = descs; self.gl_set_error(GL_INVALID_OPERATION); return Ok(()); } // enabled with no pointer set
                 let off = self.mac.mem.strip(ptr) as usize;
-                self.gl_queue_draw(t, "glDrawElements", |mem| DrawCommand::capture(mem, mode, off, count, it, &descs))?;
+                let r = self.gl_queue_draw(t, "glDrawElements", |mem, d, spare| d.capture_into(spare, mem, mode, off, count, it, &descs));
+                self.gl.descs = descs;
+                r?;
             }
             Hot::LockArrays => { /* arrays are read at the draw; the lock's promise (no change) is honoured trivially */ }
             Hot::Rest | Hot::State => return Err(format!("{name}: routed to the per-frame calls by mistake ({hot:?})")),

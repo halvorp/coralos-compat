@@ -127,13 +127,23 @@ fn to_wire_order(ty: ElemType, bytes: &mut [u8]) {
 
 /// Snapshot vertices `first .. first+count` of `d` out of guest memory `mem`.
 pub fn snapshot_array(mem: &[u8], d: &Descriptor, first: u32, count: u32) -> Result<ArraySnapshot, SnapshotError> {
+    let mut out = ArraySnapshot { role: d.role, unit: d.unit, size: d.size, ty: d.ty, first, count, data: Vec::new() };
+    snapshot_array_into(mem, d, first, count, &mut out)?;
+    Ok(out)
+}
+
+/// [`snapshot_array`] into `out`, reusing its buffer (a draw path that snapshots every frame allocates nothing once warm). On an
+/// error `out` is unspecified.
+pub fn snapshot_array_into(mem: &[u8], d: &Descriptor, first: u32, count: u32, out: &mut ArraySnapshot) -> Result<(), SnapshotError> {
     if !(1..=4).contains(&d.size) {
         return Err(SnapshotError::BadSize(d.size));
     }
     let vbytes = (d.size as usize).checked_mul(d.ty.bytes()).ok_or(SnapshotError::Overflow)?;
     let stride = if d.stride == 0 { vbytes } else { d.stride as usize };
     let total = (count as usize).checked_mul(vbytes).ok_or(SnapshotError::Overflow)?;
-    let mut data = Vec::new();
+    (out.role, out.unit, out.size, out.ty, out.first, out.count) = (d.role, d.unit, d.size, d.ty, first, count);
+    let data = &mut out.data;
+    data.clear();
     if count > 0 {
         // Prove the whole range (first vertex .. end of the last vertex) lies inside guest memory BEFORE allocating.
         let start = (first as usize).checked_mul(stride).and_then(|o| o.checked_add(d.offset)).ok_or(SnapshotError::Overflow)?;
@@ -151,9 +161,9 @@ pub fn snapshot_array(mem: &[u8], d: &Descriptor, first: u32, count: u32) -> Res
                 data.extend_from_slice(&mem[at..at + vbytes]);
             }
         }
-        to_wire_order(d.ty, &mut data);
+        to_wire_order(d.ty, data);
     }
-    Ok(ArraySnapshot { role: d.role, unit: d.unit, size: d.size, ty: d.ty, first, count, data })
+    Ok(())
 }
 
 /// Indices of one draw: little-endian bytes plus the range they reference.
@@ -169,6 +179,13 @@ pub struct IndexSnapshot {
 /// Snapshot `count` indices of type `ty` at `offset` and compute the vertex range they reference (from the converted
 /// values, never from the raw guest bytes).
 pub fn snapshot_indices(mem: &[u8], offset: usize, count: u32, ty: ElemType) -> Result<IndexSnapshot, SnapshotError> {
+    let mut out = IndexSnapshot { ty, count, data: Vec::new(), range: None };
+    snapshot_indices_into(mem, offset, count, ty, &mut out)?;
+    Ok(out)
+}
+
+/// [`snapshot_indices`] into `out`, reusing its buffer. On an error `out` is unspecified.
+pub fn snapshot_indices_into(mem: &[u8], offset: usize, count: u32, ty: ElemType, out: &mut IndexSnapshot) -> Result<(), SnapshotError> {
     if !matches!(ty, ElemType::U8 | ElemType::U16 | ElemType::U32) {
         return Err(SnapshotError::BadIndexType);
     }
@@ -177,8 +194,10 @@ pub fn snapshot_indices(mem: &[u8], offset: usize, count: u32, ty: ElemType) -> 
     if end > mem.len() {
         return Err(SnapshotError::OutOfRange);
     }
-    let mut data = mem[offset..end].to_vec();
-    to_wire_order(ty, &mut data);
+    let data = &mut out.data;
+    data.clear();
+    data.extend_from_slice(&mem[offset..end]);
+    to_wire_order(ty, data);
     let mut range: Option<(u32, u32)> = None;
     for c in data.chunks_exact(ty.bytes()) {
         let v = match ty {
@@ -188,5 +207,6 @@ pub fn snapshot_indices(mem: &[u8], offset: usize, count: u32, ty: ElemType) -> 
         };
         range = Some(range.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))));
     }
-    Ok(IndexSnapshot { ty, count, data, range })
+    (out.ty, out.count, out.range) = (ty, count, range);
+    Ok(())
 }
