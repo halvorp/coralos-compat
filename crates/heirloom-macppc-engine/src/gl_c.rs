@@ -149,6 +149,8 @@ pub struct GlState {
     sigs: Vec<Option<&'static heirloom_gl_abi::family::Sig>>,
     /// Per contract entry: how `gl_call` dispatches it (`hot::Hot`), made once at the first call.
     routes: Vec<hot::Hot>,
+    /// Per contract entry: [`MacPpc::gl_plain`], made once at the first call.
+    plain: Vec<bool>,
     /// The draw being captured, the array snapshots it does not use now, and its enabled arrays' descriptors: buffers reused draw
     /// after draw (`gl_queue_draw`), so a frame's draws allocate nothing once warm.
     draw: DrawCommand,
@@ -218,6 +220,16 @@ impl<U: GuestUi> MacPpc<U> {
         self.gl_flush().into_iter().find_map(|c| if let Command::Reply { status, words, text } = c { Some((status, words, text)) } else { None })
     }
 
+    /// Whether `entry` is PLAIN: implemented (admit_call admits it), a `gl*` call, and not one of the calls the glBegin/glEnd and
+    /// display-list state machines act on (glBegin, glEnd, glNewList, glEndList). Outside glBegin/glEnd and list compilation such a
+    /// call's begin/end gate always passes, so `gl_call` routes it without the gate's name matching (made once per entry).
+    fn gl_plain(&mut self, entry: u16) -> bool {
+        if self.gl.plain.is_empty() {
+            self.gl.plain = ENTRIES.iter().map(|e| e.implemented && e.name.starts_with("gl") && !matches!(e.name, "glBegin" | "glEnd" | "glNewList" | "glEndList")).collect();
+        }
+        self.gl.plain.get(usize::from(entry)).copied().unwrap_or(false)
+    }
+
     /// The generated family signature of contract entry `entry`, if it is a family call.
     fn gl_sig(&mut self, entry: u16) -> Option<&'static heirloom_gl_abi::family::Sig> {
         if self.gl.sigs.is_empty() { self.gl.sigs = ENTRIES.iter().map(|e| heirloom_gl_abi::family::lookup(e.name)).collect(); }
@@ -236,6 +248,23 @@ impl<U: GuestUi> MacPpc<U> {
     fn gl_note(&mut self, line: String) { self.mac.log.push(line); }
 
     pub(crate) fn gl_call(&mut self, f: GlFn, cpu: &mut Cpu) -> Result<(), String> {
+        // the per-frame calls of a plain entry, outside glBegin/glEnd and display-list compilation: straight to their route
+        if self.gl_plain(f.0) {
+            let inside = self.gl.current_token.is_some() && (self.gl.begin_ctx == Some(self.gl.current) || self.gl.list_ctx == Some(self.gl.current));
+            if !inside {
+                match self.gl_route(f.0) {
+                    hot::Hot::Rest => {}
+                    hot::Hot::State => {
+                        let r = self.gl_state_call(ENTRIES[usize::from(f.0)].name, f.0, cpu)?;
+                        return self.gl_finish(cpu, r);
+                    }
+                    h => {
+                        self.gl_hot_call(h, f.0, ENTRIES[usize::from(f.0)].name, [cpu.gpr[3], cpu.gpr[4], cpu.gpr[5], cpu.gpr[6]])?;
+                        return self.gl_finish(cpu, 0);
+                    }
+                }
+            }
+        }
         if let Err(r) = admit_call(ENTRIES, f.0) {
             let m = refusal_marker(&r);
             self.gl_note(m.clone());

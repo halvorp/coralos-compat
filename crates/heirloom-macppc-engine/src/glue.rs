@@ -27,8 +27,16 @@ pub struct Glue {
     by_key: BTreeMap<(String, String), usize>,
     /// `id_at_stub` answers by stub address, direct-mapped (a cell's stub never moves and its id never changes once interned, so a
     /// remembered answer stays true): every glue call asks, twice with the stage clock on, and the chunk walk was ~46 host
-    /// instructions a call. (pc, id + 1); 0 = empty.
-    memo: [core::cell::Cell<(u32, u32)>; 32],
+    /// instructions a call. (pc, id + 1); 0 = empty. One slot per cell of a chunk ([`MEMO`]): a game's hot natives are spread over
+    /// the ~1,300 interned cells, and 32 slots made the GL calls of one Warcraft III frame evict each other.
+    memo: Memo,
+}
+
+/// Slots of [`Glue`]'s stub memo: a chunk's worth, so cells of one chunk never share a slot.
+const MEMO: usize = CHUNK_CELLS as usize;
+struct Memo([core::cell::Cell<(u32, u32)>; MEMO]);
+impl Default for Memo {
+    fn default() -> Memo { Memo([const { core::cell::Cell::new((0, 0)) }; MEMO]) }
 }
 
 /// The libraries whose exports are the Macintosh Toolbox under the Universal Interfaces' C names: InterfaceLib itself, CarbonLib, and the
@@ -84,7 +92,7 @@ impl Glue {
 
     /// The id of the cell whose STUB is at `pc`, if any.
     pub fn id_at_stub(&self, pc: u32) -> Option<usize> {
-        let slot = &self.memo[((pc / CELL) % 32) as usize];
+        let slot = &self.memo.0[(pc / CELL) as usize % MEMO];
         let (p, id) = slot.get();
         if p == pc && id != 0 { return Some(id as usize - 1); }
         let found = self.id_at_stub_walk(pc);

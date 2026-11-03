@@ -113,7 +113,7 @@ impl<U: GuestUi> MacPpc<U> {
                 descs.extend(self.gl.enabled.iter().filter_map(|k| self.gl.arrays.get(k).copied()));
                 if descs.len() != self.gl.enabled.len() { self.gl.descs = descs; self.gl_set_error(GL_INVALID_OPERATION); return Ok(()); } // enabled with no pointer set
                 let off = self.mac.mem.strip(ptr) as usize;
-                let r = self.gl_queue_draw(t, "glDrawElements", |mem, d, spare| d.capture_into(spare, mem, mode, off, count, it, &descs));
+                let r = self.gl_queue_draw_elements(t, "glDrawElements", mode, off, count, it, &descs);
                 self.gl.descs = descs;
                 r?;
             }

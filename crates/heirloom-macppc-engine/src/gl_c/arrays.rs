@@ -101,6 +101,18 @@ impl<U: GuestUi> MacPpc<U> {
         Ok(())
     }
 
+    /// Capture a `glDrawElements` / `glDrawRangeElements` straight into the pending batch (`Frame::encode_draw_elements_into`: the
+    /// bytes of the snapshot path, written once); a capture that fails is GL_INVALID_VALUE and sends nothing.
+    pub(super) fn gl_queue_draw_elements(&mut self, token: Token, who: &str, mode: u32, off: usize, count: u32, ty: ElemType, descs: &[Descriptor]) -> Result<(), String> {
+        let len = self.mac.mem.len().min(u32::MAX as usize) as u32;
+        let mem = self.mac.mem.span(0, len).and_then(|s| self.mac.mem.bytes(s)).map_err(|_| format!("{who}: guest RAM is not addressable"))?;
+        if let Err(e) = Frame::encode_draw_elements_into(&mut self.gl.pending, token, mem, mode, off, count, ty, descs) {
+            self.gl_set_error(GL_INVALID_VALUE);
+            self.gl_note(format!("[HEIRLOOM-GL] {who} refused: {e:?}"));
+        }
+        Ok(())
+    }
+
     /// The call `name` if it is one of this module's; `None` otherwise.
     pub(super) fn gl_array_call(&mut self, name: &str, entry: u16, cpu: &mut Cpu) -> Result<Option<u32>, String> {
         let a = |m: &Self, k: usize| arg(m, cpu, k);
@@ -155,7 +167,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let it = match ElemType::from_gl(ty) { Some(t @ (ElemType::U8 | ElemType::U16 | ElemType::U32)) => t, _ => { self.gl_set_error(GL_INVALID_ENUM); return Ok(Some(0)); } };
                 let Some(descs) = self.gl_enabled_descriptors() else { return Ok(Some(0)); };
                 let off = self.mac.mem.strip(ptr) as usize;
-                self.gl_queue_draw(t, name, |mem, d, spare| d.capture_into(spare, mem, a0, off, count, it, &descs))?;
+                self.gl_queue_draw_elements(t, name, a0, off, count, it, &descs)?;
             }
             "glArrayElement" => return self.gl_array_element(a0 as i32).map(|()| Some(0)),
             "glPushClientAttrib" => {
