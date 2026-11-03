@@ -509,6 +509,15 @@ fn wc3_host_run_with_a_gl_worker() {
     let mut jit_frames = std::env::var("WC3_JIT_FRAMES").ok().map(|p| std::io::BufWriter::new(std::fs::File::create(p).unwrap()));
     #[cfg(not(feature = "cpu-library"))]
     if jit_frames.is_some() { m.exec().set_jit_clock(host_ns); }
+    // `WC3_REGION_AFTER=<n>`: tier 2's region threshold (block entries before a hot head forms a region; 0 = no regions)
+    #[cfg(not(feature = "cpu-library"))]
+    if let Some(n) = std::env::var("WC3_REGION_AFTER").ok().and_then(|s| s.parse().ok()) { m.exec().set_jit_region_after(n); }
+    // `WC3_REGION_SHAPE=<nodes>/<insns>/<pages>/<follow calls 0|1>/<spend 0|1>` (or comma-separated): the region tier's shape (tuning)
+    #[cfg(not(feature = "cpu-library"))]
+    if let Ok(v) = std::env::var("WC3_REGION_SHAPE") {
+        let f: Vec<usize> = v.split(['/', ',']).map(|x| x.trim().parse().unwrap()).collect();
+        m.exec().set_jit_region_shape(heirloom_cpu_ppc::RegionShape { max_nodes: f[0], max_insns: f[1], max_pages: f[2], follow_calls: f[3] != 0, spend: f[4] != 0 });
+    }
     let (mut jf_swaps, mut jf_t, mut jf_tr, mut jf_n) = (0usize, host_ns(), 0u64, 0u64);
     // `WC3_PERF=<frames>`: the engine's stage clock (heirloom_macppc_engine::perf) on host nanoseconds, a line every <frames> swaps
     if let Ok(every) = std::env::var("WC3_PERF") {
@@ -610,6 +619,13 @@ fn wc3_host_run_with_a_gl_worker() {
             eprintln!("JIT-HELPER total={total} top: {}", v.iter().take(30).map(|(n, k)| format!("op{}/xo{}={n}", k >> 26, (k >> 1) & 0x3FF)).collect::<Vec<_>>().join(" "));
         }
         eprintln!("PPC-TIER {:?} prof={:?} jit={:?} cache={:?} lockstep={:?} divergence={:?}", e.tier, e.prof, e.jit_stats(), e.cache_stats(), e.lockstep_stats(), e.divergence());
+        // the region compile-time tail (host ns, timed only with WC3_JIT_FRAMES): the council's p99 <= 4 ms proxy
+        let mut rt = e.jit_region_times().to_vec();
+        rt.sort_unstable();
+        if !rt.is_empty() {
+            let q = |p: usize| rt[(rt.len() * p / 100).min(rt.len() - 1)];
+            eprintln!("JIT-REGION-COMPILE n={} p50_ns={} p95_ns={} p99_ns={} max_ns={}", rt.len(), q(50), q(95), q(99), rt[rt.len() - 1]);
+        }
     }
     if let Some(cpu) = m.cpu() {
         eprintln!("END pc={:#x} lr={:#x} callbacks={:?}", cpu.pc, cpu.lr, m.callback_kinds());

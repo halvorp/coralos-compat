@@ -66,8 +66,10 @@ mod jit_fp;
 mod pc_map;
 #[cfg(target_arch = "x86_64")]
 mod jit_smap;
+#[cfg(target_arch = "x86_64")]
+mod jit_region;
 mod jit_stats;
-pub use jit_stats::JitStats;
+pub use jit_stats::{JitStats, RegionShape};
 #[cfg(target_arch = "x86_64")]
 pub use jit_mem::CodeMem;
 #[cfg(all(feature = "host-codemem", target_arch = "x86_64", target_os = "linux"))]

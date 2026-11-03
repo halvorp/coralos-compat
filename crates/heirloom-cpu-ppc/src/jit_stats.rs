@@ -49,6 +49,24 @@ pub struct JitStats {
     pub withdraw_pages: u64,
     pub codemem_failures: u64,
     pub codemem_time: u64,
+    /// Regions compiled (jit_region: a hot block's head and the hot blocks reachable from it along constant edges, one
+    /// publish unit), their nodes and guest instructions in all; heads whose counter ran out but that formed no region
+    /// (fewer than two nodes qualified).
+    pub regions: u64,
+    pub region_nodes: u64,
+    pub region_insns: u64,
+    pub region_refused: u64,
     /// Tier::Jit was asked for but no executable memory was provided (or it was refused): tier 1 ran instead.
     pub refused: bool,
+}
+
+/// The region's shape: nodes (superblocks), guest instructions and code pages at most (the council's caps 16 / 128; tuned by
+/// measurement), whether call edges (`bl`) are followed into the callee - the instruction after the `bl` is then a node too,
+/// reached from the callee's `blr` by an inline return check (`cmp target, return pc; je`) before the IBTC probe - and whether
+/// forming a region SPENDS the counters of its other nodes (they form no region of their own: the same hot code compiled into
+/// several overlapping regions multiplies the code the hot path runs through).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegionShape { pub max_nodes: usize, pub max_insns: usize, pub max_pages: usize, pub follow_calls: bool, pub spend: bool }
+impl Default for RegionShape {
+    fn default() -> Self { RegionShape { max_nodes: 16, max_insns: 128, max_pages: 4, follow_calls: false, spend: false } }
 }

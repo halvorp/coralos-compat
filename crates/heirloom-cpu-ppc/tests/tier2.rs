@@ -1,10 +1,11 @@
 //! Tier 2 (the x86-64 JIT) against tier 0 (the reference): the same state at every exit, whatever the slicing, the traps,
 //! the natives and the code modifications; JitLockstep finds no divergence; a random-program fuzz over every inline form
-//! agrees; and each planted JIT mutant goes RED. Host only (the JIT needs executable memory: HostCodeMem).
+//! agrees; and each planted JIT mutant goes RED - the region tier (jit_region) included, with a low region threshold so the
+//! test loops form regions at once. Host only (the JIT needs executable memory: HostCodeMem).
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))] // HostCodeMem: the crate's own dev-dependency enables host-codemem
 mod common;
 use common::{programs, CODE, EXIT, STACK};
-use heirloom_cpu_ppc::{Cpu, Exec, Host, HostCodeMem, RunStats, Tier};
+use heirloom_cpu_ppc::{Cpu, Exec, Host, HostCodeMem, RegionShape, RunStats, Tier};
 use heirloom_mem_flat32::GuestMem;
 
 const BUF: u32 = 0x4000;
@@ -45,18 +46,20 @@ fn load(prog: &[u32], setup: impl FnOnce(&mut Cpu, &mut M)) -> (Cpu, M) {
 }
 
 #[derive(Debug, PartialEq)]
-struct End { gpr: [u32; 32], fpr: [u64; 32], cr: u32, lr: u32, ctr: u32, xer: u32, fpscr: u32, pc: u32, tb: u64, ram: Vec<u8>, last: RunStats, total: u64, calls: Vec<u32> }
+struct End { gpr: [u32; 32], fpr: [u64; 32], cr: u32, lr: u32, ctr: u32, xer: u32, fpscr: u32, pc: u32, tb: u64, ram: Vec<u8>, last: RunStats, total: u64, calls: Vec<u32>, over_budget: bool }
 
 fn finish(exec: &mut Exec, c: &mut Cpu, m: &mut M, slice: u64) -> End {
-    let mut total = 0;
+    let (mut total, mut over_budget) = (0, false);
     let last = loop {
         let st = exec.resume(m, c, slice);
         total += st.insns;
+        // a run never retires more than its budget (a region's back edge re-checks it: mutant 24)
+        over_budget |= st.insns > slice;
         if st.halted || st.trap.is_some() || total >= 3_000_000 || exec.divergence().is_some() { break st; }
     };
     let ram = m.mem.bytes(m.mem.span(0, RAM).unwrap()).unwrap().to_vec();
     let last = RunStats { insns: 0, ..last };
-    End { gpr: c.gpr, fpr: c.fpr, cr: c.cr, lr: c.lr, ctr: c.ctr, xer: c.xer, fpscr: c.fpscr, pc: c.pc, tb: c.tb, ram, last, total, calls: m.calls.clone() }
+    End { gpr: c.gpr, fpr: c.fpr, cr: c.cr, lr: c.lr, ctr: c.ctr, xer: c.xer, fpscr: c.fpscr, pc: c.pc, tb: c.tb, ram, last, total, calls: m.calls.clone(), over_budget }
 }
 
 fn exec(tier: Tier, mutant: u8) -> Exec {
@@ -68,8 +71,25 @@ fn exec(tier: Tier, mutant: u8) -> Exec {
 }
 
 fn run_on(tier: Tier, mutant: u8, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut M)) -> (End, Exec) {
+    run_region(tier, mutant, prog, slice, setup, None)
+}
+
+/// Regions form after this many block entries in the region tests (production: 64): short test loops form them at once.
+const REGION_TEST: u32 = 2;
+
+/// `run_on` with the region threshold `region` (None = the production default).
+fn run_region(tier: Tier, mutant: u8, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut M), region: Option<u32>) -> (End, Exec) {
+    run_shape(tier, mutant, prog, slice, setup, region, RegionShape::default())
+}
+
+/// The region shapes the region gates run: the default, and calls followed (inline return checks) with spent counters.
+fn shapes() -> [RegionShape; 2] { [RegionShape::default(), RegionShape { follow_calls: true, spend: true, ..RegionShape::default() }] }
+
+fn run_shape(tier: Tier, mutant: u8, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut M), region: Option<u32>, shape: RegionShape) -> (End, Exec) {
     let (mut c, mut m) = load(prog, &setup);
     let mut e = exec(tier, mutant);
+    if let Some(r) = region { e.set_jit_region_after(r); }
+    e.set_jit_region_shape(shape);
     let end = finish(&mut e, &mut c, &mut m, slice);
     (end, e)
 }
@@ -500,5 +520,119 @@ fn negative_control_every_planted_jit_mutant_goes_red() {
             red = got != want;
         }
         assert!(red, "mutant {mutant} stayed GREEN");
+    }
+}
+
+// ---- the REGION tier (jit_region: a hot block's head and the hot blocks reachable from it, one publish unit) ----
+
+/// Every program under test, with regions forming after REGION_TEST block entries, in every slicing and under JitLockstep
+/// (which compares at every JIT exit: the regions run inside the compared entries, entered with budgets that stop them
+/// anywhere), ends in tier 0's state; regions really formed.
+#[test]
+fn regions_end_in_tier_0s_state_in_any_slicing_and_lockstep() {
+    let mut regions = 0;
+    for (name, prog, setup) in programs_under_test() {
+        let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
+        for (slice, shape) in [1, 2, 3, 7, 64, 1_000, 1_000_000].into_iter().flat_map(|s| shapes().map(|h| (s, h))) {
+            let (got, e) = run_shape(Tier::Jit, 0, prog, slice, setup, Some(REGION_TEST), shape);
+            assert!(got == want, "{name}: regions (slice {slice}) differ from tier 0: pc {:#x}/{:#x} tb {}/{} gpr {:x?}/{:x?} over {} {:?}", got.pc, want.pc, got.tb, want.tb, got.gpr, want.gpr, got.over_budget, e.jit_stats());
+            regions += e.jit_stats().regions;
+        }
+        for shape in shapes() {
+            let (got, e) = run_shape(Tier::JitLockstep, 0, prog, 50, setup, Some(REGION_TEST), shape);
+            assert!(got == want && e.divergence().is_none(), "{name}: lockstep with regions {shape:?}: {:?}", e.divergence());
+        }
+    }
+    assert!(regions > 50, "regions formed: {regions}");
+}
+
+/// The random-program fuzz (every inline form, special FP operands, MOVBE on and off) with regions: tier 0's state in
+/// Tier::Jit at two slicings and without MOVBE, and no divergence in JitLockstep.
+#[test]
+fn a_random_program_fuzz_agrees_with_tier_0_with_regions() {
+    let (mut regions, mut nodes, mut compared) = (0u64, 0u64, 0u64);
+    for seed in 0..400u64 {
+        let prog = random_program(seed);
+        let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, fuzz_setup(seed));
+        for (slice, shape) in [(37, shapes()[0]), (1_000, shapes()[0]), (37, shapes()[1])] {
+            let (got, e) = run_shape(Tier::Jit, 0, &prog, slice, fuzz_setup(seed), Some(REGION_TEST), shape);
+            assert!(got == want, "seed {seed} slice {slice}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} tb {}/{} over {} {:?}",
+                got.gpr, want.gpr, got.cr, want.cr, got.xer, want.xer, got.tb, want.tb, got.over_budget, e.jit_stats());
+            (regions, nodes) = (regions + e.jit_stats().regions, nodes + e.jit_stats().region_nodes);
+        }
+        let (mut c, mut m) = load(&prog, fuzz_setup(seed));
+        let mut e = exec(Tier::Jit, 0);
+        e.set_jit_movbe(false);
+        e.set_jit_region_after(REGION_TEST);
+        let got = finish(&mut e, &mut c, &mut m, 37);
+        assert!(got == want && !e.jit_stats().movbe, "seed {seed}: regions without MOVBE");
+        for shape in shapes() {
+            let (got, e) = run_shape(Tier::JitLockstep, 0, &prog, 50, fuzz_setup(seed), Some(REGION_TEST), shape);
+            assert!(e.divergence().is_none() && got == want, "seed {seed}: lockstep with regions {shape:?}: {:?}", e.divergence());
+            compared += e.lockstep_stats().insns;
+        }
+    }
+    assert!(regions > 400 && nodes > regions + 200, "regions, many of several nodes, were fuzzed: {regions} regions, {nodes} nodes");
+    assert!(compared > 50_000, "the fuzz really compared JIT code: {compared}");
+}
+
+/// A loop whose region spans two code pages (the head's and P2's: `b P2` ... `b top`), where the loop itself rewrites P2's
+/// instruction halfway (addi r5,r5,1 -> addi r5,r5,2, no icbi): the region's entry must see P2's generation move and bail
+/// (the rewritten block then runs), not run its stale copy of P2 (mutant 22 checks the head's page only: RED).
+const P2: u32 = CODE + 0x1000;
+const ADDI_2: u32 = 0x38A5_0002;
+fn cross_page_program() -> Vec<u32> {
+    vec![
+        d(14, 5, 0, 0), d(14, 31, 0, 100), d(15, 8, 0, P2 >> 16), d(24, 8, 8, P2 & 0xFFFF), d(15, 7, 0, ADDI_2 >> 16), d(24, 7, 7, ADDI_2 & 0xFFFF),
+        d(13, 31, 31, 0xFFFF), bc(12, 2, 20), // top: addic. r31,r31,-1; beq done
+        d(11, 0, 31, 50), bc(4, 2, 8), d(36, 7, 8, 0), // cmpwi r31,50; bne +8; stw r7,0(r8) (rewrites P2)
+        18 << 26 | ((P2 - (CODE + 44)) & 0x03FF_FFFC), // b P2
+        d(15, 24, 0, EXIT >> 16), d(24, 24, 24, EXIT & 0xFFFF), mtspr(8, 24), // done: the closing blr goes to EXIT
+    ]
+}
+fn cross_page_setup(_: &mut Cpu, m: &mut M) {
+    m.mem.write_u32(P2, ADDI_1).unwrap();
+    m.mem.write_u32(P2 + 4, 18 << 26 | ((CODE + 24).wrapping_sub(P2 + 4) & 0x03FF_FFFC)).unwrap(); // b top
+}
+
+#[test]
+fn a_region_spanning_a_page_written_since_it_formed_is_not_run_stale() {
+    let prog = cross_page_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, cross_page_setup);
+    assert_eq!(want.gpr[5], 149, "tier 0: 49 iterations of +1, then 50 of +2");
+    for slice in [1_000_000, 1_000, 13] {
+        let (got, e) = run_region(Tier::Jit, 0, &prog, slice, cross_page_setup, Some(REGION_TEST));
+        assert!(got == want && e.jit_stats().regions > 0, "slice {slice}: r5 {} {:?}", got.gpr[5], e.jit_stats());
+        let (got, _) = run_region(Tier::Jit, 22, &prog, slice, cross_page_setup, Some(REGION_TEST));
+        assert!(got != want, "slice {slice}: mutant 22 (only the head's page checked) stayed GREEN");
+    }
+    let (got, e) = run_region(Tier::JitLockstep, 0, &prog, 13, cross_page_setup, Some(REGION_TEST));
+    assert!(got == want && e.divergence().is_none(), "{:?}", e.divergence());
+}
+
+/// Each planted REGION mutant goes RED on the region gates: 21 an internal forward edge to the wrong node, 22 only the head's
+/// page generation checked, 23 an internal edge dropping the retired count, 24 a back edge that skips the budget check, 25 an
+/// inline return check that takes the wrong return (calls followed).
+#[test]
+fn negative_control_every_planted_region_mutant_goes_red() {
+    for mutant in 21..=25u8 {
+        let shape = shapes()[(mutant == 25) as usize];
+        let mut red = false;
+        let (xp, ties) = (cross_page_program(), fma_ties_program());
+        let mut progs: Vec<(Vec<u32>, Box<dyn Fn(&mut Cpu, &mut M)>)> = programs_under_test().into_iter().map(|(_, p, s)| (p.to_vec(), Box::new(s) as Box<dyn Fn(&mut Cpu, &mut M)>)).collect();
+        progs.push((xp, Box::new(cross_page_setup)));
+        progs.push((ties, Box::new(fma_ties_setup)));
+        for seed in 0..100u64 { progs.push((random_program(seed), Box::new(fuzz_setup(seed)))); }
+        for (prog, setup) in &progs {
+            let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
+            for slice in [13, 1_000] {
+                let (got, _) = run_shape(Tier::Jit, mutant, prog, slice, setup, Some(REGION_TEST), shape);
+                if got != want { red = true; break; }
+            }
+            if red { break; }
+            let (got, e) = run_shape(Tier::JitLockstep, mutant, prog, 50, setup, Some(REGION_TEST), shape);
+            if got != want || e.divergence().is_some() { red = true; break; }
+        }
+        assert!(red, "region mutant {mutant} stayed GREEN");
     }
 }

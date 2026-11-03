@@ -8,6 +8,11 @@
 //! its target is published), an indirect one (bclr/bcctr) probes the dispatch table; either way the target block's entry
 //! re-checks the budget and its page generation and bails to the dispatcher if either fails, so nothing is unlinked when
 //! code goes stale. Plan: /build/patches/h86/ppc-fast-tier-plan.md (Argon's ruling 2026-11-02).
+//!
+//! REGIONS (jit_region, council step 4): every compiled block counts its entries in the Ctx; when a head's count runs out the
+//! dispatcher forms a region from it and compiles it as one more publish unit, which replaces the block at that pc in the
+//! dispatch table and every link slot naming it. JitLockstep compares at every JIT EXIT (whatever ran in between: blocks,
+//! regions, chained jumps), with budgets that stop a region anywhere - so regions are verified as they run in production.
 use crate::cpu::{Cpu, RunStats, Trap};
 use crate::jit_asm::*;
 use crate::jit_emit::{self, Env};
@@ -119,6 +124,13 @@ pub(crate) struct Ctx {
     pub(crate) no_resync: bool,
     /// Opt-in census of the instructions JIT code hands to h_one (key: primary opcode and extended opcode bits).
     pub(crate) census: Option<BTreeMap<u32, u64>>,
+    /// The head of a block whose entry counter ran out (it left with nothing of it retired): the dispatcher forms a region
+    /// there (jit_region). EMPTY_PC = none.
+    pub(crate) hot: u32,
+    /// Block entry counters, one per dispatch-table index (a colliding block shares one: it only miscounts), counting DOWN
+    /// from the region threshold; a block's counter is reset when it is compiled. Inline: JIT code reaches one with a
+    /// single `sub [r13 + disp32], 1`.
+    pub(crate) counters: [u32; 1 << TABLE_BITS],
 }
 
 
@@ -171,17 +183,29 @@ pub(crate) struct Jit {
     pub(crate) dead: bool,
     /// The store map inline stores test (mirrors the code watch; synced before every entry).
     smap: crate::jit_smap::StoreMap,
+    /// Block entries after which a block's head forms a region (jit_region::REGION_AFTER; 0 = no regions).
+    pub(crate) region_after: u32,
+    pub(crate) region_shape: crate::jit_region::RegionShape,
+    /// Per published or pending REGION (by its entry address): the code pages it was decoded from, (page, generation, a pc
+    /// on it) - the dispatcher's entry test reads the head's page only, so a region left stale by a write to another of its
+    /// pages is found here (and recompiled as a block) instead of bailing at every entry.
+    regions: BTreeMap<u64, Vec<(usize, u64, u32)>>,
+    /// Per region compile, the translation time (the `timer` units; only while a timer is set): the compile-time tail.
+    pub(crate) region_times: Vec<u64>,
+    /// The last emit_place refused code longer than a segment (`may_refuse`).
+    refused_last: bool,
 }
 
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
         let arena = Arena::new(mem, arena_bytes, ARENA_MIN.min(arena_bytes), SEGMENTS)?;
-        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, resync: false, no_resync: false, census: None });
+        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, resync: false, no_resync: false, census: None, hot: EMPTY_PC, counters: [crate::jit_region::REGION_AFTER; 1 << TABLE_BITS] });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(),
+            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false,
         };
         j.stats.arena_bytes = j.arena.len as u64;
         if !j.stubs() { return None; }
@@ -245,6 +269,12 @@ impl Jit {
         ok
     }
 
+    /// Regions form after `n` block entries (0 = never): every block compiled from now on counts with this threshold.
+    pub(crate) fn set_region_after(&mut self, n: u32) {
+        self.region_after = n;
+        self.ctx.counters.fill(n);
+    }
+
     /// Change how code is made (lockstep journaling, a planted mutant, MOVBE): everything compiled is dropped.
     pub(crate) fn reconfigure(&mut self, logged: bool, mutant: u8, movbe: bool) {
         let movbe = movbe && self.hw_movbe;
@@ -282,6 +312,7 @@ impl Jit {
         self.blocks.clear();
         self.pending.clear();
         self.pending_pcs.clear();
+        self.regions.clear();
         self.arena.discard();
     }
 
@@ -310,13 +341,45 @@ impl Jit {
         (s.gen == gen_now && s.len as u64 <= left).then_some((s.entry, s.len))
     }
 
-    /// Count a whole-block tier-1 run at `pc`; true when it should be compiled now.
-    fn hot(&mut self, pc: u32, gen_now: u64) -> bool {
+    /// Count a whole-block tier-1 run at `pc`; true when it should be compiled now (also when the published code there is a
+    /// region one of whose other pages was written: its entry bails, tier 1 runs, and a block replaces it).
+    fn hot(&mut self, pc: u32, gen_now: u64, mem: &heirloom_mem_flat32::GuestMem) -> bool {
         let h = &mut self.hot[(pc >> 2) as usize & ((1 << TABLE_BITS) - 1)];
         if h.0 != pc { *h = (pc, 1); return HOT_AFTER <= 1; }
         h.1 = h.1.saturating_add(1);
         if h.1 < HOT_AFTER || self.pending_pcs.contains(pc) { return false; }
-        !self.blocks.get(pc).is_some_and(|s| s.gen == gen_now)
+        let regions = &self.regions;
+        !self.blocks.get(pc).is_some_and(|s| s.gen == gen_now && regions.get(&s.entry).is_none_or(|p| p.iter().all(|&(_, g, at)| mem.code_gen(at) == g)))
+    }
+
+    /// The counter of the block at `pc` (an index into Ctx.counters).
+    #[inline(always)]
+    fn counter(pc: u32) -> usize { (pc >> 2) as usize & ((1 << TABLE_BITS) - 1) }
+
+    /// Form and compile the region headed by `head` (its block's counter ran out), if two or more nodes qualify.
+    fn form_region<H: Host>(&mut self, cache: &Cache, mem: &heirloom_mem_flat32::GuestMem, head: u32, at: u64) {
+        let t0 = self.timer.map(|c| c());
+        let (blocks, counters, after) = (&self.blocks, &self.ctx.counters, self.region_after);
+        let hot = |pc: u32| blocks.contains(pc) && after.wrapping_sub(counters[Self::counter(pc)]) >= crate::jit_region::edge_min(after);
+        let Some(plan) = crate::jit_region::form(cache, mem, head, mem.raw().gen_pages as usize, self.region_shape, hot) else { self.stats.region_refused += 1; return };
+        if self.region_shape.spend {
+            // its other nodes form no region of their own (their counters wrap far from zero; they still read as hot)
+            for n in &plan.nodes[1..] { self.ctx.counters[Self::counter(n.0)] = after.wrapping_sub(1 << 31); }
+        }
+        let pages: Vec<(usize, u64)> = plan.pages.iter().map(|p| (p.0, p.1)).collect();
+        let len = plan.maxfwd[0];
+        let entry = self.emit_place(head, plan.pages[0].1, &pages, at, len, false, h_note::<H> as HNote as usize as u64, |env| jit_emit::compile_region(&plan.nodes, &plan.maxfwd, &plan.pages, &plan.rets, env));
+        if let Some(e) = entry {
+            self.regions.insert(e, plan.pages);
+            self.stats.regions += 1;
+            self.stats.region_nodes += plan.nodes.len() as u64;
+            self.stats.region_insns += plan.nodes.iter().map(|n| n.1.len() as u64).sum::<u64>();
+        }
+        if let (Some(c), Some(t0)) = (self.timer, t0) {
+            let d = c().wrapping_sub(t0);
+            self.stats.translate_time += d;
+            self.region_times.push(d);
+        }
     }
 
     /// Compile `ops` (a superblock whose first tier-1 block is `ops[..first]`) at `pc`.
@@ -330,6 +393,22 @@ impl Jit {
 
     /// False (nothing compiled, its link slots given back) when `may_refuse` and the code is longer than a segment.
     fn compile_untimed<H: Host>(&mut self, ops: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, at: u64, may_refuse: bool) -> bool {
+        let c = Self::counter(pc);
+        let counter = (self.region_after != 0).then(|| (offset_of!(Ctx, counters) + 4 * c) as i32);
+        self.ctx.counters[c] = self.region_after;
+        let note = h_note::<H> as HNote as usize as u64;
+        let r = self.emit_place(pc, gen, &[(page, gen)], at, ops.len() as u32, may_refuse, note, |env| {
+            env.counter = counter;
+            jit_emit::compile(ops, pc, gen, page, env)
+        });
+        r.is_some() || !self.refused_last
+    }
+
+    /// Emit code with `emit` (given the Env: link slots, mask, mutant) and place it as the block or region at `pc` (its
+    /// head page's generation `gen`, the code pages it checks `pages`, `len` = the instructions its entry's budget test
+    /// covers). None when nothing was placed (`refused_last` = because `may_refuse` and it is longer than a segment).
+    fn emit_place(&mut self, pc: u32, gen: u64, pages: &[(usize, u64)], at: u64, len: u32, may_refuse: bool, note: u64, emit: impl FnOnce(&mut Env) -> (Vec<u8>, usize)) -> Option<u64> {
+        self.refused_last = false;
         let (blocks, links, by_target, owner, free, link_gen) = (&self.blocks, &mut self.links, &mut self.by_target, &mut self.link_owner, &mut self.free_links, &mut self.link_gen);
         let (mask, mutant) = (self.mask, self.mutant);
         let nlinks = &mut self.nlinks;
@@ -344,14 +423,15 @@ impl Jit {
             };
             owner[i] = LINK_NEW;
             taken.push((i as u32, target));
-            link_gen[i] = if ((target & mask) >> heirloom_mem_flat32::CODE_PAGE_SHIFT) as usize == page { gen } else { ANY_GEN };
+            let tp = ((target & mask) >> heirloom_mem_flat32::CODE_PAGE_SHIFT) as usize;
+            link_gen[i] = pages.iter().find(|p| p.0 == tp).map_or(ANY_GEN, |p| p.1);
             links[i] = blocks.get(target).map_or(exit_stub, |s| landing(s, link_gen[i], mutant));
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note: h_note::<H> as HNote as usize as u64, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
-        let (code, inner) = jit_emit::compile(ops, pc, gen, page, &mut env);
-        if out_of_links { self.drop_code(); return true; }
+        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None };
+        let (code, inner) = emit(&mut env);
+        if out_of_links { self.drop_code(); return None; }
         if may_refuse && code.len() > self.arena.segment_bytes() {
             for (i, target) in taken {
                 self.link_owner[i as usize] = 0;
@@ -360,18 +440,18 @@ impl Jit {
                 self.free_links.push(i);
                 if let Some(v) = self.by_target.get_mut(&target) { v.retain(|&j| j != i); }
             }
-            return false;
+            self.refused_last = true;
+            return None;
         }
-        self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, ops.len() as u32, gen, at);
-        true
+        self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, len, gen, at)
     }
 
     /// Put compiled code in the arena (reusing the oldest segment when full) and queue it for publishing; `taken` = the
     /// link slots its code jumps through.
-    fn place(&mut self, code: &[u8], inner: usize, taken: Vec<u32>, pc: u32, len: u32, gen: u64, at: u64) {
+    fn place(&mut self, code: &[u8], inner: usize, taken: Vec<u32>, pc: u32, len: u32, gen: u64, at: u64) -> Option<u64> {
         let p = match self.arena.put(code) {
             Some(p) => p,
-            None if self.arena.withdraw_failed => { self.dead = true; self.drop_code(); return }
+            None if self.arena.withdraw_failed => { self.dead = true; self.drop_code(); return None }
             None => {
                 // the current segment is full: publish it, drop the next one's blocks, write there
                 self.publish_untimed();
@@ -380,8 +460,8 @@ impl Jit {
                 match self.arena.put(code) {
                     Some(p) => p,
                     // a withdraw the provider refused leaves pages it may still execute elsewhere: never write them
-                    None if self.arena.withdraw_failed => { self.dead = true; self.drop_code(); return }
-                    None => { self.stats.arena_full += 1; self.drop_code(); return }
+                    None if self.arena.withdraw_failed => { self.dead = true; self.drop_code(); return None }
+                    None => { self.stats.arena_full += 1; self.drop_code(); return None }
                 }
             }
         };
@@ -393,7 +473,8 @@ impl Jit {
         self.stats.code_bytes = self.arena.used() as u64;
         if self.pending.is_empty() { self.pending_at = self.clock + at; }
         self.pending.push(Slot { pc, len, entry: p as u64, gen, inner: p as u64 + inner as u64 });
-        if !self.pending_pcs.insert(pc, ()) { self.drop_code(); }
+        if !self.pending_pcs.insert(pc, ()) { self.drop_code(); return None; }
+        Some(p as u64)
     }
 
     /// Compile the block of the bound native at `pc` (jit_emit::compile_native); `gen` is its page's generation now (only
@@ -401,7 +482,7 @@ impl Jit {
     fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
         let t0 = self.timer.map(|c| c());
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
-        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: (1 << TABLE_BITS) - 1, movbe: self.movbe, counter: None };
         let code = jit_emit::compile_native(pc, &mut env);
         self.place(&code, 0, Vec::new(), pc, 1, gen, at);
         self.stats.natives_compiled += 1;
@@ -414,6 +495,7 @@ impl Jit {
     fn evict(&mut self, s: usize) {
         let (a, b) = self.arena.segment(s);
         let inside = |e: u64| e >= a && e < b;
+        self.regions.retain(|&e, _| !inside(e));
         let mut gone = Vec::new();
         let stale = self.mutant == crate::jit_emit::MUT_EVICT_STALE;
         self.blocks.retain(|pc, slot| { let k = inside(slot.entry); if k { gone.push(pc); } !k || stale });
@@ -599,7 +681,7 @@ pub(crate) extern "C" fn h_note<H: Host>(ctx: *mut Ctx, ea: u32, n: u32) {
 /// page, so one generation check covers it, and the taken edge is a side exit. A BACKWARD branch is usually a loop's back
 /// edge, taken, its fall-through the loop's exit: cold code that would only be duplicated. (Tracing through `b` / `bl` too
 /// was measured on WC3: 0.6% fewer JIT host instructions than this for 38% more compiles and 2x the evictions.)
-fn superblock(cache: &Cache, mem: &heirloom_mem_flat32::GuestMem, first: &[crate::t1op::Op], pc: u32, gen: u64, page: usize) -> Vec<crate::t1op::Op> {
+pub(crate) fn superblock(cache: &Cache, mem: &heirloom_mem_flat32::GuestMem, first: &[crate::t1op::Op], pc: u32, gen: u64, page: usize) -> Vec<crate::t1op::Op> {
     let mut ops = first.to_vec();
     while let Some(last) = ops.last() {
         let next = pc.wrapping_add(4 * ops.len() as u32);
@@ -659,6 +741,10 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
                 };
                 n += r;
                 prof.blocks += 1;
+                // a block's entry counter ran out in this entry: form the region it heads (compiled now, published with the
+                // next batch; the block runs meanwhile - its counter wrapped, so it does not ask again)
+                let head = core::mem::replace(&mut jit.ctx.hot, EMPTY_PC);
+                if head != EMPTY_PC && what.is_empty() && !jit.dead { jit.form_region::<H>(cache, host.mem(), head, n); }
                 if !what.is_empty() {
                     return (RunStats { insns: n, halted: cpu.halted(), blocked: cpu.blocked(), trap: t }, Some(Divergence { block: pc, what }));
                 }
@@ -675,7 +761,7 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
                     // natives run inside JIT code once hot (never in lockstep: a native cannot be rolled back and run twice)
                     if usable && !jit.logged {
                         let gen = host.mem().code_gen(pc);
-                        if jit.hot(pc, gen) { jit.compile_native(pc, gen, n); }
+                        if jit.hot(pc, gen, host.mem()) { jit.compile_native(pc, gen, n); }
                     }
                     if let Err(t) = t1::native(host, cpu, cache, prof) { trap = Some(t); break; }
                     n += 1;
@@ -692,7 +778,7 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
         };
         let take = len.min(left as usize);
         let host_call = cache.ops[start].k == K::Sc;
-        if usable && take == len && !host_call && jit.hot(pc, gen) {
+        if usable && take == len && !host_call && jit.hot(pc, gen, host.mem()) {
             let page = (host.mem().strip(pc) >> heirloom_mem_flat32::CODE_PAGE_SHIFT) as usize;
             // a block's entry reads its page's generation: only pages inside the watch's array are compiled
             if page < host.mem().raw().gen_pages as usize {

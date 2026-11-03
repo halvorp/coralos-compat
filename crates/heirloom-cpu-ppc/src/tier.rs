@@ -33,6 +33,8 @@ pub struct Exec {
     jit_movbe: Option<bool>,
     jit_clock: Option<fn() -> u64>,
     jit_arena: Option<usize>,
+    jit_region_after: Option<u32>,
+    jit_region_shape: Option<crate::RegionShape>,
 }
 
 /// Per native address: (calls, time inside), timed by a host-supplied clock.
@@ -51,7 +53,7 @@ impl Exec {
             code_mem: None,
             #[cfg(target_arch = "x86_64")]
             jit: None,
-            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None,
+            jit_mutant: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_region_shape: None,
         }
     }
     /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
@@ -74,6 +76,28 @@ impl Exec {
         self.jit_publish_after = Some(n);
         #[cfg(target_arch = "x86_64")]
         if let Some(j) = self.jit.as_mut() { j.publish_after = n; }
+    }
+    /// Block entries after which a compiled block's head forms a REGION (default jit_region::REGION_AFTER = 64; 0 = no regions).
+    /// Takes effect for blocks compiled after the call (a JIT made later gets it at creation).
+    #[doc(hidden)]
+    pub fn set_jit_region_after(&mut self, n: u32) {
+        self.jit_region_after = Some(n);
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_mut() { j.set_region_after(n); }
+    }
+    /// The region tier's shape (jit_region::RegionShape; default = its Default). Tuning only.
+    #[doc(hidden)]
+    pub fn set_jit_region_shape(&mut self, s: crate::RegionShape) {
+        self.jit_region_shape = Some(s);
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_mut() { j.region_shape = s; }
+    }
+    /// Per region compiled while a clock was set (`set_jit_clock`), its translation time in that clock's units.
+    #[doc(hidden)]
+    pub fn jit_region_times(&self) -> &[u64] {
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_ref() { return &j.region_times; }
+        &[]
     }
     /// Tests: the code arena's size in bytes (default 32 MiB: the stub page and 16 segments), so a test can make segments
     /// fill and be reused. Takes effect for a JIT made after the call.
@@ -101,7 +125,7 @@ impl Exec {
     pub fn set_jit_movbe(&mut self, on: bool) {
         self.jit_movbe = Some(on);
     }
-    /// NEGATIVE CONTROL ONLY: plant JIT mutant `m` - one of the `MUT_*` constants of jit_emit.rs (1-20: e.g. 3 no code-watch
+    /// NEGATIVE CONTROL ONLY: plant JIT mutant `m` - one of the `MUT_*` constants of jit_emit.rs (1-25: e.g. 3 no code-watch
     /// test on stores, 8 / 9 the global pins not loaded after a helper / not stored at the exit, 19 a store map that stops
     /// mirroring the watch), each documented there. The JIT gates must go RED with each.
     #[doc(hidden)]
@@ -171,6 +195,8 @@ impl Exec {
                     self.jit = crate::jit::Jit::new(mem, self.jit_mutant, self.jit_arena.unwrap_or(crate::jit::ARENA_BYTES)).map(Box::new);
                     if let (Some(j), Some(n)) = (self.jit.as_mut(), self.jit_publish_after) { j.publish_after = n; }
                     if let Some(j) = self.jit.as_mut() { j.timer = self.jit_clock; }
+                    if let (Some(j), Some(n)) = (self.jit.as_mut(), self.jit_region_after) { j.set_region_after(n); }
+                    if let (Some(j), Some(s)) = (self.jit.as_mut(), self.jit_region_shape) { j.region_shape = s; }
                 }
             }
             // lockstep journaling, a planted mutant or MOVBE changed since the code was made: it is dropped and remade

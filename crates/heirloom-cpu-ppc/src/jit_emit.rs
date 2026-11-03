@@ -1,4 +1,5 @@
-//! Tier 2's block compiler: one tier-1 block (t1cache boundaries, t1op decode) to x86-64.
+//! Tier 2's block compiler: one tier-1 block (t1cache boundaries, t1op decode) to x86-64 - or a REGION of them
+//! (`compile_region`, jit_region: internal edges are direct jumps, every other edge the same chained exit as a block's).
 //!
 //! Register model: rbx = &Cpu (a guest field that is not a global pin is a memory operand at its `offset_of!`), r12 = guest
 //! RAM base, r13 = &Ctx (the remaining budget included), r15 = the instructions retired so far (across chained blocks); r9
@@ -61,6 +62,19 @@ pub(crate) const MUT_FLUSH_ON_REFUSAL: u8 = 18;
 pub(crate) const MUT_SMAP_STALE: u8 = 19;
 /// A helper call does not store the global pins first (jit_emit): tier 1's handler reads stale CR / r0 / r3 / r4 / XER.
 pub(crate) const MUT_GLOBAL_STALE: u8 = 20;
+/// A region's internal forward edge lands on the node AFTER its target (jit_region): an internal branch target wrong.
+pub(crate) const MUT_REGION_TARGET: u8 = 21;
+/// A region checks only its head's page generation at entry (jit_region): a node decoded from another page that was
+/// written since runs stale.
+pub(crate) const MUT_REGION_PAGES: u8 = 22;
+/// An internal region edge does not add the instructions its source node retired (the retired count, the one value every
+/// side exit must write back, is dropped across the edge).
+pub(crate) const MUT_REGION_COUNT: u8 = 23;
+/// A region's back edge jumps without re-checking the budget (a hot loop runs past the dispatcher's budget).
+pub(crate) const MUT_REGION_BACK_BUDGET: u8 = 24;
+/// A region's `blr` goes to its first return point without the inline check (the wrong return taken in region: jit_region's
+/// call following).
+pub(crate) const MUT_REGION_RET: u8 = 25;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -78,6 +92,8 @@ pub(crate) struct Env<'a> {
     pub(crate) table_mask: u32,
     /// Use MOVBE for big-endian loads and stores (CPUID-dispatched: jit_asm::cpu_has_movbe).
     pub(crate) movbe: bool,
+    /// The Ctx offset of this block's entry counter (jit_region: a region forms when it runs out); None = no counter.
+    pub(crate) counter: Option<i32>,
 }
 
 pub(crate) const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
@@ -112,7 +128,13 @@ pub(crate) struct E<'a, 'b> {
     n: usize,
     resume: Vec<usize>,
     words: Vec<u32>,
+    /// Compiling a region: its nodes, labels and internal jumps.
+    rg: Option<Rg>,
 }
+
+/// A region being compiled (jit_region): the node pcs in layout order, each node's longest forward path, where each node's
+/// code starts once emitted, the forward jumps waiting for a node, the back edges' budget exits, the node being emitted.
+struct Rg { pcs: Vec<u32>, maxfwd: Vec<u32>, labels: Vec<Option<usize>>, fwd: Vec<(Fix, usize)>, backs: Vec<(Fix, u32)>, cur: usize, rets: Vec<u32> }
 
 /// Compile `ops` (a whole tier-1 block or a superblock at `pc`, decoded from code page `page` at generation `gen`), one pass
 /// (the global pins are fixed: jit_regs). Answers the code and the offset of its INNER entry.
@@ -129,11 +151,61 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     a.lea64(RAX, m(R15, ops.len() as i32));
     a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
     let b1 = a.jcc(Cc::A);
+    // the entry counter (jit_region): when it runs out the dispatcher forms a region headed here (left with nothing retired)
+    let hot = e.env.counter.map(|off| {
+        e.a.alu_oi(Alu::Sub, O::M(m(R13, off)), 1);
+        e.a.jcc(Cc::E)
+    });
     e.body(ops);
     e.tails();
+    if let Some(f) = hot {
+        let a = &mut e.a;
+        a.here(f);
+        a.st32i(ctx(offset_of!(Ctx, hot)), pc);
+        a.st32i(cpu(PC), pc);
+        a.mov_ri(RAX, EXIT_NORMAL);
+        a.jmp_m(ctx(offset_of!(Ctx, exit)));
+    }
     let a = &mut e.a;
     a.here(b1);
     a.here(b2);
+    a.mov_ri(RAX, EXIT_BAIL);
+    a.jmp_m(ctx(offset_of!(Ctx, exit)));
+    (e.a.b, inner)
+}
+
+/// Compile a region (jit_region::Plan): its entry checks every page's generation (the head's first; the INNER entry is
+/// past that one) and the budget for the longest forward path, then the nodes in layout order, each followed by its own
+/// slow paths and side exits; internal edges are direct jumps (`go`). Answers the code and the offset of its inner entry.
+pub(crate) fn compile_region(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], env: &mut Env) -> (Vec<u8>, usize) {
+    let mut e = E::new(&nodes[0].1, nodes[0].0, env);
+    e.rg = Some(Rg { pcs: nodes.iter().map(|n| n.0).collect(), maxfwd: maxfwd.to_vec(), labels: alloc::vec![None; nodes.len()], fwd: Vec::new(), backs: Vec::new(), cur: 0, rets: rets.to_vec() });
+    let mut bails = Vec::new();
+    let checked = if e.env.mutant == MUT_REGION_PAGES { 1 } else { pages.len() };
+    let mut inner = 0;
+    for (k, &(page, gen, _)) in pages[..checked].iter().enumerate() {
+        let a = &mut e.a;
+        a.ld64(RAX, ctx(offset_of!(Ctx, gen)));
+        let at = m(RAX, (8 * page) as i32);
+        if gen <= i32::MAX as u64 { a.alu_mi64(Alu::Cmp, at, gen as u32); } else { a.mov_ri64(RCX, gen); a.alu_rm64(Alu::Cmp, RCX, at); }
+        bails.push(a.jcc(Cc::Ne));
+        if k == 0 { inner = a.pos(); }
+    }
+    let a = &mut e.a;
+    a.lea64(RAX, m(R15, maxfwd[0] as i32));
+    a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
+    bails.push(a.jcc(Cc::A));
+    for (k, (pc, ops)) in nodes.iter().enumerate() {
+        e.start_node(k, *pc, ops);
+        e.body(ops);
+        e.tails();
+    }
+    for (f, target) in core::mem::take(&mut e.rg.as_mut().expect("a region").backs) {
+        e.a.here(f);
+        e.chain(target, 0);
+    }
+    let a = &mut e.a;
+    for f in bails { a.here(f); }
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
     (e.a.b, inner)
@@ -201,7 +273,23 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
-        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect() }
+        E { a: Asm::default(), env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None }
+    }
+
+    /// Start region node `k` (its code begins here: forward jumps waiting for it land here).
+    fn start_node(&mut self, k: usize, pc: u32, ops: &[Op]) {
+        (self.pc, self.n) = (pc, ops.len());
+        self.resume.clear();
+        self.words.clear();
+        self.words.extend(ops.iter().map(|o| o.w));
+        let here = self.a.pos();
+        let rg = self.rg.as_mut().expect("a region");
+        rg.cur = k;
+        rg.labels[k] = Some(here);
+        let mut i = 0;
+        while i < rg.fwd.len() {
+            if rg.fwd[i].1 == k { let (f, _) = rg.fwd.swap_remove(i); self.a.patch(f, here); } else { i += 1; }
+        }
     }
 
     /// The instructions, and the fall-through exit when the last one does not end the block.
@@ -212,16 +300,54 @@ impl<'a, 'b> E<'a, 'b> {
             self.resume.push(self.a.pos());
             if ended { break; }
         }
-        if !ended { self.chain(self.pc.wrapping_add(4 * ops.len() as u32), ops.len()); }
+        if !ended { self.go(self.pc.wrapping_add(4 * ops.len() as u32), ops.len()); }
     }
 }
 
 impl E<'_, '_> {
     pub(crate) fn ipc(&self, i: usize) -> u32 { self.pc.wrapping_add(4 * i as u32) }
 
+    /// On to `target` (a constant), `n` instructions of this block (node) retired: a direct jump when compiling a region that
+    /// holds a node at `target` (a back edge re-checks the budget for that node's longest forward path first, and leaves
+    /// through the chained exit when it does not fit), else the chained exit.
+    fn go(&mut self, target: u32, n: usize) {
+        let Some(j) = self.rg.as_ref().and_then(|r| r.pcs.iter().position(|&p| p == target)) else { return self.chain(target, n) };
+        let mutant = self.env.mutant;
+        let a = &mut self.a;
+        if mutant != MUT_REGION_COUNT { a.alu_ri64(Alu::Add, R15, n as i32); }
+        let rg = self.rg.as_mut().expect("a region");
+        if j <= rg.cur {
+            if mutant != MUT_REGION_BACK_BUDGET {
+                a.lea64(RAX, m(R15, rg.maxfwd[j] as i32));
+                a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
+                let out = a.jcc(Cc::A);
+                rg.backs.push((out, target));
+            }
+            let f = a.jmp();
+            a.patch(f, rg.labels[j].expect("an emitted node"));
+        } else {
+            let f = a.jmp();
+            let j = if mutant == MUT_REGION_TARGET && j + 1 < rg.pcs.len() { j + 1 } else { j };
+            rg.fwd.push((f, j));
+        }
+    }
+
+    /// A region's `blr` (target in r8d): to each of the region's return points (the instruction after a followed `bl`) by an
+    /// inline compare when the target is that one, `n` retired; else on to the dispatch-table probe.
+    fn return_check(&mut self, n: usize) {
+        let rets = match self.rg.as_ref() { Some(r) if !r.rets.is_empty() => r.rets.clone(), _ => return };
+        for r in rets {
+            if self.env.mutant == MUT_REGION_RET { return self.go(r, n); }
+            self.a.alu_ri(Alu::Cmp, R8, r);
+            let skip = self.a.jcc(Cc::Ne);
+            self.go(r, n);
+            self.a.here(skip);
+        }
+    }
+
     /// Leave for `target` (a constant), `n` instructions of this block retired.
     fn chain(&mut self, target: u32, n: usize) {
-        self.a.alu_ri64(Alu::Add, R15, n as i32);
+        if n != 0 { self.a.alu_ri64(Alu::Add, R15, n as i32); }
         self.a.st32i(cpu(PC), target);
         if self.env.chain {
             let slot = (self.env.link)(target);
@@ -295,7 +421,7 @@ impl E<'_, '_> {
     fn tails(&mut self) {
         for (fixes, i, target) in core::mem::take(&mut self.sides) {
             for f in fixes { self.a.here(f); }
-            self.chain(target, i + 1);
+            self.go(target, i + 1);
         }
         for (f, i) in core::mem::take(&mut self.slow) {
             self.a.here(f);
@@ -551,8 +677,8 @@ impl E<'_, '_> {
                 self.st_be(n);
                 if matches!(op.k, K::Stwu | K::Stbu) { self.stg(s, RSI); }
             }
-            K::B => { self.chain(op.imm, i + 1); return true; }
-            K::Bl => { self.set_lr(i); self.chain(op.imm, i + 1); return true; }
+            K::B => { self.go(op.imm, i + 1); return true; }
+            K::Bl => { self.set_lr(i); self.go(op.imm, i + 1); return true; }
             K::Bc | K::Bcl if i + 1 < self.n => {
                 // inside a superblock: the taken edge leaves through an out-of-line side exit, the not-taken one runs on
                 if op.k == K::Bcl { self.set_lr(i); }
@@ -562,9 +688,9 @@ impl E<'_, '_> {
             K::Bc | K::Bcl => {
                 if op.k == K::Bcl { self.set_lr(i); }
                 let not = self.cond(d, s);
-                self.chain(op.imm, i + 1);
+                self.go(op.imm, i + 1);
                 for f in not { self.a.here(f); }
-                self.chain(self.ipc(i).wrapping_add(4), i + 1);
+                self.go(self.ipc(i).wrapping_add(4), i + 1);
                 return true;
             }
             K::Bclr | K::Bclrl | K::Bcctr | K::Bcctrl => {
@@ -574,9 +700,10 @@ impl E<'_, '_> {
                 self.a.alu_ri(Alu::And, R8, !3);
                 if matches!(op.k, K::Bclrl | K::Bcctrl) { self.set_lr(i); }
                 let not = self.cond(d, s);
+                if op.k == K::Bclr { self.return_check(i + 1); }
                 self.chain_dyn(i + 1);
                 for f in not { self.a.here(f); }
-                self.chain(self.ipc(i).wrapping_add(4), i + 1);
+                self.go(self.ipc(i).wrapping_add(4), i + 1);
                 return true;
             }
             K::Generic | K::GenericEnd | K::Sc | K::Fp59 | K::Fp63 | K::Lfs | K::Stfs => {
