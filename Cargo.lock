@@ -152,6 +152,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-fmt-macicon"
+version = "0.1.0"
+dependencies = [
+ "heirloom-common",
+ "heirloom-fmt-resfork",
+]
+
+[[package]]
 name = "heirloom-fmt-pef"
 version = "0.1.0"
 dependencies = [
@@ -188,6 +196,7 @@ dependencies = [
  "heirloom-cpu-68k",
  "heirloom-cpu-68k-client",
  "heirloom-cpu-abi",
+ "heirloom-fmt-macicon",
  "heirloom-fmt-resfork",
  "heirloom-mac68k-engine",
  "heirloom-mem-flat32",

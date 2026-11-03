@@ -11,6 +11,7 @@ heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
 heirloom-cpu-68k = { path = "../heirloom-cpu-68k", optional = true }
 heirloom-cpu-68k-client = { path = "../heirloom-cpu-68k-client", optional = true }
 heirloom-fmt-resfork = { path = "../heirloom-fmt-resfork" }
+heirloom-fmt-macicon = { path = "../heirloom-fmt-macicon" }
 heirloom-volume = { path = "../heirloom-volume" }
 heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-present = { path = "../heirloom-present" }

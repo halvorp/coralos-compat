@@ -5,7 +5,7 @@
 //! 6 x 6 x 6 colour cube of component levels `FF CC 99 66 33 00` (red slowest, blue fastest, white first) in entries
 //! 0..=214, then four 10-step ramps (red, green, blue, gray; levels `EE DD BB AA 88 77 55 44 22 11`) in 215..=254, and
 //! black in 255. The layout is checked against Pomme's `SystemPalettes.cpp` `clut8` (MIT; the facts only, no code copied)
-//! by a unit test over every entry. The 4-bit table (`'clut'` id 4, [`CLUT4`]) is Pomme's `clut4` likewise.
+//! by a unit test over every entry. The 4-bit table (`'clut'` id 4, [`clut4`]) is Pomme's `clut4` likewise.
 use alloc::vec::Vec;
 use heirloom_common::Refusal;
 use heirloom_mem_flat32::GuestMem;
@@ -38,32 +38,17 @@ pub fn write_rgb(mem: &mut GuestMem, at: u32, c: Rgb) -> Result<(), Refusal> {
     mem.write_u16(at.wrapping_add(4), c.b).map_err(&e)
 }
 
-/// The cube's component levels, and the ramps' (Pomme `clut8`).
-const CUBE: [u8; 6] = [0xFF, 0xCC, 0x99, 0x66, 0x33, 0x00];
-const RAMP: [u8; 10] = [0xEE, 0xDD, 0xBB, 0xAA, 0x88, 0x77, 0x55, 0x44, 0x22, 0x11];
 fn wide(b: u8) -> u16 { u16::from(b) * 0x0101 }
+fn rgb(c: u32) -> Rgb { Rgb { r: wide((c >> 16) as u8), g: wide((c >> 8) as u8), b: wide(c as u8) } }
 
-/// The standard 8-bit system colour table, 256 entries.
-pub fn clut8() -> Vec<Rgb> {
-    let mut t = Vec::with_capacity(256);
-    for i in 0..215usize { t.push(Rgb { r: wide(CUBE[i / 36]), g: wide(CUBE[i / 6 % 6]), b: wide(CUBE[i % 6]) }); }
-    for ch in 0..4 { for &l in &RAMP {
-        let l = wide(l);
-        t.push(match ch { 0 => Rgb { r: l, g: 0, b: 0 }, 1 => Rgb { r: 0, g: l, b: 0 }, 2 => Rgb { r: 0, g: 0, b: l }, _ => Rgb { r: l, g: l, b: l } });
-    } }
-    t.push(Rgb::BLACK);
-    t
-}
+/// The standard 8-bit system colour table, 256 entries (its one home is heirloom-fmt-macicon's `clut`, which icons index too).
+pub fn clut8() -> Vec<Rgb> { CLUT8.iter().map(|&c| rgb(c)).collect() }
 
-/// The standard 4-bit table (Pomme `clut4`): white, yellow, orange, red, magenta, purple, blue, cyan, green, dark green,
-/// brown, tan, light gray, medium gray, dark gray, black.
-pub const CLUT4: [u32; 16] = [
-    0xFFFFFF, 0xFCF305, 0xFF6402, 0xDD0806, 0xF20884, 0x4600A5, 0x0000D4, 0x02ABEA,
-    0x1FB714, 0x006411, 0x562C05, 0x90713A, 0xC0C0C0, 0x808080, 0x404040, 0x000000,
-];
+use heirloom_fmt_macicon::clut::{CLUT4, CLUT8};
 
+/// The standard 4-bit table (Pomme `clut4`; its one home is heirloom-fmt-macicon's `clut`).
 pub fn clut4() -> Vec<Rgb> {
-    CLUT4.iter().map(|&c| Rgb { r: wide((c >> 16) as u8), g: wide((c >> 8) as u8), b: wide(c as u8) }).collect()
+    CLUT4.iter().map(|&c| rgb(c)).collect()
 }
 
 /// The 1-bit table: white 0, black 1.

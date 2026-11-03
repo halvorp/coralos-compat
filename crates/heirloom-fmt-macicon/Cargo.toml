@@ -1,0 +1,15 @@
+[package]
+name = "heirloom-fmt-macicon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Classic Mac application icons: the Finder's BNDL/FREF lookup and the icon family decoders ('icns' it32/ih32/il32/is32 + masks, ich8/icl8/ics8, icl4/ics4, ICN#/ics#) to straight RGBA, and the system colour tables (no_std)"
+
+[dependencies]
+heirloom-common = { path = "../heirloom-common" }
+heirloom-fmt-resfork = { path = "../heirloom-fmt-resfork" }
+
+[[bin]]
+# The install step's extractor: a Mac application file (MacBinary / AppleSingle / AppleDouble / raw fork) -> its icon as PNG + SVG.
+name = "heirloom-macicon"
+path = "src/bin/heirloom-macicon.rs"
