@@ -13,6 +13,10 @@ use heirloom_fmt_pef::loader::SymbolClass;
 use heirloom_fmt_pef::Pef;
 use std::sync::{Arc, Mutex};
 mod wc3_drive;
+mod wc3_heap;
+
+#[global_allocator]
+static HEAP: wc3_heap::Switch = wc3_heap::Switch;
 
 type M = MacPpc<RecordingGuestUi>;
 
@@ -45,7 +49,11 @@ struct Mock {
 }
 
 impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
-    fn transact(&mut self, req: &[u8]) -> Vec<u8> {
+    fn transact(&mut self, req: &[u8]) -> Vec<u8> { wc3_heap::outside(|| self.transact_mock(req)) }
+}
+
+impl Mock {
+    fn transact_mock(&mut self, req: &[u8]) -> Vec<u8> {
         let mut seen = self.seen.lock().unwrap();
         if self.keep { seen.stream.extend_from_slice(req); }
         let mut out = Vec::new();
@@ -437,6 +445,9 @@ fn wc3_host_run_with_a_gl_worker() {
     };
     let seen = Arc::new(Mutex::new(Seen::default()));
     // `WC3_NO_AUDIO=1`: a host with no audio service, as the CoralOS Heirloom host is today (SndNewChannel answers notEnoughHardware)
+    // `WC3_HEAP=lla`: everything from here on allocates through linked_list_allocator, as a CoralOS process does (tests/wc3_heap)
+    if std::env::var("WC3_HEAP").as_deref() == Ok("lla") { wc3_heap::enable(8 << 30); }
+    let mut heap_at = wc3_heap::counts();
     let mut ui = RecordingGuestUi::new();
     ui.refuse_audio = std::env::var("WC3_NO_AUDIO").is_ok();
     let mut m = MacPpc::for_program(ui, &app).unwrap();
@@ -533,7 +544,9 @@ fn wc3_host_run_with_a_gl_worker() {
         }
         if std::env::var("WC3_STEPS").is_ok() && i % 50 == 0 { eprintln!("STEP {i}: {st:?} {stats:?} pc={:#x} lr={:#x} cb={}", m.cpu().map_or(0, |c| c.pc), m.cpu().map_or(0, |c| c.lr), m.callback_depth()); }
         while let Some(l) = m.perf_take_line(1000) {
-            eprintln!("{l} (slice {i})");
+            let h = wc3_heap::counts();
+            eprintln!("{l} (slice {i}) | heap: calls={} kcycles={}", h.0 - heap_at.0, (h.1 - heap_at.1) / 1000);
+            heap_at = h;
             if let Some(sites) = m.perf().and_then(|p| p.sites.as_ref()) {
                 let mut v: Vec<_> = sites.iter().collect();
                 v.sort_by(|a, b| b.1.cmp(a.1));

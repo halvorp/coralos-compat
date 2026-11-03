@@ -26,6 +26,8 @@ heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc", features = ["host-codemem"] }
 heirloom-raster = { path = "../heirloom-raster" }
 heirloom-macppc-engine = { path = ".", default-features = false, features = ["fixtures"] }
 heirloom-mac68k-engine = { path = "../heirloom-mac68k-engine", features = ["fixtures"] }
+# the WC3 harness's WC3_HEAP=lla: a first-fit linked-list heap (the allocator coralos's coral-lazy-heap is built on), on the host
+linked_list_allocator = { version = "0.10", default-features = false, features = ["use_spin"] }
 
 [features]
 # The CPU backend (src/lib.rs `cpu`): the static core by default; `cpu-library` drives cpu-ppc.library through its PpcVTable
