@@ -354,3 +354,66 @@ fn an_inline_store_into_code_decoded_after_the_store_map_was_built_takes_the_slo
         assert!(got != want, "mutant {mutant} stayed GREEN: r5 {}", got.gpr[5]);
     }
 }
+
+/// A provider whose window is smaller than the arena asks for (CoralOS: EXEC_CODE_RESERVE cannot find 64 MiB of contiguous frames,
+/// or a smaller window): the JIT reserves half, and again half, until the provider says yes - it runs, exactly, in 16 MiB.
+struct SmallWindow { inner: HostCodeMem, max: usize, asked: Vec<usize> }
+impl CodeMem for SmallWindow {
+    fn reserve(&mut self, len: usize) -> Option<*mut u8> { self.asked.push(len); if len > self.max { None } else { self.inner.reserve(len) } }
+    fn publish(&mut self, ptr: *mut u8, len: usize) -> bool { self.inner.publish(ptr, len) }
+    fn reset(&mut self, ptr: *mut u8, len: usize) -> bool { self.inner.reset(ptr, len) }
+}
+
+#[test]
+fn an_arena_the_provider_cannot_reserve_is_halved_until_it_can() {
+    let prog = program(false);
+    let (want, _) = run(Tier::Interp, 0, &prog, 1_000_000);
+    let (got, e) = run_with(Tier::Jit, 0, &prog, 1_000, Box::new(SmallWindow { inner: HostCodeMem::new(), max: 16 << 20, asked: vec![] }));
+    let s = e.jit_stats();
+    assert!(got == want && !s.refused && s.insns > 0, "{s:?}");
+    assert_eq!(s.arena_bytes, 16 << 20, "64 MiB refused, 32 MiB refused, 16 MiB taken: {s:?}");
+    // a provider that cannot give even the smallest arena: tier 2 refused by name, tier 1 gives tier 0's state
+    let (got, e) = run_with(Tier::Jit, 0, &prog, 1_000, Box::new(SmallWindow { inner: HostCodeMem::new(), max: 4 << 20, asked: vec![] }));
+    assert!(got == want && e.jit_stats().refused, "{:?}", e.jit_stats());
+}
+
+/// A reused segment is withdrawn a chunk at a time (jit_mem WITHDRAW_CHUNK), never whole: on CoralOS each withdrawn page is a TLB
+/// shootdown round, and a whole 4 MiB segment at once was a 50-ms frame. 3,000 functions called twice each (each compiled once)
+/// fill an arena of 16 x 128 KiB segments several times over; every withdraw the provider sees is at most 64 KiB, and the
+/// run ends in tier 0's state.
+struct Recording { inner: HostCodeMem, resets: std::rc::Rc<std::cell::RefCell<Vec<usize>>> }
+impl CodeMem for Recording {
+    fn reserve(&mut self, len: usize) -> Option<*mut u8> { self.inner.reserve(len) }
+    fn publish(&mut self, ptr: *mut u8, len: usize) -> bool { self.inner.publish(ptr, len) }
+    fn reset(&mut self, ptr: *mut u8, len: usize) -> bool { self.resets.borrow_mut().push(len); self.inner.reset(ptr, len) }
+}
+
+#[test]
+fn a_reused_segment_is_withdrawn_a_chunk_at_a_time() {
+    const N: u32 = 3000;
+    let cold = CODE + 4 * 256; // the functions after the loop: `addi r5,r5,1; blr` each
+    let mut prog = vec![
+        d(14, 31, 0, 0), d(15, 10, 0, cold >> 16), d(24, 10, 10, cold & 0xFFFF),
+        mtspr(9, 10), BCTRL, mtspr(9, 10), BCTRL, // 3-6 (top): call it twice
+        d(14, 10, 10, 8), d(14, 31, 31, 1), d(11, 0, 31, N), bc(12, 0, -(4 * 7)),
+        d(15, 24, 0, EXIT >> 16), d(24, 24, 24, EXIT & 0xFFFF), mtspr(8, 24), BLR,
+    ];
+    prog.resize(256, 0x6000_0000);
+    for _ in 0..N { prog.extend([d(14, 5, 5, 1), BLR]); }
+    let (want, _) = run(Tier::Interp, 0, &prog, 10_000_000);
+    assert!(want.last.halted && want.gpr[5] == 2 * N, "r5 = {}", want.gpr[5]);
+    let resets = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (mut c, mut m) = load(&prog);
+    let mut e = Exec::new(Tier::Jit);
+    e.set_code_mem(Box::new(Recording { inner: HostCodeMem::new(), resets: resets.clone() }));
+    e.set_jit_publish_after(0);
+    e.set_jit_arena(4096 + 16 * (128 << 10));
+    let (mut total, mut halted) = (0, false);
+    while total < 10_000_000 && !halted { let st = e.resume(&mut m, &mut c, 1_000); total += st.insns; halted = st.halted; assert!(st.trap.is_none()); }
+    assert!(halted, "ran to the end");
+    assert_eq!((c.gpr[5], c.tb), (want.gpr[5], want.tb), "tier 0's state");
+    let s = e.jit_stats();
+    let r = resets.borrow();
+    assert!(s.evictions > 16 && !r.is_empty(), "segments were reused and withdrawn: {s:?}");
+    assert!(r.iter().all(|&n| n <= 64 << 10), "every withdraw at most one chunk: {:?}", r.iter().max());
+}

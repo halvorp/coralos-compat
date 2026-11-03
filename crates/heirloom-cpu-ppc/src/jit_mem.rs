@@ -24,6 +24,11 @@ pub trait CodeMem {
 pub(crate) const PAGE: usize = 4096;
 /// The arena's first page: the trampoline and the shared stubs (never evicted; only a whole reset rewrites it).
 pub(crate) const STUB_BYTES: usize = PAGE;
+/// A reused segment is withdrawn (back to RW) this much at a time, just ahead of where code is written, not whole: on CoralOS a
+/// withdraw is one TLB shootdown round per page, and a 4 MiB segment withdrawn at once was a 50-ms frame (1,024 pages) under
+/// the host's model of that cost. Its blocks are all unreachable from the moment it is chosen, so the pages still RX until
+/// their turn hold code nothing can run.
+pub(crate) const WITHDRAW_CHUNK: usize = 64 << 10;
 
 /// The code arena: `[base, base + len)` of a provider. Its first page holds the stubs; the rest is `nseg` equal SEGMENTS used
 /// in turn (FIFO): code is written into the current segment from `cur`, published up to `published`, and when the current
@@ -44,6 +49,11 @@ pub(crate) struct Arena {
     cur: usize,
     /// The end of the region written now (the stub page, or the current segment).
     limit: usize,
+    /// Below this the current region is RW (written or writable); from it to `limit`, pages of a reused segment not yet
+    /// withdrawn (still RX, unreachable).
+    rw_end: usize,
+    /// A withdraw the provider refused (the JIT stops: pages another CPU may still execute must not be written).
+    pub(crate) withdraw_failed: bool,
     /// What the provider was asked (every call is a syscall on CoralOS, and every page a TLB shootdown there).
     pub(crate) io: CodeMemStats,
     /// Opt-in clock for `io.time` (the JIT's translation clock); None = no clock reads.
@@ -68,12 +78,18 @@ pub(crate) struct CodeMemStats {
 
 impl Arena {
     /// `len` bytes: the stub page and `nseg` (1..=64) segments of whole pages.
-    pub(crate) fn new(mut mem: alloc::boxed::Box<dyn CodeMem>, len: usize, nseg: usize) -> Option<Arena> {
+    /// `len` bytes - or, while the provider refuses that, half as many, down to `min` (None below it). `len()` says what was
+    /// reserved.
+    pub(crate) fn new(mut mem: alloc::boxed::Box<dyn CodeMem>, len: usize, min: usize, nseg: usize) -> Option<Arena> {
         let nseg = nseg.clamp(1, 64);
-        let seg_len = (len.saturating_sub(STUB_BYTES) / nseg) & !(PAGE - 1);
-        if seg_len == 0 { return None; }
-        let base = mem.reserve(len)?;
-        Some(Arena { mem, base, len, seg_len, nseg, seg: None, used: 0, published: 0, cur: 0, limit: STUB_BYTES, io: CodeMemStats::default(), timer: None })
+        let mut len = len;
+        let base = loop {
+            if len < min || (len.saturating_sub(STUB_BYTES) / nseg) & !(PAGE - 1) == 0 { return None; }
+            if let Some(b) = mem.reserve(len) { break b; }
+            len = (len / 2) & !(PAGE - 1);
+        };
+        let seg_len = ((len - STUB_BYTES) / nseg) & !(PAGE - 1);
+        Some(Arena { mem, base, len, seg_len, nseg, seg: None, used: 0, published: 0, cur: 0, limit: STUB_BYTES, rw_end: STUB_BYTES, withdraw_failed: false, io: CodeMemStats::default(), timer: None })
     }
     fn seg_start(&self, s: usize) -> usize { STUB_BYTES + s * self.seg_len }
     /// One provider call, counted and timed: `publish` (RX) or not (back to RW).
@@ -91,8 +107,16 @@ impl Arena {
     /// Copy `code` to the unpublished tail of the current region; None when it does not fit there.
     /// Bytes of one segment: no block's code may be longer.
     pub(crate) fn segment_bytes(&self) -> usize { self.seg_len }
+    /// None when it does not fit (or a withdraw was refused: `withdraw_failed`).
     pub(crate) fn put(&mut self, code: &[u8]) -> Option<*const u8> {
         if self.cur + code.len() > self.limit { return None; }
+        // a reused segment: withdraw the next chunk(s) first
+        while self.cur + code.len() > self.rw_end {
+            let n = WITHDRAW_CHUNK.min(self.limit - self.rw_end);
+            // SAFETY: rw_end < limit <= len: the chunk is inside the reservation.
+            if !self.call(false, unsafe { self.base.add(self.rw_end) }, n) { self.withdraw_failed = true; return None; }
+            self.rw_end += n;
+        }
         // SAFETY: [base + cur, base + cur + code.len()) is inside the reservation (limit <= len) and at or above `published`
         // in a region that was reserved RW or reset to RW, so it is RW and no published code lives there.
         let p = unsafe { self.base.add(self.cur) };
@@ -114,7 +138,7 @@ impl Arena {
         ok
     }
     /// Start writing blocks: the first segment (after the stubs are published).
-    pub(crate) fn begin(&mut self) { self.enter(0); }
+    pub(crate) fn begin(&mut self) { self.enter(0); self.rw_end = self.limit; }
     fn enter(&mut self, s: usize) {
         self.seg = Some(s);
         self.cur = self.seg_start(s);
@@ -133,17 +157,15 @@ impl Arena {
         let off = p.checked_sub(self.base as u64)? as usize;
         (off >= STUB_BYTES && off < STUB_BYTES + self.nseg * self.seg_len).then(|| (off - STUB_BYTES) / self.seg_len)
     }
-    /// Write into the next segment from its start; its pages are withdrawn to RW first if they ever held published code.
-    /// The current segment's written code must be published first.
-    pub(crate) fn reuse(&mut self) -> bool {
+    /// Write into the next segment from its start (its blocks already dropped by the caller); if it ever held published code
+    /// its pages are withdrawn to RW a chunk at a time as `put` reaches them. The current segment's written code must be
+    /// published first.
+    pub(crate) fn reuse(&mut self) {
         let s = self.next_segment();
-        let ok = if self.used & (1 << s) != 0 {
-            let (a, _) = self.segment(s);
-            self.used &= !(1 << s);
-            self.call(false, a as *mut u8, self.seg_len)
-        } else { true };
+        let held_code = self.used & (1 << s) != 0;
+        self.used &= !(1 << s);
         self.enter(s);
-        ok
+        self.rw_end = if held_code { self.cur } else { self.limit };
     }
     /// Withdraw every published page (back to RW) and start writing the stubs again.
     pub(crate) fn reset(&mut self) -> bool {
@@ -152,6 +174,7 @@ impl Arena {
         self.published = 0;
         self.cur = 0;
         self.limit = STUB_BYTES;
+        self.rw_end = STUB_BYTES;
         self.call(false, self.base, self.len)
     }
     /// Bytes of code space written in the current segment (the arena's other segments hold older code).

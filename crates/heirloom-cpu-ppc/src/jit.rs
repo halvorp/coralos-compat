@@ -34,8 +34,17 @@ pub(crate) const HOT_AFTER: u32 = 2;
 /// Code arena per guest machine: a cache of [`SEGMENTS`] segments reused in turn (FIFO) when full - the oldest segment's
 /// blocks are dropped, never all of them (an arena-wide drop re-translated ~7k blocks inside ONE WC3 gameplay frame: the
 /// worst frame of the host run, 22 ms of 36). Never a refusal.
-pub(crate) const ARENA_BYTES: usize = 32 << 20;
-/// Segments of the arena (2 MiB each at the default size): one is dropped at a time.
+/// 64 MiB (CoralOS's exec window per address space), halved down to [`ARENA_MIN`] while the provider refuses to reserve it
+/// (EXEC_CODE_RESERVE allocates the whole reservation as contiguous frames: a large one can fail where a smaller one would
+/// not). Measured on WC3 (h86 2026-11-03): at 32 MiB a gameplay frame recompiled 1,288 blocks after an eviction dropped a
+/// segment of hot code - the hot code is spread over every segment, so neither FIFO nor a second-chance clock (also measured:
+/// -31% gameplay recompiles, the same bursts, +1.2% JIT instructions for its per-entry reference store) avoids it; at 64 MiB
+/// the gameplay working set and the loading code it replaces both fit: no burst over 150 blocks, gameplay compiles 8,344 ->
+/// 3,257, worst frame 59 -> 46 ms.
+pub(crate) const ARENA_BYTES: usize = 64 << 20;
+/// The smallest arena the JIT reserves before it gives up (tier 2 is then refused by name, tier 1 runs).
+pub(crate) const ARENA_MIN: usize = 8 << 20;
+/// Segments of the arena (4 MiB each at the default size): one is dropped at a time.
 pub(crate) const SEGMENTS: usize = 16;
 const TABLE_BITS: u32 = 14;
 /// Longest superblock (guest instructions): a block ending in a conditional branch goes on through the NOT-taken path into
@@ -166,7 +175,7 @@ pub(crate) struct Jit {
 
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
-        let arena = Arena::new(mem, arena_bytes, SEGMENTS)?;
+        let arena = Arena::new(mem, arena_bytes, ARENA_MIN.min(arena_bytes), SEGMENTS)?;
         let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, resync: false, no_resync: false, census: None });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
@@ -174,6 +183,7 @@ impl Jit {
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(),
         };
+        j.stats.arena_bytes = j.arena.len as u64;
         if !j.stubs() { return None; }
         Some(j)
     }
@@ -361,13 +371,18 @@ impl Jit {
     fn place(&mut self, code: &[u8], inner: usize, taken: Vec<u32>, pc: u32, len: u32, gen: u64, at: u64) {
         let p = match self.arena.put(code) {
             Some(p) => p,
+            None if self.arena.withdraw_failed => { self.dead = true; self.drop_code(); return }
             None => {
                 // the current segment is full: publish it, drop the next one's blocks, write there
                 self.publish_untimed();
                 self.evict(self.arena.next_segment());
-                // a withdraw the provider refused leaves pages it may still execute elsewhere: never write them
-                if !self.arena.reuse() { self.dead = true; self.drop_code(); return; }
-                match self.arena.put(code) { Some(p) => p, None => { self.stats.arena_full += 1; self.drop_code(); return } }
+                self.arena.reuse();
+                match self.arena.put(code) {
+                    Some(p) => p,
+                    // a withdraw the provider refused leaves pages it may still execute elsewhere: never write them
+                    None if self.arena.withdraw_failed => { self.dead = true; self.drop_code(); return }
+                    None => { self.stats.arena_full += 1; self.drop_code(); return }
+                }
             }
         };
         let seg = self.arena.segment_of(p as u64).map_or(0, |s| s as u8 + 1);

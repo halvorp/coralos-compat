@@ -33,6 +33,8 @@ pub struct JitStats {
     pub natives_compiled: u64,
     /// Bytes of code in the arena now.
     pub code_bytes: u64,
+    /// Bytes of executable memory the arena reserved (64 MiB, or less when the provider refused that much).
+    pub arena_bytes: u64,
     /// Big-endian loads and stores use MOVBE (the CPU has it and it was not turned off).
     pub movbe: bool,
     /// Time spent translating (compiling blocks, publishing pages, flushing), in the units of the clock given to

@@ -558,10 +558,11 @@ fn wc3_host_run_with_a_gl_worker() {
             if swaps != jf_swaps {
                 use std::io::Write;
                 #[cfg(not(feature = "cpu-library"))]
-                let (now, tr, n) = { let js = m.exec().jit_stats(); (host_ns(), js.translate_time, js.compiled) };
+                let (now, tr, n, fl, ev) = { let js = m.exec().jit_stats(); (host_ns(), js.translate_time, js.compiled, js.flushes, js.evictions) };
                 #[cfg(feature = "cpu-library")]
-                let (now, tr, n) = (host_ns(), 0u64, 0u64);
-                writeln!(w, "{swaps},{},{},{},{}", swaps - jf_swaps, now - jf_t, tr - jf_tr, n - jf_n).unwrap();
+                let (now, tr, n, fl, ev) = (host_ns(), 0u64, 0u64, 0u64, 0u64);
+                // the last two columns: the JIT's cumulative whole-code drops and segment evictions (a burst's cause)
+                writeln!(w, "{swaps},{},{},{},{},{fl},{ev}", swaps - jf_swaps, now - jf_t, tr - jf_tr, n - jf_n).unwrap();
                 (jf_swaps, jf_t, jf_tr, jf_n) = (swaps, now, tr, n);
             }
         }
