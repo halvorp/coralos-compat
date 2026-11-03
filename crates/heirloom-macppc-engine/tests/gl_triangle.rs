@@ -547,6 +547,8 @@ fn wc3_host_run_with_a_gl_worker() {
             let h = wc3_heap::counts();
             eprintln!("{l} (slice {i}) | heap: calls={} kcycles={}", h.0 - heap_at.0, (h.1 - heap_at.1) / 1000);
             heap_at = h;
+            // `WC3_HEAP_SITES=<n>`: from gameplay (frame 1280) on, every n-th engine allocation's call site is recorded
+            if let Some(every) = std::env::var("WC3_HEAP_SITES").ok().and_then(|v| v.parse().ok()).filter(|_| m.perf().is_some_and(|p| p.frames_total >= std::env::var("WC3_HEAP_SITES_FROM").ok().and_then(|v| v.parse().ok()).unwrap_or(1280))) { wc3_heap::sample(every); }
             if let Some(sites) = m.perf().and_then(|p| p.sites.as_ref()) {
                 let mut v: Vec<_> = sites.iter().collect();
                 v.sort_by(|a, b| b.1.cmp(a.1));
@@ -617,6 +619,9 @@ fn wc3_host_run_with_a_gl_worker() {
             eprintln!("DUMP-END from={from:#x}: {}", words.join(" "));
             eprintln!("REGS r3..r12={:x?}", &cpu.gpr[3..13]);
         }
+    }
+    for (n, site) in wc3_heap::sites().iter().take(30) {
+        eprintln!("HEAP-SITE {n:>6} {site}");
     }
     let log = &m.mac.log;
     let keep: usize = std::env::var("WC3_LOG_LINES").ok().and_then(|s| s.parse().ok()).unwrap_or(80);

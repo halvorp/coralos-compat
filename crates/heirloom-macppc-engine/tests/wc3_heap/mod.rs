@@ -28,6 +28,37 @@ pub fn outside<R>(f: impl FnOnce() -> R) -> R {
 
 fn engine() -> bool { !HARNESS.with(|h| h.get()) }
 
+/// `WC3_HEAP_SITES=<n>`: every n-th engine allocation from [`sample`] on records the engine frames of its call stack.
+static EVERY: AtomicU64 = AtomicU64::new(0);
+static SITES: std::sync::Mutex<Option<std::collections::BTreeMap<String, u64>>> = std::sync::Mutex::new(None);
+
+/// Start recording every `every`-th engine allocation's call site (0 = off).
+pub fn sample(every: u64) {
+    if EVERY.swap(every, Relaxed) != every { outside(|| eprintln!("[WC3-HEAP] recording every {every}-th engine allocation's call site")); }
+}
+
+fn record() {
+    outside(|| {
+        let bt = std::backtrace::Backtrace::force_capture().to_string();
+        // the first frames that are the engine's (or its libraries'), not the allocator's or std's
+        let frames: Vec<String> = bt.lines().map(str::trim).filter(|l| l.starts_with(|c: char| c.is_ascii_digit()))
+            .filter_map(|l| l.split_once(": ").map(|(_, f)| f.to_string()))
+            .filter(|f| f.contains("heirloom") && !f.contains("wc3_heap"))
+            .map(|f| f.split("::<").next().unwrap_or(&f).replace("heirloom_macppc_engine::machine::MacPpc<heirloom_ui_abi::recording::RecordingGuestUi>", "M"))
+            .take(4).collect();
+        let mut g = SITES.lock().unwrap();
+        *g.get_or_insert_with(Default::default).entry(frames.join(" < ")).or_insert(0) += 1;
+    });
+}
+
+/// The recorded call sites, most frequent first.
+pub fn sites() -> Vec<(u64, String)> {
+    let g = outside(|| SITES.lock().unwrap());
+    let mut v: Vec<(u64, String)> = g.iter().flatten().map(|(k, n)| (*n, k.clone())).collect();
+    v.sort_unstable_by(|a, b| b.cmp(a));
+    v
+}
+
 fn tsc() -> u64 {
     // SAFETY: RDTSC reads a counter and touches no memory.
     unsafe { core::arch::x86_64::_rdtsc() }
@@ -66,8 +97,10 @@ unsafe impl GlobalAlloc for Switch {
             // SAFETY: the caller's contract for `alloc` is passed through.
             unsafe { System.alloc(l) }
         };
-        CALLS.fetch_add(1, Relaxed);
+        let n = CALLS.fetch_add(1, Relaxed);
         CYCLES.fetch_add(tsc().wrapping_sub(t), Relaxed);
+        let every = EVERY.load(Relaxed);
+        if every != 0 && n % every == 0 { record(); }
         p
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
