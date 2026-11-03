@@ -50,6 +50,13 @@ pub struct Runtime {
     after_init: Option<StartState>,
     /// Init routines still to run before `main` (the libraries' and the application's), in order.
     init_queue: alloc::collections::VecDeque<crate::cfm::Tv>,
+    /// A reset register file the natives that run on a scratch CPU start from, cloned per call (a clone shares the empty natives
+    /// set: `Cpu::new` allocated one per Toolbox / CFM / Time Manager call).
+    pub(crate) scratch_cpu: Option<Cpu>,
+    /// The `$CallbackReturn` stub, once interned and bound (every callback entry asked by name, interning a key each time).
+    pub(crate) callback_stub: Option<u32>,
+    /// `TbFn` names by variant, made once (`tb_call` names every call in its refusals and logs; `format!` per call allocated).
+    pub(crate) tb_names: alloc::vec::Vec<(crate::toolbox_c::TbFn, alloc::rc::Rc<str>)>,
     /// The scratch File Manager parameter block (`crate::files`), allocated on first use.
     pub(crate) fm_pb: Option<u32>,
     /// `rand`'s state and the last `errno` a native set.
@@ -246,7 +253,7 @@ impl<U: GuestUi> Host for MacPpc<U> {
 
     fn native(&mut self, cpu: &mut Cpu, addr: u32) -> bool {
         if self.perf.is_none() { return self.native_call(cpu, addr); }
-        let class = self.perf_class(addr);
+        let (class, draw) = self.perf_class_draw(addr);
         let tick = self.mac.ev.ticks_total;
         let site = if class == crate::perf::Class::Clock && self.perf.as_ref().is_some_and(|p| p.sites.is_some()) {
             // the caller's LR, then the saved LRs of the two frames above (the back chain at 0(r1), the saved LR at 8)
@@ -259,7 +266,11 @@ impl<U: GuestUi> Host for MacPpc<U> {
         if class == crate::perf::Class::Clock { p.clock_read(tick, cpu.tb, site); }
         let t0 = p.now();
         let served = self.native_call(cpu, addr);
-        if let Some(p) = self.perf.as_mut() { let dt = p.now().wrapping_sub(t0); p.add_native(class, dt); }
+        if let Some(p) = self.perf.as_mut() {
+            let dt = p.now().wrapping_sub(t0);
+            p.add_native(class, dt);
+            if draw { (p.win.draw_time, p.win.draws) = (p.win.draw_time + dt, p.win.draws + 1); }
+        }
         served
     }
 }

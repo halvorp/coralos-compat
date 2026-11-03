@@ -20,7 +20,16 @@ pub struct GlueEntry { pub library: String, pub symbol: String, pub tvector: u32
 /// `keys[id]` is entry `id`'s binding key, made once at intern: the run loop looks it up on every glue call, and building it
 /// per call (a String, a `format!` for a non-Toolbox library) was a measured share of a Warcraft III frame (doc 22 phase 5).
 #[derive(Default)]
-pub struct Glue { chunks: Vec<u32>, entries: Vec<GlueEntry>, keys: Vec<Rc<str>>, by_key: BTreeMap<(String, String), usize> }
+pub struct Glue {
+    chunks: Vec<u32>,
+    entries: Vec<GlueEntry>,
+    keys: Vec<Rc<str>>,
+    by_key: BTreeMap<(String, String), usize>,
+    /// `id_at_stub` answers by stub address, direct-mapped (a cell's stub never moves and its id never changes once interned, so a
+    /// remembered answer stays true): every glue call asks, twice with the stage clock on, and the chunk walk was ~46 host
+    /// instructions a call. (pc, id + 1); 0 = empty.
+    memo: [core::cell::Cell<(u32, u32)>; 32],
+}
 
 /// The libraries whose exports are the Macintosh Toolbox under the Universal Interfaces' C names: InterfaceLib itself, CarbonLib, and the
 /// Mac OS 8.6+ sub-libraries the Toolbox was split into (the import-library set of a Mac OS 9 SDK, Retro68 `ImportLibraries/`: AppearanceLib,
@@ -75,6 +84,15 @@ impl Glue {
 
     /// The id of the cell whose STUB is at `pc`, if any.
     pub fn id_at_stub(&self, pc: u32) -> Option<usize> {
+        let slot = &self.memo[((pc / CELL) % 32) as usize];
+        let (p, id) = slot.get();
+        if p == pc && id != 0 { return Some(id as usize - 1); }
+        let found = self.id_at_stub_walk(pc);
+        if let Some(id) = found.filter(|&id| id < u32::MAX as usize) { slot.set((pc, id as u32 + 1)); }
+        found
+    }
+
+    fn id_at_stub_walk(&self, pc: u32) -> Option<usize> {
         for (ci, &base) in self.chunks.iter().enumerate() {
             let size = CELL * CHUNK_CELLS;
             if pc >= base && pc - base < size && (pc - base) % CELL == 8 {

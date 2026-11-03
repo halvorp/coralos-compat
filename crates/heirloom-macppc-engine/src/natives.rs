@@ -154,79 +154,64 @@ impl<U: GuestUi> MacPpc<U> {
             }
             Native::Tb(f) => {
                 // these need arguments and a result in registers only: run them on a scratch register file
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.tb_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Cf(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.cf_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Cfx(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.cfx_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Mn(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.mn_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Sys(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.sys_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Dsp(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.dsp_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Gl(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.gl_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Tm(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.tm_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Qa(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.qa_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Isp(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.isp_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Ot(f) => match self.ot_call(f, regs) { Ok(()) => GlueOutcome::Return, Err(e) => GlueOutcome::Refused(e) },
             Native::Qt(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.qt_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Tsm(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.tsm_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Sc(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.sc_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Cx(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.cx_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Gw(f) => {
-                let mut cpu = crate::cpu::Cpu::new(0, regs[1]);
-                cpu.gpr = *regs;
+                let mut cpu = self.scratch_cpu(regs);
                 match self.gw_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Scrap(f) => match self.scrap_call(f, regs) { Ok(()) => GlueOutcome::Return, Err(e) => GlueOutcome::Refused(e) },
@@ -337,6 +322,15 @@ impl<U: GuestUi> MacPpc<U> {
                 GlueOutcome::Return
             }
         }
+    }
+}
+
+impl<U: GuestUi> MacPpc<U> {
+    /// A scratch CPU holding `regs` (otherwise as `Cpu::new(0, regs[1])` makes it), cloned from the run state's reset one.
+    fn scratch_cpu(&mut self, regs: &[u32; 32]) -> crate::cpu::Cpu {
+        let mut cpu = self.rt.scratch_cpu.get_or_insert_with(|| crate::cpu::Cpu::new(0, 0)).clone();
+        cpu.gpr = *regs;
+        cpu
     }
 }
 

@@ -59,7 +59,7 @@ fn ticks_of(count: i32) -> u64 {
 impl<U: GuestUi> MacPpc<U> {
     pub(crate) fn tm_call(&mut self, f: TmFn, cpu: &mut Cpu) -> Result<(), String> {
         let (task, count) = (arg(self, cpu, 0)?, arg(self, cpu, 1).unwrap_or(0) as i32);
-        let n = format!("{f:?}");
+        let n = match f { TmFn::InsTime => "InsTime", TmFn::InsXTime => "InsXTime", TmFn::PrimeTime => "PrimeTime", TmFn::RmvTime => "RmvTime" };
         let now = self.mac.ev.ticks_total;
         let rd16 = |s: &Self, at: u32| s.mac.mem.read_u16(at).map_err(|_| format!("{n}: the TMTask at {task:#x} leaves guest RAM"));
         let r: i32 = match f {

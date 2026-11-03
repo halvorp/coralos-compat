@@ -88,10 +88,16 @@ pub(crate) struct Frame { pub(crate) saved: Saved, pub(crate) cont: Continuation
 impl<U: GuestUi> MacPpc<U> {
     /// The `$CallbackReturn` stub address, interned (and bound as a native) on first use.
     fn callback_return_stub(&mut self, cpu: &mut Cpu) -> Result<u32, String> {
+        if let Some(stub) = self.rt.callback_stub {
+            self.sync_natives(cpu);
+            return Ok(stub);
+        }
         self.bindings.insert(CALLBACK_RETURN.into(), Binding::Native(Native::CallbackReturn));
         let id = self.glue.intern(&mut self.mac, "CFM", CALLBACK_RETURN).map_err(|e| format!("{e:?}"))?;
         self.sync_natives(cpu);
-        self.glue.entry(id).map(|e| e.stub).ok_or_else(|| String::from("the $CallbackReturn glue cell is missing"))
+        let stub = self.glue.entry(id).map(|e| e.stub).ok_or_else(|| String::from("the $CallbackReturn glue cell is missing"))?;
+        self.rt.callback_stub = Some(stub);
+        Ok(stub)
     }
 
     /// Call the PowerPC routine behind `upp` with `args` in r3.., returning to `$CallbackReturn`. The UPP is resolved (one

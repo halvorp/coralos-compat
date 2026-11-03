@@ -41,6 +41,10 @@ pub struct Window {
     pub native_time: [u64; CLASSES],
     pub native_calls: [u64; CLASSES],
     pub gl_ring_time: u64,
+    /// The GL draw calls among the GL calls (`glDrawElements`, `glDrawArrays`, `glDrawRangeElements`: their client arrays are
+    /// snapshotted) and their time, a part of the GL class's.
+    pub draw_time: u64,
+    pub draws: u64,
     pub clock_reads: u64,
     pub poll_insns: u64,
     /// Swap-to-swap durations of the frames in this window.
@@ -128,12 +132,13 @@ pub fn report(w: &Window, per_us: u64, frames_total: u64) -> String {
     let classes: String = (0..CLASSES).map(|i| format!(" {}={}%/{}", CLASS_NAMES[i], pct(w.native_time[i], wall), w.native_calls[i] / n as u64)).collect();
     format!("[HEIRLOOM-PERF frames={frames_total} n={n} frame_ms p50={} p95={} fps={}] insns/frame={} mips_step={} mips_wall={} steps/frame={} \
 interp={}% native={}% outside_step={}% gl_ring={}%{classes} clock_reads/frame={} clock_poll={}% of insns \
-| per frame: gl_ring_us={} outside_us={} gl_us={} | per gl call: ns={} | per slice: step_us={} gap_us={}",
+| per frame: gl_ring_us={} outside_us={} gl_us={} draw_us={} draws={} | per gl call: ns={} | per slice: step_us={} gap_us={}",
         at(50) / per_ms, at(95) / per_ms, if wall == 0 { 0 } else { (n as u64) * per_ms * 1000 / wall },
         w.insns / n as u64, mips(w.step_time), mips(wall), w.steps / n as u64,
         pct(interp, wall), pct(native, wall), pct(outside, wall), pct(w.gl_ring_time, wall),
         w.clock_reads / n as u64, pct(w.poll_insns, w.insns),
         w.gl_ring_time / per_us.max(1) / n as u64, outside / per_us.max(1) / n as u64, gl_own / per_us.max(1) / n as u64,
+        w.draw_time / per_us.max(1) / n as u64, w.draws / n as u64,
         gl_own.saturating_mul(1000) / per_us.max(1) / w.native_calls[Class::Gl as usize].max(1),
         w.step_time / per_us.max(1) / w.steps.max(1), outside / per_us.max(1) / w.steps.max(1))
 }
@@ -161,21 +166,31 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// The class of the glue call whose stub is at `addr` (cached by its glue id).
-    pub(crate) fn perf_class(&mut self, addr: u32) -> Class {
-        let Some(id) = self.glue.id_at_stub(addr) else { return Class::Other };
-        if let Some(c) = self.perf.as_ref().and_then(|p| p.class_of.get(id).copied()).filter(|&c| c != u8::MAX) { return from_u8(c); }
+    pub(crate) fn perf_class(&mut self, addr: u32) -> Class { self.perf_class_draw(addr).0 }
+
+    /// [`MacPpc::perf_class`], and whether the call is a GL draw (cached with it: bit 7 of the class byte).
+    pub(crate) fn perf_class_draw(&mut self, addr: u32) -> (Class, bool) {
+        let Some(id) = self.glue.id_at_stub(addr) else { return (Class::Other, false) };
+        if let Some(c) = self.perf.as_ref().and_then(|p| p.class_of.get(id).copied()).filter(|&c| c != u8::MAX) { return (from_u8(c & 0x7F), c & 0x80 != 0); }
         let symbol = self.glue.entry(id).map(|e| e.key()).unwrap_or_default();
-        let c = classify(self.bindings.get(&symbol), &symbol);
+        let b = self.bindings.get(&symbol);
+        let (c, draw) = (classify(b, &symbol), is_draw(b));
         if let Some(p) = self.perf.as_mut() {
             if p.class_of.len() <= id { p.class_of.resize(id + 1, u8::MAX); }
-            p.class_of[id] = c as u8;
+            p.class_of[id] = c as u8 | if draw { 0x80 } else { 0 };
         }
-        c
+        (c, draw)
     }
 }
 
 fn from_u8(c: u8) -> Class {
     match c { 0 => Class::Gl, 1 => Class::Clock, 2 => Class::Thread, 3 => Class::Event, 4 => Class::File, _ => Class::Other }
+}
+
+/// Whether a binding is a GL draw (its client arrays are snapshotted into the batch).
+pub fn is_draw(b: Option<&crate::symbols::Binding>) -> bool {
+    use crate::symbols::{Binding, Native};
+    matches!(b, Some(Binding::Native(Native::Gl(f))) if matches!(heirloom_gl_abi::ENTRIES.get(usize::from(f.0)).map(|e| e.name), Some("glDrawElements" | "glDrawArrays" | "glDrawRangeElements")))
 }
 
 /// A call's class from its binding (the clocks and the event calls by name: they are bound several ways).
@@ -225,7 +240,7 @@ mod tests {
         assert!(line.contains(" gl=10%/0"), "{line}");
         // the absolute times that tell a slow GL round trip from slow slicing on the Z83: 2_525_000 units outside step over 100
         // frames and 1000 slices; nothing in gl_ring
-        assert!(line.ends_with("| per frame: gl_ring_us=0 outside_us=25250 gl_us=5050 | per gl call: ns=505000000 | per slice: step_us=2525 gap_us=2525"), "{line}");
+        assert!(line.ends_with("| per frame: gl_ring_us=0 outside_us=25250 gl_us=5050 draw_us=0 draws=0 | per gl call: ns=505000000 | per slice: step_us=2525 gap_us=2525"), "{line}");
     }
 
     #[test]
@@ -237,7 +252,9 @@ mod tests {
         w.native_time[Class::Gl as usize] = 9_000; // 9 ms of GL glue in all, 1 ms of it waiting on the worker
         w.native_calls[Class::Gl as usize] = 4_000;
         w.gl_ring_time = 1_000;
+        w.draw_time = 4_000; // 1 ms of draws a frame, 200 draws a frame
+        w.draws = 800;
         let line = report(&w, 1, 4);
-        assert!(line.contains("| per frame: gl_ring_us=250 outside_us=0 gl_us=2000 | per gl call: ns=2000 |"), "{line}");
+        assert!(line.contains("| per frame: gl_ring_us=250 outside_us=0 gl_us=2000 draw_us=1000 draws=200 | per gl call: ns=2000 |"), "{line}");
     }
 }

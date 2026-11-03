@@ -112,6 +112,8 @@ pub struct GlState {
     fence_names: BTreeMap<u32, Option<u32>>,
     next_fence_name: u32,
     ctxs: BTreeMap<u32, Token>,
+    /// `ctxs[current]`, kept by `gl_ctx_changed` (the per-call path reads it instead of the map).
+    current_token: Option<Token>,
     next_ctx: u32,
     current: u32,
     arrays: BTreeMap<(u8, u8), Descriptor>,
@@ -222,7 +224,11 @@ impl<U: GuestUi> MacPpc<U> {
         self.gl.sigs.get(usize::from(entry)).copied().flatten()
     }
 
-    fn gl_ctx_token(&self) -> Option<Token> { self.gl.ctxs.get(&self.gl.current).copied() }
+    /// The current context's token (kept in step with `ctxs` and `current` by [`MacPpc::gl_ctx_changed`]: every GL call asks).
+    fn gl_ctx_token(&self) -> Option<Token> { self.gl.current_token }
+
+    /// `ctxs` or `current` changed: the current context's token again.
+    fn gl_ctx_changed(&mut self) { self.gl.current_token = self.gl.ctxs.get(&self.gl.current).copied(); }
 
     /// Record a GL error the way GL does: the flag keeps the FIRST error until `glGetError` reads it (GL 1.2 §2.5).
     fn gl_set_error(&mut self, e: u32) { if self.gl.gl_error == 0 { self.gl.gl_error = e; } }
@@ -268,17 +274,18 @@ impl<U: GuestUi> MacPpc<U> {
                         self.gl.next_ctx += 1;
                         let h = self.gl.next_ctx;
                         self.gl.ctxs.insert(h, Token { slot: slot as u32, incarnation: inc as u32 });
+                        self.gl_ctx_changed();
                         ret = h;
                     }
                 }
             }
             "aglDestroyContext" => match self.gl.ctxs.remove(&a0) {
-                Some(t) => { self.gl_queue(t, Command::ContextDestroy); self.gl_flush(); if self.gl.current == a0 { self.gl.current = 0; } ret = 1; }
+                Some(t) => { self.gl_queue(t, Command::ContextDestroy); self.gl_flush(); if self.gl.current == a0 { self.gl.current = 0; } self.gl_ctx_changed(); ret = 1; }
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
             },
             "aglSetCurrentContext" => {
-                if a0 == 0 { self.gl_queue(none, Command::MakeCurrent); self.gl_flush(); self.gl.current = 0; ret = 1; }
-                else if let Some(t) = self.gl.ctxs.get(&a0).copied() { self.gl_queue(t, Command::MakeCurrent); self.gl.current = a0; ret = 1; }
+                if a0 == 0 { self.gl_queue(none, Command::MakeCurrent); self.gl_flush(); self.gl.current = 0; self.gl_ctx_changed(); ret = 1; }
+                else if let Some(t) = self.gl.ctxs.get(&a0).copied() { self.gl_queue(t, Command::MakeCurrent); self.gl.current = a0; self.gl_ctx_changed(); ret = 1; }
                 else { self.gl.agl_error = AGL_BAD_CONTEXT; }
             }
             "aglSetDrawable" => match self.gl.ctxs.get(&a0).copied() {

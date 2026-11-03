@@ -55,11 +55,19 @@ impl<U: GuestUi> MacPpc<U> {
         self.put_bytes(at, &b, who)
     }
 
+    /// `f`'s name as `{f:?}` writes it, made once per distinct call (a game calls a handful, many times a frame).
+    fn tb_name(&mut self, f: TbFn) -> alloc::rc::Rc<str> {
+        if let Some((_, n)) = self.rt.tb_names.iter().find(|(g, _)| *g == f) { return n.clone(); }
+        let n: alloc::rc::Rc<str> = alloc::rc::Rc::from(format!("{f:?}"));
+        self.rt.tb_names.push((f, n.clone()));
+        n
+    }
+
     pub(crate) fn tb_call(&mut self, f: TbFn, cpu: &mut Cpu) -> Result<(), String> {
         use TbFn::*;
         let (a0, a1, a2, a3) = (arg(self, cpu, 0)?, arg(self, cpu, 1).unwrap_or(0), arg(self, cpu, 2).unwrap_or(0), arg(self, cpu, 3).unwrap_or(0));
         let _ = a3;
-        let name = format!("{f:?}");
+        let name = self.tb_name(f);
         let r: u32 = match f {
             // GetIndString(Str255 theString, short strListID, short index): the index'th string of the 'STR#' resource; an empty string if there is none (ResError is set)
             GetIndString => {
