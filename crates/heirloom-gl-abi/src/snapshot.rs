@@ -106,7 +106,7 @@ pub struct ArraySnapshot {
 }
 
 /// Reverse every `ty`-sized component in place: guest (big-endian) to wire (little-endian).
-fn to_wire_order(ty: ElemType, bytes: &mut [u8]) {
+pub(crate) fn to_wire_order(ty: ElemType, bytes: &mut [u8]) {
     // one fixed-width swap per component (the compiler vectorises these; a per-chunk `reverse` it does not)
     match ty.bytes() {
         2 => bytes.chunks_exact_mut(2).for_each(|c| {

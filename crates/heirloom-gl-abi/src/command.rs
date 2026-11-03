@@ -279,11 +279,37 @@ impl Frame {
     }
 
     /// Append a `Command::Call { entry, args }` frame for `token` from borrowed words - the same bytes as encoding that frame, with
-    /// no `Vec` of arguments to build first (the engine's per-call path).
+    /// no `Vec` of arguments to build first (the engine's per-call path: ~5,000 a Warcraft III frame, so the frame is written
+    /// with one capacity check and its length known up front instead of a check per field and a patch).
     pub fn encode_call_into(out: &mut Vec<u8>, token: Token, entry: u16, args: &[u64]) {
-        let (mut p, start) = begin(out, KIND_CALL, token);
-        call_payload(&mut p, entry, args);
-        finish(p, start, out);
+        let len = 8 + 8 * args.len();
+        out.reserve(HEADER + len);
+        let mut h = [0u8; HEADER + 8];
+        h[0..2].copy_from_slice(&ABI_VERSION.to_le_bytes());
+        h[2..4].copy_from_slice(&KIND_CALL.to_le_bytes());
+        h[4..8].copy_from_slice(&(len as u32).to_le_bytes());
+        h[8..12].copy_from_slice(&token.slot.to_le_bytes());
+        h[12..16].copy_from_slice(&token.incarnation.to_le_bytes());
+        h[16..18].copy_from_slice(&entry.to_le_bytes());
+        h[20..24].copy_from_slice(&(args.len() as u32).to_le_bytes());
+        out.extend_from_slice(&h);
+        for a in args {
+            out.extend_from_slice(&a.to_le_bytes());
+        }
+    }
+
+    /// Capture a `glDrawElements(mode, count, ty, indices at index_off)` out of guest memory `mem` STRAIGHT INTO its frame at the end
+    /// of `out`: the same bytes as `Frame { token, command: Command::Draw(DrawCommand::capture(..)) }.encode_into(out)`, written
+    /// once - each index and array range is copied from guest memory into the frame and converted to the wire order there, and the
+    /// index range is found in the same pass (no snapshot buffers, no second copy: a Warcraft III frame's ~300 draws carry
+    /// ~470 KB). On an error `out` is as it was.
+    pub fn encode_draw_elements_into(out: &mut Vec<u8>, token: Token, mem: &[u8], mode: u32, index_off: usize, count: u32, ty: ElemType, arrays: &[Descriptor]) -> Result<(), SnapshotError> {
+        let start = out.len();
+        let r = encode_draw_body(out, token, mem, mode, index_off, count, ty, arrays);
+        if r.is_err() {
+            out.truncate(start);
+        }
+        r
     }
 
     /// Decode ONE frame from the front of `bytes`; returns it and the bytes consumed.
@@ -372,6 +398,120 @@ impl Frame {
     }
 }
 
+/// [`Frame::encode_draw_elements_into`] without the rollback.
+#[allow(clippy::too_many_arguments)]
+fn encode_draw_body(out: &mut Vec<u8>, token: Token, mem: &[u8], mode: u32, index_off: usize, count: u32, ty: ElemType, arrays: &[Descriptor]) -> Result<(), SnapshotError> {
+    if !matches!(ty, ElemType::U8 | ElemType::U16 | ElemType::U32) {
+        return Err(SnapshotError::BadIndexType);
+    }
+    let ibytes = (count as usize).checked_mul(ty.bytes()).ok_or(SnapshotError::Overflow)?;
+    let iend = index_off.checked_add(ibytes).ok_or(SnapshotError::Overflow)?;
+    if iend > mem.len() {
+        return Err(SnapshotError::OutOfRange);
+    }
+    let start = out.len();
+    let mut h = [0u8; HEADER + 16];
+    h[0..2].copy_from_slice(&ABI_VERSION.to_le_bytes());
+    h[2..4].copy_from_slice(&KIND_DRAW.to_le_bytes());
+    h[8..12].copy_from_slice(&token.slot.to_le_bytes());
+    h[12..16].copy_from_slice(&token.incarnation.to_le_bytes());
+    h[16..20].copy_from_slice(&mode.to_le_bytes());
+    h[20..24].copy_from_slice(&(ty as u32).to_le_bytes());
+    h[24..28].copy_from_slice(&count.to_le_bytes());
+    // the array count (h[28..32]) is patched below: none when the draw has no index
+    out.extend_from_slice(&h);
+    let at = out.len();
+    out.extend_from_slice(&mem[index_off..iend]);
+    let range = indices_to_wire(ty, &mut out[at..]);
+    if let Some((lo, hi)) = range {
+        let n = (hi - lo).checked_add(1).ok_or(SnapshotError::Overflow)?;
+        for d in arrays {
+            encode_array(out, mem, d, lo, n)?;
+        }
+        out[start + 28..start + 32].copy_from_slice(&(arrays.len() as u32).to_le_bytes());
+    }
+    let len = (out.len() - start - HEADER) as u32;
+    out[start + 4..start + 8].copy_from_slice(&len.to_le_bytes());
+    Ok(())
+}
+
+/// The (min, max) of little-endian indices of type `ty`; `None` when there are none. A plain min/max loop per width (the
+/// worker decodes ~300 draws a Warcraft III frame: an `Option` fold per index was ~0.6M host instructions a frame).
+pub fn index_range(ty: ElemType, b: &[u8]) -> Option<(u32, u32)> {
+    if b.is_empty() {
+        return None;
+    }
+    let (mut lo, mut hi) = (u32::MAX, 0u32);
+    match ty {
+        ElemType::U8 => b.iter().for_each(|&v| { lo = lo.min(u32::from(v)); hi = hi.max(u32::from(v)); }),
+        ElemType::U16 => b.chunks_exact(2).for_each(|c| { let v = u32::from(u16::from_le_bytes([c[0], c[1]])); lo = lo.min(v); hi = hi.max(v); }),
+        _ => b.chunks_exact(4).for_each(|c| { let v = u32::from_le_bytes([c[0], c[1], c[2], c[3]]); lo = lo.min(v); hi = hi.max(v); }),
+    }
+    (lo <= hi).then_some((lo, hi))
+}
+
+/// Convert indices in place from the guest's order to the wire's and return their (min, max) - one pass.
+fn indices_to_wire(ty: ElemType, b: &mut [u8]) -> Option<(u32, u32)> {
+    if b.is_empty() {
+        return None;
+    }
+    let (mut lo, mut hi) = (u32::MAX, 0u32);
+    match ty {
+        ElemType::U8 => b.iter().for_each(|&v| { lo = lo.min(u32::from(v)); hi = hi.max(u32::from(v)); }),
+        ElemType::U16 => b.chunks_exact_mut(2).for_each(|c| {
+            let v = u16::from_be_bytes([c[0], c[1]]);
+            c.copy_from_slice(&v.to_le_bytes());
+            lo = lo.min(u32::from(v));
+            hi = hi.max(u32::from(v));
+        }),
+        _ => b.chunks_exact_mut(4).for_each(|c| {
+            let v = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
+            c.copy_from_slice(&v.to_le_bytes());
+            lo = lo.min(v);
+            hi = hi.max(v);
+        }),
+    }
+    Some((lo, hi))
+}
+
+/// One array's frame record and its vertices `first .. first+count` at the end of `out`, as `snapshot_array_into` + the draw's
+/// encoding would write them (the same checks, in the same order).
+fn encode_array(out: &mut Vec<u8>, mem: &[u8], d: &Descriptor, first: u32, count: u32) -> Result<(), SnapshotError> {
+    if !(1..=4).contains(&d.size) {
+        return Err(SnapshotError::BadSize(d.size));
+    }
+    let vbytes = (d.size as usize).checked_mul(d.ty.bytes()).ok_or(SnapshotError::Overflow)?;
+    let stride = if d.stride == 0 { vbytes } else { d.stride as usize };
+    let total = (count as usize).checked_mul(vbytes).ok_or(SnapshotError::Overflow)?;
+    let begin = (first as usize).checked_mul(stride).and_then(|o| o.checked_add(d.offset)).ok_or(SnapshotError::Overflow)?;
+    let last = (count as usize - 1).checked_mul(stride).and_then(|o| o.checked_add(begin)).ok_or(SnapshotError::Overflow)?;
+    let end = last.checked_add(vbytes).ok_or(SnapshotError::Overflow)?;
+    if end > mem.len() {
+        return Err(SnapshotError::OutOfRange);
+    }
+    let mut rec = [0u8; 20];
+    rec[0] = d.role as u8;
+    rec[1] = d.unit;
+    rec[2] = d.size;
+    rec[4..8].copy_from_slice(&(d.ty as u32).to_le_bytes());
+    rec[8..12].copy_from_slice(&first.to_le_bytes());
+    rec[12..16].copy_from_slice(&count.to_le_bytes());
+    rec[16..20].copy_from_slice(&(total as u32).to_le_bytes());
+    out.reserve(rec.len() + total);
+    out.extend_from_slice(&rec);
+    let at = out.len();
+    if stride == vbytes {
+        out.extend_from_slice(&mem[begin..end]);
+    } else {
+        for i in 0..count as usize {
+            let a = begin + i * stride; // bounded by the proof above
+            out.extend_from_slice(&mem[a..a + vbytes]);
+        }
+    }
+    crate::snapshot::to_wire_order(d.ty, &mut out[at..]);
+    Ok(())
+}
+
 fn decode_draw(p: &mut Reader) -> Result<DrawCommand, WireError> {
     let mode = p.u32()?;
     if mode > GL_POLYGON {
@@ -401,10 +541,6 @@ fn decode_draw(p: &mut Reader) -> Result<DrawCommand, WireError> {
         }
         arrays.push(ArraySnapshot { role, unit, size, ty, first, count, data: p.take(dlen)?.to_vec() });
     }
-    let range = idata.chunks_exact(ity.bytes()).map(|c| match ity {
-        ElemType::U8 => u32::from(c[0]),
-        ElemType::U16 => u32::from(u16::from_le_bytes([c[0], c[1]])),
-        _ => u32::from_le_bytes([c[0], c[1], c[2], c[3]]),
-    }).fold(None, |a: Option<(u32, u32)>, v| Some(a.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v)))));
+    let range = index_range(ity, &idata);
     Ok(DrawCommand { mode, indices: crate::snapshot::IndexSnapshot { ty: ity, count: icount, data: idata, range }, arrays })
 }
