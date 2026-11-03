@@ -329,6 +329,13 @@ fn the_engine_reads_the_powerpc_stage_clock_through_the_table() {
     assert_eq!(perf(remote.inst, 1000, line.as_mut_ptr(), line.len(), &mut n), PERF_NONE);
     assert_eq!(remote.send(&program(&app(), "PPC Hello")), APPLY_OK);
     assert_eq!(remote.send(&[control(Control::Advance { virtual_us: 0 }), control(Control::Step { budget: BUDGET })]), APPLY_OK);
+    // the CFM's map lines come first through the same entry (one per instantiated section: profile.rs), then nothing - no frame
+    // has swapped yet, so no window line
+    let mut cfm = Vec::new();
+    while perf(remote.inst, 1000, line.as_mut_ptr(), line.len(), &mut n) == PERF_LINE {
+        cfm.push(String::from_utf8_lossy(&line[..n]).into_owned());
+    }
+    assert!(!cfm.is_empty() && cfm.iter().all(|l| l.starts_with("[HEIRLOOM-CFM frag=")), "{cfm:?}");
     assert_eq!(perf(remote.inst, 1000, line.as_mut_ptr(), line.len(), &mut n), PERF_NONE);
     assert_eq!(n, 0);
 }
