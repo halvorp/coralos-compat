@@ -173,3 +173,57 @@ fn tier_jit_needs_an_accepted_code_mem_and_otherwise_runs_tier_1_by_name() {
     assert_eq!((st.insns, cpu.gpr[3]), (3, 6));
     assert_eq!(e.tier_set, Some(TIER_JIT));
 }
+
+/// Counts the allocations of the thread that switched it on.
+struct Counting;
+std::thread_local! { static ON: core::cell::Cell<bool> = const { core::cell::Cell::new(false) }; static N: core::cell::Cell<u64> = const { core::cell::Cell::new(0) }; }
+// SAFETY: forwards every call unchanged to the system allocator; the thread-local counter is a side effect only.
+unsafe impl core::alloc::GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: core::alloc::Layout) -> *mut u8 {
+        if ON.with(|o| o.get()) { N.with(|n| n.set(n.get() + 1)); }
+        // SAFETY: the caller's contract for `alloc` is passed through.
+        unsafe { std::alloc::System.alloc(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: core::alloc::Layout) {
+        // SAFETY: `p` came from System with layout `l`.
+        unsafe { std::alloc::System.dealloc(p, l) }
+    }
+}
+#[global_allocator]
+static A: Counting = Counting;
+
+/// h86: two guest threads' CPUs carrying the same 1,300 bound natives (each its own copy of the set, so their generations differ)
+/// run in turn on one Exec: switching between them allocates nothing once both are bound (the mirror was cloned whole per
+/// switch: ~120 node allocations each - RED before the in-place sync), and a native bound on one thread only still reaches the
+/// library when that thread runs and is unbound when the other does.
+#[test]
+fn switching_between_threads_with_equal_native_sets_allocates_nothing() {
+    let mut h = host(|_, _, _| true);
+    let mut a = Cpu::new(CODE, 0x8_0000);
+    for k in 0..1_300u32 { a.bind_native(0x10_0000 + 16 * k); }
+    let mut b = a.clone();
+    b.bind_native(0x9_0000);
+    b.unbind_native(0x9_0000); // b's set equals a's, under its own generation
+    let mut e = Exec::default();
+    for _ in 0..2 { let _ = e.resume(&mut h, &mut a, 2); let _ = e.resume(&mut h, &mut b, 2); }
+    (a.pc, b.pc) = (CODE, CODE);
+    ON.with(|o| o.set(true));
+    for _ in 0..50 {
+        a.pc = CODE;
+        let _ = e.resume(&mut h, &mut a, 2);
+        b.pc = CODE;
+        let _ = e.resume(&mut h, &mut b, 2);
+    }
+    ON.with(|o| o.set(false));
+    assert_eq!(N.with(|n| n.get()), 0, "switching threads allocated");
+    // a native only b has: b's run calls it, a's does not
+    b.bind_native(CODE);
+    b.pc = CODE;
+    b.lr = 0x2000;
+    let calls = h.calls.len();
+    let _ = e.resume(&mut h, &mut b, 4);
+    assert_eq!(h.calls.len(), calls + 1, "b's own native ran");
+    a.pc = CODE;
+    let _ = e.resume(&mut h, &mut a, 2);
+    assert_eq!(h.calls.len(), calls + 1, "a, without it, executed the code instead");
+}

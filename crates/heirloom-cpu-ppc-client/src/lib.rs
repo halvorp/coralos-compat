@@ -209,10 +209,13 @@ struct BoundSet { set: BTreeSet<u32>, gen: Option<u64> }
 impl BoundSet {
     fn sync(&mut self, t: &PpcVTable, inst: *mut CpuInstance, cpu: &Cpu) {
         if self.gen == Some(cpu.natives_gen) { return; }
+        // The mirror follows the CPU's set IN PLACE: a guest that switches threads (each thread's Cpu carries its own copy of the
+        // set, so its generation differs) costs a walk of the two sets - no copy of one (a clone of ~1,300 natives was ~120 node
+        // allocations and frees per switch on the engine's heap).
         let gone: Vec<u32> = self.set.difference(&cpu.natives).copied().collect();
-        for a in gone { (t.unbind_native)(inst, a); }
-        for &a in cpu.natives.difference(&self.set) { (t.bind_native)(inst, a); }
-        self.set = (*cpu.natives).clone();
+        for a in gone { (t.unbind_native)(inst, a); self.set.remove(&a); }
+        let new: Vec<u32> = cpu.natives.difference(&self.set).copied().collect();
+        for a in new { (t.bind_native)(inst, a); self.set.insert(a); }
         self.gen = Some(cpu.natives_gen);
     }
 }
