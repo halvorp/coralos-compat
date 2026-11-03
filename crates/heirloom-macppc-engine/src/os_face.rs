@@ -81,7 +81,7 @@ impl OsFamily for MacPpcFamily {
         if name != CPU_TIER {
             return Err(format!("input {name:?}: the PowerPC Mac takes {CPU_TIER:?} and {HOME:?}"));
         }
-        let t = core::str::from_utf8(&bytes).ok().and_then(Tier::parse).ok_or_else(|| format!("{CPU_TIER}: {:?} is not a tier (interp, blocks or jit)", String::from_utf8_lossy(&bytes)))?;
+        let t = core::str::from_utf8(&bytes).ok().and_then(Tier::parse).ok_or_else(|| format!("{CPU_TIER}: {:?} is not a tier (interp, blocks, jit or jitblocks)", String::from_utf8_lossy(&bytes)))?;
         m.exec().tier = t;
         Ok(())
     }
@@ -99,6 +99,7 @@ fn tier_name(t: Tier) -> &'static str {
         Tier::Lockstep => "lockstep",
         Tier::Jit => "jit",
         Tier::JitLockstep => "jitlockstep",
+        Tier::JitBlocks => "jitblocks",
     }
 }
 

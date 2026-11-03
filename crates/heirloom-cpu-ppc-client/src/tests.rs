@@ -174,6 +174,25 @@ fn tier_jit_needs_an_accepted_code_mem_and_otherwise_runs_tier_1_by_name() {
     assert_eq!(e.tier_set, Some(TIER_JIT));
 }
 
+/// Tier::JitBlocks (cpu-tier "jitblocks": tier 2 with regions off, the silicon A/B switch) crosses the table as TIER_JIT_BLOCKS
+/// with an accepted provider, and runs tier 1 by name without one - like Tier::Jit.
+#[test]
+fn tier_jitblocks_crosses_as_tier_jit_blocks() {
+    let mut h = host(|_, _, _| true);
+    let mut cpu = Cpu::new(CODE, 0x8_0000);
+    let mut e = Exec::new(Tier::JitBlocks);
+    let _ = e.resume(&mut h, &mut cpu, 3);
+    assert!(e.lockstep_refused(), "no provider: tier 1, named");
+    let ok = PpcCodeMem { size: core::mem::size_of::<PpcCodeMem>() as u32, flags: 0, ctx: ptr::null_mut(), reserve: refuse_reserve, publish: refuse_range, reset: refuse_range };
+    let mut e = Exec::new(Tier::JitBlocks);
+    e.set_code_mem(ok);
+    let mut cpu = Cpu::new(CODE, 0x8_0000);
+    let st = e.resume(&mut h, &mut cpu, 3);
+    assert!(!e.lockstep_refused());
+    assert_eq!((st.insns, cpu.gpr[3]), (3, 6));
+    assert_eq!(e.tier_set, Some(TIER_JIT_BLOCKS));
+}
+
 /// Counts the allocations of the thread that switched it on.
 struct Counting;
 std::thread_local! { static ON: core::cell::Cell<bool> = const { core::cell::Cell::new(false) }; static N: core::cell::Cell<u64> = const { core::cell::Cell::new(0) }; }

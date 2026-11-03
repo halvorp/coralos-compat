@@ -669,3 +669,19 @@ fn negative_control_every_planted_region_mutant_goes_red() {
         assert!(red, "region mutant {mutant} stayed GREEN");
     }
 }
+
+/// Tier::JitBlocks (cpu-tier "jitblocks", TIER_JIT_BLOCKS: the silicon A/B switch) is tier 2 with no regions: the same end
+/// state, JIT code ran, and no region formed even at the lowest threshold.
+#[test]
+fn tier_jitblocks_runs_tier_2_without_regions() {
+    let mut compiled = 0;
+    for (name, prog, setup) in programs_under_test() {
+        let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
+        let (got, e) = run_region(Tier::JitBlocks, 0, prog, 1_000, setup, Some(REGION_TEST));
+        assert!(got == want, "{name}: jitblocks ends in tier 0's state");
+        let s = e.jit_stats();
+        assert!(s.regions == 0 && !s.refused, "{name}: tier 2 without regions: {s:?}");
+        compiled += s.compiled;
+    }
+    assert!(compiled > 20, "JIT code ran: {compiled} blocks compiled");
+}

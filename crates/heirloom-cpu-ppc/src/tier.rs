@@ -173,7 +173,7 @@ impl Exec {
                     let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));
                     t1::run(host, cpu, budget, &mut self.prof, cache)
                 }
-                Tier::Jit | Tier::JitLockstep => {
+                Tier::Jit | Tier::JitLockstep | Tier::JitBlocks => {
                     if self.divergence.is_some() { cpu.halt(); return RunStats { insns: 0, halted: true, blocked: false, trap: None }; }
                     self.run_jit(host, cpu, budget)
                 }
@@ -211,6 +211,9 @@ impl Exec {
             // lockstep journaling, a planted mutant or MOVBE changed since the code was made: it is dropped and remade
             if let Some(j) = self.jit.as_mut() {
                 j.reconfigure(lock, self.jit_mutant, self.jit_movbe != Some(false));
+                // Tier::JitBlocks: no new regions (those already formed stay until evicted or replaced)
+                let after = if self.tier == Tier::JitBlocks { 0 } else { self.jit_region_after.unwrap_or(crate::jit::REGION_AFTER) };
+                if j.region_after != after { j.set_region_after(after); }
             }
             if let Some(jit) = self.jit.as_mut() {
                 let cache = self.cache.get_or_insert_with(|| Box::new(Cache::new()));

@@ -36,6 +36,7 @@ pub(crate) const EXIT_TRAP: u32 = 2;
 pub(crate) const EXIT_BAIL: u32 = 3;
 /// Whole-block tier-1 runs before a block is compiled (a new constant of this tier; tuned only by measurement).
 pub(crate) const HOT_AFTER: u32 = 2;
+pub(crate) use crate::jit_region::REGION_AFTER;
 /// Code arena per guest machine: a cache of [`SEGMENTS`] segments reused in turn (FIFO) when full - the oldest segment's
 /// blocks are dropped, never all of them (an arena-wide drop re-translated ~7k blocks inside ONE WC3 gameplay frame: the
 /// worst frame of the host run, 22 ms of 36). Never a refusal.
@@ -754,7 +755,7 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
                 // a block's entry counter ran out in this entry: form the region it heads (compiled now, published with the
                 // next batch; the block runs meanwhile - its counter wrapped, so it does not ask again)
                 let head = core::mem::replace(&mut jit.ctx.hot, EMPTY_PC);
-                if head != EMPTY_PC && what.is_empty() && !jit.dead { jit.form_region::<H>(cache, host.mem(), head, n); }
+                if head != EMPTY_PC && what.is_empty() && !jit.dead && jit.region_after != 0 { jit.form_region::<H>(cache, host.mem(), head, n); }
                 if !what.is_empty() {
                     return (RunStats { insns: n, halted: cpu.halted(), blocked: cpu.blocked(), trap: t }, Some(Divergence { block: pc, what }));
                 }
