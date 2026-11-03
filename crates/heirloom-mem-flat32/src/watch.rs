@@ -90,11 +90,16 @@ impl crate::GuestMem {
         if page >= w.gen_pages as usize || page / 64 >= w.marked_words as usize { return 0; }
         // SAFETY: both indices are inside the owner-allocated arrays (checked above).
         unsafe {
-            *w.marked.add(page / 64) |= 1 << (page % 64);
+            let word = &mut *w.marked.add(page / 64);
+            if *word & (1 << (page % 64)) == 0 { w.marks = w.marks.wrapping_add(1); }
+            *word |= 1 << (page % 64);
             w.active = 1;
             *w.gen.add(page)
         }
     }
+    /// Pages marked so far (wrapping): with [`code_bumps`](Self::code_bumps) (every unmark bumps), unchanged = the `marked`
+    /// bitmap is as it was.
+    pub fn code_marks(&self) -> u32 { self.hooks.w().marks }
     /// The generation of the page holding `addr` (0 for a page outside the watch).
     #[inline]
     pub fn code_gen(&self, addr: u32) -> u64 {

@@ -64,6 +64,8 @@ mod jit_regs;
 #[cfg(target_arch = "x86_64")]
 mod jit_fp;
 mod pc_map;
+#[cfg(target_arch = "x86_64")]
+mod jit_smap;
 mod jit_stats;
 pub use jit_stats::JitStats;
 #[cfg(target_arch = "x86_64")]

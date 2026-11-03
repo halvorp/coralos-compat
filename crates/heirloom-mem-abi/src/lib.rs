@@ -22,7 +22,9 @@ pub struct CodeWatch {
     pub bumps: u64,
     /// 1 when any page is marked (the only thing a write tests when nothing is).
     pub active: u32,
-    pub reserved: u32,
+    /// Pages MARKED so far (a bit going 0 -> 1; wrapping). With `bumps` (every unmark bumps) a reader that mirrors `marked`
+    /// (tier 2's store map) knows exactly when to look again. Was `reserved` (always 0): an older writer leaves it 0.
+    pub marks: u32,
 }
 
 /// The engine's guest RAM: `len` big-endian bytes at `base`; every access drops the address bits outside `mask` first.

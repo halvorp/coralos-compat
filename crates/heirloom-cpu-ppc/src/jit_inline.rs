@@ -68,7 +68,7 @@ impl E<'_, '_> {
         a.alu_rr64(Alu::Add, RCX, RCX);
         self.slow_if(Cc::Ne, i);
         self.a.here(ok);
-        self.ea(i, e, 4);
+        self.ea_regs(e);
         self.store_guard(i, e, 4);
         let a = &mut self.a;
         a.ld64(RDX, f(s));

@@ -184,6 +184,11 @@ impl Asm {
         self.u32(v as u32);
     }
     /// op qword [m], imm32 (sign-extended).
+    /// cmp byte [mm], imm8.
+    pub(crate) fn cmp8_mi(&mut self, mm: M, v: u8) {
+        self.op_m(None, false, &[0x80], 7, mm, false);
+        self.u8(v);
+    }
     pub(crate) fn alu_mi64(&mut self, op: Alu, mm: M, v: u32) {
         self.op_m(None, true, &[0x81], op as u8, mm, false);
         self.u32(v);
@@ -340,6 +345,8 @@ mod tests {
         assert_eq!(enc(|a| a.cmov(Cc::Ne, RDX, RAX)), [0x0F, 0x45, 0xD0]); // cmovne edx,eax
         assert_eq!(enc(|a| a.bt_oi(O::M(m(RBX, 0x100)), 5)), [0x0F, 0xBA, 0xA3, 0x00, 0x01, 0, 0, 5]); // bt dword [rbx+0x100],5
         assert_eq!(enc(|a| a.bt_rr64(RDX, RCX)), [0x48, 0x0F, 0xA3, 0xCA]); // bt rdx,rcx
+        assert_eq!(enc(|a| a.cmp8_mi(mx(RDI, RCX, 1), 0)), [0x80, 0x3C, 0x0F, 0x00]); // cmp byte [rdi+rcx],0
+        assert_eq!(enc(|a| a.cmp8_mi(mx(R12, R9, 1), 7)), [0x43, 0x80, 0x3C, 0x0C, 0x07]); // cmp byte [r12+r9],7
         assert_eq!(enc(|a| a.jmp_m(m(R13, 8))), [0x41, 0xFF, 0x65, 0x08]); // jmp [r13+8]
         assert_eq!(enc(|a| a.jmp_m(m(RAX, 0))), [0xFF, 0x20]); // jmp [rax]
         assert_eq!(enc(|a| a.call_r(RAX)), [0xFF, 0xD0]);

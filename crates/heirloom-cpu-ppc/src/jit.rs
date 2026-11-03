@@ -77,6 +77,8 @@ pub(crate) struct Ctx {
     pub(crate) mask: u32,
     pad: u32,
     pub(crate) marked: *const u64,
+    /// The store map (jit_smap): one byte per guest page, 1 = an inline store may write there.
+    pub(crate) smap: *const u8,
     pub(crate) budget: u64,
     pub(crate) retired: u64,
     pub(crate) tb0: u64,
@@ -155,17 +157,19 @@ pub(crate) struct Jit {
     /// or PUBLISH_REFUSALS publishes in a row): tier 2 is refused from then on (JitStats::refused), tier 1 runs.
     refusals: u32,
     pub(crate) dead: bool,
+    /// The store map inline stores test (mirrors the code watch; synced before every entry).
+    smap: crate::jit_smap::StoreMap,
 }
 
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
         let arena = Arena::new(mem, arena_bytes, SEGMENTS)?;
-        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, resync: false, no_resync: false, census: None });
+        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, trap: None, native: 0, natives: 0, helpers: 0, resync: false, no_resync: false, census: None });
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << TABLE_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
-            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false,
+            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(),
         };
         if !j.stubs() { return None; }
         Some(j)
@@ -449,6 +453,9 @@ impl Jit {
     /// Run JIT code from `entry` for at most `budget` instructions: (exit status, instructions retired).
     fn run_code<H: Host>(&mut self, host: &mut H, cpu: &mut Cpu, entry: u64, budget: u64) -> (u32, u64) {
         let raw = host.mem().raw();
+        // the store map first: it must mirror the watch before any inline store runs (no memory for it: tier 1 runs)
+        if !self.smap.sync(host.mem(), &raw, self.mutant == crate::jit_emit::MUT_SMAP_STALE) { return (EXIT_BAIL, 0); }
+        self.ctx.smap = self.smap.map.as_ptr();
         let c = &mut *self.ctx;
         c.cpu = cpu as *mut Cpu;
         c.ram = raw.base;

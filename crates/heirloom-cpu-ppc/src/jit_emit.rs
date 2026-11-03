@@ -57,6 +57,9 @@ pub(crate) const MUT_INNER_ANY_GEN: u8 = 17;
 /// A refused publish resets the whole arena and drops every block (jit.rs) - the pre-h86 behaviour that turned one slow
 /// TLB shootdown on the Z83 into a withdraw-everything / recompile-everything loop.
 pub(crate) const MUT_FLUSH_ON_REFUSAL: u8 = 18;
+/// The store map stops mirroring the code watch after it is built (jit_smap): a page decoded later stays "store inline", so a
+/// store into fresh code never bumps its generation.
+pub(crate) const MUT_SMAP_STALE: u8 = 19;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -377,32 +380,43 @@ impl E<'_, '_> {
         if e.update { a.mov_rr(RAX, RSI); }
         if self.env.mask != u32::MAX { a.alu_rm(Alu::And, RAX, ctx(offset_of!(Ctx, mask))); }
     }
-    /// The store guards after `ea`: no page crossing, the page not watched (it holds decoded code), and in lockstep the
-    /// old bytes journaled first.
+    /// The store guards after `ea_regs` (eax = the masked EA; no bounds test: the store map covers it): the store stays in
+    /// one page - a 2- or 4-byte store by its ALIGNMENT (`test al, n - 1`: an unaligned one takes the slow path, exact and
+    /// rare), an 8-byte one by its offset in the page - then `store_guard_n`.
     pub(crate) fn store_guard(&mut self, i: usize, e: Ea, n: u8) {
-        if n > 1 {
-            let a = &mut self.a;
-            a.mov_rr(RCX, RAX);
-            a.alu_ri(Alu::And, RCX, 0xFFF);
-            a.alu_ri(Alu::Cmp, RCX, 0x1000 - n as u32);
-            self.slow_if(Cc::A, i);
+        match n {
+            2 | 4 => {
+                self.a.test_ri(RAX, n as u32 - 1);
+                self.slow_if(Cc::Ne, i);
+            }
+            8 => {
+                let a = &mut self.a;
+                a.mov_rr(RCX, RAX);
+                a.alu_ri(Alu::And, RCX, 0xFFF);
+                a.alu_ri(Alu::Cmp, RCX, 0x1000 - 8);
+                self.slow_if(Cc::A, i);
+            }
+            _ => {}
         }
         self.store_guard_n(i, n as u32);
         if self.env.logged { self.ea_regs(e); }
     }
-    /// A store of `bytes` at eax that stays in one page: slow if the page is watched (it holds decoded code); in lockstep
-    /// the old bytes are journaled first (eax is then clobbered: the caller recomputes it).
+    /// A store of `bytes` at eax that stays in one page: the slow path unless the store map (jit_smap) says the page is inside
+    /// RAM and not watched (a watched page holds decoded code: tier 1's handler writes it through GuestMem, which bumps its
+    /// generation); in lockstep the old bytes are journaled first (eax is then clobbered: the caller recomputes it).
     pub(crate) fn store_guard_n(&mut self, i: usize, bytes: u32) {
+        let a = &mut self.a;
         if self.env.mutant != MUT_NO_WATCH {
-            let a = &mut self.a;
             a.mov_rr(RCX, RAX);
             a.sh_ri(Sh::Shr, RCX, 12);
-            a.mov_rr(RDX, RCX);
-            a.sh_ri(Sh::Shr, RDX, 6);
-            a.ld64(RDI, ctx(offset_of!(Ctx, marked)));
-            a.ld64(RDX, mx(RDI, RDX, 8));
-            a.bt_rr64(RDX, RCX);
-            self.slow_if(Cc::B, i);
+            a.ld64(RDI, ctx(offset_of!(Ctx, smap)));
+            a.cmp8_mi(mx(RDI, RCX, 1), 0);
+            self.slow_if(Cc::E, i);
+        } else {
+            // the planted mutant drops the watch test only: RAM bounds still hold (the map was both)
+            a.lea64(RCX, m(RAX, bytes as i32));
+            a.alu_rm64(Alu::Cmp, RCX, ctx(offset_of!(Ctx, len)));
+            self.slow_if(Cc::A, i);
         }
         if self.env.logged {
             // h_note is a C call: the cache's caller-saved registers are kept across it (rsp stays 16-byte aligned)
@@ -542,7 +556,7 @@ impl E<'_, '_> {
             K::Stw | K::Stb | K::Sth | K::Stwu | K::Stbu | K::Stwx | K::Stbx | K::Stfd => {
                 let n = match op.k { K::Stw | K::Stwu | K::Stwx => 4, K::Sth => 2, K::Stfd => 8, _ => 1 };
                 let indexed = matches!(op.k, K::Stwx | K::Stbx);
-                self.ea(i, Ea::of(op, indexed), n);
+                self.ea_regs(Ea::of(op, indexed));
                 self.store_guard(i, Ea::of(op, indexed), n);
                 if n == 8 { self.a.ld64(RDX, m(RBX, fpr(d))) } else { self.ldg(RDX, d) }
                 self.st_be(n);

@@ -300,3 +300,52 @@ fn a_refused_publish_drops_its_batch_and_never_withdraws_the_arena() {
         assert!(e.jit_stats().withdraw_pages > 0, "mutant 18 (a refusal withdraws the whole arena) stayed GREEN: {:?}", e.jit_stats());
     }
 }
+
+/// THE STORE MAP (jit_smap) mirrors the code watch AFTER it was built: the JIT's loop runs (the map built while page B is
+/// unused), then the loop starts calling a function on page B (B decoded and marked: its map byte must drop to 0), then the
+/// loop's own INLINE store writes a new instruction into B with no icbi: it must take the slow path, bump B's generation, and
+/// the next call must run the new instruction. Tier 0's state; mutant 19 (the map stops mirroring) RED, mutant 3 (no watch
+/// test at all) RED.
+fn store_into_fresh_code_program() -> Vec<u32> {
+    const B: u32 = 0x3000; // another page than the loop's
+    let b = |from: u32, to: u32| 18 << 26 | (4 * (to as i32 - from as i32)) as u32 & 0x03FF_FFFC;
+    vec![
+        d(14, 10, 0, B),                            // 0: r10 = B
+        d(15, 11, 0, 0x38A5), d(24, 11, 11, 1),     // 1, 2: r11 = addi r5,r5,1
+        d(36, 11, 10, 0),                           // 3: B[0] = addi r5,r5,1
+        d(15, 12, 0, 0x4E80), d(24, 12, 12, 0x20),  // 4, 5: r12 = blr
+        d(36, 12, 10, 4),                           // 6: B[1] = blr
+        d(24, 11, 11, 3),                           // 7: r11 = addi r5,r5,3 (ori: the new instruction)
+        d(14, 31, 0, 200),                          // 8: li r31,200
+        d(13, 31, 31, 0xFFFF),                      // 9 top: addic. r31,r31,-1
+        bc(12, 2, 4 * 10),                          // 10: beq out (20)
+        d(11, 0, 31, 140),                          // 11: cmpwi r31,140
+        bc(12, 1, 4 * 7),                           // 12: bgt skip (19): B is not called for the first 59 trips
+        mtspr(9, 10), BCTRL,                        // 13, 14: call B
+        d(11, 0, 31, 100),                          // 15: cmpwi r31,100
+        bc(4, 2, 4 * 2),                            // 16: bne skip (18 -> 19)
+        d(36, 11, 10, 0),                           // 17: stw r11,0(r10): B[0] = the new instruction, no icbi
+        b(18, 9),                                   // 18: skip: b top
+        b(19, 9),                                   // 19: b top
+        d(15, 24, 0, EXIT >> 16),                   // 20 out
+        d(24, 24, 24, EXIT & 0xFFFF), mtspr(8, 24), BLR,
+    ]
+}
+
+#[test]
+fn an_inline_store_into_code_decoded_after_the_store_map_was_built_takes_the_slow_path() {
+    let prog = store_into_fresh_code_program();
+    let (want, _) = run(Tier::Interp, 0, &prog, 1_000_000);
+    // B was called 140 times: 41 before the store (+1 each) and 99 after it (+3 each)
+    assert!(want.last.halted && want.gpr[5] == 41 + 99 * 3, "the reference run: r5 = {}", want.gpr[5]);
+    for slice in [1, 7, 37, 1_000_000] {
+        let (got, e) = run(Tier::Jit, 0, &prog, slice);
+        assert!(got == want, "slice {slice}: r5 {}/{} {:?}", got.gpr[5], want.gpr[5], e.jit_stats());
+    }
+    let (got, e) = run(Tier::JitLockstep, 0, &prog, 50);
+    assert!(e.divergence().is_none() && got == want, "lockstep: {:?}", e.divergence());
+    for mutant in [19, 3] {
+        let (got, _) = run(Tier::Jit, mutant, &prog, 1_000_000);
+        assert!(got != want, "mutant {mutant} stayed GREEN: r5 {}", got.gpr[5]);
+    }
+}

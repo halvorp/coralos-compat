@@ -122,7 +122,7 @@ impl GuestMem {
             ram: vec![0; size],
             marked: vec![0; words],
             gen: vec![0; pages],
-            watch: CodeWatch { marked: core::ptr::null_mut(), marked_words: 0, gen_pages: 0, gen: core::ptr::null_mut(), bumps: 0, active: 0, reserved: 0 },
+            watch: CodeWatch { marked: core::ptr::null_mut(), marked_words: 0, gen_pages: 0, gen: core::ptr::null_mut(), bumps: 0, active: 0, marks: 0 },
             desc: FlatRam { size: core::mem::size_of::<FlatRam>() as u32, flags: 0, base: core::ptr::null_mut(), len: 0, mask: MASK_32, epoch: 0, watch: core::ptr::null_mut() },
         });
         Self::publish(&mut o);
