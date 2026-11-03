@@ -115,8 +115,12 @@ pub struct Frame {
     pub command: Command,
 }
 
-/// The frame kind of [`Command::Call`].
+/// The frame kinds a carrier reads without decoding (the header's second field, [`peek`]).
 const KIND_CALL: u16 = 4;
+const KIND_DRAW: u16 = 5;
+const KIND_FENCE_SET: u16 = 6;
+const KIND_SWAP: u16 = 7;
+const KIND_BATCH_END: u16 = 10;
 
 fn kind_of(c: &Command) -> u16 {
     match c {
@@ -124,15 +128,41 @@ fn kind_of(c: &Command) -> u16 {
         Command::ContextDestroy => 2,
         Command::MakeCurrent => 3,
         Command::Call { .. } => KIND_CALL,
-        Command::Draw(_) => 5,
-        Command::FenceSet { .. } => 6,
-        Command::Swap { .. } => 7,
+        Command::Draw(_) => KIND_DRAW,
+        Command::FenceSet { .. } => KIND_FENCE_SET,
+        Command::Swap { .. } => KIND_SWAP,
         Command::Refused { .. } => 8,
         Command::Reply { .. } => 9,
-        Command::BatchEnd { .. } => 10,
+        Command::BatchEnd { .. } => KIND_BATCH_END,
         Command::Retired { .. } => 11,
         Command::CallData { .. } => 12,
         Command::ReplyData { .. } => 13,
+    }
+}
+
+/// What a carrier reads of one whole frame from its header alone, without decoding (or copying) its payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Peek {
+    /// A `Command::Call` of this contract entry (its payload's first field; `None` when the payload is too short to hold it).
+    Call(Option<u16>),
+    Draw,
+    FenceSet,
+    Swap,
+    BatchEnd,
+    /// Any other kind (or a header too short to hold one).
+    Other,
+}
+
+/// [`Peek`] of the frame `frame` (its header first; nothing is validated past the kind and a call's entry).
+pub fn peek(frame: &[u8]) -> Peek {
+    let Some(k) = frame.get(2..4).map(|b| u16::from_le_bytes([b[0], b[1]])) else { return Peek::Other };
+    match k {
+        KIND_CALL => Peek::Call(frame.get(HEADER..HEADER + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))),
+        KIND_DRAW => Peek::Draw,
+        KIND_FENCE_SET => Peek::FenceSet,
+        KIND_SWAP => Peek::Swap,
+        KIND_BATCH_END => Peek::BatchEnd,
+        _ => Peek::Other,
     }
 }
 
@@ -271,7 +301,7 @@ impl Frame {
             1 => Command::ContextCreate,
             2 => Command::ContextDestroy,
             3 => Command::MakeCurrent,
-            4 => {
+            KIND_CALL => {
                 let entry = p.u16()?;
                 p.u16()?;
                 let n = p.u32()? as usize;
@@ -285,9 +315,9 @@ impl Frame {
                 }
                 Command::Call { entry, args }
             }
-            5 => Command::Draw(decode_draw(&mut p)?),
-            6 => Command::FenceSet { id: p.u32()? },
-            7 => Command::Swap { drawable: Token { slot: p.u32()?, incarnation: p.u32()? } },
+            KIND_DRAW => Command::Draw(decode_draw(&mut p)?),
+            KIND_FENCE_SET => Command::FenceSet { id: p.u32()? },
+            KIND_SWAP => Command::Swap { drawable: Token { slot: p.u32()?, incarnation: p.u32()? } },
             8 => {
                 let t = p.take(p.remaining())?;
                 Command::Refused { text: String::from_utf8(t.to_vec()).map_err(|_| WireError::BadValue("refusal text is not UTF-8"))? }
@@ -305,7 +335,7 @@ impl Frame {
                 let t = p.take(p.remaining())?;
                 Command::Reply { status, words, text: String::from_utf8(t.to_vec()).map_err(|_| WireError::BadValue("reply text is not UTF-8"))? }
             }
-            10 => Command::BatchEnd { seq: p.u64()? },
+            KIND_BATCH_END => Command::BatchEnd { seq: p.u64()? },
             11 => Command::Retired { seq: p.u64()? },
             12 => {
                 let entry = p.u16()?;

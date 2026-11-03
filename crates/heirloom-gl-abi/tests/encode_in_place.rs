@@ -83,3 +83,23 @@ fn a_call_from_borrowed_words_is_the_bytes_of_the_call_frame() {
         assert_eq!(&queue[3..], &want[..], "{args:x?}");
     }
 }
+
+#[test]
+fn peek_reads_the_kind_and_a_calls_entry_from_the_header_for_every_variant() {
+    use heirloom_gl_abi::command::{peek, Peek};
+    for c in every_variant() {
+        let want = match &c {
+            Command::Call { entry, .. } => Peek::Call(Some(*entry)),
+            Command::Draw(_) => Peek::Draw,
+            Command::FenceSet { .. } => Peek::FenceSet,
+            Command::Swap { .. } => Peek::Swap,
+            Command::BatchEnd { .. } => Peek::BatchEnd,
+            _ => Peek::Other,
+        };
+        let bytes = Frame { token: tok(), command: c }.encode();
+        assert_eq!(peek(&bytes), want);
+    }
+    assert_eq!(peek(&[3, 0]), Peek::Other, "a header too short for a kind");
+    let call = Frame { token: tok(), command: Command::Call { entry: 9, args: vec![] } }.encode();
+    assert_eq!(peek(&call[..17]), Peek::Call(None), "a call cut before its entry");
+}
