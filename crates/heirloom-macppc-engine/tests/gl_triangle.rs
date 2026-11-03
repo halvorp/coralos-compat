@@ -528,6 +528,8 @@ fn wc3_host_run_with_a_gl_worker() {
         m.perf_enable(ns);
         m.perf_report_every(every.parse().unwrap_or(64));
         if std::env::var("WC3_PERF_SITES").is_ok() { m.perf_census(); }
+        // `WC3_PROFILE=1`: the guest-PC profile (heirloom_macppc_engine::profile, cpu-tier "jitprofile" on CoralOS)
+        if std::env::var("WC3_PROFILE").is_ok() { m.perf_profile(ns); }
     }
     // `WC3_BUDGET=<insns>` per slice (default 5M) and `WC3_CLOCK_MIPS=<n>`: the virtual clock advances by the instructions the slice ran
     // at n million per second (a slower CPU's clock, e.g. the Z83's) instead of 20 ms per slice

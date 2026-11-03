@@ -190,7 +190,7 @@ impl<U: GuestUi> MacPpc<U> {
         self.sync_natives(&mut cpu);
         let mut exec = core::mem::take(&mut self.rt.exec);
         let t0 = self.perf.as_mut().map(|p| { p.ledger.run_begin(p.clock_fn()); p.now() });
-        let stats = exec.resume(self, &mut cpu, budget);
+        let stats = if self.perf.as_ref().is_some_and(|p| p.profile.is_some()) { self.resume_sampled(&mut exec, &mut cpu, budget) } else { exec.resume(self, &mut cpu, budget) };
         self.rt.exec = exec;
         if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let dt = p.now().wrapping_sub(t0); p.add_step(dt, stats.insns); p.ledger.run_end(p.clock_fn()); }
         heirloom_mac68k_engine::qd::flush(&mut self.mac);
@@ -219,6 +219,30 @@ impl<U: GuestUi> MacPpc<U> {
             else if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked } else { Step::BudgetSpent };
         if step != Step::Exited { self.rt.cpu = Some(cpu); }
         (step, stats)
+    }
+
+    /// The guest-PC profile's run (profile.rs): the budget in pseudo-random chunks, the pc and the chunk's JIT ticks sampled
+    /// after each. The same run as one resume, cut at more points (a budget cut is a safepoint the guest never sees).
+    fn resume_sampled(&mut self, exec: &mut crate::cpu::Exec, cpu: &mut Cpu, budget: u64) -> crate::cpu::RunStats {
+        let mut total = crate::cpu::RunStats { insns: 0, halted: false, blocked: false, trap: None };
+        while total.insns < budget && !total.halted && !total.blocked && total.trap.is_none() {
+            let Some(p) = self.perf.as_mut() else { break };
+            let left = budget - total.insns;
+            // a slice of at most two chunks runs whole (sampled once, at its end): every cut costs a bail and a tier-1 tail
+            let chunk = if left <= 2 * crate::profile::CHUNK_MEAN { left } else { p.profile.as_mut().map_or(left, |pr| pr.next_chunk()).min(left) };
+            let jit = |p: &crate::perf::Perf| p.ledger.clock.at(p.now())[crate::perf_ledger::L_JIT];
+            let j0 = jit(p);
+            let s = exec.resume(self, cpu, chunk);
+            let (perf, map) = (&mut self.perf, &self.code_map);
+            if let Some(p) = perf.as_mut() {
+                let j1 = jit(p);
+                if let Some(pr) = p.profile.as_mut() { pr.sample(map, cpu.pc, s.insns, j1.wrapping_sub(j0)); }
+            }
+            total.insns += s.insns;
+            (total.halted, total.blocked, total.trap) = (s.halted, s.blocked, s.trap);
+            if s.insns < chunk { break; }
+        }
+        total
     }
 
     /// Step until the program exits, blocks for an event, faults, or `max_insns` are spent. Returns the last step.
@@ -281,6 +305,7 @@ impl<U: GuestUi> Host for MacPpc<U> {
             p.ledger.clock.exit(t1);
             let dt = t1.wrapping_sub(t0);
             p.add_native(class, dt);
+            if let (Some(pr), Some(id)) = (p.profile.as_mut(), self.glue.id_at_stub(addr)) { pr.native(id, dt); }
             if draw { (p.win.draw_time, p.win.draws) = (p.win.draw_time + dt, p.win.draws + 1); }
         }
         served

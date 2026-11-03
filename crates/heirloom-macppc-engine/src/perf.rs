@@ -130,6 +130,9 @@ pub struct Perf {
     pub(crate) tb: u64,
     /// cpu-tier "jitablate": rotate tier 2's knobs through [`ABLATIONS`] (the index of the running one).
     pub(crate) ablate: Option<usize>,
+    /// cpu-tier "jitprofile": the guest-PC profile (profile.rs), and the closed ones waiting for their lines.
+    pub(crate) profile: Option<alloc::boxed::Box<crate::profile::Profile>>,
+    profile_done: Vec<(u64, crate::profile::Profile)>,
 }
 
 impl Perf {
@@ -177,11 +180,15 @@ impl Perf {
         let now = self.now();
         self.ledger.swap(self.clock, self.tb, jit);
         if let Some(prev) = self.last_swap { self.win.frames.push(now.wrapping_sub(prev)); }
+        if let Some(pr) = self.profile.as_mut() { pr.frames += 1; }
         self.last_swap = Some(now);
         if self.win.frames.len() >= self.every.max(1) {
             self.frames_total += self.win.frames.len() as u64;
             self.win.ledger = self.ledger.take_window();
             self.win.cfg = self.ablate.map_or("", |k| ABLATIONS[k].0);
+            if let Some(pr) = self.profile.as_mut().filter(|_| self.ledger.windows % crate::profile::PROFILE_WINDOWS == 0) {
+                self.profile_done.push((self.frames_total, core::mem::take(&mut **pr)));
+            }
             let w = core::mem::take(&mut self.win);
             self.done.push((self.frames_total, w));
         }
@@ -267,7 +274,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn perf_enable(&mut self, clock: fn() -> u64) {
         self.perf = Some(alloc::boxed::Box::new(Perf {
             clock, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0,
-            ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None,
+            ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(),
         }));
     }
     /// Report every `n` frames instead of [`REPORT_FRAMES`] (a host harness's finer view).
@@ -280,7 +287,23 @@ impl<U: GuestUi> MacPpc<U> {
     /// units per microsecond; None when no window is closed, or `per_us` is 0 (not measured yet: the window waits).
     /// Each closed window gives its `[HEIRLOOM-PERF ...]` line, then its capture and ledger lines ([`Perf::take_line`]).
     pub fn perf_take_line(&mut self, per_us: u64) -> Option<String> {
-        self.perf.as_mut()?.take_line(per_us)
+        if per_us == 0 { return None; }
+        let p = self.perf.as_mut()?;
+        // the map's lines first (one per section, at instantiation), then the windows, then a closed profile's lines
+        if !self.code_map.lines.is_empty() { return Some(self.code_map.lines.remove(0)); }
+        if let Some(l) = p.take_line(per_us) { return Some(l); }
+        if p.profile_done.is_empty() { return None; }
+        let (n, pr) = p.profile_done.remove(0);
+        let glue = &self.glue;
+        let name_of = |id: usize| glue.key_of(id).map_or_else(|| format!("glue#{id}"), |k| String::from(&*k));
+        p.pending.extend(crate::profile::lines(&pr, &self.code_map, &name_of, per_us, n));
+        p.pending.pop_front()
+    }
+    /// Turn the guest-PC profile on (cpu-tier "jitprofile"): the stage clock goes on; the profile prints every
+    /// [`crate::profile::PROFILE_WINDOWS`] perf windows.
+    pub fn perf_profile(&mut self, clock: fn() -> u64) {
+        if self.perf.is_none() { self.perf_enable(clock); }
+        if let Some(p) = self.perf.as_mut() { p.profile = Some(Default::default()); }
     }
     /// The engine's half of the frame ledger ([`heirloom_os_abi::perf::PerfHost`]): turns the stage clock on (on `clock`).
     pub fn perf_attach(&mut self, clock: fn() -> u64, host: heirloom_os_abi::perf::PerfHost) {
@@ -365,7 +388,7 @@ mod tests {
     #[test]
     fn reads_on_the_same_tick_close_together_are_a_poll_and_a_far_or_new_tick_read_is_not() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new() };
         p.clock_read(5, 100, [0; 3]);
         p.clock_read(5, 400, [0; 3]); // 300 insns later, same tick: a poll
         p.clock_read(6, 500, [0; 3]); // the tick moved: not a poll
@@ -413,7 +436,7 @@ mod tests {
     #[test]
     fn the_capture_line_shows_the_draws_shape_the_sampled_split_and_the_read_passes() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new() };
         for _ in 0..98 { p.add_capture(2000, 2048); } // 1000 a KiB: bucket 9 = [512, 1024), the edge 1024
         p.add_capture(100_000, 1024); // two stalls: 100,000 a KiB, bucket 16 [65536, 131072)
         p.add_capture(50_000, 512);

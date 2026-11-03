@@ -57,6 +57,7 @@ pub mod source;
 pub mod mp;
 pub mod sched;
 pub mod perf; // the opt-in stage clock: where a guest frame's time goes ([HEIRLOOM-PERF] lines)
+pub mod profile; // the guest-PC profile (cpu-tier "jitprofile"): functions by sampled JIT time, natives by exact calls ([HEIRLOOM-PROFILE])
 pub mod perf_ledger; // the stage clock's frame ledger: one exclusive account per guest frame ([HEIRLOOM-LEDGER] / [HEIRLOOM-HW])
 pub mod stdclib;
 pub mod threads;

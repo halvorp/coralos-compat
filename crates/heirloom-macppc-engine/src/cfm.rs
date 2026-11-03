@@ -164,6 +164,13 @@ impl<U: GuestUi> MacPpc<U> {
             };
             if let Some(v) = v { exports.push((e.name.clone(), v)); }
         }
+        // 5. the guest-PC profile's map (profile.rs): the sections as placed, the function starts found in the code
+        let secs: Vec<(usize, bool, u32, u32)> = pef.sections.iter().enumerate()
+            .filter_map(|(i, s)| bases[i].map(|b| (i, matches!(s.kind, heirloom_fmt_pef::SectionKind::Code | heirloom_fmt_pef::SectionKind::ExecutableData), b, s.total_size)))
+            .collect();
+        let entries: Vec<u32> = [main, init, term].iter().flatten().map(|t| t.code).chain(exports.iter().map(|e| e.1)).collect();
+        let mem = &self.mac.mem;
+        self.code_map.add(name, &secs, &|a| mem.read_u32(a).ok(), &entries);
         Ok(Fragment { name: name.into(), section_bases: bases, imports: resolved, main, init, term, exports })
     }
 
