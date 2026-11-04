@@ -3,22 +3,36 @@
 //! QuickDraw here draws into each window's canvas; the frame buffer at `ScrnBase` (the main device's PixMap `baseAddr`) is real guest
 //! RAM that nothing writes -- until a program does it itself: a game that has opened a full-screen window and then blits its pictures
 //! straight into video memory with its own code (Glider PRO does, after `SwapMMUMode`). On a Mac a pixel written there simply appears,
-//! in whatever window is over it. This module does that: once per step it compares the frame buffer with what it showed last time, and
+//! in whatever window is over it. This module does that: at a step after something wrote the frame buffer it compares it with what it showed last time, and
 //! every pixel that CHANGED is copied into the canvas of the topmost visible window whose content covers it (damage and the display list
 //! follow, through the ordinary `target::finish`). Pixels no window covers have no desktop to appear on and are dropped; a window whose
 //! canvas is not the screen's depth (a 1-bit window under an 8-bit screen) is skipped and logged once.
 //!
 //! Only CHANGED pixels are copied, so what QuickDraw drew into a canvas is never overwritten by the (blank) buffer beneath.
+//!
+//! The buffer is compared only when something WROTE to it (h86 aot-step, 2026-11-04): after each comparison its pages are put
+//! under guest RAM's write watch (heirloom-mem-flat32 watch.rs, the code-page generations - every write to guest RAM, by the CPU,
+//! a native or the loader, passes it), and the next step compares again only if one of their generations moved. On the Z83 the
+//! unconditional compare was the frame ledger's `step_other`: ~3 ms a Warcraft III frame (14 steps x the whole 8-bit screen
+//! through memcmp, the L2 flushed of the JIT's code with it) for a program that never writes the buffer.
 use super::target;
 use crate::lowmem::{screen_size, SCREEN_BASE};
 use crate::machine::Mac;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
 use heirloom_raster::{Rect, Region};
+use heirloom_mem_flat32::CODE_PAGE_SHIFT;
 
 /// What the frame buffer held when it was last shown.
 #[derive(Default)]
-pub struct ScreenSync { shadow: Vec<u8>, warned_depth: bool }
+pub struct ScreenSync {
+    shadow: Vec<u8>,
+    warned_depth: bool,
+    /// The buffer's pages' write-watch generations when it was last compared (empty: not watched yet).
+    gens: Vec<u64>,
+    /// Comparisons made (the watch's tests count them).
+    pub compares: u64,
+}
 
 /// The screen's depth: the main device's, else a 1-bit Plus.
 fn depth<U: GuestUi>(m: &Mac<U>) -> u8 { if m.cqd.main_device != 0 { crate::cqd::gdevice::SCREEN_DEPTH } else { 1 } }
@@ -28,6 +42,18 @@ pub fn sync<U: GuestUi>(m: &mut Mac<U>) {
     if d != 8 { return; } // 1-bit direct screen writes are not shown (named in the module note); no corpus program does it
     let (sw, sh) = screen_size(true); // an 8-bit screen is a colour machine's
     let bytes = sw as u32 * sh as u32;
+    let pages = (SCREEN_BASE >> CODE_PAGE_SHIFT)..=((SCREEN_BASE + bytes - 1) >> CODE_PAGE_SHIFT);
+    // nothing written since the last comparison: every page still at the generation the watch armed it at
+    let gens = &m.qd.screen.gens;
+    if !gens.is_empty() && pages.clone().zip(gens).all(|(p, &g)| m.mem.code_gen(p << CODE_PAGE_SHIFT) == g) { return; }
+    compare(m, sw, sh, bytes);
+    // arm the watch for the next step: any write to the buffer from now on moves one of these generations
+    m.qd.screen.gens = pages.map(|p| m.mem.watch_code_page(p << CODE_PAGE_SHIFT)).collect();
+}
+
+/// Compare the buffer with the shadow and copy the changed pixels into the windows over them (the body of [`sync`]).
+fn compare<U: GuestUi>(m: &mut Mac<U>, sw: i16, sh: i16, bytes: u32) {
+    m.qd.screen.compares += 1;
     let Ok(span) = m.mem.span(SCREEN_BASE, bytes) else { return };
     let Ok(now) = m.mem.bytes(span) else { return };
     if m.qd.screen.shadow.is_empty() { m.qd.screen.shadow = alloc::vec![0; bytes as usize]; }

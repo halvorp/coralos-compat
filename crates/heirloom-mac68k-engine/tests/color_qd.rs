@@ -607,10 +607,17 @@ fn a_program_writing_the_frame_buffer_itself_shows_in_the_window_over_it_and_onl
     assert_eq!((w.px(10, 10), w.px(5, 5), w.px(20, 20)), (42, 11, 12), "a pixel QuickDraw drew survives inside the dirty box; the direct writes arrive");
     // the window is told: it was repainted (a plane or content frame for it exists after the flush)
     assert!(w.m.ui.calls.iter().any(|c| matches!(c, UiCall::PresentContent { .. } | UiCall::PresentPlane(..))), "{:?}", w.m.ui.calls.len());
-    // a second flush with no change does nothing
-    let n = w.m.ui.calls.len();
+    // a second flush with no change does nothing - and does not even compare the buffer (no write moved its pages' watch)
+    let (n, c) = (w.m.ui.calls.len(), w.m.qd.screen.compares);
     heirloom_mac68k_engine::qd::flush(&mut w.m);
     assert_eq!(w.m.ui.calls.len(), n, "no change, no repaint");
+    assert_eq!(w.m.qd.screen.compares, c, "nothing wrote the frame buffer: it is not compared (h86: 3 ms a WC3 frame on the Z83)");
+    // the next write to it is seen at the next flush, whoever writes it
+    w.m.mem.write_u8(at(56, 106), 13).unwrap();
+    heirloom_mac68k_engine::qd::flush(&mut w.m);
+    assert_eq!((w.m.qd.screen.compares, w.px(6, 6)), (c + 1, 13), "a write re-arms the comparison");
+    heirloom_mac68k_engine::qd::flush(&mut w.m);
+    assert_eq!(w.m.qd.screen.compares, c + 1, "and the watch is armed again after it");
 }
 
 #[test]
