@@ -60,6 +60,8 @@ pub struct JitStats {
     pub region_nodes: u64,
     pub region_insns: u64,
     pub region_refused: u64,
+    /// Global pins displaced by regions' register bindings (jit_regs pick_locals), summed over the regions compiled.
+    pub region_displaced: u64,
     /// Compares in regions fused with their branch (jit_rflow: the CR field dead after it, never written).
     pub region_fused: u64,
     /// With the region census on (Exec::set_jit_region_census): region entries and internal edges taken, all runs.

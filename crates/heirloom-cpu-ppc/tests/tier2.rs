@@ -14,6 +14,9 @@ mod jitsize;
 /// The h86 fnreg translated shapes (the matrix compare's fast path, the byte compare, the byte-add loop): tests/tier2/xshapes.rs.
 #[path = "tier2/xshapes.rs"]
 mod xshapes;
+/// The h86 fnreg region register binding (global pins re-bound to a region's hotter GPRs): tests/tier2/fnreg.rs.
+#[path = "tier2/fnreg.rs"]
+mod fnreg;
 
 const BUF: u32 = 0x4000;
 const NATIVE: u32 = 0xF100;

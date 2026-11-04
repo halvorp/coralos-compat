@@ -71,6 +71,8 @@ mod jit_region;
 #[cfg(target_arch = "x86_64")]
 mod jit_rflow;
 #[cfg(target_arch = "x86_64")]
+mod jit_lazyca; // lazy XER[CA]: srawi / addic leave the carry pending, settled only where it can be observed
+#[cfg(target_arch = "x86_64")]
 mod jit_xbytes; // translated byte-string shapes (jit_xlate's family): an unsigned byte compare, a saturating byte-add loop
 #[cfg(target_arch = "x86_64")]
 mod jit_xlate; // translated functions: a recognised guest function compiled whole, exactly (the Z83 profile's rank 1 first)

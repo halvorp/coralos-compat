@@ -92,6 +92,9 @@ pub(crate) struct Ctx {
     /// Opt-in region census (Exec::set_jit_region_census): region entries and internal edges taken.
     pub(crate) rentries: u64,
     pub(crate) redges: u64,
+    /// A pending XER[CA]'s source (jit_lazyca: srawi / addic store it, the settle computes the bit from it).
+    pub(crate) ca_src: u32,
+    ca_pad: u32,
     /// The STORE MAP (jit_smap): one byte per guest page, 1 = an inline store starting there may write; inside the Ctx so an
     /// inline store's test is `cmp byte [r13 + page + offset], 0` (no load of the map's base).
     pub(crate) smap: [u8; crate::jit_smap::MAP_PAGES],

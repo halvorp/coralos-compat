@@ -91,3 +91,8 @@ pub(crate) const MUT_XLATE_OVERLAP: u8 = 39;
 /// The byte compare's translation retires 16 + 6k at a difference whatever its sign (jit_xbytes): the original's `li r3,-1`
 /// and its second blr (a[k] < b[k]) go uncounted.
 pub(crate) const MUT_XLATE_COUNT: u8 = 40;
+/// A region's chained exit does not load the displaced global pins back (jit_regs `restore_displaced`): the next block finds
+/// a region local's value in a pin's register.
+pub(crate) const MUT_REGION_DISPLACED_EXIT: u8 = 41;
+/// A superblock side exit does not settle a pending XER[CA] (jit_lazyca): the code it leaves for finds the older carry.
+pub(crate) const MUT_CA_LAZY_SIDE: u8 = 42;

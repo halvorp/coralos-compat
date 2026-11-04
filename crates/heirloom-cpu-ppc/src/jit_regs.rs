@@ -49,14 +49,44 @@ pub(crate) const LOCAL_REGS: [u8; 2] = [RSI, RDI];
 /// exit must pay off).
 const LOCAL_MIN_USES: u32 = 4;
 
-/// The region's locals from a dry run's GPR access counts: the most-used GPRs that are not global pins.
-pub(crate) fn pick_locals(uses: &[u32; 32], writes: &[u32; 32]) -> alloc::vec::Vec<(usize, u8, bool)> {
+/// A GPR local must be used this many times MORE than the global pin whose host register it takes (h86 fnreg: the pin's value
+/// is stored at the region's entry and loaded back at every exit; a local in a free register pays only its own load / store).
+const DISPLACE_MARGIN: u32 = 4;
+
+/// The region's REGISTER BINDING from a dry run's GPR access counts (h86 fnreg, the function-region step "the pinned host
+/// registers re-bound to the region's hottest GPRs"): the most-used GPRs that are not global pins become locals, first in rsi
+/// and rdi, then - with `displace` - in the host registers of the GPR pins the region uses least (r1 r0 r3 r4 r6: CR keeps
+/// r14), each only while the local is used [`DISPLACE_MARGIN`] times more than the pin it displaces. Answers the locals
+/// (Cpu offset, host register, written in the region) and the DISPLACED pins (Cpu offset, host register): inside the region a
+/// displaced pin is a memory operand; its register is stored at the entry and loaded back at every exit.
+pub(crate) fn pick_locals(uses: &[u32; 32], writes: &[u32; 32], displace: bool) -> (alloc::vec::Vec<(usize, u8, bool)>, alloc::vec::Vec<(usize, u8)>) {
+    let n_of = |off: usize| (off - gpr(0) as usize) / 4;
     let mut v: alloc::vec::Vec<(u32, u8)> = (0..32u8).filter(|&n| global(gpr(n) as usize).is_none() && uses[n as usize] >= LOCAL_MIN_USES).map(|n| (uses[n as usize], n)).collect();
     v.sort_unstable_by(|a, b| b.cmp(a));
-    v.iter().zip(LOCAL_REGS).map(|(&(_, n), r)| (gpr(n) as usize, r, writes[n as usize] != 0)).collect()
+    // the host registers on offer, cheapest first: the two free ones, then the GPR pins by their uses here, least first
+    let mut slots: alloc::vec::Vec<(u8, Option<(usize, u32)>)> = LOCAL_REGS.iter().map(|&r| (r, None)).collect();
+    if displace {
+        let mut pins: alloc::vec::Vec<(u32, usize, u8)> = GLOBALS.iter().filter(|g| g.0 != CR).map(|&(off, h)| (uses[n_of(off)], off, h)).collect();
+        pins.sort_unstable();
+        slots.extend(pins.into_iter().map(|(u, off, h)| (h, Some((off, u)))));
+    }
+    let (mut locals, mut displaced) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
+    for (&(u, n), &(h, pin)) in v.iter().zip(&slots) {
+        if let Some((off, pu)) = pin {
+            if u < pu + DISPLACE_MARGIN { break; }
+            displaced.push((off, h));
+        }
+        locals.push((gpr(n) as usize, h, writes[n as usize] != 0));
+    }
+    (locals, displaced)
 }
 /// Store every global pin into the Cpu (before Rust can read it).
 pub(crate) fn store_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.st32(crate::jit_emit::cpu_m(off as i32), h); } }
+/// Store every global pin but the `displaced` ones (a region's helper call: a displaced pin's Cpu field is current, its
+/// register holds a local).
+pub(crate) fn store_globals_except(a: &mut Asm, displaced: &[(usize, u8)]) {
+    for (off, h) in GLOBALS { if !displaced.iter().any(|d| d.0 == off) { a.st32(crate::jit_emit::cpu_m(off as i32), h); } }
+}
 /// Load every global pin from the Cpu (after Rust may have written it).
 pub(crate) fn load_globals(a: &mut Asm) { for (off, h) in GLOBALS { a.ld32(h, crate::jit_emit::cpu_m(off as i32)); } }
 
@@ -64,8 +94,26 @@ impl E<'_, '_> {
     /// The Cpu field at `off` (a 32-bit one): its host register when it is a global pin, else the memory operand.
     #[inline(always)]
     fn field(&self, off: usize) -> O {
-        if let Some(h) = global(off) { return O::R(h) }
-        self.locals.iter().find(|l| l.0 == off).map_or(O::M(crate::jit_emit::cpu_m(off as i32)), |l| O::R(l.1))
+        if let Some(l) = self.locals.iter().find(|l| l.0 == off) { return O::R(l.1) }
+        match global(off) {
+            Some(h) if !self.displaced.iter().any(|d| d.0 == off) => O::R(h),
+            _ => O::M(crate::jit_emit::cpu_m(off as i32)),
+        }
+    }
+    /// A region's entry, after its checks: the displaced pins' registers into the Cpu, then every local into its register.
+    pub(crate) fn bind_entry(&mut self) {
+        let t = self.cat(crate::jit_census::LOCALS_LOAD);
+        for &(off, h) in &self.displaced { self.a.st32(crate::jit_emit::cpu_m(off as i32), h); }
+        self.a.set_tag(t);
+        self.load_locals();
+    }
+    /// Every way out of a region (after store_locals): the displaced pins back into their registers, so the code it goes to
+    /// finds every global pin where it always is.
+    pub(crate) fn restore_displaced(&mut self) {
+        if self.env.mutant == crate::jit_mutants::MUT_REGION_DISPLACED_EXIT { return; }
+        let t = self.cat(crate::jit_census::LOCALS_STORE);
+        for &(off, h) in &self.displaced { self.a.ld32(h, crate::jit_emit::cpu_m(off as i32)); }
+        self.a.set_tag(t);
     }
     /// Load every region local from the Cpu (region entry; after a helper call).
     pub(crate) fn load_locals(&mut self) {

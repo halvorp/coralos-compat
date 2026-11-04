@@ -429,11 +429,20 @@ pub const KNOB_NO_SMC_STORE: u32 = 1;
 pub const KNOB_NO_ENTRY_GEN: u32 = 2;
 /// Recognised whole functions are compiled block by block like any other code (jit_xlate's translations off: their A/B).
 pub const KNOB_NO_XLATE: u32 = 4;
+/// Regions keep every global pin in its register (h86 fnreg: no pin re-bound to the region's hotter GPRs) - the A/B of the
+/// re-binding, which changes code, not semantics.
+pub const KNOB_NO_DISPLACE: u32 = 8;
+/// srawi / addic compute XER[CA] at once (h86 fnreg: no lazy carry) - the A/B of the lazy carry, code not semantics.
+pub const KNOB_NO_LAZY_CA: u32 = 16;
+/// Regions follow call edges into the callee, its blr checked inline against the return points (RegionShape::follow_calls)
+/// - the A/B of call following on the Z83 (h86 fnreg: the host census measured -2% JIT instructions for +46% distinct code
+/// lines); code, not semantics.
+pub const KNOB_FOLLOW_CALLS: u32 = 32;
 /// Bits 8..12 of the knobs: the IBTC's index bits (8..=16 entries' log2; 0 = the default 16, 64K entries / 512 KiB).
 pub const KNOB_IBTC_BITS_SHIFT: u32 = 8;
 pub const KNOB_IBTC_BITS_MASK: u32 = 0x1F;
 /// The knob bits a library may be asked for (anything else: -1).
-pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
+pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
 
 /// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
 /// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;

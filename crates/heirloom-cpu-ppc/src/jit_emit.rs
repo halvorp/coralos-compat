@@ -60,6 +60,8 @@ pub(crate) struct Env<'a> {
     pub(crate) so_free: bool,
     /// OUT (with `tags`): (code offset, guest word, guest pc) where each guest instruction's code starts.
     pub(crate) tag_words: Vec<(u32, u32, u32)>,
+    /// OUT (a region): the global pins its binding displaced (jit_regs pick_locals).
+    pub(crate) displaced: u32,
 }
 
 pub(crate) const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
@@ -103,6 +105,8 @@ pub(crate) struct E<'a, 'b> {
     rg: Option<Rg>,
     /// Region locals (jit_regs): (Cpu offset, host register, written in the region).
     pub(crate) locals: Vec<(usize, u8, bool)>,
+    /// Global pins whose host register holds a local in this region (jit_regs pick_locals): (Cpu offset, host register).
+    pub(crate) displaced: Vec<(usize, u8)>,
     /// GPR accesses / writes emitted so far (the dry run that picks the locals reads them).
     pub(crate) uses: [u32; 32],
     pub(crate) writes: [u32; 32],
@@ -131,6 +135,9 @@ pub(crate) struct E<'a, 'b> {
     pub(crate) facts: crate::jit_ffacts::Facts,
     leaving: bool,
     helped: bool,
+    /// The pending XER[CA] (jit_lazyca), and per instruction of the block / node the one pending before it.
+    pub(crate) ca_lazy: Option<crate::jit_lazyca::Lazy>,
+    pub(crate) ca_at: Vec<Option<crate::jit_lazyca::Lazy>>,
 }
 
 /// A region being compiled (jit_region): the node pcs in layout order, each node's longest forward path, where each node's
@@ -151,6 +158,7 @@ struct NodeTails {
     slow_leave: Vec<(Fix, usize)>,
     stfs_outs: Vec<(Option<Fix>, Fix, usize, usize, usize)>,
     fma_outs: Vec<(Vec<Fix>, usize)>,
+    ca_at: Vec<Option<crate::jit_lazyca::Lazy>>,
 }
 
 /// Compile `ops` (a whole tier-1 block or a superblock at `pc`, decoded from code page `page` at generation `gen`), one pass
@@ -206,11 +214,21 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
 pub(crate) fn compile_region(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], env: &mut Env) -> (Vec<u8>, usize) {
     // a dry run counts the GPR accesses: the most-used ones become locals for the real one
     let fuse = crate::jit_rflow::fuse_marks(nodes, rets, env.mutant == MUT_CR_LIVE_OUT);
-    let locals = {
-        let dry = emit_region(nodes, maxfwd, pages, rets, &fuse, env, Vec::new(), true);
-        crate::jit_regs::pick_locals(&dry.uses, &dry.writes)
+    let binding = {
+        let dry = emit_region(nodes, maxfwd, pages, rets, &fuse, env, (Vec::new(), Vec::new()), true);
+        // pins are displaced only in a region that LOOPS (an edge back to a node at or before its source): its entry and exit
+        // costs are paid once per entry, its uses once per trip (measured: in straight-line regions the binding's own loads
+        // and stores ate what it saved)
+        let loops = nodes.iter().enumerate().any(|(i, (pc, ops))| {
+            let mut succ = Vec::new();
+            crate::jit_region::successors(*pc, ops, false, &mut succ);
+            succ.iter().any(|t| nodes[..=i].iter().any(|n| n.0 == *t))
+        });
+        crate::jit_regs::pick_locals(&dry.uses, &dry.writes, loops && env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_DISPLACE == 0)
     };
-    let mut e = emit_region(nodes, maxfwd, pages, rets, &fuse, env, locals, false);
+    let pins = binding.1.len() as u32;
+    let mut e = emit_region(nodes, maxfwd, pages, rets, &fuse, env, binding, false);
+    e.e.env.displaced = pins;
     let inner = e.inner;
     e.e.env.tag_runs = e.e.a.tags.take().unwrap_or_default();
     (e.e.a.b, inner)
@@ -218,7 +236,7 @@ pub(crate) fn compile_region(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[
 
 struct Emitted<'a, 'b> { e: E<'a, 'b>, inner: usize, uses: [u32; 32], writes: [u32; 32] }
 
-fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], fuse: &[Vec<bool>], env: &'a mut Env<'b>, locals: Vec<(usize, u8, bool)>, dry: bool) -> Emitted<'a, 'b> {
+fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], fuse: &[Vec<bool>], env: &'a mut Env<'b>, binding: (Vec<(usize, u8, bool)>, Vec<(usize, u8)>), dry: bool) -> Emitted<'a, 'b> {
     let mut e = E::new(&nodes[0].1, nodes[0].0, env);
     e.dry = dry;
     e.rg = Some(Rg { pcs: nodes.iter().map(|n| n.0).collect(), maxfwd: maxfwd.to_vec(), labels: alloc::vec![None; nodes.len()], fwd: Vec::new(), backs: Vec::new(), cur: 0, rets: rets.to_vec(), deferred: Vec::new() });
@@ -238,9 +256,9 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
     a.set_tag(tg::NO_K << 8 | tg::ENTRY_BUDGET as u16);
     a.alu_mi64(Alu::Cmp, ctx(offset_of!(Ctx, left)), maxfwd[0] as u32);
     bails.push(a.jcc(Cc::B));
-    e.locals = locals;
+    (e.locals, e.displaced) = binding;
     if e.env.census { e.a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, rentries)), 1); }
-    e.load_locals();
+    e.bind_entry();
     for (k, (pc, ops)) in nodes.iter().enumerate() {
         e.start_node(k, *pc, ops, &fuse[k]);
         e.body(ops);
@@ -329,7 +347,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     pub(crate) fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
-        E { a: Asm { wide: env.wide, tags: env.tags.then(Vec::new), ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new(), kind: tg::NO_K << 8, stfs_outs: Vec::new(), fma_outs: Vec::new(), groups: Vec::new(), sgroups: Vec::new(), slow_leave: Vec::new(), facts: Default::default(), leaving: false, helped: false }
+        E { a: Asm { wide: env.wide, tags: env.tags.then(Vec::new), ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), displaced: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new(), kind: tg::NO_K << 8, stfs_outs: Vec::new(), fma_outs: Vec::new(), groups: Vec::new(), sgroups: Vec::new(), slow_leave: Vec::new(), facts: Default::default(), leaving: false, helped: false, ca_lazy: None, ca_at: Vec::new() }
     }
 
     /// Start region node `k` (its code begins here: forward jumps waiting for it land here).
@@ -358,7 +376,7 @@ impl<'a, 'b> E<'a, 'b> {
         let t = NodeTails {
             pc: self.pc, n: self.n, cur, resume: core::mem::take(&mut self.resume), words: core::mem::take(&mut self.words),
             sides: core::mem::take(&mut self.sides), slow: core::mem::take(&mut self.slow), slow_leave: core::mem::take(&mut self.slow_leave),
-            stfs_outs: core::mem::take(&mut self.stfs_outs), fma_outs: core::mem::take(&mut self.fma_outs),
+            stfs_outs: core::mem::take(&mut self.stfs_outs), fma_outs: core::mem::take(&mut self.fma_outs), ca_at: core::mem::take(&mut self.ca_at),
         };
         self.rg.as_mut().expect("a region").deferred.push(t);
     }
@@ -366,6 +384,7 @@ impl<'a, 'b> E<'a, 'b> {
     fn node_tails(&mut self, t: NodeTails) {
         (self.pc, self.n, self.resume, self.words) = (t.pc, t.n, t.resume, t.words);
         (self.sides, self.slow, self.slow_leave, self.stfs_outs, self.fma_outs) = (t.sides, t.slow, t.slow_leave, t.stfs_outs, t.fma_outs);
+        self.ca_at = t.ca_at;
         self.rg.as_mut().expect("a region").cur = t.cur;
         self.tails();
     }
@@ -379,12 +398,14 @@ impl<'a, 'b> E<'a, 'b> {
         let map_test = self.env.mutant != MUT_NO_WATCH && self.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_SMC_STORE == 0;
         self.sgroups = if self.env.mask == u32::MAX && map_test { crate::jit_lgroup::plan_stores(ops, self.env.mutant == MUT_SGROUP_WIDE) } else { Vec::new() };
         self.facts = Default::default();
+        (self.ca_lazy, self.ca_at) = (None, Vec::new());
         for (i, op) in ops.iter().enumerate() {
             self.kind = tg::kind(op) << 8;
             if let Some(s) = self.a.tags.as_mut() {
                 s.push((self.a.b.len() as u32, tg::START));
                 if !self.dry { self.env.tag_words.push((self.a.b.len() as u32, op.w, self.ipc(i))); }
             }
+            self.ca_before(op);
             self.cat(tg::BODY);
             let fx = crate::jit_ffacts::effect(op);
             (self.leaving, self.helped) = (crate::jit_ffacts::leaves(fx) && self.env.mutant != MUT_FACTS_REJOIN, false);
@@ -408,6 +429,7 @@ impl E<'_, '_> {
     /// holds a node at `target` (a back edge re-checks the budget for that node's longest forward path first, and leaves
     /// through the chained exit when it does not fit), else the chained exit.
     fn go(&mut self, target: u32, n: usize) {
+        self.settle_ca_exit();
         let Some(j) = self.rg.as_ref().and_then(|r| r.pcs.iter().position(|&p| p == target)) else { return self.chain(target, n) };
         let mutant = self.env.mutant;
         let t = self.cat(tg::EDGE);
@@ -449,7 +471,9 @@ impl E<'_, '_> {
 
     /// Leave for `target` (a constant), `n` instructions of this block retired.
     pub(crate) fn chain(&mut self, target: u32, n: usize) {
+        self.settle_ca_exit();
         self.store_locals();
+        self.restore_displaced();
         let t = self.cat(tg::RETIRED);
         if n != 0 { self.a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), n as u32); }
         self.cat(tg::CHAIN);
@@ -481,7 +505,9 @@ impl E<'_, '_> {
     }
     /// Leave for the target in r8d, `n` retired: through the dispatch table when chaining.
     pub(crate) fn chain_dyn(&mut self, n: usize) {
+        self.settle_ca_exit_keep_r8();
         self.store_locals();
+        self.restore_displaced();
         let t = self.cat(tg::RETIRED);
         let a = &mut self.a;
         a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), n as u32);
@@ -498,7 +524,8 @@ impl E<'_, '_> {
     /// leaves with the exact retired count). The global pins are stored first (the handler reads the Cpu); the stub loads
     /// them back after it (the handler may have written any field).
     pub(crate) fn helper(&mut self, i: usize) {
-        if self.env.mutant != MUT_GLOBAL_STALE { crate::jit_regs::store_globals(&mut self.a); }
+        self.settle_ca_exit();
+        if self.env.mutant != MUT_GLOBAL_STALE { crate::jit_regs::store_globals_except(&mut self.a, &self.displaced); }
         self.store_locals();
         let (ipc, w) = (self.ipc(i), self.words[i]);
         let a = &mut self.a;
@@ -547,6 +574,7 @@ impl E<'_, '_> {
     fn tails(&mut self) {
         for (fixes, i, target) in core::mem::take(&mut self.sides) {
             for f in fixes { self.a.here(f); }
+            self.settle_ca_at(i, true);
             self.go(target, i + 1);
         }
         self.cat(tg::SLOW);
@@ -578,7 +606,9 @@ impl E<'_, '_> {
             // tier 1's handler runs the instruction (or makes its trap), then the block leaves after it: what follows runs on
             // tier 1, each instruction with its own tests
             self.a.here(f);
+            self.settle_ca_at(i, false);
             self.helper(i);
+            self.restore_displaced();
             let pc = self.ipc(i).wrapping_add(4);
             self.a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), i as u32 + 1);
             self.a.st32i(cpu(PC), pc);
@@ -586,6 +616,7 @@ impl E<'_, '_> {
         }
         for (f, i) in core::mem::take(&mut self.slow) {
             self.a.here(f);
+            self.settle_ca_at(i, false);
             self.helper(i);
             let back = self.a.jmp();
             let r = self.resume[i];
@@ -680,6 +711,13 @@ impl E<'_, '_> {
                 self.stg(d, RDX);
                 self.cr0_of_logic_flags();
             }
+            K::Addic | K::AddicRc if self.ca_lazy_on() => {
+                self.ldg(RDX, s);
+                self.ca_defer(crate::jit_lazyca::Lazy::AddImm(op.imm));
+                self.a.alu_ri(Alu::Add, RDX, op.imm);
+                self.stg(d, RDX);
+                if op.k == K::AddicRc { self.cr0_of_edx(); }
+            }
             K::Addic | K::AddicRc => {
                 self.ldg(RDX, s);
                 self.a.alu_ri(Alu::Add, RDX, op.imm);
@@ -744,6 +782,14 @@ impl E<'_, '_> {
             K::Mullw => { self.ldg(RDX, s); let o = self.gr(b); self.a.imul_ro(RDX, o); self.stg(d, RDX); }
             K::Extsh => { let o = self.gr(s); self.a.movsx16o(RDX, o); self.stg(d, RDX); }
             K::Extsb => { let o = self.gr(s); self.a.movsx8o(RDX, o); self.stg(d, RDX); }
+            K::Srawi | K::SrawiRc if self.ca_lazy_on() => {
+                let sh = b & 31;
+                self.ldg(RDX, s);
+                self.ca_defer(crate::jit_lazyca::Lazy::Sra(if sh == 0 { 0 } else { (1u32 << sh) - 1 }));
+                if sh != 0 { self.a.sh_ri(Sh::Sar, RDX, sh); }
+                self.stg(d, RDX);
+                if op.k == K::SrawiRc { self.cr0_of_edx(); }
+            }
             K::Srawi | K::SrawiRc => {
                 // CA = negative and a one bit shifted out = (rS & (0x80000000 | low bits)) > 0x80000000, unsigned: the
                 // borrow of 0x80000000 - that, taken as a mask by sbb (no setcc / shift chain)
@@ -841,6 +887,7 @@ impl E<'_, '_> {
 
     /// After a terminal Generic answered 0 (it never does: a branch answers 1 with pc set), leave with pc as it is.
     fn chain_dyn_after_helper(&mut self, i: usize) {
+        self.restore_displaced();
         self.a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), i as u32 + 1);
         self.exit_normal();
     }

@@ -396,18 +396,26 @@ impl Jit {
         let t0 = self.timer.map(|c| c());
         let (blocks, counters, after) = (&self.blocks, &self.ctx.counters, self.region_after);
         let hot = |pc: u32| blocks.contains(pc) && after.wrapping_sub(counters[Self::counter(pc)]) >= crate::jit_region::edge_min(after);
-        let Some(plan) = crate::jit_region::form(cache, mem, head, mem.raw().gen_pages as usize, self.region_shape, hot) else { self.stats.region_refused += 1; return };
-        if self.region_shape.spend {
+        // the A/B knob KNOB_FOLLOW_CALLS: call edges followed into the callee (inline return checks) whatever the shape says
+        let shape = if self.knobs & heirloom_cpu_abi::ppc::KNOB_FOLLOW_CALLS != 0 { crate::RegionShape { follow_calls: true, ..self.region_shape } } else { self.region_shape };
+        let Some(plan) = crate::jit_region::form(cache, mem, head, mem.raw().gen_pages as usize, shape, hot) else { self.stats.region_refused += 1; return };
+        if shape.spend {
             // its other nodes form no region of their own (their counters wrap far from zero; they still read as hot)
             for n in &plan.nodes[1..] { self.ctx.counters[Self::counter(n.0)] = after.wrapping_sub(1 << 31); }
         }
         let pages: Vec<(usize, u64)> = plan.pages.iter().map(|p| (p.0, p.1)).collect();
         let len = plan.maxfwd[0];
-        let entry = self.emit_place(head, plan.pages[0].1, &pages, at, len, false, h_note::<H> as HNote as usize as u64, |env| jit_emit::compile_region(&plan.nodes, &plan.maxfwd, &plan.pages, &plan.rets, env));
+        let pins = core::cell::Cell::new(0u32);
+        let entry = self.emit_place(head, plan.pages[0].1, &pages, at, len, false, h_note::<H> as HNote as usize as u64, |env| {
+            let r = jit_emit::compile_region(&plan.nodes, &plan.maxfwd, &plan.pages, &plan.rets, env);
+            pins.set(env.displaced);
+            r
+        });
         if let Some(e) = entry {
             self.regions.insert(e, plan.pages);
             self.stats.regions += 1;
             self.stats.region_nodes += plan.nodes.len() as u64;
+            self.stats.region_displaced += pins.get() as u64;
             self.stats.region_insns += plan.nodes.iter().map(|n| n.1.len() as u64).sum::<u64>();
             self.stats.region_fused += crate::jit_rflow::fuse_marks(&plan.nodes, &plan.rets, false).iter().flatten().filter(|&&f| f).count() as u64;
         }
@@ -474,7 +482,7 @@ impl Jit {
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { ibtc_mask }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: self.region_census, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware };
+        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { ibtc_mask }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: self.region_census, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware, displaced: 0 };
         let (code, inner) = emit(&mut env);
         let homes = core::mem::take(&mut env.homes);
         let runs = core::mem::take(&mut env.tag_runs);
@@ -565,7 +573,7 @@ impl Jit {
     fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
         let t0 = self.timer.map(|c| c());
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
-        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { self.ibtc_mask() }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: false, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { self.ibtc_mask() }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: false, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware, displaced: 0 };
         let code = jit_emit::compile_native(pc, &mut env);
         let runs = core::mem::take(&mut env.tag_runs);
         if let Some(p) = self.place(&code, 0, Vec::new(), pc, 1, gen, at) { self.tag_code(p, code.len(), &runs); }
