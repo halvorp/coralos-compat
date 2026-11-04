@@ -63,13 +63,15 @@ fn version_enumeration_find_reserve_state_release_and_the_error_numbers() {
     let win = *m.mac.windows.keys().next().expect("the native window");
     let w = &m.mac.windows[&win];
     assert_eq!((w.rect.right - w.rect.left, w.rect.bottom - w.rect.top, w.visible), (800, 600, false));
-    // Active shows it (never a display mode change: the main device's rectangle is untouched); Inactive hides it again
+    // Active: the guest's main GDevice reports the mode (the host display is never switched) and the window stays hidden - only a
+    // game that presents through DrawSprocket shows it; Inactive gives the GDevice its own rectangle back
     assert_eq!(call(&mut m, "DSpContext_SetState", &[ctx, 0]), 0);
-    assert!(m.mac.windows[&win].visible);
+    assert!(!m.mac.windows[&win].visible, "no empty host window for a game that makes its own");
+    assert_eq!(gd_rect(&m), (800, 600));
     assert_eq!(call(&mut m, "DSpContext_GetState", &[ctx, OUT]), 0);
     assert_eq!(call(&mut m, "DSpContext_SetState", &[ctx, 2]), 0);
-    assert!(!m.mac.windows[&win].visible);
-    assert!(m.mac.ui.calls.iter().any(|c| matches!(c, UiCall::HideWindow(_))));
+    assert_eq!(gd_rect(&m), (640, 480), "Inactive: the display's own rectangle again");
+    assert!(!m.mac.ui.calls.iter().any(|c| matches!(c, UiCall::HideWindow(_))), "a window never shown is not hidden");
     // attributes report the context's mode
     assert_eq!(call(&mut m, "DSpContext_GetAttributes", &[ctx, ATTR]), 0);
     assert_eq!((m.mac.mem.read_u32(ATTR).unwrap(), m.mac.mem.read_u32(ATTR + 48).unwrap()), (60 << 16, 1));
@@ -91,6 +93,43 @@ fn version_enumeration_find_reserve_state_release_and_the_error_numbers() {
     assert_eq!(call(&mut m, "DSpContext_SetState", &[ctx, 0]), -30445);
     assert_eq!(call(&mut m, "DSpContext_Reserve", &[0x1234, ATTR]), -30442);
     assert_eq!(call(&mut m, "DSpContext_GetAttributes", &[first + 30, ATTR]), -30442, "NEGATIVE control: one past the last context names none");
+}
+
+/// The main GDevice's gdRect as (width, height).
+fn gd_rect(m: &M) -> (i32, i32) {
+    let p = m.mac.mm.block(m.mac.cqd.main_device).unwrap().ptr + 0x22;
+    let r = |o: u32| m.mac.mem.read_u16(p + o).unwrap() as i16 as i32;
+    (r(6) - r(2), r(4) - r(0))
+}
+
+/// Warcraft III's mode change (FUN_10351aa0, Z83 2026-11-04): FindBest + Reserve + SetState(Active), then CreateNewWindow sized from the
+/// main GDevice's gdRect. With the mode reported there the game's own GL window is 1280x800 (it was the 640x480 display's, and the
+/// 1280x800 frame showed cropped); the context's own window stays hidden (no second, empty host window); Release restores the GDevice.
+#[test]
+fn an_active_context_is_the_gdevices_rectangle_and_its_window_shows_only_for_a_drawsprocket_presenter() {
+    let mut m = machine();
+    call(&mut m, "DSpStartup", &[]);
+    m.mac.mem.write_bytes(ATTR, &[0u8; 72]).unwrap();
+    m.mac.mem.write_u32(ATTR + 4, 1280).unwrap();
+    m.mac.mem.write_u32(ATTR + 8, 800).unwrap();
+    assert_eq!(call(&mut m, "DSpFindBestContextOnDisplayID", &[ATTR, OUT, 1]), 0);
+    let ctx = m.mac.mem.read_u32(OUT).unwrap();
+    assert_eq!(call(&mut m, "DSpContext_Reserve", &[ctx, ATTR]), 0);
+    assert_eq!(gd_rect(&m), (640, 480), "reserving changes nothing yet");
+    assert_eq!(call(&mut m, "DSpContext_SetState", &[ctx, 0]), 0);
+    assert_eq!(gd_rect(&m), (1280, 800), "the game sizes its window from this");
+    let win = *m.mac.windows.keys().next().unwrap();
+    assert!(!m.mac.windows[&win].visible);
+    // the mode list still starts at the DISPLAY's size while a context reports its mode there
+    call(&mut m, "DSpGetFirstContext", &[1, OUT]);
+    let first = m.mac.mem.read_u32(OUT).unwrap();
+    call(&mut m, "DSpContext_GetAttributes", &[first, ATTR + 0x100]);
+    assert_eq!((m.mac.mem.read_u32(ATTR + 0x104).unwrap(), m.mac.mem.read_u32(ATTR + 0x108).unwrap()), (640, 480));
+    // a game that presents through DrawSprocket gets the window shown
+    assert_eq!(call(&mut m, "DSpContext_GetBackBuffer", &[ctx, 0, OUT]), 0);
+    assert!(m.mac.windows[&win].visible, "GetBackBuffer shows the window SwapBuffers draws into");
+    assert_eq!(call(&mut m, "DSpContext_Release", &[ctx]), 0);
+    assert_eq!(gd_rect(&m), (640, 480), "Release: the display's own rectangle again");
 }
 
 /// Walk the contexts from `first` as Warcraft III's mode list does (GetAttributes, then Next until it fails): every (width, height).

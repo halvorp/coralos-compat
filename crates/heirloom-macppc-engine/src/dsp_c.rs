@@ -10,8 +10,11 @@
 //!   games-run-windowed rule (the display itself never changes mode): the host scales the window's GL picture to whatever size the user gives the window.
 //!   `DSpFindBestContext[OnDisplayID]` answers the exact mode of the requested width/height, else the smallest that holds it, else the largest (a zero request: the first),
 //!   and records the request.
-//! * `Reserve(ctx, attrs)` records the attributes and makes the (hidden) native window of the requested size; `SetState(Active)` shows and fronts it, `Inactive` hides it (through the
-//!   additive `GuestUi::hide_window`); `Release` closes it and the back buffer. Reserving twice is -30444, using an unreserved context -30445, an unknown reference -30446.
+//! * `Reserve(ctx, attrs)` records the attributes and makes the (hidden) native window of the requested size. `SetState(Active)` makes the context's
+//!   mode the main GDevice's rectangle - the guest's view of a display-mode change (Warcraft III sizes the window it draws GL into from it) - and
+//!   `Inactive` / `Release` give the GDevice its own rectangle back. The native window is SHOWN only for a game that presents through
+//!   DrawSprocket (`GetBackBuffer`, or `aglSetFullScreen` on the context): a game that makes its own window never gets an empty second
+//!   host window (taskboard heirloom_hide_window); `Inactive` hides a shown one (through the additive `GuestUi::hide_window`); `Release` closes it and the back buffer. Reserving twice is -30444, using an unreserved context -30445, an unknown reference -30446.
 //! * `GetBackBuffer` is a `GWorld` of the window's size at the main display's depth ([`crate::gworld`]; a direct-colour depth is refused by name there); `SwapBuffers` copies it to the
 //!   window through `CopyBits` (the busy proc is never called: the copy completes at once); `InvalBackBufferRect` is accepted (the whole buffer is copied).
 //! * `FadeGamma`, `FadeGammaIn/Out`: the real display gamma is never touched; the fade applies to the game's window only, and the seam has no per-window fade yet, so the request is
@@ -57,6 +60,10 @@ pub struct DspState {
     reserved: bool,
     /// The reserved context (valid while `reserved`).
     ctx: u32,
+    /// The main GDevice's own rectangle while an active context reports its mode there (None: the GDevice is the display's).
+    saved_gd: Option<(i16, i16, i16, i16)>,
+    /// The context's native window was shown (only for a game that draws through the back buffer or aglSetFullScreen).
+    shown: bool,
     play: u32, // 0 active, 1 paused, 2 inactive
     width: u32, height: u32,
     window: u32,
@@ -101,8 +108,42 @@ impl<U: GuestUi> MacPpc<U> {
         if at == 0 { return Ok(()); }
         self.mac.mem.write_u32(at, v).map_err(|_| format!("{who}: the result pointer {at:#x} leaves guest RAM"))
     }
-    /// The main display's size (its GDevice rectangle), 640x480 before QuickDraw exists.
+    /// The main GDevice's gdRect address (the device record + 0x22), None before QuickDraw exists.
+    fn dsp_gd_rect_at(&self) -> Option<u32> {
+        if self.mac.cqd.main_device == 0 { return None; }
+        self.mac.mm.block(self.mac.cqd.main_device).map(|b| b.ptr + 0x22)
+    }
+    /// The context's mode becomes the main GDevice's rectangle while it is active - what a real DrawSprocket's display-mode change
+    /// does, as the game sees it (Warcraft III sizes the window it draws GL into from that rectangle right after SetState(Active):
+    /// FUN_10351aa0's CreateNewWindow(gdRect)). Only the guest's view changes: the host display is never switched.
+    fn dsp_enter_mode(&mut self) {
+        let Some(at) = self.dsp_gd_rect_at() else { return };
+        let rd = |o: u32| self.mac.mem.read_u16(at + o).map(|v| v as i16).ok();
+        if self.dsp.saved_gd.is_none() {
+            if let (Some(t), Some(l), Some(b), Some(r)) = (rd(0), rd(2), rd(4), rd(6)) { self.dsp.saved_gd = Some((t, l, b, r)); }
+        }
+        let (w, h) = (self.dsp.width as i16, self.dsp.height as i16);
+        for (i, v) in [0i16, 0, h, w].into_iter().enumerate() { let _ = self.mac.mem.write_u16(at + 2 * i as u32, v as u16); }
+        self.mac.log.push(format!("[dsp] context active: the main GDevice reports {w}x{h} (the guest's view of the mode; the host display is unchanged)"));
+    }
+    /// The main GDevice is the display's again (Inactive / Release).
+    fn dsp_leave_mode(&mut self) {
+        let (Some(at), Some((t, l, b, r))) = (self.dsp_gd_rect_at(), self.dsp.saved_gd.take()) else { return };
+        for (i, v) in [t, l, b, r].into_iter().enumerate() { let _ = self.mac.mem.write_u16(at + 2 * i as u32, v as u16); }
+    }
+    /// Show the context's native window (once): a game that presents through DrawSprocket itself needs it; one that makes its own
+    /// window (Warcraft III) never does, so it stays hidden and opens no empty host window.
+    pub(crate) fn dsp_show(&mut self) -> Result<(), String> {
+        if self.dsp.shown || self.dsp.window == 0 || self.dsp.play != 0 { return Ok(()); }
+        let w = self.dsp.window;
+        self.dsp_trap("ShowWindow", &[w])?;
+        self.dsp_trap("SelectWindow", &[w])?;
+        self.dsp.shown = true;
+        Ok(())
+    }
+    /// The display's own size (its GDevice rectangle, the one saved while a context reports its mode), 640x480 before QuickDraw exists.
     fn dsp_display_size(&self) -> (u32, u32) {
+        if let Some((t, l, b, r)) = self.dsp.saved_gd.filter(|g| g.2 > g.0 && g.3 > g.1) { return ((r - l) as u32, (b - t) as u32); }
         if self.mac.cqd.main_device == 0 { return (640, 480); }
         match self.mac.mm.block(self.mac.cqd.main_device).map(|b| b.ptr).and_then(|p| heirloom_mac68k_engine::pascal::read_rect(&self.mac.mem, p + 0x22).ok()) {
             Some(r) if r.right > r.left && r.bottom > r.top => ((r.right - r.left) as u32, (r.bottom - r.top) as u32),
@@ -209,9 +250,14 @@ impl<U: GuestUi> MacPpc<U> {
             // kDSpContextState_Active 0, Paused 1, Inactive 2
             SetState => if !self.dsp.reserved { NOT_RESERVED } else {
                 match a1 {
-                    0 => { let w = self.dsp.window; self.dsp_trap("ShowWindow", &[w])?; self.dsp_trap("SelectWindow", &[w])?; self.dsp.play = 0; 0 }
+                    0 => { self.dsp.play = 0; self.dsp_enter_mode(); 0 }
                     1 => { self.dsp.play = 1; 0 }
-                    2 => { let w = self.dsp.window; self.dsp_trap("HideWindow", &[w])?; self.dsp.play = 2; 0 }
+                    2 => {
+                        if self.dsp.shown { let w = self.dsp.window; self.dsp_trap("HideWindow", &[w])?; self.dsp.shown = false; }
+                        self.dsp.play = 2;
+                        self.dsp_leave_mode();
+                        0
+                    }
                     s => return Err(format!("{n}: context state {s} is not Active (0), Paused (1) or Inactive (2)")),
                 }
             },
@@ -223,6 +269,7 @@ impl<U: GuestUi> MacPpc<U> {
             SetMaxFrameRate => { self.dsp.max_frame_rate = a1; 0 }
             // GetBackBuffer(ctx, bufferKind, CGrafPtr *): a GWorld of the window's size at the main display's depth
             GetBackBuffer => if !self.dsp.reserved { NOT_RESERVED } else {
+                self.dsp_show()?; // it presents through DrawSprocket: its window is where SwapBuffers puts the pictures
                 if self.dsp.back == 0 {
                     let b = Rect { top: 0, left: 0, bottom: self.dsp.height as i16, right: self.dsp.width as i16 };
                     match self.mac.gw_new(0, b, 0, 0).map_err(|e| format!("{n}: {}", e.0))? { Ok(p) => self.dsp.back = p, Err(code) => return Ok(cpu.gpr[3] = i32::from(code) as u32) }
@@ -259,7 +306,8 @@ impl<U: GuestUi> MacPpc<U> {
     fn dsp_release(&mut self) -> Result<(), String> {
         if self.dsp.back != 0 { let b = self.dsp.back; self.mac.gw_dispose(b).map_err(|e| e.0)?; self.dsp.back = 0; }
         if self.dsp.window != 0 { let w = self.dsp.window; self.dsp_trap("DisposeWindow", &[w])?; self.dsp.window = 0; }
-        self.dsp.reserved = false; self.dsp.play = 2;
+        self.dsp.reserved = false; self.dsp.play = 2; self.dsp.shown = false;
+        self.dsp_leave_mode();
         Ok(())
     }
 }

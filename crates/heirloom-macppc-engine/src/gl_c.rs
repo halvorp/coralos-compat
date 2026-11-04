@@ -371,6 +371,7 @@ impl<U: GuestUi> MacPpc<U> {
                     let set = GlFn::by_name("aglSetDrawable").ok_or_else(|| String::from("aglSetFullScreen: the contract has no aglSetDrawable"))?;
                     // The window the games-windowed rule shows it in: the DrawSprocket context's window when one is reserved, else none
                     // (0: the window owner attaches nothing and says so).
+                    self.dsp_show()?; // the context's window is where the full-screen drawable is shown
                     let win = self.mac.windows.get(&self.dsp.window()).and_then(|w| w.native).map_or(0, |n| u64::from(n.id));
                     self.gl_queue(t, Command::Call { entry: set.0, args: alloc::vec![u64::from(a1), u64::from(a2), win] });
                     self.gl_note(format!("[HEIRLOOM-GL FULLSCREEN-AS-WINDOW w={a1} h={a2}] the games-windowed rule: the display mode is not changed"));
