@@ -115,6 +115,9 @@ pub struct GlState {
     fence_names: BTreeMap<u32, Option<u32>>,
     next_fence_name: u32,
     ctxs: BTreeMap<u32, Token>,
+    /// Each context's drawable port and the size last sent for it (`aglSetDrawable`): AGL tracks its port's size, so a swap after
+    /// the port was resized (Warcraft III's mode change: SizeWindow, no new aglSetDrawable) sends the new size first.
+    drawables: BTreeMap<u32, (u32, u32, u32)>,
     /// `ctxs[current]`, kept by `gl_ctx_changed` (the per-call path reads it instead of the map).
     current_token: Option<Token>,
     next_ctx: u32,
@@ -177,6 +180,19 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn gl_attach(&mut self, w: Box<dyn GlWorker>) { self.gl.attach(w); }
 
     fn gl_queue(&mut self, token: Token, command: Command) { Frame { token, command }.encode_into(&mut self.gl.pending); }
+
+    /// A CGrafPort's / GrafPort's portRect size (top, left, bottom, right at +16), None for an empty rect or one outside guest RAM.
+    fn agl_port_size(&self, port: u32) -> Option<(u32, u32)> {
+        let r = |o: u32| self.mac.mem.read_i16(port + o).ok();
+        let (t, l, b, rr) = (r(16)?, r(18)?, r(20)?, r(22)?);
+        (b > t && rr > l).then(|| ((rr - l) as u32, (b - t) as u32))
+    }
+    /// Queue `aglSetDrawable(w, h, window)` for context `t`: ABI 3 names the drawable's host window (the port IS the window here:
+    /// GetWindowPort returns the window), so the window owner attaches the picture to exactly that window; 0 = no shown window.
+    fn agl_send_drawable(&mut self, t: Token, entry: u16, port: u32, w: u32, h: u32) {
+        let win = self.mac.windows.get(&port).and_then(|w| w.native).map_or(0, |n| u64::from(n.id));
+        self.gl_queue(t, Command::Call { entry, args: alloc::vec![u64::from(w), u64::from(h), win] });
+    }
 
     /// The (empty) argument buffer for one call: fill it, then hand it back through [`MacPpc::gl_queue_call`] or [`MacPpc::gl_words_back`].
     pub(super) fn gl_words(&mut self) -> Vec<u64> { let mut w = core::mem::take(&mut self.gl.words); w.clear(); w }
@@ -311,7 +327,7 @@ impl<U: GuestUi> MacPpc<U> {
                     }
                 }
             }
-            "aglDestroyContext" => match self.gl.ctxs.remove(&a0) {
+            "aglDestroyContext" => match self.gl.ctxs.remove(&a0).inspect(|_| { self.gl.drawables.remove(&a0); }) {
                 Some(t) => { self.gl_queue(t, Command::ContextDestroy); self.gl_flush(); if self.gl.current == a0 { self.gl.current = 0; } self.gl_ctx_changed(); ret = 1; }
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
             },
@@ -322,25 +338,30 @@ impl<U: GuestUi> MacPpc<U> {
             }
             "aglSetDrawable" => match self.gl.ctxs.get(&a0).copied() {
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
-                Some(t) if a1 == 0 => { self.gl_queue(t, Command::Call { entry: f.0, args: alloc::vec![0, 0, 0] }); ret = 1; }
-                Some(t) => {
-                    // CGrafPort / GrafPort: portRect (top, left, bottom, right) at +16
-                    let r: Result<[i16; 4], _> = (|| Ok::<_, heirloom_mem_flat32::MemError>([self.mac.mem.read_i16(a1 + 16)?, self.mac.mem.read_i16(a1 + 18)?, self.mac.mem.read_i16(a1 + 20)?, self.mac.mem.read_i16(a1 + 22)?]))();
-                    match r {
-                        Ok([t0, l, b, rr]) if b > t0 && rr > l => {
-                            // ABI 3: the drawable's host window id (the port IS the window here: GetWindowPort returns the window),
-                            // so the window owner attaches the picture to exactly that window; 0 = a port that is no shown window.
-                            let win = self.mac.windows.get(&a1).and_then(|w| w.native).map_or(0, |n| u64::from(n.id));
-                            self.gl_queue(t, Command::Call { entry: f.0, args: alloc::vec![u64::from((rr - l) as u32), u64::from((b - t0) as u32), win] });
-                            ret = 1;
-                        }
-                        _ => self.gl.agl_error = AGL_BAD_DRAWABLE,
+                Some(t) if a1 == 0 => { self.gl.drawables.remove(&a0); self.gl_queue(t, Command::Call { entry: f.0, args: alloc::vec![0, 0, 0] }); ret = 1; }
+                Some(t) => match self.agl_port_size(a1) {
+                    Some((w, h)) => {
+                        self.agl_send_drawable(t, f.0, a1, w, h);
+                        self.gl.drawables.insert(a0, (a1, w, h));
+                        ret = 1;
                     }
-                }
+                    None => self.gl.agl_error = AGL_BAD_DRAWABLE,
+                },
             },
             "aglSwapBuffers" => match self.gl.ctxs.get(&a0).copied() {
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
-                Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); let jit = self.jit_events(); let w0 = self.perf.as_ref().map_or(0, |p| p.ledger.windows); if let Some(p) = self.perf.as_mut() { p.swap(jit); } self.ablate_after_swap(w0); }
+                Some(t) => {
+                    // the port was resized since its aglSetDrawable: the drawable follows it before this frame is shown
+                    if let Some((port, w0, h0)) = self.gl.drawables.get(&a0).copied() {
+                        if let Some((w, h)) = self.agl_port_size(port).filter(|s| *s != (w0, h0)) {
+                            let set = GlFn::by_name("aglSetDrawable").ok_or_else(|| String::from("aglSwapBuffers: the contract has no aglSetDrawable"))?;
+                            self.agl_send_drawable(t, set.0, port, w, h);
+                            self.gl.drawables.insert(a0, (port, w, h));
+                            self.gl_note(format!("[HEIRLOOM-GL DRAWABLE-FOLLOWS-PORT {w0}x{h0} -> {w}x{h}] the port was resized after aglSetDrawable"));
+                        }
+                    }
+                    self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); let jit = self.jit_events(); let w0 = self.perf.as_ref().map_or(0, |p| p.ledger.windows); if let Some(p) = self.perf.as_mut() { p.swap(jit); } self.ablate_after_swap(w0);
+                }
             },
             "aglSetFullScreen" => match self.gl.ctxs.get(&a0).copied() {
                 // aglSetFullScreen(ctx, width, height, freq, device): the games-windowed rule - the drawable becomes a window of that size
