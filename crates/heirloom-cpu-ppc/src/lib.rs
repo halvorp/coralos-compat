@@ -82,6 +82,8 @@ mod jit_mutants;
 #[cfg(target_arch = "x86_64")]
 mod jit_lgroup;
 #[cfg(target_arch = "x86_64")]
+mod jit_memops;
+#[cfg(target_arch = "x86_64")]
 mod jit_ffacts;
 pub use jit_stats::{JitStats, RegionShape};
 /// The guest words of the shapes tier 2 translates whole (jit_xlate), for tests that place one.

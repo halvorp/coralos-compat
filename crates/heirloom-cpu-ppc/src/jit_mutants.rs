@@ -80,3 +80,5 @@ pub(crate) const MUT_LGROUP_SHORT: u8 = 35;
 /// A form that makes an FPR fact has slow paths that come back (jit_ffacts): after tier 1's handler left the FPR as it was
 /// (an enabled invalid operation), later code still trusts the fact.
 pub(crate) const MUT_FACTS_REJOIN: u8 = 36;
+/// A store group may span more than a page (jit_lgroup): a member two pages above its head's test runs inline on a code page.
+pub(crate) const MUT_SGROUP_WIDE: u8 = 37;

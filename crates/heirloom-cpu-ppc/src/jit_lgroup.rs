@@ -6,8 +6,14 @@
 //! so the dispatcher - tier 1 - runs the rest one instruction at a time, each with its own test, exactly.
 //!
 //! What ends a group: a write to the base register (an instruction whose destination it is, an update form, a Generic or
-//! `sc` - tier 1's handler may write any register), the end of the block. Stores do not join (the store map is their test)
-//! and do not end a group unless they update the base.
+//! `sc` - tier 1's handler may write any register), the end of the block. Stores do not join a load group and do not end one
+//! unless they update the base.
+//!
+//! STORE GROUPS, the same way: D-form stores off one unwritten base whose bytes span at most a page share ONE store-map test
+//! (jit_smap: the entry of the page holding the group's lowest EA covers that page and the next, which hold the whole span).
+//! The map cannot turn against a member after the head's test: a page is marked (its entry cleared) only by tier 1's decode,
+//! outside JIT code - and a member that WRITES a watched page is not possible then. When the head's test fails, the head
+//! runs on tier 1's handler and the block leaves after it, as for loads. Lockstep still journals every member's old bytes.
 use crate::t1op::{Op, K};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -20,6 +26,12 @@ pub(crate) enum Grp {
     Head { lo: i32, span: u32 },
     /// A later load of the group: no test of its own.
     Member,
+}
+
+/// A D-form store: (base register, offset, bytes, no GPR written, update form).
+fn store(op: &Op) -> Option<(u8, i32, u32, Option<u8>, bool)> {
+    let n = match op.k { K::Stw | K::Stwu | K::Stfs => 4, K::Stb | K::Stbu => 1, K::Sth => 2, K::Stfd => 8, _ => return None };
+    Some((op.a, op.imm as i32, n, None, matches!(op.k, K::Stwu | K::Stbu)))
 }
 
 /// A D-form load: (base register, offset, bytes, the GPR it writes, update form).
@@ -45,18 +57,24 @@ fn writes(op: &Op, r: u8) -> Option<bool> {
 
 /// The load groups of `ops` (one block or region node), per instruction. `short` = planted mutant MUT_LGROUP_SHORT (the span
 /// leaves out the last member's bytes).
-pub(crate) fn plan(ops: &[Op], short: bool) -> Vec<Grp> {
+pub(crate) fn plan(ops: &[Op], short: bool) -> Vec<Grp> { plan_by(ops, load, u32::MAX, short) }
+
+/// The store groups of `ops`, per instruction (span at most a page; `wide` = planted mutant MUT_SGROUP_WIDE: any span).
+pub(crate) fn plan_stores(ops: &[Op], wide: bool) -> Vec<Grp> { plan_by(ops, store, if wide { u32::MAX } else { 4096 }, false) }
+
+fn plan_by(ops: &[Op], access: fn(&Op) -> Option<(u8, i32, u32, Option<u8>, bool)>, max_span: u32, short: bool) -> Vec<Grp> {
     let mut g = vec![Grp::None; ops.len()];
     let mut i = 0;
     while i < ops.len() {
-        let Some((ra, off, n, dst, upd)) = load(&ops[i]) else { i += 1; continue };
+        let Some((ra, off, n, dst, upd)) = access(&ops[i]) else { i += 1; continue };
         if ra == 0 || upd || dst == Some(ra) { i += 1; continue; }
         let (mut lo, mut hi, mut last_n, mut members) = (off as i64, off as i64 + n as i64, n, vec![i]);
         let mut j = i + 1;
         while j < ops.len() {
             let op = &ops[j];
-            if let Some((rb, o, m, d, u)) = load(op) {
-                if rb == ra {
+            if let Some((rb, o, m, d, u)) = access(op) {
+                let (lo2, hi2) = (lo.min(o as i64), hi.max(o as i64 + m as i64));
+                if rb == ra && hi2 - lo2 <= max_span as i64 {
                     members.push(j);
                     lo = lo.min(o as i64);
                     if o as i64 + m as i64 >= hi { hi = o as i64 + m as i64; last_n = m; }
@@ -88,6 +106,16 @@ mod tests {
         let ops = [op(K::Lwz, 5, 3, 8), op(K::Addi, 6, 3, 4), op(K::Lwz, 7, 3, -4), op(K::Lbz, 8, 3, 20), op(K::Addi, 3, 3, 1), op(K::Lwz, 9, 3, 0)];
         let g = plan(&ops, false);
         assert_eq!(g, [Grp::Head { lo: -4, span: 25 }, Grp::None, Grp::Member, Grp::Member, Grp::None, Grp::None]);
+    }
+
+    #[test]
+    fn stores_off_one_base_within_a_page_share_a_test_and_a_wider_span_or_a_base_write_ends_the_group() {
+        let ops = [op(K::Stw, 0, 1, 8), op(K::Stw, 31, 1, -4), op(K::Stfd, 1, 1, 16), op(K::Stwu, 1, 1, -64), op(K::Stw, 5, 1, 0)];
+        assert_eq!(plan_stores(&ops, false), [Grp::Head { lo: -64, span: 88 }, Grp::Member, Grp::Member, Grp::Member, Grp::None]);
+        let ops = [op(K::Stw, 5, 3, 0), op(K::Stw, 6, 3, 0x1000), op(K::Stw, 7, 3, 4)];
+        assert_eq!(plan_stores(&ops, false), [Grp::Head { lo: 0, span: 8 }, Grp::None, Grp::Member]);
+        let ops = [op(K::Stw, 5, 3, 0), op(K::Lwz, 3, 4, 0), op(K::Stw, 7, 3, 4)];
+        assert_eq!(plan_stores(&ops, false), [Grp::None, Grp::None, Grp::None]);
     }
 
     #[test]

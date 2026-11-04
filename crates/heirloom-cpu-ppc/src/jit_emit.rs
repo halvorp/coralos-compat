@@ -123,8 +123,9 @@ pub(crate) struct E<'a, 'b> {
     pub(crate) fma_outs: Vec<(Vec<Fix>, usize)>,
     /// The current block's / node's load groups (jit_lgroup), per instruction; and the slow paths that LEAVE after tier 1's
     /// handler instead of coming back (a group head whose span test failed): (the jump, the instruction index).
-    groups: Vec<crate::jit_lgroup::Grp>,
-    slow_leave: Vec<(Fix, usize)>,
+    pub(crate) groups: Vec<crate::jit_lgroup::Grp>,
+    pub(crate) sgroups: Vec<crate::jit_lgroup::Grp>,
+    pub(crate) slow_leave: Vec<(Fix, usize)>,
     /// What the code so far proves about the FPRs and FPSCR[RN] (jit_ffacts); `leaving`: the instruction being emitted makes
     /// a fact, so its slow paths leave; `helped`: it ran on tier 1's handler on the hot path.
     pub(crate) facts: crate::jit_ffacts::Facts,
@@ -312,7 +313,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     pub(crate) fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
-        E { a: Asm { wide: env.wide, tags: env.tags.then(Vec::new), ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new(), kind: tg::NO_K << 8, stfs_outs: Vec::new(), fma_outs: Vec::new(), groups: Vec::new(), slow_leave: Vec::new(), facts: Default::default(), leaving: false, helped: false }
+        E { a: Asm { wide: env.wide, tags: env.tags.then(Vec::new), ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new(), kind: tg::NO_K << 8, stfs_outs: Vec::new(), fma_outs: Vec::new(), groups: Vec::new(), sgroups: Vec::new(), slow_leave: Vec::new(), facts: Default::default(), leaving: false, helped: false }
     }
 
     /// Start region node `k` (its code begins here: forward jumps waiting for it land here).
@@ -338,6 +339,9 @@ impl<'a, 'b> E<'a, 'b> {
         let mut ended = false;
         // load groups need the EA unmasked by anything but the address space (a masked EA can wrap inside the span)
         self.groups = if self.env.mask == u32::MAX { crate::jit_lgroup::plan(ops, self.env.mutant == MUT_LGROUP_SHORT) } else { Vec::new() };
+        // store groups share the store map's test: only with that test (not under its ablation knob or mutant 3)
+        let map_test = self.env.mutant != MUT_NO_WATCH && self.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_SMC_STORE == 0;
+        self.sgroups = if self.env.mask == u32::MAX && map_test { crate::jit_lgroup::plan_stores(ops, self.env.mutant == MUT_SGROUP_WIDE) } else { Vec::new() };
         self.facts = Default::default();
         for (i, op) in ops.iter().enumerate() {
             self.kind = tg::kind(op) << 8;
@@ -468,51 +472,6 @@ impl E<'_, '_> {
         self.load_locals();
     }
 
-    /// edx (rdx for 8) = the big-endian `n`-byte value at [r12 + rax], zero- or sign-extended (16 bits).
-    pub(crate) fn ld_be(&mut self, n: u8, sign: bool) { self.ld_be_to(RDX, n, sign) }
-    /// Host register `r` = the big-endian `n`-byte value at [r12 + rax] (a guest field's own register: no copy after).
-    pub(crate) fn ld_be_to(&mut self, r: u8, n: u8, sign: bool) {
-        let t = self.cat(tg::ACCESS);
-        let (a, at) = (&mut self.a, mx(R12, RAX, 1));
-        match (n, self.env.movbe) {
-            (8, true) => a.movbe_ld(64, r, at),
-            (8, false) => { a.ld64(r, at); a.bswap64(r); }
-            (4, true) => a.movbe_ld(32, r, at),
-            (4, false) => { a.ld32(r, at); a.bswap32(r); }
-            (2, true) => { a.movbe_ld(16, r, at); if sign { a.movsx16_rr(r, r) } else { a.movzx16_rr(r, r) } }
-            (2, false) => { a.movzx16(r, at); a.bswap32(r); a.sh_ri(if sign { Sh::Sar } else { Sh::Shr }, r, 16); }
-            _ => a.movzx8(r, at),
-        }
-        a.set_tag(t);
-    }
-    /// Store edx (rdx for 8) big-endian as `n` bytes at [r12 + rax] (edx is clobbered).
-    pub(crate) fn st_be(&mut self, n: u8) {
-        let t = self.cat(tg::ACCESS);
-        let (a, at) = (&mut self.a, mx(R12, RAX, 1));
-        match (n, self.env.movbe) {
-            (8, true) => a.movbe_st(64, at, RDX),
-            (8, false) => { a.bswap64(RDX); a.st64(at, RDX); }
-            (4, true) => a.movbe_st(32, at, RDX),
-            (4, false) => { a.bswap32(RDX); a.st32(at, RDX); }
-            (2, true) => a.movbe_st(16, at, RDX),
-            (2, false) => { a.bswap32(RDX); a.sh_ri(Sh::Shr, RDX, 16); a.st16(at, RDX); }
-            _ => a.st8(at, RDX),
-        }
-        a.set_tag(t);
-    }
-    /// Store GPR `n` big-endian as `bytes` (1, 2 or 4) at [r12 + rax]: straight from its host register where the store needs
-    /// no byte swap in a scratch register (MOVBE, or one byte), else through edx.
-    fn st_gpr(&mut self, n: u8, bytes: u8) {
-        match self.gr(n) {
-            O::R(r) if bytes == 1 || self.env.movbe => {
-                let t = self.cat(tg::ACCESS);
-                let at = mx(R12, RAX, 1);
-                if bytes == 1 { self.a.st8(at, r) } else { self.a.movbe_st(8 * bytes, at, r) }
-                self.a.set_tag(t);
-            }
-            o => { let t = self.cat(tg::GPR_LD); self.a.ld32o(RDX, o); self.a.set_tag(t); self.st_be(bytes) }
-        }
-    }
     /// The host register of GPR `n` when it has one (a global pin or a region local).
     pub(crate) fn greg(&mut self, n: u8) -> Option<u8> { if let O::R(r) = self.gw(n) { Some(r) } else { None } }
     /// rD = rS op imm (addi / ori / xori): in place in rD's register when it has one (`lea` for an add: no flags needed).
@@ -665,96 +624,6 @@ impl E<'_, '_> {
         let x = self.rw(XER);
         self.a.alu_oi(Alu::And, x, !XER_CA);
         self.a.alu_or(Alu::Or, x, R8);
-        self.a.set_tag(t);
-    }
-
-    /// eax = EA & mask (esi = EA unmasked too, for the update forms); a slow path unless `n` bytes from it are in RAM.
-    pub(crate) fn ea(&mut self, i: usize, e: Ea, n: u8) {
-        use crate::jit_lgroup::Grp;
-        match self.groups.get(i).copied() {
-            // a group's later load: the head tested its bytes
-            Some(Grp::Member) => return self.ea_regs(e),
-            Some(Grp::Head { lo, span }) => {
-                // the group's lowest EA, its whole span tested against the RAM length (64-bit: no wrap), then this load's EA
-                self.ea_regs(Ea { imm: lo as u32, ..e });
-                let t = self.cat(tg::GUARD_BOUNDS);
-                let a = &mut self.a;
-                a.lea64(RCX, m(RAX, span as i32));
-                a.alu_rm64(Alu::Cmp, RCX, ctx(offset_of!(Ctx, len)));
-                let f = a.jcc(Cc::A);
-                self.slow_leave.push((f, i));
-                self.a.set_tag(t);
-                let d = e.imm.wrapping_sub(lo as u32) as i32;
-                if d != 0 { let t = self.cat(tg::EA); self.a.lea32(RAX, m(RAX, d)); self.a.set_tag(t); }
-                return;
-            }
-            _ => {}
-        }
-        self.ea_regs(e);
-        let t = self.cat(tg::GUARD_BOUNDS);
-        let lim = match n { 1 => offset_of!(Ctx, lim1), 2 => offset_of!(Ctx, lim2), 4 => offset_of!(Ctx, lim4), _ => offset_of!(Ctx, lim8) };
-        self.a.alu_rm64(Alu::Cmp, RAX, ctx(lim));
-        self.slow_if(Cc::A, i);
-        self.a.set_tag(t);
-    }
-    pub(crate) fn ea_regs(&mut self, e: Ea) {
-        let t = self.cat(tg::EA);
-        let r = if e.update { R8 } else { RAX };
-        match (e.ra, e.rb) {
-            (0, Some(rb)) => { let o = self.gr(rb); self.a.ld32o(r, o) }
-            (ra, Some(rb)) => match (self.gr(ra), self.gr(rb)) {
-                (O::R(x), O::R(y)) => self.a.lea32(r, mx(x, y, 1)),
-                (oa, ob) => { self.a.ld32o(r, oa); self.a.alu_ro(Alu::Add, r, ob); }
-            },
-            (ra, None) => match self.gr(ra) {
-                O::R(x) => self.a.lea32(r, m(x, e.imm as i32)),
-                o => { self.a.ld32o(r, o); if e.imm != 0 { self.a.alu_ri(Alu::Add, r, e.imm); } }
-            },
-        }
-        let a = &mut self.a;
-        if e.update { a.mov_rr(RAX, R8); }
-        if self.env.mask != u32::MAX { a.alu_rm(Alu::And, RAX, ctx(offset_of!(Ctx, mask))); }
-        a.set_tag(t);
-    }
-    /// The store guard after `ea_regs` (eax = the masked EA; no bounds test, no alignment or page-offset test: the store map's
-    /// entry for the store's first page covers that page and the next, jit_smap), then `store_guard_n`.
-    pub(crate) fn store_guard(&mut self, i: usize, e: Ea, n: u8) {
-        let t = self.a.tag;
-        self.store_guard_n(i, n as u32);
-        if self.env.logged { self.ea_regs(e); }
-        self.a.set_tag(t);
-    }
-    /// A store of at most 8 `bytes` at eax: the slow path unless the store map (jit_smap) says its page and the next are inside
-    /// RAM and not watched (a watched page holds decoded code: tier 1's handler writes it through GuestMem, which bumps its
-    /// generation); in lockstep the old bytes are journaled first (eax is then clobbered: the caller recomputes it).
-    pub(crate) fn store_guard_n(&mut self, i: usize, bytes: u32) {
-        let t = self.cat(tg::GUARD_SMAP);
-        let a = &mut self.a;
-        if self.env.mutant != MUT_NO_WATCH && self.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_SMC_STORE == 0 {
-            a.mov_rr(RCX, RAX);
-            a.sh_ri(Sh::Shr, RCX, 12);
-            a.cmp8_mi(mxd(R13, RCX, 1, offset_of!(Ctx, smap) as i32), 0);
-            self.slow_if(Cc::E, i);
-        } else {
-            // the planted mutant drops the watch test only: RAM bounds still hold (the map was both)
-            a.lea64(RCX, m(RAX, bytes as i32));
-            a.alu_rm64(Alu::Cmp, RCX, ctx(offset_of!(Ctx, len)));
-            self.slow_if(Cc::A, i);
-        }
-        if self.env.logged {
-            self.cat(tg::NOTE);
-            // h_note is a C call: the cache's caller-saved registers are kept across it (rsp stays 16-byte aligned)
-            let a = &mut self.a;
-            for r in crate::jit_regs::CALLER_SAVED.iter().chain(&crate::jit_regs::LOCAL_REGS) { a.push(*r); }
-            a.alu_ri64(Alu::Sub, RSP, 8);
-            a.mov_rr64(RDI, R13);
-            a.mov_rr(RSI, RAX);
-            a.mov_ri(RDX, bytes);
-            a.mov_ri64(RAX, self.env.note);
-            a.call_r(RAX);
-            a.alu_ri64(Alu::Add, RSP, 8);
-            for r in crate::jit_regs::CALLER_SAVED.iter().chain(&crate::jit_regs::LOCAL_REGS).rev() { a.pop(*r); }
-        }
         self.a.set_tag(t);
     }
 
