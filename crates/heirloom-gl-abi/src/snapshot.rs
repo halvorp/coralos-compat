@@ -105,26 +105,6 @@ pub struct ArraySnapshot {
     pub data: Vec<u8>,
 }
 
-/// Reverse every `ty`-sized component in place: guest (big-endian) to wire (little-endian).
-pub(crate) fn to_wire_order(ty: ElemType, bytes: &mut [u8]) {
-    // one fixed-width swap per component (the compiler vectorises these; a per-chunk `reverse` it does not)
-    match ty.bytes() {
-        2 => bytes.chunks_exact_mut(2).for_each(|c| {
-            let v = u16::from_be_bytes([c[0], c[1]]);
-            c.copy_from_slice(&v.to_le_bytes());
-        }),
-        4 => bytes.chunks_exact_mut(4).for_each(|c| {
-            let v = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
-            c.copy_from_slice(&v.to_le_bytes());
-        }),
-        8 => bytes.chunks_exact_mut(8).for_each(|c| {
-            let v = u64::from_be_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
-            c.copy_from_slice(&v.to_le_bytes());
-        }),
-        _ => {}
-    }
-}
-
 /// Snapshot vertices `first .. first+count` of `d` out of guest memory `mem`.
 pub fn snapshot_array(mem: &[u8], d: &Descriptor, first: u32, count: u32) -> Result<ArraySnapshot, SnapshotError> {
     let mut out = ArraySnapshot { role: d.role, unit: d.unit, size: d.size, ty: d.ty, first, count, data: Vec::new() };
@@ -153,15 +133,8 @@ pub fn snapshot_array_into(mem: &[u8], d: &Descriptor, first: u32, count: u32, o
             return Err(SnapshotError::OutOfRange);
         }
         data.reserve_exact(total);
-        if stride == vbytes {
-            data.extend_from_slice(&mem[start..end]); // tightly packed: the range is one copy
-        } else {
-            for i in 0..count as usize {
-                let at = start + i * stride; // bounded by the proof above
-                data.extend_from_slice(&mem[at..at + vbytes]);
-            }
-        }
-        to_wire_order(d.ty, data);
+        // copied and converted in one pass, no `memcpy` per vertex (wire_copy)
+        crate::wire_copy::append_swapped(data, mem, start, stride, vbytes, count as usize, d.ty.bytes())?;
     }
     Ok(())
 }
@@ -196,8 +169,7 @@ pub fn snapshot_indices_into(mem: &[u8], offset: usize, count: u32, ty: ElemType
     }
     let data = &mut out.data;
     data.clear();
-    data.extend_from_slice(&mem[offset..end]);
-    to_wire_order(ty, data);
+    crate::wire_copy::append_swapped(data, mem, offset, total, total, 1, ty.bytes())?;
     let mut range: Option<(u32, u32)> = None;
     for c in data.chunks_exact(ty.bytes()) {
         let v = match ty {

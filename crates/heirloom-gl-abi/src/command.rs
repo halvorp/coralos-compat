@@ -4,6 +4,7 @@
 use crate::snapshot::{snapshot_array, snapshot_array_into, snapshot_indices_into, ArraySnapshot, Descriptor, ElemType, Role, SnapshotError};
 use crate::token::Token;
 use crate::wire::{Reader, WireError, Writer, ABI_VERSION};
+use crate::wire_copy::{append_swapped, put, put_words};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -292,10 +293,9 @@ impl Frame {
         h[12..16].copy_from_slice(&token.incarnation.to_le_bytes());
         h[16..18].copy_from_slice(&entry.to_le_bytes());
         h[20..24].copy_from_slice(&(args.len() as u32).to_le_bytes());
-        out.extend_from_slice(&h);
-        for a in args {
-            out.extend_from_slice(&a.to_le_bytes());
-        }
+        // inline stores, no `memcpy` per field (wire_copy: on CoralOS that call is three microcoded REP MOVS)
+        put(out, h);
+        put_words(out, args);
     }
 
     /// Capture a `glDrawElements(mode, count, ty, indices at index_off)` out of guest memory `mem` STRAIGHT INTO its frame at the end
@@ -419,10 +419,11 @@ fn encode_draw_body(out: &mut Vec<u8>, token: Token, mem: &[u8], mode: u32, inde
     h[20..24].copy_from_slice(&(ty as u32).to_le_bytes());
     h[24..28].copy_from_slice(&count.to_le_bytes());
     // the array count (h[28..32]) is patched below: none when the draw has no index
-    out.extend_from_slice(&h);
+    put(out, h);
     let at = out.len();
-    out.extend_from_slice(&mem[index_off..iend]);
-    let range = indices_to_wire(ty, &mut out[at..]);
+    append_swapped(out, mem, index_off, ibytes, ibytes, 1, ty.bytes())?;
+    // the (min, max) over the bytes just converted: they are in L1
+    let range = index_range(ty, &out[at..]);
     if let Some((lo, hi)) = range {
         let n = (hi - lo).checked_add(1).ok_or(SnapshotError::Overflow)?;
         // every array's lines asked for before the first is copied: the misses overlap instead of each copy waiting on its own
@@ -454,13 +455,6 @@ pub fn index_range(ty: ElemType, b: &[u8]) -> Option<(u32, u32)> {
         _ => b.chunks_exact(4).for_each(|c| { let v = u32::from_le_bytes([c[0], c[1], c[2], c[3]]); lo = lo.min(v); hi = hi.max(v); }),
     }
     (lo <= hi).then_some((lo, hi))
-}
-
-/// Convert indices in place from the guest's order to the wire's and return their (min, max) ([`index_range`], over the bytes
-/// just converted: they are in L1).
-fn indices_to_wire(ty: ElemType, b: &mut [u8]) -> Option<(u32, u32)> {
-    crate::snapshot::to_wire_order(ty, b);
-    index_range(ty, b)
 }
 
 /// The guest bytes vertices `first .. first+count` of `d` span (first vertex to the end of the last), when they lie inside `mem`
@@ -508,18 +502,9 @@ fn encode_array(out: &mut Vec<u8>, mem: &[u8], d: &Descriptor, first: u32, count
     rec[12..16].copy_from_slice(&count.to_le_bytes());
     rec[16..20].copy_from_slice(&(total as u32).to_le_bytes());
     out.reserve(rec.len() + total);
-    out.extend_from_slice(&rec);
-    let at = out.len();
-    if stride == vbytes {
-        out.extend_from_slice(&mem[begin..end]);
-    } else {
-        for i in 0..count as usize {
-            let a = begin + i * stride; // bounded by the proof above
-            out.extend_from_slice(&mem[a..a + vbytes]);
-        }
-    }
-    crate::snapshot::to_wire_order(d.ty, &mut out[at..]);
-    Ok(())
+    put(out, rec);
+    // one pass: each vertex's components copied and reversed together, no `memcpy` per vertex (wire_copy)
+    append_swapped(out, mem, begin, stride, vbytes, count as usize, d.ty.bytes())
 }
 
 fn decode_draw(p: &mut Reader) -> Result<DrawCommand, WireError> {

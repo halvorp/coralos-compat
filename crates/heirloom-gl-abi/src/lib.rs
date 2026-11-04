@@ -41,6 +41,7 @@ pub mod snapshot;
 pub mod token;
 pub mod version;
 pub mod wire;
+mod wire_copy;
 
 pub use caps::{derive, extensions_string, version_string, Capabilities};
 pub use command::{Command, DrawCommand, Frame};

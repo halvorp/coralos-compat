@@ -30,13 +30,13 @@ impl Writer {
         self.buf.push(v);
     }
     pub fn u16(&mut self, v: u16) {
-        self.buf.extend_from_slice(&v.to_le_bytes());
+        crate::wire_copy::put(&mut self.buf, v.to_le_bytes());
     }
     pub fn u32(&mut self, v: u32) {
-        self.buf.extend_from_slice(&v.to_le_bytes());
+        crate::wire_copy::put(&mut self.buf, v.to_le_bytes());
     }
     pub fn u64(&mut self, v: u64) {
-        self.buf.extend_from_slice(&v.to_le_bytes());
+        crate::wire_copy::put(&mut self.buf, v.to_le_bytes());
     }
     pub fn bytes(&mut self, v: &[u8]) {
         self.buf.extend_from_slice(v);
