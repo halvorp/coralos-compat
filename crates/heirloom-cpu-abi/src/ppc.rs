@@ -427,11 +427,13 @@ pub const TIER_KNOB_SHIFT: u32 = 8;
 pub const KNOB_NO_SMC_STORE: u32 = 1;
 /// Block and region entries skip the code-page generation check (a rewritten page's stale block runs).
 pub const KNOB_NO_ENTRY_GEN: u32 = 2;
+/// Recognised whole functions are compiled block by block like any other code (jit_xlate's translations off: their A/B).
+pub const KNOB_NO_XLATE: u32 = 4;
 /// Bits 8..12 of the knobs: the IBTC's index bits (8..=16 entries' log2; 0 = the default 16, 64K entries / 512 KiB).
 pub const KNOB_IBTC_BITS_SHIFT: u32 = 8;
 pub const KNOB_IBTC_BITS_MASK: u32 = 0x1F;
 /// The knob bits a library may be asked for (anything else: -1).
-pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
+pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
 
 /// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
 /// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;

@@ -70,8 +70,14 @@ mod jit_smap;
 mod jit_region;
 #[cfg(target_arch = "x86_64")]
 mod jit_rflow;
+#[cfg(target_arch = "x86_64")]
+mod jit_xlate; // translated functions: a recognised guest function compiled whole, exactly (the Z83 profile's rank 1 first)
 mod jit_stats;
 pub use jit_stats::{JitStats, RegionShape};
+/// The guest words of the shapes tier 2 translates whole (jit_xlate), for tests that place one.
+#[cfg(target_arch = "x86_64")]
+#[doc(hidden)]
+pub use jit_xlate::CMP16F as XLATE_CMP16F;
 #[cfg(target_arch = "x86_64")]
 pub use jit_mem::CodeMem;
 #[cfg(all(feature = "host-codemem", target_arch = "x86_64", target_os = "linux"))]

@@ -451,6 +451,14 @@ impl Jit {
         }
     }
 
+    /// Compile the recognised whole function `s` at `pc` as one block (jit_xlate): its entry's budget test covers its longest path.
+    fn compile_shape<H: Host>(&mut self, s: crate::jit_xlate::Shape, pc: u32, gen: u64, page: usize, at: u64) {
+        let note = h_note::<H> as HNote as usize as u64;
+        if self.emit_place(pc, gen, &[(page, gen)], at, crate::jit_xlate::max_insns(s), false, note, |env| crate::jit_xlate::compile(s, pc, gen, page, env)).is_some() {
+            self.stats.translated += 1;
+        }
+    }
+
     /// Compile `ops` (a superblock whose first tier-1 block is `ops[..first]`) at `pc`.
     fn compile<H: Host>(&mut self, ops: &[crate::t1op::Op], first: usize, pc: u32, gen: u64, page: usize, at: u64) {
         let t0 = self.timer.map(|c| c());
@@ -876,9 +884,16 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
             let page = (host.mem().strip(pc) >> heirloom_mem_flat32::CODE_PAGE_SHIFT) as usize;
             // a block's entry reads its page's generation: only pages inside the watch's array are compiled
             if page < host.mem().raw().gen_pages as usize {
-                let ops = superblock(cache, host.mem(), &cache.ops[start..start + len], pc, gen, page);
-                jit.stats.superblocks += (ops.len() > len) as u64;
-                jit.compile::<H>(&ops, len, pc, gen, page, n);
+                // a recognised whole function (jit_xlate) is compiled whole; any other block as before
+                let mem = host.mem();
+                let shape = (jit.mask == u32::MAX && jit.knobs & heirloom_cpu_abi::ppc::KNOB_NO_XLATE == 0).then(|| crate::jit_xlate::recognise(pc, heirloom_mem_flat32::CODE_PAGE_SHIFT, |a| mem.read_u32(a).ok())).flatten();
+                if let Some(s) = shape {
+                    jit.compile_shape::<H>(s, pc, gen, page, n);
+                } else {
+                    let ops = superblock(cache, host.mem(), &cache.ops[start..start + len], pc, gen, page);
+                    jit.stats.superblocks += (ops.len() > len) as u64;
+                    jit.compile::<H>(&ops, len, pc, gen, page, n);
+                }
             }
         }
         n += t1run::run(host, cpu, &cache.ops[start..start + take], pc, gen, check, &mut trap);

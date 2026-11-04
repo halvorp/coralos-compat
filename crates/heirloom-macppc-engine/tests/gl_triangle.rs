@@ -489,6 +489,8 @@ fn wc3_host_run_with_a_gl_worker() {
     // (tier 2, `jit` / `jitlockstep`, runs in this host's executable memory: heirloom_cpu_ppc::HostCodeMem)
     if let Some(t) = std::env::var("HEIRLOOM_PPC_TIER").ok().and_then(|s| heirloom_macppc_engine::cpu::Tier::parse(&s)) {
         m.exec().tier = t;
+        // `WC3_KNOBS=<n>`: tier 2's ablation knobs (heirloom_cpu_abi::ppc::KNOB_*: 4 = no translated functions), the host A/B
+        if let Some(k) = std::env::var("WC3_KNOBS").ok().and_then(|v| v.parse().ok()) { m.exec().set_jit_knobs(k); }
         // `WC3_CODEMEM_COST=<us per call>,<us per page>`: every publish / withdraw also costs this much (a busy wait), the
         // shape of CoralOS's EXEC_CODE_PROTECT - one syscall per call, one TLB shootdown round per page that changes state
         let mem: Box<dyn heirloom_cpu_ppc::CodeMem> = match std::env::var("WC3_CODEMEM_COST").ok().and_then(|v| v.split_once(',').map(|(a, b)| (a.parse::<u64>().ok(), b.parse::<u64>().ok()))) {

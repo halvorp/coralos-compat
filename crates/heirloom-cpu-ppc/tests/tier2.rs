@@ -792,3 +792,76 @@ fn negative_control_the_guard_knobs_miss_a_store_into_code() {
         assert!(got != want, "knobs {knobs:#x}: the store into code went unseen (r5 {} vs {})", got.gpr[5], want.gpr[5]);
     }
 }
+
+/// h86 aot-xlate: the Z83 profile's rank-1 function (a 4x4 single-float matrix compare, 68 words) placed at XFN and called in a
+/// loop over seven cases - equal, a difference at pair 0 / 7 / 15, +0 against -0 everywhere (equal), infinities, and a NaN at
+/// pair 0 (tier 1's: the translation bails before writing anything) - with r3, CR and FPSCR folded into registers after every call.
+const XFN: u32 = 0x2_0000;
+const XCASES: u32 = 7;
+fn xlate_program() -> Vec<u32> {
+    let bl = |from: u32, to: u32| 18 << 26 | (to.wrapping_sub(from) & 0x03FF_FFFC) | 1;
+    let mut p = vec![d(14, 31, 0, 200), d(14, 20, 0, 0), d(14, 22, 0, 0)]; // li r31,200; li r20,0; li r22,0
+    let outer = p.len();
+    p.push(d(14, 30, 0, 0)); // li r30,0
+    let inner = p.len();
+    p.push(d(14, 3, 30, BUF)); // addi r3,r30,BUF
+    p.push(d(14, 4, 3, 64)); // addi r4,r3,64
+    let at = CODE + 4 * p.len() as u32;
+    p.push(bl(at, XFN));
+    p.push(rlwinm(20, 20, 1, 0, 31, false)); // rotlwi r20,r20,1
+    p.push(x(20, 20, 3, 266, false)); // add r20,r20,r3
+    p.push(31 << 26 | 21 << 21 | 19 << 1); // mfcr r21
+    p.push(x(22, 22, 21, 266, false)); // add r22,r22,r21
+    p.push(63 << 26 | 3 << 21 | 583 << 1); // mffs f3
+    p.push(d(54, 3, 1, 0xFFF8)); // stfd f3,-8(r1)
+    p.push(d(32, 23, 1, 0xFFFC)); // lwz r23,-4(r1): the FPSCR
+    p.push(x(25, 25, 23, 266, false)); // add r25,r25,r23
+    p.push(d(14, 30, 30, 128)); // addi r30,r30,128
+    p.push(d(11, 0, 30, 128 * XCASES)); // cmpwi r30,128 * cases
+    let b = p.len();
+    p.push(bc(4, 2, (inner as i32 - b as i32) * 4)); // bne inner
+    p.push(d(13, 31, 31, 0xFFFF)); // addic. r31,r31,-1
+    let b = p.len();
+    p.push(bc(4, 2, (outer as i32 - b as i32) * 4)); // bne outer
+    p.extend([d(15, 24, 0, EXIT >> 16), d(24, 24, 24, EXIT & 0xFFFF), mtspr(8, 24)]);
+    p
+}
+fn xlate_setup(c: &mut Cpu, m: &mut M) {
+    c.fpscr = 0x1000; // FPSCR[FU] set before the first call: every ordered fcmpu clears it
+    for (i, &w) in heirloom_cpu_ppc::XLATE_CMP16F.iter().enumerate() { m.mem.write_u32(XFN + 4 * i as u32, w).unwrap(); }
+    let f = |v: f32| v.to_bits();
+    for case in 0..XCASES {
+        let (a, b) = (BUF + 128 * case, BUF + 128 * case + 64);
+        for k in 0..16u32 {
+            let base = f(1.5 + k as f32);
+            let (va, vb) = match case {
+                1 if k == 0 => (base, f(-7.0)),
+                2 if k == 7 => (base, f(2.25)),
+                3 if k == 15 => (base, f(0.125)),
+                4 => (f(0.0), f(-0.0)),
+                5 => (f(f32::INFINITY), f(f32::INFINITY)),
+                6 if k == 0 => (0x7FC0_0001, base),
+                _ => (base, base),
+            };
+            m.mem.write_u32(a + 4 * k, va).unwrap();
+            m.mem.write_u32(b + 4 * k, vb).unwrap();
+        }
+    }
+}
+
+/// The translated function ends every call in tier 0's exact state - r0, r3, f0, f1, CR0, FPSCR[FPCC], the retired count, the
+/// pc - in every slicing (so the budget test and the bail are taken too) and in JitLockstep; and it is really translated.
+#[test]
+fn the_translated_matrix_compare_is_exact_and_is_used() {
+    let prog = xlate_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, xlate_setup);
+    assert_ne!(want.gpr[20], 0, "some calls answered 1");
+    for slice in [1_000_000, 1_000, 61, 13] {
+        let (got, e) = run_on(Tier::Jit, 0, &prog, slice, xlate_setup);
+        assert!(got == want, "slice {slice}: r20 {:#x} vs {:#x}, r22 {:#x} vs {:#x}, f1 {:#x} vs {:#x}, fpscr {:#x} vs {:#x}, tb {} vs {}",
+            got.gpr[20], want.gpr[20], got.gpr[22], want.gpr[22], got.fpr[1], want.fpr[1], got.fpscr, want.fpscr, got.tb, want.tb);
+        assert!(e.jit_stats().translated >= 1, "slice {slice}: the function was translated: {:?}", e.jit_stats());
+    }
+    let (got, e) = run_on(Tier::JitLockstep, 0, &prog, 13, xlate_setup);
+    assert!(got == want && e.divergence().is_none(), "{:?}", e.divergence());
+}

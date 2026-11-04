@@ -339,7 +339,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 }
 
 impl<'a, 'b> E<'a, 'b> {
-    fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
+    pub(crate) fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
         E { a: Asm { wide: env.wide, ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new() }
     }
 
@@ -444,7 +444,7 @@ impl E<'_, '_> {
         self.a.jmp_m(ctx(offset_of!(Ctx, exit)));
     }
     /// Leave for the target in r8d, `n` retired: through the dispatch table when chaining.
-    fn chain_dyn(&mut self, n: usize) {
+    pub(crate) fn chain_dyn(&mut self, n: usize) {
         self.store_locals();
         let a = &mut self.a;
         a.alu_ri64(Alu::Add, R15, n as i32);

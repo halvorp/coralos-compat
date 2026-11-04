@@ -22,6 +22,8 @@ pub struct JitStats {
     pub flushes: u64,
     /// Compiled blocks that are superblocks (go on through a conditional branch's not-taken path into the next block).
     pub superblocks: u64,
+    /// Whole guest functions compiled as one translated block (jit_xlate: a recognised shape).
+    pub translated: u64,
     /// Instructions JIT code handed to tier 1's handler (jit::h_one), one call each.
     pub helpers: u64,
     /// Indirect branches (blr / bctr / a native's return) whose target the dispatch table held (a chained jump), and those
