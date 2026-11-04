@@ -73,6 +73,12 @@ mod jit_rflow;
 #[cfg(target_arch = "x86_64")]
 mod jit_xlate; // translated functions: a recognised guest function compiled whole, exactly (the Z83 profile's rank 1 first)
 mod jit_stats;
+#[cfg(target_arch = "x86_64")]
+mod jit_census; // diagnostics: what each emitted byte is for (Exec::set_jit_tag_census)
+#[cfg(target_arch = "x86_64")]
+mod jit_ctx;
+#[cfg(target_arch = "x86_64")]
+mod jit_mutants;
 pub use jit_stats::{JitStats, RegionShape};
 /// The guest words of the shapes tier 2 translates whole (jit_xlate), for tests that place one.
 #[cfg(target_arch = "x86_64")]

@@ -517,6 +517,9 @@ fn wc3_host_run_with_a_gl_worker() {
     // `WC3_REGION_CENSUS`: regions count their entries and internal edges (JitStats region_entries / region_edges)
     #[cfg(not(feature = "cpu-library"))]
     if std::env::var("WC3_REGION_CENSUS").is_ok() { m.exec().set_jit_region_census(true); }
+    // `WC3_ARENA_TAGS=<file>` (with WC3_ARENA_DUMP): a tag per JIT code byte (cpu-ppc jit_census), dumped beside the arena
+    #[cfg(not(feature = "cpu-library"))]
+    if std::env::var("WC3_ARENA_TAGS").is_ok() { m.exec().set_jit_tag_census(true); }
     // `WC3_REGION_SHAPE=<nodes>/<insns>/<pages>/<follow calls 0|1>/<spend 0|1>` (or comma-separated): the region tier's shape (tuning)
     #[cfg(not(feature = "cpu-library"))]
     if let Ok(v) = std::env::var("WC3_REGION_SHAPE") {
@@ -631,6 +634,12 @@ fn wc3_host_run_with_a_gl_worker() {
         if let (Ok(path), Some((base, code))) = (std::env::var("WC3_ARENA_DUMP"), e.jit_arena_bytes()) {
             std::fs::write(&path, code).expect("WC3_ARENA_DUMP");
             eprintln!("ARENA-DUMP base={base:#x} len={} -> {path}", code.len());
+        }
+        if let (Ok(path), Some(tags)) = (std::env::var("WC3_ARENA_TAGS"), e.jit_arena_tags()) {
+            std::fs::write(&path, tags.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<u8>>()).expect("WC3_ARENA_TAGS");
+            eprintln!("ARENA-TAGS len={} -> {path}", tags.len());
+            let words: Vec<u8> = e.jit_arena_words().iter().flat_map(|&(o, w, pc)| [(o as u32).to_le_bytes(), w.to_le_bytes(), pc.to_le_bytes()]).flatten().collect();
+            std::fs::write(format!("{path}.words"), words).expect("WC3_ARENA_TAGS words");
         }
         eprintln!("PPC-TIER {:?} prof={:?} jit={:?} cache={:?} lockstep={:?} divergence={:?}", e.tier, e.prof, e.jit_stats(), e.cache_stats(), e.lockstep_stats(), e.divergence());
         // the region compile-time tail (host ns, timed only with WC3_JIT_FRAMES): the council's p99 <= 4 ms proxy

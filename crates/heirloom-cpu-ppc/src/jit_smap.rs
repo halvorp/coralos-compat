@@ -1,7 +1,9 @@
-//! Tier 2's STORE MAP: one byte per 4 KiB guest page, 1 = an inline store may write there (the whole page is inside guest RAM
-//! and the code watch does not mark it), 0 = the store takes the slow path (tier 1's handler: GuestMem's write, which bumps a
+//! Tier 2's STORE MAP: one byte per 4 KiB guest page, 1 = an inline store STARTING there may write (that page AND the next one
+//! are wholly inside guest RAM and the code watch marks neither: a store of at most 8 bytes, aligned or not, stays inside the
+//! two - so JIT code tests no alignment and no page offset, h86 jitsize), 0 = the store takes the slow path (tier 1's handler: GuestMem's write, which bumps a
 //! marked page's generation - the existing self-modifying-code semantics - or the trap past RAM). An inline store then needs
-//! one byte compare (`cmp byte [map + ea >> 12], 0`) where it tested RAM bounds and the watch bit (~14 host instructions:
+//! one byte compare (`cmp byte [r13 + (ea >> 12) + MAP], 0`: the map is inside the JIT's Ctx, jit.rs, so its base is no
+//! load) where it tested RAM bounds and the watch bit (~14 host instructions:
 //! bounds, a 64-bit bitmap word load, BT); never `bt [mem], reg` (microcoded on the Atom).
 //!
 //! The map MIRRORS the watch's `marked` bitmap, and the watch stays the authority: it is checked before every entry into JIT
@@ -15,9 +17,10 @@ use heirloom_mem_flat32::{GuestMem, RawRam};
 
 const PAGE_SHIFT: u32 = 12;
 
+/// Entries of the map: one per page of the whole 32-bit address space, so every masked EA indexes inside it whatever the mask.
+pub(crate) const MAP_PAGES: usize = 1 << (32 - PAGE_SHIFT);
+
 pub(crate) struct StoreMap {
-    /// One byte per page of the masked address space ((mask >> 12) + 1 entries): every masked EA indexes inside it.
-    pub(crate) map: Vec<u8>,
     /// The `marked` words as last mirrored.
     shadow: Vec<u64>,
     /// What the map was built for: RAM base / length / mask / bitmap, and the watch's counters.
@@ -26,47 +29,53 @@ pub(crate) struct StoreMap {
     /// Full rebuilds and words re-read (diagnostics).
     pub(crate) rebuilds: u64,
     pub(crate) words: u64,
+    /// Planted mutant MUT_SMAP_ONE_PAGE: an entry covers its own page only (the pre-jitsize map, under code that no longer
+    /// tests alignment).
+    one_page: bool,
 }
 
 impl StoreMap {
-    pub(crate) fn new() -> StoreMap { StoreMap { map: Vec::new(), shadow: Vec::new(), built: None, seen: (0, 0), rebuilds: 0, words: 0 } }
+    pub(crate) fn new() -> StoreMap { StoreMap { shadow: Vec::new(), built: None, seen: (0, 0), rebuilds: 0, words: 0, one_page: false } }
 
-    /// Make the map agree with `mem`'s RAM and watch (before an entry into JIT code). False when it could not be allocated
-    /// (tier 2 then does not enter: the caller treats it as unusable). `stale` = the planted mutant that skips the mirroring.
-    pub(crate) fn sync(&mut self, mem: &GuestMem, raw: &RawRam, stale: bool) -> bool {
+    /// Make `map` (the Ctx's) agree with `mem`'s RAM and watch (before an entry into JIT code). False when the shadow could
+    /// not be allocated (tier 2 then does not enter: the caller treats it as unusable). `stale` = the planted mutant that
+    /// skips the mirroring.
+    pub(crate) fn sync(&mut self, mem: &GuestMem, raw: &RawRam, stale: bool, one_page: bool, map: &mut [u8; MAP_PAGES]) -> bool {
+        if one_page != self.one_page { (self.one_page, self.built) = (one_page, None); }
         let key = (raw.base as usize, raw.len, raw.mask, raw.marked as usize, raw.marked_words);
         let seen = (mem.code_marks(), mem.code_bumps());
         if self.built != Some(key) {
-            let n = (raw.mask >> PAGE_SHIFT) as usize + 1;
-            let (mut map, mut shadow) = (Vec::new(), Vec::new());
-            if map.try_reserve_exact(n).is_err() || shadow.try_reserve_exact(raw.marked_words as usize).is_err() { self.built = None; return false; }
+            let mut shadow = Vec::new();
+            if shadow.try_reserve_exact(raw.marked_words as usize).is_err() { self.built = None; return false; }
             let full = raw.len >> PAGE_SHIFT; // pages wholly inside RAM
-            map.extend((0..n).map(|p| (p < full) as u8));
+            let k = if self.one_page { 0 } else { 1 };
+            for (p, e) in map.iter_mut().enumerate() { *e = (p + k < full) as u8; }
             shadow.resize(raw.marked_words as usize, 0);
-            (self.map, self.shadow, self.built) = (map, shadow, Some(key));
+            (self.shadow, self.built) = (shadow, Some(key));
             self.rebuilds += 1;
-            self.diff(raw, full);
+            self.diff(raw, full, map);
             self.seen = seen;
         } else if seen != self.seen && !stale {
-            self.diff(raw, raw.len >> PAGE_SHIFT);
+            self.diff(raw, raw.len >> PAGE_SHIFT, map);
             self.seen = seen;
         }
         true
     }
 
-    /// Re-read every bitmap word that differs from the shadow: a marked page 0, an unmarked page inside RAM 1.
-    fn diff(&mut self, raw: &RawRam, full: usize) {
+    /// Re-read every bitmap word that differs from the shadow; each page of it, and the page before it (whose entry covers it
+    /// too), is 1 when it and the next page are inside RAM and unmarked.
+    fn diff(&mut self, raw: &RawRam, full: usize, map: &mut [u8; MAP_PAGES]) {
         for w in 0..self.shadow.len() {
             // SAFETY: w < marked_words, the length of the owner's `marked` array (RawRam's contract; the key above).
             let now = unsafe { *raw.marked.add(w) };
             if now == self.shadow[w] { continue; }
             self.shadow[w] = now;
             self.words += 1;
-            for b in 0..64 {
-                let p = w * 64 + b;
-                if p >= self.map.len() { break; }
-                self.map[p] = (p < full && now & (1 << b) == 0) as u8;
+            for p in (w * 64).saturating_sub(1)..(w * 64 + 64).min(MAP_PAGES) {
+                map[p] = (self.free(p, full) && (self.one_page || self.free(p + 1, full))) as u8;
             }
         }
     }
+    /// Page `p` is inside RAM and not marked (by the shadow, as mirrored so far).
+    fn free(&self, p: usize, full: usize) -> bool { p < full && self.shadow.get(p / 64).is_none_or(|&w| w & (1 << (p % 64)) == 0) }
 }

@@ -2,8 +2,9 @@
 //! (`compile_region`, jit_region: internal edges are direct jumps, every other edge the same chained exit as a block's).
 //!
 //! Register model: rbx = &Cpu (a guest field that is not a global pin is a memory operand at its `offset_of!`), r12 = guest
-//! RAM base, r13 = &Ctx (the remaining budget included), r15 = the instructions retired so far (across chained blocks); r9
-//! r10 r11 rbp r14 hold the GLOBAL pins (jit_regs: CR, r0, r3, r4, XER across all JIT code, stored only where Rust can read
+//! RAM base, r13 = &Ctx, r15 = the instructions LEFT of this entry's budget (counted down across chained blocks: an entry
+//! test is `cmp r15, len`; the retired count is Ctx.budget - r15, formed only where Rust needs it); r9
+//! r10 r11 rbp r14 hold the GLOBAL pins (jit_regs: CR, r0, r1, r3, r4 across all JIT code, stored only where Rust can read
 //! the Cpu). rax, rcx, rdx, rsi, rdi, r8 are scratch. Code size matters
 //! (the WC3 working set is tens of thousands of blocks): every slow path is one
 //! `call [r13 + slow]` into the shared stub (jit.rs), which calls the helper and either returns or leaves.
@@ -17,74 +18,12 @@
 use crate::cpu::{Cpu, XER_CA};
 use crate::jit::{Ctx, EXIT_BAIL, EXIT_NORMAL};
 use crate::jit_asm::*;
+use crate::jit_census as tg;
 use crate::t1op::{Op, K};
 use alloc::vec::Vec;
 use core::mem::offset_of;
 
-/// Planted mutants for the negative controls (each must make JitLockstep RED). 0 = none.
-pub(crate) const MUT_SUBFIC_CA: u8 = 1;
-pub(crate) const MUT_NO_SO: u8 = 2;
-pub(crate) const MUT_NO_WATCH: u8 = 3;
-pub(crate) const MUT_EXIT_COUNT: u8 = 4;
-/// Single-precision FP arithmetic not rounded to single (jit_inline).
-pub(crate) const MUT_FP_SINGLE: u8 = 5;
-/// sraw's count > 31 path dropped (x86 masks the count to 5 bits: the wrong result and CA) (jit_inline).
-pub(crate) const MUT_SRAW_BIG: u8 = 6;
-/// adde / addze / subfe / subfze ignore XER[CA] as their carry in (jit_inline).
-pub(crate) const MUT_CA_IN: u8 = 7;
-/// The slow stub does not load the global pins back after the helper (jit.rs): a field tier 1's handler wrote is lost.
-pub(crate) const MUT_GLOBAL_NO_RELOAD: u8 = 8;
-/// The common exit does not store the global pins (jit.rs): the Cpu keeps stale CR / r0 / r3 / r4 / XER after JIT code.
-pub(crate) const MUT_GLOBAL_NO_EXIT_STORE: u8 = 9;
-/// CR0 of `add.` read from the add's own flags (its OF is not the result's sign test) instead of `test`.
-pub(crate) const MUT_LAZY_FLAGS: u8 = 10;
-/// Eviction leaves the dropped segment's blocks in the block map and the dispatch table (jit.rs): the dispatcher then
-/// enters code whose pages went back to RW (no execute) or were rewritten.
-pub(crate) const MUT_EVICT_STALE: u8 = 11;
-/// fmadds rounded twice (the f64 sum, then single) instead of round-to-odd + one rounding (jit_fp).
-pub(crate) const MUT_FMA_TWICE: u8 = 12;
-/// A native block counts the native as two retired instructions (the time base and the budget drift from tier 0's).
-pub(crate) const MUT_NATIVE_COUNT: u8 = 13;
-/// The dispatcher keeps an evicted or flushed block's entry in its dispatch table (jit.rs): a stale jump-cache hit.
-pub(crate) const MUT_TABLE_STALE: u8 = 14;
-/// A native that changed the natives set or guest RAM does not make JIT code leave for the dispatcher's resync (jit.rs).
-pub(crate) const MUT_NO_RESYNC: u8 = 15;
-/// A native block does not store the global pins before h_native (jit_emit): the host's native reads stale r3 / r4 / ...
-pub(crate) const MUT_NATIVE_GLOBALS: u8 = 16;
-/// A chained jump from the target's own page lands past its page-generation check even when the two blocks were compiled
-/// at different generations (jit.rs): a block left stale by a write to its page runs.
-pub(crate) const MUT_INNER_ANY_GEN: u8 = 17;
-/// A refused publish resets the whole arena and drops every block (jit.rs) - the pre-h86 behaviour that turned one slow
-/// TLB shootdown on the Z83 into a withdraw-everything / recompile-everything loop.
-pub(crate) const MUT_FLUSH_ON_REFUSAL: u8 = 18;
-/// The store map stops mirroring the code watch after it is built (jit_smap): a page decoded later stays "store inline", so a
-/// store into fresh code never bumps its generation.
-pub(crate) const MUT_SMAP_STALE: u8 = 19;
-/// A helper call does not store the global pins first (jit_emit): tier 1's handler reads stale CR / r0 / r3 / r4 / XER.
-pub(crate) const MUT_GLOBAL_STALE: u8 = 20;
-/// A region's internal forward edge lands on the node AFTER its target (jit_region): an internal branch target wrong.
-pub(crate) const MUT_REGION_TARGET: u8 = 21;
-/// A region checks only its head's page generation at entry (jit_region): a node decoded from another page that was
-/// written since runs stale.
-pub(crate) const MUT_REGION_PAGES: u8 = 22;
-/// An internal region edge does not add the instructions its source node retired (the retired count, the one value every
-/// side exit must write back, is dropped across the edge).
-pub(crate) const MUT_REGION_COUNT: u8 = 23;
-/// A region's back edge jumps without re-checking the budget (a hot loop runs past the dispatcher's budget).
-pub(crate) const MUT_REGION_BACK_BUDGET: u8 = 24;
-/// A region's `blr` goes to its first return point without the inline check (the wrong return taken in region: jit_region's
-/// call following).
-pub(crate) const MUT_REGION_RET: u8 = 25;
-/// A region's exits do not store its locals (jit_regs): a side exit drops a dirty value.
-pub(crate) const MUT_REGION_LOCAL_EXIT: u8 = 26;
-/// A compare is fused with its branch (CR field never written: jit_rflow) even when the field is live after the branch.
-pub(crate) const MUT_CR_LIVE_OUT: u8 = 27;
-/// (28: measured, not shipped - forward chained jumps landing past the entry counter, h86 ppc-jit5 lever 1.)
-/// A chained exit's tail stores the wrong pc (target + 4) when its target is not published (the dispatcher resumes there).
-pub(crate) const MUT_TAIL_PC: u8 = 29;
-/// The IBTC probe indexes with 14 bits (the 16K entries of 4bf4dfb's table) instead of 16: the Z83 regression of 2026-11-03,
-/// dispatcher entries 4.4x per guest instruction.
-pub(crate) const MUT_IBTC_SMALL: u8 = 30;
+pub(crate) use crate::jit_mutants::*;
 
 /// What a block's code may refer to outside itself.
 pub(crate) struct Env<'a> {
@@ -114,6 +53,13 @@ pub(crate) struct Env<'a> {
     /// OUT: per link slot taken (in `link` call order), the offset of its EXIT TAIL in the code: `mov [pc], target` and the
     /// common exit. A slot whose target is not published points there (jit.rs), so the chained exit itself stores no pc.
     pub(crate) homes: Vec<usize>,
+    /// Diagnostics (jit_census): tag the code; OUT: its tag runs (code offset, tag).
+    pub(crate) tags: bool,
+    pub(crate) tag_runs: Vec<(u32, u16)>,
+    /// XER[SO] is clear wherever this code runs (jit.rs `so_aware` false): a CR field from a compare takes no SO bit.
+    pub(crate) so_free: bool,
+    /// OUT (with `tags`): (code offset, guest word, guest pc) where each guest instruction's code starts.
+    pub(crate) tag_words: Vec<(u32, u32, u32)>,
 }
 
 pub(crate) const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
@@ -168,6 +114,13 @@ pub(crate) struct E<'a, 'b> {
     flags: Option<bool>,
     /// The targets of the chained exits emitted so far, in link-slot order: each gets an exit tail (`exit_tails`).
     tails_to: Vec<u32>,
+    /// The current guest form's `K` << 8 (jit_census tags), tg::NO_K << 8 outside one.
+    kind: u16,
+    /// stfs's out-of-line value paths (jit_inline `stfs`): (not exactly a single, exponent field 0, where to come back,
+    /// the instruction index, frS).
+    pub(crate) stfs_outs: Vec<(Fix, Fix, usize, usize, usize)>,
+    /// fmadds's out-of-line exact paths (jit_fp): (the jumps to it, where to come back).
+    pub(crate) fma_outs: Vec<(Vec<Fix>, usize)>,
 }
 
 /// A region being compiled (jit_region): the node pcs in layout order, each node's longest forward path, where each node's
@@ -178,6 +131,7 @@ struct Rg { pcs: Vec<u32>, maxfwd: Vec<u32>, labels: Vec<Option<usize>>, fwd: Ve
 /// (the global pins are fixed: jit_regs). Answers the code and the offset of its INNER entry.
 pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env) -> (Vec<u8>, usize) {
     let mut e = E::new(ops, pc, env);
+    e.cat(tg::ENTRY_GEN);
     let a = &mut e.a;
     // entry checks: the page generation (skipped by a chained jump from this page at this generation: the INNER entry),
     // then the budget
@@ -188,17 +142,19 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
         Some(a.jcc(Cc::Ne))
     } else { None };
     let inner = a.pos();
-    a.lea64(RAX, m(R15, ops.len() as i32));
-    a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
-    let b1 = a.jcc(Cc::A);
+    a.set_tag(tg::NO_K << 8 | tg::ENTRY_BUDGET as u16);
+    a.alu_ri64(Alu::Cmp, R15, ops.len() as i32);
+    let b1 = a.jcc(Cc::B);
     // the entry counter (jit_region): when it runs out the dispatcher forms a region headed here (left with nothing retired)
     let hot = e.env.counter.map(|off| {
+        e.a.set_tag(tg::NO_K << 8 | tg::ENTRY_COUNTER as u16);
         e.a.alu_oi(Alu::Sub, O::M(m(R13, off)), 1);
         e.a.jcc(Cc::E)
     });
     e.body(ops);
     e.tails();
     e.exit_tails();
+    e.cat(tg::BAIL);
     if let Some(f) = hot {
         let a = &mut e.a;
         a.here(f);
@@ -214,6 +170,7 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     a.st32i(cpu(PC), pc);
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
+    e.env.tag_runs = e.a.tags.take().unwrap_or_default();
     (e.a.b, inner)
 }
 
@@ -227,8 +184,9 @@ pub(crate) fn compile_region(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[
         let dry = emit_region(nodes, maxfwd, pages, rets, &fuse, env, Vec::new(), true);
         crate::jit_regs::pick_locals(&dry.uses, &dry.writes)
     };
-    let e = emit_region(nodes, maxfwd, pages, rets, &fuse, env, locals, false);
+    let mut e = emit_region(nodes, maxfwd, pages, rets, &fuse, env, locals, false);
     let inner = e.inner;
+    e.e.env.tag_runs = e.e.a.tags.take().unwrap_or_default();
     (e.e.a.b, inner)
 }
 
@@ -241,6 +199,7 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
     let mut bails = Vec::new();
     let checked = if e.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_ENTRY_GEN != 0 { 0 } else if e.env.mutant == MUT_REGION_PAGES { 1 } else { pages.len() };
     let mut inner = 0;
+    e.cat(tg::ENTRY_GEN);
     for (k, &(page, gen, _)) in pages[..checked].iter().enumerate() {
         let a = &mut e.a;
         a.ld64(RAX, ctx(offset_of!(Ctx, gen)));
@@ -250,9 +209,9 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
         if k == 0 { inner = a.pos(); }
     }
     let a = &mut e.a;
-    a.lea64(RAX, m(R15, maxfwd[0] as i32));
-    a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
-    bails.push(a.jcc(Cc::A));
+    a.set_tag(tg::NO_K << 8 | tg::ENTRY_BUDGET as u16);
+    a.alu_ri64(Alu::Cmp, R15, maxfwd[0] as i32);
+    bails.push(a.jcc(Cc::B));
     e.locals = locals;
     if e.env.census { e.a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, rentries)), 1); }
     e.load_locals();
@@ -266,6 +225,7 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
         e.chain(target, 0);
     }
     e.exit_tails();
+    e.cat(tg::BAIL);
     let a = &mut e.a;
     for f in bails { a.here(f); }
     a.st32i(cpu(PC), nodes[0].0);
@@ -303,19 +263,22 @@ fn probe(a: &mut Asm, table_mask: u32) {
 /// Every cached register was stored by the exit that got here, so the call clobbers nothing a block holds.
 pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
     let mut a = Asm { wide: env.wide, ..Asm::default() };
-    a.lea64(RAX, m(R15, 1));
-    a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
-    let bail = a.jcc(Cc::A);
+    if env.tags { env.tag_runs = alloc::vec![(0, tg::NO_K << 8 | tg::NATIVE as u16)]; }
+    a.alu_ri64(Alu::Cmp, R15, 1);
+    let bail = a.jcc(Cc::B);
+    // the native reads and writes the Cpu: a pending FPSCR[FPRF] is settled (rax, rcx, rdx clobbered: before the
+    // arguments), the global pins go there first and come back after (rax untouched)
+    crate::jit_inline::emit_fprf_settle(&mut a);
     a.mov_rr64(RDI, R13);
     a.mov_ri(RSI, pc);
-    a.mov_rr64(RDX, R15);
-    // the native reads and writes the Cpu: the global pins go there first and come back after (rax untouched)
+    a.ld64(RDX, ctx(offset_of!(Ctx, budget)));
+    a.alu_rr64(Alu::Sub, RDX, R15);
     if env.mutant != MUT_NATIVE_GLOBALS { crate::jit_regs::store_globals(&mut a); }
     a.call_m(ctx(offset_of!(Ctx, native)));
     crate::jit_regs::load_globals(&mut a);
     a.test_rr(RAX, RAX);
     let out = a.jcc(Cc::Ne);
-    a.alu_ri64(Alu::Add, R15, if env.mutant == MUT_NATIVE_COUNT { 2 } else { 1 });
+    a.alu_ri64(Alu::Sub, R15, if env.mutant == MUT_NATIVE_COUNT { 2 } else { 1 });
     if env.chain {
         a.ld32(R8, cpu(PC));
         probe(&mut a, env.table_mask);
@@ -325,7 +288,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
     a.here(out);
     a.alu_ri(Alu::Cmp, RAX, 2);
     let t = a.jcc(Cc::E);
-    a.alu_ri64(Alu::Add, R15, 1);
+    a.alu_ri64(Alu::Sub, R15, 1);
     a.mov_ri(RAX, EXIT_NORMAL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
     a.here(t);
@@ -340,7 +303,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     pub(crate) fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
-        E { a: Asm { wide: env.wide, ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new() }
+        E { a: Asm { wide: env.wide, tags: env.tags.then(Vec::new), ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new(), kind: tg::NO_K << 8, stfs_outs: Vec::new(), fma_outs: Vec::new() }
     }
 
     /// Start region node `k` (its code begins here: forward jumps waiting for it land here).
@@ -365,16 +328,25 @@ impl<'a, 'b> E<'a, 'b> {
     fn body(&mut self, ops: &[Op]) {
         let mut ended = false;
         for (i, op) in ops.iter().enumerate() {
+            self.kind = tg::kind(op) << 8;
+            if let Some(s) = self.a.tags.as_mut() {
+                s.push((self.a.b.len() as u32, tg::START));
+                if !self.dry { self.env.tag_words.push((self.a.b.len() as u32, op.w, self.ipc(i))); }
+            }
+            self.cat(tg::BODY);
             ended = self.op(i, op);
             self.resume.push(self.a.pos());
             if ended { break; }
         }
+        self.kind = tg::NO_K << 8;
         if !ended { self.go(self.pc.wrapping_add(4 * ops.len() as u32), ops.len()); }
     }
 }
 
 impl E<'_, '_> {
     pub(crate) fn ipc(&self, i: usize) -> u32 { self.pc.wrapping_add(4 * i as u32) }
+    /// The code from here on is for category `c` of the current guest form (jit_census); answers the tag to restore.
+    pub(crate) fn cat(&mut self, c: u8) -> u16 { self.a.tag_in(self.kind | c as u16) }
 
     /// On to `target` (a constant), `n` instructions of this block (node) retired: a direct jump when compiling a region that
     /// holds a node at `target` (a back edge re-checks the budget for that node's longest forward path first, and leaves
@@ -382,15 +354,15 @@ impl E<'_, '_> {
     fn go(&mut self, target: u32, n: usize) {
         let Some(j) = self.rg.as_ref().and_then(|r| r.pcs.iter().position(|&p| p == target)) else { return self.chain(target, n) };
         let mutant = self.env.mutant;
+        let t = self.cat(tg::EDGE);
         let a = &mut self.a;
-        if mutant != MUT_REGION_COUNT { a.alu_ri64(Alu::Add, R15, n as i32); }
+        if mutant != MUT_REGION_COUNT { a.alu_ri64(Alu::Sub, R15, n as i32); }
         if self.env.census { a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, redges)), 1); }
         let rg = self.rg.as_mut().expect("a region");
         if j <= rg.cur {
             if mutant != MUT_REGION_BACK_BUDGET {
-                a.lea64(RAX, m(R15, rg.maxfwd[j] as i32));
-                a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
-                let out = a.jcc(Cc::A);
+                a.alu_ri64(Alu::Cmp, R15, rg.maxfwd[j] as i32);
+                let out = a.jcc(Cc::B);
                 rg.backs.push((out, target));
             }
             let f = a.jmp();
@@ -400,6 +372,7 @@ impl E<'_, '_> {
             let j = if mutant == MUT_REGION_TARGET && j + 1 < rg.pcs.len() { j + 1 } else { j };
             rg.fwd.push((f, j));
         }
+        a.set_tag(t);
     }
 
     /// A region's `blr` (target in r8d): to each of the region's return points (the instruction after a followed `bl`) by an
@@ -408,8 +381,10 @@ impl E<'_, '_> {
         let rets = match self.rg.as_ref() { Some(r) if !r.rets.is_empty() => r.rets.clone(), _ => return };
         for r in rets {
             if self.env.mutant == MUT_REGION_RET { return self.go(r, n); }
+            let t = self.cat(tg::RET_CHECK);
             self.a.alu_ri(Alu::Cmp, R8, r);
             let skip = self.a.jcc(Cc::Ne);
+            self.a.set_tag(t);
             self.go(r, n);
             self.a.here(skip);
         }
@@ -418,7 +393,9 @@ impl E<'_, '_> {
     /// Leave for `target` (a constant), `n` instructions of this block retired.
     fn chain(&mut self, target: u32, n: usize) {
         self.store_locals();
-        if n != 0 { self.a.alu_ri64(Alu::Add, R15, n as i32); }
+        let t = self.cat(tg::RETIRED);
+        if n != 0 { self.a.alu_ri64(Alu::Sub, R15, n as i32); }
+        self.cat(tg::CHAIN);
         if self.env.chain {
             // the pc is stored by the slot's own exit tail when its target is not published (a chained target needs none)
             let slot = if self.dry { core::ptr::null() } else { (self.env.link)(target) };
@@ -429,9 +406,11 @@ impl E<'_, '_> {
             self.a.st32i(cpu(PC), target);
             self.exit_normal();
         }
+        self.a.set_tag(t);
     }
     /// The exit tails of every chained exit emitted (out of line, after the code): store the target pc, leave.
     fn exit_tails(&mut self) {
+        self.cat(tg::TAIL);
         for t in core::mem::take(&mut self.tails_to) {
             if !self.dry { self.env.homes.push(self.a.pos()); }
             let pc = if self.env.mutant == MUT_TAIL_PC { t.wrapping_add(4) } else { t };
@@ -446,11 +425,16 @@ impl E<'_, '_> {
     /// Leave for the target in r8d, `n` retired: through the dispatch table when chaining.
     pub(crate) fn chain_dyn(&mut self, n: usize) {
         self.store_locals();
+        let t = self.cat(tg::RETIRED);
         let a = &mut self.a;
-        a.alu_ri64(Alu::Add, R15, n as i32);
-        a.st32(cpu(PC), R8);
+        a.alu_ri64(Alu::Sub, R15, n as i32);
+        self.cat(tg::DYN);
+        let a = &mut self.a;
+        // an IBTC hit jumps away (the target stores no pc either); a miss falls through and leaves with the pc
         if self.env.chain { probe(a, self.env.table_mask); }
+        a.st32(cpu(PC), R8);
         self.exit_normal();
+        self.a.set_tag(t);
     }
 
     /// Run instruction `i` through tier 1's handler (the shared slow stub: it returns here when the block goes on, else
@@ -472,6 +456,7 @@ impl E<'_, '_> {
     pub(crate) fn ld_be(&mut self, n: u8, sign: bool) { self.ld_be_to(RDX, n, sign) }
     /// Host register `r` = the big-endian `n`-byte value at [r12 + rax] (a guest field's own register: no copy after).
     pub(crate) fn ld_be_to(&mut self, r: u8, n: u8, sign: bool) {
+        let t = self.cat(tg::ACCESS);
         let (a, at) = (&mut self.a, mx(R12, RAX, 1));
         match (n, self.env.movbe) {
             (8, true) => a.movbe_ld(64, r, at),
@@ -482,9 +467,11 @@ impl E<'_, '_> {
             (2, false) => { a.movzx16(r, at); a.bswap32(r); a.sh_ri(if sign { Sh::Sar } else { Sh::Shr }, r, 16); }
             _ => a.movzx8(r, at),
         }
+        a.set_tag(t);
     }
     /// Store edx (rdx for 8) big-endian as `n` bytes at [r12 + rax] (edx is clobbered).
     pub(crate) fn st_be(&mut self, n: u8) {
+        let t = self.cat(tg::ACCESS);
         let (a, at) = (&mut self.a, mx(R12, RAX, 1));
         match (n, self.env.movbe) {
             (8, true) => a.movbe_st(64, at, RDX),
@@ -495,16 +482,19 @@ impl E<'_, '_> {
             (2, false) => { a.bswap32(RDX); a.sh_ri(Sh::Shr, RDX, 16); a.st16(at, RDX); }
             _ => a.st8(at, RDX),
         }
+        a.set_tag(t);
     }
     /// Store GPR `n` big-endian as `bytes` (1, 2 or 4) at [r12 + rax]: straight from its host register where the store needs
     /// no byte swap in a scratch register (MOVBE, or one byte), else through edx.
     fn st_gpr(&mut self, n: u8, bytes: u8) {
         match self.gr(n) {
             O::R(r) if bytes == 1 || self.env.movbe => {
+                let t = self.cat(tg::ACCESS);
                 let at = mx(R12, RAX, 1);
                 if bytes == 1 { self.a.st8(at, r) } else { self.a.movbe_st(8 * bytes, at, r) }
+                self.a.set_tag(t);
             }
-            o => { self.a.ld32o(RDX, o); self.st_be(bytes) }
+            o => { let t = self.cat(tg::GPR_LD); self.a.ld32o(RDX, o); self.a.set_tag(t); self.st_be(bytes) }
         }
     }
     /// The host register of GPR `n` when it has one (a global pin or a region local).
@@ -547,6 +537,29 @@ impl E<'_, '_> {
             for f in fixes { self.a.here(f); }
             self.go(target, i + 1);
         }
+        self.cat(tg::SLOW);
+        for (inexact, tiny, back, i, s) in core::mem::take(&mut self.stfs_outs) {
+            // not exactly a single: the PowerPC's bit selection (the shared stub; a single denormal is the slow path's)
+            self.a.here(inexact);
+            self.a.ld64(RDX, cpu_m(fpr(s as u8)));
+            self.a.call_m(ctx(offset_of!(Ctx, stfs)));
+            self.slow_if(Cc::Ne, i);
+            let j = self.a.jmp();
+            self.a.patch(j, back);
+            // exponent field 0: +-0 goes on, a single denormal is the slow path's
+            self.a.here(tiny);
+            self.a.lea32(RCX, mx(RDX, RDX, 1));
+            self.a.test_rr(RCX, RCX);
+            self.slow_if(Cc::Ne, i);
+            let j = self.a.jmp();
+            self.a.patch(j, back);
+        }
+        for (fixes, back) in core::mem::take(&mut self.fma_outs) {
+            for f in fixes { self.a.here(f); }
+            self.a.call_m(ctx(offset_of!(Ctx, fma_odd)));
+            let j = self.a.jmp();
+            self.a.patch(j, back);
+        }
         for (f, i) in core::mem::take(&mut self.slow) {
             self.a.here(f);
             self.helper(i);
@@ -558,12 +571,14 @@ impl E<'_, '_> {
 
     /// CR field `bf` from the flags of a compare: LT / GT by `lt` / `gt`, EQ otherwise, SO from XER. The field's nibble is
     /// built in place by a move and two CMOVs from the Ctx's per-field constants (flag-free: the compare's flags are read
-    /// here only), then SO (XER bit 31, the sign of XER's register) is or-ed in on the rarely taken path.
+    /// here only), then SO (XER bit 31, the sign of XER's register) is or-ed in on the rarely taken path - unless the code
+    /// is SO-FREE (Env::so_free: XER[SO] is known clear wherever it runs, jit.rs `so_aware`).
     pub(crate) fn cr_set(&mut self, bf: u8, lt: Cc, gt: Cc) {
-        let no_so = self.env.mutant == MUT_NO_SO;
+        let no_so = self.env.mutant == MUT_NO_SO || self.env.so_free;
         let f = bf as usize & 7;
         let sh = 28 - 4 * f as u32;
         let k = offset_of!(Ctx, crk) + 8 * f;
+        let t = self.cat(tg::CR_SET);
         let a = &mut self.a;
         a.mov_ri(RAX, 0b0010 << sh);
         a.cmov_rm(lt, RAX, ctx(k));
@@ -580,12 +595,15 @@ impl E<'_, '_> {
         let c = self.rw(CR);
         self.a.alu_oi(Alu::And, c, !(0xF << sh));
         self.a.alu_or(Alu::Or, c, RAX);
+        self.a.set_tag(t);
     }
     /// CR0 from the signed value in edx.
     pub(crate) fn cr0_of_edx(&mut self) { self.cr0_of(RDX) }
     /// CR0 from the signed value in host register `r`.
     pub(crate) fn cr0_of(&mut self, r: u8) {
+        let t = self.cat(tg::CR_SET);
         self.a.test_rr(r, r);
+        self.a.set_tag(t);
         self.cr_set(0, Cc::L, Cc::G);
     }
     /// CR0 from the flags the instruction that produced edx left (AND / OR / XOR: SF and ZF of the result, OF = 0, so
@@ -593,24 +611,46 @@ impl E<'_, '_> {
     pub(crate) fn cr0_of_logic_flags(&mut self) {
         self.cr_set(0, Cc::L, Cc::G);
     }
+    /// r8d = all ones when CF (the op right before) is set, else 0 - inverted first when `invert` (a borrow is CA = 0): the
+    /// mask `ca_from_mask` takes. Flags clobbered.
+    pub(crate) fn ca_mask_cf(&mut self, invert: bool) {
+        let t = self.cat(tg::CA);
+        if invert { self.a.cmc(); }
+        self.a.alu_rr(Alu::Sbb, R8, R8);
+        self.a.set_tag(t);
+    }
+    /// XER[CA] = bit 29 of r8d (a mask of all ones or none): XER ^= (XER ^ r8) & CA, every other bit kept.
+    pub(crate) fn ca_from_mask(&mut self) {
+        let t = self.cat(tg::CA);
+        let x = self.rw(XER);
+        self.a.alu_ro(Alu::Xor, R8, x);
+        self.a.alu_ri(Alu::And, R8, XER_CA);
+        self.a.alu_or(Alu::Xor, x, R8);
+        self.a.set_tag(t);
+    }
     /// XER[CA] = the byte in r8b (0 or 1).
     pub(crate) fn ca_from_r8(&mut self) {
+        let t = self.cat(tg::CA);
         let a = &mut self.a;
         a.movzx8_rr(R8, R8);
         a.sh_ri(Sh::Shl, R8, 29);
         let x = self.rw(XER);
         self.a.alu_oi(Alu::And, x, !XER_CA);
         self.a.alu_or(Alu::Or, x, R8);
+        self.a.set_tag(t);
     }
 
     /// eax = EA & mask (esi = EA unmasked too, for the update forms); a slow path unless `n` bytes from it are in RAM.
     pub(crate) fn ea(&mut self, i: usize, e: Ea, n: u8) {
         self.ea_regs(e);
+        let t = self.cat(tg::GUARD_BOUNDS);
         let lim = match n { 1 => offset_of!(Ctx, lim1), 2 => offset_of!(Ctx, lim2), 4 => offset_of!(Ctx, lim4), _ => offset_of!(Ctx, lim8) };
         self.a.alu_rm64(Alu::Cmp, RAX, ctx(lim));
         self.slow_if(Cc::A, i);
+        self.a.set_tag(t);
     }
     pub(crate) fn ea_regs(&mut self, e: Ea) {
+        let t = self.cat(tg::EA);
         let r = if e.update { R8 } else { RAX };
         match (e.ra, e.rb) {
             (0, Some(rb)) => { let o = self.gr(rb); self.a.ld32o(r, o) }
@@ -626,38 +666,26 @@ impl E<'_, '_> {
         let a = &mut self.a;
         if e.update { a.mov_rr(RAX, R8); }
         if self.env.mask != u32::MAX { a.alu_rm(Alu::And, RAX, ctx(offset_of!(Ctx, mask))); }
+        a.set_tag(t);
     }
-    /// The store guards after `ea_regs` (eax = the masked EA; no bounds test: the store map covers it): the store stays in
-    /// one page - a 2- or 4-byte store by its ALIGNMENT (`test al, n - 1`: an unaligned one takes the slow path, exact and
-    /// rare), an 8-byte one by its offset in the page - then `store_guard_n`.
+    /// The store guard after `ea_regs` (eax = the masked EA; no bounds test, no alignment or page-offset test: the store map's
+    /// entry for the store's first page covers that page and the next, jit_smap), then `store_guard_n`.
     pub(crate) fn store_guard(&mut self, i: usize, e: Ea, n: u8) {
-        match n {
-            2 | 4 => {
-                self.a.test_ri(RAX, n as u32 - 1);
-                self.slow_if(Cc::Ne, i);
-            }
-            8 => {
-                let a = &mut self.a;
-                a.mov_rr(RCX, RAX);
-                a.alu_ri(Alu::And, RCX, 0xFFF);
-                a.alu_ri(Alu::Cmp, RCX, 0x1000 - 8);
-                self.slow_if(Cc::A, i);
-            }
-            _ => {}
-        }
+        let t = self.a.tag;
         self.store_guard_n(i, n as u32);
         if self.env.logged { self.ea_regs(e); }
+        self.a.set_tag(t);
     }
-    /// A store of `bytes` at eax that stays in one page: the slow path unless the store map (jit_smap) says the page is inside
+    /// A store of at most 8 `bytes` at eax: the slow path unless the store map (jit_smap) says its page and the next are inside
     /// RAM and not watched (a watched page holds decoded code: tier 1's handler writes it through GuestMem, which bumps its
     /// generation); in lockstep the old bytes are journaled first (eax is then clobbered: the caller recomputes it).
     pub(crate) fn store_guard_n(&mut self, i: usize, bytes: u32) {
+        let t = self.cat(tg::GUARD_SMAP);
         let a = &mut self.a;
         if self.env.mutant != MUT_NO_WATCH && self.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_SMC_STORE == 0 {
             a.mov_rr(RCX, RAX);
             a.sh_ri(Sh::Shr, RCX, 12);
-            a.alu_rm64(Alu::Add, RCX, ctx(offset_of!(Ctx, smap)));
-            a.cmp8_mi(m(RCX, 0), 0);
+            a.cmp8_mi(mxd(R13, RCX, 1, offset_of!(Ctx, smap) as i32), 0);
             self.slow_if(Cc::E, i);
         } else {
             // the planted mutant drops the watch test only: RAM bounds still hold (the map was both)
@@ -666,6 +694,7 @@ impl E<'_, '_> {
             self.slow_if(Cc::A, i);
         }
         if self.env.logged {
+            self.cat(tg::NOTE);
             // h_note is a C call: the cache's caller-saved registers are kept across it (rsp stays 16-byte aligned)
             let a = &mut self.a;
             for r in crate::jit_regs::CALLER_SAVED.iter().chain(&crate::jit_regs::LOCAL_REGS) { a.push(*r); }
@@ -678,6 +707,7 @@ impl E<'_, '_> {
             a.alu_ri64(Alu::Add, RSP, 8);
             for r in crate::jit_regs::CALLER_SAVED.iter().chain(&crate::jit_regs::LOCAL_REGS).rev() { a.pop(*r); }
         }
+        self.a.set_tag(t);
     }
 
     /// One instruction; true when it ended the block.
@@ -699,9 +729,9 @@ impl E<'_, '_> {
             K::Addic | K::AddicRc => {
                 self.ldg(RDX, s);
                 self.a.alu_ri(Alu::Add, RDX, op.imm);
-                self.a.setcc(Cc::B, R8);
+                self.ca_mask_cf(false);
                 self.stg(d, RDX);
-                self.ca_from_r8();
+                self.ca_from_mask();
                 if op.k == K::AddicRc { self.cr0_of_edx(); }
             }
             K::Subfic => {
@@ -709,9 +739,9 @@ impl E<'_, '_> {
                 self.a.mov_ri(RDX, op.imm);
                 let o = self.gr(s);
                 self.a.alu_ro(Alu::Sub, RDX, o);
-                self.a.setcc(if self.env.mutant == MUT_SUBFIC_CA { Cc::B } else { Cc::Ae }, R8);
+                self.ca_mask_cf(self.env.mutant != MUT_SUBFIC_CA);
                 self.stg(d, RDX);
-                self.ca_from_r8();
+                self.ca_from_mask();
             }
             K::Mulli => { let o = self.gr(s); self.a.imul_roi(RDX, o, op.imm); self.stg(d, RDX); }
             K::Rlwinm | K::RlwinmRc => {
@@ -761,21 +791,21 @@ impl E<'_, '_> {
             K::Extsh => { let o = self.gr(s); self.a.movsx16o(RDX, o); self.stg(d, RDX); }
             K::Extsb => { let o = self.gr(s); self.a.movsx8o(RDX, o); self.stg(d, RDX); }
             K::Srawi | K::SrawiRc => {
+                // CA = negative and a one bit shifted out = (rS & (0x80000000 | low bits)) > 0x80000000, unsigned: the
+                // borrow of 0x80000000 - that, taken as a mask by sbb (no setcc / shift chain)
                 let sh = b & 31;
                 self.ldg(RDX, s);
+                let t = self.cat(tg::CA);
                 let a = &mut self.a;
-                a.mov_rr(R8, RDX);
-                if sh != 0 { a.sh_ri(Sh::Sar, RDX, sh); }
+                a.mov_rr(RCX, RDX);
+                a.alu_ri(Alu::And, RCX, 0x8000_0000 | if sh == 0 { 0 } else { (1u32 << sh) - 1 });
+                a.mov_ri(R8, 0x8000_0000);
+                a.alu_rr(Alu::Cmp, R8, RCX);
+                a.alu_rr(Alu::Sbb, R8, R8);
+                self.a.set_tag(t);
+                if sh != 0 { self.a.sh_ri(Sh::Sar, RDX, sh); }
                 self.stg(d, RDX);
-                // CA = negative and a one bit shifted out
-                let a = &mut self.a;
-                a.test_ri(R8, if sh == 0 { 0 } else { (1u32 << sh) - 1 });
-                a.setcc(Cc::Ne, RAX);
-                a.test_rr(R8, R8);
-                a.setcc(Cc::S, RCX);
-                a.and8_rr(RAX, RCX);
-                a.mov_rr(R8, RAX);
-                self.ca_from_r8();
+                self.ca_from_mask();
                 if op.k == K::SrawiRc { self.cr0_of_edx(); }
             }
             K::Slw | K::Srw => {
@@ -842,6 +872,7 @@ impl E<'_, '_> {
             }
             K::Generic | K::GenericEnd | K::Sc | K::Fp59 | K::Fp63 | K::Lfs | K::Stfs => {
                 if self.inline(i, op) { return false; }
+                self.cat(tg::HELPER);
                 self.helper(i);
                 if op.terminal() {
                     // a block-ending Generic always leaves through its helper (it is a branch: answer 1)
@@ -855,7 +886,7 @@ impl E<'_, '_> {
 
     /// After a terminal Generic answered 0 (it never does: a branch answers 1 with pc set), leave with pc as it is.
     fn chain_dyn_after_helper(&mut self, i: usize) {
-        self.a.alu_ri64(Alu::Add, R15, i as i32 + 1);
+        self.a.alu_ri64(Alu::Sub, R15, i as i32 + 1);
         self.exit_normal();
     }
 
@@ -870,6 +901,7 @@ impl E<'_, '_> {
     /// The BO / BI tests of a conditional branch (CTR decremented first unless BO says not); the returned jumps go to
     /// the NOT-taken path.
     fn cond(&mut self, bo: u8, bi: u8) -> Vec<Fix> {
+        self.cat(tg::BRANCH);
         if let Some(cc) = self.fused_cc(bo, bi) { return alloc::vec![self.a.jcc(cc.not())]; }
         let mut not = Vec::new();
         if bo & 0x04 == 0 {
@@ -888,6 +920,7 @@ impl E<'_, '_> {
     /// The same tests as [`Self::cond`], but the returned jumps go to the TAKEN path (the not-taken one falls through):
     /// one inverted jcc when only CTR or only a CR bit is tested.
     fn cond_taken(&mut self, bo: u8, bi: u8) -> Vec<Fix> {
+        self.cat(tg::BRANCH);
         if let Some(cc) = self.fused_cc(bo, bi) { return alloc::vec![self.a.jcc(cc)]; }
         match (bo & 0x04 == 0, bo & 0x10 == 0) {
             (true, true) => {

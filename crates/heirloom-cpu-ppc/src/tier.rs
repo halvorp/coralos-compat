@@ -38,6 +38,7 @@ pub struct Exec {
     jit_region_after: Option<u32>,
     jit_region_shape: Option<crate::RegionShape>,
     jit_region_census: bool,
+    jit_tags: bool,
 }
 
 /// Per native address: (calls, time inside), timed by a host-supplied clock.
@@ -56,7 +57,7 @@ impl Exec {
             code_mem: None,
             #[cfg(target_arch = "x86_64")]
             jit: None,
-            jit_mutant: 0, jit_knobs: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_region_shape: None, jit_region_census: false,
+            jit_mutant: 0, jit_knobs: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_region_shape: None, jit_region_census: false, jit_tags: false,
         }
     }
     /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
@@ -118,6 +119,22 @@ impl Exec {
         // SAFETY: the reservation is readable in every state (RW or R+X) for the arena's lifetime, which `&self` spans.
         Some((j.arena.base as u64, unsafe { core::slice::from_raw_parts(j.arena.base, j.arena.len) }))
     }
+    /// Diagnostics: keep a tag per tier-2 code byte saying what it is for (jit_census: the guest form's K << 8 | a category),
+    /// for a host tool that joins it with a profiler's per-address counts. Code compiled before the call stays untagged (0).
+    #[cfg(target_arch = "x86_64")]
+    #[doc(hidden)]
+    pub fn set_jit_tag_census(&mut self, on: bool) {
+        self.jit_tags = on;
+        if let Some(j) = self.jit.as_mut() { if on { j.start_tagmap() } else { j.tagmap = None } }
+    }
+    /// Diagnostics: the tag map (one u16 per byte of `jit_arena_bytes`), when `set_jit_tag_census(true)`.
+    #[cfg(target_arch = "x86_64")]
+    #[doc(hidden)]
+    pub fn jit_arena_tags(&self) -> Option<&[u16]> { self.jit.as_ref()?.tagmap.as_deref() }
+    /// Diagnostics: with the tag map, (arena offset, guest word, guest pc) where each placed guest instruction's code starts.
+    #[cfg(target_arch = "x86_64")]
+    #[doc(hidden)]
+    pub fn jit_arena_words(&self) -> &[(u64, u32, u32)] { self.jit.as_ref().map_or(&[], |j| &j.tag_words) }
     /// Tests: the code arena's size in bytes (default 32 MiB: the stub page and 16 segments), so a test can make segments
     /// fill and be reused. Takes effect for a JIT made after the call.
     #[doc(hidden)]
@@ -221,6 +238,7 @@ impl Exec {
                     if let (Some(j), Some(n)) = (self.jit.as_mut(), self.jit_region_after) { j.set_region_after(n); }
                     if let (Some(j), Some(s)) = (self.jit.as_mut(), self.jit_region_shape) { j.region_shape = s; }
                     if let Some(j) = self.jit.as_mut() { j.region_census = self.jit_region_census; }
+                    if let Some(j) = self.jit.as_mut().filter(|_| self.jit_tags) { j.start_tagmap(); }
                 }
             }
             // lockstep journaling, a planted mutant or MOVBE changed since the code was made: it is dropped and remade

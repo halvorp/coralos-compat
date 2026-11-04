@@ -9,6 +9,13 @@
 //! native call 4,024 (per-block) -> 3,946 (3 + 2) -> 3,918 (4 + 1) -> 3,874 (5 + 0); and with no per-block registers left the
 //! counting pass (half of every compile) is gone.
 //!
+//! h86 jitsize: XER gave its register to r1. Block-boundary traffic stopped mattering once the pins were global; what a pin
+//! saves now is the instructions of each USE (a memory operand loaded into scratch, `mov` + `add` for an EA where `lea` does).
+//! Executed GPR references in JIT code (WC3 gameplay, callgrind window, per guest instruction): r0 ~0.33 (overcounted: RA=0),
+//! r3 0.16, r1 0.13 (0.10 as a load / store base: the stack), r4 0.13, r6 0.09, r5 0.09, r8 0.08, r7 0.07, r31 0.05; XER's
+//! uses (CA in / out, SO under SO-aware code: jit.rs `so_aware`) are read-modify-write forms that take a memory operand at
+//! the same instruction count.
+//!
 //! EXACTNESS: the Cpu holds a global's value wherever Rust can see it. The trampoline loads them; the common exit stores them
 //! (every way out of JIT code passes there: chained-exit misses, bails, traps, the slow stub's leaving paths); a call into
 //! Rust - the slow stub's helper (tier 1's handler for one instruction), a native block's h_native - is preceded by a store
@@ -24,10 +31,10 @@
 //! across its internal edges, stored at every exit (each one the region writes anywhere: an exit cannot know the path), and
 //! around every helper call (stored before, reloaded after: the handler may write any field).
 use crate::jit_asm::*;
-use crate::jit_emit::{gpr, CR, E, LR, XER};
+use crate::jit_emit::{gpr, CR, E, LR};
 
 /// The global pins: (Cpu field offset, host register).
-pub(crate) const GLOBALS: [(usize, u8); 5] = [(CR, R14), (gpr(3) as usize, RBP), (XER, R11), (gpr(0) as usize, R10), (gpr(4) as usize, R9)];
+pub(crate) const GLOBALS: [(usize, u8); 5] = [(CR, R14), (gpr(3) as usize, RBP), (gpr(1) as usize, R11), (gpr(0) as usize, R10), (gpr(4) as usize, R9)];
 /// The caller-saved ones (pushed around the lockstep journal call).
 pub(crate) const CALLER_SAVED: [u8; 3] = [R9, R10, R11];
 
@@ -59,11 +66,17 @@ impl E<'_, '_> {
         self.locals.iter().find(|l| l.0 == off).map_or(O::M(crate::jit_emit::cpu_m(off as i32)), |l| O::R(l.1))
     }
     /// Load every region local from the Cpu (region entry; after a helper call).
-    pub(crate) fn load_locals(&mut self) { for &(off, h, _) in &self.locals { self.a.ld32(h, crate::jit_emit::cpu_m(off as i32)); } }
+    pub(crate) fn load_locals(&mut self) {
+        let t = self.cat(crate::jit_census::LOCALS_LOAD);
+        for &(off, h, _) in &self.locals { self.a.ld32(h, crate::jit_emit::cpu_m(off as i32)); }
+        self.a.set_tag(t);
+    }
     /// Store every region local the region writes into the Cpu (every exit; before a helper call).
     pub(crate) fn store_locals(&mut self) {
         if self.env.mutant == crate::jit_emit::MUT_REGION_LOCAL_EXIT { return; }
+        let t = self.cat(crate::jit_census::LOCALS_STORE);
         for &(off, h, w) in &self.locals { if w { self.a.st32(crate::jit_emit::cpu_m(off as i32), h); } }
+        self.a.set_tag(t);
     }
     /// The Cpu field at `off`, to read / to write / to read and write (the same operand: named for the reader).
     pub(crate) fn r(&mut self, off: usize) -> O { self.field(off) }
@@ -73,13 +86,25 @@ impl E<'_, '_> {
     pub(crate) fn gr(&mut self, n: u8) -> O { self.uses[n as usize & 31] += 1; self.r(gpr(n) as usize) }
     pub(crate) fn gw(&mut self, n: u8) -> O { self.uses[n as usize & 31] += 1; self.writes[n as usize & 31] += 1; self.w(gpr(n) as usize) }
     /// host `d` = GPR n; GPR n = host `s`; host `d` op= GPR n.
-    pub(crate) fn ldg(&mut self, d: u8, n: u8) { let o = self.gr(n); self.a.ld32o(d, o) }
-    pub(crate) fn stg(&mut self, n: u8, s: u8) { let o = self.gw(n); self.a.st32o(o, s) }
+    pub(crate) fn ldg(&mut self, d: u8, n: u8) {
+        let o = self.gr(n);
+        let t = self.cat(if matches!(o, O::M(_)) { crate::jit_census::GPR_LD } else { crate::jit_census::GPR_MOV });
+        self.a.ld32o(d, o);
+        self.a.set_tag(t);
+    }
+    pub(crate) fn stg(&mut self, n: u8, s: u8) {
+        let o = self.gw(n);
+        let t = self.cat(if matches!(o, O::M(_)) { crate::jit_census::GPR_ST } else { crate::jit_census::GPR_MOV });
+        self.a.st32o(o, s);
+        self.a.set_tag(t);
+    }
     pub(crate) fn alug(&mut self, op: Alu, d: u8, n: u8) { let o = self.gr(n); self.a.alu_ro(op, d, o) }
     /// LR = the address after instruction i (bl / bcl / bclrl / bcctrl).
     pub(crate) fn set_lr(&mut self, i: usize) {
         let v = self.ipc(i).wrapping_add(4);
         let o = self.w(LR);
+        let t = self.cat(crate::jit_census::LR_SET);
         self.a.st32io(o, v);
+        self.a.set_tag(t);
     }
 }

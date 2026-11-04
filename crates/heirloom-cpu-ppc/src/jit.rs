@@ -13,7 +13,7 @@
 //! dispatcher forms a region from it and compiles it as one more publish unit, which replaces the block at that pc in the
 //! dispatch table and every link slot naming it. JitLockstep compares at every JIT EXIT (whatever ran in between: blocks,
 //! regions, chained jumps), with budgets that stop a region anywhere - so regions are verified as they run in production.
-use crate::cpu::{Cpu, RunStats, Trap};
+use crate::cpu::{Cpu, RunStats};
 use crate::jit_asm::*;
 use crate::jit_emit::{self, Env};
 use crate::jit_mem::{Arena, CodeMem};
@@ -52,7 +52,7 @@ pub(crate) const ARENA_BYTES: usize = 64 << 20;
 pub(crate) const ARENA_MIN: usize = 8 << 20;
 /// Segments of the arena (4 MiB each at the default size): one is dropped at a time.
 pub(crate) const SEGMENTS: usize = 16;
-const TABLE_BITS: u32 = 14;
+pub(crate) const TABLE_BITS: u32 = 14;
 /// The INDIRECT BRANCH TARGET CACHE that blr / bctr / a native's return probe (jit_emit `probe`): 64K direct-mapped entries
 /// of 8 bytes (guest pc, entry offset in the arena) - 512 KiB, the dispatch table's size, 4x its entries. Z83 2026-11-03
 /// (tag blue forest peak): with the probe on the 16K-entry dispatch table (4bf4dfb), dispatcher entries rose 4.4x per guest
@@ -79,7 +79,7 @@ pub(crate) const PUBLISH_AFTER: u64 = 2_000_000;
 /// which kept the wrapped 64 MiB arena cycling (Z83 2026-11-03: publish = withdraw pages, 30-60 per 5 s, every window).
 const PUBLISH_SMALL: usize = 2048;
 const SMALL_WAIT: u64 = 8;
-const EMPTY_PC: u32 = 1; // never a PowerPC instruction address (not word aligned)
+pub(crate) const EMPTY_PC: u32 = 1; // never a PowerPC instruction address (not word aligned)
 /// `link_owner` of a slot the block being compiled took (its segment is known once its code is placed).
 const LINK_NEW: u8 = 0xFF;
 
@@ -95,76 +95,7 @@ const EMPTY: Slot = Slot { pc: EMPTY_PC, len: 0, entry: 0, gen: 0, inner: 0 };
 /// `link_gen` of a link slot whose owner is on another page than its target (or that is free): always the full entry.
 const ANY_GEN: u64 = u64::MAX;
 
-/// What JIT code reads through r13, and what its helpers find. Rebuilt before every entry.
-#[repr(C)]
-/// FIELD ORDER (h86 ppc-jit6): what JIT code reads on its hot paths comes first - the page generations, the budget, the common
-/// exit, the store map, the four RAM limits and the CR-field constants fill the first 128 bytes, so each is `[r13 + disp8]`
-/// (one byte) instead of a 4-byte displacement; WC3's hot JIT code read crk at 0x1011c past the 64K-entry counters.
-pub(crate) struct Ctx {
-    /// The code watch's generation array (block entries compare their page's element).
-    pub(crate) gen: *const u64,
-    pub(crate) budget: u64,
-    pub(crate) exit: u64,
-    /// The store map (jit_smap): one byte per guest page, 1 = an inline store may write there.
-    pub(crate) smap: *const u8,
-    /// `len - n` for the n-byte accesses: an access at a (masked) EA is inside RAM iff EA <= lim_n.
-    pub(crate) lim1: u64,
-    pub(crate) lim2: u64,
-    pub(crate) lim4: u64,
-    pub(crate) lim8: u64,
-    /// Per CR field f: the field's LT and GT nibbles already in place (8 << s, 4 << s; s = 28 - 4f) - the CMOV sources of
-    /// jit_emit's cr_set.
-    pub(crate) crk: [[u32; 2]; 8],
-    // ---- 128 bytes: below, a 4-byte displacement ----
-    /// The IBTC (Jit::ibtc) and the arena base its entry offsets are relative to.
-    pub(crate) ibtc: *const u64,
-    pub(crate) abase: u64,
-    /// Indirect branches (blr / bctr / a native's return) that found their target in the dispatch table, and that did not.
-    pub(crate) ibtc_hits: u64,
-    pub(crate) ibtc_misses: u64,
-    /// The shared code stubs JIT code calls (jit_inline): FPSCR[FPRF] of a single / double result, stfs's bits.
-    pub(crate) fprf_s: u64,
-    pub(crate) fprf_d: u64,
-    pub(crate) stfs: u64,
-    /// The shared slow stub, and `h_one::<H>` it calls.
-    pub(crate) slow: u64,
-    pub(crate) helper: u64,
-    /// `h_native::<H>` (native blocks call it), the natives it ran this entry, and whether one changed what the dispatcher
-    /// must resync (the natives set, guest RAM).
-    pub(crate) native: u64,
-    pub(crate) natives: u64,
-    /// h_one calls this entry.
-    pub(crate) helpers: u64,
-    pub(crate) cpu: *mut Cpu,
-    pub(crate) ram: *mut u8,
-    pub(crate) len: u64,
-    pub(crate) mask: u32,
-    pad: u32,
-    pub(crate) marked: *const u64,
-    pub(crate) retired: u64,
-    pub(crate) tb0: u64,
-    pub(crate) host: *mut u8,
-    pub(crate) table: *const Slot,
-    pub(crate) trap: Option<Trap>,
-    pub(crate) resync: bool,
-    /// Planted mutant MUT_NO_RESYNC: h_native never asks for the resync.
-    pub(crate) no_resync: bool,
-    /// Opt-in census of the instructions JIT code hands to h_one (key: primary opcode and extended opcode bits).
-    pub(crate) census: Option<BTreeMap<u32, u64>>,
-    /// The head of a block whose entry counter ran out (it left with nothing of it retired): the dispatcher forms a region
-    /// there (jit_region). EMPTY_PC = none.
-    pub(crate) hot: u32,
-    /// Block entry counters, one per dispatch-table index (a colliding block shares one: it only miscounts), counting DOWN
-    /// from the region threshold; a block's counter is reset when it is compiled. Inline: JIT code reaches one with a
-    /// single `sub [r13 + disp32], 1`.
-    pub(crate) counters: [u32; 1 << TABLE_BITS],
-    /// Opt-in region census (Exec::set_jit_region_census): region entries and internal edges taken.
-    pub(crate) rentries: u64,
-    pub(crate) redges: u64,
-}
-
-
-const _: () = assert!(offset_of!(Ctx, crk) + core::mem::size_of::<[[u32; 2]; 8]>() <= 128, "Ctx's hot fields must stay within a one-byte displacement of r13");
+pub(crate) use crate::jit_ctx::Ctx;
 
 pub(crate) struct Jit {
     pub(crate) arena: Arena,
@@ -239,18 +170,31 @@ pub(crate) struct Jit {
     pub(crate) region_times: Vec<u64>,
     /// The last emit_place refused code longer than a segment (`may_refuse`).
     refused_last: bool,
+    /// Diagnostics (Exec::set_jit_tag_census): one jit_census tag per arena byte, written as code is placed.
+    pub(crate) tagmap: Option<Vec<u16>>,
+    /// The stubs' code ranges by jit_census category (start offset in the arena, category), for the tag map.
+    stub_tags: Vec<(usize, u8)>,
+    /// Code is compiled for XER[SO] set or clear (h86 jitsize): SO-FREE code (false, the default: CodeWarrior's code sets no
+    /// SO) builds a compare's CR field with no SO test. XER[SO] is set only by tier 1's handlers (the OE forms, mtxer) and the
+    /// natives - each makes JIT code leave right after it while the code is SO-free (h_one / h_native: Ctx::so_free) - so
+    /// SO-free code never runs with SO set; the dispatcher finding SO set switches for good (every block dropped, the next
+    /// ones compiled SO-aware).
+    pub(crate) so_aware: bool,
+    /// Diagnostics (with the tag map): (arena offset, guest word, guest pc) of every guest instruction's code start placed
+    /// (a reused segment's old rows stay: a tool keeps the last row per offset).
+    pub(crate) tag_words: Vec<(u64, u32, u32)>,
 }
 
 impl Jit {
     pub(crate) fn new(mem: Box<dyn CodeMem>, mutant: u8, arena_bytes: usize) -> Option<Jit> {
         let arena = Arena::new(mem, arena_bytes, ARENA_MIN.min(arena_bytes), SEGMENTS)?;
-        let ctx = Box::new(Ctx { cpu: core::ptr::null_mut(), ram: core::ptr::null_mut(), len: 0, mask: 0, pad: 0, marked: core::ptr::null(), smap: core::ptr::null(), budget: 0, retired: 0, tb0: 0, host: core::ptr::null_mut(), table: core::ptr::null(), exit: 0, gen: core::ptr::null(), lim1: 0, lim2: 0, lim4: 0, lim8: 0, slow: 0, helper: 0, fprf_s: 0, fprf_d: 0, stfs: 0, trap: None, native: 0, natives: 0, helpers: 0, ibtc_hits: 0, ibtc_misses: 0, ibtc: core::ptr::null(), abase: 0, resync: false, no_resync: false, census: None, hot: EMPTY_PC, counters: [crate::jit_region::REGION_AFTER; 1 << TABLE_BITS], crk: core::array::from_fn(|f| [8 << (28 - 4 * f), 4 << (28 - 4 * f)]), rentries: 0, redges: 0 });
+        let ctx = Ctx::boxed();
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![IBTC_EMPTY; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << IBTC_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(), knobs: 0,
-            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false,
+            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), so_aware: false,
         };
         j.stats.arena_bytes = j.arena.len as u64;
         if !j.stubs() { return None; }
@@ -266,13 +210,21 @@ impl Jit {
         a.ld64(RBX, m(R13, offset_of!(Ctx, cpu) as i32));
         a.lea64(RBX, m(RBX, crate::jit_emit::CPU_BIAS));
         a.ld64(R12, m(R13, offset_of!(Ctx, ram) as i32));
-        a.alu_rr(Alu::Xor, R15, R15);
+        // r15 = the instructions left of the budget (jit_emit): counted down by every block
+        a.ld64(R15, m(R13, offset_of!(Ctx, budget) as i32));
         crate::jit_regs::load_globals(&mut a);
         a.jmp_r(RSI);
         let exit = a.pos();
-        // every way out of JIT code passes here: the global pins go back to the Cpu
+        // every way out of JIT code passes here: the global pins go back to the Cpu, a pending FPSCR[FPRF] is settled
         if self.mutant != crate::jit_emit::MUT_GLOBAL_NO_EXIT_STORE { crate::jit_regs::store_globals(&mut a); }
-        a.st64(m(R13, offset_of!(Ctx, retired) as i32), R15);
+        if self.mutant != crate::jit_emit::MUT_FPRF_EXIT {
+            a.push(RAX);
+            crate::jit_inline::emit_fprf_settle(&mut a);
+            a.pop(RAX);
+        }
+        a.ld64(RCX, m(R13, offset_of!(Ctx, budget) as i32));
+        a.alu_rr64(Alu::Sub, RCX, R15);
+        a.st64(m(R13, offset_of!(Ctx, retired) as i32), RCX);
         a.alu_ri64(Alu::Add, RSP, 8);
         for r in [R15, R14, R13, R12, RBP, RBX] { a.pop(r); }
         a.ret();
@@ -284,8 +236,14 @@ impl Jit {
         // or leaves with i (trap) or i + 1 (anything else) instructions of it retired
         let slow = a.pos();
         a.push(RCX);
+        // tier 1's handler reads FPSCR: a pending FPRF first (edx = the pc is live)
+        a.push(RDX);
+        crate::jit_inline::emit_fprf_settle(&mut a);
+        a.pop(RDX);
         a.mov_rr64(RDI, R13);
-        a.lea64(RCX, mx(R15, RCX, 1));
+        // done = the retired count before instruction i: (budget - r15) + i
+        a.alu_rr64(Alu::Sub, RCX, R15);
+        a.alu_rm64(Alu::Add, RCX, m(R13, offset_of!(Ctx, budget) as i32));
         a.call_m(m(R13, offset_of!(Ctx, helper) as i32));
         // the handler may have written any field: the global pins come back from the Cpu (rax, the answer, untouched)
         if self.mutant != crate::jit_emit::MUT_GLOBAL_NO_RELOAD { crate::jit_regs::load_globals(&mut a); }
@@ -297,11 +255,12 @@ impl Jit {
         a.alu_ri64(Alu::Add, RSP, 8);
         a.alu_ri(Alu::Cmp, RAX, 2);
         let t = a.jcc(Cc::E);
-        a.lea64(R15, mxd(R15, RCX, 1, if self.mutant == crate::jit_emit::MUT_EXIT_COUNT { 2 } else { 1 }));
+        a.lea64(RCX, m(RCX, if self.mutant == crate::jit_emit::MUT_EXIT_COUNT { 2 } else { 1 }));
+        a.alu_rr64(Alu::Sub, R15, RCX);
         a.mov_ri(RAX, EXIT_NORMAL);
         a.jmp_m(m(R13, offset_of!(Ctx, exit) as i32));
         a.here(t);
-        a.alu_rr64(Alu::Add, R15, RCX);
+        a.alu_rr64(Alu::Sub, R15, RCX);
         a.mov_ri(RAX, EXIT_TRAP);
         a.jmp_m(m(R13, offset_of!(Ctx, exit) as i32));
         let fprf_s = a.pos();
@@ -310,8 +269,17 @@ impl Jit {
         crate::jit_inline::emit_fprf(&mut a, false);
         let stfs = a.pos();
         crate::jit_inline::emit_stfs_bits(&mut a);
+        let lazy = a.pos();
+        crate::jit_inline::emit_fprf_lazy(&mut a, fprf_s, fprf_d);
+        let fma_odd = a.pos();
+        crate::jit_fp::emit_fma_odd(&mut a, self.mutant == crate::jit_emit::MUT_FMA_TWICE);
         let Some(p) = self.arena.put(&a.b) else { return false };
+        let at = p as usize - self.arena.base as usize;
+        use crate::jit_census as tg;
+        self.stub_tags = alloc::vec![(at, tg::STUB_EXIT), (at + slow, tg::STUB_SLOW), (at + fprf_s, tg::STUB_FPRF), (at + stfs, tg::STUB_STFS), (at + a.b.len(), tg::OTHER)];
         (self.ctx.fprf_s, self.ctx.fprf_d, self.ctx.stfs) = (p as u64 + fprf_s as u64, p as u64 + fprf_d as u64, p as u64 + stfs as u64);
+        self.ctx.fprf_lazy = p as u64 + lazy as u64;
+        self.ctx.fma_odd = p as u64 + fma_odd as u64;
         self.enter = p as u64;
         self.ctx.exit = p as u64 + exit as u64;
         self.exit_stub = p as u64 + stub as u64;
@@ -507,9 +475,11 @@ impl Jit {
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { ibtc_mask }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: self.region_census, homes: Vec::new() };
+        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { ibtc_mask }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: self.region_census, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware };
         let (code, inner) = emit(&mut env);
         let homes = core::mem::take(&mut env.homes);
+        let runs = core::mem::take(&mut env.tag_runs);
+        let words = core::mem::take(&mut env.tag_words);
         if out_of_links { self.drop_code(); return None; }
         if may_refuse && code.len() > self.arena.segment_bytes() {
             for (i, target) in taken {
@@ -523,6 +493,8 @@ impl Jit {
             return None;
         }
         let p = self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, len, gen, at)?;
+        self.tag_code(p, code.len(), &runs);
+        if self.tagmap.is_some() { self.tag_words.extend(words.iter().map(|&(o, w, pc)| (p - self.arena.base as u64 + o as u64, w, pc))); }
         // each slot's home is its exit tail in the placed code; it lands in its target if that is published (after any
         // eviction place() made), else at home
         debug_assert_eq!(homes.len(), taken.len());
@@ -566,14 +538,37 @@ impl Jit {
         Some(p as u64)
     }
 
+    /// Diagnostics: start the tag map (every byte untagged but the stubs').
+    pub(crate) fn start_tagmap(&mut self) {
+        let mut map = alloc::vec![0u16; self.arena.len];
+        for w in self.stub_tags.windows(2) { map[w[0].0..w[1].0].fill(w[0].1 as u16 | crate::jit_census::NO_K << 8); }
+        self.tagmap = Some(map);
+    }
+
+    /// Diagnostics: the tag map's bytes of the code placed at `p` (`len` bytes) from its tag runs (jit_census).
+    fn tag_code(&mut self, p: u64, len: usize, runs: &[(u32, u16)]) {
+        let base = self.arena.base as u64;
+        let Some(map) = self.tagmap.as_mut() else { return };
+        let at = (p - base) as usize;
+        let dst = &mut map[at..at + len];
+        dst.fill(crate::jit_census::OTHER as u16);
+        let tags: Vec<&(u32, u16)> = runs.iter().filter(|r| r.1 != crate::jit_census::START).collect();
+        for (k, &&(from, t)) in tags.iter().enumerate() {
+            let to = tags.get(k + 1).map_or(len, |r| r.0 as usize);
+            dst[from as usize..to].fill(t);
+        }
+        for r in runs.iter().filter(|r| r.1 == crate::jit_census::START && (r.0 as usize) < len) { dst[r.0 as usize] |= crate::jit_census::START_BIT; }
+    }
+
     /// Compile the block of the bound native at `pc` (jit_emit::compile_native); `gen` is its page's generation now (only
     /// so the dispatcher's entry test reads the same way for every block: the code does not depend on the page).
     fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
         let t0 = self.timer.map(|c| c());
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
-        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { self.ibtc_mask() }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: false, homes: Vec::new() };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { self.ibtc_mask() }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: false, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware };
         let code = jit_emit::compile_native(pc, &mut env);
-        self.place(&code, 0, Vec::new(), pc, 1, gen, at);
+        let runs = core::mem::take(&mut env.tag_runs);
+        if let Some(p) = self.place(&code, 0, Vec::new(), pc, 1, gen, at) { self.tag_code(p, code.len(), &runs); }
         self.stats.natives_compiled += 1;
         if let (Some(c), Some(t0)) = (self.timer, t0) { self.stats.translate_time += c().wrapping_sub(t0); }
     }
@@ -657,8 +652,7 @@ impl Jit {
     fn run_code<H: Host>(&mut self, host: &mut H, cpu: &mut Cpu, entry: u64, budget: u64) -> (u32, u64) {
         let raw = host.mem().raw();
         // the store map first: it must mirror the watch before any inline store runs (no memory for it: tier 1 runs)
-        if !self.smap.sync(host.mem(), &raw, self.mutant == crate::jit_emit::MUT_SMAP_STALE) { return (EXIT_BAIL, 0); }
-        self.ctx.smap = self.smap.map.as_ptr();
+        if !self.smap.sync(host.mem(), &raw, self.mutant == crate::jit_emit::MUT_SMAP_STALE, self.mutant == crate::jit_emit::MUT_SMAP_ONE_PAGE, &mut self.ctx.smap) { return (EXIT_BAIL, 0); }
         let c = &mut *self.ctx;
         c.cpu = cpu as *mut Cpu;
         c.ram = raw.base;
@@ -682,6 +676,8 @@ impl Jit {
         c.native = h_native::<H> as HNative as usize as u64;
         c.natives = 0;
         c.helpers = 0;
+        c.fprf_kind = 0;
+        c.so_free = !self.so_aware && self.mutant != crate::jit_emit::MUT_SO_STAYS;
         c.ibtc_hits = 0;
         c.ibtc_misses = 0;
         c.resync = false;
@@ -744,7 +740,8 @@ pub(crate) extern "C" fn h_native<H: Host>(ctx: *mut Ctx, pc: u32, done: u64) ->
         c.resync = true;
         return 1;
     }
-    if cpu.halted() || cpu.blocked() { 1 } else { 0 }
+    // XER[SO] set under SO-free code: leave after the native (the dispatcher switches the code to SO-aware)
+    if cpu.halted() || cpu.blocked() || (c.so_free && cpu.xer & crate::cpu::XER_SO != 0) { 1 } else { 0 }
 }
 
 /// JIT code's call for ONE instruction it has no inline code for (or whose inline guard failed): tier 1's handler, with the
@@ -761,7 +758,8 @@ pub(crate) extern "C" fn h_one<H: Host>(ctx: *mut Ctx, w: u32, ipc: u32, done: u
     let bumps = host.mem().code_bumps();
     match t1run::one(host, cpu, &op, ipc, c.tb0.wrapping_add(done)) {
         Ok(Flow::Next) => {
-            if cpu.halted() || cpu.blocked() || host.mem().code_bumps() != bumps { cpu.pc = ipc.wrapping_add(4); return 3; }
+            // ... or XER[SO] set under SO-free code (the dispatcher then switches the code to SO-aware)
+            if cpu.halted() || cpu.blocked() || host.mem().code_bumps() != bumps || (c.so_free && cpu.xer & crate::cpu::XER_SO != 0) { cpu.pc = ipc.wrapping_add(4); return 3; }
             0
         }
         Ok(Flow::Jump(t)) => { cpu.pc = t; 1 }
@@ -810,6 +808,8 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
     let mut usable = usable_for(&raw) && !jit.dead;
     if !usable { jit.stats.refused = true; }
     while n < budget && !cpu.halted() && !cpu.blocked() {
+        // XER[SO] set (tier 1, a native, or the caller): SO-free code may not run any more (Jit::so_aware)
+        if !jit.so_aware && cpu.xer & crate::cpu::XER_SO != 0 { jit.so_aware = true; jit.drop_code(); }
         let pc = cpu.pc;
         let left = budget - n;
         // publish a page's worth of new blocks, or anything compiled a while ago (a long run must not wait for its end)

@@ -75,6 +75,7 @@ pub(crate) fn max_insns(s: Shape) -> u32 {
 /// Compile shape `s` at `pc` (code page `page` at generation `gen`): the code and the offset of its inner entry.
 pub(crate) fn compile(s: Shape, pc: u32, gen: u64, page: usize, env: &mut Env) -> (Vec<u8>, usize) {
     let mut e = E::new(&[], pc, env);
+    e.cat(crate::jit_census::XLATE);
     let mut bails = Vec::new();
     // the block's own entry checks (jit_emit::compile's): its code page's generation (unless KNOB_NO_ENTRY_GEN), then a budget
     // that covers the longest path through the whole function
@@ -87,15 +88,15 @@ pub(crate) fn compile(s: Shape, pc: u32, gen: u64, page: usize, env: &mut Env) -
         bails.push(a.jcc(Cc::Ne));
     }
     let inner = a.pos();
-    a.lea64(RAX, m(R15, max_insns(s) as i32));
-    a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
-    bails.push(a.jcc(Cc::A));
+    a.alu_ri64(Alu::Cmp, R15, max_insns(s) as i32);
+    bails.push(a.jcc(Cc::B));
     match s { Shape::Cmp16F => e.cmp16f(&mut bails) }
     let a = &mut e.a;
     for b in bails { a.here(b); }
     a.st32i(cpu(crate::jit_emit::PC), pc);
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
+    e.env.tag_runs = e.a.tags.take().unwrap_or_default();
     (e.a.b, inner)
 }
 
@@ -104,6 +105,8 @@ impl E<'_, '_> {
     /// f1 / f0 = pair k' widened, CR0 and FPSCR[FPCC] = fcmpu of pair k', r0 = r3 = (a pair differs), the retired count
     /// 5 + 4 k' + (differs ? 3 : 2), and the pc = LR (its blr). Bails (nothing written) on a range outside RAM or a NaN.
     fn cmp16f(&mut self, bails: &mut Vec<Fix>) {
+        // it writes FPSCR[FPCC]: a pending FPRF first
+        crate::jit_inline::emit_fprf_settle(&mut self.a);
         let (r3, r4) = (self.gr(3), self.gr(4));
         let a = &mut self.a;
         // the two 64-byte operand ranges must lie in RAM (lim4: the last address a 4-byte access may start at)
@@ -196,9 +199,9 @@ impl E<'_, '_> {
         self.a.st32o(r3, RSI);
         // retired: 5 + 4 k' + 2 + flag = 7 + r8 + rsi
         let a = &mut self.a;
-        a.alu_rr64(Alu::Add, R15, R8);
-        a.alu_rr64(Alu::Add, R15, RSI);
-        a.alu_ri64(Alu::Add, R15, 7);
+        a.alu_rr64(Alu::Sub, R15, R8);
+        a.alu_rr64(Alu::Sub, R15, RSI);
+        a.alu_ri64(Alu::Sub, R15, 7);
         // blr: on to LR through the dispatch table
         let lr = self.rw(LR);
         self.a.ld32o(R8, lr);

@@ -36,7 +36,7 @@ impl Cc {
 /// ALU group-1 operations: the /digit of 0x81 and (digit << 3) | 1 is the `r/m, reg` opcode.
 #[derive(Clone, Copy)]
 #[repr(u8)]
-pub(crate) enum Alu { Add = 0, Or = 1, And = 4, Sub = 5, Xor = 6, Cmp = 7 }
+pub(crate) enum Alu { Add = 0, Or = 1, Sbb = 3, And = 4, Sub = 5, Xor = 6, Cmp = 7 }
 
 /// Shift / rotate group-2 operations (the /digit of 0xC1 / 0xD3).
 #[derive(Clone, Copy)]
@@ -65,11 +65,20 @@ pub(crate) struct Fix8(usize);
 /// `wide`: every displacement and immediate in its 32-bit form (the pre-h86-ppc-jit6 code size and more), never the short
 /// ones - the same instructions in more bytes. Tier::JitWide's A/B switch: on silicon it isolates what CODE SIZE costs (the
 /// instruction cache and L2 footprint) from what the instructions cost.
+/// `tags` (diagnostics, jit_census): when Some, every change of `tag` - what the code being emitted is for - is recorded with
+/// the offset it starts at; the bytes are the same either way.
 #[derive(Default)]
-pub(crate) struct Asm { pub(crate) b: Vec<u8>, pub(crate) wide: bool }
+pub(crate) struct Asm { pub(crate) b: Vec<u8>, pub(crate) wide: bool, pub(crate) tags: Option<Vec<(u32, u16)>>, pub(crate) tag: u16 }
 
 impl Asm {
     pub(crate) fn pos(&self) -> usize { self.b.len() }
+    /// The code emitted from here on is for `t` (jit_census); answers the previous tag, for `set_tag` to restore.
+    pub(crate) fn tag_in(&mut self, t: u16) -> u16 { let old = self.tag; self.set_tag(t); old }
+    pub(crate) fn set_tag(&mut self, t: u16) {
+        if t == self.tag { return }
+        self.tag = t;
+        if let Some(v) = self.tags.as_mut() { v.push((self.b.len() as u32, t)); }
+    }
     fn u8(&mut self, v: u8) { self.b.push(v) }
     fn u32(&mut self, v: u32) { self.b.extend_from_slice(&v.to_le_bytes()) }
     /// The sign-extended imm8 form serves `v` (and the code is not wide).
@@ -191,6 +200,11 @@ impl Asm {
         self.b.extend_from_slice(&v.to_le_bytes());
     }
     /// mov dword [m], imm32.
+    /// mov byte [m], imm8.
+    pub(crate) fn st8i(&mut self, mm: M, v: u8) {
+        self.op_m(None, false, &[0xC6], 0, mm, false);
+        self.u8(v);
+    }
     pub(crate) fn st32i(&mut self, mm: M, v: u32) {
         self.op_m(None, false, &[0xC7], 0, mm, false);
         self.u32(v);
@@ -279,6 +293,8 @@ impl Asm {
         self.op_r(false, &[if short { 0x83 } else { 0x81 }], 2, d, false);
         self.grp1_tail(v, short)
     }
+    /// cmc (CF = !CF).
+    pub(crate) fn cmc(&mut self) { self.u8(0xF5) }
     pub(crate) fn stc(&mut self) { self.u8(0xF9) }
     /// cdq (sign-extend eax into edx).
     pub(crate) fn cdq(&mut self) { self.u8(0x99) }
@@ -301,8 +317,16 @@ impl Asm {
     /// movq r64, xmm / movd xmm, r32.
     pub(crate) fn movq_rx(&mut self, r: u8, x: u8) { self.u8(0x66); self.op_r(true, &[0x0F, 0x7E], x, r, false) }
     pub(crate) fn movd_xr(&mut self, x: u8, r: u8) { self.u8(0x66); self.op_r(false, &[0x0F, 0x6E], x, r, false) }
+    /// movd r32, xmm.
+    pub(crate) fn movd_rx(&mut self, r: u8, x: u8) { self.u8(0x66); self.op_r(false, &[0x0F, 0x7E], x, r, false) }
     /// movq xmm, r64.
     pub(crate) fn movq_xr(&mut self, x: u8, r: u8) { self.u8(0x66); self.op_r(true, &[0x0F, 0x6E], x, r, false) }
+    /// cvtps2pd xmm, xmm (no prefix: 0F 5A).
+    pub(crate) fn cvtps2pd(&mut self, x: u8, y: u8) { self.op_r(false, &[0x0F, 0x5A], x, y, false) }
+    /// cmpneqpd xmm, xmm (each lane: all ones when not equal, NaN included).
+    pub(crate) fn cmpneqpd(&mut self, x: u8, y: u8) { self.sse_r(0x66, 0xC2, x, y); self.u8(4) }
+    /// movmskpd r32, xmm (the two lanes' sign bits).
+    pub(crate) fn movmskpd(&mut self, r: u8, x: u8) { self.sse_r(0x66, 0x50, r, x) }
     /// movapd xmm, xmm.
     pub(crate) fn movapd(&mut self, x: u8, y: u8) { self.sse_r(0x66, 0x28, x, y) }
     /// cvttsd2si r32, xmm (truncating; 0x80000000 for NaN or out of range).
@@ -387,6 +411,19 @@ mod tests {
     #[test]
     fn encodings_match_an_assembler() {
         assert_eq!(enc(|a| a.ld32(RDX, m(RBX, 0x10))), [0x8B, 0x53, 0x10]); // mov edx,[rbx+0x10]
+        // h86 jitsize: the packed single round trip, the byte store, the lea doubling, the budget compare
+        assert_eq!(enc(|a| a.cvtps2pd(2, 2)), [0x0F, 0x5A, 0xD2]); // cvtps2pd xmm2,xmm2
+        assert_eq!(enc(|a| a.cmpneqpd(2, 1)), [0x66, 0x0F, 0xC2, 0xD1, 0x04]); // cmpneqpd xmm2,xmm1
+        assert_eq!(enc(|a| a.movmskpd(RCX, 2)), [0x66, 0x0F, 0x50, 0xCA]); // movmskpd ecx,xmm2
+        assert_eq!(enc(|a| a.sse_m(0x66, 0x16, 1, m(RBX, 0x10))), [0x66, 0x0F, 0x16, 0x4B, 0x10]); // movhpd xmm1,[rbx+0x10]
+        assert_eq!(enc(|a| a.sse_r(0x66, 0x5A, 2, 1)), [0x66, 0x0F, 0x5A, 0xD1]); // cvtpd2ps xmm2,xmm1
+        assert_eq!(enc(|a| a.movd_rx(RDX, 1)), [0x66, 0x0F, 0x7E, 0xCA]); // movd edx,xmm1
+        assert_eq!(enc(|a| a.st8i(m(R13, 0x10), 1)), [0x41, 0xC6, 0x45, 0x10, 0x01]); // mov byte [r13+0x10],1
+        assert_eq!(enc(|a| a.lea64(RCX, mx(RAX, RAX, 1))), [0x48, 0x8D, 0x0C, 0x00]); // lea rcx,[rax+rax]
+        assert_eq!(enc(|a| a.alu_ri64(Alu::Cmp, R15, 3)), [0x49, 0x83, 0xFF, 0x03]); // cmp r15,3
+        assert_eq!(enc(|a| a.sse_r(0x66, 0x2E, 0, 0)), [0x66, 0x0F, 0x2E, 0xC0]); // ucomisd xmm0,xmm0
+        assert_eq!(enc(|a| a.alu_rr(Alu::Sbb, R8, R8)), [0x45, 0x19, 0xC0]); // sbb r8d,r8d
+        assert_eq!(enc(|a| a.cmc()), [0xF5]); // cmc
         assert_eq!(enc(|a| a.ld32(RAX, m(R13, 0))), [0x41, 0x8B, 0x45, 0x00]); // mov eax,[r13+0]
         assert_eq!(enc(|a| a.ld32(RAX, m(R12, 0))), [0x41, 0x8B, 0x04, 0x24]); // mov eax,[r12]
         assert_eq!(enc(|a| a.ld32(RDX, mx(R12, RAX, 1))), [0x41, 0x8B, 0x14, 0x04]); // mov edx,[r12+rax]

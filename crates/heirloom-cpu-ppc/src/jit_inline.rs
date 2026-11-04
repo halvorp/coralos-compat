@@ -45,22 +45,33 @@ impl E<'_, '_> {
         self.ea(i, e, 4);
         self.ld_be(4, false);
         let a = &mut self.a;
-        a.mov_rr(RCX, RDX);
-        a.alu_ri(Alu::And, RCX, 0x7FFF_FFFF);
-        a.alu_ri(Alu::Cmp, RCX, 0x7F80_0000);
-        self.slow_if(Cc::A, i);
-        let a = &mut self.a;
         a.movd_xr(0, RDX);
         a.sse_r(0xF3, 0x5A, 0, 0); // cvtss2sd
-        a.sse_m(0xF2, 0x11, 0, f(d)); // movsd [frD], xmm0
+        // a NaN (whose SNaN-ness tier 0 keeps, cvtss2sd would not) is the slow path's: unordered with itself
+        let t = self.cat(crate::jit_census::FP_GUARD);
+        self.a.sse_r(0x66, 0x2E, 0, 0); // ucomisd xmm0, xmm0
+        self.slow_if(Cc::P, i);
+        self.a.set_tag(t);
+        self.a.sse_m(0xF2, 0x11, 0, f(d)); // movsd [frD], xmm0
     }
 
     fn stfs(&mut self, i: usize, e: Ea, s: usize) {
-        // the value first, through the shared stub (emit_stfs_bits): a single denormal is the slow path's
+        // the value first. A double that is EXACTLY a single (cvtsd2ss and back give its bits: WC3's stfs of single results)
+        // is stored as cvtsd2ss makes it - for such a value the PowerPC's bit selection gives the same bits - unless it is a
+        // single denormal (exponent field 0, not +-0: the slow path's, as below); any other double goes through the shared
+        // bit-selection stub out of line (emit_stfs_bits: a single denormal is the slow path's there too)
         let a = &mut self.a;
-        a.ld64(RDX, f(s));
-        a.call_m(crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, stfs)));
-        self.slow_if(Cc::Ne, i);
+        a.sse_m(0xF2, 0x10, 0, f(s));
+        a.sse_r(0xF2, 0x5A, 1, 0); // cvtsd2ss xmm1, xmm0
+        a.sse_r(0xF3, 0x5A, 2, 1); // cvtss2sd xmm2, xmm1
+        a.movq_rx(RAX, 2);
+        a.alu_rm64(Alu::Cmp, RAX, f(s));
+        let inexact = a.jcc(Cc::Ne);
+        a.movd_rx(RDX, 1);
+        a.test_ri(RDX, 0x7F80_0000);
+        let tiny = a.jcc(Cc::E);
+        let back = a.pos();
+        self.stfs_outs.push((inexact, tiny, back, i, s));
         self.ea_regs(e);
         self.store_guard(i, e, 4);
         // edx survives the guards (eax / r8 / ecx), except lockstep's journal call: the value again then
@@ -109,10 +120,12 @@ impl E<'_, '_> {
             self.a.alu_rr64(Alu::Add, RCX, RCX);
             self.slow_if(Cc::E, i);
         }
+        let t = self.cat(crate::jit_census::FP_GUARD);
         let a = &mut self.a;
         a.ld32(RCX, cpu(FPSCR));
         a.test_ri(RCX, 3); // FPSCR[RN] != 0: tier 0 refuses by name
         self.slow_if(Cc::Ne, i);
+        self.a.set_tag(t);
         let a = &mut self.a;
         a.sse_m(0xF2, 0x10, 0, f(a_));
         a.sse_m(0xF2, opc, 0, f(src));
@@ -121,21 +134,47 @@ impl E<'_, '_> {
             a.sse_r(0xF3, 0x5A, 0, 0); // cvtss2sd
         }
         a.movq_rx(RAX, 0);
-        a.mov_rr64(RCX, RAX);
-        a.sh_ri64(Sh::Shr, RCX, 52);
-        a.alu_ri(Alu::And, RCX, 0x7FF);
-        a.alu_ri(Alu::Cmp, RCX, 0x7FF);
-        self.slow_if(Cc::E, i);
+        self.slow_unless_finite(i);
         self.a.st64(f(d), RAX);
         self.fprf(single);
         true
     }
 
-    /// FPSCR[FPRF] = the class of the finite result in rax: one call of the shared stub (emit_fprf; rax, rcx, rdx clobbered).
+    /// FPSCR[FPRF] = the class of the finite result in rax, LAZILY (jit.rs Ctx::fprf_src): the bits and their kind are
+    /// stored; the class is formed only where FPSCR can be read.
     pub(crate) fn fprf(&mut self, single: bool) {
-        let at = if single { offset_of!(crate::jit::Ctx, fprf_s) } else { offset_of!(crate::jit::Ctx, fprf_d) };
-        self.a.call_m(crate::jit_emit::ctx(at));
+        let t = self.cat(crate::jit_census::FPRF);
+        self.a.st64(crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, fprf_src)), RAX);
+        self.a.st8i(crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, fprf_kind)), if single { 1 } else { 2 });
+        self.a.set_tag(t);
     }
+    /// Before inline code that writes part of FPRF (fcmpu / fcmpo's FPCC): settle a pending FPRF (rax, rcx, rdx clobbered).
+    pub(crate) fn fprf_settle(&mut self) {
+        let t = self.cat(crate::jit_census::FPRF);
+        emit_fprf_settle(&mut self.a);
+        self.a.set_tag(t);
+    }
+}
+
+/// If an FPSCR[FPRF] is pending (Ctx::fprf_kind != 0), settle it through the `fprf_lazy` stub (rax, rcx, rdx clobbered).
+pub(crate) fn emit_fprf_settle(a: &mut Asm) {
+    a.cmp8_mi(crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, fprf_kind)), 0);
+    let none = a.jcc8(Cc::E);
+    a.call_m(crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, fprf_lazy)));
+    a.here8(none);
+}
+
+/// The shared stub that settles a pending FPSCR[FPRF] (called with one pending): the kind is cleared, then the FPRF stub of
+/// its kind (at `single` / `double` in the same stub page) classifies the pending bits and returns to the caller.
+pub(crate) fn emit_fprf_lazy(a: &mut Asm, single: usize, double: usize) {
+    let kind = crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, fprf_kind));
+    a.ld64(RAX, crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, fprf_src)));
+    a.cmp8_mi(kind, 1);
+    a.st8i(kind, 0);
+    let d = a.jcc(Cc::Ne);
+    a.patch(d, double);
+    let s = a.jmp();
+    a.patch(s, single);
 }
 
 /// The shared stub `stfs` calls (jit.rs `stubs`): rdx = the double's bits in; edx = stfs's single (the PowerPC's bit
@@ -200,30 +239,25 @@ pub(crate) fn emit_fprf(a: &mut Asm, single: bool) {
 impl E<'_, '_> {
     /// fcmpu / fcmpo of ordered operands: CR field `bf` and FPSCR[FPCC] = FL FG FE (FU 0); FPRF[C] untouched.
     fn fcmp(&mut self, i: usize, bf: u8, ra: usize, rb: usize) {
+        self.fprf_settle();
         let a = &mut self.a;
         a.sse_m(0xF2, 0x10, 0, f(ra));
         a.sse_m(0x66, 0x2E, 0, f(rb)); // ucomisd
         self.slow_if(Cc::P, i);
+        // FL FG FE as CR field bf's nibble, in place: EQ, then the Ctx's LT / GT constants of that field by CMOV (cr_set's)
+        let sh = 28 - 4 * (bf as u32 & 7);
+        let k = offset_of!(crate::jit::Ctx, crk) + 8 * (bf as usize & 7);
         let a = &mut self.a;
-        a.setcc(Cc::B, RAX);
-        a.setcc(Cc::A, RCX);
-        a.setcc(Cc::E, RDX);
-        a.movzx8_rr(RAX, RAX);
-        a.movzx8_rr(RCX, RCX);
-        a.movzx8_rr(RDX, RDX);
-        a.sh_ri(Sh::Shl, RAX, 3);
-        a.sh_ri(Sh::Shl, RCX, 2);
-        a.alu_rr(Alu::Add, RDX, RDX);
-        a.alu_rr(Alu::Or, RAX, RCX);
-        a.alu_rr(Alu::Or, RAX, RDX);
+        a.mov_ri(RAX, 0b0010 << sh);
+        a.cmov_rm(Cc::B, RAX, crate::jit_emit::ctx(k));
+        a.cmov_rm(Cc::A, RAX, crate::jit_emit::ctx(k + 4));
+        // ... and as FPSCR[FPCC] (bits 12-15)
         a.mov_rr(RDX, RAX);
-        a.sh_ri(Sh::Shl, RDX, 12);
+        if sh > 12 { a.sh_ri(Sh::Shr, RDX, (sh - 12) as u8) } else if sh < 12 { a.sh_ri(Sh::Shl, RDX, (12 - sh) as u8) }
         a.ld32(RCX, cpu(FPSCR));
         a.alu_ri(Alu::And, RCX, !0xF000);
         a.alu_rr(Alu::Or, RCX, RDX);
         a.st32(cpu(FPSCR), RCX);
-        let sh = 28 - 4 * (bf as u32 & 7);
-        if sh != 0 { a.sh_ri(Sh::Shl, RAX, sh as u8); }
         let c = self.rw(CR);
         self.a.alu_oi(Alu::And, c, !(0xF << sh));
         self.a.alu_or(Alu::Or, c, RAX);
@@ -341,9 +375,9 @@ impl E<'_, '_> {
             138 | 136 => { let o = self.gr(b); ca_in(self); self.a.adc_ro(RDX, o); }
             _ => { ca_in(self); self.a.adc_ri(RDX, 0); }
         }
-        self.a.setcc(Cc::B, R8);
+        self.ca_mask_cf(false);
         self.stg(d, RDX);
-        self.ca_from_r8();
+        self.ca_from_mask();
         if rc { self.cr0_of_edx(); }
     }
 
@@ -358,11 +392,7 @@ impl E<'_, '_> {
         a.sse_r(0xF2, 0x5A, 0, 0);
         a.sse_r(0xF3, 0x5A, 0, 0);
         a.movq_rx(RAX, 0);
-        a.mov_rr64(RCX, RAX);
-        a.sh_ri64(Sh::Shr, RCX, 52);
-        a.alu_ri(Alu::And, RCX, 0x7FF);
-        a.alu_ri(Alu::Cmp, RCX, 0x7FF);
-        self.slow_if(Cc::E, i);
+        self.slow_unless_finite(i);
         self.a.st64(f(d), RAX);
         self.fprf(true);
     }
