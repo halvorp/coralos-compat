@@ -36,6 +36,7 @@ pub struct Exec {
     jit_clock: Option<fn() -> u64>,
     jit_arena: Option<usize>,
     jit_region_after: Option<u32>,
+    jit_cold: Option<(u64, u32)>,
     jit_region_shape: Option<crate::RegionShape>,
     jit_region_census: bool,
     jit_tags: bool,
@@ -57,7 +58,7 @@ impl Exec {
             code_mem: None,
             #[cfg(target_arch = "x86_64")]
             jit: None,
-            jit_mutant: 0, jit_knobs: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_region_shape: None, jit_region_census: false, jit_tags: false,
+            jit_mutant: 0, jit_knobs: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_cold: None, jit_region_shape: None, jit_region_census: false, jit_tags: false,
         }
     }
     /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
@@ -84,6 +85,13 @@ impl Exec {
     /// Block entries after which a compiled block's head forms a REGION (default jit_region::REGION_AFTER = 64; 0 = no regions).
     /// Takes effect for blocks compiled after the call (a JIT made later gets it at creation).
     #[doc(hidden)]
+    /// The cold-tail rule's window and minimum (jit_cold; tuning and tests - the product sets it with KNOB_COLD_TAIL).
+    #[doc(hidden)]
+    pub fn set_jit_cold(&mut self, window: u64, min: u32) {
+        self.jit_cold = Some((window, min));
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_mut() { j.cold = self.jit_cold; }
+    }
     pub fn set_jit_region_after(&mut self, n: u32) {
         self.jit_region_after = Some(n);
         #[cfg(target_arch = "x86_64")]
@@ -169,6 +177,9 @@ impl Exec {
     pub fn set_jit_knobs(&mut self, knobs: u32) {
         self.jit_knobs = knobs;
     }
+    /// The ablation knobs set (what the next run compiles under).
+    #[doc(hidden)]
+    pub fn jit_knobs(&self) -> u32 { self.jit_knobs }
     pub fn plant_jit_mutant(&mut self, m: u8) {
         self.jit_mutant = m;
     }
@@ -236,6 +247,7 @@ impl Exec {
                     if let (Some(j), Some(n)) = (self.jit.as_mut(), self.jit_publish_after) { j.publish_after = n; }
                     if let Some(j) = self.jit.as_mut() { j.timer = self.jit_clock; }
                     if let (Some(j), Some(n)) = (self.jit.as_mut(), self.jit_region_after) { j.set_region_after(n); }
+                    if let Some(j) = self.jit.as_mut() { j.cold = self.jit_cold; }
                     if let (Some(j), Some(s)) = (self.jit.as_mut(), self.jit_region_shape) { j.region_shape = s; }
                     if let Some(j) = self.jit.as_mut() { j.region_census = self.jit_region_census; }
                     if let Some(j) = self.jit.as_mut().filter(|_| self.jit_tags) { j.start_tagmap(); }

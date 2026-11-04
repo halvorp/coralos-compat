@@ -514,6 +514,8 @@ fn wc3_host_run_with_a_gl_worker() {
     // `WC3_REGION_AFTER=<n>`: tier 2's region threshold (block entries before a hot head forms a region; 0 = no regions)
     #[cfg(not(feature = "cpu-library"))]
     if let Some(n) = std::env::var("WC3_REGION_AFTER").ok().and_then(|s| s.parse().ok()) { m.exec().set_jit_region_after(n); }
+    // `WC3_COLD=<window insns>/<runs>`: tier 2's cold-tail rule (jit_cold; KNOB_COLD_TAIL sets 2500000/4)
+    if let Some((w, n)) = std::env::var("WC3_COLD").ok().and_then(|v| v.split_once('/').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))) { m.exec().set_jit_cold(w, n); }
     // `WC3_REGION_CENSUS`: regions count their entries and internal edges (JitStats region_entries / region_edges)
     #[cfg(not(feature = "cpu-library"))]
     if std::env::var("WC3_REGION_CENSUS").is_ok() { m.exec().set_jit_region_census(true); }
@@ -535,6 +537,8 @@ fn wc3_host_run_with_a_gl_worker() {
         if std::env::var("WC3_PERF_SITES").is_ok() { m.perf_census(); }
         // `WC3_PROFILE=1`: the guest-PC profile (heirloom_macppc_engine::profile, cpu-tier "jitprofile" on CoralOS)
         if std::env::var("WC3_PROFILE").is_ok() { m.perf_profile(ns); }
+        // `WC3_ABLATE=1`: cpu-tier "jitablate"'s knob rotation (perf.rs ABLATIONS) with its [CPU-PPC-TIER] proof line per window
+        if std::env::var("WC3_ABLATE").is_ok() { m.perf_ablate(ns); }
     }
     // `WC3_BUDGET=<insns>` per slice (default 5M) and `WC3_CLOCK_MIPS=<n>`: the virtual clock advances by the instructions the slice ran
     // at n million per second (a slower CPU's clock, e.g. the Z83's) instead of 20 ms per slice

@@ -401,6 +401,18 @@ pub struct PpcProf {
     pub arena_bytes: u64,
     /// Regions tier 2 compiled (its region tier; 0 with TIER_JIT_BLOCKS).
     pub jit_regions: u64,
+    // ---- appended 2026-11-04 (h86 fnreg: the jitablate A/B proves itself from inside the library) ----
+    /// The ablation knobs in force INSIDE the library (what its last accepted `set_tier` word carried above the tier byte).
+    pub knobs: u64,
+    /// `set_tier` words the library refused (an unknown tier or knob bit: nothing changed), and the last such word.
+    pub tier_refusals: u64,
+    pub tier_refused_word: u64,
+    /// Whole functions / loops tier 2 translated (jit_xlate), and the times its code was dropped by a reconfiguration (a knob,
+    /// lockstep, a mutant or MOVBE changed: everything compiled is remade).
+    pub jit_translated: u64,
+    pub jit_reconfigures: u64,
+    /// The library's build identity: a hash of heirloom-cpu-ppc's own sources (its build script), 0 from an older library.
+    pub build: u64,
 }
 
 /// `PpcProf`'s size before the tier counters were appended: what a `size` of 0 asks for.
@@ -438,11 +450,14 @@ pub const KNOB_NO_LAZY_CA: u32 = 16;
 /// - the A/B of call following on the Z83 (h86 fnreg: the host census measured -2% JIT instructions for +46% distinct code
 /// lines); code, not semantics.
 pub const KNOB_FOLLOW_CALLS: u32 = 32;
+/// The cold-tail rule (h86 fnreg): a block compiles only once it ran 4 times within one window of ~2.5 M guest instructions
+/// (about a Z83 WC3 frame), instead of on its 2nd run ever - code that runs less often stays on tier 1; code, not semantics.
+pub const KNOB_COLD_TAIL: u32 = 128;
 /// Bits 8..12 of the knobs: the IBTC's index bits (8..=16 entries' log2; 0 = the default 16, 64K entries / 512 KiB).
 pub const KNOB_IBTC_BITS_SHIFT: u32 = 8;
 pub const KNOB_IBTC_BITS_MASK: u32 = 0x1F;
 /// The knob bits a library may be asked for (anything else: -1).
-pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
+pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
 
 /// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
 /// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;

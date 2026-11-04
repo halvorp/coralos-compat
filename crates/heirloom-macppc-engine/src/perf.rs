@@ -70,9 +70,9 @@ pub struct Window {
 /// cpu-tier "jitablate" (h86 aot-ledger): tier 2 with its guards switched off in turn, each for [`ABLATE_WINDOWS`] perf windows
 /// (the first after a switch recompiles everything; the second is the warm one), so ONE Z83 deployment measures what each guard
 /// costs. Each knob drops a check that keeps the JIT exact for self-modifying code - a measurement setting, never a default.
-pub const ABLATIONS: [(&str, u32); 10] = {
-    use heirloom_os_abi::ppc::{KNOB_FOLLOW_CALLS as C, KNOB_IBTC_BITS_SHIFT as I, KNOB_NO_DISPLACE as D, KNOB_NO_ENTRY_GEN as G, KNOB_NO_LAZY_CA as L, KNOB_NO_SMC_STORE as S, KNOB_NO_XLATE as X};
-    [("base", 0), ("noxlate", X), ("nodisplace", D), ("nolazyca", L), ("followcalls", C), ("nosmc", S), ("nogen", G), ("nosmc+nogen", S | G), ("ibtc12", 12 << I), ("ibtc14", 14 << I)]
+pub const ABLATIONS: [(&str, u32); 11] = {
+    use heirloom_os_abi::ppc::{KNOB_COLD_TAIL as T, KNOB_FOLLOW_CALLS as C, KNOB_IBTC_BITS_SHIFT as I, KNOB_NO_DISPLACE as D, KNOB_NO_ENTRY_GEN as G, KNOB_NO_LAZY_CA as L, KNOB_NO_SMC_STORE as S, KNOB_NO_XLATE as X};
+    [("base", 0), ("noxlate", X), ("nodisplace", D), ("nolazyca", L), ("followcalls", C), ("coldtail", T), ("nosmc", S), ("nogen", G), ("nosmc+nogen", S | G), ("ibtc12", 12 << I), ("ibtc14", 14 << I)]
 };
 pub const ABLATE_WINDOWS: u64 = 2;
 
@@ -126,6 +126,8 @@ pub struct Perf {
     pub(crate) ledger: crate::perf_ledger::Ledger,
     /// Lines of a closed window not yet taken (the `[HEIRLOOM-PERF ...]` line first, then the ledger's).
     pending: alloc::collections::VecDeque<String>,
+    /// The CPU's build line was said (cpu-tier "jitablate": once, before the first CPU-PPC-TIER line).
+    lib_said: bool,
     /// Guest instructions retired at the last native's entry (the CPU's timebase): a swap is inside a native.
     pub(crate) tb: u64,
     /// cpu-tier "jitablate": rotate tier 2's knobs through [`ABLATIONS`] (the index of the running one).
@@ -274,7 +276,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn perf_enable(&mut self, clock: fn() -> u64) {
         self.perf = Some(alloc::boxed::Box::new(Perf {
             clock, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0,
-            ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(),
+            ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false,
         }));
     }
     /// Report every `n` frames instead of [`REPORT_FRAMES`] (a host harness's finer view).
@@ -313,13 +315,53 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// cpu-tier "jitablate": after a swap that closed a perf window, the next [`ABLATIONS`] setting every [`ABLATE_WINDOWS`].
     pub(crate) fn ablate_after_swap(&mut self, windows_before: u64) {
-        let Some(p) = self.perf.as_mut() else { return };
+        let Some(p) = self.perf.as_ref() else { return };
         let Some(k) = p.ablate else { return };
         let w = p.ledger.windows;
-        if w == windows_before || w % ABLATE_WINDOWS != 0 { return; }
+        if w == windows_before { return; }
+        // the window that just closed ran under ABLATIONS[k]: what the CPU itself says it ran under (h86 fnreg - the A/B proves
+        // itself or names why not), then the next setting every ABLATE_WINDOWS
+        let lines = self.cpu_tier_lines(k, w);
+        let Some(p) = self.perf.as_mut() else { return };
+        p.pending.extend(lines);
+        if w % ABLATE_WINDOWS != 0 { return; }
         let next = (k + 1) % ABLATIONS.len();
         p.ablate = Some(next);
         self.rt.exec.set_jit_knobs(ABLATIONS[next].1);
+    }
+    /// `[CPU-PPC-TIER window=<n> label=<setting> asked=<knobs> knobs=<in the CPU> applied=0|1 ...]` for the window that closed
+    /// under ABLATIONS[k] - the knobs, compiles, regions, translations and code drops as the CPU (cpu-ppc.library's read_prof, or
+    /// the static core) reports them, and a refused knob word by name; once, first, `[CPU-PPC-LIB build=<hash> prof=<bytes>]`.
+    fn cpu_tier_lines(&mut self, k: usize, w: u64) -> Vec<String> {
+        let (label, asked) = ABLATIONS[k];
+        let mut out = Vec::new();
+        #[cfg(feature = "cpu-library")]
+        let (knobs, tier, compiles, regions, xlate, drops, refusals, refused, build, size) = {
+            let t = &self.rt.exec.tiers;
+            let refused = self.rt.exec.knob_refused().map(|w| w as u64).or((t.tier_refusals != 0).then_some(t.tier_refused_word));
+            (t.knobs as u32, t.tier, t.jit_compiled, t.jit_regions, t.jit_translated, t.jit_reconfigures, t.tier_refusals, refused, t.build, t.size)
+        };
+        #[cfg(not(feature = "cpu-library"))]
+        let (knobs, tier, compiles, regions, xlate, drops, refusals, refused, build, size) = {
+            let j = self.rt.exec.jit_stats();
+            (self.rt.exec.jit_knobs(), self.rt.exec.tier as u32, j.compiled, j.regions, j.translated, j.reconfigures, 0u64, None::<u64>, heirloom_cpu_ppc::BUILD, 0u32)
+        };
+        let _ = (build, size);
+        let why = match refused { Some(w) => format!(" applied=0 why=refused-word-{w:#x}"), None if knobs != asked => " applied=0 why=knobs-differ".into(), None => " applied=1".into() };
+        out.push(format!("[CPU-PPC-TIER window={w} label={label} asked={asked:#x} knobs={knobs:#x}{why} tier={tier} compiles={compiles} regions={regions} xlate={xlate} reconfigures={drops} refusals={refusals}]"));
+        out
+    }
+    /// Once, at the first swap after the CPU reported: `[CPU-PPC-LIB build=<hash> prof=<bytes>]` - which core this engine runs
+    /// (cpu-ppc.library's PpcProf::build: a hash of heirloom-cpu-ppc's sources; 0 = a library older than the field).
+    pub(crate) fn cpu_lib_once(&mut self) {
+        #[cfg(feature = "cpu-library")]
+        let (build, size) = (self.rt.exec.tiers.build, self.rt.exec.tiers.size);
+        #[cfg(not(feature = "cpu-library"))]
+        let (build, size) = (heirloom_cpu_ppc::BUILD, 0u32);
+        let Some(p) = self.perf.as_mut().filter(|p| !p.lib_said) else { return };
+        if cfg!(feature = "cpu-library") && size == 0 { return; } // no read_prof yet
+        p.lib_said = true;
+        p.pending.push_back(format!("[CPU-PPC-LIB build={build:#018x} prof={size}]{}", if build == 0 { " - an OLDER cpu-ppc.library: it reports no build id (it predates h86 fnreg-3)" } else { "" }));
     }
     /// Turn the rotation on (cpu-tier "jitablate"): the stage clock goes on, the first setting runs now.
     pub fn perf_ablate(&mut self, clock: fn() -> u64) {
@@ -388,7 +430,7 @@ mod tests {
     #[test]
     fn reads_on_the_same_tick_close_together_are_a_poll_and_a_far_or_new_tick_read_is_not() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new() };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false };
         p.clock_read(5, 100, [0; 3]);
         p.clock_read(5, 400, [0; 3]); // 300 insns later, same tick: a poll
         p.clock_read(6, 500, [0; 3]); // the tick moved: not a poll
@@ -436,7 +478,7 @@ mod tests {
     #[test]
     fn the_capture_line_shows_the_draws_shape_the_sampled_split_and_the_read_passes() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new() };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false };
         for _ in 0..98 { p.add_capture(2000, 2048); } // 1000 a KiB: bucket 9 = [512, 1024), the edge 1024
         p.add_capture(100_000, 1024); // two stalls: 100,000 a KiB, bucket 16 [65536, 131072)
         p.add_capture(50_000, 512);

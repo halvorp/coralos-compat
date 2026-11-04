@@ -124,7 +124,11 @@ pub(crate) struct Jit {
     blocks: PcMap<Slot>,
     /// Tier-1 whole-block runs per pc (direct-mapped, IBTC_BITS: at 16K entries two hot blocks 64 KiB apart reset each
     /// other's count and never compiled).
-    hot: Box<[(u32, u32)]>,
+    /// Compile-trigger counts: (pc, tier-1 runs, the COLD window they were counted in - jit_cold).
+    hot: Box<[(u32, u32, u32)]>,
+    /// The cold-tail rule (jit_cold): (window in guest instructions, runs within one window before a block compiles); None =
+    /// the cumulative HOT_AFTER rule.
+    pub(crate) cold: Option<(u64, u32)>,
     pending: Vec<Slot>,
     pending_pcs: PcMap<()>,
     /// `clock` when the oldest unpublished block was compiled.
@@ -192,7 +196,7 @@ impl Jit {
         let ctx = Ctx::boxed();
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
-            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![[IBTC_EMPTY, 0]; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << IBTC_BITS].into_boxed_slice(), pending: Vec::new(),
+            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![[IBTC_EMPTY, 0]; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0, 0); 1 << IBTC_BITS].into_boxed_slice(), cold: None, pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(), knobs: 0,
             region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), so_aware: false,
@@ -305,6 +309,7 @@ impl Jit {
         self.mutant = mutant;
         self.movbe = movbe;
         self.wide = wide;
+        self.stats.reconfigures += 1;
         if stubs_change { self.flush(); } else if self.stats.compiled != 0 { self.drop_code(); }
     }
 
@@ -324,7 +329,7 @@ impl Jit {
     fn drop_code(&mut self) {
         self.stats.flushes += 1;
         if self.mutant != crate::jit_emit::MUT_TABLE_STALE { self.table.fill(EMPTY); self.ibtc.fill([IBTC_EMPTY, 0]); }
-        self.hot.fill((EMPTY_PC, 0));
+        self.hot.fill((EMPTY_PC, 0, 0));
         self.links.fill(self.exit_stub);
         self.link_owner.fill(0);
         self.link_gen.fill(ANY_GEN);
@@ -379,10 +384,14 @@ impl Jit {
     /// Count a whole-block tier-1 run at `pc`; true when it should be compiled now (also when the published code there is a
     /// region one of whose other pages was written: its entry bails, tier 1 runs, and a block replaces it).
     fn hot(&mut self, pc: u32, gen_now: u64, mem: &heirloom_mem_flat32::GuestMem) -> bool {
+        // the cold-tail rule (KNOB_COLD_TAIL / Exec::set_jit_cold): runs count only within one window of guest instructions, so a
+        // block that runs fewer than `min` times a window stays on tier 1 (its code never joins the JIT's per-frame footprint)
+        let cold = self.cold.or((self.knobs & heirloom_cpu_abi::ppc::KNOB_COLD_TAIL != 0).then_some(crate::jit_cold::DEFAULT));
+        let (epoch, min) = match cold { Some((w, m)) => ((self.clock / w.max(1)) as u32, m), None => (0, HOT_AFTER) };
         let h = &mut self.hot[(pc >> 2) as usize & ((1 << IBTC_BITS) - 1)];
-        if h.0 != pc { *h = (pc, 1); return HOT_AFTER <= 1; }
+        if h.0 != pc || h.2 != epoch { *h = (pc, 1, epoch); return min <= 1; }
         h.1 = h.1.saturating_add(1);
-        if h.1 < HOT_AFTER || self.pending_pcs.contains(pc) { return false; }
+        if h.1 < min || self.pending_pcs.contains(pc) { return false; }
         let regions = &self.regions;
         !self.blocks.get(pc).is_some_and(|s| s.gen == gen_now && regions.get(&s.entry).is_none_or(|p| p.iter().all(|&(_, g, at)| mem.code_gen(at) == g)))
     }

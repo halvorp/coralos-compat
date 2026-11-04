@@ -278,3 +278,47 @@ fn jit_knobs_cross_set_tier_above_the_tier_byte() {
     let _ = e.resume(&mut h, &mut cpu, 3);
     assert_eq!(e.tier_set, Some(TIER_JIT | heirloom_cpu_abi::ppc::KNOB_NO_SMC_STORE << heirloom_cpu_abi::ppc::TIER_KNOB_SHIFT));
 }
+
+/// h86 fnreg: the knob path END TO END - client -> cpu-ppc.library's set_tier -> the core's reconfigure: the knobs the client
+/// was asked for are the knobs the library reports in force, they change what tier 2 makes (KNOB_NO_XLATE: the matrix compare
+/// is no longer translated), and a word the library refuses is NAMED on both sides (Exec::knob_refused, PpcProf::tier_refusals)
+/// while the run goes on at the bare tier.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn jit_knobs_reach_the_library_end_to_end_and_a_refusal_is_named() {
+    use heirloom_cpu_abi::ppc::{KNOB_NO_XLATE, TIER_KNOB_SHIFT};
+    use heirloom_cpu_ppc::CodeMem;
+    struct P(heirloom_cpu_ppc::HostCodeMem);
+    extern "C" fn rs(ctx: *mut c_void, len: usize, out: *mut *mut u8) -> i32 {
+        // SAFETY: ctx is the test's P, live for the Exec's life; out is the library's slot.
+        match unsafe { &mut *(ctx as *mut P) }.0.reserve(len) { Some(p) => { unsafe { *out = p }; 0 } None => -1 }
+    }
+    extern "C" fn pb(ctx: *mut c_void, p: *mut u8, len: usize) -> i32 { if unsafe { &mut *(ctx as *mut P) }.0.publish(p, len) { 0 } else { -1 } }
+    extern "C" fn rt(ctx: *mut c_void, p: *mut u8, len: usize) -> i32 { if unsafe { &mut *(ctx as *mut P) }.0.reset(p, len) { 0 } else { -1 } }
+    const XFN: u32 = 0x2_0000;
+    let mut prov = Box::new(P(heirloom_cpu_ppc::HostCodeMem::new()));
+    let rec = PpcCodeMem { size: core::mem::size_of::<PpcCodeMem>() as u32, flags: 0, ctx: (&mut *prov as *mut P).cast(), reserve: rs, publish: pb, reset: rt };
+    let mut h = host(|_, _, _| true);
+    // loop: lis r3,3; addi r4,r3,64; bl XFN; b loop - the matrix compare over zero bytes
+    let bl = 18 << 26 | ((XFN - (CODE + 8)) & 0x03FF_FFFC) | 1;
+    for (i, w) in [0x3C60_0003, 0x3883_0040, bl, 0x4BFF_FFF4].iter().enumerate() { h.mem.write_u32(CODE + 4 * i as u32, *w).unwrap(); }
+    for (i, w) in heirloom_cpu_ppc::XLATE_CMP16F.iter().enumerate() { h.mem.write_u32(XFN + 4 * i as u32, *w).unwrap(); }
+    let mut e = Exec::new(Tier::Jit);
+    e.set_code_mem(rec);
+    let mut cpu = Cpu::new(CODE, 0x8_0000);
+    let mut go = |e: &mut Exec, h: &mut H, cpu: &mut Cpu| for _ in 0..40 { let _ = e.resume(h, cpu, 100_000); };
+    go(&mut e, &mut h, &mut cpu);
+    assert!(e.tiers.knobs == 0 && e.tiers.jit_translated >= 1 && e.tiers.build == heirloom_cpu_ppc::BUILD, "{:?}", e.tiers);
+    e.set_jit_knobs(KNOB_NO_XLATE);
+    go(&mut e, &mut h, &mut cpu);
+    let t1 = e.tiers;
+    assert_eq!((t1.knobs, e.knob_refused()), (KNOB_NO_XLATE as u64, None), "asked = in force inside the library");
+    assert!(t1.jit_reconfigures >= 1, "the code was remade: {t1:?}");
+    let x1 = t1.jit_translated;
+    e.set_jit_knobs(0x4000); // a bit no library knows
+    go(&mut e, &mut h, &mut cpu);
+    let word = TIER_JIT | 0x4000 << TIER_KNOB_SHIFT;
+    assert_eq!((e.knob_refused(), e.tiers.tier_refusals, e.tiers.tier_refused_word, e.tiers.knobs), (Some(word), 1, word as u64, 0), "refused, named, the bare tier");
+    assert!(e.tiers.jit_translated > x1, "the bare tier translates again: {:?}", e.tiers);
+    drop(e);
+}

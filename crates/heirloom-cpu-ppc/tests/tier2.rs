@@ -773,7 +773,8 @@ fn run_knobs(knobs: u32, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut
 #[test]
 fn every_ablation_knob_keeps_code_that_does_not_rewrite_itself_exact() {
     use heirloom_cpu_abi::ppc::{KNOB_IBTC_BITS_SHIFT as I, KNOB_NO_ENTRY_GEN as G, KNOB_NO_SMC_STORE as S};
-    for knobs in [S, G, S | G, 12 << I, 14 << I, 8 << I] {
+    use heirloom_cpu_abi::ppc::{KNOB_COLD_TAIL as T, KNOB_FOLLOW_CALLS as C, KNOB_NO_DISPLACE as D, KNOB_NO_LAZY_CA as L};
+    for knobs in [S, G, S | G, 12 << I, 14 << I, 8 << I, T, C, D | L, T | C] {
         // bench_smc / smc_native rewrite their own code: exactly what the guard knobs stop seeing (the negative control below)
         for (name, prog, setup) in programs_under_test().into_iter().filter(|p| !p.0.contains("smc") || knobs & (S | G) == 0) {
             let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);

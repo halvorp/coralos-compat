@@ -99,3 +99,34 @@ fn a_lazy_carry_is_settled_at_side_exits_helpers_and_exits_and_its_mutant_goes_r
     let (got, _) = run_on(Tier::Jit, 42, &prog, 1_000_000, |_, _| {});
     assert!(got != want, "mutant 42 (side exits do not settle the carry) stayed GREEN");
 }
+
+// ---- the cold-tail rule (jit_cold) ----
+
+/// A block compiles only once it ran `min` times within one window of guest instructions: with a minimum no block reaches,
+/// nothing is compiled and tier 1 ends in tier 0's state; with 4 the hot loop compiles; every program under test ends in tier 0's
+/// state under the rule in any slicing.
+#[test]
+fn the_cold_tail_rule_keeps_rarely_run_blocks_on_tier_1_and_changes_nothing_else() {
+    let run = |prog: &[u32], setup: Setup, slice: u64, cold: (u64, u32)| {
+        let (mut c, mut m) = load(prog, &setup);
+        let mut e = exec(Tier::Jit, 0);
+        e.set_jit_cold(cold.0, cold.1);
+        let end = finish(&mut e, &mut c, &mut m, slice);
+        (end, e)
+    };
+    for (name, prog, setup) in programs_under_test() {
+        let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
+        for slice in [1_000_000, 1_000, 13] {
+            for cold in [(10_000, 4), (1_000_000, 2), (64, 3)] {
+                let (got, e) = run(prog, setup, slice, cold);
+                assert!(got == want, "{name} slice {slice} cold {cold:?}: {:?}", e.jit_stats());
+            }
+        }
+    }
+    let prog = displace_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, displace_setup);
+    let (got, e) = run(&prog, displace_setup, 1_000_000, (u64::MAX, u32::MAX));
+    assert!(got == want && e.jit_stats().compiled == 0, "no block reaches the minimum: {:?}", e.jit_stats());
+    let (got, e) = run(&prog, displace_setup, 1_000_000, (u64::MAX, 4));
+    assert!(got == want && e.jit_stats().compiled > 0, "the hot loop compiles: {:?}", e.jit_stats());
+}

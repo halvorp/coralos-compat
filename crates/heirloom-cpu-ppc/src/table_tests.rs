@@ -301,3 +301,47 @@ fn tier_jit_without_a_provider_still_runs_and_gives_the_same_registers() {
     let c = count_loop(&mut r, 300_001);
     assert_eq!(c.regs.gpr[3], 150_000);
 }
+
+/// h86 fnreg: the jitablate A/B proves itself from INSIDE the library - a knob word set through `set_tier` is what read_prof
+/// reports as `knobs`, it really remakes the code (`jit_reconfigures`, new compiles) and changes what is made (KNOB_NO_XLATE: a
+/// translated function stops being translated), a word with an unknown knob bit is refused, counted and named
+/// (`tier_refusals` / `tier_refused_word`) with nothing changed, and `build` names this build.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn a_knob_word_is_applied_inside_the_library_and_a_refused_one_is_named() {
+    use heirloom_cpu_abi::ppc::{KNOB_NO_XLATE, TIER_KNOB_SHIFT};
+    const XFN: u32 = 0x2_0000;
+    const BUF: u32 = 0x3_0000;
+    let mut r = Rig::new();
+    let mut prov = Box::new(Provider::default());
+    let rec = PpcCodeMem { size: core::mem::size_of::<PpcCodeMem>() as u32, flags: 0, ctx: (&mut *prov as *mut Provider).cast(), reserve: p_reserve, publish: p_publish, reset: p_reset };
+    assert_eq!((vtable().set_code_mem)(r.inst, &rec), 0);
+    // loop: li r3,BUF; addi r4,r3,64; bl XFN; b loop - the matrix compare (jit_xlate CMP16F) on 128 zero bytes
+    let bl = 18 << 26 | ((XFN - (CODE + 8)) & 0x03FF_FFFC) | 1;
+    r.code(CODE, &[0x3C60_0000 | BUF >> 16, 0x3883_0040, bl, 0x4BFF_FFF4]); // lis r3,BUF>>16
+    r.code(XFN, &crate::jit_xlate::CMP16F);
+    let prof = |r: &Rig| { let mut p = PpcProf { size: core::mem::size_of::<PpcProf>() as u32, ..PpcProf::default() }; assert_eq!((vtable().read_prof)(r.inst, &mut p), 0); p };
+    let mut c = PpcContext::new(CODE, 0x8_0000);
+    let mut go = |r: &mut Rig, c: &mut PpcContext| for _ in 0..40 { let x = r.run(c, 100_000); assert_eq!(x.code, EXIT_BUDGET); };
+    assert_eq!((vtable().set_tier)(r.inst, TIER_JIT), 0);
+    go(&mut r, &mut c);
+    let p0 = prof(&r);
+    assert!(p0.knobs == 0 && p0.jit_translated >= 1 && p0.jit_compiled > 0 && p0.build == crate::BUILD && p0.build != 0, "{p0:?}");
+    // noxlate: in force inside, the code remade, the function compiled block by block
+    assert_eq!((vtable().set_tier)(r.inst, TIER_JIT | KNOB_NO_XLATE << TIER_KNOB_SHIFT), 0);
+    go(&mut r, &mut c);
+    let p1 = prof(&r);
+    assert_eq!(p1.knobs, KNOB_NO_XLATE as u64);
+    assert!(p1.jit_reconfigures > p0.jit_reconfigures && p1.jit_compiled > p0.jit_compiled && p1.jit_translated == p0.jit_translated, "{p0:?} -> {p1:?}");
+    // an unknown knob bit: refused, counted, named - and the knobs in force do not change
+    let bad = TIER_JIT | 0x4000 << TIER_KNOB_SHIFT;
+    assert_eq!((vtable().set_tier)(r.inst, bad), -1);
+    let p2 = prof(&r);
+    assert_eq!((p2.tier_refusals, p2.tier_refused_word, p2.knobs), (1, bad as u64, KNOB_NO_XLATE as u64));
+    // back to base: translated again
+    assert_eq!((vtable().set_tier)(r.inst, TIER_JIT), 0);
+    go(&mut r, &mut c);
+    let p3 = prof(&r);
+    assert!(p3.knobs == 0 && p3.jit_translated > p1.jit_translated, "{p1:?} -> {p3:?}");
+    drop(r);
+}

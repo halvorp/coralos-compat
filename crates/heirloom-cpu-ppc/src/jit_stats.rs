@@ -67,6 +67,8 @@ pub struct JitStats {
     /// With the region census on (Exec::set_jit_region_census): region entries and internal edges taken, all runs.
     pub region_entries: u64,
     pub region_edges: u64,
+    /// Code drops by a reconfiguration (Jit::reconfigure: a knob, lockstep, a mutant, MOVBE or the wide encodings changed).
+    pub reconfigures: u64,
     /// Tier::Jit was asked for but no executable memory was provided (or it was refused): tier 1 ran instead.
     pub refused: bool,
 }

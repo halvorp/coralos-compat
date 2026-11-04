@@ -71,6 +71,8 @@ mod jit_region;
 #[cfg(target_arch = "x86_64")]
 mod jit_rflow;
 #[cfg(target_arch = "x86_64")]
+mod jit_cold; // the cold-tail rule: a block compiles only when it runs often within a recent window
+#[cfg(target_arch = "x86_64")]
 mod jit_lazyca; // lazy XER[CA]: srawi / addic leave the carry pending, settled only where it can be observed
 #[cfg(target_arch = "x86_64")]
 mod jit_xbytes; // translated byte-string shapes (jit_xlate's family): an unsigned byte compare, a saturating byte-add loop
@@ -90,6 +92,9 @@ mod jit_memops;
 #[cfg(target_arch = "x86_64")]
 mod jit_ffacts;
 pub use jit_stats::{JitStats, RegionShape};
+/// This build's identity: a hash of the crate's own sources (build.rs), reported by cpu-ppc.library's read_prof (PpcProf::build)
+/// so a device can tell which core it runs.
+pub const BUILD: u64 = include!(concat!(env!("OUT_DIR"), "/build_id.rs"));
 /// The guest words of the shapes tier 2 translates whole (jit_xlate), for tests that place one.
 #[cfg(target_arch = "x86_64")]
 #[doc(hidden)]

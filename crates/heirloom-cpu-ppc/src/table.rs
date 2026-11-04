@@ -32,6 +32,9 @@ struct Instance {
     /// Binds (true) / unbinds (false) asked for during a run, applied after the callback that asked.
     pending: Vec<(u32, bool)>,
     running: bool,
+    /// `set_tier` words refused, and the last one (PpcProf: the A/B names a refusal instead of hiding it).
+    refusals: u64,
+    refused_word: u32,
 }
 
 fn instance<'a>(inst: *mut CpuInstance) -> Option<&'a mut Instance> {
@@ -131,7 +134,7 @@ extern "C" fn create(cfg: *const PpcCreate, out: *mut *mut CpuInstance) -> i32 {
     // SAFETY: non-null record pointers the caller promises are live for the instance's lifetime (PpcCreate's contract).
     let (Some(ram), Some(host)) = (unsafe { c.ram.as_ref() }, unsafe { c.host.as_ref() }) else { return -1 };
     if !ram_ok(ram) || host.size != core::mem::size_of::<PpcHostCallbacks>() as u32 { return -1; }
-    let i = Box::new(Instance { ram: c.ram, host: c.host, cpu: Some(Cpu::new(0, 0)), exec: Some(Exec::default()), pending: Vec::new(), running: false });
+    let i = Box::new(Instance { ram: c.ram, host: c.host, cpu: Some(Cpu::new(0, 0)), exec: Some(Exec::default()), pending: Vec::new(), running: false, refusals: 0, refused_word: 0 });
     // SAFETY: `out` is non-null and writable (the table's contract).
     unsafe { *out = Box::into_raw(i).cast() };
     0
@@ -202,11 +205,17 @@ extern "C" fn unbind_native(inst: *mut CpuInstance, addr: u32) -> i32 {
 }
 
 extern "C" fn set_tier(inst: *mut CpuInstance, tier: u32) -> i32 {
-    let Some(e) = instance(inst).and_then(|i| i.exec.as_mut()) else { return -1 };
+    let Some(i) = instance(inst) else { return -1 };
+    let Some(e) = i.exec.as_mut() else { return -1 };
     // TIER_JIT without executable memory runs tier 1 and is named (JitStats::refused), as the static core does
     let knobs = tier >> heirloom_cpu_abi::ppc::TIER_KNOB_SHIFT;
-    if knobs & !heirloom_cpu_abi::ppc::KNOBS_KNOWN != 0 { return -1; }
-    e.tier = match tier & 0xFF { TIER_INTERP => Tier::Interp, TIER_BLOCKS => Tier::Blocks, TIER_JIT => Tier::Jit, TIER_JIT_BLOCKS => Tier::JitBlocks, TIER_JIT_WIDE => Tier::JitWide, _ => return -1 };
+    let t = match tier & 0xFF { TIER_INTERP => Some(Tier::Interp), TIER_BLOCKS => Some(Tier::Blocks), TIER_JIT => Some(Tier::Jit), TIER_JIT_BLOCKS => Some(Tier::JitBlocks), TIER_JIT_WIDE => Some(Tier::JitWide), _ => None };
+    let Some(t) = t.filter(|_| knobs & !heirloom_cpu_abi::ppc::KNOBS_KNOWN == 0) else {
+        // refused, nothing changed - and counted, so a caller's read_prof can name it
+        (i.refusals, i.refused_word) = (i.refusals + 1, tier);
+        return -1;
+    };
+    e.tier = t;
     e.set_jit_knobs(knobs);
     0
 }
@@ -242,7 +251,9 @@ extern "C" fn set_code_mem(inst: *mut CpuInstance, mem: *const heirloom_cpu_abi:
 }
 
 extern "C" fn read_prof(inst: *mut CpuInstance, out: *mut PpcProf) -> i32 {
-    let (Some(e), false) = (instance(inst).and_then(|i| i.exec.as_ref()), out.is_null()) else { return -1 };
+    let Some(i) = instance(inst) else { return -1 };
+    let (refusals, refused_word) = (i.refusals, i.refused_word);
+    let (Some(e), false) = (i.exec.as_ref(), out.is_null()) else { return -1 };
     let (c, j) = (e.cache_stats(), e.jit_stats());
     let p = PpcProf {
         size: core::mem::size_of::<PpcProf>() as u32, tier: e.tier.number(), insns: e.prof.insns, natives: e.prof.natives,
@@ -252,6 +263,8 @@ extern "C" fn read_prof(inst: *mut CpuInstance, out: *mut PpcProf) -> i32 {
         interp_insns: c.interp_insns, jit_refused: (matches!(e.tier, Tier::Jit | Tier::JitBlocks | Tier::JitWide) && j.refused) as u64, publishes: j.publishes,
         publish_pages: j.publish_pages, withdraws: j.withdraws, withdraw_pages: j.withdraw_pages, codemem_failures: j.codemem_failures,
         ibtc_hits: j.ibtc_hits, ibtc_misses: j.ibtc_misses, arena_bytes: j.arena_bytes, jit_regions: j.regions,
+        knobs: e.jit_knobs() as u64, tier_refusals: refusals, tier_refused_word: refused_word as u64, jit_translated: j.translated,
+        jit_reconfigures: j.reconfigures, build: crate::BUILD,
     };
     // the caller's size (0 = the first version's fields), never more than this record
     // SAFETY: `out` is non-null and the caller's record, at least as large as the size it states (PpcProf's contract).

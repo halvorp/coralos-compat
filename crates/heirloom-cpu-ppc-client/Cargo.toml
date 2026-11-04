@@ -16,5 +16,6 @@ heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
 heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc", optional = true }
 
 [dev-dependencies]
-heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc" }
+# host-codemem: the end-to-end knob test runs tier 2 in host executable memory behind a PpcCodeMem record
+heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc", features = ["host-codemem"] }
 heirloom-cpu-ppc-client = { path = ".", features = ["bind-static"] }
