@@ -135,7 +135,23 @@ pub(crate) struct E<'a, 'b> {
 
 /// A region being compiled (jit_region): the node pcs in layout order, each node's longest forward path, where each node's
 /// code starts once emitted, the forward jumps waiting for a node, the back edges' budget exits, the node being emitted.
-struct Rg { pcs: Vec<u32>, maxfwd: Vec<u32>, labels: Vec<Option<usize>>, fwd: Vec<(Fix, usize)>, backs: Vec<(Fix, u32)>, cur: usize, rets: Vec<u32> }
+struct Rg { pcs: Vec<u32>, maxfwd: Vec<u32>, labels: Vec<Option<usize>>, fwd: Vec<(Fix, usize)>, backs: Vec<(Fix, u32)>, cur: usize, rets: Vec<u32>, deferred: Vec<NodeTails> }
+
+/// A region node's out-of-line code, emitted after ALL nodes (h86 jitsize increment 4): the nodes' hot paths are then
+/// contiguous - fewer cache lines - and a node's fall-through edge to the next node needs no jump at all. What `tails` reads
+/// of its node is kept here until then.
+struct NodeTails {
+    pc: u32,
+    n: usize,
+    cur: usize,
+    resume: Vec<usize>,
+    words: Vec<u32>,
+    sides: Vec<(Vec<Fix>, usize, u32)>,
+    slow: Vec<(Fix, usize)>,
+    slow_leave: Vec<(Fix, usize)>,
+    stfs_outs: Vec<(Option<Fix>, Fix, usize, usize, usize)>,
+    fma_outs: Vec<(Vec<Fix>, usize)>,
+}
 
 /// Compile `ops` (a whole tier-1 block or a superblock at `pc`, decoded from code page `page` at generation `gen`), one pass
 /// (the global pins are fixed: jit_regs). Answers the code and the offset of its INNER entry.
@@ -205,7 +221,7 @@ struct Emitted<'a, 'b> { e: E<'a, 'b>, inner: usize, uses: [u32; 32], writes: [u
 fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], fuse: &[Vec<bool>], env: &'a mut Env<'b>, locals: Vec<(usize, u8, bool)>, dry: bool) -> Emitted<'a, 'b> {
     let mut e = E::new(&nodes[0].1, nodes[0].0, env);
     e.dry = dry;
-    e.rg = Some(Rg { pcs: nodes.iter().map(|n| n.0).collect(), maxfwd: maxfwd.to_vec(), labels: alloc::vec![None; nodes.len()], fwd: Vec::new(), backs: Vec::new(), cur: 0, rets: rets.to_vec() });
+    e.rg = Some(Rg { pcs: nodes.iter().map(|n| n.0).collect(), maxfwd: maxfwd.to_vec(), labels: alloc::vec![None; nodes.len()], fwd: Vec::new(), backs: Vec::new(), cur: 0, rets: rets.to_vec(), deferred: Vec::new() });
     let mut bails = Vec::new();
     let checked = if e.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_ENTRY_GEN != 0 { 0 } else if e.env.mutant == MUT_REGION_PAGES { 1 } else { pages.len() };
     let mut inner = 0;
@@ -228,8 +244,9 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
     for (k, (pc, ops)) in nodes.iter().enumerate() {
         e.start_node(k, *pc, ops, &fuse[k]);
         e.body(ops);
-        e.tails();
+        e.defer_tails();
     }
+    for t in core::mem::take(&mut e.rg.as_mut().expect("a region").deferred) { e.node_tails(t); }
     for (f, target) in core::mem::take(&mut e.rg.as_mut().expect("a region").backs) {
         e.a.here(f);
         e.chain(target, 0);
@@ -271,6 +288,22 @@ fn probe(a: &mut Asm, table_mask: u32) {
 /// instructions, ~750 host instructions of dispatcher each). The helper answers 0 = go on, 1 = leave after it (halted,
 /// blocked, the natives set or guest RAM changed: the dispatcher must resync first), 2 = trap (nothing retired).
 /// Every cached register was stored by the exit that got here, so the call clobbers nothing a block holds.
+/// The shared stub of CR field `f` from a compare's flags (jit.rs `stubs`; SO-free code calls it from cr_set): EQ, then the
+/// field's LT / GT constants by CMOV on the flags the caller left (signed: L / G, unsigned: B / A), merged into CR's global
+/// register. rax clobbered. `wrong` = planted mutant MUT_CRSTUB_FIELD (the nibble lands in field f ^ 1).
+pub(crate) fn emit_cr_set(a: &mut Asm, f: usize, signed: bool, wrong: bool) {
+    let cr = crate::jit_regs::GLOBALS.iter().find(|g| g.0 == CR).expect("CR is a global pin").1;
+    let g = if wrong { f ^ 1 } else { f };
+    let (sh, k) = (28 - 4 * g as u32, offset_of!(Ctx, crk) + 8 * g);
+    let (lt, gt) = if signed { (Cc::L, Cc::G) } else { (Cc::B, Cc::A) };
+    a.mov_ri(RAX, 0b0010 << sh);
+    a.cmov_rm(lt, RAX, ctx(k));
+    a.cmov_rm(gt, RAX, ctx(k + 4));
+    a.alu_ri(Alu::And, cr, !(0xF << sh));
+    a.alu_rr(Alu::Or, cr, RAX);
+    a.ret();
+}
+
 pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
     let mut a = Asm { wide: env.wide, ..Asm::default() };
     if env.tags { env.tag_runs = alloc::vec![(0, tg::NO_K << 8 | tg::NATIVE as u16)]; }
@@ -324,14 +357,34 @@ impl<'a, 'b> E<'a, 'b> {
         self.resume.clear();
         self.words.clear();
         self.words.extend(ops.iter().map(|o| o.w));
-        let here = self.a.pos();
+        // the previous node's code ends in a jump to this one: it falls through instead
         let rg = self.rg.as_mut().expect("a region");
+        if let Some(at) = rg.fwd.iter().position(|(f, j)| *j == k && self.a.drop_last_jmp(f)) { rg.fwd.swap_remove(at); }
+        let here = self.a.pos();
         rg.cur = k;
         rg.labels[k] = Some(here);
         let mut i = 0;
         while i < rg.fwd.len() {
             if rg.fwd[i].1 == k { let (f, _) = rg.fwd.swap_remove(i); self.a.patch(f, here); } else { i += 1; }
         }
+    }
+
+    /// Keep the current region node's out-of-line code for after the last node (NodeTails).
+    fn defer_tails(&mut self) {
+        let cur = self.rg.as_ref().expect("a region").cur;
+        let t = NodeTails {
+            pc: self.pc, n: self.n, cur, resume: core::mem::take(&mut self.resume), words: core::mem::take(&mut self.words),
+            sides: core::mem::take(&mut self.sides), slow: core::mem::take(&mut self.slow), slow_leave: core::mem::take(&mut self.slow_leave),
+            stfs_outs: core::mem::take(&mut self.stfs_outs), fma_outs: core::mem::take(&mut self.fma_outs),
+        };
+        self.rg.as_mut().expect("a region").deferred.push(t);
+    }
+    /// Emit a node's deferred out-of-line code with that node's context back in place.
+    fn node_tails(&mut self, t: NodeTails) {
+        (self.pc, self.n, self.resume, self.words) = (t.pc, t.n, t.resume, t.words);
+        (self.sides, self.slow, self.slow_leave, self.stfs_outs, self.fma_outs) = (t.sides, t.slow, t.slow_leave, t.stfs_outs, t.fma_outs);
+        self.rg.as_mut().expect("a region").cur = t.cur;
+        self.tails();
     }
 
     /// The instructions, and the fall-through exit when the last one does not end the block.
@@ -390,7 +443,8 @@ impl E<'_, '_> {
         } else {
             let f = a.jmp();
             let j = if mutant == MUT_REGION_TARGET && j + 1 < rg.pcs.len() { j + 1 } else { j };
-            rg.fwd.push((f, j));
+            // a node's deferred tails jump forward to nodes already emitted
+            match rg.labels[j] { Some(l) => a.patch(f, l), None => rg.fwd.push((f, j)) }
         }
         a.set_tag(t);
     }
@@ -566,6 +620,14 @@ impl E<'_, '_> {
         let sh = 28 - 4 * f as u32;
         let k = offset_of!(Ctx, crk) + 8 * f;
         let t = self.cat(tg::CR_SET);
+        if no_so {
+            // SO-free: the shared stub of this field and signedness (the call leaves the compare's flags to it: one 7-byte
+            // call where the field was built inline in ~25 bytes - cold code's bytes are what the Atom's front end pays for)
+            let signed = matches!(lt, Cc::L);
+            self.a.call_m(ctx(offset_of!(Ctx, crset) + 8 * (2 * f + signed as usize)));
+            self.a.set_tag(t);
+            return;
+        }
         let a = &mut self.a;
         a.mov_ri(RAX, 0b0010 << sh);
         a.cmov_rm(lt, RAX, ctx(k));

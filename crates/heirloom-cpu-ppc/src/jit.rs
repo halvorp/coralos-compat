@@ -273,13 +273,21 @@ impl Jit {
         crate::jit_inline::emit_fprf_lazy(&mut a, fprf_s, fprf_d);
         let fma_odd = a.pos();
         crate::jit_fp::emit_fma_odd(&mut a, self.mutant == crate::jit_emit::MUT_FMA_TWICE);
+        let mut crset = [[0usize; 2]; 8];
+        for (f, s) in crset.iter_mut().enumerate() {
+            for (signed, at) in s.iter_mut().enumerate() {
+                *at = a.pos();
+                crate::jit_emit::emit_cr_set(&mut a, f, signed == 1, self.mutant == crate::jit_emit::MUT_CRSTUB_FIELD);
+            }
+        }
         let Some(p) = self.arena.put(&a.b) else { return false };
         let at = p as usize - self.arena.base as usize;
         use crate::jit_census as tg;
-        self.stub_tags = alloc::vec![(at, tg::STUB_EXIT), (at + slow, tg::STUB_SLOW), (at + fprf_s, tg::STUB_FPRF), (at + stfs, tg::STUB_STFS), (at + a.b.len(), tg::OTHER)];
+        self.stub_tags = alloc::vec![(at, tg::STUB_EXIT), (at + slow, tg::STUB_SLOW), (at + fprf_s, tg::STUB_FPRF), (at + stfs, tg::STUB_STFS), (at + crset[0][0], tg::STUB_CR), (at + a.b.len(), tg::OTHER)];
         (self.ctx.fprf_s, self.ctx.fprf_d, self.ctx.stfs) = (p as u64 + fprf_s as u64, p as u64 + fprf_d as u64, p as u64 + stfs as u64);
         self.ctx.fprf_lazy = p as u64 + lazy as u64;
         self.ctx.fma_odd = p as u64 + fma_odd as u64;
+        self.ctx.crset = crset.map(|s| s.map(|at| p as u64 + at as u64));
         self.enter = p as u64;
         self.ctx.exit = p as u64 + exit as u64;
         self.exit_stub = p as u64 + stub as u64;
@@ -554,8 +562,9 @@ impl Jit {
         dst.fill(crate::jit_census::OTHER as u16);
         let tags: Vec<&(u32, u16)> = runs.iter().filter(|r| r.1 != crate::jit_census::START).collect();
         for (k, &&(from, t)) in tags.iter().enumerate() {
-            let to = tags.get(k + 1).map_or(len, |r| r.0 as usize);
-            dst[from as usize..to].fill(t);
+            // a run may start past the end where code was cut back (a dropped fall-through jump)
+            let to = tags.get(k + 1).map_or(len, |r| (r.0 as usize).min(len));
+            dst[(from as usize).min(to)..to].fill(t);
         }
         for r in runs.iter().filter(|r| r.1 == crate::jit_census::START && (r.0 as usize) < len) { dst[r.0 as usize] |= crate::jit_census::START_BIT; }
     }

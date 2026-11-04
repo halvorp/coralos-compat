@@ -68,7 +68,7 @@ pub(crate) struct Fix8(usize);
 /// `tags` (diagnostics, jit_census): when Some, every change of `tag` - what the code being emitted is for - is recorded with
 /// the offset it starts at; the bytes are the same either way.
 #[derive(Default)]
-pub(crate) struct Asm { pub(crate) b: Vec<u8>, pub(crate) wide: bool, pub(crate) tags: Option<Vec<(u32, u16)>>, pub(crate) tag: u16 }
+pub(crate) struct Asm { pub(crate) b: Vec<u8>, pub(crate) wide: bool, pub(crate) tags: Option<Vec<(u32, u16)>>, pub(crate) tag: u16, pub(crate) last_here: usize }
 
 impl Asm {
     pub(crate) fn pos(&self) -> usize { self.b.len() }
@@ -340,6 +340,13 @@ impl Asm {
         self.u32(0);
         Fix(self.pos())
     }
+    /// Cut back a `jmp` that ends the code (it would jump to the very next byte), when no label sits at the end.
+    pub(crate) fn drop_last_jmp(&mut self, f: &Fix) -> bool {
+        let p = self.pos();
+        if f.0 != p || self.last_here == p || p < 5 || self.b[p - 5] != 0xE9 { return false; }
+        self.b.truncate(p - 5);
+        true
+    }
     pub(crate) fn jmp(&mut self) -> Fix {
         self.u8(0xE9);
         self.u32(0);
@@ -350,7 +357,8 @@ impl Asm {
         let rel = (target as i64 - f.0 as i64) as i32;
         self.b[f.0 - 4..f.0].copy_from_slice(&rel.to_le_bytes());
     }
-    pub(crate) fn here(&mut self, f: Fix) { let p = self.pos(); self.patch(f, p) }
+    /// Land a jump here (`last_here` remembers the latest such position: code ending there may not be cut back).
+    pub(crate) fn here(&mut self, f: Fix) { let p = self.pos(); self.last_here = p; self.patch(f, p) }
     /// jcc rel8 over a short run of code (the wide form when the code is wide).
     pub(crate) fn jcc8(&mut self, cc: Cc) -> Result<Fix8, Fix> {
         if self.wide { return Err(self.jcc(cc)); }
@@ -359,6 +367,7 @@ impl Asm {
     }
     /// Land a short jump here: what it skips must be under 128 bytes (a few fixed instructions; never a guest operand's size).
     pub(crate) fn here8(&mut self, f: Result<Fix8, Fix>) {
+        self.last_here = self.pos();
         match f {
             Ok(Fix8(at)) => {
                 let rel = self.pos() - at;

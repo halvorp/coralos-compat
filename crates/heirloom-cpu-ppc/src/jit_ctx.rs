@@ -49,6 +49,8 @@ pub(crate) struct Ctx {
     /// fmadds's exact-path stub (jit_fp emit_fma_odd), and the f64 bit patterns shifted up one (sign dropped) at which the
     /// exponent is 0x7FF (k_inf2: not finite) and below which it is under 897 (k_tiny2: under 2^-126, the single normal range).
     pub(crate) fma_odd: u64,
+    /// The shared CR-field stubs (jit_emit emit_cr_set): [field][signed] - SO-free code's compares call them.
+    pub(crate) crset: [[u64; 2]; 8],
     pub(crate) k_inf2: u64,
     pub(crate) k_tiny2: u64,
     /// The shared slow stub, and `h_one::<H>` it calls.
