@@ -138,10 +138,15 @@ pub struct Ledger {
     pub frames: Vec<Frame>,
     /// Windows closed (the pair rotation's counter).
     pub windows: u64,
+    /// The engine's GL phases (carrier + wait + push) charged INSIDE the library's `gl_ring` phase, cumulative, and their
+    /// total at the open ring's entry. Only these are nested in a library phase: the engine also settles a batch in flight
+    /// OUTSIDE the library (the guest stopped running), and that wait is its own bucket, never subtracted from the library's.
+    ring_eng: u64,
+    ring_open: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Snap { now: u64, lib: [u64; NLIB], eng: [u64; ENGINE_PHASES], hw: Hw, tb: u64, jit: [u64; 4] }
+struct Snap { now: u64, lib: [u64; NLIB], eng: [u64; ENGINE_PHASES], hw: Hw, tb: u64, jit: [u64; 4], ring_eng: u64 }
 
 impl Ledger {
     /// Attach the engine's half; the first swap after it starts the account.
@@ -160,6 +165,23 @@ impl Ledger {
             Ok(s) => Some(hw_of(&s)),
             Err(hw::HW_PAIR_REFUSED) => { self.pair_refused = true; h.sample(hw::SELECT_KEEP).ok().map(|s| hw_of(&s)) }
             Err(_) => { self.hw_off = true; None }
+        }
+    }
+
+    fn eng_gl(&self, now: u64) -> u64 {
+        self.host.and_then(|h| h.phases_at(now)).map_or(0, |e| e[PH_GL_CARRIER] + e[PH_GL_WAIT] + e[PH_GL_PUSH])
+    }
+    /// The GL worker's transact begins / ends (gl_c.rs `gl_flush`): the library's `gl_ring` phase, and the engine's GL phases
+    /// nested in it (h86 Z83 jit run, violet meadow wave: the slow frames' -7.5 ms residue was the engine's OUTSIDE settle
+    /// subtracted from the library's account as if it had been inside it).
+    pub fn ring_enter(&mut self, now: u64) {
+        self.clock.enter(L_GL_RING, now);
+        self.ring_open = Some(self.eng_gl(now));
+    }
+    pub fn ring_exit(&mut self, now: u64) {
+        self.clock.exit(now);
+        if let Some(e0) = self.ring_open.take() {
+            self.ring_eng = self.ring_eng.wrapping_add(self.eng_gl(now).wrapping_sub(e0));
         }
     }
 
@@ -187,7 +209,13 @@ impl Ledger {
         let t = now();
         let lib = self.clock.at(t);
         let eng = self.host.and_then(|h| h.phases_at(t)).unwrap_or([0; ENGINE_PHASES]);
-        let snap = Snap { now: t, lib, eng, hw: hwv, tb, jit };
+        let ring_eng = self.ring_eng.wrapping_add(self.ring_open.map_or(0, |e0| self.eng_gl(t).wrapping_sub(e0)));
+        let snap = Snap { now: t, lib, eng, hw: hwv, tb, jit, ring_eng };
+        // a new pair restarted the programmable sums at this sample: a CPU-library run open across it has its base there too
+        // (h86 Z83: its delta crossed the restart - new sums minus the old pair's - and wrapped below zero, ~2^64 per 1k insns)
+        if select != hw::SELECT_KEEP {
+            if let Some((_, h0)) = self.run_open.as_mut() { (h0[HW_PMC], h0[HW_PMC + 1]) = (hwv[HW_PMC], hwv[HW_PMC + 1]); }
+        }
         let run = core::mem::take(&mut self.run_acc);
         if let Some(p) = self.last.replace(snap) {
             let mut f = Frame { wall: t.wrapping_sub(p.now), insns: tb.wrapping_sub(p.tb), hw: hw_sub(&hwv, &p.hw), hw_run: run.1, run_ticks: run.0, ..Frame::default() };
@@ -195,7 +223,7 @@ impl Ledger {
             f.jit = core::array::from_fn(|i| jit[i].wrapping_sub(p.jit[i]));
             let dl: [u64; NLIB] = core::array::from_fn(|i| lib[i].wrapping_sub(p.lib[i]));
             let de: [u64; ENGINE_PHASES] = core::array::from_fn(|i| eng[i].wrapping_sub(p.eng[i]));
-            let eng_gl = de[PH_GL_CARRIER] + de[PH_GL_WAIT] + de[PH_GL_PUSH];
+            let eng_gl = ring_eng.wrapping_sub(p.ring_eng); // the engine's GL time INSIDE the library's ring phase only
             f.b[..L_GL_RING].copy_from_slice(&dl[..L_GL_RING]); // jit + the native classes
             f.b[7] = dl[L_GL_RING].saturating_sub(eng_gl); // the library's own side of the ring
             (f.b[B_GL_CARRIER], f.b[9], f.b[10]) = (de[PH_GL_CARRIER], de[PH_GL_WAIT], de[PH_GL_PUSH]);
@@ -341,32 +369,37 @@ mod tests {
         at(1150);
         l.run_begin(now);
         l.clock.enter(1, 1300);
-        l.clock.enter(L_GL_RING, 1320);
+        l.ring_enter(1320);
         e(&mut eng, PH_GL_CARRIER, 1325);
         e(&mut eng, PH_GL_WAIT, 1335);
         e(&mut eng, PH_GL_PUSH, 1365);
         e(&mut eng, PH_LIB, 1380);
-        l.clock.exit(1380);
+        l.ring_exit(1380);
         l.clock.exit(1400);
         at(1550);
         l.run_end(now);
         l.clock.exit(1550);
+        // the engine serves 70, of which it SETTLES the batch in flight for 30 OUTSIDE the library (the guest stopped
+        // running): its own gl_wait, never the library's (the Z83's slow frames counted it twice), then waits 200 for the app
         e(&mut eng, PH_SERVE, 1550);
-        e(&mut eng, PH_WAIT_APP, 1620);
-        e(&mut eng, PH_LIB, 1820);
-        at(1820);
+        e(&mut eng, PH_GL_WAIT, 1580);
+        e(&mut eng, PH_SERVE, 1610);
+        e(&mut eng, PH_WAIT_APP, 1650);
+        e(&mut eng, PH_LIB, 1850);
+        at(1850);
         l.swap(now, 3_000, [2, 1, 0, 0]);
         let f = l.frames[0];
-        assert_eq!(f.wall, 820);
+        assert_eq!(f.wall, 850);
         assert_eq!(f.insns, 3_000);
         let b = |name: &str| f.b[BUCKETS.iter().position(|n| *n == name).unwrap()];
-        assert_eq!((b("jit"), b("gl"), b("gl_ring"), b("gl_carrier"), b("gl_wait"), b("gl_push")), (300, 40, 5, 10, 30, 15));
+        assert_eq!((b("jit"), b("gl"), b("gl_ring"), b("gl_carrier"), b("gl_wait"), b("gl_push")), (300, 40, 5, 10, 30 + 30, 15));
         assert_eq!((b("step_other"), b("probe"), b("serve"), b("wait_app")), (50, 0, 70, 200));
         assert_eq!(b("lib_other"), 100, "the engine's lib time the library did not name");
         assert_eq!(f.residue, 0, "every tick is in exactly one bucket");
         assert_eq!(f.jit, [2, 1, 0, 0]);
         let lines = lines(&l.frames, PAIRS[0], false, 1, 2);
         assert!(lines[0].starts_with("[HEIRLOOM-LEDGER frames=2 n=1] wall_ms p50=0.8 "), "{}", lines[0]);
+        assert!(lines[0].contains(" residue=0 "), "{}", lines[0]);
         assert!(lines[0].contains(" jit=300 gl=40 "), "{}", lines[0]);
         assert!(lines[2].starts_with("[HEIRLOOM-HW frames=2] none"), "{}", lines[2]);
     }
@@ -376,12 +409,15 @@ mod tests {
     fn the_counters_give_core_cycles_per_guest_instruction_and_the_pair_rotates() {
         static N: AtomicU64 = AtomicU64::new(0);
         static SEL: AtomicU64 = AtomicU64::new(0);
+        // after a pair change the kernel's pair sums restart from the sample that asked for it (k0)
+        static K0: AtomicU64 = AtomicU64::new(0);
         extern "C" fn counts(_: *mut core::ffi::c_void, select: u32, out: *mut HwSample) -> i32 {
             let k = N.fetch_add(1, Ordering::Relaxed) + 1;
-            if select != hw::SELECT_KEEP { SEL.store(u64::from(select), Ordering::Relaxed); }
+            if select != hw::SELECT_KEEP { SEL.store(u64::from(select), Ordering::Relaxed); if N.load(Ordering::Relaxed) > 4 { K0.store(k, Ordering::Relaxed); } }
+            let pk = if K0.load(Ordering::Relaxed) != 0 { k - K0.load(Ordering::Relaxed) } else { k };
             // every sample: 1000 TSC-rate ticks on, 1333 core cycles (a 1.333x burst), 2000 instructions retired
             // SAFETY: the test passes a valid record.
-            unsafe { *out = HwSample { valid: 7, run_tsc: k * 1000, aperf: k * 1333, mperf: k * 1000, inst: k * 2000, core_cycles: k * 1333, pmc: [k * 10, k * 3], ..HwSample::default() } };
+            unsafe { *out = HwSample { valid: 7, run_tsc: k * 1000, aperf: k * 1333, mperf: k * 1000, inst: k * 2000, core_cycles: k * 1333, pmc: [pk * 10, pk * 3], ..HwSample::default() } };
             hw::HW_OK
         }
         let mut l = Ledger::default();
@@ -402,7 +438,17 @@ mod tests {
         assert!(hwl.contains("run_freq_mhz=1"), "aperf/mperf x per_us: {hwl}");
         let (_, pair, _) = l.take_window();
         assert_eq!(pair, PAIRS[0]);
+        // the next window's first swap lands INSIDE a run (as on the Z83: the swap is a native inside the CPU library's run) and
+        // restarts the pair's sums: the run's delta must not cross the restart (it wrapped below zero there)
+        at(1300);
+        l.run_begin(now);
         l.swap(now, 600, [0; 4]);
         assert_eq!(SEL.load(Ordering::Relaxed), u64::from(hw::select(PAIRS[1].0, PAIRS[1].1)), "the next window counts the next pair");
+        at(1400);
+        l.run_end(now);
+        at(1500);
+        l.swap(now, 700, [0; 4]);
+        let f = l.frames.last().unwrap();
+        assert!(f.hw_run[HW_PMC] < 1_000 && f.hw_run[HW_PMC + 1] < 1_000, "no wrapped pmc delta: {:?}", f.hw_run);
     }
 }

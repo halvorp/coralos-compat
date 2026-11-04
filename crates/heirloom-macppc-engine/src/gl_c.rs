@@ -197,12 +197,12 @@ impl<U: GuestUi> MacPpc<U> {
         let mut req = core::mem::take(&mut self.gl.pending);
         self.gl.sent_bytes += req.len() as u64;
         let Some(w) = self.gl.worker.as_mut() else { return Vec::new() };
-        let t0 = self.perf.as_mut().map(|p| { let t = p.now(); p.ledger.clock.enter(crate::perf_ledger::L_GL_RING, t); t });
+        let t0 = self.perf.as_mut().map(|p| { let t = p.now(); p.ledger.ring_enter(t); t });
         let reply = w.transact(&req);
         // the next batch reuses this one's capacity (a gameplay frame is ~470 KB: no regrowth from zero every flush)
         req.clear();
         self.gl.pending = req;
-        if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let t1 = p.now(); p.ledger.clock.exit(t1); p.add_gl_ring(t1.wrapping_sub(t0)); }
+        if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let t1 = p.now(); p.ledger.ring_exit(t1); p.add_gl_ring(t1.wrapping_sub(t0)); }
         let mut out = Vec::new();
         let mut at = 0;
         while at < reply.len() {
