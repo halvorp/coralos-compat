@@ -15,7 +15,6 @@
 //! return goes through LR.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
-#[cfg(feature = "fixtures")]
 pub mod asm;
 /// The PowerPC CPU this engine runs on, named in ONE place (doctrine ONE-NAME-ONE-CONCERN-LOADED): the static core
 /// (`cpu-static`, the default: host tests, the macppc-run CLI) or cpu-ppc.library through heirloom-cpu-ppc-client (`cpu-library`:

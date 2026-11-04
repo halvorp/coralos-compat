@@ -302,14 +302,17 @@ impl<U: GuestUi> Host for MacPpc<U> {
         let t0 = p.now();
         p.tb = cpu.tb;
         p.ledger.clock.enter(1 + class as usize, t0);
+        let drain0 = self.gl.defer.drain_time;
         let served = self.native_call(cpu, addr);
+        // a GL native first serves the calls guest code queued (gl_c/defer.rs): a draw's own time leaves that out
+        let drained = self.gl.defer.drain_time.wrapping_sub(drain0);
         if let Some(p) = self.perf.as_mut() {
             let t1 = p.now();
             p.ledger.clock.exit(t1);
             let dt = t1.wrapping_sub(t0);
             p.add_native(class, dt);
             if let (Some(pr), Some(id)) = (p.profile.as_mut(), self.glue.id_at_stub(addr)) { pr.native(id, dt); }
-            if draw { (p.win.draw_time, p.win.draws) = (p.win.draw_time + dt, p.win.draws + 1); }
+            if draw { (p.win.draw_time, p.win.draws) = (p.win.draw_time + dt.saturating_sub(drained), p.win.draws + 1); }
         }
         served
     }

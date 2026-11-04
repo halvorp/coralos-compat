@@ -38,6 +38,9 @@ impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
 #[test]
 fn a_routed_call_sends_and_leaves_exactly_what_its_first_call_did() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    // the same frame twice: with the state shadow on, the second frame's calls would set what the worker already holds and not be
+    // sent (gl_c/shadow.rs, tests/gl_shadow.rs); routing is what this test compares
+    m.gl_shadow(false);
     let seen = Arc::new(Mutex::new(Vec::new()));
     m.gl_attach(Box::new(Mock(TokenTable::default(), seen.clone())));
     let names = ["aglChoosePixelFormat", "aglCreateContext", "aglSetCurrentContext", "aglSwapBuffers", "glActiveTextureARB", "glEnable", "glViewport",

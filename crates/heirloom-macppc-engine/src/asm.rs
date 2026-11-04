@@ -1,5 +1,5 @@
-//! A tiny PowerPC assembler for test programs: the handful of integer instructions a hand-written Mac application
-//! needs, with labels. Encodings are from the Programming Environments Manual (PEM) instruction-format tables (D-form,
+//! A tiny PowerPC assembler for test programs and the engine's own guest routines (the deferred GL calls' queue routines,
+//! gl_c/defer.rs): the handful of instructions a hand-written Mac application needs, with labels. Encodings are from the Programming Environments Manual (PEM) instruction-format tables (D-form,
 //! X-form, B-form, I-form, XFX-form for the SPR moves). No `powerpc-*-as` exists on every build host, and a fixture
 //! built from words you can read here is cheaper to audit than a binary blob.
 use alloc::collections::BTreeMap;
@@ -7,6 +7,8 @@ use alloc::vec::Vec;
 
 /// Condition-register bit of CR0 that `beq`/`bne` test.
 const CR0_EQ: u32 = 2;
+/// Condition-register bit of CR0 that `bge` tests (clear).
+const CR0_LT: u32 = 0;
 
 #[derive(Default)]
 pub struct Asm {
@@ -17,7 +19,7 @@ pub struct Asm {
 }
 
 #[derive(Clone, Copy)]
-enum Fix { Always, IfEq, IfNe }
+enum Fix { Always, IfEq, IfNe, IfGe }
 
 fn d(op: u32, rt: u32, ra: u32, imm: i32) -> u32 { op << 26 | rt << 21 | ra << 16 | (imm as u32 & 0xFFFF) }
 fn x(rt: u32, ra: u32, rb: u32, xo: u32) -> u32 { 31 << 26 | rt << 21 | ra << 16 | rb << 11 | xo << 1 }
@@ -53,10 +55,17 @@ impl Asm {
     pub fn mtlr(&mut self, rs: u32) -> &mut Self { self.push(spr(rs, 8, 467)) }
     pub fn mtctr(&mut self, rs: u32) -> &mut Self { self.push(spr(rs, 9, 467)) }
     pub fn bctrl(&mut self) -> &mut Self { self.push(0x4E80_0421) }
+    pub fn bctr(&mut self) -> &mut Self { self.push(0x4E80_0420) }
     pub fn blr(&mut self) -> &mut Self { self.push(0x4E80_0020) }
+    /// `cmplw ra,rb` = `cmpl cr0,0,ra,rb` (unsigned).
+    pub fn cmplw(&mut self, ra: u32, rb: u32) -> &mut Self { self.push(x(0, ra, rb, 32)) }
+    /// `stfd frs, off(ra)`: store an FPR's double.
+    pub fn stfd(&mut self, frs: u32, off: i32, ra: u32) -> &mut Self { self.push(d(54, frs, ra, off)) }
     pub fn b(&mut self, to: &'static str) -> &mut Self { self.fix(to, Fix::Always) }
     pub fn beq(&mut self, to: &'static str) -> &mut Self { self.fix(to, Fix::IfEq) }
     pub fn bne(&mut self, to: &'static str) -> &mut Self { self.fix(to, Fix::IfNe) }
+    /// `bge`: CR0's LT bit clear.
+    pub fn bge(&mut self, to: &'static str) -> &mut Self { self.fix(to, Fix::IfGe) }
     fn fix(&mut self, to: &'static str, k: Fix) -> &mut Self { self.fixups.push((self.words.len(), to, k)); self.push(0) }
 
     /// The CFM pointer-glue call sequence through the TVector whose address sits in the TOC word at `toc_off(r2)`:
@@ -75,6 +84,7 @@ impl Asm {
                 Fix::Always => 18 << 26 | (off as u32 & 0x03FF_FFFC),
                 Fix::IfEq => 16 << 26 | 12 << 21 | CR0_EQ << 16 | (off as u32 & 0xFFFC),
                 Fix::IfNe => 16 << 26 | 4 << 21 | CR0_EQ << 16 | (off as u32 & 0xFFFC),
+                Fix::IfGe => 16 << 26 | 4 << 21 | CR0_LT << 16 | (off as u32 & 0xFFFC),
             };
         }
         w.iter().flat_map(|v| v.to_be_bytes()).collect()
@@ -98,5 +108,13 @@ mod tests {
         a.label("top").li(3, 1).bne("end").b("top").label("end").blr();
         let w: Vec<u32> = a.finish().chunks(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect();
         assert_eq!(w[1], 0x4082_0008, "bne +8"); assert_eq!(w[2], 0x4BFF_FFF8, "b -8");
+    }
+    #[test]
+    fn queue_stub_encodings_match_known_words() {
+        let mut a = Asm::new();
+        a.cmplw(11, 0).bge("x").stfd(1, 8, 11).bctr().label("x").blr();
+        let w: Vec<u32> = a.finish().chunks(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect();
+        // cmplw r11,r0 ; bge +12 ; stfd f1,8(r11) ; bctr ; blr
+        assert_eq!(w, [0x7C0B_0040, 0x4080_000C, 0xD82B_0008, 0x4E80_0420, 0x4E80_0020]);
     }
 }

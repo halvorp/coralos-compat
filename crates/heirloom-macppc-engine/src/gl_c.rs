@@ -45,7 +45,9 @@ pub(crate) mod capture_probe;
 mod begin_end;
 mod bulk;
 mod client;
+mod defer;
 mod generic;
+mod shadow;
 mod hot;
 mod image;
 mod state;
@@ -164,6 +166,10 @@ pub struct GlState {
     descs: Vec<Descriptor>,
     /// The argument words of the call being encoded: one buffer reused call after call ([`MacPpc::gl_words`]), not a `Vec` each.
     words: Vec<u64>,
+    /// The calls guest code queues instead of calling the engine (gl_c/defer.rs).
+    pub(crate) defer: defer::DeferQ,
+    /// The worker's state as last sent, so a call that changes nothing is not sent (gl_c/shadow.rs).
+    shadow: shadow::Shadow,
 }
 
 impl GlState {
@@ -266,7 +272,17 @@ impl<U: GuestUi> MacPpc<U> {
 
     fn gl_note(&mut self, line: String) { self.mac.log.push(line); }
 
+    /// A GL native: the calls guest code queued before it first (gl_c/defer.rs), then this one.
     pub(crate) fn gl_call(&mut self, f: GlFn, cpu: &mut Cpu) -> Result<(), String> {
+        if self.gl.defer.ctl != 0 { self.gl_defer_drain()?; }
+        self.gl_call_now(f, cpu)
+    }
+
+    /// One GL call, as a native call or a drained record: the arguments are `cpu`'s registers (and memory they point at).
+    pub(crate) fn gl_call_now(&mut self, f: GlFn, cpu: &mut Cpu) -> Result<(), String> {
+        // a call that sets what the worker already holds is not sent (gl_c/shadow.rs)
+        let inside = self.gl.begin_ctx == Some(self.gl.current) || self.gl.list_ctx == Some(self.gl.current);
+        if self.gl_shadow_meet(f.0, cpu, inside)? { return self.gl_finish(cpu, 0); }
         // the per-frame calls of a plain entry, outside glBegin/glEnd and display-list compilation: straight to their route
         if self.gl_plain(f.0) {
             let inside = self.gl.current_token.is_some() && (self.gl.begin_ctx == Some(self.gl.current) || self.gl.list_ctx == Some(self.gl.current));
@@ -355,6 +371,9 @@ impl<U: GuestUi> MacPpc<U> {
                     if let Some((port, w0, h0)) = self.gl.drawables.get(&a0).copied() {
                         if let Some((w, h)) = self.agl_port_size(port).filter(|s| *s != (w0, h0)) {
                             let set = GlFn::by_name("aglSetDrawable").ok_or_else(|| String::from("aglSwapBuffers: the contract has no aglSetDrawable"))?;
+                            // a new drawable may reset state the worker holds (its viewport): the shadow knows nothing after it
+                            self.gl_shadow_send_unit();
+                            self.gl.shadow.forget();
                             self.agl_send_drawable(t, set.0, port, w, h);
                             self.gl.drawables.insert(a0, (port, w, h));
                             self.gl_note(format!("[HEIRLOOM-GL DRAWABLE-FOLLOWS-PORT {w0}x{h0} -> {w}x{h}] the port was resized after aglSetDrawable"));

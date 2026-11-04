@@ -264,6 +264,92 @@ fn pef() -> (Vec<u8>, Layout) {
     (app_with(&libs, &code, &tail), l)
 }
 
+/// The deferred-call program (gl_c/defer.rs): every record shape - GPR words, a float, two doubles, four floats, a 16-word and a
+/// 3-word vector the guest SCRIBBLES right after the call - then 3,000 glEnable calls (more than the queue holds: its routine
+/// falls back to the native call), a query and a swap.
+const DEFER_IMPORTS: &[&str] = &[
+    "aglChoosePixelFormat", "aglCreateContext", "aglSetCurrentContext", "aglSetDrawable", "aglSwapBuffers", "aglDestroyContext", "aglDestroyPixelFormat",
+    "glMatrixMode", "glLoadMatrixf", "glNormal3fv", "glAlphaFunc", "glDepthRange", "glClearColor", "glEnable", "glBindTexture", "glTexEnvi",
+    "glViewport", "glGetError", "glFinish",
+];
+
+fn defer_pef() -> Vec<u8> {
+    let base = (TOC_FIRST + 4 * DEFER_IMPORTS.len() as u32) as i32;
+    let mut d = Data { bytes: Vec::new(), base };
+    let words = |v: &[f32]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let mat = d.put(&words(&(0..16).map(|i| i as f32 * 0.5).collect::<Vec<_>>()));
+    let nrm = d.put(&words(&[0.25, -0.5, 0.75]));
+    let fl = d.put(&words(&[0.125, 0.2, 0.4, 0.6, 0.8]));
+    let dbl = d.put(&[0.1f64.to_be_bytes(), 0.9f64.to_be_bytes()].concat());
+    let mut port = vec![0u8; 16];
+    for v in [0i16, 0, 64, 64] { port.extend_from_slice(&v.to_be_bytes()); }
+    let port = d.put(&port);
+    let err = d.put(&[0xFF; 4]);
+    let toc = |n: &str| (TOC_FIRST as i32) + 4 * DEFER_IMPORTS.iter().position(|x| *x == n).unwrap() as i32;
+    let mut a = Asm::new();
+    a.mflr(0).stw(0, 8, 1).stwu(1, -64, 1).stw(31, 60, 1).stw(30, 56, 1);
+    a.li(3, 0).li(4, 0).li(5, 0).call_toc(toc("aglChoosePixelFormat")).mr(31, 3);
+    a.mr(3, 31).li(4, 0).call_toc(toc("aglCreateContext")).mr(30, 3);
+    a.mr(3, 30).call_toc(toc("aglSetCurrentContext")).mr(3, 30).addi(4, 2, port).call_toc(toc("aglSetDrawable"));
+    a.li(3, 0x1700).call_toc(toc("glMatrixMode")).addi(3, 2, mat).call_toc(toc("glLoadMatrixf"));
+    a.addi(3, 2, nrm).call_toc(toc("glNormal3fv"));
+    // the guest scribbles the matrix and the normal BEFORE any GL native runs: the records hold the values of the call
+    a.li(0, -4370);
+    for i in 0..16 { a.stw(0, mat + 4 * i, 2); }
+    for i in 0..3 { a.stw(0, nrm + 4 * i, 2); }
+    a.li(3, 0x0204).lfs(1, fl, 2).call_toc(toc("glAlphaFunc"));
+    a.lfd(1, dbl, 2).lfd(2, dbl + 8, 2).call_toc(toc("glDepthRange"));
+    a.lfs(1, fl + 4, 2).lfs(2, fl + 8, 2).lfs(3, fl + 12, 2).lfs(4, fl + 16, 2).call_toc(toc("glClearColor"));
+    a.li(3, 0x0DE1).li(4, 7).call_toc(toc("glBindTexture"));
+    a.li(3, 0x2300).li(4, 0x2200).li(5, 0x2100).call_toc(toc("glTexEnvi"));
+    a.li(3, 1).li(4, 2).li(5, 3).li(6, 4).call_toc(toc("glViewport"));
+    // 3,000 records: past the queue's capacity, so later ones take the routine's native path, in order
+    a.li(31, 3000).label("more").li(3, 0x0BE2).call_toc(toc("glEnable")).addi(31, 31, -1).cmpwi(31, 0).bne("more");
+    a.call_toc(toc("glGetError")).stw(3, err, 2);
+    a.call_toc(toc("glFinish")).mr(3, 30).call_toc(toc("aglSwapBuffers"));
+    a.li(3, 0).call_toc(toc("aglSetCurrentContext")).mr(3, 30).call_toc(toc("aglDestroyContext")).mr(3, 31).call_toc(toc("aglDestroyPixelFormat"));
+    a.li(3, 0).lwz(30, 56, 1).lwz(31, 60, 1).addi(1, 1, 64).lwz(0, 8, 1).mtlr(0).blr();
+    let syms: Vec<(&str, SymbolClass, bool)> = DEFER_IMPORTS.iter().map(|n| (*n, SymbolClass::TVector, false)).collect();
+    let libs: [Lib; 1] = [("OpenGLLibrary", false, &syms)];
+    app_with(&libs, &a.finish(), &d.bytes)
+}
+
+#[test]
+fn deferred_gl_calls_reach_the_worker_as_the_same_frames_as_native_calls() {
+    let go = |defer: bool| {
+        let seen = Arc::new(Mutex::new(Seen::default()));
+        let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+        m.gl_defer(defer);
+        m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: true }));
+        let frag = m.instantiate("defer", &Pef::parse(&defer_pef()).unwrap()).unwrap();
+        m.start(&frag).unwrap();
+        assert_eq!(m.step(10_000_000).0, Step::Exited, "{:?}", m.fault());
+        let s = std::mem::take(&mut seen.lock().unwrap().stream);
+        (m.gl_deferred(), s)
+    };
+    let ((n_off, off), (n_on, on)) = (go(false), go(true));
+    assert_eq!(n_off, 0, "NEGATIVE CONTROL: with the queue off nothing is deferred");
+    assert!(n_on > 2000, "the queue served the program's calls ({n_on})");
+    assert!(n_on < 3009, "the queue filled and its routine took the native path ({n_on} of 3,009 deferrable calls)");
+    assert_eq!(on, off, "the worker receives the same bytes either way");
+    // the matrix and the normal are the values at the call, not the scribble that followed it
+    let mut at = 0;
+    let mut found = 0;
+    while at < on.len() {
+        let n = peek_len(&on[at..]).unwrap().unwrap();
+        if let (Frame { command: Command::Call { entry, args }, .. }, _) = Frame::decode(&on[at..at + n]).unwrap() {
+            match heirloom_gl_abi::ENTRIES[usize::from(entry)].name {
+                "glLoadMatrixf" => { assert_eq!(args[3], u64::from(1.5f32.to_bits())); found += 1; }
+                "glNormal3fv" => { assert_eq!(args, [0.25f32, -0.5, 0.75].map(|x| u64::from(x.to_bits()))); found += 1; }
+                "glDepthRange" => { assert_eq!(args, [0.1f64.to_bits(), 0.9f64.to_bits()]); found += 1; }
+                _ => {}
+            }
+        }
+        at += n;
+    }
+    assert_eq!(found, 3);
+}
+
 fn run(gpu: bool) -> (M, Arc<Mutex<Seen>>, Layout, u32) {
     let (bytes, l) = pef();
     let seen = Arc::new(Mutex::new(Seen::default()));
@@ -484,6 +570,10 @@ fn wc3_host_run_with_a_gl_worker() {
         eprintln!("staged War3.mpq ({len} bytes) as a stream in Warcraft III:");
     }
     }
+    // `WC3_GL_DEFER=0`: every GL call is a native call (the deferred-call queue off: the A/B reference, gl_c/defer.rs)
+    if std::env::var("WC3_GL_DEFER").as_deref() == Ok("0") { m.gl_defer(false); }
+    // `WC3_GL_SHADOW=0`: every GL call is sent, also one that sets what the worker already holds (gl_c/shadow.rs)
+    if std::env::var("WC3_GL_SHADOW").as_deref() == Ok("0") { m.gl_shadow(false); }
     m.start_file(&app, "Warcraft III").unwrap();
     // `HEIRLOOM_PPC_TIER=0|1|lockstep|...`: the PowerPC execution tier (heirloom_cpu_ppc::Tier::parse), default tier 1
     // (tier 2, `jit` / `jitlockstep`, runs in this host's executable memory: heirloom_cpu_ppc::HostCodeMem)

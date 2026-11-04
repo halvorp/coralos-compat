@@ -304,7 +304,13 @@ impl<U: GuestUi> MacPpc<U> {
                     // a symbol a PEF library exports: its own address (a TVector for code), never a glue stub (no binding is recorded for one)
                     Binding::Export(a) => (*a, SYMBOL_CLASS_TVECTOR),
                     Binding::Qd | Binding::CData(_) => match self.data_block(&name, &b) { Ok(p) => (p, SYMBOL_CLASS_DATA), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
-                    _ => match self.glue.intern(&mut self.mac, &lib, &name) { Ok(id) => (self.glue.entry(id).map_or(0, |e| e.tvector), SYMBOL_CLASS_TVECTOR), Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")) },
+                    _ => match self.glue.intern(&mut self.mac, &lib, &name) {
+                        Ok(id) => {
+                            if let Binding::Native(Native::Gl(f)) = &b { if let Err(e) = self.gl_defer_bind(id, *f) { return GlueOutcome::Refused(format!("FindSymbol: {e}")); } }
+                            (self.glue.entry(id).map_or(0, |e| e.tvector), SYMBOL_CLASS_TVECTOR)
+                        }
+                        Err(e) => return GlueOutcome::Refused(format!("FindSymbol: {e}")),
+                    },
                 };
                 let ok = self.mac.mem.write_u32(addr_p, addr).is_ok() && (class_p == 0 || self.mac.mem.write_u8(class_p, class).is_ok());
                 self.mac.log.push(format!("[cfm] FindSymbol {lib}/{name} -> {addr:#x}"));

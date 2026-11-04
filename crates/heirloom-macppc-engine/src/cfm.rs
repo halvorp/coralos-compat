@@ -122,6 +122,8 @@ impl<U: GuestUi> MacPpc<U> {
                 None if b.is_data() => (ImportStatus::Bound(b.describe()), self.data_block(&imp.name, &b)?),
                 None => {
                     let id = self.glue.intern(&mut self.mac, &lib.name, &imp.name)?;
+                    // a deferrable GL call imported as a TVector calls the queue routine (gl_c/defer.rs)
+                    if let (Binding::Native(crate::symbols::Native::Gl(f)), SymbolClass::TVector) = (&b, imp.class) { self.gl_defer_bind(id, *f).map_err(CfmError::Memory)?; }
                     (ImportStatus::Bound(b.describe()), fn_value(&self.glue, id))
                 }
             };
