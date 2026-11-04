@@ -118,9 +118,18 @@ pub(crate) struct E<'a, 'b> {
     kind: u16,
     /// stfs's out-of-line value paths (jit_inline `stfs`): (not exactly a single, exponent field 0, where to come back,
     /// the instruction index, frS).
-    pub(crate) stfs_outs: Vec<(Fix, Fix, usize, usize, usize)>,
+    pub(crate) stfs_outs: Vec<(Option<Fix>, Fix, usize, usize, usize)>,
     /// fmadds's out-of-line exact paths (jit_fp): (the jumps to it, where to come back).
     pub(crate) fma_outs: Vec<(Vec<Fix>, usize)>,
+    /// The current block's / node's load groups (jit_lgroup), per instruction; and the slow paths that LEAVE after tier 1's
+    /// handler instead of coming back (a group head whose span test failed): (the jump, the instruction index).
+    groups: Vec<crate::jit_lgroup::Grp>,
+    slow_leave: Vec<(Fix, usize)>,
+    /// What the code so far proves about the FPRs and FPSCR[RN] (jit_ffacts); `leaving`: the instruction being emitted makes
+    /// a fact, so its slow paths leave; `helped`: it ran on tier 1's handler on the hot path.
+    pub(crate) facts: crate::jit_ffacts::Facts,
+    leaving: bool,
+    helped: bool,
 }
 
 /// A region being compiled (jit_region): the node pcs in layout order, each node's longest forward path, where each node's
@@ -303,7 +312,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     pub(crate) fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
-        E { a: Asm { wide: env.wide, tags: env.tags.then(Vec::new), ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new(), kind: tg::NO_K << 8, stfs_outs: Vec::new(), fma_outs: Vec::new() }
+        E { a: Asm { wide: env.wide, tags: env.tags.then(Vec::new), ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new(), kind: tg::NO_K << 8, stfs_outs: Vec::new(), fma_outs: Vec::new(), groups: Vec::new(), slow_leave: Vec::new(), facts: Default::default(), leaving: false, helped: false }
     }
 
     /// Start region node `k` (its code begins here: forward jumps waiting for it land here).
@@ -327,6 +336,9 @@ impl<'a, 'b> E<'a, 'b> {
     /// The instructions, and the fall-through exit when the last one does not end the block.
     fn body(&mut self, ops: &[Op]) {
         let mut ended = false;
+        // load groups need the EA unmasked by anything but the address space (a masked EA can wrap inside the span)
+        self.groups = if self.env.mask == u32::MAX { crate::jit_lgroup::plan(ops, self.env.mutant == MUT_LGROUP_SHORT) } else { Vec::new() };
+        self.facts = Default::default();
         for (i, op) in ops.iter().enumerate() {
             self.kind = tg::kind(op) << 8;
             if let Some(s) = self.a.tags.as_mut() {
@@ -334,7 +346,11 @@ impl<'a, 'b> E<'a, 'b> {
                 if !self.dry { self.env.tag_words.push((self.a.b.len() as u32, op.w, self.ipc(i))); }
             }
             self.cat(tg::BODY);
+            let fx = crate::jit_ffacts::effect(op);
+            (self.leaving, self.helped) = (crate::jit_ffacts::leaves(fx) && self.env.mutant != MUT_FACTS_REJOIN, false);
             ended = self.op(i, op);
+            self.leaving = false;
+            if self.helped { self.facts = Default::default() } else { self.facts.apply(fx) }
             self.resume.push(self.a.pos());
             if ended { break; }
         }
@@ -527,7 +543,7 @@ impl E<'_, '_> {
     /// A conditional jump to instruction `i`'s slow path (tier 1's handler for it, then back after it).
     pub(crate) fn slow_if(&mut self, cc: Cc, i: usize) {
         let f = self.a.jcc(cc);
-        self.slow.push((f, i));
+        if self.leaving { self.slow_leave.push((f, i)) } else { self.slow.push((f, i)) }
     }
 
     /// The slow paths of the inline forms (every fast path leaves before writing guest state): the helper, then back after
@@ -540,12 +556,14 @@ impl E<'_, '_> {
         self.cat(tg::SLOW);
         for (inexact, tiny, back, i, s) in core::mem::take(&mut self.stfs_outs) {
             // not exactly a single: the PowerPC's bit selection (the shared stub; a single denormal is the slow path's)
-            self.a.here(inexact);
-            self.a.ld64(RDX, cpu_m(fpr(s as u8)));
-            self.a.call_m(ctx(offset_of!(Ctx, stfs)));
-            self.slow_if(Cc::Ne, i);
-            let j = self.a.jmp();
-            self.a.patch(j, back);
+            if let Some(inexact) = inexact {
+                self.a.here(inexact);
+                self.a.ld64(RDX, cpu_m(fpr(s as u8)));
+                self.a.call_m(ctx(offset_of!(Ctx, stfs)));
+                self.slow_if(Cc::Ne, i);
+                let j = self.a.jmp();
+                self.a.patch(j, back);
+            }
             // exponent field 0: +-0 goes on, a single denormal is the slow path's
             self.a.here(tiny);
             self.a.lea32(RCX, mx(RDX, RDX, 1));
@@ -559,6 +577,16 @@ impl E<'_, '_> {
             self.a.call_m(ctx(offset_of!(Ctx, fma_odd)));
             let j = self.a.jmp();
             self.a.patch(j, back);
+        }
+        for (f, i) in core::mem::take(&mut self.slow_leave) {
+            // tier 1's handler runs the instruction (or makes its trap), then the block leaves after it: what follows runs on
+            // tier 1, each instruction with its own tests
+            self.a.here(f);
+            self.helper(i);
+            let pc = self.ipc(i).wrapping_add(4);
+            self.a.alu_ri64(Alu::Sub, R15, i as i32 + 1);
+            self.a.st32i(cpu(PC), pc);
+            self.exit_normal();
         }
         for (f, i) in core::mem::take(&mut self.slow) {
             self.a.here(f);
@@ -642,6 +670,26 @@ impl E<'_, '_> {
 
     /// eax = EA & mask (esi = EA unmasked too, for the update forms); a slow path unless `n` bytes from it are in RAM.
     pub(crate) fn ea(&mut self, i: usize, e: Ea, n: u8) {
+        use crate::jit_lgroup::Grp;
+        match self.groups.get(i).copied() {
+            // a group's later load: the head tested its bytes
+            Some(Grp::Member) => return self.ea_regs(e),
+            Some(Grp::Head { lo, span }) => {
+                // the group's lowest EA, its whole span tested against the RAM length (64-bit: no wrap), then this load's EA
+                self.ea_regs(Ea { imm: lo as u32, ..e });
+                let t = self.cat(tg::GUARD_BOUNDS);
+                let a = &mut self.a;
+                a.lea64(RCX, m(RAX, span as i32));
+                a.alu_rm64(Alu::Cmp, RCX, ctx(offset_of!(Ctx, len)));
+                let f = a.jcc(Cc::A);
+                self.slow_leave.push((f, i));
+                self.a.set_tag(t);
+                let d = e.imm.wrapping_sub(lo as u32) as i32;
+                if d != 0 { let t = self.cat(tg::EA); self.a.lea32(RAX, m(RAX, d)); self.a.set_tag(t); }
+                return;
+            }
+            _ => {}
+        }
         self.ea_regs(e);
         let t = self.cat(tg::GUARD_BOUNDS);
         let lim = match n { 1 => offset_of!(Ctx, lim1), 2 => offset_of!(Ctx, lim2), 4 => offset_of!(Ctx, lim4), _ => offset_of!(Ctx, lim8) };
@@ -872,6 +920,7 @@ impl E<'_, '_> {
             }
             K::Generic | K::GenericEnd | K::Sc | K::Fp59 | K::Fp63 | K::Lfs | K::Stfs => {
                 if self.inline(i, op) { return false; }
+                self.helped = true;
                 self.cat(tg::HELPER);
                 self.helper(i);
                 if op.terminal() {

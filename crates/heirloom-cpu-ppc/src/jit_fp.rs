@@ -32,31 +32,45 @@ impl E<'_, '_> {
     /// fmadds / fmsubs / fnmadds / fnmsubs (xo5 29 / 28 / 31 / 30), Rc=0: frD = [-](frA * frC [+-] frB) rounded once to single.
     pub(crate) fn fmadds(&mut self, i: usize, xo5: u32, d: usize, a_: usize, b: usize, c: usize) {
         let (sub, neg) = (xo5 & 1 == 0, xo5 >= 30);
-        self.a.ld32(RCX, cpu(FPSCR));
-        self.a.test_ri(RCX, 3); // FPSCR[RN] != 0: tier 0 refuses by name
-        self.slow_if(Cc::Ne, i);
+        self.rn_test(i);
         // every operand single-representable (else tier 0 takes the plain f64 fma: the slow path). Not tested here: that each
         // is FINITE - a non-finite operand (single-representable or not) makes the sum s below non-finite (a, c finite
         // singles: their product cannot overflow f64), and a non-finite s is the slow path's before anything is written
         // a and c together (one packed round trip to single and back, compared lane by lane: a NaN compares unequal and
         // goes slow, as it would below), b alone (its bits; xmm3 keeps it)
+        // (an operand the facts know is single - jit_ffacts SINGLE - takes no round trip)
+        let known = |r: usize| self.facts.single >> r & 1 != 0;
+        let (ka, kc, kb) = (known(a_), known(c), known(b));
         let t = self.cat(crate::jit_census::FP_GUARD);
-        let a = &mut self.a;
-        a.sse_m(0xF2, 0x10, 1, f(a_));
-        a.sse_m(0x66, 0x16, 1, f(c)); // movhpd xmm1, [c]
-        a.sse_r(0x66, 0x5A, 2, 1); // cvtpd2ps
-        a.cvtps2pd(2, 2);
-        a.cmpneqpd(2, 1);
-        a.movmskpd(RCX, 2);
-        a.test_rr(RCX, RCX);
-        self.slow_if(Cc::Ne, i);
+        if !ka && !kc {
+            let a = &mut self.a;
+            a.sse_m(0xF2, 0x10, 1, f(a_));
+            a.sse_m(0x66, 0x16, 1, f(c)); // movhpd xmm1, [c]
+            a.sse_r(0x66, 0x5A, 2, 1); // cvtpd2ps
+            a.cvtps2pd(2, 2);
+            a.cmpneqpd(2, 1);
+            a.movmskpd(RCX, 2);
+            a.test_rr(RCX, RCX);
+            self.slow_if(Cc::Ne, i);
+        } else if !ka || !kc {
+            let r = if ka { c } else { a_ };
+            let a = &mut self.a;
+            a.sse_m(0xF2, 0x10, 1, f(r));
+            a.sse_r(0xF2, 0x5A, 2, 1); // cvtsd2ss
+            a.sse_r(0xF3, 0x5A, 2, 2); // cvtss2sd
+            a.movq_rx(RAX, 2);
+            a.alu_rm64(Alu::Cmp, RAX, f(r));
+            self.slow_if(Cc::Ne, i);
+        }
         let a = &mut self.a;
         a.sse_m(0xF2, 0x10, 3, f(b));
-        a.sse_r(0xF2, 0x5A, 4, 3); // cvtsd2ss
-        a.sse_r(0xF3, 0x5A, 4, 4); // cvtss2sd
-        a.movq_rx(RAX, 4);
-        a.alu_rm64(Alu::Cmp, RAX, f(b));
-        self.slow_if(Cc::Ne, i);
+        if !kb {
+            a.sse_r(0xF2, 0x5A, 4, 3); // cvtsd2ss
+            a.sse_r(0xF3, 0x5A, 4, 4); // cvtss2sd
+            a.movq_rx(RAX, 4);
+            a.alu_rm64(Alu::Cmp, RAX, f(b));
+            self.slow_if(Cc::Ne, i);
+        }
         self.a.set_tag(t);
         let a = &mut self.a;
         a.sse_m(0xF2, 0x10, 0, f(a_));

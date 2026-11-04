@@ -271,6 +271,67 @@ fn xer_so_set_under_so_free_code_makes_it_leave_and_compares_see_so() {
     assert!(got != want, "mutant 33 (SO set, SO-free code stays) stayed GREEN");
 }
 
+/// A subroutine of two loads off r3 (one load group: jit_lgroup) called 20 times on a buffer, then once with r3 eight bytes
+/// before the end of RAM: its second load ends two bytes past RAM - tier 0's trap there, with the first load done.
+fn load_group_program() -> Vec<u32> {
+    let bl = |from: u32, to: u32| 18 << 26 | ((4 * (to - from)) & 0x03FF_FFFC) | 1;
+    vec![
+        d(14, 31, 0, 20), d(15, 3, 0, BUF >> 16), d(24, 3, 3, BUF & 0xFFFF), bl(3, 13), d(13, 31, 31, 0xFFFF), bc(4, 2, -8),
+        d(15, 3, 0, (RAM - 8) >> 16), d(24, 3, 3, (RAM - 8) & 0xFFFF), bl(8, 13),
+        d(15, 24, 0, EXIT >> 16), d(24, 24, 24, EXIT & 0xFFFF), mtspr(8, 24), 0x4E80_0020,
+        d(32, 5, 3, 0), d(32, 6, 3, 6), 0x4E80_0020, // F: lwz r5,0(r3); lwz r6,6(r3); blr
+    ]
+}
+
+#[test]
+fn a_load_group_whose_span_leaves_ram_runs_its_head_and_traps_at_the_member_like_tier_0() {
+    let prog = load_group_program();
+    let setup = |_: &mut Cpu, m: &mut M| { m.mem.write_u32(RAM - 8, 0x1234_5678).unwrap(); };
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, setup);
+    assert!(want.last.trap.is_some() && want.gpr[5] == 0x1234_5678 && want.pc == CODE + 4 * 14, "tier 0 traps at the second load: {:?}", want.last);
+    for slice in [1_000_000, 1_000, 13] {
+        let (got, e) = run_on(Tier::Jit, 0, &prog, slice, setup);
+        assert!(got == want, "slice {slice}: {:?} {:?}", got.last, e.jit_stats());
+    }
+    let (got, e) = run_on(Tier::JitLockstep, 0, &prog, 13, setup);
+    assert!(got == want && e.divergence().is_none(), "{:?}", e.divergence());
+    // negative control: a span short of the last member's bytes lets the member read past RAM and run on
+    let (got, _) = run_on(Tier::Jit, 35, &prog, 1_000_000, setup);
+    assert!(got != want, "mutant 35 (a load group's short span) stayed GREEN");
+}
+
+/// fadds of a signalling NaN with FPSCR[VE] set leaves frD as it was (tier 0, an enabled invalid operation) - a double no
+/// single equals - and stfs then stores the PowerPC's bit selection of it (truncation, not cvtsd2ss's rounding). The fadds'
+/// slow path must not come back to code that took its result for a single (jit_ffacts).
+fn facts_program() -> Vec<u32> {
+    vec![
+        d(14, 31, 0, 20), d(15, 20, 0, BUF >> 16), d(24, 20, 20, BUF & 0xFFFF),
+        fa(59, 3, 1, 2, 0, 21, false), d(52, 3, 20, 0), d(13, 31, 31, 0xFFFF), bc(4, 2, -12), // fadds f3,f1,f2; stfs f3,0(r20)
+        d(15, 24, 0, EXIT >> 16), d(24, 24, 24, EXIT & 0xFFFF), mtspr(8, 24),
+    ]
+}
+fn facts_setup(c: &mut Cpu, _: &mut M) {
+    c.fpr[1] = 0x7FF0_0000_0000_0001; // SNaN
+    c.set_fpr_f64(2, 1.0);
+    c.fpr[3] = 0x3FF0_0000_1FFF_FFFF; // its single rounding 0x3F800001, its bit selection 0x3F800000
+    c.fpscr = 0x80; // VE
+}
+
+#[test]
+fn an_fp_slow_path_that_leaves_frd_unchanged_is_not_followed_by_code_trusting_frd() {
+    let prog = facts_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, facts_setup);
+    assert_eq!(&want.ram[BUF as usize..BUF as usize + 4], &[0x3F, 0x80, 0, 0], "tier 0 stores the bit selection");
+    for slice in [1_000_000, 1_000, 13] {
+        let (got, e) = run_on(Tier::Jit, 0, &prog, slice, facts_setup);
+        assert!(got == want, "slice {slice}: {:x?} {:?}", &got.ram[BUF as usize..BUF as usize + 4], e.jit_stats());
+    }
+    let (got, e) = run_on(Tier::JitLockstep, 0, &prog, 13, facts_setup);
+    assert!(got == want && e.divergence().is_none(), "{:?}", e.divergence());
+    let (got, _) = run_on(Tier::Jit, 36, &prog, 1_000_000, facts_setup);
+    assert!(got != want, "mutant 36 (fact-making slow paths come back) stayed GREEN");
+}
+
 struct Rng(u64);
 impl Rng {
     fn next(&mut self) -> u32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; (self.0 >> 16) as u32 }

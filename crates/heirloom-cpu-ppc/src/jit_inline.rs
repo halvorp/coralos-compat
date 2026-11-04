@@ -60,13 +60,21 @@ impl E<'_, '_> {
         // is stored as cvtsd2ss makes it - for such a value the PowerPC's bit selection gives the same bits - unless it is a
         // single denormal (exponent field 0, not +-0: the slow path's, as below); any other double goes through the shared
         // bit-selection stub out of line (emit_stfs_bits: a single denormal is the slow path's there too)
+        // (a value the facts know is such a single - jit_ffacts EXACT - takes no round trip)
+        let known = self.facts.exact >> s & 1 != 0;
         let a = &mut self.a;
-        a.sse_m(0xF2, 0x10, 0, f(s));
-        a.sse_r(0xF2, 0x5A, 1, 0); // cvtsd2ss xmm1, xmm0
-        a.sse_r(0xF3, 0x5A, 2, 1); // cvtss2sd xmm2, xmm1
-        a.movq_rx(RAX, 2);
-        a.alu_rm64(Alu::Cmp, RAX, f(s));
-        let inexact = a.jcc(Cc::Ne);
+        let inexact = if known {
+            a.sse_m(0xF2, 0x5A, 1, f(s)); // cvtsd2ss xmm1, [frS]
+            None
+        } else {
+            a.sse_m(0xF2, 0x10, 0, f(s));
+            a.sse_r(0xF2, 0x5A, 1, 0); // cvtsd2ss xmm1, xmm0
+            a.sse_r(0xF3, 0x5A, 2, 1); // cvtss2sd xmm2, xmm1
+            a.movq_rx(RAX, 2);
+            a.alu_rm64(Alu::Cmp, RAX, f(s));
+            Some(a.jcc(Cc::Ne))
+        };
+        let a = &mut self.a;
         a.movd_rx(RDX, 1);
         a.test_ri(RDX, 0x7F80_0000);
         let tiny = a.jcc(Cc::E);
@@ -120,12 +128,7 @@ impl E<'_, '_> {
             self.a.alu_rr64(Alu::Add, RCX, RCX);
             self.slow_if(Cc::E, i);
         }
-        let t = self.cat(crate::jit_census::FP_GUARD);
-        let a = &mut self.a;
-        a.ld32(RCX, cpu(FPSCR));
-        a.test_ri(RCX, 3); // FPSCR[RN] != 0: tier 0 refuses by name
-        self.slow_if(Cc::Ne, i);
-        self.a.set_tag(t);
+        self.rn_test(i);
         let a = &mut self.a;
         a.sse_m(0xF2, 0x10, 0, f(a_));
         a.sse_m(0xF2, opc, 0, f(src));
@@ -138,6 +141,18 @@ impl E<'_, '_> {
         self.a.st64(f(d), RAX);
         self.fprf(single);
         true
+    }
+
+    /// The slow path unless FPSCR[RN] = 0 (tier 0 refuses any other mode by name) - no test when the facts know it
+    /// (jit_ffacts: an earlier FP form of this block passed it, and nothing since could change it).
+    pub(crate) fn rn_test(&mut self, i: usize) {
+        if self.facts.rn { return; }
+        let t = self.cat(crate::jit_census::FP_GUARD);
+        let a = &mut self.a;
+        a.ld32(RCX, cpu(FPSCR));
+        a.test_ri(RCX, 3);
+        self.slow_if(Cc::Ne, i);
+        self.a.set_tag(t);
     }
 
     /// FPSCR[FPRF] = the class of the finite result in rax, LAZILY (jit.rs Ctx::fprf_src): the bits and their kind are
@@ -383,10 +398,7 @@ impl E<'_, '_> {
 
     /// frsp, Rc=0, RN = 0: frD = (frB as f32) as f64 when that is finite (a NaN, an infinity or an overflow goes slow).
     fn frsp(&mut self, i: usize, d: usize, b: usize) {
-        let a = &mut self.a;
-        a.ld32(RCX, cpu(FPSCR));
-        a.test_ri(RCX, 3);
-        self.slow_if(Cc::Ne, i);
+        self.rn_test(i);
         let a = &mut self.a;
         a.sse_m(0xF2, 0x10, 0, f(b));
         a.sse_r(0xF2, 0x5A, 0, 0);

@@ -79,6 +79,10 @@ mod jit_census; // diagnostics: what each emitted byte is for (Exec::set_jit_tag
 mod jit_ctx;
 #[cfg(target_arch = "x86_64")]
 mod jit_mutants;
+#[cfg(target_arch = "x86_64")]
+mod jit_lgroup;
+#[cfg(target_arch = "x86_64")]
+mod jit_ffacts;
 pub use jit_stats::{JitStats, RegionShape};
 /// The guest words of the shapes tier 2 translates whole (jit_xlate), for tests that place one.
 #[cfg(target_arch = "x86_64")]

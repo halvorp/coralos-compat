@@ -75,3 +75,8 @@ pub(crate) const MUT_FPRF_EXIT: u8 = 32;
 pub(crate) const MUT_SO_STAYS: u8 = 33;
 /// fmadds rounds s straight to single at a single midpoint too (jit_fp): the exact path only for a tiny s.
 pub(crate) const MUT_FMA_NO_MIDPOINT: u8 = 34;
+/// A load group's head tests a span that leaves out its last member's bytes (jit_lgroup): a member that ends past RAM runs.
+pub(crate) const MUT_LGROUP_SHORT: u8 = 35;
+/// A form that makes an FPR fact has slow paths that come back (jit_ffacts): after tier 1's handler left the FPR as it was
+/// (an enabled invalid operation), later code still trusts the fact.
+pub(crate) const MUT_FACTS_REJOIN: u8 = 36;
