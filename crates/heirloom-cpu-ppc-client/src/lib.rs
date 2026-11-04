@@ -28,7 +28,7 @@ use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use heirloom_cpu_abi::ppc::{
     check_ppc, PpcContext, PpcCreate, PpcExit, PpcHostCallbacks, PpcOpenRefusal, PpcProf, CTX_HALTED, CTX_RUNNABLE,
     EXIT_BLOCK, EXIT_BUDGET, EXIT_HALT, EXIT_TRAP, HOST_BLOCK, HOST_HALT, HOST_HANDLED, HOST_REDIRECTED, HOST_UNHANDLED,
-    REFUSED_CREATE, REFUSED_NO_FLAT_RAM, REFUSED_UNBOUND, SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP, TIER_JIT, TIER_JIT_BLOCKS, TIER_JIT_WIDE, WHAT_UNLISTED, refusal_of,
+    REFUSED_BUILD, REFUSED_CREATE, REFUSED_NO_FLAT_RAM, REFUSED_UNBOUND, SUB_ARCH_G3, TIER_BLOCKS, TIER_INTERP, TIER_JIT, TIER_JIT_BLOCKS, TIER_JIT_WIDE, WHAT_UNLISTED, refusal_of,
 };
 pub use heirloom_cpu_abi::ppc::PpcCodeMem;
 use heirloom_cpu_abi::CpuInstance;
@@ -257,6 +257,9 @@ pub struct Exec {
     /// Tier 2's ablation knobs (`KNOB_*`, crossing `set_tier` above its low byte): the Z83's guard-cost A/B. Measurement only.
     pub knobs: u32,
     knob_refused: Option<u32>,
+    /// A library refused for its build: (its PpcProf::build, the one expected); and the build expected (EXPECTED_BUILD).
+    build_mismatch: Option<(u64, u64)>,
+    expected_build: u64,
 }
 
 // SAFETY: the instance and the callbacks box are owned by this Exec alone and used only through `&mut self`; moving the Exec moves
@@ -272,12 +275,15 @@ impl Drop for Exec {
 }
 
 /// The run that ran nothing: a [`Trap::Refused`] naming why.
+/// The heirloom-cpu-ppc build this client was built against (build.rs): what cpu-ppc.library must report in PpcProf::build.
+pub const EXPECTED_BUILD: u64 = include!(concat!(env!("OUT_DIR"), "/expected_build.rs"));
+
 fn refused(why: &'static str) -> RunStats { RunStats { insns: 0, halted: false, blocked: false, trap: Some(Trap::Refused { why }) } }
 
 impl Exec {
     pub fn new(tier: Tier) -> Exec {
         let host = Box::new(PpcHostCallbacks { size: core::mem::size_of::<PpcHostCallbacks>() as u32, flags: 0, ctx: ptr::null_mut(), on_native, on_syscall });
-        Exec { tier, prof: Prof::default(), inst: ptr::null_mut(), host, bound: BoundSet::default(), tier_set: None, lockstep_refused: false, code_mem: None, code_mem_refused: false, tiers: PpcProf::default(), knobs: 0, knob_refused: None }
+        Exec { tier, prof: Prof::default(), inst: ptr::null_mut(), host, bound: BoundSet::default(), tier_set: None, lockstep_refused: false, code_mem: None, code_mem_refused: false, tiers: PpcProf::default(), knobs: 0, knob_refused: None, build_mismatch: None, expected_build: EXPECTED_BUILD }
     }
     /// True once a resume was asked for [`Tier::Lockstep`] or [`Tier::JitLockstep`] (cpu-ppc.library serves neither: the static
     /// core does), or for [`Tier::Jit`] with no executable memory given or with the provider refused: the run used tier 1 - named
@@ -285,6 +291,11 @@ impl Exec {
     pub fn lockstep_refused(&self) -> bool { self.lockstep_refused }
     /// Tier 2's ablation knobs (`heirloom_cpu_abi::ppc::KNOB_*`), sent with the tier at the next run (the static core's name).
     pub fn set_jit_knobs(&mut self, knobs: u32) { self.knobs = knobs; }
+    /// Some((found, expected)) once the library was refused for its build (every run then answers REFUSED_BUILD).
+    pub fn build_mismatch(&self) -> Option<(u64, u64)> { self.build_mismatch }
+    /// Tests: expect another build (the refusal's negative control).
+    #[doc(hidden)]
+    pub fn expect_build(&mut self, b: u64) { self.expected_build = b; }
     /// The last knob word the library refused (Some: that word's run went on at the bare tier, without the knobs).
     pub fn knob_refused(&self) -> Option<u32> { self.knob_refused }
     /// Tier 2's executable memory (CPU ABI v3 [`PpcCodeMem`]; on CoralOS macppc.engine fills it from libcoral::codemem, behind
@@ -300,10 +311,22 @@ impl Exec {
     /// Execute `cpu` until [`Cpu::halt`], [`Cpu::block`], a trap, or `budget` instructions.
     pub fn resume<H: Host>(&mut self, host: &mut H, cpu: &mut Cpu, budget: u64) -> RunStats {
         let Some(t) = table() else { return refused(REFUSED_UNBOUND) };
+        if self.build_mismatch.is_some() { return refused(REFUSED_BUILD); }
         if self.inst.is_null() {
             let Some(ram) = host.mem().flat_ram() else { return refused(REFUSED_NO_FLAT_RAM) };
             let cfg = PpcCreate { size: core::mem::size_of::<PpcCreate>() as u32, sub_arch: SUB_ARCH_G3, ram, host: &*self.host };
             if (t.create)(&cfg, &mut self.inst) != 0 { self.inst = ptr::null_mut(); return refused(REFUSED_CREATE); }
+            // the library must BE the core this client was built against (h86 fnreg: a stale cpu-ppc.library ran silently on the
+            // Z83): its read_prof names its build; another one - or none, from a library older than the field - is refused here,
+            // before it runs anything, and stays refused (build_mismatch names both numbers)
+            let mut p = PpcProf { size: core::mem::size_of::<PpcProf>() as u32, ..PpcProf::default() };
+            let found = if (t.read_prof)(self.inst, &mut p) == 0 { p.build } else { 0 };
+            if found != self.expected_build {
+                (t.destroy)(self.inst);
+                self.inst = ptr::null_mut();
+                self.build_mismatch = Some((found, self.expected_build));
+                return refused(REFUSED_BUILD);
+            }
             if let Some(m) = self.code_mem { self.code_mem_refused = (t.set_code_mem)(self.inst, &m) != 0; }
         }
         // cpu-ppc.library serves no lockstep tier; the JIT only with executable memory it accepted: otherwise tier 1, named

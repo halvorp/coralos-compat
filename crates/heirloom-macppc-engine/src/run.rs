@@ -193,9 +193,12 @@ impl<U: GuestUi> MacPpc<U> {
         let stats = if self.perf.as_ref().is_some_and(|p| p.profile.is_some()) { self.resume_sampled(&mut exec, &mut cpu, budget) } else { exec.resume(self, &mut cpu, budget) };
         self.rt.exec = exec;
         if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) { let dt = p.now().wrapping_sub(t0); p.add_step(dt, stats.insns); p.ledger.run_end(p.clock_fn()); }
+        self.after_run();
         heirloom_mac68k_engine::qd::flush(&mut self.mac);
         if let Some(t) = stats.trap {
             let mut why = format!("PowerPC fault: {t}");
+            #[cfg(feature = "cpu-library")]
+            if let Some((found, want)) = self.rt.exec.build_mismatch() { why = format!("{why} [CPU-PPC-LIB REFUSED build={found:#018x} expected={want:#018x}]"); }
             if let crate::cpu::Trap::BusFault { addr, .. } = t {
                 if addr >= UNBOUND_DATA && addr - UNBOUND_DATA < 0x1000 && !self.unbound_data.is_empty() {
                     why = format!("{why} -- the placeholder address of an unbound DATA import; unbound data imports of this fragment: {}", self.unbound_data.join(", "));

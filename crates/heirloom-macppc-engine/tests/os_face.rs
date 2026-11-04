@@ -335,7 +335,10 @@ fn the_engine_reads_the_powerpc_stage_clock_through_the_table() {
     while perf(remote.inst, 1000, line.as_mut_ptr(), line.len(), &mut n) == PERF_LINE {
         cfm.push(String::from_utf8_lossy(&line[..n]).into_owned());
     }
-    assert!(!cfm.is_empty() && cfm.iter().all(|l| l.starts_with("[HEIRLOOM-CFM frag=")), "{cfm:?}");
+    // ... and, once, after the first run: which core the engine runs (h86 fnreg: the library's own build id and record size)
+    let lib = cfm.iter().filter(|l| l.starts_with("[CPU-PPC-LIB ")).cloned().collect::<Vec<_>>();
+    assert_eq!(lib, [format!("[CPU-PPC-LIB build={:#018x} prof={}]", heirloom_cpu_ppc::BUILD, core::mem::size_of::<ppc::PpcProf>())], "{cfm:?}");
+    assert!(cfm.iter().filter(|l| !l.starts_with("[CPU-PPC-LIB ")).all(|l| l.starts_with("[HEIRLOOM-CFM frag=")), "{cfm:?}");
     assert_eq!(perf(remote.inst, 1000, line.as_mut_ptr(), line.len(), &mut n), PERF_NONE);
     assert_eq!(n, 0);
 }

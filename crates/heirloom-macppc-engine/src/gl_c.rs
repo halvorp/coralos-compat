@@ -340,7 +340,7 @@ impl<U: GuestUi> MacPpc<U> {
             },
             "aglSwapBuffers" => match self.gl.ctxs.get(&a0).copied() {
                 None => self.gl.agl_error = AGL_BAD_CONTEXT,
-                Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); let jit = self.jit_events(); let w0 = self.perf.as_ref().map_or(0, |p| p.ledger.windows); if let Some(p) = self.perf.as_mut() { p.swap(jit); } self.ablate_after_swap(w0); self.cpu_lib_once(); }
+                Some(t) => { self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); let jit = self.jit_events(); let w0 = self.perf.as_ref().map_or(0, |p| p.ledger.windows); if let Some(p) = self.perf.as_mut() { p.swap(jit); } self.ablate_after_swap(w0); }
             },
             "aglSetFullScreen" => match self.gl.ctxs.get(&a0).copied() {
                 // aglSetFullScreen(ctx, width, height, freq, device): the games-windowed rule - the drawable becomes a window of that size

@@ -322,3 +322,22 @@ fn jit_knobs_reach_the_library_end_to_end_and_a_refusal_is_named() {
     assert!(e.tiers.jit_translated > x1, "the bare tier translates again: {:?}", e.tiers);
     drop(e);
 }
+
+/// h86 fnreg: the client runs only the core it was built against - the bound library's PpcProf::build equals EXPECTED_BUILD
+/// here (the static table is this tree's core), and a client expecting another build refuses the library at its first
+/// instance with REFUSED_BUILD, names both numbers, runs nothing and stays refused (NEGATIVE CONTROL for a stale library).
+#[test]
+fn a_library_of_another_build_is_refused_by_name_before_it_runs() {
+    assert_eq!(EXPECTED_BUILD, heirloom_cpu_ppc::BUILD, "the client expects the core of its own tree");
+    let mut h = host(|_, _, _| true);
+    let mut cpu = Cpu::new(CODE, 0x8_0000);
+    let mut e = Exec::default();
+    assert_eq!(e.resume(&mut h, &mut cpu, 3).insns, 3, "the right build runs");
+    let mut e = Exec::default();
+    e.expect_build(1);
+    let mut cpu = Cpu::new(CODE, 0x8_0000);
+    let st = e.resume(&mut h, &mut cpu, 3);
+    assert_eq!((st.insns, st.trap), (0, Some(Trap::Refused { why: heirloom_cpu_abi::ppc::REFUSED_BUILD })));
+    assert_eq!(e.build_mismatch(), Some((heirloom_cpu_ppc::BUILD, 1)));
+    assert_eq!(e.resume(&mut h, &mut cpu, 3).trap, Some(Trap::Refused { why: heirloom_cpu_abi::ppc::REFUSED_BUILD }), "and stays refused");
+}

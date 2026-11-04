@@ -276,6 +276,7 @@ pub const WHAT: &[&str] = &[
     REFUSED_INSTANCE,
     REFUSED_HOST_PROTOCOL,
     REFUSED_EXIT_CODE,
+    REFUSED_BUILD,
 ];
 
 /// The [`Trap::Refused`] reasons (in [`WHAT`], so a refusal crosses the table by id like any other reason).
@@ -287,6 +288,9 @@ pub const REFUSED_RAM: &str = "cpu-ppc.library refused the RAM descriptor";
 pub const REFUSED_INSTANCE: &str = "cpu-ppc.library refused the instance";
 pub const REFUSED_HOST_PROTOCOL: &str = "a host callback answered a code the protocol does not define";
 pub const REFUSED_EXIT_CODE: &str = "cpu-ppc.library returned an exit code the ABI does not define";
+/// h86 fnreg: the library's PpcProf::build is not the core this engine was built against (a stale or foreign cpu-ppc.library, or
+/// one older than the field: build 0) - refused at its first instance, never run.
+pub const REFUSED_BUILD: &str = "cpu-ppc.library is not the build this engine was built against (PpcProf::build differs)";
 
 /// The [`Trap::Refused`] reason an [`EXIT_REFUSED`] / [`EXIT_HOST_PROTOCOL`] / unknown exit record names.
 pub fn refusal_of(exit: &PpcExit) -> &'static str {

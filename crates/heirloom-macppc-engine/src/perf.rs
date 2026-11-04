@@ -126,8 +126,13 @@ pub struct Perf {
     pub(crate) ledger: crate::perf_ledger::Ledger,
     /// Lines of a closed window not yet taken (the `[HEIRLOOM-PERF ...]` line first, then the ledger's).
     pending: alloc::collections::VecDeque<String>,
-    /// The CPU's build line was said (cpu-tier "jitablate": once, before the first CPU-PPC-TIER line).
+    /// The CPU's build line was said (once, after the first run that reported).
     lib_said: bool,
+    /// What a swap (inside a run) left for the run's end (MacPpc::after_run): the next knobs, the closed windows' CPU-PPC-TIER
+    /// lines (ABLATIONS index, window), and tier 2's event counts as of the last run's end.
+    knobs_due: Option<u32>,
+    tier_line_due: Vec<(usize, u64)>,
+    jit_now: [u64; 4],
     /// Guest instructions retired at the last native's entry (the CPU's timebase): a swap is inside a native.
     pub(crate) tb: u64,
     /// cpu-tier "jitablate": rotate tier 2's knobs through [`ABLATIONS`] (the index of the running one).
@@ -276,7 +281,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn perf_enable(&mut self, clock: fn() -> u64) {
         self.perf = Some(alloc::boxed::Box::new(Perf {
             clock, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0,
-            ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false,
+            ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false, knobs_due: None, tier_line_due: Vec::new(), jit_now: [0; 4],
         }));
     }
     /// Report every `n` frames instead of [`REPORT_FRAMES`] (a host harness's finer view).
@@ -321,13 +326,31 @@ impl<U: GuestUi> MacPpc<U> {
         if w == windows_before { return; }
         // the window that just closed ran under ABLATIONS[k]: what the CPU itself says it ran under (h86 fnreg - the A/B proves
         // itself or names why not), then the next setting every ABLATE_WINDOWS
-        let lines = self.cpu_tier_lines(k, w);
+        // a swap is inside a native, inside the run: the run's Exec is moved out of self.rt meanwhile (run.rs), so the window's
+        // line and the next knobs wait for the run's end (after_run) - h86 fnreg: set here, they went to the placeholder Exec and
+        // were lost, which is why no jitablate window ever applied its knobs
         let Some(p) = self.perf.as_mut() else { return };
-        p.pending.extend(lines);
+        p.tier_line_due.push((k, w));
         if w % ABLATE_WINDOWS != 0 { return; }
         let next = (k + 1) % ABLATIONS.len();
         p.ablate = Some(next);
-        self.rt.exec.set_jit_knobs(ABLATIONS[next].1);
+        p.knobs_due = Some(ABLATIONS[next].1);
+    }
+    /// After every run, with the run's Exec back in self.rt: the knobs a swap chose, the windows' CPU-PPC-TIER lines, the
+    /// CPU-PPC-LIB line once, and tier 2's event counts for the ledger's next frames.
+    pub(crate) fn after_run(&mut self) {
+        if self.perf.is_none() { return; }
+        let jit = self.jit_events_live();
+        let Some(p) = self.perf.as_mut() else { return };
+        p.jit_now = jit;
+        // the closed windows' lines first (what ran in them), then the next setting
+        let due = core::mem::take(&mut p.tier_line_due);
+        for (k, w) in due {
+            let lines = self.cpu_tier_lines(k, w);
+            if let Some(p) = self.perf.as_mut() { p.pending.extend(lines); }
+        }
+        if let Some(k) = self.perf.as_mut().and_then(|p| p.knobs_due.take()) { self.rt.exec.set_jit_knobs(k); }
+        self.cpu_lib_once();
     }
     /// `[CPU-PPC-TIER window=<n> label=<setting> asked=<knobs> knobs=<in the CPU> applied=0|1 ...]` for the window that closed
     /// under ABLATIONS[k] - the knobs, compiles, regions, translations and code drops as the CPU (cpu-ppc.library's read_prof, or
@@ -344,7 +367,7 @@ impl<U: GuestUi> MacPpc<U> {
         #[cfg(not(feature = "cpu-library"))]
         let (knobs, tier, compiles, regions, xlate, drops, refusals, refused, build, size) = {
             let j = self.rt.exec.jit_stats();
-            (self.rt.exec.jit_knobs(), self.rt.exec.tier as u32, j.compiled, j.regions, j.translated, j.reconfigures, 0u64, None::<u64>, heirloom_cpu_ppc::BUILD, 0u32)
+            (self.rt.exec.jit_knobs(), self.rt.exec.tier.number(), j.compiled, j.regions, j.translated, j.reconfigures, 0u64, None::<u64>, heirloom_cpu_ppc::BUILD, 0u32)
         };
         let _ = (build, size);
         let why = match refused { Some(w) => format!(" applied=0 why=refused-word-{w:#x}"), None if knobs != asked => " applied=0 why=knobs-differ".into(), None => " applied=1".into() };
@@ -373,6 +396,10 @@ impl<U: GuestUi> MacPpc<U> {
     /// Tier 2's cumulative events for the frame ledger: blocks compiled, publishes, withdraws (arena reuse), bails - from the CPU
     /// library's last `read_prof` (cpu-library) or the static core's own counters.
     pub(crate) fn jit_events(&self) -> [u64; 4] {
+        // at a swap (inside the run: the Exec is moved out) the counts as of the last run's end (after_run)
+        self.perf.as_ref().map_or([0; 4], |p| p.jit_now)
+    }
+    fn jit_events_live(&self) -> [u64; 4] {
         #[cfg(feature = "cpu-library")]
         { let t = &self.rt.exec.tiers; [t.jit_compiled, t.publishes, t.withdraws, t.jit_bails] }
         #[cfg(not(feature = "cpu-library"))]
@@ -430,7 +457,7 @@ mod tests {
     #[test]
     fn reads_on_the_same_tick_close_together_are_a_poll_and_a_far_or_new_tick_read_is_not() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false, knobs_due: None, tier_line_due: Vec::new(), jit_now: [0; 4] };
         p.clock_read(5, 100, [0; 3]);
         p.clock_read(5, 400, [0; 3]); // 300 insns later, same tick: a poll
         p.clock_read(6, 500, [0; 3]); // the tick moved: not a poll
@@ -478,7 +505,7 @@ mod tests {
     #[test]
     fn the_capture_line_shows_the_draws_shape_the_sampled_split_and_the_read_passes() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false, knobs_due: None, tier_line_due: Vec::new(), jit_now: [0; 4] };
         for _ in 0..98 { p.add_capture(2000, 2048); } // 1000 a KiB: bucket 9 = [512, 1024), the edge 1024
         p.add_capture(100_000, 1024); // two stalls: 100,000 a KiB, bucket 16 [65536, 131072)
         p.add_capture(50_000, 512);
