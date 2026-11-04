@@ -421,7 +421,7 @@ impl Jit {
     /// Compile the recognised whole function `s` at `pc` as one block (jit_xlate): its entry's budget test covers its longest path.
     fn compile_shape<H: Host>(&mut self, s: crate::jit_xlate::Shape, pc: u32, gen: u64, page: usize, at: u64) {
         let note = h_note::<H> as HNote as usize as u64;
-        if self.emit_place(pc, gen, &[(page, gen)], at, crate::jit_xlate::max_insns(s), false, note, |env| crate::jit_xlate::compile(s, pc, gen, page, env)).is_some() {
+        if self.emit_place(pc, gen, &[(page, gen)], at, crate::jit_xlate::slot_len(s), false, note, |env| crate::jit_xlate::compile(s, pc, gen, page, env)).is_some() {
             self.stats.translated += 1;
         }
     }
@@ -786,6 +786,8 @@ pub(crate) fn superblock(cache: &Cache, mem: &heirloom_mem_flat32::GuestMem, fir
         let next = pc.wrapping_add(4 * ops.len() as u32);
         let forward = matches!(last.k, K::Bc | K::Bcl) && last.d & 0x14 != 0x14 && last.imm.wrapping_sub(next) < 0x8000_0000;
         if !forward || ops.len() >= SUPER_MAX || (mem.strip(next) >> heirloom_mem_flat32::CODE_PAGE_SHIFT) as usize != page { break; }
+        // a translated shape (jit_xlate) starts its own block: the not-taken path into a loop shape's head stops here
+        if crate::jit_xlate::recognise(next, heirloom_mem_flat32::CODE_PAGE_SHIFT, |a| mem.read_u32(a).ok()).is_some() { break; }
         if !cache.peek(mem, next, gen, SUPER_MAX - ops.len(), &mut ops) { break; }
     }
     ops

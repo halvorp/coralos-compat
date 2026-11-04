@@ -448,7 +448,7 @@ impl E<'_, '_> {
     }
 
     /// Leave for `target` (a constant), `n` instructions of this block retired.
-    fn chain(&mut self, target: u32, n: usize) {
+    pub(crate) fn chain(&mut self, target: u32, n: usize) {
         self.store_locals();
         let t = self.cat(tg::RETIRED);
         if n != 0 { self.a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), n as u32); }
@@ -466,7 +466,7 @@ impl E<'_, '_> {
         self.a.set_tag(t);
     }
     /// The exit tails of every chained exit emitted (out of line, after the code): store the target pc, leave.
-    fn exit_tails(&mut self) {
+    pub(crate) fn exit_tails(&mut self) {
         self.cat(tg::TAIL);
         for t in core::mem::take(&mut self.tails_to) {
             if !self.dry { self.env.homes.push(self.a.pos()); }

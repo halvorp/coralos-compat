@@ -336,6 +336,22 @@ impl Asm {
     /// cvtsi2sd xmm, r32.
     pub(crate) fn cvtsi2sd(&mut self, x: u8, r: u8) { self.sse_r(0xF2, 0x2A, x, r) }
 
+    // ---- SSE2 packed integer (the translated shapes' vector paths, jit_xlate) ----
+    /// movdqu xmm, [m] / movdqu [m], xmm (unaligned 16 bytes).
+    pub(crate) fn movdqu_ld(&mut self, x: u8, mm: M) { self.sse_m(0xF3, 0x6F, x, mm) }
+    pub(crate) fn movdqu_st(&mut self, mm: M, x: u8) { self.sse_m(0xF3, 0x7F, x, mm) }
+    /// movdqa xmm, xmm.
+    pub(crate) fn movdqa(&mut self, x: u8, y: u8) { self.sse_r(0x66, 0x6F, x, y) }
+    /// pcmpeqd / pand / por / paddusb xmm, xmm.
+    pub(crate) fn pcmpeqd(&mut self, x: u8, y: u8) { self.sse_r(0x66, 0x76, x, y) }
+    pub(crate) fn pand(&mut self, x: u8, y: u8) { self.sse_r(0x66, 0xDB, x, y) }
+    pub(crate) fn por(&mut self, x: u8, y: u8) { self.sse_r(0x66, 0xEB, x, y) }
+    pub(crate) fn paddusb(&mut self, x: u8, y: u8) { self.sse_r(0x66, 0xDC, x, y) }
+    /// pmovmskb r32, xmm (the 16 bytes' top bits).
+    pub(crate) fn pmovmskb(&mut self, r: u8, x: u8) { self.sse_r(0x66, 0xD7, r, x) }
+    /// pshufd xmm, xmm, imm8.
+    pub(crate) fn pshufd(&mut self, x: u8, y: u8, imm: u8) { self.sse_r(0x66, 0x70, x, y); self.u8(imm) }
+
     // ---- control flow ----
     pub(crate) fn jcc(&mut self, cc: Cc) -> Fix {
         self.b.extend_from_slice(&[0x0F, 0x80 + cc as u8]);
@@ -422,6 +438,17 @@ mod tests {
     #[test]
     fn encodings_match_an_assembler() {
         assert_eq!(enc(|a| a.ld32(RDX, m(RBX, 0x10))), [0x8B, 0x53, 0x10]); // mov edx,[rbx+0x10]
+        // h86 fnreg: the translated shapes' packed-integer forms (llvm-mc -show-encoding)
+        assert_eq!(enc(|a| a.movdqu_ld(0, mxd(R12, RSI, 1, 16))), [0xF3, 0x41, 0x0F, 0x6F, 0x44, 0x34, 0x10]); // movdqu xmm0,[r12+rsi+16]
+        assert_eq!(enc(|a| a.movdqu_ld(2, mx(R12, RSI, 1))), [0xF3, 0x41, 0x0F, 0x6F, 0x14, 0x34]); // movdqu xmm2,[r12+rsi]
+        assert_eq!(enc(|a| a.movdqu_st(mx(R12, RDX, 1), 1)), [0xF3, 0x41, 0x0F, 0x7F, 0x0C, 0x14]); // movdqu [r12+rdx],xmm1
+        assert_eq!(enc(|a| a.pcmpeqd(4, 0)), [0x66, 0x0F, 0x76, 0xE0]); // pcmpeqd xmm4,xmm0
+        assert_eq!(enc(|a| a.pand(5, 4)), [0x66, 0x0F, 0xDB, 0xEC]); // pand xmm5,xmm4
+        assert_eq!(enc(|a| a.por(6, 3)), [0x66, 0x0F, 0xEB, 0xF3]); // por xmm6,xmm3
+        assert_eq!(enc(|a| a.pmovmskb(RAX, 5)), [0x66, 0x0F, 0xD7, 0xC5]); // pmovmskb eax,xmm5
+        assert_eq!(enc(|a| a.paddusb(0, 1)), [0x66, 0x0F, 0xDC, 0xC1]); // paddusb xmm0,xmm1
+        assert_eq!(enc(|a| a.pshufd(7, 7, 0)), [0x66, 0x0F, 0x70, 0xFF, 0x00]); // pshufd xmm7,xmm7,0
+        assert_eq!(enc(|a| a.movdqa(3, 1)), [0x66, 0x0F, 0x6F, 0xD9]); // movdqa xmm3,xmm1
         // h86 jitsize: the packed single round trip, the byte store, the lea doubling, the budget compare
         assert_eq!(enc(|a| a.cvtps2pd(2, 2)), [0x0F, 0x5A, 0xD2]); // cvtps2pd xmm2,xmm2
         assert_eq!(enc(|a| a.cmpneqpd(2, 1)), [0x66, 0x0F, 0xC2, 0xD1, 0x04]); // cmpneqpd xmm2,xmm1

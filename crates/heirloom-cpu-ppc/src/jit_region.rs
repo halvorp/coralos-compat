@@ -98,7 +98,9 @@ pub(crate) fn form(cache: &Cache, mem: &GuestMem, head: u32, gen_pages: usize, s
         if new_page { pages.push((page, gen, pc)); }
         succ.clear();
         successors(pc, &ops, shape.follow_calls, &mut succ);
-        for &s in &succ { if s == head || (hot(s) && !queue.contains(&s)) { queue.push(s); } }
+        // a translated shape (jit_xlate) is never a node: its own block is faster than any region code for it (a side exit)
+        let shape = |s: u32| crate::jit_xlate::recognise(s, CODE_PAGE_SHIFT, |a| mem.read_u32(a).ok()).is_some();
+        for &s in &succ { if s == head || (hot(s) && !queue.contains(&s) && !shape(s)) { queue.push(s); } }
         nodes.push((pc, ops));
     }
     // one node is what tier 2 already runs - unless it loops to itself (its back edge becomes an internal jump)

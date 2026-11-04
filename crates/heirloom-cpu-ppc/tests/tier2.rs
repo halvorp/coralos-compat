@@ -11,6 +11,9 @@ use heirloom_mem_flat32::GuestMem;
 /// The h86 jitsize directed tests (store map pages, SO-free code, load / store groups, FPR facts): tests/tier2/jitsize.rs.
 #[path = "tier2/jitsize.rs"]
 mod jitsize;
+/// The h86 fnreg translated shapes (the matrix compare's fast path, the byte compare, the byte-add loop): tests/tier2/xshapes.rs.
+#[path = "tier2/xshapes.rs"]
+mod xshapes;
 
 const BUF: u32 = 0x4000;
 const NATIVE: u32 = 0xF100;

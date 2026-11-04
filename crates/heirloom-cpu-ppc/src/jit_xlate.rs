@@ -1,4 +1,4 @@
-//! Tier 2's TRANSLATED FUNCTIONS (h86 aot-xlate, 2026-11-04; the WC3 council's prototype step 4, chosen by the Z83's own
+//! Tier 2's TRANSLATED FUNCTIONS AND LOOPS (h86 aot-xlate, 2026-11-04; the WC3 council's prototype step 4, chosen by the Z83's own
 //! guest-PC profile): a whole guest function that the profile ranks hot and that is structurally simple is compiled as ONE
 //! block that computes the function's exact architectural effect, instead of one block per guest basic block.
 //!
@@ -21,6 +21,9 @@
 //!   first difference (a 4x4 matrix compare: the game's GL state cache asks it before every matrix upload). Rank 1 of the
 //!   gameplay profile: 7.3 % of JIT time, 5.7 % of the guest's instructions, ~2,200 calls a frame. Only ever reached
 //!   by direct calls (no TVector), so a host native - an exit from JIT code to Rust per call - would cost more than it saves.
+//!   h86 fnreg: a vector fast path for the 64 bytes bit-identical (the census measured the scalar walk at ~330 host
+//!   instructions a call, 5.9 % of the JIT's).
+//! * [`Shape::Memcmp`] and [`Shape::BlendAdd`] (h86 fnreg): byte-string routines, in jit_xbytes.
 use crate::jit_asm::*;
 use crate::jit_emit::{cpu, cpu_m, fpr, ctx, Env, E, CR, LR};
 use crate::jit::{Ctx, EXIT_BAIL};
@@ -31,6 +34,10 @@ use core::mem::offset_of;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Shape {
     Cmp16F,
+    /// jit_xbytes::MEMCMPB: an unsigned byte compare of r5 bytes (a whole function).
+    Memcmp,
+    /// jit_xbytes::BLENDADD: a saturating byte add of CTR groups of four (a loop, at its head).
+    BlendAdd,
 }
 
 /// The 68 words of [`Shape::Cmp16F`]: `lfs f1,0(r3); li r0,0; lfs f0,0(r4); fcmpu cr0,f1,f0; bne done1`, then 15 x
@@ -61,15 +68,32 @@ pub const CMP16F: [u32; 68] = {
 };
 
 /// The shape whose words start at `pc`, read through `word`, if one does and it lies in one code page of `page_shift` bits.
+/// The first word decides which shape is compared at all (one read for every other block).
 pub(crate) fn recognise(pc: u32, page_shift: u32, word: impl Fn(u32) -> Option<u32>) -> Option<Shape> {
-    let len = 4 * CMP16F.len() as u32;
-    if pc & 3 != 0 || pc >> page_shift != (pc.wrapping_add(len - 1)) >> page_shift { return None; }
-    CMP16F.iter().enumerate().all(|(i, &w)| word(pc + 4 * i as u32) == Some(w)).then_some(Shape::Cmp16F)
+    use crate::jit_xbytes::{BLENDADD, MEMCMPB};
+    if pc & 3 != 0 { return None; }
+    let (s, words): (Shape, &[u32]) = match word(pc)? {
+        w if w == CMP16F[0] => (Shape::Cmp16F, &CMP16F),
+        w if w == MEMCMPB[0] => (Shape::Memcmp, &MEMCMPB),
+        w if w == BLENDADD[0] => (Shape::BlendAdd, &BLENDADD),
+        _ => return None,
+    };
+    let len = 4 * words.len() as u32;
+    if pc >> page_shift != (pc.wrapping_add(len - 1)) >> page_shift { return None; }
+    words.iter().enumerate().all(|(i, &w)| word(pc + 4 * i as u32) == Some(w)).then_some(s)
 }
 
-/// The most instructions a shape retires (its entry's budget test).
+/// The fewest instructions a shape retires (its entry's budget test; a variable-length shape tests its own exact need after
+/// it, before writing anything).
 pub(crate) fn max_insns(s: Shape) -> u32 {
-    match s { Shape::Cmp16F => 67 }
+    match s { Shape::Cmp16F => 67, Shape::Memcmp => 9, Shape::BlendAdd => 36 }
+}
+
+/// The budget the dispatcher wants before entering the shape (Slot::len): its longest path, or for a variable-length shape
+/// the need of a typical call - 64 bytes / 64 groups - so a lockstep entry (budget = this + up to 63) usually runs the
+/// translation instead of bailing, and lockstep really compares it.
+pub(crate) fn slot_len(s: Shape) -> u32 {
+    match s { Shape::Cmp16F => 67, Shape::Memcmp => 6 * 64 + 12, Shape::BlendAdd => 36 * 64 }
 }
 
 /// Compile shape `s` at `pc` (code page `page` at generation `gen`): the code and the offset of its inner entry.
@@ -90,7 +114,8 @@ pub(crate) fn compile(s: Shape, pc: u32, gen: u64, page: usize, env: &mut Env) -
     let inner = a.pos();
     a.alu_mi64(Alu::Cmp, ctx(offset_of!(Ctx, left)), max_insns(s));
     bails.push(a.jcc(Cc::B));
-    match s { Shape::Cmp16F => e.cmp16f(&mut bails) }
+    match s { Shape::Cmp16F => e.cmp16f(&mut bails), Shape::Memcmp => e.memcmpb(&mut bails), Shape::BlendAdd => e.blendadd(pc, &mut bails) }
+    e.exit_tails();
     let a = &mut e.a;
     for b in bails { a.here(b); }
     a.st32i(cpu(crate::jit_emit::PC), pc);
@@ -117,6 +142,37 @@ impl E<'_, '_> {
             a.alu_rm64(Alu::Cmp, RCX, ctx(offset_of!(Ctx, lim4)));
             bails.push(a.jcc(Cc::A));
         }
+        // h86 fnreg: the common case first - the 64 bytes bit-identical and no float with exponent 0xFF (an infinity or a NaN:
+        // fcmpu's unordered answer is tier 1's) - is every pair equal, k' = 15, without the scalar walk (~2,000 of ~2,200 calls
+        // a frame upload no matrix). Per 4-byte lane of the guest's big-endian float: exponent 0xFF = bits 0-6 and 15 set.
+        // Anything else (a difference, +0 against -0, an infinity, a NaN) takes the walk below from pair 0.
+        let fast = {
+            a.mov_ri(RAX, if self.env.mutant == crate::jit_mutants::MUT_XLATE_FAST_NAN { 0 } else { 0x807F });
+            a.movd_xr(7, RAX);
+            a.pshufd(7, 7, 0);
+            for j in 0..4u8 {
+                a.movdqu_ld(j, mxd(R12, RSI, 1, 16 * j as i32));
+                a.movdqu_ld(4, mxd(R12, RDI, 1, 16 * j as i32));
+                a.pcmpeqd(4, j);
+                if j == 0 { a.movdqa(5, 4) } else { a.pand(5, 4) }
+                a.pand(j, 7);
+                a.pcmpeqd(j, 7);
+                if j == 0 { a.movdqa(6, 0) } else { a.por(6, j) }
+            }
+            a.pmovmskb(RAX, 5);
+            a.pmovmskb(RCX, 6);
+            if self.env.mutant == crate::jit_mutants::MUT_XLATE_FAST_NAN { a.alu_rr(Alu::Xor, RCX, RCX); }
+            a.alu_ri(Alu::Cmp, RAX, 0xFFFF);
+            let walk = a.jcc(Cc::Ne);
+            a.test_rr(RCX, RCX);
+            let walk2 = a.jcc(Cc::Ne);
+            a.mov_ri(R8, 60);
+            a.alu_rr(Alu::Xor, RSI, RSI);
+            let f = a.jmp();
+            a.here(walk);
+            a.here(walk2);
+            f
+        };
         a.alu_rr(Alu::Xor, R8, R8); // 4 k
         let top = a.pos();
         // a = [ram + r3 + 4k], b = [ram + r4 + 4k], big-endian
@@ -152,6 +208,7 @@ impl E<'_, '_> {
         a.here(differ);
         a.mov_ri(RSI, 1);
         a.here(join);
+        a.here(fast);
         // f1 / f0 = pair k' widened to double (lfs); RSI holds the flag now, so the bases are read again from r3 / r4
         let (r3, r4) = (self.gr(3), self.gr(4));
         let a = &mut self.a;

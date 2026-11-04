@@ -82,3 +82,12 @@ pub(crate) const MUT_LGROUP_SHORT: u8 = 35;
 pub(crate) const MUT_FACTS_REJOIN: u8 = 36;
 /// A store group may span more than a page (jit_lgroup): a member two pages above its head's test runs inline on a code page.
 pub(crate) const MUT_SGROUP_WIDE: u8 = 37;
+/// The matrix compare's vector fast path takes NaN / infinity lanes for equal floats (jit_xlate): a bit-identical NaN pair is
+/// "equal" (fcmpu says unordered: the routine answers 1).
+pub(crate) const MUT_XLATE_FAST_NAN: u8 = 38;
+/// The blend loop's translation runs on a destination that partly overlaps a source (jit_xbytes): the original's byte order
+/// reads bytes the loop itself wrote; the vector pass does not.
+pub(crate) const MUT_XLATE_OVERLAP: u8 = 39;
+/// The byte compare's translation retires 16 + 6k at a difference whatever its sign (jit_xbytes): the original's `li r3,-1`
+/// and its second blr (a[k] < b[k]) go uncounted.
+pub(crate) const MUT_XLATE_COUNT: u8 = 40;
