@@ -241,6 +241,8 @@ impl Asm {
         self.op_m(None, false, &[0x80], 7, mm, false);
         self.u8(v);
     }
+    /// op qword [m], r64.
+    pub(crate) fn alu_mr64(&mut self, op: Alu, mm: M, r: u8) { self.op_m(None, true, &[(op as u8) << 3 | 1], r, mm, false) }
     pub(crate) fn alu_mi64(&mut self, op: Alu, mm: M, v: u32) {
         let short = self.imm8(v);
         self.op_m(None, true, &[if short { 0x83 } else { 0x81 }], op as u8, mm, false);
@@ -433,6 +435,9 @@ mod tests {
         assert_eq!(enc(|a| a.sse_r(0x66, 0x2E, 0, 0)), [0x66, 0x0F, 0x2E, 0xC0]); // ucomisd xmm0,xmm0
         assert_eq!(enc(|a| a.alu_rr(Alu::Sbb, R8, R8)), [0x45, 0x19, 0xC0]); // sbb r8d,r8d
         assert_eq!(enc(|a| a.cmc()), [0xF5]); // cmc
+        assert_eq!(enc(|a| a.alu_mr64(Alu::Sub, m(R13, 8), RCX)), [0x49, 0x29, 0x4D, 0x08]); // sub qword [r13+8],rcx
+        assert_eq!(enc(|a| a.alu_mi64(Alu::Cmp, m(R13, 8), 3)), [0x49, 0x83, 0x7D, 0x08, 0x03]); // cmp qword [r13+8],3
+        assert_eq!(enc(|a| a.jmp_m(mxd(RCX, RAX, 1, 8))), [0xFF, 0x64, 0x01, 0x08]); // jmp qword [rcx+rax+8]
         assert_eq!(enc(|a| a.ld32(RAX, m(R13, 0))), [0x41, 0x8B, 0x45, 0x00]); // mov eax,[r13+0]
         assert_eq!(enc(|a| a.ld32(RAX, m(R12, 0))), [0x41, 0x8B, 0x04, 0x24]); // mov eax,[r12]
         assert_eq!(enc(|a| a.ld32(RDX, mx(R12, RAX, 1))), [0x41, 0x8B, 0x14, 0x04]); // mov edx,[r12+rax]

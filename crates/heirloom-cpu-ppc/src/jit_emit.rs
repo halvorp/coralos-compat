@@ -2,9 +2,9 @@
 //! (`compile_region`, jit_region: internal edges are direct jumps, every other edge the same chained exit as a block's).
 //!
 //! Register model: rbx = &Cpu (a guest field that is not a global pin is a memory operand at its `offset_of!`), r12 = guest
-//! RAM base, r13 = &Ctx, r15 = the instructions LEFT of this entry's budget (counted down across chained blocks: an entry
-//! test is `cmp r15, len`; the retired count is Ctx.budget - r15, formed only where Rust needs it); r9
-//! r10 r11 rbp r14 hold the GLOBAL pins (jit_regs: CR, r0, r1, r3, r4 across all JIT code, stored only where Rust can read
+//! RAM base, r13 = &Ctx (Ctx.left: the instructions LEFT of this entry's budget, counted down across chained blocks - an
+//! entry test is `cmp qword [r13 + left], len`; the retired count is Ctx.budget - left, formed only where Rust needs it); r9
+//! r10 r11 rbp r14 r15 hold the GLOBAL pins (jit_regs: CR, r0, r1, r3, r4, r6 across all JIT code, stored only where Rust can read
 //! the Cpu). rax, rcx, rdx, rsi, rdi, r8 are scratch. Code size matters
 //! (the WC3 working set is tens of thousands of blocks): every slow path is one
 //! `call [r13 + slow]` into the shared stub (jit.rs), which calls the helper and either returns or leaves.
@@ -169,7 +169,7 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     } else { None };
     let inner = a.pos();
     a.set_tag(tg::NO_K << 8 | tg::ENTRY_BUDGET as u16);
-    a.alu_ri64(Alu::Cmp, R15, ops.len() as i32);
+    a.alu_mi64(Alu::Cmp, ctx(offset_of!(Ctx, left)), ops.len() as u32);
     let b1 = a.jcc(Cc::B);
     // the entry counter (jit_region): when it runs out the dispatcher forms a region headed here (left with nothing retired)
     let hot = e.env.counter.map(|off| {
@@ -236,7 +236,7 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
     }
     let a = &mut e.a;
     a.set_tag(tg::NO_K << 8 | tg::ENTRY_BUDGET as u16);
-    a.alu_ri64(Alu::Cmp, R15, maxfwd[0] as i32);
+    a.alu_mi64(Alu::Cmp, ctx(offset_of!(Ctx, left)), maxfwd[0] as u32);
     bails.push(a.jcc(Cc::B));
     e.locals = locals;
     if e.env.census { e.a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, rentries)), 1); }
@@ -267,17 +267,16 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
 /// The table is the INDIRECT BRANCH TARGET CACHE of blr / bctr (and of a native's return): hits and misses are counted
 /// (Ctx.ibtc_hits / ibtc_misses -> JitStats -> PpcProf).
 fn probe(a: &mut Asm, table_mask: u32) {
-    // the IBTC (jit.rs): 8-byte entries, guest pc then the entry's offset in the arena (rax, rcx clobbered)
+    // the IBTC (jit.rs): 16-byte entries, guest pc then the entry's ADDRESS - the byte offset of entry (pc >> 2) & mask is
+    // (pc << 2) & (mask << 4); a hit jumps through the entry itself (rax, rcx clobbered)
     a.mov_rr(RAX, R8);
-    a.sh_ri(Sh::Shr, RAX, 2);
-    if table_mask == 0xFFFF && !a.wide { a.movzx16_rr(RAX, RAX) } else { a.alu_ri(Alu::And, RAX, table_mask) }
+    a.sh_ri(Sh::Shl, RAX, 2);
+    a.alu_ri(Alu::And, RAX, table_mask << 4);
     a.ld64(RCX, ctx(offset_of!(Ctx, ibtc)));
-    a.alu_rm(Alu::Cmp, R8, mxd(RCX, RAX, 8, 0));
+    a.alu_rm(Alu::Cmp, R8, mx(RCX, RAX, 1));
     let miss = a.jcc(Cc::Ne);
-    a.ld32(RCX, mxd(RCX, RAX, 8, 4));
-    a.alu_rm64(Alu::Add, RCX, ctx(offset_of!(Ctx, abase)));
     a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, ibtc_hits)), 1);
-    a.jmp_r(RCX);
+    a.jmp_m(mxd(RCX, RAX, 1, 8));
     a.here(miss);
     a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, ibtc_misses)), 1);
 }
@@ -288,26 +287,10 @@ fn probe(a: &mut Asm, table_mask: u32) {
 /// instructions, ~750 host instructions of dispatcher each). The helper answers 0 = go on, 1 = leave after it (halted,
 /// blocked, the natives set or guest RAM changed: the dispatcher must resync first), 2 = trap (nothing retired).
 /// Every cached register was stored by the exit that got here, so the call clobbers nothing a block holds.
-/// The shared stub of CR field `f` from a compare's flags (jit.rs `stubs`; SO-free code calls it from cr_set): EQ, then the
-/// field's LT / GT constants by CMOV on the flags the caller left (signed: L / G, unsigned: B / A), merged into CR's global
-/// register. rax clobbered. `wrong` = planted mutant MUT_CRSTUB_FIELD (the nibble lands in field f ^ 1).
-pub(crate) fn emit_cr_set(a: &mut Asm, f: usize, signed: bool, wrong: bool) {
-    let cr = crate::jit_regs::GLOBALS.iter().find(|g| g.0 == CR).expect("CR is a global pin").1;
-    let g = if wrong { f ^ 1 } else { f };
-    let (sh, k) = (28 - 4 * g as u32, offset_of!(Ctx, crk) + 8 * g);
-    let (lt, gt) = if signed { (Cc::L, Cc::G) } else { (Cc::B, Cc::A) };
-    a.mov_ri(RAX, 0b0010 << sh);
-    a.cmov_rm(lt, RAX, ctx(k));
-    a.cmov_rm(gt, RAX, ctx(k + 4));
-    a.alu_ri(Alu::And, cr, !(0xF << sh));
-    a.alu_rr(Alu::Or, cr, RAX);
-    a.ret();
-}
-
 pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
     let mut a = Asm { wide: env.wide, ..Asm::default() };
     if env.tags { env.tag_runs = alloc::vec![(0, tg::NO_K << 8 | tg::NATIVE as u16)]; }
-    a.alu_ri64(Alu::Cmp, R15, 1);
+    a.alu_mi64(Alu::Cmp, ctx(offset_of!(Ctx, left)), 1);
     let bail = a.jcc(Cc::B);
     // the native reads and writes the Cpu: a pending FPSCR[FPRF] is settled (rax, rcx, rdx clobbered: before the
     // arguments), the global pins go there first and come back after (rax untouched)
@@ -315,13 +298,13 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
     a.mov_rr64(RDI, R13);
     a.mov_ri(RSI, pc);
     a.ld64(RDX, ctx(offset_of!(Ctx, budget)));
-    a.alu_rr64(Alu::Sub, RDX, R15);
+    a.alu_rm64(Alu::Sub, RDX, ctx(offset_of!(Ctx, left)));
     if env.mutant != MUT_NATIVE_GLOBALS { crate::jit_regs::store_globals(&mut a); }
     a.call_m(ctx(offset_of!(Ctx, native)));
     crate::jit_regs::load_globals(&mut a);
     a.test_rr(RAX, RAX);
     let out = a.jcc(Cc::Ne);
-    a.alu_ri64(Alu::Sub, R15, if env.mutant == MUT_NATIVE_COUNT { 2 } else { 1 });
+    a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), if env.mutant == MUT_NATIVE_COUNT { 2 } else { 1 });
     if env.chain {
         a.ld32(R8, cpu(PC));
         probe(&mut a, env.table_mask);
@@ -331,7 +314,7 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
     a.here(out);
     a.alu_ri(Alu::Cmp, RAX, 2);
     let t = a.jcc(Cc::E);
-    a.alu_ri64(Alu::Sub, R15, 1);
+    a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), 1);
     a.mov_ri(RAX, EXIT_NORMAL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
     a.here(t);
@@ -429,12 +412,12 @@ impl E<'_, '_> {
         let mutant = self.env.mutant;
         let t = self.cat(tg::EDGE);
         let a = &mut self.a;
-        if mutant != MUT_REGION_COUNT { a.alu_ri64(Alu::Sub, R15, n as i32); }
+        if mutant != MUT_REGION_COUNT { a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), n as u32); }
         if self.env.census { a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, redges)), 1); }
         let rg = self.rg.as_mut().expect("a region");
         if j <= rg.cur {
             if mutant != MUT_REGION_BACK_BUDGET {
-                a.alu_ri64(Alu::Cmp, R15, rg.maxfwd[j] as i32);
+                a.alu_mi64(Alu::Cmp, ctx(offset_of!(Ctx, left)), rg.maxfwd[j] as u32);
                 let out = a.jcc(Cc::B);
                 rg.backs.push((out, target));
             }
@@ -468,7 +451,7 @@ impl E<'_, '_> {
     fn chain(&mut self, target: u32, n: usize) {
         self.store_locals();
         let t = self.cat(tg::RETIRED);
-        if n != 0 { self.a.alu_ri64(Alu::Sub, R15, n as i32); }
+        if n != 0 { self.a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), n as u32); }
         self.cat(tg::CHAIN);
         if self.env.chain {
             // the pc is stored by the slot's own exit tail when its target is not published (a chained target needs none)
@@ -501,7 +484,7 @@ impl E<'_, '_> {
         self.store_locals();
         let t = self.cat(tg::RETIRED);
         let a = &mut self.a;
-        a.alu_ri64(Alu::Sub, R15, n as i32);
+        a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), n as u32);
         self.cat(tg::DYN);
         let a = &mut self.a;
         // an IBTC hit jumps away (the target stores no pc either); a miss falls through and leaves with the pc
@@ -597,7 +580,7 @@ impl E<'_, '_> {
             self.a.here(f);
             self.helper(i);
             let pc = self.ipc(i).wrapping_add(4);
-            self.a.alu_ri64(Alu::Sub, R15, i as i32 + 1);
+            self.a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), i as u32 + 1);
             self.a.st32i(cpu(PC), pc);
             self.exit_normal();
         }
@@ -620,14 +603,6 @@ impl E<'_, '_> {
         let sh = 28 - 4 * f as u32;
         let k = offset_of!(Ctx, crk) + 8 * f;
         let t = self.cat(tg::CR_SET);
-        if no_so {
-            // SO-free: the shared stub of this field and signedness (the call leaves the compare's flags to it: one 7-byte
-            // call where the field was built inline in ~25 bytes - cold code's bytes are what the Atom's front end pays for)
-            let signed = matches!(lt, Cc::L);
-            self.a.call_m(ctx(offset_of!(Ctx, crset) + 8 * (2 * f + signed as usize)));
-            self.a.set_tag(t);
-            return;
-        }
         let a = &mut self.a;
         a.mov_ri(RAX, 0b0010 << sh);
         a.cmov_rm(lt, RAX, ctx(k));
@@ -866,7 +841,7 @@ impl E<'_, '_> {
 
     /// After a terminal Generic answered 0 (it never does: a branch answers 1 with pc set), leave with pc as it is.
     fn chain_dyn_after_helper(&mut self, i: usize) {
-        self.a.alu_ri64(Alu::Sub, R15, i as i32 + 1);
+        self.a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), i as u32 + 1);
         self.exit_normal();
     }
 

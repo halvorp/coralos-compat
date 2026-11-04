@@ -510,7 +510,7 @@ fn rc_forms_set_cr0_from_the_result_even_when_the_add_overflows() {
 /// programs for the store-watch and exit-count ones. A gate that stays green with a mutant proves nothing.
 #[test]
 fn negative_control_every_planted_jit_mutant_goes_red() {
-    for mutant in (1..=10u8).chain([12, 20, 32, 34, 38]) {
+    for mutant in (1..=10u8).chain([12, 20, 32, 34]) {
         let mut red = false;
         for seed in 0..400u64 {
             let prog = random_program(seed);

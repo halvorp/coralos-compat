@@ -23,7 +23,9 @@
 //! caller-saved globals are kept on the stack around it. In JitLockstep every block is entered through the trampoline, so the
 //! globals are flushed at every block boundary there.
 //!
-//! Host registers: r9 r10 r11 (caller-saved) and rbp, r14 (callee-saved; the trampoline saves them). Nothing else in tier 2
+//! Host registers: r9 r10 r11 (caller-saved) and rbp, r14, r15 (callee-saved; the trampoline saves them). h86 jitsize increment
+//! 5: r15 held the budget's count; that count is in the Ctx now (`left`, read-modify-write at the same instruction count) and
+//! r15 holds r6 (0.09 executed references per guest insn, the next GPR after r0 r3 r1 r4). Nothing else in tier 2
 //! uses them (scratch is rax rcx rdx r8; rsi and rdi hold a region's locals, below, and call arguments).
 //!
 //! REGION LOCALS (increment 2 of the region tier): inside a region two more GPRs - the two the region's code accesses most,
@@ -34,7 +36,7 @@ use crate::jit_asm::*;
 use crate::jit_emit::{gpr, CR, E, LR};
 
 /// The global pins: (Cpu field offset, host register).
-pub(crate) const GLOBALS: [(usize, u8); 5] = [(CR, R14), (gpr(3) as usize, RBP), (gpr(1) as usize, R11), (gpr(0) as usize, R10), (gpr(4) as usize, R9)];
+pub(crate) const GLOBALS: [(usize, u8); 6] = [(CR, R14), (gpr(3) as usize, RBP), (gpr(1) as usize, R11), (gpr(0) as usize, R10), (gpr(4) as usize, R9), (gpr(6) as usize, R15)];
 /// The caller-saved ones (pushed around the lockstep journal call).
 pub(crate) const CALLER_SAVED: [u8; 3] = [R9, R10, R11];
 

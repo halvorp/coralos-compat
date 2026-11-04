@@ -88,7 +88,7 @@ pub(crate) fn compile(s: Shape, pc: u32, gen: u64, page: usize, env: &mut Env) -
         bails.push(a.jcc(Cc::Ne));
     }
     let inner = a.pos();
-    a.alu_ri64(Alu::Cmp, R15, max_insns(s) as i32);
+    a.alu_mi64(Alu::Cmp, ctx(offset_of!(Ctx, left)), max_insns(s));
     bails.push(a.jcc(Cc::B));
     match s { Shape::Cmp16F => e.cmp16f(&mut bails) }
     let a = &mut e.a;
@@ -199,9 +199,9 @@ impl E<'_, '_> {
         self.a.st32o(r3, RSI);
         // retired: 5 + 4 k' + 2 + flag = 7 + r8 + rsi
         let a = &mut self.a;
-        a.alu_rr64(Alu::Sub, R15, R8);
-        a.alu_rr64(Alu::Sub, R15, RSI);
-        a.alu_ri64(Alu::Sub, R15, 7);
+        a.alu_mr64(Alu::Sub, ctx(offset_of!(Ctx, left)), R8);
+        a.alu_mr64(Alu::Sub, ctx(offset_of!(Ctx, left)), RSI);
+        a.alu_mi64(Alu::Sub, ctx(offset_of!(Ctx, left)), 7);
         // blr: on to LR through the dispatch table
         let lr = self.rw(LR);
         self.a.ld32o(R8, lr);

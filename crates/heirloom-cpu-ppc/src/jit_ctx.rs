@@ -14,7 +14,10 @@ use core::mem::offset_of;
 pub(crate) struct Ctx {
     /// The code watch's generation array (block entries compare their page's element).
     pub(crate) gen: *const u64,
-    pub(crate) budget: u64,
+    /// The instructions LEFT of this entry's budget, counted down by every block (an entry test is `cmp qword [r13 + left],
+    /// len`; the retired count is `budget - left`, formed only where Rust needs it). In the Ctx since h86 jitsize increment 5:
+    /// r15, which held it, holds the global pin of r6.
+    pub(crate) left: u64,
     pub(crate) exit: u64,
     /// The pending FPSCR[FPRF] source (see `fprf_kind`), here for a one-byte displacement.
     pub(crate) fprf_src: u64,
@@ -27,9 +30,8 @@ pub(crate) struct Ctx {
     /// jit_emit's cr_set.
     pub(crate) crk: [[u32; 2]; 8],
     // ---- 128 bytes: below, a 4-byte displacement ----
-    /// The IBTC (Jit::ibtc) and the arena base its entry offsets are relative to.
+    /// The IBTC (Jit::ibtc: [pc, entry address] pairs).
     pub(crate) ibtc: *const u64,
-    pub(crate) abase: u64,
     /// Indirect branches (blr / bctr / a native's return) that found their target in the dispatch table, and that did not.
     pub(crate) ibtc_hits: u64,
     pub(crate) ibtc_misses: u64,
@@ -49,8 +51,6 @@ pub(crate) struct Ctx {
     /// fmadds's exact-path stub (jit_fp emit_fma_odd), and the f64 bit patterns shifted up one (sign dropped) at which the
     /// exponent is 0x7FF (k_inf2: not finite) and below which it is under 897 (k_tiny2: under 2^-126, the single normal range).
     pub(crate) fma_odd: u64,
-    /// The shared CR-field stubs (jit_emit emit_cr_set): [field][signed] - SO-free code's compares call them.
-    pub(crate) crset: [[u64; 2]; 8],
     pub(crate) k_inf2: u64,
     pub(crate) k_tiny2: u64,
     /// The shared slow stub, and `h_one::<H>` it calls.
@@ -62,6 +62,8 @@ pub(crate) struct Ctx {
     pub(crate) natives: u64,
     /// h_one calls this entry.
     pub(crate) helpers: u64,
+    /// This entry's budget (the retired count is budget - left).
+    pub(crate) budget: u64,
     pub(crate) cpu: *mut Cpu,
     pub(crate) ram: *mut u8,
     pub(crate) len: u64,

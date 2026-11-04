@@ -82,5 +82,3 @@ pub(crate) const MUT_LGROUP_SHORT: u8 = 35;
 pub(crate) const MUT_FACTS_REJOIN: u8 = 36;
 /// A store group may span more than a page (jit_lgroup): a member two pages above its head's test runs inline on a code page.
 pub(crate) const MUT_SGROUP_WIDE: u8 = 37;
-/// The shared CR-field stub of field f writes field f ^ 1 (jit_emit emit_cr_set).
-pub(crate) const MUT_CRSTUB_FIELD: u8 = 38;

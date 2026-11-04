@@ -57,8 +57,6 @@ pub(crate) const STUB_EXIT: u8 = 34;
 pub(crate) const STUB_SLOW: u8 = 35;
 pub(crate) const STUB_FPRF: u8 = 36;
 pub(crate) const STUB_STFS: u8 = 37;
-/// The shared CR-field stubs (jit_emit emit_cr_set).
-pub(crate) const STUB_CR: u8 = 39;
 
 /// `K` of a tag outside any guest instruction (entries, exits after the body, tails).
 pub(crate) const NO_K: u16 = 0xFF;

@@ -54,7 +54,8 @@ pub(crate) const ARENA_MIN: usize = 8 << 20;
 pub(crate) const SEGMENTS: usize = 16;
 pub(crate) const TABLE_BITS: u32 = 14;
 /// The INDIRECT BRANCH TARGET CACHE that blr / bctr / a native's return probe (jit_emit `probe`): 64K direct-mapped entries
-/// of 8 bytes (guest pc, entry offset in the arena) - 512 KiB, the dispatch table's size, 4x its entries. Z83 2026-11-03
+/// of 16 bytes (guest pc, the entry's address: a hit is one `jmp [entry + 8]`, h86 jitsize - it was the offset in the arena
+/// added to its base, 8 bytes an entry) - 1 MiB. Z83 2026-11-03
 /// (tag blue forest peak): with the probe on the 16K-entry dispatch table (4bf4dfb), dispatcher entries rose 4.4x per guest
 /// instruction (1 per ~3.1k, IBTC misses ~all of them); host repro 1 per ~2.8k. ppc-jit4's own census: 64K hits 99.6%.
 pub(crate) const IBTC_BITS: u32 = 16;
@@ -116,7 +117,7 @@ pub(crate) struct Jit {
     link_home: Box<[u64]>,
     by_target: BTreeMap<u32, Vec<u32>>,
     /// The IBTC: per entry, guest pc (low half) and the block's entry offset in the arena (high half); IBTC_EMPTY = none.
-    ibtc: Box<[u64]>,
+    ibtc: Box<[[u64; 2]]>,
     /// Every published block by pc (the dispatch table is a direct-mapped cache in front of it: a colliding block is
     /// refilled from here, never recompiled). Hashed: every dispatcher miss probes it, and in WC3 gameplay most misses are
     /// native calls (pcs that are never a block), ~1 per 500 guest instructions.
@@ -191,7 +192,7 @@ impl Jit {
         let ctx = Ctx::boxed();
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
-            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![IBTC_EMPTY; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << IBTC_BITS].into_boxed_slice(), pending: Vec::new(),
+            nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![[IBTC_EMPTY, 0]; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0); 1 << IBTC_BITS].into_boxed_slice(), pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(), knobs: 0,
             region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), so_aware: false,
@@ -210,8 +211,6 @@ impl Jit {
         a.ld64(RBX, m(R13, offset_of!(Ctx, cpu) as i32));
         a.lea64(RBX, m(RBX, crate::jit_emit::CPU_BIAS));
         a.ld64(R12, m(R13, offset_of!(Ctx, ram) as i32));
-        // r15 = the instructions left of the budget (jit_emit): counted down by every block
-        a.ld64(R15, m(R13, offset_of!(Ctx, budget) as i32));
         crate::jit_regs::load_globals(&mut a);
         a.jmp_r(RSI);
         let exit = a.pos();
@@ -223,7 +222,7 @@ impl Jit {
             a.pop(RAX);
         }
         a.ld64(RCX, m(R13, offset_of!(Ctx, budget) as i32));
-        a.alu_rr64(Alu::Sub, RCX, R15);
+        a.alu_rm64(Alu::Sub, RCX, m(R13, offset_of!(Ctx, left) as i32));
         a.st64(m(R13, offset_of!(Ctx, retired) as i32), RCX);
         a.alu_ri64(Alu::Add, RSP, 8);
         for r in [R15, R14, R13, R12, RBP, RBX] { a.pop(r); }
@@ -241,8 +240,8 @@ impl Jit {
         crate::jit_inline::emit_fprf_settle(&mut a);
         a.pop(RDX);
         a.mov_rr64(RDI, R13);
-        // done = the retired count before instruction i: (budget - r15) + i
-        a.alu_rr64(Alu::Sub, RCX, R15);
+        // done = the retired count before instruction i: (budget - left) + i
+        a.alu_rm64(Alu::Sub, RCX, m(R13, offset_of!(Ctx, left) as i32));
         a.alu_rm64(Alu::Add, RCX, m(R13, offset_of!(Ctx, budget) as i32));
         a.call_m(m(R13, offset_of!(Ctx, helper) as i32));
         // the handler may have written any field: the global pins come back from the Cpu (rax, the answer, untouched)
@@ -256,11 +255,11 @@ impl Jit {
         a.alu_ri(Alu::Cmp, RAX, 2);
         let t = a.jcc(Cc::E);
         a.lea64(RCX, m(RCX, if self.mutant == crate::jit_emit::MUT_EXIT_COUNT { 2 } else { 1 }));
-        a.alu_rr64(Alu::Sub, R15, RCX);
+        a.alu_mr64(Alu::Sub, m(R13, offset_of!(Ctx, left) as i32), RCX);
         a.mov_ri(RAX, EXIT_NORMAL);
         a.jmp_m(m(R13, offset_of!(Ctx, exit) as i32));
         a.here(t);
-        a.alu_rr64(Alu::Sub, R15, RCX);
+        a.alu_mr64(Alu::Sub, m(R13, offset_of!(Ctx, left) as i32), RCX);
         a.mov_ri(RAX, EXIT_TRAP);
         a.jmp_m(m(R13, offset_of!(Ctx, exit) as i32));
         let fprf_s = a.pos();
@@ -273,21 +272,13 @@ impl Jit {
         crate::jit_inline::emit_fprf_lazy(&mut a, fprf_s, fprf_d);
         let fma_odd = a.pos();
         crate::jit_fp::emit_fma_odd(&mut a, self.mutant == crate::jit_emit::MUT_FMA_TWICE);
-        let mut crset = [[0usize; 2]; 8];
-        for (f, s) in crset.iter_mut().enumerate() {
-            for (signed, at) in s.iter_mut().enumerate() {
-                *at = a.pos();
-                crate::jit_emit::emit_cr_set(&mut a, f, signed == 1, self.mutant == crate::jit_emit::MUT_CRSTUB_FIELD);
-            }
-        }
         let Some(p) = self.arena.put(&a.b) else { return false };
         let at = p as usize - self.arena.base as usize;
         use crate::jit_census as tg;
-        self.stub_tags = alloc::vec![(at, tg::STUB_EXIT), (at + slow, tg::STUB_SLOW), (at + fprf_s, tg::STUB_FPRF), (at + stfs, tg::STUB_STFS), (at + crset[0][0], tg::STUB_CR), (at + a.b.len(), tg::OTHER)];
+        self.stub_tags = alloc::vec![(at, tg::STUB_EXIT), (at + slow, tg::STUB_SLOW), (at + fprf_s, tg::STUB_FPRF), (at + stfs, tg::STUB_STFS), (at + a.b.len(), tg::OTHER)];
         (self.ctx.fprf_s, self.ctx.fprf_d, self.ctx.stfs) = (p as u64 + fprf_s as u64, p as u64 + fprf_d as u64, p as u64 + stfs as u64);
         self.ctx.fprf_lazy = p as u64 + lazy as u64;
         self.ctx.fma_odd = p as u64 + fma_odd as u64;
-        self.ctx.crset = crset.map(|s| s.map(|at| p as u64 + at as u64));
         self.enter = p as u64;
         self.ctx.exit = p as u64 + exit as u64;
         self.exit_stub = p as u64 + stub as u64;
@@ -332,7 +323,7 @@ impl Jit {
     /// segments are withdrawn when the FIFO reuses them, as always. For a natives-set, RAM or link-table change.
     fn drop_code(&mut self) {
         self.stats.flushes += 1;
-        if self.mutant != crate::jit_emit::MUT_TABLE_STALE { self.table.fill(EMPTY); self.ibtc.fill(IBTC_EMPTY); }
+        if self.mutant != crate::jit_emit::MUT_TABLE_STALE { self.table.fill(EMPTY); self.ibtc.fill([IBTC_EMPTY, 0]); }
         self.hot.fill((EMPTY_PC, 0));
         self.links.fill(self.exit_stub);
         self.link_owner.fill(0);
@@ -382,7 +373,7 @@ impl Jit {
     /// Point the IBTC at published block `s`.
     #[inline(always)]
     fn ibtc_set(&mut self, s: &Slot) {
-        self.ibtc[(s.pc >> 2) as usize & self.ibtc_mask() as usize] = s.pc as u64 | (s.entry - self.arena.base as u64) << 32;
+        self.ibtc[(s.pc >> 2) as usize & self.ibtc_mask() as usize] = [s.pc as u64, s.entry];
     }
 
     /// Count a whole-block tier-1 run at `pc`; true when it should be compiled now (also when the published code there is a
@@ -594,8 +585,7 @@ impl Jit {
         self.blocks.retain(|pc, slot| { let k = inside(slot.entry); if k { gone.push(pc); } !k || stale });
         if !stale {
             for t in self.table.iter_mut() { if inside(t.entry) { *t = EMPTY; } }
-            let base = self.arena.base as u64;
-            for v in self.ibtc.iter_mut() { if *v != IBTC_EMPTY && inside(base + (*v >> 32)) { *v = IBTC_EMPTY; } }
+            for v in self.ibtc.iter_mut() { if v[0] != IBTC_EMPTY && inside(v[1]) { *v = [IBTC_EMPTY, 0]; } }
         }
         for pc in &gone {
             if let Some(v) = self.by_target.get(pc) { for &i in v { self.links[i as usize] = self.link_home[i as usize]; } }
@@ -675,12 +665,12 @@ impl Jit {
         c.lim8 = raw.len as u64 - 8;
         c.helper = h_one::<H> as HOne as usize as u64;
         c.budget = budget;
+        c.left = budget;
         c.retired = 0;
         c.tb0 = cpu.tb;
         c.host = host as *mut H as *mut u8;
         c.table = self.table.as_ptr();
-        c.ibtc = self.ibtc.as_ptr();
-        c.abase = self.arena.base as u64;
+        c.ibtc = self.ibtc.as_ptr() as *const u64;
         c.trap = None;
         c.native = h_native::<H> as HNative as usize as u64;
         c.natives = 0;
