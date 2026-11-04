@@ -41,9 +41,10 @@ fn version_enumeration_find_reserve_state_release_and_the_error_numbers() {
     let first = m.mac.mem.read_u32(OUT).unwrap();
     assert_ne!(first, 0);
     let modes = enumerate(&mut m, first);
-    assert_eq!(modes.len(), 15);
-    assert_eq!(modes[0], (640, 480), "the display's own size first: an unset game preference keeps today's mode");
-    assert!(modes.contains(&(1920, 1080)) && modes.contains(&(1280, 800)) && modes.contains(&(1024, 768)));
+    assert_eq!(modes.len(), 30, "15 modes, each at 16 and at 32 bits");
+    assert_eq!(modes[0], (640, 480, 16), "the display's own size at 16 bits first: WC3's default colordepth 16 keeps today's mode");
+    assert_eq!(modes[1], (640, 480, 32));
+    assert!(modes.contains(&(1920, 1080, 32)) && modes.contains(&(1280, 800, 16)) && modes.contains(&(1024, 768, 32)));
     assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 0, "the walk ends with a NIL");
     assert_eq!(call(&mut m, "DSpGetFirstContext", &[2, OUT]), -30446, "NEGATIVE control: no second display");
     // FindBestContext answers the requested mode's context; Reserve makes the native window of that size (hidden until Active)
@@ -53,6 +54,10 @@ fn version_enumeration_find_reserve_state_release_and_the_error_numbers() {
     assert_eq!(call(&mut m, "DSpFindBestContextOnDisplayID", &[ATTR, OUT, 1]), 0);
     let ctx = m.mac.mem.read_u32(OUT).unwrap();
     assert_ne!(ctx, first, "800x600 is its own context");
+    m.mac.mem.write_u32(ATTR + 44, 32).unwrap();
+    assert_eq!(call(&mut m, "DSpFindBestContextOnDisplayID", &[ATTR, OUT, 1]), 0);
+    assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), ctx + 1, "a 32-bit request is the same mode's 32-bit context");
+    m.mac.mem.write_u32(ATTR + 44, 0).unwrap();
     assert_eq!(call(&mut m, "DSpContext_Reserve", &[ctx, ATTR]), 0);
     assert_eq!(call(&mut m, "DSpContext_Reserve", &[ctx, ATTR]), -30444, "already reserved");
     let win = *m.mac.windows.keys().next().expect("the native window");
@@ -68,7 +73,7 @@ fn version_enumeration_find_reserve_state_release_and_the_error_numbers() {
     // attributes report the context's mode
     assert_eq!(call(&mut m, "DSpContext_GetAttributes", &[ctx, ATTR]), 0);
     assert_eq!((m.mac.mem.read_u32(ATTR).unwrap(), m.mac.mem.read_u32(ATTR + 48).unwrap()), (60 << 16, 1));
-    assert_eq!((m.mac.mem.read_u32(ATTR + 4).unwrap(), m.mac.mem.read_u32(ATTR + 8).unwrap()), (800, 600));
+    assert_eq!((m.mac.mem.read_u32(ATTR + 4).unwrap(), m.mac.mem.read_u32(ATTR + 8).unwrap(), m.mac.mem.read_u32(ATTR + 44).unwrap()), (800, 600, 16), "the reserved context reports the mode and depth it runs");
     // a call that needs the reserved context, on another one, is kDSpContextNotReservedErr
     assert_eq!(call(&mut m, "DSpContext_SetState", &[first, 0]), -30445);
     // can the user pick? no: one context; UserSelectContext answers it without a dialog
@@ -85,18 +90,18 @@ fn version_enumeration_find_reserve_state_release_and_the_error_numbers() {
     assert_eq!(call(&mut m, "DSpContext_Release", &[ctx]), -30445);
     assert_eq!(call(&mut m, "DSpContext_SetState", &[ctx, 0]), -30445);
     assert_eq!(call(&mut m, "DSpContext_Reserve", &[0x1234, ATTR]), -30442);
-    assert_eq!(call(&mut m, "DSpContext_GetAttributes", &[first + 15, ATTR]), -30442, "NEGATIVE control: one past the last mode names no context");
+    assert_eq!(call(&mut m, "DSpContext_GetAttributes", &[first + 30, ATTR]), -30442, "NEGATIVE control: one past the last context names none");
 }
 
 /// Walk the contexts from `first` as Warcraft III's mode list does (GetAttributes, then Next until it fails): every (width, height).
-fn enumerate(m: &mut M, first: u32) -> Vec<(u32, u32)> {
+fn enumerate(m: &mut M, first: u32) -> Vec<(u32, u32, u32)> {
     let mut ctx = first;
     let mut out = Vec::new();
     loop {
         assert_eq!(call(m, "DSpContext_GetAttributes", &[ctx, ATTR]), 0);
         // the game keeps a context whose displayWidth >= 640 and displayBestDepth >= 16 (FUN_10350930)
         assert!(m.mac.mem.read_u32(ATTR + 4).unwrap() >= 640 && m.mac.mem.read_u32(ATTR + 44).unwrap() >= 16);
-        out.push((m.mac.mem.read_u32(ATTR + 4).unwrap(), m.mac.mem.read_u32(ATTR + 8).unwrap()));
+        out.push((m.mac.mem.read_u32(ATTR + 4).unwrap(), m.mac.mem.read_u32(ATTR + 8).unwrap(), m.mac.mem.read_u32(ATTR + 44).unwrap()));
         if call(m, "DSpGetNextContext", &[ctx, OUT]) != 0 {
             return out;
         }

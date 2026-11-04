@@ -3,9 +3,9 @@
 //! not on the 9.2.1 CD, so the contract is the public API (Game Sprockets reference) and the structure offsets confirmed by systemless (GPL, facts only: the
 //! `DSpContextAttributes` offsets frequency 0, width 4, height 8, contextOptions 28, backBufferDepthMask 32, displayDepthMask 36, backBufferBestDepth 40, displayBestDepth 44, pageCount 48).
 //! * `DSpGetVersion` answers 1.7.5 as a `NumVersion` (0x01758000, a struct result: written through the hidden pointer in r3): the version Warcraft III requires. `DSpStartup` / `DSpShutdown` bracket everything (-30440 before startup).
-//! * `DSpGetFirstContext(displayID, &ctx)`: display ID 1 (the main display; `DMGetDisplayIDByGDevice` answers the same) has one context PER MODE of [`MODES`]: the
+//! * `DSpGetFirstContext(displayID, &ctx)`: display ID 1 (the main display; `DMGetDisplayIDByGDevice` answers the same) has one context PER MODE AND DEPTH ([`MODES`] x [`DEPTHS`]): the
 //!   main display's own size first (640x480 until a real size is bridged: the game's default stays today's), then the standard 4:3, 5:4, 16:9 and 16:10 modes up to 1920x1200,
-//!   each at 32 bits; `DSpGetNextContext` walks them and ends with kDSpContextNotFoundErr (-30446) and a NIL out. Warcraft III's mode list (FUN_10350930 in the 2026-11-01
+//!   each at 16 then 32 bits; `DSpGetNextContext` walks them and ends with kDSpContextNotFoundErr (-30446) and a NIL out. Warcraft III's mode list (FUN_10350930 in the 2026-11-01
 //!   game call map) keeps every context whose displayWidth >= 640 and displayBestDepth >= 16, so its Video options list every mode here. A mode is a WINDOW size under the
 //!   games-run-windowed rule (the display itself never changes mode): the host scales the window's GL picture to whatever size the user gives the window.
 //!   `DSpFindBestContext[OnDisplayID]` answers the exact mode of the requested width/height, else the smallest that holds it, else the largest (a zero request: the first),
@@ -43,6 +43,10 @@ pub const MODES: [(u32, u32); 14] = [
     (800, 600), (1024, 768), (1152, 864), (1280, 720), (1280, 800), (1280, 960), (1280, 1024), (1366, 768), (1440, 900), (1600, 900),
     (1680, 1050), (1600, 1200), (1920, 1080), (1920, 1200),
 ];
+/// The display depths every mode is offered at, as its own context: 16 first (Warcraft III's `colordepth` preference defaults to
+/// 16 and its in-game Video Options shows the running mode as `640x480x16`), then 32. Under the GPU path the depth is only what
+/// the game is told: the GL picture is ARGB8888 either way.
+pub const DEPTHS: [u32; 2] = [16, 32];
 pub const MAIN_DISPLAY_ID: u32 = 1;
 const VERSION_1_7_5: u32 = 0x0175_8000;
 const ATTR_SIZE: u32 = 72;
@@ -114,15 +118,24 @@ impl<U: GuestUi> MacPpc<U> {
         let own = self.dsp_display_size();
         core::iter::once(own).chain(MODES.iter().copied().filter(|m| *m != own)).collect()
     }
-    /// The mode of context reference `ctx`, None for a reference that names no context.
+    /// The mode of context reference `ctx`, None for a reference that names no context. Each mode is two contexts, its
+    /// [`DEPTHS`] in order: context `CONTEXT + 2m + d` is mode `m` at depth `DEPTHS[d]`.
     fn dsp_mode_of(&self, ctx: u32) -> Option<(u32, u32)> {
-        ctx.checked_sub(CONTEXT).and_then(|i| self.dsp_modes().get(i as usize).copied())
+        let i = ctx.checked_sub(CONTEXT)? as usize;
+        self.dsp_modes().get(i / DEPTHS.len()).copied()
+    }
+    /// The display depth context `ctx` reports (its displayBestDepth).
+    fn dsp_depth_of(ctx: u32) -> u32 {
+        DEPTHS[ctx.wrapping_sub(CONTEXT) as usize % DEPTHS.len()]
     }
     /// The width and height an attributes record asks for ((0, 0) for a NIL record).
     fn dsp_request(&self, attrs: u32) -> Result<(u32, u32), String> {
-        if attrs == 0 { return Ok((0, 0)); }
-        let rd = |o: u32| self.mac.mem.read_u32(attrs + o).map_err(|_| String::from("DrawSprocket: the attributes leave guest RAM"));
-        Ok((rd(4)?, rd(8)?))
+        Ok((self.dsp_attr(attrs, 4)?, self.dsp_attr(attrs, 8)?))
+    }
+    /// One u32 field of an attributes record (0 for a NIL record).
+    fn dsp_attr(&self, attrs: u32, off: u32) -> Result<u32, String> {
+        if attrs == 0 { return Ok(0); }
+        self.mac.mem.read_u32(attrs + off).map_err(|_| String::from("DrawSprocket: the attributes leave guest RAM"))
     }
     /// The best context for a requested size (see the module doc), and the request recorded for the next Reserve (a zero keeps the
     /// context's own mode).
@@ -132,7 +145,9 @@ impl<U: GuestUi> MacPpc<U> {
         let (mw, mh) = self.dsp_modes()[i];
         self.dsp.width = if w == 0 { mw } else { w };
         self.dsp.height = if h == 0 { mh } else { h };
-        Ok(CONTEXT + i as u32)
+        // the depth the record asks for (displayBestDepth): the context of that depth, else the first (16)
+        let d = DEPTHS.iter().position(|d| *d == self.dsp_attr(attrs, 44).unwrap_or(0)).unwrap_or(0);
+        Ok(CONTEXT + (i * DEPTHS.len() + d) as u32)
     }
 
     pub(crate) fn dsp_call(&mut self, f: DspFn, cpu: &mut Cpu) -> Result<(), String> {
@@ -170,7 +185,7 @@ impl<U: GuestUi> MacPpc<U> {
                 // displayWidth >= 640: its mode list, FUN_10350930 in the 2026-11-01 game call map). The BACK BUFFER stays the main device's depth: a
                 // DSp back buffer is a GWorld at that depth (GetBackBuffer), so its mask and best depth say what GetBackBuffer gives.
                 let display_mask = (1u32 << 3) | (1 << 4) | (1 << 5);
-                for (o, v) in [(0u32, 60u32 << 16), (4, w), (8, h), (28, 0), (32, mask), (36, display_mask), (40, depth), (44, 32), (48, 1)] { self.dsp_put32(a1 + o, v, n)?; }
+                for (o, v) in [(0u32, 60u32 << 16), (4, w), (8, h), (28, 0), (32, mask), (36, display_mask), (40, depth), (44, Self::dsp_depth_of(a0)), (48, 1)] { self.dsp_put32(a1 + o, v, n)?; }
                 0
             }
             Reserve => {
