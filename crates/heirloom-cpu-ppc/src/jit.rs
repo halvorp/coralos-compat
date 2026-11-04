@@ -59,7 +59,7 @@ pub(crate) const TABLE_BITS: u32 = 14;
 /// (tag blue forest peak): with the probe on the 16K-entry dispatch table (4bf4dfb), dispatcher entries rose 4.4x per guest
 /// instruction (1 per ~3.1k, IBTC misses ~all of them); host repro 1 per ~2.8k. ppc-jit4's own census: 64K hits 99.6%.
 pub(crate) const IBTC_BITS: u32 = 16;
-const IBTC_EMPTY: u64 = EMPTY_PC as u64;
+pub(crate) const IBTC_EMPTY: u64 = EMPTY_PC as u64;
 /// Longest superblock (guest instructions): a block ending in a conditional branch goes on through the NOT-taken path into
 /// the next tier-1 block on the same code page, the taken edge a side exit (jit_emit). A new constant of this tier (WC3
 /// blocks average 3.8 instructions; tuned only by measurement).
@@ -92,7 +92,7 @@ const LINK_NEW: u8 = 0xFF;
 /// first: a store to a watched page goes through the helper, which leaves when any code page was written). A native
 /// block has no generation check: inner = entry.
 pub(crate) struct Slot { pub(crate) pc: u32, pub(crate) len: u32, pub(crate) entry: u64, pub(crate) gen: u64, pub(crate) inner: u64 }
-const EMPTY: Slot = Slot { pc: EMPTY_PC, len: 0, entry: 0, gen: 0, inner: 0 };
+pub(crate) const EMPTY: Slot = Slot { pc: EMPTY_PC, len: 0, entry: 0, gen: 0, inner: 0 };
 /// `link_gen` of a link slot whose owner is on another page than its target (or that is free): always the full entry.
 const ANY_GEN: u64 = u64::MAX;
 
@@ -102,8 +102,8 @@ pub(crate) struct Jit {
     pub(crate) arena: Arena,
     enter: u64,
     exit_stub: u64,
-    table: Box<[Slot]>,
-    links: Box<[u64]>,
+    pub(crate) table: Box<[Slot]>,
+    pub(crate) links: Box<[u64]>,
     nlinks: usize,
     /// Per link slot: 0 free (or never used), [`LINK_NEW`] taken by the block being compiled, else 1 + the arena segment
     /// holding the code that jumps through it (the slot is freed when that segment is reused).
@@ -114,14 +114,14 @@ pub(crate) struct Jit {
     link_gen: Box<[u64]>,
     /// Per link slot: its owner's exit tail (stores the target pc, leaves) - where the slot points while its target is not
     /// published.
-    link_home: Box<[u64]>,
-    by_target: BTreeMap<u32, Vec<u32>>,
+    pub(crate) link_home: Box<[u64]>,
+    pub(crate) by_target: BTreeMap<u32, Vec<u32>>,
     /// The IBTC: per entry, guest pc (low half) and the block's entry offset in the arena (high half); IBTC_EMPTY = none.
-    ibtc: Box<[[u64; 2]]>,
+    pub(crate) ibtc: Box<[[u64; 2]]>,
     /// Every published block by pc (the dispatch table is a direct-mapped cache in front of it: a colliding block is
     /// refilled from here, never recompiled). Hashed: every dispatcher miss probes it, and in WC3 gameplay most misses are
     /// native calls (pcs that are never a block), ~1 per 500 guest instructions.
-    blocks: PcMap<Slot>,
+    pub(crate) blocks: PcMap<Slot>,
     /// Tier-1 whole-block runs per pc (direct-mapped, IBTC_BITS: at 16K entries two hot blocks 64 KiB apart reset each
     /// other's count and never compiled).
     /// Compile-trigger counts: (pc, tier-1 runs, the COLD window they were counted in - jit_cold).
@@ -129,8 +129,8 @@ pub(crate) struct Jit {
     /// The cold-tail rule (jit_cold): (window in guest instructions, runs within one window before a block compiles); None =
     /// the cumulative HOT_AFTER rule.
     pub(crate) cold: Option<(u64, u32)>,
-    pending: Vec<Slot>,
-    pending_pcs: PcMap<()>,
+    pub(crate) pending: Vec<Slot>,
+    pub(crate) pending_pcs: PcMap<()>,
     /// `clock` when the oldest unpublished block was compiled.
     pending_at: u64,
     /// Guest instructions run on this tier so far (all runs): the age of waiting blocks.
@@ -170,7 +170,11 @@ pub(crate) struct Jit {
     /// Per published or pending REGION (by its entry address): the code pages it was decoded from, (page, generation, a pc
     /// on it) - the dispatcher's entry test reads the head's page only, so a region left stale by a write to another of its
     /// pages is found here (and recompiled as a block) instead of bailing at every entry.
-    regions: BTreeMap<u64, Vec<(usize, u64, u32)>>,
+    pub(crate) regions: BTreeMap<u64, Vec<(usize, u64, u32)>>,
+    /// EAGER INVALIDATION (jit_inval): every code page compiled code was decoded from, at the generation it was decoded at, and
+    /// the guest RAM's code-write count when the pages were last compared.
+    pub(crate) page_gen: BTreeMap<usize, u64>,
+    pub(crate) seen_bumps: u64,
     /// Per region compile, the translation time (the `timer` units; only while a timer is set): the compile-time tail.
     pub(crate) region_times: Vec<u64>,
     /// The last emit_place refused code longer than a segment (`may_refuse`).
@@ -199,7 +203,7 @@ impl Jit {
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![[IBTC_EMPTY, 0]; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0, 0); 1 << IBTC_BITS].into_boxed_slice(), cold: None, pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(), knobs: 0,
-            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), so_aware: false,
+            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), page_gen: BTreeMap::new(), seen_bumps: 0, region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), so_aware: false,
         };
         j.stats.arena_bytes = j.arena.len as u64;
         if !j.stubs() { return None; }
@@ -509,6 +513,7 @@ impl Jit {
             return None;
         }
         let p = self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, len, gen, at)?;
+        for &(pg, g) in pages { self.page_gen.insert(pg, g); }
         self.tag_code(p, code.len(), &runs);
         if self.tagmap.is_some() { self.tag_words.extend(words.iter().map(|&(o, w, pc)| (p - self.arena.base as u64 + o as u64, w, pc))); }
         // each slot's home is its exit tail in the placed code; it lands in its target if that is published (after any
@@ -698,6 +703,7 @@ impl Jit {
         c.ibtc_misses = 0;
         c.resync = false;
         c.no_resync = self.mutant == crate::jit_emit::MUT_NO_RESYNC;
+        c.no_inval_leave = self.mutant == crate::jit_emit::MUT_INVAL_STALE;
         // SAFETY: `enter` is the trampoline this Jit emitted and published (RX) at the arena's start, with the System V
         // signature extern "C" fn(*mut Ctx, u64) -> u32; `entry` is a published block's entry in the same arena. The
         // generated code touches only the Cpu, the Ctx, guest RAM inside `len` bytes at `ram` (bounds-checked per access)
@@ -745,6 +751,7 @@ pub(crate) extern "C" fn h_native<H: Host>(ctx: *mut Ctx, pc: u32, done: u64) ->
     let c = unsafe { &mut *ctx };
     let (host, cpu) = unsafe { (&mut *(c.host as *mut H), &mut *c.cpu) };
     let natives_gen = cpu.natives_gen;
+    let bumps = host.mem().code_bumps();
     cpu.tb = c.tb0.wrapping_add(done);
     cpu.note_pc(pc);
     c.natives += 1;
@@ -756,8 +763,10 @@ pub(crate) extern "C" fn h_native<H: Host>(ctx: *mut Ctx, pc: u32, done: u64) ->
         c.resync = true;
         return 1;
     }
-    // XER[SO] set under SO-free code: leave after the native (the dispatcher switches the code to SO-aware)
-    if cpu.halted() || cpu.blocked() || (c.so_free && cpu.xer & crate::cpu::XER_SO != 0) { 1 } else { 0 }
+    // XER[SO] set under SO-free code: leave after the native (the dispatcher switches the code to SO-aware); a native that wrote
+    // a watched code page: leave, so the dispatcher drops that page's code before anything chains into it (jit_inval)
+    let wrote_code = host.mem().code_bumps() != bumps && !c.no_inval_leave;
+    if cpu.halted() || cpu.blocked() || wrote_code || (c.so_free && cpu.xer & crate::cpu::XER_SO != 0) { 1 } else { 0 }
 }
 
 /// JIT code's call for ONE instruction it has no inline code for (or whose inline guard failed): tier 1's handler, with the
@@ -835,6 +844,8 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
         // the provider failed for good (jit.dead): no more compiling, publishing or entering, from this instruction on
         if usable && jit.dead { usable = false; jit.stats.refused = true; }
         if usable {
+            // a watched code page was written since the last look: its compiled code goes (jit_inval) before anything is entered
+            jit.invalidate_stale(host.mem());
             if let Some((entry, len)) = jit.entry(pc, host.mem().code_gen(pc), left) {
                 let (st, r, t, what) = match ls.as_deref_mut() {
                     None => {

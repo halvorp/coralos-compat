@@ -78,6 +78,8 @@ pub(crate) struct Ctx {
     pub(crate) resync: bool,
     /// Planted mutant MUT_NO_RESYNC: h_native never asks for the resync.
     pub(crate) no_resync: bool,
+    /// Planted mutant MUT_INVAL_STALE: h_native does not leave after a native that wrote code (jit_inval).
+    pub(crate) no_inval_leave: bool,
     /// The code running is SO-free (Jit::so_aware false): h_one / h_native make it leave once XER[SO] is set.
     pub(crate) so_free: bool,
     /// Opt-in census of the instructions JIT code hands to h_one (key: primary opcode and extended opcode bits).

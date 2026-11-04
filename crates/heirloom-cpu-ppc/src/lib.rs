@@ -73,6 +73,8 @@ mod jit_rflow;
 #[cfg(target_arch = "x86_64")]
 mod jit_cold; // the cold-tail rule: a block compiles only when it runs often within a recent window
 #[cfg(target_arch = "x86_64")]
+mod jit_inval; // eager invalidation: a written code page's code goes at once, so no entry tests its page
+#[cfg(target_arch = "x86_64")]
 mod jit_lazyca; // lazy XER[CA]: srawi / addic leave the carry pending, settled only where it can be observed
 #[cfg(target_arch = "x86_64")]
 mod jit_xbytes; // translated byte-string shapes (jit_xlate's family): an unsigned byte compare, a saturating byte-add loop

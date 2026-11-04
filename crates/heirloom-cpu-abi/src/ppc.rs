@@ -441,7 +441,8 @@ pub const TIER_JIT_WIDE: u32 = 4;
 pub const TIER_KNOB_SHIFT: u32 = 8;
 /// Guest stores check RAM bounds only, not the per-page store map's watch bit (stores into decoded code go unseen).
 pub const KNOB_NO_SMC_STORE: u32 = 1;
-/// Block and region entries skip the code-page generation check (a rewritten page's stale block runs).
+/// Block and region entries skip the code-page generation check AND the eager invalidation is off (a rewritten page's stale
+/// block runs: the negative control of both).
 pub const KNOB_NO_ENTRY_GEN: u32 = 2;
 /// Recognised whole functions are compiled block by block like any other code (jit_xlate's translations off: their A/B).
 pub const KNOB_NO_XLATE: u32 = 4;
@@ -457,11 +458,15 @@ pub const KNOB_FOLLOW_CALLS: u32 = 32;
 /// The cold-tail rule (h86 fnreg): a block compiles only once it ran 4 times within one window of ~2.5 M guest instructions
 /// (about a Z83 WC3 frame), instead of on its 2nd run ever - code that runs less often stays on tier 1; code, not semantics.
 pub const KNOB_COLD_TAIL: u32 = 128;
+/// Block and region entries test their code pages' generations and the eager invalidation is off (the pre-fnreg-5 way) instead of
+/// the eager invalidation alone (h86 fnreg: when a watched code page is written the JIT drops that page's blocks, regions, dispatch and
+/// IBTC entries and re-points the links into them, so an entry needs no test) - the A/B of the entry tests; code, not semantics.
+pub const KNOB_ENTRY_CHECKS: u32 = 64;
 /// Bits 8..12 of the knobs: the IBTC's index bits (8..=16 entries' log2; 0 = the default 16, 64K entries / 512 KiB).
 pub const KNOB_IBTC_BITS_SHIFT: u32 = 8;
 pub const KNOB_IBTC_BITS_MASK: u32 = 0x1F;
 /// The knob bits a library may be asked for (anything else: -1).
-pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
+pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_ENTRY_CHECKS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
 
 /// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
 /// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;

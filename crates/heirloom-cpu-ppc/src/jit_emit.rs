@@ -169,7 +169,7 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     let a = &mut e.a;
     // entry checks: the page generation (skipped by a chained jump from this page at this generation: the INNER entry),
     // then the budget
-    let b2 = if e.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_ENTRY_GEN == 0 {
+    let b2 = if crate::jit_inval::entry_checks(e.env.knobs) {
         a.ld64(RAX, ctx(offset_of!(Ctx, gen)));
         let at = m(RAX, (8 * page) as i32);
         if gen <= i32::MAX as u64 { a.alu_mi64(Alu::Cmp, at, gen as u32); } else { a.mov_ri64(RCX, gen); a.alu_rm64(Alu::Cmp, RCX, at); }
@@ -241,7 +241,7 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
     e.dry = dry;
     e.rg = Some(Rg { pcs: nodes.iter().map(|n| n.0).collect(), maxfwd: maxfwd.to_vec(), labels: alloc::vec![None; nodes.len()], fwd: Vec::new(), backs: Vec::new(), cur: 0, rets: rets.to_vec(), deferred: Vec::new() });
     let mut bails = Vec::new();
-    let checked = if e.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_ENTRY_GEN != 0 { 0 } else if e.env.mutant == MUT_REGION_PAGES { 1 } else { pages.len() };
+    let checked = if !crate::jit_inval::entry_checks(e.env.knobs) { 0 } else if e.env.mutant == MUT_REGION_PAGES { 1 } else { pages.len() };
     let mut inner = 0;
     e.cat(tg::ENTRY_GEN);
     for (k, &(page, gen, _)) in pages[..checked].iter().enumerate() {

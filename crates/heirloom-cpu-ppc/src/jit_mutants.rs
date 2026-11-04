@@ -96,3 +96,6 @@ pub(crate) const MUT_XLATE_COUNT: u8 = 40;
 pub(crate) const MUT_REGION_DISPLACED_EXIT: u8 = 41;
 /// A superblock side exit does not settle a pending XER[CA] (jit_lazyca): the code it leaves for finds the older carry.
 pub(crate) const MUT_CA_LAZY_SIDE: u8 = 42;
+/// The eager invalidation keeps a written page's code, and a native that wrote code does not make JIT code leave (jit_inval):
+/// with no entry tests, stale code runs.
+pub(crate) const MUT_INVAL_STALE: u8 = 43;

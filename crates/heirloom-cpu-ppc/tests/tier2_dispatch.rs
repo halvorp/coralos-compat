@@ -122,6 +122,8 @@ fn run_with(tier: Tier, mutant: u8, prog: &[u32], slice: u64, mem: Box<dyn CodeM
     e.set_code_mem(mem);
     e.set_jit_publish_after(0);
     if mutant != 0 { e.plant_jit_mutant(mutant); }
+    // mutant 17 (a stale inner landing) means something only where entries test their pages: KNOB_ENTRY_CHECKS (jit_inval)
+    if mutant == 17 { e.set_jit_knobs(heirloom_cpu_abi::ppc::KNOB_ENTRY_CHECKS); }
     let mut total = 0;
     let last = loop {
         let st = e.resume(&mut m, &mut c, slice);

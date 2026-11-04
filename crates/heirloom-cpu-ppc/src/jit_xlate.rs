@@ -103,7 +103,7 @@ pub(crate) fn compile(s: Shape, pc: u32, gen: u64, page: usize, env: &mut Env) -
     let mut bails = Vec::new();
     // the block's own entry checks (jit_emit::compile's): its code page's generation (unless KNOB_NO_ENTRY_GEN), then a budget
     // that covers the longest path through the whole function
-    let check_gen = e.env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_ENTRY_GEN == 0;
+    let check_gen = crate::jit_inval::entry_checks(e.env.knobs);
     let a = &mut e.a;
     if check_gen {
         a.ld64(RAX, ctx(offset_of!(Ctx, gen)));

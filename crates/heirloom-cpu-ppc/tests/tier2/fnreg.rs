@@ -130,3 +130,34 @@ fn the_cold_tail_rule_keeps_rarely_run_blocks_on_tier_1_and_changes_nothing_else
     let (got, e) = run(&prog, displace_setup, 1_000_000, (u64::MAX, 4));
     assert!(got == want && e.jit_stats().compiled > 0, "the hot loop compiles: {:?}", e.jit_stats());
 }
+
+// ---- the eager invalidation (jit_inval) ----
+
+/// With no entry tests (the default), the self-modifying programs - a store into a later block's page, the loop that rewrites the
+/// second page of its own region, a native that rewrites code - end in tier 0's state in every slicing and in lockstep, because
+/// the written page's code is dropped before anything is entered; the same with KNOB_ENTRY_CHECKS; and with the planted mutant
+/// (the written page's code kept, a native that wrote code not leaving) stale code runs: RED.
+#[test]
+fn a_written_code_page_loses_its_code_before_anything_enters_it() {
+    use heirloom_cpu_abi::ppc::KNOB_ENTRY_CHECKS;
+    let (smc, xp) = (smc_store_program(), cross_page_program());
+    let progs: [(&str, &[u32], Setup); 4] = [("smc_store", &smc, smc_store_setup), ("cross_page", &xp, cross_page_setup),
+        ("bench_smc", programs::BENCH_SMC, |c, _| c.gpr[3] = 100), ("smc_native", programs::SMC_NATIVE, |c, _| c.gpr[3] = 100)];
+    let mut red = false;
+    for (name, prog, setup) in progs {
+        let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
+        for slice in [1_000_000, 1_000, 13] {
+            for region in [None, Some(REGION_TEST)] {
+                let (got, e) = run_region(Tier::Jit, 0, prog, slice, setup, region);
+                assert!(got == want, "{name} slice {slice} region {region:?}: {:?}", e.jit_stats());
+            }
+            let (got, _) = run_knobs(KNOB_ENTRY_CHECKS, prog, slice, setup);
+            assert!(got == want, "{name} slice {slice}: with the entry tests too");
+            let (got, _) = run_region(Tier::Jit, 43, prog, slice, setup, Some(REGION_TEST));
+            red |= got != want;
+        }
+        let (got, e) = run_region(Tier::JitLockstep, 0, prog, 13, setup, Some(REGION_TEST));
+        assert!(got == want && e.divergence().is_none(), "{name} lockstep: {:?}", e.divergence());
+    }
+    assert!(red, "mutant 43 (written code kept) stayed GREEN");
+}

@@ -98,6 +98,9 @@ fn shapes() -> [RegionShape; 2] { [RegionShape::default(), RegionShape { follow_
 fn run_shape(tier: Tier, mutant: u8, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut M), region: Option<u32>, shape: RegionShape) -> (End, Exec) {
     let (mut c, mut m) = load(prog, &setup);
     let mut e = exec(tier, mutant);
+    // the entry-test mutants (17 a stale inner landing, 22 a region testing its head's page only) mean something only where entries
+    // test their pages: with KNOB_ENTRY_CHECKS (by default the eager invalidation keeps code exact without them: jit_inval)
+    if matches!(mutant, 17 | 22) { e.set_jit_knobs(heirloom_cpu_abi::ppc::KNOB_ENTRY_CHECKS); }
     if let Some(r) = region { e.set_jit_region_after(r); }
     e.set_jit_region_shape(shape);
     let end = finish(&mut e, &mut c, &mut m, slice);
