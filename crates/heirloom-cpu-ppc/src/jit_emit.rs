@@ -284,7 +284,7 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
 /// rcx clobbered).
 /// The table is the INDIRECT BRANCH TARGET CACHE of blr / bctr (and of a native's return): hits and misses are counted
 /// (Ctx.ibtc_hits / ibtc_misses -> JitStats -> PpcProf).
-fn probe(a: &mut Asm, table_mask: u32) {
+pub(crate) fn probe(a: &mut Asm, table_mask: u32) {
     // the IBTC (jit.rs): 16-byte entries, guest pc then the entry's ADDRESS - the byte offset of entry (pc >> 2) & mask is
     // (pc << 2) & (mask << 4); a hit jumps through the entry itself (rax, rcx clobbered)
     a.mov_rr(RAX, R8);

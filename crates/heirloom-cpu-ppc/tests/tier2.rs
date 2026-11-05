@@ -17,6 +17,9 @@ mod xshapes;
 /// The h86 fnreg region register binding (global pins re-bound to a region's hotter GPRs): tests/tier2/fnreg.rs.
 #[path = "tier2/fnreg.rs"]
 mod fnreg;
+/// The h86 native routines (jit_xnat: the palette blit, the nibble-rotate rows, the bitset scan): tests/tier2/native.rs.
+#[path = "tier2/native.rs"]
+mod native;
 
 const BUF: u32 = 0x4000;
 const NATIVE: u32 = 0xF100;

@@ -62,6 +62,8 @@ pub(crate) struct Ctx {
     pub(crate) natives: u64,
     /// h_one calls this entry.
     pub(crate) helpers: u64,
+    /// `jit_xnat::h_xnat::<H>`: a native routine's block calls it (h86 native).
+    pub(crate) xnat: u64,
     /// This entry's budget (the retired count is budget - left).
     pub(crate) budget: u64,
     pub(crate) cpu: *mut Cpu,

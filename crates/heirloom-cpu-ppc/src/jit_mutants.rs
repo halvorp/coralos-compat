@@ -99,3 +99,9 @@ pub(crate) const MUT_CA_LAZY_SIDE: u8 = 42;
 /// The eager invalidation keeps a written page's code, and a native that wrote code does not make JIT code leave (jit_inval):
 /// with no entry tests, stale code runs.
 pub(crate) const MUT_INVAL_STALE: u8 = 43;
+/// The palette blit counts one instruction short per row (jit_xpix).
+pub(crate) const MUT_NAT_PB_COUNT: u8 = 44;
+/// The nibble-rotate rows count 36 short when they run the 8-pixel loop (jit_xpix).
+pub(crate) const MUT_NAT_TC_COUNT: u8 = 45;
+/// The bitset scan counts a set word's load and test as 3 instructions (jit_xpix).
+pub(crate) const MUT_NAT_BITSCAN_COUNT: u8 = 46;

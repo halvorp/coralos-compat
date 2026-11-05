@@ -70,7 +70,7 @@ pub(crate) fn successors(pc: u32, ops: &[Op], calls: bool, out: &mut Vec<u32>) {
 /// Form the region headed by `head` (a compiled block whose counter ran out). `hot(pc)` = a compiled block at pc ran at
 /// least [`edge_min`] times; `gen_pages` = the pages the code watch has a generation for. None when fewer than two nodes
 /// qualify and the head does not loop to itself (one node is what tier 2 already runs).
-pub(crate) fn form(cache: &Cache, mem: &GuestMem, head: u32, gen_pages: usize, shape: RegionShape, hot: impl Fn(u32) -> bool) -> Option<Plan> {
+pub(crate) fn form(cache: &Cache, mem: &GuestMem, head: u32, gen_pages: usize, shape: RegionShape, knobs: u32, hot: impl Fn(u32) -> bool) -> Option<Plan> {
     let mut nodes: Vec<(u32, Vec<Op>)> = Vec::new();
     let mut pages: Vec<(usize, u64, u32)> = Vec::new();
     let mut queue: Vec<u32> = alloc::vec![head];
@@ -92,14 +92,14 @@ pub(crate) fn form(cache: &Cache, mem: &GuestMem, head: u32, gen_pages: usize, s
             _ => cache.peek(mem, pc, gen, room, &mut first),
         };
         if !got { if nodes.is_empty() { return None; } continue; }
-        let mut ops = crate::jit::superblock(cache, mem, &first, pc, gen, page);
+        let mut ops = crate::jit::superblock(cache, mem, &first, pc, gen, page, knobs);
         if ops.len() > room { ops.truncate(first.len()); }
         total += ops.len();
         if new_page { pages.push((page, gen, pc)); }
         succ.clear();
         successors(pc, &ops, shape.follow_calls, &mut succ);
         // a translated shape (jit_xlate) is never a node: its own block is faster than any region code for it (a side exit)
-        let shape = |s: u32| crate::jit_xlate::recognise(s, CODE_PAGE_SHIFT, |a| mem.read_u32(a).ok()).is_some();
+        let shape = |s: u32| crate::jit_xlate::recognise(s, CODE_PAGE_SHIFT, knobs, |a| mem.read_u32(a).ok()).is_some();
         for &s in &succ { if s == head || (hot(s) && !queue.contains(&s) && !shape(s)) { queue.push(s); } }
         nodes.push((pc, ops));
     }

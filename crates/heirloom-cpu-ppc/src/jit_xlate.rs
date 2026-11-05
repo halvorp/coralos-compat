@@ -38,6 +38,15 @@ pub(crate) enum Shape {
     Memcmp,
     /// jit_xbytes::BLENDADD: a saturating byte add of CTR groups of four (a loop, at its head).
     BlendAdd,
+    /// A native routine (jit_xnat): Rust code over guest RAM, called from a small block.
+    Nat(crate::jit_xnat::Routine),
+}
+
+impl Shape {
+    /// The shape's knob is not set (KNOB_NO_XLATE: the three translated shapes; KNOB_NO_NAT_*: each native routine).
+    pub(crate) fn enabled(self, knobs: u32) -> bool {
+        match self { Shape::Nat(r) => knobs & r.knob() == 0, _ => knobs & heirloom_cpu_abi::ppc::KNOB_NO_XLATE == 0 }
+    }
 }
 
 /// The 68 words of [`Shape::Cmp16F`]: `lfs f1,0(r3); li r0,0; lfs f0,0(r4); fcmpu cr0,f1,f0; bne done1`, then 15 x
@@ -67,17 +76,21 @@ pub const CMP16F: [u32; 68] = {
     w
 };
 
-/// The shape whose words start at `pc`, read through `word`, if one does and it lies in one code page of `page_shift` bits.
-/// The first word decides which shape is compared at all (one read for every other block).
-pub(crate) fn recognise(pc: u32, page_shift: u32, word: impl Fn(u32) -> Option<u32>) -> Option<Shape> {
+/// The shape whose words start at `pc`, read through `word`, if one does, its knob is not set in `knobs` and it lies in one
+/// code page of `page_shift` bits. The first word decides which shape is compared at all (one read for every other block).
+/// A shape whose knob is set does not exist: superblocks and regions run through its words like any code.
+pub(crate) fn recognise(pc: u32, page_shift: u32, knobs: u32, word: impl Fn(u32) -> Option<u32>) -> Option<Shape> {
     use crate::jit_xbytes::{BLENDADD, MEMCMPB};
+    use crate::jit_xnat::Routine;
     if pc & 3 != 0 { return None; }
-    let (s, words): (Shape, &[u32]) = match word(pc)? {
+    let w0 = word(pc)?;
+    let (s, words): (Shape, &[u32]) = match w0 {
         w if w == CMP16F[0] => (Shape::Cmp16F, &CMP16F),
         w if w == MEMCMPB[0] => (Shape::Memcmp, &MEMCMPB),
         w if w == BLENDADD[0] => (Shape::BlendAdd, &BLENDADD),
-        _ => return None,
+        _ => match Routine::ALL.iter().find(|r| r.words()[0] == w0) { Some(&r) => (Shape::Nat(r), r.words()), None => return None },
     };
+    if !s.enabled(knobs) { return None; }
     let len = 4 * words.len() as u32;
     if pc >> page_shift != (pc.wrapping_add(len - 1)) >> page_shift { return None; }
     words.iter().enumerate().all(|(i, &w)| word(pc + 4 * i as u32) == Some(w)).then_some(s)
@@ -86,18 +99,19 @@ pub(crate) fn recognise(pc: u32, page_shift: u32, word: impl Fn(u32) -> Option<u
 /// The fewest instructions a shape retires (its entry's budget test; a variable-length shape tests its own exact need after
 /// it, before writing anything).
 pub(crate) fn max_insns(s: Shape) -> u32 {
-    match s { Shape::Cmp16F => 67, Shape::Memcmp => 9, Shape::BlendAdd => 36 }
+    match s { Shape::Cmp16F => 67, Shape::Memcmp => 9, Shape::BlendAdd => 36, Shape::Nat(r) => r.min_insns() }
 }
 
 /// The budget the dispatcher wants before entering the shape (Slot::len): its longest path, or for a variable-length shape
 /// the need of a typical call - 64 bytes / 64 groups - so a lockstep entry (budget = this + up to 63) usually runs the
 /// translation instead of bailing, and lockstep really compares it.
 pub(crate) fn slot_len(s: Shape) -> u32 {
-    match s { Shape::Cmp16F => 67, Shape::Memcmp => 6 * 64 + 12, Shape::BlendAdd => 36 * 64 }
+    match s { Shape::Cmp16F => 67, Shape::Memcmp => 6 * 64 + 12, Shape::BlendAdd => 36 * 64, Shape::Nat(r) => r.slot_len() }
 }
 
 /// Compile shape `s` at `pc` (code page `page` at generation `gen`): the code and the offset of its inner entry.
 pub(crate) fn compile(s: Shape, pc: u32, gen: u64, page: usize, env: &mut Env) -> (Vec<u8>, usize) {
+    if let Shape::Nat(r) = s { return crate::jit_xnat::compile(r, pc, gen, page, env); }
     let mut e = E::new(&[], pc, env);
     e.cat(crate::jit_census::XLATE);
     let mut bails = Vec::new();
@@ -114,7 +128,7 @@ pub(crate) fn compile(s: Shape, pc: u32, gen: u64, page: usize, env: &mut Env) -
     let inner = a.pos();
     a.alu_mi64(Alu::Cmp, ctx(offset_of!(Ctx, left)), max_insns(s));
     bails.push(a.jcc(Cc::B));
-    match s { Shape::Cmp16F => e.cmp16f(&mut bails), Shape::Memcmp => e.memcmpb(&mut bails), Shape::BlendAdd => e.blendadd(pc, &mut bails) }
+    match s { Shape::Cmp16F => e.cmp16f(&mut bails), Shape::Memcmp => e.memcmpb(&mut bails), Shape::BlendAdd => e.blendadd(pc, &mut bails), Shape::Nat(_) => unreachable!() }
     e.exit_tails();
     let a = &mut e.a;
     for b in bails { a.here(b); }
@@ -279,10 +293,10 @@ mod tests {
         assert_eq!(CMP16F[60], 0x4082_0014);
         assert_eq!(&CMP16F[65..], &[0x3800_0001, 0x5403_063E, 0x4E80_0020]);
         let mem = |a: u32| Some(CMP16F[((a - 0x1000) / 4) as usize]);
-        assert_eq!(recognise(0x1000, 12, mem), Some(Shape::Cmp16F));
-        assert_eq!(recognise(0x1F00, 12, |a| Some(CMP16F[((a - 0x1F00) / 4) as usize % 68])), None, "across a code page: never");
+        assert_eq!(recognise(0x1000, 12, 0, mem), Some(Shape::Cmp16F));
+        assert_eq!(recognise(0x1F00, 12, 0, |a| Some(CMP16F[((a - 0x1F00) / 4) as usize % 68])), None, "across a code page: never");
         let mut w = CMP16F;
         w[30] ^= 4;
-        assert_eq!(recognise(0x1000, 12, |a| Some(w[((a - 0x1000) / 4) as usize])), None, "one word off: never");
+        assert_eq!(recognise(0x1000, 12, 0, |a| Some(w[((a - 0x1000) / 4) as usize])), None, "one word off: never");
     }
 }

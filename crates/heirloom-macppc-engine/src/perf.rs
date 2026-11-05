@@ -70,9 +70,11 @@ pub struct Window {
 /// cpu-tier "jitablate" (h86 aot-ledger): tier 2 with its guards switched off in turn, each for [`ABLATE_WINDOWS`] perf windows
 /// (the first after a switch recompiles everything; the second is the warm one), so ONE Z83 deployment measures what each guard
 /// costs. Each knob drops a check that keeps the JIT exact for self-modifying code - a measurement setting, never a default.
-pub const ABLATIONS: [(&str, u32); 12] = {
+/// h86 native: the native routines (cpu-ppc jit_xnat) all off, then each alone - each prices itself on the Z83.
+pub const ABLATIONS: [(&str, u32); 16] = {
     use heirloom_os_abi::ppc::{KNOB_COLD_TAIL as T, KNOB_ENTRY_CHECKS as E, KNOB_FOLLOW_CALLS as C, KNOB_IBTC_BITS_SHIFT as I, KNOB_NO_DISPLACE as D, KNOB_NO_ENTRY_GEN as G, KNOB_NO_LAZY_CA as L, KNOB_NO_SMC_STORE as S, KNOB_NO_XLATE as X};
-    [("base", 0), ("noxlate", X), ("nodisplace", D), ("nolazyca", L), ("followcalls", C), ("coldtail", T), ("entrychecks", E), ("nosmc", S), ("nogen", G), ("nosmc+nogen", S | G), ("ibtc12", 12 << I), ("ibtc14", 14 << I)]
+    use heirloom_os_abi::ppc::{KNOB_NO_NAT as N, KNOB_NO_NAT_BITSCAN as NB, KNOB_NO_NAT_PALBLIT as NP, KNOB_NO_NAT_TEXCONV as NT};
+    [("base", 0), ("noxlate", X), ("nonat", N), ("nopalblit", NP), ("notexconv", NT), ("nobitscan", NB), ("nodisplace", D), ("nolazyca", L), ("followcalls", C), ("coldtail", T), ("entrychecks", E), ("nosmc", S), ("nogen", G), ("nosmc+nogen", S | G), ("ibtc12", 12 << I), ("ibtc14", 14 << I)]
 };
 pub const ABLATE_WINDOWS: u64 = 2;
 
