@@ -168,6 +168,10 @@ fn negative_control_a_native_counted_twice_or_no_resync_goes_red() {
     // 16: a native block calls the native without storing the global pins (N_ADD reads r3, a global)
     let (got, _) = run(Tier::Jit, 16, &prog, 1_000);
     assert!(got != want, "mutant 16 (a native block leaves the global pins unstored) stayed GREEN");
+    // 47: tier 2 keeps its code when the natives set changes (h86 native: it drops code ONLY then, not on tier 1's arena-full
+    // flush) - TOGGLE bound over compiled guest code would run the old instructions
+    let (got, _) = run(Tier::Jit, 47, &prog, 1_000_000);
+    assert!(got != want, "mutant 47 (code kept across a natives-set change) stayed GREEN");
 }
 
 /// Negative control for the dispatch table, in a child process (the mutant leaves table entries pointing into code that a

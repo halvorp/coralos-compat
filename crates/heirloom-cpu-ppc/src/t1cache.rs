@@ -43,6 +43,8 @@ pub struct CacheStats {
     pub stale: u64,
     /// Whole-cache drops (arena full, or the bound natives changed).
     pub flushes: u64,
+    /// Of those, the ones because the bound natives changed (tier 2's code must go with them; an arena-full drop leaves it valid).
+    pub natives_flushes: u64,
     /// Pages found volatile (rewritten again and again after decoding): tier 0 runs them.
     pub volatile_pages: u64,
     /// Instructions tier 1 handed to tier 0 on volatile pages.
@@ -85,6 +87,7 @@ impl Cache {
         if self.natives_gens.contains(&cpu.natives_gen) { return; }
         if !Arc::ptr_eq(&self.natives, &cpu.natives) && self.natives != cpu.natives {
             self.flush();
+            self.stats.natives_flushes += 1;
             self.natives = cpu.natives.clone();
             let mut set = PcMap::new(());
             self.native_set = self.natives.iter().all(|&a| set.insert(a, ())).then_some(set);

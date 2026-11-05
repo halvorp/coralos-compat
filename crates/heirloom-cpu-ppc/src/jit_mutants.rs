@@ -105,3 +105,6 @@ pub(crate) const MUT_NAT_PB_COUNT: u8 = 44;
 pub(crate) const MUT_NAT_TC_COUNT: u8 = 45;
 /// The bitset scan counts a set word's load and test as 3 instructions (jit_xpix).
 pub(crate) const MUT_NAT_BITSCAN_COUNT: u8 = 46;
+/// Tier 2 keeps its code when the bound natives change (jit.rs sync): a block compiled over a pc that is a native now runs the
+/// old guest instructions instead of the native.
+pub(crate) const MUT_NATIVES_KEEP_CODE: u8 = 47;

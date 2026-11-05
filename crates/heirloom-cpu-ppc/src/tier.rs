@@ -111,6 +111,27 @@ impl Exec {
         #[cfg(target_arch = "x86_64")]
         if let Some(j) = self.jit.as_mut() { j.region_census = on; }
     }
+    /// Diagnostics (jit_churn): classify every block compiled from now on by why it is compiled (`on`), or stop; the counts
+    /// by cause and the (pc, cause) log so far. Only once tier 2 exists.
+    #[doc(hidden)]
+    pub fn set_jit_churn(&mut self, on: bool) {
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_mut() { j.churn.on = on; }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = on;
+    }
+    /// Diagnostics (jit_churn): zero the counts and the log, keep the history (where a measured window starts).
+    #[doc(hidden)]
+    pub fn jit_churn_reset(&mut self) {
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_mut() { j.churn.reset(); }
+    }
+    #[doc(hidden)]
+    pub fn jit_churn(&self) -> ([u64; 6], &[(u32, u8)], &[(u8, u64)], &[(u32, bool)]) {
+        #[cfg(target_arch = "x86_64")]
+        if let Some(j) = self.jit.as_ref() { return (j.churn.counts, &j.churn.log, &j.churn.drops, &j.churn.regions); }
+        ([0; 6], &[], &[], &[])
+    }
     /// Per region compiled while a clock was set (`set_jit_clock`), its translation time in that clock's units.
     #[doc(hidden)]
     pub fn jit_region_times(&self) -> &[u64] {

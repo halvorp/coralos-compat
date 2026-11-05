@@ -473,10 +473,13 @@ pub const KNOB_NO_NAT_PALBLIT: u32 = 1 << 16;
 pub const KNOB_NO_NAT_TEXCONV: u32 = 1 << 17;
 /// clearBitset's skip over zero words.
 pub const KNOB_NO_NAT_BITSCAN: u32 = 1 << 18;
+/// Every tier-1 decode-cache flush drops tier 2's code too, as before h86 native (now only a natives-set change does: an
+/// arena-full flush of tier 1 leaves compiled code valid) - the A/B of the gameplay-start recompile burst; code, not semantics.
+pub const KNOB_T1_FLUSH_DROPS: u32 = 1 << 19;
 /// Every native routine off (their A/B together).
 pub const KNOB_NO_NAT: u32 = KNOB_NO_NAT_PALBLIT | KNOB_NO_NAT_TEXCONV | KNOB_NO_NAT_BITSCAN;
 /// The knob bits a library may be asked for (anything else: -1).
-pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_ENTRY_CHECKS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT | KNOB_NO_NAT;
+pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_ENTRY_CHECKS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT | KNOB_NO_NAT | KNOB_T1_FLUSH_DROPS;
 
 /// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
 /// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;

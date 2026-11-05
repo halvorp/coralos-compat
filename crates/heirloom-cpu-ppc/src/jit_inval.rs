@@ -53,6 +53,7 @@ impl Jit {
         for pc in &gone {
             if let Some(v) = self.by_target.get(pc) { for &i in v { self.links[i as usize] = self.link_home[i as usize]; } }
         }
+        self.churn.gone(gone.iter().copied(), crate::jit_churn::INVAL);
         self.regions.retain(|e, _| !entries.contains(e));
         self.stats.invalidated += gone.len() as u64;
     }

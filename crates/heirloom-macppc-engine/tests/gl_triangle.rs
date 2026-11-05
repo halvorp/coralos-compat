@@ -638,6 +638,12 @@ fn wc3_host_run_with_a_gl_worker() {
     let slices: u32 = std::env::var("WC3_SLICES").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
     use heirloom_ui_abi::UiCall;
     let mut drive = wc3_drive::Drive::from_env();
+    // THE GAMEPLAY GATE: a census or a lockstep run is evidence about gameplay code only if it reached gameplay (h86 native,
+    // 2026-11-05: at compat 9807006 the drive stalled in a menu at ~25 draws a frame while lockstep said divergence=None over
+    // 10 G instructions). Gameplay = GAMEPLAY_RUN swaps in a row each with >= GAMEPLAY_DRAWS draws (WC3 gameplay draws ~265 a
+    // frame; its menus 25-170, its loading screen 25); "[WC3-GAMEPLAY] reached" is said once, with the swap it began at.
+    let mut gate = GameplayGate::default();
+    let (mut churn_on, mut churn_from) = (false, 0usize);
     let (mut click_phase, mut click_kinds) = (0u8, 0usize);
     let mut ui_seen = 0usize;
     for i in 0..slices {
@@ -702,6 +708,17 @@ fn wc3_host_run_with_a_gl_worker() {
                 m.mac.ui.events.extend(evs);
             }
         }
+        {
+            let s = seen.lock().unwrap();
+            if let Some(l) = gate.swap(s.swaps, s.draws.len() + s.draws_seen) { eprintln!("{l} (slice {i})"); }
+            // `WC3_JIT_CHURN=<swap>`: classify every block tier 2 compiles by why (cpu-ppc jit_churn) - the census runs from the
+            // start (a pc's history decides its cause), its counts from that swap on
+            #[cfg(not(feature = "cpu-library"))]
+            if let Some(from) = std::env::var("WC3_JIT_CHURN").ok().and_then(|v| v.parse::<usize>().ok()) {
+                m.exec().set_jit_churn(true);
+                if !churn_on && s.swaps >= from { churn_on = true; churn_from = s.swaps; m.exec().jit_churn_reset(); }
+            }
+        }
         if ring_out.is_some() && seen.lock().unwrap().swaps >= ring_swaps {
             eprintln!("slice {i}: {ring_swaps} swaps kept for the ring image");
             break;
@@ -734,6 +751,25 @@ fn wc3_host_run_with_a_gl_worker() {
             eprintln!("ARENA-TAGS len={} -> {path}", tags.len());
             let words: Vec<u8> = e.jit_arena_words().iter().flat_map(|&(o, w, pc)| [(o as u32).to_le_bytes(), w.to_le_bytes(), pc.to_le_bytes()]).flatten().collect();
             std::fs::write(format!("{path}.words"), words).expect("WC3_ARENA_TAGS words");
+        }
+        if churn_on {
+            let (counts, log, drops, regions) = e.jit_churn();
+            let again = regions.iter().filter(|r| r.1).count();
+            eprintln!("JIT-CHURN regions formed: {} ({} at a head that had one before)", regions.len(), again);
+            let mut rh: std::collections::BTreeMap<u32, u32> = Default::default();
+            for (pc, _) in regions { *rh.entry(*pc).or_default() += 1; }
+            let mut rv: Vec<_> = rh.into_iter().collect();
+            rv.sort_by(|a, b| b.1.cmp(&a.1));
+            for (pc, n) in rv.iter().take(15) { eprintln!("  JIT-CHURN region head={pc:#x} x{n}"); }
+            for (w, clk) in drops { eprintln!("JIT-CHURN drop_code: {} at guest insn {clk}", heirloom_cpu_ppc::jit_churn::DROP_NAMES[*w as usize]); }
+            let swaps = seen.lock().unwrap().swaps;
+            let per: Vec<String> = heirloom_cpu_ppc::jit_churn::NAMES.iter().zip(counts).map(|(n, c)| format!("{n}={c}")).collect();
+            eprintln!("JIT-CHURN swaps {churn_from}..{swaps}: {} compiles ({:.2} a frame): {}", log.len(), log.len() as f64 / (swaps - churn_from).max(1) as f64, per.join(" "));
+            let mut by: std::collections::BTreeMap<(u32, u8), u32> = Default::default();
+            for &(pc, c) in log { *by.entry((pc, c)).or_default() += 1; }
+            let mut v: Vec<_> = by.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            for ((pc, c), n) in v.iter().take(40) { eprintln!("  JIT-CHURN pc={pc:#x} {} x{n}", heirloom_cpu_ppc::jit_churn::NAMES[*c as usize]); }
         }
         eprintln!("PPC-TIER {:?} prof={:?} jit={:?} cache={:?} lockstep={:?} divergence={:?}", e.tier, e.prof, e.jit_stats(), e.cache_stats(), e.lockstep_stats(), e.divergence());
         // the region compile-time tail (host ns, timed only with WC3_JIT_FRAMES): the council's p99 <= 4 ms proxy
@@ -777,11 +813,64 @@ fn wc3_host_run_with_a_gl_worker() {
     for (k, v) in &s.args_hist {
         eprintln!("ARGS {v:>6} {k}");
     }
+    // `WC3_REQUIRE_GAMEPLAY=<swap>[/<frames>]`: the run FAILS as INCONCLUSIVE unless gameplay began by that swap and at least
+    // <frames> gameplay frames (default 256) followed - a lockstep or census over a menu proves nothing about gameplay code.
+    // A run that IS evidence about gameplay requires it by default (1216/256: the census window starts at swap 1216): a
+    // driven JitLockstep run, an arena dump (the callgrind census), the guest-PC profile. `WC3_REQUIRE_GAMEPLAY=0` turns it off.
+    let evidence = std::env::var("WC3_DRIVE").is_ok()
+        && (std::env::var("HEIRLOOM_PPC_TIER").is_ok_and(|t| t.contains("lockstep")) || std::env::var("WC3_ARENA_DUMP").is_ok() || std::env::var("WC3_PROFILE").is_ok());
+    let require = std::env::var("WC3_REQUIRE_GAMEPLAY").ok().or_else(|| evidence.then(|| "1216/256".into())).filter(|v| v != "0");
+    if let Some((by, need)) = require.map(|v| {
+        let mut f = v.split('/').map(|x| x.trim().parse::<usize>().unwrap());
+        (f.next().unwrap(), f.next().unwrap_or(256))
+    }) {
+        let verdict = gate.verdict(by, need);
+        eprintln!("{verdict}");
+        assert!(verdict.starts_with("[WC3-GAMEPLAY] PROVEN"), "{verdict}");
+    }
     if let Some(path) = &ring_out {
         let ring = OwnedRing::new(s.stream.len().max(4096)).unwrap();
         assert_eq!(ring.ring().push(&s.stream), s.stream.len());
         std::fs::write(path, ring.image()).unwrap();
         eprintln!("ring image: {} request bytes -> {path}", s.stream.len());
+    }
+}
+
+/// Draws a swap must reach to count as a gameplay frame, and the run of them that says gameplay began.
+const GAMEPLAY_DRAWS: usize = 220;
+const GAMEPLAY_RUN: usize = 32;
+
+/// The harness's gameplay detector (see `gate` in wc3_host_run_with_a_gl_worker).
+#[derive(Default)]
+struct GameplayGate { last_swaps: usize, last_draws: usize, run: usize, began: Option<usize>, frames: usize, swaps: usize }
+
+impl GameplayGate {
+    /// The swap count and the draws so far, after a slice: the line to say when gameplay is first seen.
+    fn swap(&mut self, swaps: usize, draws: usize) -> Option<String> {
+        if swaps == self.last_swaps { return None; }
+        // draws per swap since the last look (a slice may span several swaps)
+        let per = (draws - self.last_draws) / (swaps - self.last_swaps);
+        let n = swaps - self.last_swaps;
+        (self.last_swaps, self.last_draws, self.swaps) = (swaps, draws, swaps);
+        if per >= GAMEPLAY_DRAWS {
+            self.run += n;
+            if self.began.is_some() { self.frames += n; }
+        } else {
+            self.run = 0;
+        }
+        if self.began.is_none() && self.run >= GAMEPLAY_RUN {
+            self.began = Some(swaps - self.run);
+            self.frames = self.run;
+            return Some(format!("[WC3-GAMEPLAY] reached at swap {} ({per} draws a frame)", swaps - self.run));
+        }
+        None
+    }
+    fn verdict(&self, by: usize, need: usize) -> String {
+        match self.began {
+            Some(b) if b <= by && self.frames >= need => format!("[WC3-GAMEPLAY] PROVEN: began at swap {b} (required by {by}), {} gameplay frames of {} swaps", self.frames, self.swaps),
+            Some(b) => format!("[WC3-GAMEPLAY] INCONCLUSIVE: began at swap {b} (required by {by}), {} gameplay frames (need {need}) of {} swaps", self.frames, self.swaps),
+            None => format!("[WC3-GAMEPLAY] INCONCLUSIVE: never reached gameplay (>= {GAMEPLAY_DRAWS} draws a frame for {GAMEPLAY_RUN} swaps) in {} swaps", self.swaps),
+        }
     }
 }
 

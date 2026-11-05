@@ -86,6 +86,8 @@ mod jit_xpix; // native routines: Warcraft III's palette blit, texture nibble ro
 mod jit_xlate; // translated functions: a recognised guest function compiled whole, exactly (the Z83 profile's rank 1 first)
 mod jit_stats;
 #[cfg(target_arch = "x86_64")]
+pub mod jit_churn; // diagnostics: why each block is compiled in steady play (Exec::set_jit_churn)
+#[cfg(target_arch = "x86_64")]
 mod jit_census; // diagnostics: what each emitted byte is for (Exec::set_jit_tag_census)
 #[cfg(target_arch = "x86_64")]
 mod jit_ctx;

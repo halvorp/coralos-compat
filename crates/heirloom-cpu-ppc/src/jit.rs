@@ -139,6 +139,8 @@ pub(crate) struct Jit {
     ctx: Box<Ctx>,
     pub(crate) stats: JitStats,
     seen_flushes: u64,
+    /// Tier 1's flushes of any cause as last seen (KNOB_T1_FLUSH_DROPS).
+    seen_t1_flushes: u64,
     gen_base: *mut u64,
     helper: u64,
     pub(crate) logged: bool,
@@ -167,6 +169,8 @@ pub(crate) struct Jit {
     pub(crate) region_shape: crate::jit_region::RegionShape,
     /// Regions compiled from now on count their entries and internal edges (diagnostics: two `add [r13+..], 1` more).
     pub(crate) region_census: bool,
+    /// The compile-cause census (jit_churn; Exec::set_jit_churn). Diagnostics only.
+    pub(crate) churn: crate::jit_churn::Churn,
     /// Per published or pending REGION (by its entry address): the code pages it was decoded from, (page, generation, a pc
     /// on it) - the dispatcher's entry test reads the head's page only, so a region left stale by a write to another of its
     /// pages is found here (and recompiled as a block) instead of bailing at every entry.
@@ -201,9 +205,9 @@ impl Jit {
         let mut j = Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![[IBTC_EMPTY, 0]; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0, 0); 1 << IBTC_BITS].into_boxed_slice(), cold: None, pending: Vec::new(),
-            pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
+            pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, seen_t1_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(), knobs: 0,
-            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, regions: BTreeMap::new(), page_gen: BTreeMap::new(), seen_bumps: 0, region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), so_aware: false,
+            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, churn: Default::default(), regions: BTreeMap::new(), page_gen: BTreeMap::new(), seen_bumps: 0, region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), so_aware: false,
         };
         j.stats.arena_bytes = j.arena.len as u64;
         if !j.stubs() { return None; }
@@ -332,6 +336,7 @@ impl Jit {
     /// segments are withdrawn when the FIFO reuses them, as always. For a natives-set, RAM or link-table change.
     fn drop_code(&mut self) {
         self.stats.flushes += 1;
+        self.churn.dropped_all(self.clock);
         if self.mutant != crate::jit_emit::MUT_TABLE_STALE { self.table.fill(EMPTY); self.ibtc.fill([IBTC_EMPTY, 0]); }
         self.hot.fill((EMPTY_PC, 0, 0));
         self.links.fill(self.exit_stub);
@@ -351,9 +356,17 @@ impl Jit {
     /// another host type.
     fn sync<H: Host>(&mut self, cache: &Cache, raw: &heirloom_mem_flat32::RawRam) {
         let helper = h_one::<H> as HOne as usize as u64;
-        if cache.stats.flushes != self.seen_flushes || raw.gen != self.gen_base || helper != self.helper || raw.mask != self.mask {
+        // tier 2's code goes when the bound natives changed (a block may run over a pc that is a native now), never because tier
+        // 1's decode arena filled (h86 native, 2026-11-05: WC3 dropped and recompiled every block at the start of gameplay for
+        // that - ~1,300 compiles in the swap and ~550 more later, rare paths compiled twice; compiled code reads no tier-1 op)
+        // KNOB_T1_FLUSH_DROPS: the pre-h86-native way (every tier-1 flush drops tier 2's code) - the Z83 A/B
+        let any_flush = self.knobs & heirloom_cpu_abi::ppc::KNOB_T1_FLUSH_DROPS != 0 && cache.stats.flushes != self.seen_t1_flushes;
+        self.seen_t1_flushes = cache.stats.flushes;
+        let natives_changed = (cache.stats.natives_flushes != self.seen_flushes || any_flush) && self.mutant != crate::jit_emit::MUT_NATIVES_KEEP_CODE;
+        if natives_changed || raw.gen != self.gen_base || helper != self.helper || raw.mask != self.mask {
+            self.churn.drop_why = if natives_changed { crate::jit_churn::DROP_T1_FLUSH } else { crate::jit_churn::DROP_RAM };
             if self.stats.compiled != 0 { self.drop_code(); }
-            self.seen_flushes = cache.stats.flushes;
+            self.seen_flushes = cache.stats.natives_flushes;
             self.gen_base = raw.gen;
             self.helper = helper;
             self.mask = raw.mask;
@@ -425,6 +438,7 @@ impl Jit {
             r
         });
         if let Some(e) = entry {
+            self.churn.region(head);
             self.regions.insert(e, plan.pages);
             self.stats.regions += 1;
             self.stats.region_nodes += plan.nodes.len() as u64;
@@ -452,6 +466,7 @@ impl Jit {
         let t0 = self.timer.map(|c| c());
         // a superblock whose code would not fit an empty arena segment is compiled as its first block alone (a block that
         // big would only ever flush the whole cache)
+        self.churn.compiled(pc, self.blocks.contains(pc));
         if !self.compile_untimed::<H>(ops, pc, gen, page, at, first < ops.len()) { self.compile_untimed::<H>(&ops[..first], pc, gen, page, at, false); }
         if let (Some(c), Some(t0)) = (self.timer, t0) { self.stats.translate_time += c().wrapping_sub(t0); }
     }
@@ -500,7 +515,7 @@ impl Jit {
         let homes = core::mem::take(&mut env.homes);
         let runs = core::mem::take(&mut env.tag_runs);
         let words = core::mem::take(&mut env.tag_words);
-        if out_of_links { self.drop_code(); return None; }
+        if out_of_links { self.churn.drop_why = crate::jit_churn::DROP_LINKS; self.drop_code(); return None; }
         if may_refuse && code.len() > self.arena.segment_bytes() {
             for (i, target) in taken {
                 self.link_owner[i as usize] = 0;
@@ -542,7 +557,7 @@ impl Jit {
                     Some(p) => p,
                     // a withdraw the provider refused leaves pages it may still execute elsewhere: never write them
                     None if self.arena.withdraw_failed => { self.dead = true; self.drop_code(); return None }
-                    None => { self.stats.arena_full += 1; self.drop_code(); return None }
+                    None => { self.stats.arena_full += 1; self.churn.drop_why = crate::jit_churn::DROP_ARENA; self.drop_code(); return None }
                 }
             }
         };
@@ -612,6 +627,7 @@ impl Jit {
         for pc in &gone {
             if let Some(v) = self.by_target.get(pc) { for &i in v { self.links[i as usize] = self.link_home[i as usize]; } }
         }
+        self.churn.gone(gone.iter().copied(), crate::jit_churn::EVICT);
         let tag = s as u8 + 1;
         for i in 1..self.nlinks {
             if self.link_owner[i] == tag { self.link_owner[i] = 0; self.link_gen[i] = ANY_GEN; self.links[i] = self.exit_stub; self.free_links.push(i as u32); }
@@ -666,7 +682,7 @@ impl Jit {
         }
         self.pending_pcs.clear();
         // the block map could not grow: drop the code (a block not in the map would never be refilled into the table)
-        if !grown { self.drop_code(); }
+        if !grown { self.churn.drop_why = crate::jit_churn::DROP_MAP; self.drop_code(); }
     }
 
     /// Run JIT code from `entry` for at most `budget` instructions: (exit status, instructions retired).
@@ -838,7 +854,7 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
     if !usable { jit.stats.refused = true; }
     while n < budget && !cpu.halted() && !cpu.blocked() {
         // XER[SO] set (tier 1, a native, or the caller): SO-free code may not run any more (Jit::so_aware)
-        if !jit.so_aware && cpu.xer & crate::cpu::XER_SO != 0 { jit.so_aware = true; jit.drop_code(); }
+        if !jit.so_aware && cpu.xer & crate::cpu::XER_SO != 0 { jit.so_aware = true; jit.churn.drop_why = crate::jit_churn::DROP_SO; jit.drop_code(); }
         let pc = cpu.pc;
         let left = budget - n;
         // publish a page's worth of new blocks, or anything compiled a while ago (a long run must not wait for its end)
