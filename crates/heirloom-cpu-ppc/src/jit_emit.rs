@@ -636,7 +636,7 @@ impl E<'_, '_> {
         let no_so = self.env.mutant == MUT_NO_SO || self.env.so_free;
         let f = bf as usize & 7;
         let sh = 28 - 4 * f as u32;
-        let k = offset_of!(Ctx, crk) + 8 * f;
+        let k = Ctx::crk_at(f);
         let t = self.cat(tg::CR_SET);
         let a = &mut self.a;
         a.mov_ri(RAX, 0b0010 << sh);

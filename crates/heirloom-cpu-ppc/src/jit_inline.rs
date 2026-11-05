@@ -261,7 +261,7 @@ impl E<'_, '_> {
         self.slow_if(Cc::P, i);
         // FL FG FE as CR field bf's nibble, in place: EQ, then the Ctx's LT / GT constants of that field by CMOV (cr_set's)
         let sh = 28 - 4 * (bf as u32 & 7);
-        let k = offset_of!(crate::jit::Ctx, crk) + 8 * (bf as usize & 7);
+        let k = crate::jit::Ctx::crk_at(bf as usize & 7);
         let a = &mut self.a;
         a.mov_ri(RAX, 0b0010 << sh);
         a.cmov_rm(Cc::B, RAX, crate::jit_emit::ctx(k));

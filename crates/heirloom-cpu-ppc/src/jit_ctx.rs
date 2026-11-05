@@ -7,10 +7,10 @@ use core::mem::offset_of;
 
 /// What JIT code reads through r13, and what its helpers find. Rebuilt before every entry.
 #[repr(C)]
-/// FIELD ORDER (h86 ppc-jit6): what JIT code reads on its hot paths comes first - the page generations, the budget, the common
-/// exit, the pending FPRF source (jitsize: the store map's base pointer was here until the map moved into the Ctx), the
-/// four RAM limits and the CR-field constants fill the first 128 bytes, so each is `[r13 + disp8]`
-/// (one byte) instead of a 4-byte displacement; WC3's hot JIT code read crk at 0x1011c past the 64K-entry counters.
+/// FIELD ORDER: what JIT code reads on its hot paths comes first - the page generations, the budget, the common exit, the
+/// pending FPRF source, the four RAM limits, CR field 0's constants, RAM's length, the FP finiteness constants, the pending
+/// FPRF kind and the IBTC's base and counters fill the first 128 bytes, so each is `[r13 + disp8]` (one byte) instead of a
+/// 4-byte displacement in every instruction that reads it; CR fields 1-7's constants, rarely read, follow.
 pub(crate) struct Ctx {
     /// The code watch's generation array (block entries compare their page's element).
     pub(crate) gen: *const u64,
@@ -26,19 +26,15 @@ pub(crate) struct Ctx {
     pub(crate) lim2: u64,
     pub(crate) lim4: u64,
     pub(crate) lim8: u64,
-    /// Per CR field f: the field's LT and GT nibbles already in place (8 << s, 4 << s; s = 28 - 4f) - the CMOV sources of
-    /// jit_emit's cr_set.
-    pub(crate) crk: [[u32; 2]; 8],
-    // ---- 128 bytes: below, a 4-byte displacement ----
-    /// The IBTC (Jit::ibtc: [pc, entry address] pairs).
-    pub(crate) ibtc: *const u64,
-    /// Indirect branches (blr / bctr / a native's return) that found their target in the dispatch table, and that did not.
-    pub(crate) ibtc_hits: u64,
-    pub(crate) ibtc_misses: u64,
-    /// The shared code stubs JIT code calls (jit_inline): FPSCR[FPRF] of a single / double result, stfs's bits.
-    pub(crate) fprf_s: u64,
-    pub(crate) fprf_d: u64,
-    pub(crate) stfs: u64,
+    /// Field 0's LT and GT nibbles (`crk[0]`, here for a one-byte displacement: CR0 is the field nearly every compare and
+    /// record form sets).
+    pub(crate) crk0: [u32; 2],
+    /// Guest RAM's length (a load group's span test `cmp rcx, [r13 + len]`).
+    pub(crate) len: u64,
+    /// The f64 bit patterns shifted up one (sign dropped) at which the exponent is 0x7FF (k_inf2: not finite - every inline FP
+    /// result's test) and below which it is under 897 (k_tiny2: under 2^-126, the single normal range).
+    pub(crate) k_inf2: u64,
+    pub(crate) k_tiny2: u64,
     /// LAZY FPSCR[FPRF] (h86 jitsize): an FP result's class is not computed where it is made - JIT code stores the result's
     /// bits in `fprf_src` and `fprf_kind` (1 = single, 2 = double; 0 = FPSCR is exact) and FPSCR[FPRF] is brought up to date only
     /// where something can read it: the common exit, the slow stub (before tier 1's handler), a native block (before the
@@ -47,12 +43,22 @@ pub(crate) struct Ctx {
     /// class is all FPRF ever showed.
     /// Its low byte is the kind (JIT code writes and tests one byte).
     pub(crate) fprf_kind: u64,
-    pub(crate) fprf_lazy: u64,
-    /// fmadds's exact-path stub (jit_fp emit_fma_odd), and the f64 bit patterns shifted up one (sign dropped) at which the
-    /// exponent is 0x7FF (k_inf2: not finite) and below which it is under 897 (k_tiny2: under 2^-126, the single normal range).
+    /// The IBTC (Jit::ibtc: [pc, entry address] pairs).
+    pub(crate) ibtc: *const u64,
+    /// Indirect branches (blr / bctr / a native's return) that found their target in the dispatch table, and that did not.
+    pub(crate) ibtc_hits: u64,
+    pub(crate) ibtc_misses: u64,
+    // ---- 128 bytes: below, a 4-byte displacement ----
+    /// Per CR field f: the field's LT and GT nibbles already in place (8 << s, 4 << s; s = 28 - 4f) - the CMOV sources of
+    /// jit_emit's cr_set.
+    pub(crate) crk: [[u32; 2]; 8],
+    /// fmadds's exact-path stub (jit_fp emit_fma_odd).
     pub(crate) fma_odd: u64,
-    pub(crate) k_inf2: u64,
-    pub(crate) k_tiny2: u64,
+    /// The shared code stubs JIT code calls (jit_inline): FPSCR[FPRF] of a single / double result, stfs's bits.
+    pub(crate) fprf_s: u64,
+    pub(crate) fprf_d: u64,
+    pub(crate) stfs: u64,
+    pub(crate) fprf_lazy: u64,
     /// The shared slow stub, and `h_one::<H>` it calls.
     pub(crate) slow: u64,
     pub(crate) helper: u64,
@@ -68,7 +74,6 @@ pub(crate) struct Ctx {
     pub(crate) budget: u64,
     pub(crate) cpu: *mut Cpu,
     pub(crate) ram: *mut u8,
-    pub(crate) len: u64,
     pub(crate) mask: u32,
     pad: u32,
     pub(crate) marked: *const u64,
@@ -119,10 +124,16 @@ impl Ctx {
         c.hot = EMPTY_PC;
         c.counters.fill(crate::jit_region::REGION_AFTER);
         c.crk = core::array::from_fn(|f| [8 << (28 - 4 * f), 4 << (28 - 4 * f)]);
+        c.crk0 = c.crk[0];
         (c.k_inf2, c.k_tiny2) = (0xFFE0_0000_0000_0000, 897 << 53);
         c
     }
 }
 
 
-const _: () = assert!(offset_of!(Ctx, crk) + core::mem::size_of::<[[u32; 2]; 8]>() <= 128, "Ctx's hot fields must stay within a one-byte displacement of r13");
+const _: () = assert!(offset_of!(Ctx, ibtc_misses) + 8 <= 128 && offset_of!(Ctx, crk0) < 128 && offset_of!(Ctx, len) < 128, "Ctx's hot fields must stay within a one-byte displacement of r13");
+
+impl Ctx {
+    /// The offset of CR field `f`'s LT / GT constants (`f` 0..=7): field 0's in the hot first 128 bytes.
+    pub(crate) const fn crk_at(f: usize) -> usize { if f == 0 { offset_of!(Ctx, crk0) } else { offset_of!(Ctx, crk) + 8 * f } }
+}
