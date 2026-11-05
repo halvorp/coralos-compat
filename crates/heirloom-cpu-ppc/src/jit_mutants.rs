@@ -108,3 +108,5 @@ pub(crate) const MUT_NAT_BITSCAN_COUNT: u8 = 46;
 /// Tier 2 keeps its code when the bound natives change (jit.rs sync): a block compiled over a pc that is a native now runs the
 /// old guest instructions instead of the native.
 pub(crate) const MUT_NATIVES_KEEP_CODE: u8 = 47;
+/// A region's back-edge budget exits settle the carry the LAST node left pending (jit_emit emit_region), not the edge's own.
+pub(crate) const MUT_REGION_BACK_CA: u8 = 48;

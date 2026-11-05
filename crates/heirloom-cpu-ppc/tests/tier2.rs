@@ -913,7 +913,8 @@ fn a_random_program_fuzz_agrees_without_superblocks() {
         for (slice, region) in [(37, Some(REGION_TEST)), (1_000, Some(REGION_TEST)), (37, None)] {
             let (mut c, mut m) = load(&prog, fuzz_setup(seed));
             let mut e = exec(Tier::Jit, 0);
-            e.set_jit_knobs(heirloom_cpu_abi::ppc::KNOB_NO_SUPERBLOCK);
+            // lazy carries on too (the back-edge settle with single-block nodes, fixed in h86 native)
+            e.set_jit_knobs(heirloom_cpu_abi::ppc::KNOB_NO_SUPERBLOCK | heirloom_cpu_abi::ppc::KNOB_LAZY_CA);
             if let Some(r) = region { e.set_jit_region_after(r); }
             let got = finish(&mut e, &mut c, &mut m, slice);
             assert!(got == want, "seed {seed} slice {slice} region {region:?}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} {:?}",

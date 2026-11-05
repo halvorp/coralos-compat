@@ -265,6 +265,10 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
         e.defer_tails();
     }
     for t in core::mem::take(&mut e.rg.as_mut().expect("a region").deferred) { e.node_tails(t); }
+    // a back edge's budget exit: go() settled the edge's own pending carry before the budget test, so nothing is pending on
+    // it - not the state the last node emitted left (settling that would recompute XER[CA] from a stale Ctx::ca_src on a
+    // back edge from a node that had no carry pending)
+    if e.env.mutant != MUT_REGION_BACK_CA { e.ca_lazy = None; }
     for (f, target) in core::mem::take(&mut e.rg.as_mut().expect("a region").backs) {
         e.a.here(f);
         e.chain(target, 0);

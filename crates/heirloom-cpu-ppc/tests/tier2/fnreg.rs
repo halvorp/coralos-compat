@@ -165,3 +165,50 @@ fn a_written_code_page_loses_its_code_before_anything_enters_it() {
     }
     assert!(red, "mutant 43 (written code kept) stayed GREEN");
 }
+
+/// A 64-bit shift-and-subtract divide in single-block region nodes (the shape WC3 JitLockstep diverged on, h86 native
+/// 2026-11-05): node A `adde x4; subfc; subfe.; blt L`, node B `mr; mr; addic r0,r10,1; L: bdnz A`, node L `bdnz A` (B's
+/// last instruction, also entered from A). Node B leaves a lazy carry pending; L's back edge to A, taken where the budget runs
+/// out, must not settle it (A's subfe set XER[CA]). 40 divisions of varying operands; the quotient, remainder and XER folded.
+fn divide_program() -> Vec<u32> {
+    let adde = |t: u32, a: u32, b: u32| x(t, a, b, 138, false);
+    let mr = |t: u32, s: u32| x(s, t, s, 444, false); // or rT,rS,rS
+    let mut p = vec![d(14, 31, 0, 40), d(14, 20, 0, 0)]; // li r31,40; li r20,0
+    let outer = p.len();
+    p.extend([d(14, 10, 0, 0xFFFF), rlwinm(3, 31, 13, 0, 31, false), d(14, 4, 31, 0x7531), d(14, 5, 0, 0), d(14, 6, 31, 3), // r10=-1, r3:r4, r5:r6
+              d(14, 7, 0, 0), d(14, 8, 0, 0), d(14, 9, 0, 64), mtspr(9, 9), d(12, 7, 7, 0)]); // r7=r8=0; ctr=64; addic r7,r7,0
+    let a = p.len();
+    p.extend([adde(4, 4, 4), adde(3, 3, 3), adde(8, 8, 8), adde(7, 7, 7), x(0, 6, 8, 8, false), x(9, 5, 7, 136, true)]); // subfc r0,r6,r8; subfe. r9,r5,r7
+    let blt = p.len();
+    p.push(0);
+    p.extend([mr(8, 0), mr(7, 9), d(12, 0, 10, 1)]); // mr r8,r0; mr r7,r9; addic r0,r10,1
+    let l = p.len();
+    p.push(bc(16, 0, (a as i32 - l as i32) * 4)); // L: bdnz A
+    p[blt] = bc(12, 0, (l as i32 - blt as i32) * 4); // blt L
+    p.extend([adde(4, 4, 4), adde(3, 3, 3), x(20, 20, 4, 266, false), x(20, 20, 7, 266, false), x(20, 20, 8, 266, false),
+              x(26, 0, 0, 339 | 0, false) | 1 << 16, x(20, 20, 26, 266, false)]); // add r20 += r4 r7 r8; mfxer r26; add
+    p.push(d(13, 31, 31, 0xFFFF)); // addic. r31,r31,-1
+    let b = p.len();
+    p.push(bc(4, 2, (outer as i32 - b as i32) * 4)); // bne outer
+    p
+}
+
+/// The divide loop ends in tier 0's state with lazy carries and no superblocks (single-block nodes), regions on, in slicings
+/// small enough for back-edge budget exits, and in JitLockstep; with the back-edge settle planted back (mutant 48) RED.
+#[test]
+fn a_regions_back_edge_exit_does_not_settle_a_stale_lazy_carry_and_its_mutant_goes_red() {
+    use heirloom_cpu_abi::ppc::{KNOB_LAZY_CA as Z, KNOB_NO_SUPERBLOCK as B};
+    let prog = divide_program();
+    let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, |_, _| {});
+    assert!(want.last.halted, "tier 0 runs it: {:?}", want.last);
+    for knobs in [Z | B, Z, B, 0] {
+        for slice in [1_000_000, 1_000, 61, 23, 13] {
+            let (got, e) = run_full(Tier::Jit, 0, knobs, &prog, slice, |_, _| {}, Some(REGION_TEST));
+            assert!(got == want, "knobs {knobs:#x} slice {slice}: xer {:#x}/{:#x} r20 {:#x}/{:#x} {:?}", got.xer, want.xer, got.gpr[20], want.gpr[20], e.jit_stats());
+        }
+        let (got, e) = run_full(Tier::JitLockstep, 0, knobs, &prog, 50, |_, _| {}, Some(REGION_TEST));
+        assert!(got == want && e.divergence().is_none(), "knobs {knobs:#x} lockstep: {:?}", e.divergence());
+    }
+    let red = [61u64, 23, 13].iter().any(|&slice| run_full(Tier::Jit, 48, Z | B, &prog, slice, |_, _| {}, Some(REGION_TEST)).0 != want);
+    assert!(red, "mutant 48 (a back-edge exit settles the last node's carry) stayed GREEN");
+}

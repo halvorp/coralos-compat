@@ -27,17 +27,11 @@ pub(crate) enum Lazy {
 }
 
 impl E<'_, '_> {
-    /// Lazy carries on: unless the A/B knob KNOB_NO_LAZY_CA is set (lockstep included: its entries end at exits, which
-    /// settle the carry).
-    /// KNOB_NO_SUPERBLOCK turns it off too (h86 native, 2026-11-05: WC3 JitLockstep with no superblocks and lazy carries
-    /// diverged in XER[CA] at a region of single-block nodes - Miles' AIL_API_file_fss_attrib_write -> AIL_set_error, block
-    /// 0xd5c980 - and agreed with lazy carries off or with no regions; the Z83 priced lazy carries at ~0 (nolazyca 0), so the
-    /// no-superblock A/B runs without them until that interaction is found).
-    /// OFF BY DEFAULT since 2026-11-05 (the coordinator's ruling: a known-wrong XER[CA] path must not run by default): only
-    /// KNOB_LAZY_CA turns it on.
+    /// Lazy carries are OFF by default: only the A/B knob KNOB_LAZY_CA turns them on, and KNOB_NO_LAZY_CA overrides it
+    /// (lockstep included: its entries end at exits, which settle the carry).
     pub(crate) fn ca_lazy_on(&self) -> bool {
-        use heirloom_cpu_abi::ppc::{KNOB_LAZY_CA, KNOB_NO_LAZY_CA, KNOB_NO_SUPERBLOCK};
-        self.env.knobs & KNOB_LAZY_CA != 0 && self.env.knobs & (KNOB_NO_LAZY_CA | KNOB_NO_SUPERBLOCK) == 0
+        use heirloom_cpu_abi::ppc::{KNOB_LAZY_CA, KNOB_NO_LAZY_CA};
+        self.env.knobs & KNOB_LAZY_CA != 0 && self.env.knobs & KNOB_NO_LAZY_CA == 0
     }
 
     /// Before instruction `op` (the body loop): record the pending state its out-of-line paths settle with, and settle (or
