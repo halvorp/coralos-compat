@@ -46,6 +46,20 @@ impl core::error::Error for SourceError {}
 /// when `file` is an AppleDouble header (or a bare resource fork).
 pub fn fragment_bytes(file: &[u8], data_fork: Option<&[u8]>) -> Result<(String, Vec<u8>), SourceError> {
     if Pef::has_magic(file) { return Ok(("(bare PEF)".into(), file.to_vec())); }
+    let (name, data, span) = app_member(file, data_fork)?;
+    Ok((name, data[span].to_vec()))
+}
+
+/// Where the PowerPC application fragment lies in the file's data fork: `(offset, length)`, the length resolved (a `cfrg` length 0 =
+/// to the end of the fork). What the Code Fragment Manager puts in the `CFragInitBlock`'s data-fork locator. A bare PEF is the whole file.
+pub fn fragment_span(file: &[u8], data_fork: Option<&[u8]>) -> Result<(u32, u32), SourceError> {
+    if Pef::has_magic(file) { return Ok((0, file.len() as u32)); }
+    let (_, _, span) = app_member(file, data_fork)?;
+    Ok((span.start as u32, (span.end - span.start) as u32))
+}
+
+/// The `cfrg` 0 `pwpc` application member of `file`: its name, the data fork it lives in, and its byte range there.
+fn app_member<'a>(file: &'a [u8], data_fork: Option<&'a [u8]>) -> Result<(String, &'a [u8], core::ops::Range<usize>), SourceError> {
     let opened = heirloom_fmt_resfork::open(file).map_err(SourceError::Container)?;
     let fork = ResFork::parse(file[opened.rsrc.clone()].to_vec()).map_err(SourceError::Fork)?;
     let i = fork.find(*b"cfrg", 0).ok_or(SourceError::NoCfrg)?;
@@ -60,7 +74,7 @@ pub fn fragment_bytes(file: &[u8], data_fork: Option<&[u8]>) -> Result<(String, 
     let end = if m.length == 0 { data.len() } else { (m.offset as usize).saturating_add(m.length as usize) };
     if m.offset as usize > data.len() || end > data.len() { return Err(SourceError::OutOfFork { offset: m.offset, length: m.length, fork: data.len() }); }
     let name = if m.name.is_empty() { opened.name.unwrap_or_else(|| format!("(cfrg member)")) } else { m.name.clone() };
-    Ok((name, data[m.offset as usize..end].to_vec()))
+    Ok((name, data, m.offset as usize..end))
 }
 
 /// The PowerPC IMPORT-LIBRARY members of the `cfrg` of `file` that live in its data fork: private shared libraries an application carries inside its own file (Blizzard's

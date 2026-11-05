@@ -4,8 +4,10 @@
 //! Fragment Manager enters a fragment: a fresh stack, r1 16-byte aligned over a zero back chain, r2 = the TOC of the
 //! entry TVector, r12 = the TVector's own address (the pointer-glue convention: a callee may rely on it), LR = the
 //! `ExitToShell` glue so returning from `main` ends the program. A fragment with an init routine runs it first: LR is
-//! then a pseudo-glue (`$InitDone`) that, when reached, switches the CPU to `main`. The init routine gets r3 = 0 where
-//! the real CFM passes a `CFragInitBlock *` (not built: nothing here reads it; named, not hidden). Its OSErr result (r3) is
+//! then a pseudo-glue (`$InitDone`) that, when reached, switches the CPU to `main`. The APPLICATION's init routine gets r3 =
+//! a real `CFragInitBlock *` ([`MacPpc::app_init_block`]: its data-fork locator names the application file and the fragment's
+//! span in it - a fat loader such as Installer VISE's FatLoader reads it to GetDiskFragment its real code from the same file).
+//! A LIBRARY's init routine still gets r3 = 0 (no locator is kept for a supplied library; named, not hidden). Its OSErr result (r3) is
 //! honoured: nonzero is a fault and `main` does not run. Term routines are not
 //! run (ExitToShell of a classic application tears the whole process down).
 //!
@@ -49,7 +51,7 @@ pub struct Runtime {
     /// `main`'s entry state, held while the init routine runs.
     after_init: Option<StartState>,
     /// Init routines still to run before `main` (the libraries' and the application's), in order.
-    init_queue: alloc::collections::VecDeque<crate::cfm::Tv>,
+    init_queue: alloc::collections::VecDeque<(crate::cfm::Tv, u32)>,
     /// A reset register file the natives that run on a scratch CPU start from, cloned per call (a clone shares the empty natives
     /// set: `Cpu::new` allocated one per Toolbox / CFM / Time Manager call).
     pub(crate) scratch_cpu: Option<Cpu>,
@@ -78,7 +80,9 @@ pub struct Runtime {
     pub(crate) streams: alloc::collections::BTreeMap<u32, crate::stdio::Stream>,
     pub(crate) rand_seeded: bool,
     pub(crate) errno: u32,
-    main_tvector: u32,
+    main_tvector: u32,    /// Init routines of libraries the program loaded while it RUNS (GetDiskFragment, GetMemFragment, a first import): each runs as a callback
+    /// before the call that loaded it returns ([`MacPpc::begin_lib_init`]): (its TVector, the library's name, its CFragInitBlock).
+    pub(crate) pending_inits: alloc::collections::VecDeque<(crate::cfm::Tv, String, u32)>,
     /// The lowest address of the application thread's stack (for `ThreadCurrentStackSpace`; accurate to the 16-byte alignment of r1).
     pub(crate) main_stack: u32,
     /// A refusal or CPU trap; once set, every step reports it again (the program cannot continue).
@@ -118,13 +122,15 @@ impl<U: GuestUi> MacPpc<U> {
         let exec = core::mem::take(&mut self.rt.exec);
         self.rt = Runtime { main_tvector: cpu.gpr[12], main_stack: (main.r1 + 64).saturating_sub(crate::cfm::STACK_SIZE), exec, ..Runtime::default() };
         // every library's init routine (dependencies first), then the application's own, run before main; each returns to `$InitDone`, which starts the next
-        let mut inits: alloc::collections::VecDeque<crate::cfm::Tv> = self.lib_inits.iter().copied().collect();
-        if let Some(init) = frag.init { inits.push_back(init); }
-        if let Some(first) = inits.pop_front() {
+        // each with the r3 it is entered with: 0 for a library, the CFragInitBlock for the application
+        let mut inits: alloc::collections::VecDeque<(crate::cfm::Tv, u32)> = self.lib_inits.iter().map(|&t| (t, 0)).collect();
+        if let Some(init) = frag.init { inits.push_back((init, self.app_init_block()?)); }
+        if let Some((first, r3)) = inits.pop_front() {
             let id = self.glue.intern(&mut self.mac, "CFM", INIT_DONE)?;
             cpu.pc = first.code;
             cpu.gpr[2] = first.toc;
             cpu.gpr[12] = first.address;
+            cpu.gpr[3] = r3;
             cpu.lr = self.glue.entry(id).map_or(0, |e| e.stub);
             self.rt.after_init = Some(main);
             self.rt.init_queue = inits;
@@ -133,6 +139,9 @@ impl<U: GuestUi> MacPpc<U> {
         self.rt.cpu = Some(cpu);
         Ok(())
     }
+
+    /// Has the program started (its CFM entry state built)? A library instantiated from now on runs its init routine as a callback.
+    pub(crate) fn started(&self) -> bool { self.rt.main_tvector != 0 }
 
     /// The CPU while a program is loaded (for inspection; `None` once it exited).
     pub fn cpu(&self) -> Option<&Cpu> { self.rt.cpu.as_ref() }
@@ -166,19 +175,25 @@ impl<U: GuestUi> MacPpc<U> {
             let timed_out = self.rt.wait_deadline.is_some_and(|d| self.mac.ev.ticks.wrapping_sub(d) < 0x8000_0000);
             // a Time Manager task that is due wakes the parked call too: the retried call is the safepoint that runs it
             let timer_due = self.tm_next_wake().is_some_and(|w| w <= self.mac.ev.ticks_total);
-            let wake = self.mac.event_pending(mask) || timed_out || timer_due || self.carbon_motion_wakes();
+            // a dialog item the user hit (a native control's intent) with no ModalDialog to collect it: a CONTROL's hit becomes the click it
+            // stands for (a mouseDown the program's own FindControl / TrackControl, or DialogSelect, turns back into the item: Installer
+            // VISE's splash); any other hit wakes the call with a null event, which a modeless loop hands DialogSelect (IsDialogEvent takes a
+            // null event for the front dialog). Either way the loop no longer sleeps through the user's press.
+            let clicked = !self.mac.tr.dlg.hits.is_empty() && self.mac.dialog_hit_to_click().unwrap_or(false);
+            let hit_pending = !clicked && !self.mac.tr.dlg.hits.is_empty();
+            let wake = self.mac.event_pending(mask) || timed_out || timer_due || hit_pending || self.carbon_motion_wakes();
             if wake { self.carbon_unpark(); }
             if self.rt.sched.sweep.is_some() {
                 if wake {
                     self.rt.sched.sweep = None;
-                    self.rt.wait_timed_out = timed_out;
+                    self.rt.wait_timed_out = timed_out || hit_pending;
                     self.rt.wait_mask = None;
                     self.rt.wait_deadline = None;
                 }
                 // else the sweep is still going round: another task holds the CPU, so this is not a park
             } else {
                 if !wake { self.rt.cpu = Some(cpu); return (Step::Blocked, idle()); }
-                self.rt.wait_timed_out = timed_out;
+                self.rt.wait_timed_out = timed_out || hit_pending;
                 self.rt.wait_mask = None;
                 self.rt.wait_deadline = None;
             }
@@ -333,11 +348,11 @@ impl<U: GuestUi> MacPpc<U> {
                 cpu.halt();
                 return true;
             }
-            if let Some(next) = self.rt.init_queue.pop_front() {
-                // the next init routine; r3 = 0 where the CFM passes a CFragInitBlock
+            if let Some((next, r3)) = self.rt.init_queue.pop_front() {
+                // the next init routine, r3 = its CFragInitBlock (0 for a library)
                 cpu.gpr[2] = next.toc;
                 cpu.gpr[12] = next.address;
-                cpu.gpr[3] = 0;
+                cpu.gpr[3] = r3;
                 cpu.lr = addr;
                 cpu.set_pc(next.code);
                 return true;
@@ -474,13 +489,35 @@ impl<U: GuestUi> MacPpc<U> {
             }
         }
         let mut regs = cpu.gpr;
+        let refused_before = self.mac.refused.len();
         let outcome = self.glue_call(symbol, &mut regs);
+        // a call the Toolbox refused (and the program goes on past) is placed: the guest return address names the caller
+        if self.mac.refused.len() > refused_before { self.mac.log.push(format!("[cfm] {symbol} was refused; called from {:#x}", cpu.lr)); }
+        // a library this call loaded has an init routine: it runs now, as the CFM runs it before GetDiskFragment / GetMemFragment returns
+        if matches!(outcome, GlueOutcome::Return) && !self.rt.pending_inits.is_empty() {
+            cpu.gpr[3] = regs[3];
+            cpu.gpr[4] = regs[4];
+            if let Err(why) = self.begin_lib_init(cpu) { self.rt.fault = Some(why); cpu.halt(); }
+            self.sync_natives(cpu);
+            return true;
+        }
         // a host call changes the result registers only; anything else it touched would be a bug in the adapter
         cpu.gpr[3] = regs[3];
         cpu.gpr[4] = regs[4];
         match outcome {
             GlueOutcome::Return => {}
-            GlueOutcome::Exit => cpu.halt(),
+            GlueOutcome::Exit => {
+                // the guest call chain that ended the program (PowerPC frames: the caller's r1 at [r1], its saved LR at 8 of it)
+                let (mut sp, mut chain) = (cpu.gpr[1], alloc::vec![cpu.lr]);
+                while chain.len() < 12 {
+                    let Ok(next) = self.mac.mem.read_u32(sp) else { break };
+                    if next <= sp { break }
+                    chain.push(self.mac.mem.read_u32(next + 8).unwrap_or(0));
+                    sp = next;
+                }
+                self.mac.log.push(format!("[cfm] {symbol} ends the program; called from {chain:x?}"));
+                cpu.halt()
+            }
             GlueOutcome::Idle => {
                 // the call parked: it was not progress after all (note_call counted it before it ran)
                 if let (Some(s), Some(p)) = (&mut self.rt.sched.sweep, progressed_before) { s.progressed = p; }

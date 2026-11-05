@@ -15,6 +15,12 @@ use crate::cpu::Cpu;
 pub enum GwFn {
     NewGWorld, UpdateGWorld, DisposeGWorld, GetGWorld, SetGWorld, LockPixels, UnlockPixels, GetGWorldPixMap, GetGWorldDevice, GetPixBaseAddr, GetPixRowBytes,
     GetPixelsState, SetPixelsState, AllowPurgePixels, NoPurgePixels, PixMap32Bit, GetPortBounds, GetWindowPortBounds, GetPortBitMapForCopyBits, GetPixBounds,
+    /// The port's text fields (`txFont` 68, `txFace` 70, `txMode` 72, `txSize` 74 in a GrafPort and a CGrafPort alike), `GetPortVisibleRegion`
+    /// (a COPY of `visRgn` into the caller's region), `GetPortPixMap` (a colour port's `portPixMap`), `GetQDGlobalsThePort` (the current port).
+    GetPortTextFont, GetPortTextFace, GetPortTextMode, GetPortTextSize, GetPortVisibleRegion, GetPortPixMap, GetQDGlobalsThePort,
+    /// `LockPortBits(port)` / `UnlockPortBits(port)`: noErr - a Mac OS 9 port's pixels are guest memory that never moves (Carbon locks a
+    /// Mac OS X window's backing store; there is none here). A NIL port is paramErr.
+    LockPortBits, UnlockPortBits,
 }
 
 impl GwFn {
@@ -26,6 +32,9 @@ impl GwFn {
             "GetPixBaseAddr" => GetPixBaseAddr, "GetPixRowBytes" => GetPixRowBytes, "GetPixelsState" => GetPixelsState, "SetPixelsState" => SetPixelsState,
             "AllowPurgePixels" => AllowPurgePixels, "NoPurgePixels" => NoPurgePixels, "PixMap32Bit" => PixMap32Bit,
             "GetPortBounds" => GetPortBounds, "GetWindowPortBounds" => GetWindowPortBounds, "GetPortBitMapForCopyBits" => GetPortBitMapForCopyBits, "GetPixBounds" => GetPixBounds,
+            "GetPortTextFont" => GetPortTextFont, "GetPortTextFace" => GetPortTextFace, "GetPortTextMode" => GetPortTextMode, "GetPortTextSize" => GetPortTextSize,
+            "GetPortVisibleRegion" => GetPortVisibleRegion, "GetPortPixMap" => GetPortPixMap, "GetQDGlobalsThePort" => GetQDGlobalsThePort,
+            "LockPortBits" => LockPortBits, "UnlockPortBits" => UnlockPortBits,
             _ => return None,
         })
     }
@@ -88,6 +97,27 @@ impl<U: GuestUi> MacPpc<U> {
             GetPortBounds | GetWindowPortBounds => { let r = self.rect_at(a0.wrapping_add(P_RECT), &name)?; self.put_rect(a1, r, &name)?; cpu.gpr[3] = a1; return Ok(()); }
             GetPixBounds => { let r = self.mac.pix_bounds(a0).map_err(e)?; self.put_rect(a1, r, &name)?; cpu.gpr[3] = a1; return Ok(()); }
             GetPortBitMapForCopyBits => self.mac.port_bits_for_copybits(a0).map_err(e)?,
+            GetPortTextFont | GetPortTextMode | GetPortTextSize => {
+                use heirloom_mac68k_engine::qd::port::{P_TX_FONT, P_TX_MODE, P_TX_SIZE};
+                let off = match f { GetPortTextFont => P_TX_FONT, GetPortTextMode => P_TX_MODE, _ => P_TX_SIZE };
+                self.mac.mem.read_u16(a0.wrapping_add(off)).map_err(|_| format!("{name}: the port {a0:#x} leaves guest RAM"))? as i16 as i32 as u32
+            }
+            // txFace is a Style (one byte) followed by a filler byte
+            GetPortTextFace => u32::from(self.mac.mem.read_u8(a0.wrapping_add(heirloom_mac68k_engine::qd::port::P_TX_FACE)).map_err(|_| format!("{name}: the port {a0:#x} leaves guest RAM"))?),
+            GetPortVisibleRegion => {
+                let vis = self.mac.mem.read_u32(a0.wrapping_add(heirloom_mac68k_engine::qd::port::P_VIS)).map_err(|_| format!("{name}: the port {a0:#x} leaves guest RAM"))?;
+                let op = heirloom_mac68k_engine::mixed::trap_opcode("CopyRgn").ok_or("CopyRgn has no trap word")?;
+                self.mac.pascal_call(op, &[vis, a1]).map_err(|e| format!("{name}: {e:?}"))?;
+                a1
+            }
+            GetPortPixMap => {
+                use heirloom_mac68k_engine::qd::port::{CP_PIXMAP, CPORT_VERSION, P_PORT_VERSION};
+                let v = self.mac.mem.read_u16(a0.wrapping_add(P_PORT_VERSION)).map_err(|_| format!("{name}: the port {a0:#x} leaves guest RAM"))?;
+                if v & 0xC000 != CPORT_VERSION & 0xC000 { return Err(format!("{name}: {a0:#x} is a basic GrafPort (portVersion {v:#06x}): it has no PixMap")); }
+                self.mac.mem.read_u32(a0.wrapping_add(CP_PIXMAP)).map_err(|_| format!("{name}: the port {a0:#x} leaves guest RAM"))?
+            }
+            GetQDGlobalsThePort => heirloom_mac68k_engine::qd::target::current_port(&self.mac).map_err(e)?,
+            LockPortBits | UnlockPortBits => if a0 == 0 { (-50i32) as u32 } else { 0 },
         };
         cpu.gpr[3] = r;
         Ok(())

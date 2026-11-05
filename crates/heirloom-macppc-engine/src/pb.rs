@@ -19,7 +19,7 @@ use heirloom_mac68k_engine::osconv::Regs;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PbCall { kind: Kind, hfs: bool, async_call: bool }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind { Trap(u8), Selector(u16) }
+enum Kind { Trap(u8), Selector(u16), NoAccessControl }
 
 /// (C name without `PB`/`H`/`Sync`/`Async`, trap name): the plain traps. The `H` prefix selects the HFS form of the same trap.
 const TRAPS: &[(&str, &str)] = &[
@@ -36,6 +36,11 @@ impl PbCall {
     pub fn by_name(name: &str) -> Option<PbCall> {
         // the Desktop Manager's synchronous calls have no Sync suffix (PBDTGetPath)
         if name == "PBDTGetPath" { return Some(PbCall { kind: Kind::Selector(heirloom_mac68k_engine::fm::traps::sel::DT_GET_PATH), hfs: true, async_call: false }); }
+        // PBHGetDirAccess / PBHSetDirAccess (_HFSDispatch $32 / $33): AppleShare access privileges. These volumes are local and do not have them
+        // (PBHGetVolParms reports vMAttrib 0: bAccessCntl clear, which a program is meant to test): paramErr on a volume that exists, nsvErr else
+        if let Some(rest) = name.strip_prefix("PBH").and_then(|r| r.strip_suffix("Sync").map(|c| (c, false)).or_else(|| r.strip_suffix("Async").map(|c| (c, true)))) {
+            if matches!(rest.0, "GetDirAccess" | "SetDirAccess") { return Some(PbCall { kind: Kind::NoAccessControl, hfs: true, async_call: rest.1 }); }
+        }
         let rest = name.strip_prefix("PB")?;
         let (core, async_call) = match (rest.strip_suffix("Sync"), rest.strip_suffix("Async")) { (Some(c), _) => (c, false), (_, Some(c)) => (c, true), _ => return None };
         let (hfs, base) = match core.strip_prefix('H') { Some(b) if TRAPS.iter().any(|(n, _)| *n == b) || SELECTORS.iter().any(|(n, _)| *n == b) => (true, b), _ => (false, core) };
@@ -77,6 +82,13 @@ impl<U: GuestUi> MacPpc<U> {
                 let op = base | if c.hfs { 0x0200 } else { 0 } | if c.async_call { 0x0400 } else { 0 };
                 let (regs, _) = self.mac.os_call_regs(Regs { opcode: op, d0: 0, a0: pb, d1: 0, a1: 0 }).map_err(|e| format!("{}: {e}", TRAPS[i as usize].0))?;
                 Ok(regs.d0 as u16 as i16)
+            }
+            Kind::NoAccessControl => {
+                let vref = self.mac.mem.read_u16(pb.wrapping_add(heirloom_mac68k_engine::fm::pb::IO_VREF_NUM)).map_err(|_| format!("PBHGet/SetDirAccess: the block {pb:#x} leaves guest RAM"))? as i16;
+                let e: i16 = if self.mac.fm.volume_of_vref(vref).is_ok() { -50 } else { -35 };
+                let _ = self.mac.mem.write_u16(pb.wrapping_add(heirloom_mac68k_engine::fm::pb::IO_RESULT), e as u16);
+                self.mac.log.push(format!("[file] PBH(Get|Set)DirAccess vRef {vref} -> {e} (no access privileges on a local volume)"));
+                Ok(e)
             }
             Kind::Selector(s) => match heirloom_mac68k_engine::fm::traps::call_selector(&mut self.mac, s, pb, c.async_call, c.hfs) {
                 Some(Ok(e)) => {

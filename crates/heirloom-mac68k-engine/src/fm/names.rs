@@ -94,6 +94,9 @@ impl FileMgr {
             }
             match self.tree.find_child(cur, &nm) {
                 Some(n) if self.tree.is_dir(n) => { cur = n; }
+                // the LAST component of a directory path ("a:new:") that does not exist yet is a valid spec of what to create, fnfErr upstream
+                // (FSMakeFSSpec + FSpDirCreate, as the Photoshop 7 tryout's set-up tool makes its folders); a missing folder BEFORE it is dirNFErr
+                None if i == last => { self.tree.check_name(&nm, &[]).map_err(os_err)?; return Ok(Located { vol, parent: cur, leaf: Some(nm), node: None }); }
                 Some(_) | None => return Err(err::DIR_NF_ERR),
             }
             if i == last { return Ok(Located { vol, parent: self.tree.parent(cur), leaf: Some(nm), node: Some(cur) }); }

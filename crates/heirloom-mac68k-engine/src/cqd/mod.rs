@@ -20,7 +20,8 @@
 //!
 //! Not modelled, by name (each one is a refusal when called, never a fake): direct (16/32-bit) pixel maps, the inverse
 //! table (`gdITable` is NIL: the engine answers `Color2Index` itself), device search/complement procedures, gamma, the
-//! arithmetic transfer modes 32..39, colour patterns other than `patType` 0, colour icons and cursors.
+//! arithmetic transfer modes 32..39, colour patterns other than `patType` 0, colour cursors ('crsr'). Colour icons ('cicn') are [`cicon`].
+pub mod cicon;
 pub mod cport;
 pub mod color;
 pub mod ctab;
@@ -60,6 +61,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     depth::register(m)?;
     pixmap::register(m)?;
     cport::register(m)?;
+    cicon::register(m)?;
     pens::register(m)
 }
 

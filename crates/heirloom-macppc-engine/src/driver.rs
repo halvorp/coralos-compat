@@ -48,6 +48,16 @@ impl<U: GuestUi> GuestMachine for MacPpc<U> {
         // The application's own file on the default volume (the folder set_home named, else the boot volume), as the 68k launch
         // does: GetProcessInformation's processAppSpec names it and the program finds the files beside it.
         self.install_app_file(file, &frag_name).map_err(|e| Refusal(format!("{name}: {e}")))?;
+        // CurApName / CurApRefNum: the program finds itself the way a real one does (LMGetCurApName, PBGetFCBInfo(CurApRefNum))
+        if let Some(app) = self.mac.fm.app {
+            let n: Vec<u8> = self.mac.fm.tree.name(app).chars().take(31).map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect();
+            use heirloom_mac68k_engine::lowmem::{CUR_AP_NAME, CUR_AP_REF_NUM};
+            let w = self.mac.mem.write_u8(CUR_AP_NAME, n.len() as u8).and_then(|_| self.mac.mem.write_bytes(CUR_AP_NAME + 1, &n))
+                .and_then(|_| self.mac.mem.write_u16(CUR_AP_REF_NUM, heirloom_mac68k_engine::resmgr::APP_REF_NUM as u16));
+            w.map_err(|e| Refusal(format!("{name}: CurApName: {e}")))?;
+        }
+        // its init routine's CFragInitBlock names this file and the fragment's span in it (a fat loader reads it to load its real code)
+        self.app_span = crate::source::fragment_span(file, None).ok();
         let frag = self.instantiate(&frag_name, &pef).map_err(|e| Refusal(format!("{name}: {e}")))?;
         MacPpc::start(self, &frag).map_err(|e| Refusal(format!("{name}: {e}")))
     }

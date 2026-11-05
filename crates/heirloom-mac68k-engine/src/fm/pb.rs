@@ -63,16 +63,18 @@ pub const IO_WD_PROC_ID: u32 = 28;
 pub const IO_WD_VREF_NUM: u32 = 32;
 pub const IO_WD_DIR_ID: u32 = 48;
 // FCBPBRec (GetFCBInfo)
+// FCBPBRec (Files.h; BasiliskII extfs_defs.h agrees): ioFCBIndx is a SHORT at 28 with filler1 at 30, so ioFCBFlNm is at 32 and the rest
+// follow it without a gap (ioFCBVRefNum 52, ioFCBParID 58: what a program reads to find an open file's folder).
 pub const IO_FCB_INDX: u32 = 28;
-pub const IO_FCB_FL_NM: u32 = 34;
-pub const IO_FCB_FLAGS: u32 = 38;
-pub const IO_FCB_ST_BLK: u32 = 40;
-pub const IO_FCB_EOF: u32 = 42;
-pub const IO_FCB_PLEN: u32 = 46;
-pub const IO_FCB_CR_PS: u32 = 50;
-pub const IO_FCB_VREF_NUM: u32 = 54;
-pub const IO_FCB_CLP_SIZ: u32 = 56;
-pub const IO_FCB_PAR_ID: u32 = 60;
+pub const IO_FCB_FL_NM: u32 = 32;
+pub const IO_FCB_FLAGS: u32 = 36;
+pub const IO_FCB_ST_BLK: u32 = 38;
+pub const IO_FCB_EOF: u32 = 40;
+pub const IO_FCB_PLEN: u32 = 44;
+pub const IO_FCB_CR_PS: u32 = 48;
+pub const IO_FCB_VREF_NUM: u32 = 52;
+pub const IO_FCB_CLP_SIZ: u32 = 54;
+pub const IO_FCB_PAR_ID: u32 = 58;
 // CMovePBRec (CatMove)
 pub const IO_NEW_NAME: u32 = 28;
 pub const IO_NEW_DIR_ID: u32 = 36;

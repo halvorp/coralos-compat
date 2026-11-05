@@ -76,3 +76,22 @@ fn errors_and_the_resource_file_forms_report_like_the_68k_calls() {
     // a name still unserved is refused by name
     assert!(matches!(m.bind("FSpResolve"), Binding::Unbound(why) if why.contains("FSpResolve")));
 }
+
+/// FSMakeFSSpec of a directory path whose LAST folder does not exist yet (":Privilege:Common:") is fnfErr with a valid spec, so FSpDirCreate
+/// makes it (the Photoshop 7 tryout set-up tool builds its folders this way); a missing folder BEFORE the last stays dirNFErr.
+#[test]
+fn a_missing_last_folder_of_a_directory_path_is_fnferr_with_a_valid_spec() {
+    let mut m = MacPpc::new(heirloom_ui_abi::RecordingGuestUi::new()).unwrap();
+    let root = m.mac.fm.def_vol;
+    m.mac.fm.tree.mkdirs(root, ["Privilege"].iter().copied()).unwrap();
+    const NAME: u32 = 0x3200;
+    const SPEC: u32 = 0x3300;
+    let ps = |m: &mut MacPpc<heirloom_ui_abi::RecordingGuestUi>, s: &str| { m.mac.mem.write_u8(NAME, s.len() as u8).unwrap(); m.mac.mem.write_bytes(NAME + 1, s.as_bytes()).unwrap(); };
+    let mk = |m: &mut MacPpc<heirloom_ui_abi::RecordingGuestUi>| m.mac.fsp_call(heirloom_mac68k_engine::fm::fsspec::sel::MAKE_FSSPEC, &[0, 0, NAME, SPEC]);
+    ps(&mut m, ":Privilege:Common:");
+    assert_eq!(mk(&mut m), Err(-43), "fnfErr");
+    assert_eq!(m.mac.fsp_call(heirloom_mac68k_engine::fm::fsspec::sel::DIR_CREATE, &[SPEC, 0, 0x3400]), Ok(0), "the spec creates the folder");
+    assert_eq!(mk(&mut m), Ok(0), "now it exists");
+    ps(&mut m, ":Nowhere:Common:");
+    assert_eq!(mk(&mut m), Err(-120), "NEGATIVE CONTROL: a missing folder before the last is dirNFErr");
+}

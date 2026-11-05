@@ -36,6 +36,15 @@ pub struct ResolvedImport {
     pub value: u32,
 }
 
+/// Where a library loaded at run time came from (its CFragInitBlock's locator).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibLocator {
+    /// kDataForkCFragLocator: the guest FSSpec it was loaded through (copied into the block), and the span of the data fork.
+    Disk { spec: u32, offset: u32, length: u32 },
+    /// kMemoryCFragLocator: where the container was in memory.
+    Memory { address: u32, length: u32 },
+}
+
 /// A TVector read from the instantiated fragment: where the code is and the TOC to load into r2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tv { pub address: u32, pub code: u32, pub toc: u32 }
@@ -86,6 +95,21 @@ impl<U: GuestUi> MacPpc<U> {
             let image = pef.section_image(i)?;
             self.mac.mem.write_bytes(base, &image).map_err(mem_err("placing a section"))?;
             bases[i] = Some(base);
+        }
+        // 1b. a fragment that is not a supplied library (the APPLICATION) is known by its name from now on, its exports at their placed
+        // addresses: a library its imports load may import from it in turn (CodeWarrior's MSL imports `operator new` from "application",
+        // Photoshop 7), as the CFM resolves an import of the application's own fragment name. A supplied library keeps its Loading slot (a
+        // cycle between two libraries is named).
+        if !self.libs.contains_key(name) {
+            let early: alloc::collections::BTreeMap<String, u32> = loader.exports.iter().filter_map(|e| match e.target {
+                ExportTarget::Section { index, offset } => bases.get(usize::from(index)).copied().flatten().map(|b| (e.name.clone(), b.wrapping_add(offset))),
+                ExportTarget::Absolute(v) => Some((e.name.clone(), v)),
+                ExportTarget::Reexport { .. } => None,
+            }).collect();
+            if !early.is_empty() {
+                self.mac.log.push(format!("[cfm] \"{name}\": its {} exports are importable by the libraries it loads", early.len()));
+                self.libs.insert(name.into(), crate::machine::LibSlot::Loaded(early, None));
+            }
         }
         // 2. imports
         let mut resolved = Vec::with_capacity(loader.imports.len());
@@ -187,5 +211,56 @@ impl<U: GuestUi> MacPpc<U> {
         let id = self.glue.intern(&mut self.mac, "InterfaceLib", "ExitToShell")?;
         let lr = self.glue.entry(id).map_or(0, |e| e.stub);
         Ok(StartState { pc: main.code, r1, r2: main.toc, lr })
+    }
+
+    /// The `CFragInitBlock` the application's init routine is entered with (CodeFragments.h, the System 7 layout): contextID 0,
+    /// closureID 4, connectionID 8, fragLocator 12 (`where` 12; the data-fork locator's fileSpec 16, offset 20, length 24), libName 28,
+    /// reservedA 32; the FSSpec (70 bytes) and the name follow it in the same block. The locator is kDataForkCFragLocator (1): the
+    /// application's own file ([`heirloom_mac68k_engine::fm::fsspec::write_app_spec`]) and the fragment's span in its data fork
+    /// ([`MacPpc::app_span`], set by the launch from the `cfrg`). 0 when no application file was installed (a fragment started
+    /// from memory by a host): no locator would be true then, and the routine gets NULL.
+    /// The `CFragInitBlock` of a library loaded while the program runs: the locator its loader recorded ([`MacPpc::lib_locator`]: the data
+    /// fork of a file, or memory), else kMemoryCFragLocator with no address (a library supplied as bytes); libName is the library's name.
+    pub(crate) fn lib_init_block(&mut self, lib: &str) -> Result<u32, CfmError> {
+        const BLOCK: u32 = 36;
+        const FSSPEC: u32 = 70;
+        let name: Vec<u8> = lib.chars().take(63).map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect();
+        let size = BLOCK + FSSPEC + 1 + name.len() as u32;
+        let p = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, size, true).map_err(|_| CfmError::NoMemory { what: "a CFragInitBlock", bytes: size })?;
+        let (spec, lib_name) = (p + BLOCK, p + BLOCK + FSSPEC);
+        let (where_, a, b, c) = match self.lib_locator.remove(lib) {
+            Some(LibLocator::Disk { spec: src, offset, length }) => {
+                let bytes = self.mac.mem.span(src, FSSPEC).and_then(|s| self.mac.mem.bytes(s).map(<[u8]>::to_vec)).map_err(mem_err("the library's FSSpec"))?;
+                self.mac.mem.write_bytes(spec, &bytes).map_err(mem_err("the CFragInitBlock's FSSpec"))?;
+                (1, spec, offset, length)
+            }
+            Some(LibLocator::Memory { address, length }) => (0, address, length, 0),
+            None => (0, 0, 0, 0),
+        };
+        let m = &mut self.mac.mem;
+        for (at, v) in [(0, 1), (4, 1), (8, 1), (12, where_), (16, a), (20, b), (24, c), (28, lib_name)] {
+            m.write_u32(p + at, v).map_err(mem_err("the CFragInitBlock"))?;
+        }
+        m.write_u8(lib_name, name.len() as u8).and_then(|_| m.write_bytes(lib_name + 1, &name)).map_err(mem_err("the CFragInitBlock's name"))?;
+        Ok(p)
+    }
+
+    pub fn app_init_block(&mut self) -> Result<u32, CfmError> {
+        const BLOCK: u32 = 36;
+        const FSSPEC: u32 = 70;
+        let Some((offset, length)) = self.app_span else { return Ok(0) };
+        if self.mac.fm.app.is_none() { return Ok(0) }
+        let name = self.mac.fm.app.map(|n| String::from(self.mac.fm.tree.name(n))).unwrap_or_default();
+        let name: Vec<u8> = name.chars().take(63).map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect();
+        let size = BLOCK + FSSPEC + 1 + name.len() as u32;
+        let p = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, size, true).map_err(|_| CfmError::NoMemory { what: "the CFragInitBlock", bytes: size })?;
+        let (spec, lib_name) = (p + BLOCK, p + BLOCK + FSSPEC);
+        if heirloom_mac68k_engine::fm::fsspec::write_app_spec(&mut self.mac, spec) != Ok(true) { return Ok(0) }
+        let m = &mut self.mac.mem;
+        for (at, v) in [(0, 1), (4, 1), (8, 1), (12, 1), (16, spec), (20, offset), (24, length), (28, lib_name)] {
+            m.write_u32(p + at, v).map_err(mem_err("the CFragInitBlock"))?;
+        }
+        m.write_u8(lib_name, name.len() as u8).and_then(|_| m.write_bytes(lib_name + 1, &name)).map_err(mem_err("the CFragInitBlock's name"))?;
+        Ok(p)
     }
 }

@@ -554,6 +554,24 @@ up (Macintosh Garden has none stated, so it was not used). **For Peter, if wante
   them, which is the distribution doc 17 expects: Window + QuickDraw + Event carry every app, Control/Dialog/Menu carry the apps
   with a UI. The Retro68 samples are small and inflate Memory/File counts with their libc glue: weigh the two rich apps more.
 
+### Adobe Photoshop 7.0 Tryout (2026-11-05): the second heavy Mac PPC app after Warcraft III
+
+Input (test data only, never committed): `/data/build/corpus-bin/mac/photoshop7-tryout/` (MacFormat 123 disc 1, archive.org
+`macformat-123-cd`; `Install Adobe Photoshop`, a MindVision Installer VISE 7.4 Carbon application). `tests/ps7_installer.rs` runs the REAL
+installer on the host (splash, licence, Read Me, Easy Install) to "Installation was successful" in ~47 s and exports the installed tree
+(`PS7_EXPORT_DIR`, the WC3 form: data forks, `.rsrc` sidecars, manifest.tsv); `tests/ps7_launch.rs` runs a program of that tree (the
+tryout set-up tool VSetupT the installer asks LaunchApplication for, then Photoshop 7.0 itself). Engine gaps it found and closed, each with
+a host test: the application's CFragInitBlock (VISE's FatLoader GetDiskFragment's its real code from it), GetDiskFragment / GetMemFragment
+preparing the fragment and returning mainAddr, run-time-loaded libraries' init routines (run as a callback before the loading call returns),
+the application's exports importable by its own fragment name, FSRef calls (FSpMakeFSRef, PBMakeFSRefSync, FSGetCatalogInfo /
+FSSetCatalogInfo, FSDeleteObject, FSRefMakePath as Mac OS 9's CarbonLib 1.4 makes it: the HFS full path), the HFS-by-dirID File Manager
+routines, the Script Manager's line layout (StyledLineBreak, PortionLine, DrawJustified, PixelToChar ...), color icons ('cicn'), Appearance
+pop-up buttons, CNTL dialog items placed at their DITL rectangle, modeless dialog clicks for a WaitNextEvent loop, and two real File Manager
+bugs: FCBPBRec offsets 2 bytes off from ioFCBFlNm on, and PBHGetFInfo writing past its 80-byte HFileParam (which overran VISE's stack).
+Photoshop 7.0 (`Contents:MacOSClassic`, InterfaceLib, ~3.4 M PPC instructions of which ~52 700 are AltiVec words: it has scalar G3 paths)
+runs its static initialisers, loads its tryout DRM library (`drmet(classic)`, Aladdin Privilege) and stops where the DRM reaches its
+License Manager: a second process spoken to with Apple Events (AECreateDesc / AESend), which the one-process machine does not host.
+
 ### The top rows for the Mac side (by app count and by what a user sees)
 
 1. **Window Manager** (`NewWindow`/`NewCWindow`/`GetNewWindow`, `BeginUpdate`/`EndUpdate`, `FindWindow`, `DragWindow`,

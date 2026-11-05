@@ -29,6 +29,34 @@ pub fn provided(l: &str) -> bool {
 fn err(e: i16) -> u32 { e as i32 as u32 }
 
 impl<U: GuestUi> MacPpc<U> {
+    /// The end of GetDiskFragment / GetMemFragment: `bytes` must be a PEF container (else cfragFragmentFormatErr -2806); it is provided as
+    /// the library `name`, prepared NOW (imports bound, relocated: a fragment that does not prepare is cfragFragmentCorruptErr -2829) and
+    /// connected; `*connID` and `*mainAddr` (its main TVector, NIL when it has none) are written unless NULL.
+    fn connect_pef(&mut self, who: &str, name: String, bytes: &[u8], conn_p: u32, main_p: u32, regs: &mut [u32; 32]) -> GlueOutcome {
+        let err = |e: i16| e as i32 as u32;
+        if bytes.len() < 8 || &bytes[..8] != b"Joy!peff" {
+            self.mac.log.push(format!("[cfm] {who} \"{name}\": {} bytes that are not a PEF container -> cfragFragmentFormatErr", bytes.len()));
+            regs[3] = err(-2806);
+            return GlueOutcome::Return;
+        }
+        self.provide_library(&name, bytes);
+        self.ensure_loaded(&name);
+        let main = match self.libs.get(name.as_str()) {
+            Some(crate::machine::LibSlot::Loaded(_, main)) => main.unwrap_or(0),
+            Some(crate::machine::LibSlot::Failed(why)) => {
+                self.mac.log.push(format!("[cfm] {who} \"{name}\": the fragment does not prepare ({why}) -> cfragFragmentCorruptErr"));
+                regs[3] = err(-2829);
+                return GlueOutcome::Return;
+            }
+            _ => 0,
+        };
+        let id = match self.connections.iter().position(|c| *c == name) { Some(i) => i, None => { self.connections.push(name.clone()); self.connections.len() - 1 } } as u32 + 1;
+        let ok = (conn_p == 0 || self.mac.mem.write_u32(conn_p, id).is_ok()) && (main_p == 0 || self.mac.mem.write_u32(main_p, main).is_ok());
+        self.mac.log.push(format!("[cfm] {who} \"{name}\" ({} bytes) -> connection {id}, main {main:#x}", bytes.len()));
+        regs[3] = if ok { 0 } else { err(-50) };
+        GlueOutcome::Return
+    }
+
     fn finish(&mut self, name: &str, res: Result<Return, heirloom_mac68k_engine::mixed::MixedError>, result: Option<Arg>, regs: &mut [u32; 32]) -> GlueOutcome {
         let r = match res { Ok(r) => r, Err(e) => return GlueOutcome::Refused(format!("{name}: {e}")) };
         if r.blocked { return GlueOutcome::Refused(format!("{name}: the handler tried to block the caller; the PowerPC run loop cannot suspend it yet")); }
@@ -206,6 +234,14 @@ impl<U: GuestUi> MacPpc<U> {
                 let mut cpu = self.scratch_cpu(regs);
                 match self.sc_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::Tl(f) => {
+                let mut cpu = self.scratch_cpu(regs);
+                match self.tl_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
+            Native::Fsr(f) => {
+                let mut cpu = self.scratch_cpu(regs);
+                match self.fsr_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
             Native::Cx(f) => {
                 let mut cpu = self.scratch_cpu(regs);
                 match self.cx_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
@@ -257,8 +293,8 @@ impl<U: GuestUi> MacPpc<U> {
             }
             // GetDiskFragment(fileSpec, offset, length, fragName, options, &connID, &mainAddr, errMessage): a PEF container in a FILE (Miles loads its
             // plug-ins from its "Miles" folder this way). The bytes [offset, offset + length) of the file's data fork (length 0 = to the end) are
-            // provided as a library under fragName (else the file's own name) and connected like GetSharedLibrary: it is instantiated, imports and
-            // init, at its first FindSymbol. *mainAddr is NIL (the program asks FindSymbol for what it needs). A file that does not open is
+            // provided as a library under fragName (else the file's own name), connected like GetSharedLibrary, and instantiated NOW: *mainAddr is
+            // its main TVector (NIL when it has none; connID / mainAddr NULL are not written). A file that does not open is
             // fragLibNotFound, and bytes that are not a PEF container cfragFragmentFormatErr (-2806), both logged by name.
             Native::GetDiskFragment => {
                 let (spec, offset, length, name_p, conn_p, main_p) = (a(0), a(1), a(2), a(3), a(5), a(6));
@@ -279,17 +315,23 @@ impl<U: GuestUi> MacPpc<U> {
                 let file_name = match self.pstr(spec + 6) { Ok(n) => n, Err(e) => return GlueOutcome::Refused(format!("GetDiskFragment: {e}")) };
                 let name = if name_p != 0 { self.pstr(name_p).unwrap_or_default() } else { String::new() };
                 let name = if name.is_empty() { file_name } else { name };
-                if bytes.len() < 8 || &bytes[..8] != b"Joy!peff" {
-                    self.mac.log.push(format!("[cfm] GetDiskFragment \"{name}\": {} bytes that are not a PEF container -> cfragFragmentFormatErr", bytes.len()));
-                    regs[3] = err(-2806);
-                    return GlueOutcome::Return;
-                }
-                self.provide_library(&name, &bytes);
-                let id = match self.connections.iter().position(|c| *c == name) { Some(i) => i, None => { self.connections.push(name.clone()); self.connections.len() - 1 } } as u32 + 1;
-                let ok = self.mac.mem.write_u32(conn_p, id).is_ok() && (main_p == 0 || self.mac.mem.write_u32(main_p, 0).is_ok());
-                self.mac.log.push(format!("[cfm] GetDiskFragment \"{name}\" ({} bytes) -> connection {id}", bytes.len()));
-                regs[3] = if ok { 0 } else { err(-50) };
-                GlueOutcome::Return
+                self.lib_locator.insert(name.clone(), crate::cfm::LibLocator::Disk { spec, offset, length: count });
+                self.connect_pef("GetDiskFragment", name, &bytes, conn_p, main_p, regs)
+            }
+            // GetMemFragment(memAddr, length, fragName, options, &connID, &mainAddr, errMessage): a PEF container already in memory (Installer VISE
+            // loads its 'Xshb' external code resources this way: Get1Resource, HLock, GetMemFragment of the handle's block). The bytes are copied
+            // and prepared like GetDiskFragment's (the CFM prepares a memory fragment in place; the copy is the same code at another address,
+            // which a position-independent PEF cannot tell). An unnamed fragment is named by its address.
+            Native::GetMemFragment => {
+                let (addr, length, name_p, conn_p, main_p) = (a(0), a(1), a(2), a(4), a(5));
+                let bytes = match self.mac.mem.span(addr, length).and_then(|sp| self.mac.mem.bytes(sp).map(<[u8]>::to_vec)) {
+                    Ok(b) => b,
+                    Err(_) => { self.mac.log.push(format!("[cfm] GetMemFragment {addr:#x} +{length}: not guest memory -> paramErr")); regs[3] = err(-50); return GlueOutcome::Return; }
+                };
+                let name = if name_p != 0 { self.pstr(name_p).unwrap_or_default() } else { String::new() };
+                let name = if name.is_empty() { format!("(memory fragment at {addr:#x})") } else { name };
+                self.lib_locator.insert(name.clone(), crate::cfm::LibLocator::Memory { address: addr, length });
+                self.connect_pef("GetMemFragment", name, &bytes, conn_p, main_p, regs)
             }
             Native::FindSymbol => {
                 let (conn, name_p, addr_p, class_p) = (a(0), a(1), a(2), a(3));
@@ -347,6 +389,13 @@ impl<U: GuestUi> PpcHost for MacPpc<U> {
         };
         match b {
             Binding::Pascal(op) => {
+                // a Toolbox manager initialised before QuickDraw (Photoshop 7's DRM library calls InitWindows from the application's static
+                // initialisers, before the application's own InitGraf): the process's `qd` block is made and initialised as InitGraf(&qd.thePort)
+                // would, the same block the application's later InitGraf fills again
+                if self.mac.qd_globals == 0 && matches!(op, 0xA912 | 0xA930 | 0xA97B | 0xA9CC | 0xA8FE) {
+                    self.mac.log.push(format!("[quickdraw] {symbol} before InitGraf: QuickDraw is initialised first for this process (qd)"));
+                    self.implicit_graf();
+                }
                 let Some((layout, result)) = self.mac.pascal_signature(op) else { return GlueOutcome::Refused(format!("{symbol}: registered with the other calling convention")) };
                 let values = match self.arg_values(layout.len(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{symbol}: {e}")) };
                 let r = self.mac.pascal_call(op, &values);

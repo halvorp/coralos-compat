@@ -72,6 +72,8 @@ pub mod decimal;
 pub mod dsp_c;
 pub mod qdacc_c;
 pub mod script_c;
+pub mod fsref_c; // the FSRef calls (FSpMakeFSRef, PBMakeFSRefSync, FSGetCatalogInfo, FSDeleteObject ...) over the one volume tree
+pub mod textlayout_c; // the Script Manager's line layout (StyledLineBreak, PortionLine, DrawJustified, PixelToChar ...), Roman, over the drawn font
 pub mod stdalert_c;
 pub mod sysmisc_c;
 pub mod tm_c; pub mod gl_c;

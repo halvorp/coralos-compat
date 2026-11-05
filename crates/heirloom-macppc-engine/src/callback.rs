@@ -80,6 +80,8 @@ pub(crate) enum Continuation {
     IoCompletion,
     /// A program's UPP called through an `Invoke<Name>UPP` ([`crate::invoke_c`]): the result goes back to the caller.
     Invoke(crate::invoke_c::Result_),
+    /// The init routine of a library loaded while the program runs (its name): the loading call returns afterwards.
+    LibInit(String),
 }
 
 #[derive(Debug, Clone)]
@@ -177,7 +179,35 @@ impl<U: GuestUi> MacPpc<U> {
             Continuation::SwitchIn => { frame.saved.restore(cpu); Ok(()) }
             Continuation::TimerTask | Continuation::IoCompletion => { frame.saved.restore(cpu); Ok(()) }
             Continuation::Invoke(res) => { self.invoke_returned(cpu, frame, res); Ok(()) }
+            Continuation::LibInit(ref name) => { let name = name.clone(); self.lib_init_returned(cpu, frame, &name) }
         }
+    }
+
+    /// Run the oldest pending library init routine (r3 = its CFragInitBlock) as a callback; the interrupted call returns (to `cpu.lr`, its
+    /// result already in r3) once every pending one has run.
+    pub(crate) fn begin_lib_init(&mut self, cpu: &mut Cpu) -> Result<(), String> {
+        let Some((tv, name, block)) = self.rt.pending_inits.pop_front() else { return Ok(()) };
+        let saved = Saved::of(cpu, cpu.lr);
+        let sp = cpu.gpr[1];
+        self.enter_tvector(cpu, tv.address, &[block], sp).map_err(|e| format!("{name}'s init routine: {e}"))?;
+        self.mac.log.push(format!("[cfm] {name}: its init routine runs before the call that loaded it returns"));
+        self.rt.callbacks.push(Frame { saved, cont: Continuation::LibInit(name) });
+        Ok(())
+    }
+
+    /// A library's init routine returned: a nonzero OSErr fails the load (the call answers cfragInitFunctionErr, -2821, as the CFM does); then
+    /// the next pending one, else the interrupted call returns.
+    fn lib_init_returned(&mut self, cpu: &mut Cpu, frame: Frame, name: &str) -> Result<(), String> {
+        let status = cpu.gpr[3] as u16 as i16;
+        frame.saved.restore(cpu);
+        if status != 0 {
+            self.mac.log.push(format!("[cfm] {name}: its init routine failed with OSErr {status} -> cfragInitFunctionErr"));
+            cpu.gpr[3] = (-2821i32) as u32;
+            self.rt.pending_inits.clear();
+            return Ok(());
+        }
+        if !self.rt.pending_inits.is_empty() { return self.begin_lib_init(cpu); }
+        Ok(())
     }
 
     /// Callbacks in progress (for tests and the census).

@@ -341,3 +341,29 @@ fn a_filter_proc_answering_false_is_called_again_on_every_tick_and_input_and_bef
     assert_eq!((m.mem.read_u16(cells::HIT1).unwrap(), m.mem.read_u16(CALLS).unwrap()), (1, 4), "the button's hit, after one more filter call");
     assert!(m.refused.is_empty(), "{:?}", m.refused);
 }
+
+/// A DITL with a disabled helpItem (type 1 | 0x80 = 129: Balloon Help's 'hdlg' reference, invisible), as the Photoshop 7 installer's dialogs
+/// carry, builds its dialog: the item is kept (GetDialogItem finds it) and shows nothing. Before, GetNewDialog refused the whole dialog.
+#[test]
+fn a_help_item_is_kept_and_shows_nothing() {
+    let mut m = machine();
+    let mut bytes = ditl_bytes();
+    bytes[1] = 2; // three items
+    bytes.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 129, 4, 0, 1, 0x1F, 0x40]); // helpItem: kScrollWindowHelp... 'hdlg' 8000
+    let items = text_handle(&mut m, "");
+    m.mm.set_handle_size(&mut m.mem, &mut m.heap, items, bytes.len() as u32).unwrap();
+    let p = m.mm.block(items).unwrap().ptr;
+    m.mem.write_bytes(p, &bytes).unwrap();
+    set_rect(&mut m, BOX, 40, 60, 160, 300);
+    put_pstr(&mut m, 0x3500, "Help");
+    let new = ScriptCall { name: "NewDialog", args: vec![Lit(0), Lit(BOX), Lit(0x3500), Lit(1), Lit(1), Lit(0xFFFF_FFFF), Lit(0), Lit(0), Lit(items)], save: Some(cells::DIALOG) };
+    let mut prog = Prog::new();
+    prog.script(&m, &[new]).exit();
+    m.start(&prog.0, 0).unwrap();
+    assert_eq!(m.step(1_000_000).0, Step::Exited, "{:#?}", m.log);
+    assert!(m.refused.is_empty(), "{:?}", m.refused);
+    let w = win(&m);
+    let list = &m.tr.dlg.dialogs[&w].list;
+    assert_eq!((list.len(), list[2].raw_type), (3, 129), "the help item is the dialog's third item");
+    assert!(m.tr.projected(Obj::Control(list[2].handle)).is_none(), "and no native part shows it");
+}

@@ -103,6 +103,35 @@ fn a_popup_is_a_native_choice_over_its_menu_resource_and_the_cdef_publishes_min_
     for proc_id in [1007u16, 1024, 1000] { assert!(row_of(proc_id).is_none(), "{proc_id}"); }
 }
 
+/// The Appearance Manager's pop-up button (kControlPopupButtonProc 400; 401 = fixed width, the Photoshop 7 installer's language pop-up) is the
+/// same pop-up CDEF; its `contrlData` is a `PopupPrivateData` handle whose mHandle is the menu (what GetControlPopupMenuHandle returns), and
+/// items the program adds to that menu show once the menu is set again.
+#[test]
+fn an_appearance_popup_button_is_the_popup_cdef_and_its_private_data_holds_the_menu() {
+    let mut w = world(401, "Language:", 1, MENU_ID, 0, &["English"]);
+    assert_eq!(model(&w).kind, ControlKind::Choice { style: ChoiceStyle::Popup, labels: vec!["English".into()], selected: 0 });
+    for proc_id in [400u16, 401, 404, 409] { assert_eq!(row_of(proc_id).map(|r| r.cdef), Some(Cdef::PopupMenu), "{proc_id}"); }
+    assert!(row_of(416).is_none() && row_of(399).is_none(), "NEGATIVE CONTROL: neighbours of CDEF 25 are not pop-ups");
+    let (id, menu) = w.rig.m.popup_menu(w.ctl).expect("a pop-up's menu");
+    assert_eq!(id, MENU_ID);
+    let data = field(&w, 28) as u16 as u32; // contrlData's high word ...
+    let p = w.rig.m.mm.block(w.ctl).unwrap().ptr;
+    let data = (data << 16) | u32::from(w.rig.m.mem.read_u16(p + 30).unwrap());
+    let pd = w.rig.m.mm.block(data).expect("contrlData is a live handle").ptr;
+    assert_eq!((w.rig.m.mem.read_u32(pd).unwrap(), w.rig.m.mem.read_u16(pd + 4).unwrap() as i16), (menu, MENU_ID), "PopupPrivateData {{ mHandle, mID }}");
+    let mut parsed = w.rig.m.menu_view(menu).unwrap();
+    let mut extra = parsed.items[0].clone();
+    extra.text = b"Deutsch".to_vec();
+    parsed.items.push(extra);
+    w.rig.m.menu_store(menu, &parsed).unwrap();
+    w.rig.m.set_popup_menu(w.ctl, menu).unwrap();
+    assert_eq!(model(&w).kind, ControlKind::Choice { style: ChoiceStyle::Popup, labels: vec!["English".into(), "Deutsch".into()], selected: 0 });
+    assert_eq!(field(&w, 22), 2, "contrlMax follows the menu");
+    // DisposeControl frees the private data too (and is not refused: the control is still known while its data is read)
+    w.rig.m.dispose_control(w.ctl, true).unwrap();
+    assert!(w.rig.m.mm.block(data).is_none(), "PopupPrivateData disposed with its control");
+}
+
 #[test]
 fn choosing_a_popup_item_is_a_mouse_down_and_track_control_returns_in_button_with_the_value_set() {
     let mut w = world(1008, "Size:", 1, MENU_ID, 40, &["Small", "Medium", "Large"]);

@@ -179,4 +179,37 @@ mod real_ppc {
         assert_eq!(m.step(1_000_000).0, Step::Exited, "{:#?}", m.mac.log);
         assert_eq!(hit(&m, r2), 5);
     }
+
+    /// A MODELESS dialog loop, as Installer VISE's splash runs it: `WaitNextEvent` with a long sleep, `IsDialogEvent`, `DialogSelect`. The program
+    /// parks in WaitNextEvent; a native button press queues the item hit AND wakes the parked call with a null event (a real click would have
+    /// been an event), so IsDialogEvent (front window is a dialog) and DialogSelect collect the hit. Before, the program slept on forever.
+    #[test]
+    fn a_modeless_wait_next_event_loop_wakes_on_a_native_hit_and_dialog_select_returns_it() {
+        use heirloom_macppc_engine::asm::Asm;
+        use heirloom_macppc_engine::fixture::{app_with, TOC_FIRST};
+        use heirloom_fmt_pef::loader::SymbolClass::TVector;
+        let toc = |i: i32| (TOC_FIRST as i32) + 4 * i;
+        let imports = [("GetNewDialog", TVector, false), ("WaitNextEvent", TVector, false), ("IsDialogEvent", TVector, false), ("DialogSelect", TVector, false), ("ExitToShell", TVector, false)];
+        let mut a = Asm::new();
+        a.mflr(0).stw(0, 8, 1).stwu(1, -80, 1);
+        a.li(3, 128).li(4, 0).li(5, -1).call_toc(toc(0));
+        a.label("loop");
+        a.li(3, -1).addi(4, 1, 32).lis(5, 0x7FFF).li(6, 0).call_toc(toc(1)); // WaitNextEvent(everyEvent, &ev, a long sleep, nil)
+        a.addi(3, 1, 32).call_toc(toc(2)).cmpwi(3, 0).beq("loop"); // IsDialogEvent(&ev)
+        a.addi(3, 1, 32).addi(4, 1, 52).addi(5, 1, 56).call_toc(toc(3)).cmpwi(3, 0).beq("loop"); // DialogSelect(&ev, &dlg, &item)
+        a.lhz(0, 56, 1).sth(0, DIALOG_HIT_AT + 2, 2);
+        a.call_toc(toc(4));
+        let bytes = app_with(&[("InterfaceLib", false, &imports)], &a.finish(), &[0; 4]);
+        let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+        m.attach_resources(&dialog_fork()).unwrap();
+        let frag = m.instantiate("modeless", &Pef::parse(&bytes).unwrap()).unwrap();
+        m.start(&frag).unwrap();
+        let r2 = m.cpu().unwrap().gpr[2];
+        assert_eq!(m.step(1_000_000).0, Step::Blocked, "{:#?}\nfault: {:?}", m.mac.log, m.fault());
+        assert_eq!(m.step(1_000_000).0, Step::Blocked, "NEGATIVE CONTROL: with no hit the program stays parked");
+        let (win, cancel) = item(&m, 2);
+        m.mac.ui.push_intent(win, cancel, Intent::Activate).unwrap();
+        assert_eq!(m.step(1_000_000).0, Step::Exited, "{:#?}\nfault: {:?}", m.mac.log, m.fault());
+        assert_eq!(hit(&m, r2), 2, "DialogSelect handed Cancel's item number to the PowerPC loop");
+    }
 }

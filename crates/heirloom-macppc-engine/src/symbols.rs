@@ -19,7 +19,7 @@ use heirloom_mac68k_engine::Mac;
 /// used as it is: the 68k event calls suspend a 68k guest through its run loop, so the PowerPC adapter ([`crate::natives`]) polls
 /// the handler with `sleep = 0` and parks the CPU itself (`WaitNextEvent` with a sleep); `GetNextEvent` never waits; `ModalDialog` is parked the same way, on the front dialog's item hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Native { StandardAlert, GetSharedLibrary, GetDiskFragment, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent, ModalDialog, SysBeep,
+pub enum Native { StandardAlert, GetSharedLibrary, GetDiskFragment, GetMemFragment, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent, ModalDialog, SysBeep,
     /// `HasDepth` / `SetDepth`: selectors of the 68k `PaletteDispatch` trap, so they have no trap name of their own; the shared routines in `cqd::depth`.
     HasDepth, SetDepth,
     /// StdCLib `__setjmp`, `exit`, `_BreakPoint`: they need the CPU's registers, so [`crate::run`] serves them, not `glue_call`.
@@ -93,6 +93,8 @@ pub enum Native { StandardAlert, GetSharedLibrary, GetDiskFragment, FindSymbol, 
     Tsm(crate::tsm_c::TsmFn),
     /// A Script Manager call, Roman only ([`crate::script_c`]).
     Sc(crate::script_c::ScFn),
+    Tl(crate::textlayout_c::TlFn),
+    Fsr(crate::fsref_c::FsrFn),
     /// An Alias Manager call ([`crate::alias_c`]).
     Alias(crate::alias_c::AliasCall),
     /// An FSSpec call (`FSMakeFSSpec`, `FSpOpenDF` ...): [`crate::fsspec`].
@@ -138,7 +140,7 @@ impl TrapQuery {
 impl Native {
     pub fn by_name(name: &str) -> Option<Native> {
         Some(match name {
-            "GetSharedLibrary" => Native::GetSharedLibrary, "GetDiskFragment" => Native::GetDiskFragment, "FindSymbol" => Native::FindSymbol, "CloseConnection" => Native::CloseConnection,
+            "GetSharedLibrary" => Native::GetSharedLibrary, "GetDiskFragment" => Native::GetDiskFragment, "GetMemFragment" => Native::GetMemFragment, "FindSymbol" => Native::FindSymbol, "CloseConnection" => Native::CloseConnection,
             "MemError" => Native::MemError, "WaitNextEvent" => Native::WaitNextEvent, "GetNextEvent" => Native::GetNextEvent, "ModalDialog" => Native::ModalDialog, "StandardAlert" => Native::StandardAlert, "BlockZero" => Native::BlockZero, "SysBeep" => Native::SysBeep, "ExitToShell" => Native::Exit, "HasDepth" => Native::HasDepth, "SetDepth" => Native::SetDepth,
             "NGetTrapAddress" => Native::TrapAddress(TrapQuery::ByType), "GetOSTrapAddress" => Native::TrapAddress(TrapQuery::Os),
             "GetToolTrapAddress" => Native::TrapAddress(TrapQuery::Tool), "GetTrapAddress" => Native::TrapAddress(TrapQuery::Old),
@@ -157,6 +159,8 @@ impl Native {
             n if crate::invoke_c::InvokeFn::by_name(n).is_some() => Native::Invoke(crate::invoke_c::InvokeFn::by_name(n).expect("checked")),
             n if crate::tsm_c::TsmFn::by_name(n).is_some() => Native::Tsm(crate::tsm_c::TsmFn::by_name(n).expect("checked")),
             n if crate::script_c::ScFn::by_name(n).is_some() => Native::Sc(crate::script_c::ScFn::by_name(n).expect("checked")),
+            n if crate::textlayout_c::TlFn::by_name(n).is_some() => Native::Tl(crate::textlayout_c::TlFn::by_name(n).expect("checked")),
+            n if crate::fsref_c::FsrFn::by_name(n).is_some() => Native::Fsr(crate::fsref_c::FsrFn::by_name(n).expect("checked")),
             n if crate::carbon_ctl::CxFn::by_name(n).is_some() => Native::Cx(crate::carbon_ctl::CxFn::by_name(n).expect("checked")),
             n if crate::gworld::GwFn::by_name(n).is_some() => Native::Gw(crate::gworld::GwFn::by_name(n).expect("checked")),
             n if crate::toolbox_c::TbFn::by_name(n).is_some() => Native::Tb(crate::toolbox_c::TbFn::by_name(n).expect("checked")),
@@ -255,7 +259,9 @@ const NEEDS_68K_RUN_LOOP: &[(&str, &str)] = &[
 /// trap words case-insensitively; `GetMenu` is the Menu Manager's `_GetRMenu` (menu.rs registers it under that word); `SetPalette` is `_NSetPalette`'s word ($AA95, which the 68k table names after the newer INTEGER form; the older Boolean `cUpdates` fits the same slot); `SetPortBits` is `_SetPBits`. The three `Invert*` C names whose traps keep the short `_Inver*` spelling;
 /// InvertOval/InvertArc/InvertPoly already match.
 pub const INTERFACELIB_ALIASES: &[(&str, &str)] = &[("GetMenu", "GetRMenu"), ("BeginUpdate", "BeginUpDate"), ("EndUpdate", "EndUpDate"), ("XorRgn", "XOrRgn"), ("SetPalette", "NSetPalette"), ("SetPortBits", "SetPBits"),
-    ("DisableMenuItem", "DisableItem"), ("CountMenuItems", "CountMItems"), ("EnableMenuItem", "EnableItem"), ("InvertRect", "InverRect"), ("InvertRoundRect", "InverRoundRect"), ("InvertRgn", "InverRgn")];
+    ("DisableMenuItem", "DisableItem"), ("CountMenuItems", "CountMItems"), ("EnableMenuItem", "EnableItem"), ("InvertRect", "InverRect"), ("InvertRoundRect", "InverRoundRect"), ("InvertRgn", "InverRgn"),
+    // Fonts.h / Dialogs.h names of _GetFName and _UpdtDialog (Installer VISE imports both)
+    ("GetFontName", "GetFName"), ("UpdateDialog", "UpdtDialog")];
 
 /// How `name` would be served, given the handlers `mac` has registered.
 pub fn lookup<U: GuestUi>(mac: &Mac<U>, name: &str) -> Binding {

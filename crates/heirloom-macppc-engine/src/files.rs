@@ -26,7 +26,8 @@ static PB_SIG: OsSig = OsSig { name: "ParamBlock", args: &[Reg::A0], result: Som
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileCall {
     FSOpen, OpenRF, FSClose, FSRead, FSWrite, GetEOF, SetEOF, GetFPos, SetFPos, FlushVol, GetVol, SetVol, Create, FSDelete,
-    HOpen, HOpenDF, HOpenRF, HCreate, HDelete, GetVRefNum,
+    HOpen, HOpenDF, HOpenRF, HCreate, HDelete, GetVRefNum, HGetVol, HSetVol,
+    HGetFInfo, HSetFInfo, HSetFLock, HRstFLock, DirCreate, HRename,
 }
 
 impl FileCall {
@@ -36,7 +37,8 @@ impl FileCall {
             "FSOpen" => FSOpen, "OpenRF" => OpenRF, "FSClose" => FSClose, "FSRead" => FSRead, "FSWrite" => FSWrite, "GetEOF" => GetEOF,
             "SetEOF" => SetEOF, "GetFPos" => GetFPos, "SetFPos" => SetFPos, "FlushVol" => FlushVol, "GetVol" => GetVol, "SetVol" => SetVol,
             "Create" => Create, "FSDelete" => FSDelete, "HOpen" => HOpen, "HOpenDF" => HOpenDF, "HOpenRF" => HOpenRF, "HCreate" => HCreate,
-            "HDelete" => HDelete, "GetVRefNum" => GetVRefNum,
+            "HDelete" => HDelete, "GetVRefNum" => GetVRefNum, "HGetVol" => HGetVol, "HSetVol" => HSetVol,
+            "HGetFInfo" => HGetFInfo, "HSetFInfo" => HSetFInfo, "HSetFLock" => HSetFLock, "HRstFLock" => HRstFLock, "DirCreate" => DirCreate, "HRename" => HRename,
             _ => return None,
         })
     }
@@ -67,9 +69,41 @@ impl<U: GuestUi> MacPpc<U> {
         Ok(r.value as u16 as i16)
     }
 
+    /// The `(vRefNum, dirID, name, ...)` routines of Files.h: the HFS parameter block filled from the first three arguments and run through the
+    /// SAME `PB...Sync` call a program can make itself ([`MacPpc::pb_call`]); then each routine's outputs. `HSetFInfo` is the glue's PBHGetFInfo +
+    /// PBHSetFInfo (the get answers the file number where ioDirID was, so the caller's dirID is put back between them).
+    fn hfs_file_call(&mut self, c: FileCall, a: &[u32]) -> Result<i16, String> {
+        use FileCall::*;
+        let name = alloc::format!("{c:?}");
+        if a.len() < 4 { return Err(format!("{name}: 4 arguments needed, {} given", a.len())); }
+        let pb = self.scratch_pb()?;
+        let g = |what: &str| pb_failed(&name, what);
+        let p = Pb(pb);
+        let m = &mut self.mac.mem;
+        p.put_i16(m, IO_VREF_NUM, a[0] as i16).and_then(|_| p.put_u32(m, IO_DIR_ID, a[1])).and_then(|_| p.put_u32(m, IO_NAME_PTR, a[2])).map_err(|_| g("input"))?;
+        if c == HRename { p.put_u32(m, IO_MISC, a[3]).map_err(|_| g("newName"))?; }
+        let pb_name = match c { HGetFInfo | HSetFInfo => "PBHGetFInfoSync", HSetFLock => "PBHSetFLockSync", HRstFLock => "PBHRstFLockSync", DirCreate => "PBDirCreateSync", _ => "PBHRenameSync" };
+        let run = |s: &mut Self, n: &str| s.pb_call(crate::pb::PbCall::by_name(n).ok_or_else(|| format!("{n} is not a parameter-block call"))?, pb);
+        let mut res = run(self, pb_name)?;
+        if res != 0 { return Ok(res) }
+        let m = &mut self.mac.mem;
+        match c {
+            HGetFInfo => { let fi = m.bytes(m.span(pb + IO_FL_FNDR_INFO, 16).map_err(|_| g("FInfo"))?).map_err(|_| g("FInfo"))?.to_vec(); m.write_bytes(a[3], &fi).map_err(|_| g("fndrInfo"))?; }
+            HSetFInfo => {
+                let fi = m.bytes(m.span(a[3], 16).map_err(|_| g("fndrInfo"))?).map_err(|_| g("fndrInfo"))?.to_vec();
+                m.write_bytes(pb + IO_FL_FNDR_INFO, &fi).and_then(|_| p.put_u32(m, IO_DIR_ID, a[1])).map_err(|_| g("FInfo"))?;
+                res = run(self, "PBHSetFInfoSync")?;
+            }
+            DirCreate => { let id = p.u32(m, IO_DIR_ID).map_err(|_| g("dirID"))?; if a[3] != 0 { m.write_u32(a[3], id).map_err(|_| g("createdDirID"))?; } }
+            _ => {}
+        }
+        Ok(res)
+    }
+
     /// One File Manager routine: `a` = the PowerPC arguments (r3..), the result is the OSErr to put in r3.
     pub(crate) fn file_call(&mut self, c: FileCall, a: &[u32]) -> Result<i16, String> {
         use FileCall::*;
+        if matches!(c, HGetFInfo | HSetFInfo | HSetFLock | HRstFLock | DirCreate | HRename) { return self.hfs_file_call(c, a); }
         let name = alloc::format!("{c:?}");
         let pb = self.scratch_pb()?;
         let g = |what: &str| pb_failed(&name, what);
@@ -81,6 +115,9 @@ impl<U: GuestUi> MacPpc<U> {
             FlushVol => (2, false, "FlushVol"), GetVol => (2, false, "GetVol"), SetVol => (2, false, "SetVol"),
             Create => (4, false, "Create"), HCreate => (5, true, "Create"), FSDelete => (2, false, "Delete"), HDelete => (3, true, "Delete"),
             GetVRefNum => (2, false, ""),
+            // HGetVol(volName, &vRefNum, &dirID) / HSetVol(volName, vRefNum, dirID): PBHGetVol / PBHSetVol (_GetVol / _SetVol, HFS form)
+            HGetVol => (3, true, "GetVol"), HSetVol => (3, true, "SetVol"),
+            HGetFInfo | HSetFInfo | HSetFLock | HRstFLock | DirCreate | HRename => unreachable!("hfs_file_call"),
         };
         if a.len() < n_in { return Err(format!("{name}: {n_in} arguments needed, {} given", a.len())); }
         let m = &mut self.mac;
@@ -100,9 +137,11 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 SetFPos => { p.put_i16(&mut m.mem, IO_REF_NUM, a[0] as i16)?; p.put_i16(&mut m.mem, IO_POS_MODE, a[1] as i16)?; p.put_u32(&mut m.mem, IO_POS_OFFSET, a[2])?; }
                 FlushVol | SetVol | Create | FSDelete => { p.put_u32(&mut m.mem, IO_NAME_PTR, a[0])?; p.put_i16(&mut m.mem, IO_VREF_NUM, a[1] as i16)?; }
-                GetVol => p.put_u32(&mut m.mem, IO_NAME_PTR, a[0])?,
+                GetVol | HGetVol => p.put_u32(&mut m.mem, IO_NAME_PTR, a[0])?,
+                HSetVol => { p.put_u32(&mut m.mem, IO_NAME_PTR, a[0])?; p.put_i16(&mut m.mem, IO_VREF_NUM, a[1] as i16)?; p.put_u32(&mut m.mem, IO_WD_DIR_ID, a[2])?; }
                 HCreate | HDelete => { p.put_i16(&mut m.mem, IO_VREF_NUM, a[0] as i16)?; p.put_u32(&mut m.mem, IO_DIR_ID, a[1])?; p.put_u32(&mut m.mem, IO_NAME_PTR, a[2])?; }
                 GetVRefNum => {}
+                _ => {}
             }
             Ok(())
         })();
@@ -140,6 +179,8 @@ impl<U: GuestUi> MacPpc<U> {
                 GetEOF if res == 0 => { let v = p.u32(&m.mem, IO_MISC)?; m.mem.write_u32(a[1], v)?; }
                 GetFPos if res == 0 => { let v = p.u32(&m.mem, IO_POS_OFFSET)?; m.mem.write_u32(a[1], v)?; }
                 GetVol if res == 0 => { let v = p.i16(&m.mem, IO_VREF_NUM)?; m.mem.write_u16(a[1], v as u16)?; }
+                // the Universal Interfaces glue: *vRefNum = ioVRefNum (a working directory's when one was set), *dirID = ioWDDirID
+                HGetVol if res == 0 => { let v = p.i16(&m.mem, IO_VREF_NUM)?; m.mem.write_u16(a[1], v as u16)?; let d = p.u32(&m.mem, IO_WD_DIR_ID)?; m.mem.write_u32(a[2], d)?; }
                 _ => {}
             }
             Ok(())

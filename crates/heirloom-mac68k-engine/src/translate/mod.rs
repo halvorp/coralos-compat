@@ -65,8 +65,9 @@ pub struct Translate {
     live: Projections<Meta>,
     /// `ControlHandle` -> its `procID` (a ControlRecord holds only a CDEF handle, so the id lives host-side).
     pub procs: BTreeMap<u32, u16>,
-    /// A pop-up control's MENU resource ID and item titles (read when it was made; the menu resource is the CDEF's private data).
-    pub popups: BTreeMap<u32, (i16, alloc::vec::Vec<alloc::string::String>)>,
+    /// A pop-up control's MENU resource ID and its MenuHandle (the CDEF's private data, `PopupPrivateData.mHandle`): the item titles are read
+    /// from the menu each time the control is projected, so items the program appends or a menu it swaps in show.
+    pub popups: BTreeMap<u32, (i16, u32)>,
     /// A native gesture waiting for its `TrackControl`: control -> (the part code the user's release is in, the value the drag leaves).
     /// It lives until that call, or until the next input supersedes it ([`Translate::supersede`]).
     pub tracks: BTreeMap<u32, (u16, Option<i16>)>,

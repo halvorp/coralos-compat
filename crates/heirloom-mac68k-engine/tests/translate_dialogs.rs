@@ -158,7 +158,10 @@ fn the_default_item_is_guest_data_and_never_panics() {
 }
 
 /// DLOG 130 with an OK button (item 1) and a `resCtrl` item 2 naming CNTL 130, a vertical scroll bar 0..100.
-fn scroll_dialog_fork() -> Vec<u8> {
+fn scroll_dialog_fork() -> Vec<u8> { scroll_dialog_fork_at([10, 220, 70, 236]) }
+
+/// The same dialog, its CNTL 130 carrying `cntl_rect` (the DITL item stays at (10,220)-(70,236)).
+fn scroll_dialog_fork_at(cntl_rect: [i16; 4]) -> Vec<u8> {
     let ps = |s: &str| { let mut v = vec![s.len() as u8]; v.extend_from_slice(s.as_bytes()); v };
     let item = |rect: [i16; 4], ty: u8, data: &[u8]| {
         let mut v = vec![0u8; 4];
@@ -177,7 +180,7 @@ fn scroll_dialog_fork() -> Vec<u8> {
     dlog.extend_from_slice(&130i16.to_be_bytes());
     dlog.extend_from_slice(&ps("Scroll"));
     let mut cntl = Vec::new();
-    for v in [10i16, 220, 70, 236, 0, 0x0100, 100, 0, 16] { cntl.extend_from_slice(&v.to_be_bytes()); } // rect, value, visible, max, min, procID 16
+    for v in cntl_rect.into_iter().chain([0i16, 0x0100, 100, 0, 16]) { cntl.extend_from_slice(&v.to_be_bytes()); } // rect, value, visible, max, min, procID 16
     cntl.extend_from_slice(&0u32.to_be_bytes());
     cntl.extend_from_slice(&ps(""));
     heirloom_fmt_resfork::writer::ForkBuilder::new().add(b"DLOG", 130, None, &dlog).add(b"DITL", 130, None, &ditl).add(b"CNTL", 130, None, &cntl).build()
@@ -200,4 +203,22 @@ fn a_scroll_bar_in_a_dialog_moves_its_value_and_reports_its_item() {
     assert_eq!(m.mem.read_u16(cells::HIT1).unwrap(), 2, "the item is reported");
     assert_eq!(m.control_facts(h).unwrap().value, 40, "and DialogSelect's TrackControl left the thumb where it was dragged");
     assert!(m.refused.is_empty(), "{:?}", m.refused);
+}
+
+/// A `resCtrl` item whose CNTL resource has another rectangle is MOVED to the item's top-left (it keeps the CNTL's size), as the Dialog
+/// Manager does (Executor dialCreate.cpp): the Photoshop 7 installer's splash puts its Continue CNTL (v 344, below the window) at item v 308.
+#[test]
+fn a_resource_control_item_is_moved_to_the_items_top_left() {
+    let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+    heirloom_mac68k_engine::quickdraw::fill_globals(&mut m, GLOBALS).unwrap();
+    m.qd_globals = GLOBALS;
+    m.rm.open_fork(heirloom_mac68k_engine::resmgr::APP_REF_NUM, heirloom_fmt_resfork::ResFork::parse(scroll_dialog_fork_at([300, 500, 340, 516])).unwrap());
+    let mut p = Prog::new();
+    p.clr_l().w(130).l(0).l(0xFFFF_FFFF).trap(0xA97C).pop_l(cells::DIALOG).exit();
+    m.start(&p.0, 0).unwrap();
+    assert_eq!(m.step(1_000_000).0, Step::Exited, "{:#?}", m.log);
+    let (win, _) = dialog(&m);
+    let (_, h) = item_ref(&m, win, 2);
+    let r = m.control_facts(h).unwrap().rect;
+    assert_eq!((r.top, r.left, r.bottom, r.right), (10, 220, 50, 236), "at the item's top-left, with the CNTL's own 40 x 16 size");
 }

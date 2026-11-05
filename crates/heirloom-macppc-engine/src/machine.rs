@@ -58,8 +58,8 @@ pub enum LibSlot {
     Available(Vec<u8>),
     /// Being instantiated now (an import cycle would find it here).
     Loading,
-    /// Instantiated: exported name -> address.
-    Loaded(BTreeMap<String, u32>),
+    /// Instantiated: exported name -> address, and its main TVector's address (what GetDiskFragment's mainAddr receives).
+    Loaded(BTreeMap<String, u32>, Option<u32>),
     /// Could not be instantiated; every import from it names why.
     Failed(String),
 }
@@ -100,6 +100,11 @@ pub struct MacPpc<U: GuestUi> {
     pub libs: BTreeMap<String, LibSlot>,
     /// Init routines of the libraries loaded so far, dependencies first: `start` runs them before the application's own.
     pub lib_inits: Vec<crate::cfm::Tv>,
+    /// The application fragment's `(offset, length)` in its file's data fork (the launch reads it from the `cfrg`): the data-fork locator
+    /// of the `CFragInitBlock` its init routine gets ([`MacPpc::app_init_block`]). None when the program was not started from a file.
+    pub app_span: Option<(u32, u32)>,
+    /// Where each library loaded at run time came from, until its init routine's CFragInitBlock is built ([`MacPpc::lib_init_block`]).
+    pub(crate) lib_locator: BTreeMap<String, crate::cfm::LibLocator>,
     /// Guest address of every TOC/data word an import's value was relocated into -> (library, symbol, weak): names a call through a null weak import.
     pub import_slots: BTreeMap<u32, (String, String, bool)>,
     /// The opt-in stage clock ([`crate::perf`]); None = off.
@@ -157,7 +162,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(heirloom_mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: Default::default(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), import_slots: BTreeMap::new(), perf: None, code_map: Default::default() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: Default::default(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), app_span: None, lib_locator: BTreeMap::new(), import_slots: BTreeMap::new(), perf: None, code_map: Default::default() })
     }
 
     /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.
@@ -211,20 +216,33 @@ impl<U: GuestUi> MacPpc<U> {
         }
     }
 
-    fn export_binding(&mut self, lib: &str, name: &str) -> Binding {
+    /// Instantiate the supplied library `lib` now if it is not yet (its imports bound, relocations applied). Its init routine joins
+    /// [`MacPpc::lib_inits`] when the program has not started yet; one loaded while the program RUNS (a GetDiskFragment, a first
+    /// FindSymbol) runs as a callback before the loading call returns ([`MacPpc::begin_lib_init`]).
+    pub(crate) fn ensure_loaded(&mut self, lib: &str) {
         if let Some(LibSlot::Available(_)) = self.libs.get(lib) {
             let Some(LibSlot::Available(bytes)) = self.libs.insert(lib.into(), LibSlot::Loading) else { unreachable!() };
             let loaded = heirloom_fmt_pef::Pef::parse(&bytes).map_err(|e| alloc::format!("{e}")).and_then(|pef| self.instantiate(lib, &pef).map_err(|e| alloc::format!("{e}")));
             match loaded {
                 Ok(frag) => {
-                    if let Some(init) = frag.init { self.lib_inits.push(init); }
-                    self.libs.insert(lib.into(), LibSlot::Loaded(frag.exports.iter().cloned().collect()));
+                    if let Some(init) = frag.init {
+                        // before the program starts, `start` runs it with the others; while it runs, before the loading call returns
+                        if self.started() {
+                            let block = self.lib_init_block(lib).unwrap_or(0);
+                            self.rt.pending_inits.push_back((init, String::from(lib), block));
+                        } else { self.lib_inits.push(init); }
+                    }
+                    self.libs.insert(lib.into(), LibSlot::Loaded(frag.exports.iter().cloned().collect(), frag.main.map(|t| t.address)));
                 }
                 Err(why) => { self.libs.insert(lib.into(), LibSlot::Failed(why)); }
             }
         }
+    }
+
+    fn export_binding(&mut self, lib: &str, name: &str) -> Binding {
+        self.ensure_loaded(lib);
         match self.libs.get(lib) {
-            Some(LibSlot::Loaded(ex)) => ex.get(name).map_or_else(|| Binding::Unbound(alloc::format!("{name} is not exported by the PEF library {lib}")), |&a| Binding::Export(a)),
+            Some(LibSlot::Loaded(ex, _)) => ex.get(name).map_or_else(|| Binding::Unbound(alloc::format!("{name} is not exported by the PEF library {lib}")), |&a| Binding::Export(a)),
             Some(LibSlot::Loading) => Binding::Unbound(alloc::format!("{lib} imports {name} from itself while it is being loaded (an import cycle)")),
             Some(LibSlot::Failed(why)) => Binding::Unbound(alloc::format!("the PEF library {lib} could not be loaded: {why}")),
             _ => Binding::Unbound(alloc::format!("library {lib} is not provided")),
@@ -387,7 +405,11 @@ impl<U: GuestUi> MacPpc<U> {
 
     /// A Carbon program never calls `InitGraf` (Carbon initialises QuickDraw for the process): the first CarbonLib import makes the `qd` block and runs what `InitGraf(&qd.thePort)` would,
     /// so `SetPort`, `NewGWorld` and the drawing calls have a `thePort` slot. A failure here (no memory) leaves QuickDraw uninitialised and the first QuickDraw call refuses by name.
-    fn carbon_implicit_graf(&mut self) {
+    fn carbon_implicit_graf(&mut self) { self.implicit_graf() }
+
+    /// `InitGraf(&qd.thePort)` done for the process (the `qd` block, QuickDraw's globals in it, the devices): a Carbon program never calls InitGraf,
+    /// and a library may initialise a Toolbox manager before its Classic application has. Nothing when QuickDraw is already initialised.
+    pub(crate) fn implicit_graf(&mut self) {
         if self.mac.qd_globals != 0 { return; }
         let Ok(q) = self.qd_block() else { return };
         let p = q + QD_GLOBALS_SIZE - 4;

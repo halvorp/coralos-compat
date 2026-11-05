@@ -94,7 +94,7 @@ fn closing_the_window_ends_the_run_through_findwindow_trackgoaway_sysbeep_exitto
     let log = m.mac.log.join("\n");
     assert!(log.contains("part 6"), "FindWindow said inGoAway: {log}");
     assert!(log.contains("SysBeep duration 1 (logged only"), "{log}");
-    assert!(log.trim_end().ends_with("ExitToShell"), "{log}");
+    assert!(log.lines().rev().nth(1).is_some_and(|l| l.ends_with("ExitToShell")) && log.trim_end().lines().last().is_some_and(|l| l.starts_with("[cfm] ExitToShell ends the program; called from")), "the exit is the last call, its caller chain logged after it: {log}");
     assert!(m.mac.refused.is_empty(), "{:?}", m.mac.refused);
     // once exited, stepping again says so
     assert_eq!(m.step(1000).0, Step::Exited);

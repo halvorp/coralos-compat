@@ -109,6 +109,15 @@ impl FileMgr {
             b"trsh" => make(self, vol, "Trash")?,
             b"desk" => make(self, vol, "Desktop Folder")?,
             b"macs" => make(self, vol, "System Folder")?,
+            // kVolumeRootFolderType (Folders.h, Mac OS 8.6+): the volume's root directory itself (Installer VISE's 'BtRt' location)
+            b"root" => vol,
+            // kApplicationSupportFolderType / kShutdownFolderType: System Folder:Application Support, System Folder:Shutdown Items
+            b"asup" => { let sys = make(self, vol, "System Folder")?; make(self, sys, "Application Support")? }
+            b"shdf" => { let sys = make(self, vol, "System Folder")?; make(self, sys, "Shutdown Items")? }
+            // kApplicationsFolderType: Mac OS 9.1 and later name it "Applications (Mac OS 9)", at the volume's root
+            b"apps" => make(self, vol, "Applications (Mac OS 9)")?,
+            // kColorSyncProfilesFolderType (Mac OS 8.5+): System Folder:ColorSync Profiles
+            b"prof" => { let sys = make(self, vol, "System Folder")?; make(self, sys, "ColorSync Profiles")? }
             t => {
                 let (_, name) = SYSTEM_SUB.iter().find(|(k, _)| *k == t).ok_or(err::FNF_ERR)?;
                 let sys = make(self, vol, "System Folder")?;

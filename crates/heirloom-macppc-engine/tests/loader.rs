@@ -146,3 +146,20 @@ fn a_call_through_an_absent_weak_import_is_traced_to_its_name_instead_of_a_bare_
     assert!(m.mac.refused.iter().any(|r| r.starts_with(marker)), "{:?}", m.mac.refused);
     assert!(m.mac.log.iter().any(|l| l.starts_with(marker)), "the machine's log names it");
 }
+
+/// The application fragment is importable by its own name while (and after) it is prepared: a library its imports load can bind the
+/// application's exports (CodeWarrior's MSL imports `operator new` from the fragment "application": Photoshop 7). Before, that weak import was
+/// absent and relocated to 0, and the first `new` called address 0.
+#[test]
+fn the_application_s_exports_are_importable_by_its_fragment_name() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let mut b = PefBuilder::new();
+    b.code(&{ let mut c = Asm::new(); c.li(3, 0).blr(); c.finish() });
+    let d = b.data(&[0u8; 32], 32);
+    b.reloc(d as u16, &[0x4600]);
+    b.main(d as i32, 0).export("__nw__FUl", F, d as i16, 16);
+    let frag = m.instantiate("application", &Pef::parse(&b.build()).unwrap()).unwrap();
+    let want = frag.section_bases[1].unwrap() + 16;
+    assert_eq!(m.bind_from("application", "__nw__FUl"), Binding::Export(want));
+    assert!(matches!(m.bind_from("application", "absent"), Binding::Unbound(_)), "NEGATIVE CONTROL: only what it exports");
+}

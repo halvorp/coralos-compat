@@ -19,12 +19,28 @@ pub enum TbFn {
     /// `TEToScrap()` / `TEFromScrap()` (glue in the Universal Interfaces) and `UpperString(Str255, diacSensitive)` (glue over `_UprString`): the 68k
     /// engine's shared bodies. `GetGrayRgn()` reads the GrayRgn low-memory global (spec macos9-specs/Misc/GetGrayRgn.md).
     TEToScrap, TEFromScrap, UpperString, GetGrayRgn,
+    /// `GetParamText(param0..param3)`: `ParamText`'s four strings copied out (a NIL pointer skips one). `LMGetCurApName()`: the address of the
+    /// CurApName low-memory Str31 (a StringPtr, not a value: the launch writes the application's name there).
+    GetParamText, CurApName,
+    /// `GetIntlResource(theID)`: the 68k `IUGetIntl` (_Pack6 selector 6) body; an ID it does not provide is NIL, named in `refused`.
+    GetIntlResource,
+    /// `LMGetBootDrive()`: BootDrive, the working-directory reference number of the boot volume's System Folder (Inside Macintosh: Files;
+    /// SysEnvirons' sysVRefNum is the same number).
+    BootDrive,
+    /// `DateString(dateTime, longFlag, result, intlHandle)` / `TimeString(dateTime, wantSeconds, result, intlHandle)`: the 68k IUDateString /
+    /// IUTimeString text (heirloom_mac68k_engine::intl::date_text / time_text); the intl handle is not consulted (named in the log).
+    DateString, TimeString,
+    /// `LaunchApplication(LaunchPBPtr)`: this machine hosts ONE process (heirloom_mac68k_engine::procmgr), so another application is not started
+    /// here: memFullErr (-108, "no room to launch it", IM: Processes) and a `[process] LaunchApplication` line naming the file (launchAppSpec)
+    /// and the control flags, for a host that can start it as an Heirloom application of its own. A NIL block or one that is not 'LC' is paramErr.
+    LaunchApplication,
     /// `LMGet<Name>` / `LMSet<Name>` over the table [`LOWMEM`]; the index is the row.
     LmGet(u8), LmSet(u8),
 }
 
 /// (accessor suffix, address, bytes): the low-memory globals programs read through the Universal Interfaces' `LMGet`/`LMSet` calls.
-pub const LOWMEM: &[(&str, u32, u32)] = &[("ResLoad", 0x0A5E, 1), ("MBarHeight", 0x0BAA, 2), ("CurDirStore", 0x0398, 4), ("Ticks", 0x016A, 4), ("DoubleTime", 0x02F0, 4), ("CaretTime", 0x02F4, 4), ("SFSaveDisk", 0x0214, 2), ("ApplLimit", 0x0130, 4)];
+pub const LOWMEM: &[(&str, u32, u32)] = &[("ResLoad", 0x0A5E, 1), ("MBarHeight", 0x0BAA, 2), ("CurDirStore", 0x0398, 4), ("Ticks", 0x016A, 4), ("DoubleTime", 0x02F0, 4), ("CaretTime", 0x02F4, 4), ("SFSaveDisk", 0x0214, 2), ("ApplLimit", 0x0130, 4),
+    ("ResErr", 0x0A60, 2), ("RndSeed", 0x0156, 4), ("SysFontFam", 0x0BA6, 2), ("TESysJust", 0x0BAC, 2), ("HiliteMode", 0x0938, 1)];
 
 impl TbFn {
     pub fn by_name(name: &str) -> Option<TbFn> {
@@ -35,6 +51,13 @@ impl TbFn {
             "FindFolder" => FindFolder, "SetEventMask" => SetEventMask, "GetDateTime" => GetDateTime, "GetDblTime" => GetDblTime, "GetCaretTime" => GetCaretTime, "Microseconds" => Microseconds, "UpTime" => UpTime,
             "AbsoluteToNanoseconds" => AbsoluteToNanoseconds,
             "TEToScrap" => TEToScrap, "TEFromScrap" => TEFromScrap, "UpperString" => UpperString, "GetGrayRgn" => GetGrayRgn,
+            "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication,
+            // GetMBarHeight() / GetSysFont() are the Universal Interfaces' readers of MBarHeight and SysFontFam (Menus.h, Fonts.h)
+            "GetMBarHeight" => return TbFn::by_name("LMGetMBarHeight"),
+            "GetSysFont" => return TbFn::by_name("LMGetSysFontFam"),
+            // GetSysDirection / SetSysDirection: TESysJust, the system's line direction (0 = left to right, the Roman script's)
+            "GetSysDirection" => return TbFn::by_name("LMGetTESysJust"),
+            "SetSysDirection" => return TbFn::by_name("LMSetTESysJust"),
             n => {
                 let (get, rest) = if let Some(r) = n.strip_prefix("LMGet") { (true, r) } else if let Some(r) = n.strip_prefix("LMSet") { (false, r) } else { return None };
                 let i = LOWMEM.iter().position(|(s, _, _)| *s == rest)? as u8;
@@ -66,7 +89,6 @@ impl<U: GuestUi> MacPpc<U> {
     pub(crate) fn tb_call(&mut self, f: TbFn, cpu: &mut Cpu) -> Result<(), String> {
         use TbFn::*;
         let (a0, a1, a2, a3) = (arg(self, cpu, 0)?, arg(self, cpu, 1).unwrap_or(0), arg(self, cpu, 2).unwrap_or(0), arg(self, cpu, 3).unwrap_or(0));
-        let _ = a3;
         let name = self.tb_name(f);
         let r: u32 = match f {
             // GetIndString(Str255 theString, short strListID, short index): the index'th string of the 'STR#' resource; an empty string if there is none (ResError is set)
@@ -100,13 +122,45 @@ impl<U: GuestUi> MacPpc<U> {
                 self.put_bytes(a0 + 1, &t, &name)?;
                 0
             }
+            GetParamText => {
+                for (i, p) in [a0, a1, a2, a3].into_iter().enumerate() {
+                    if p == 0 { continue }
+                    let s = self.mac.tr.dlg.params[i].clone();
+                    self.put_pstr(p, &s, &name)?;
+                }
+                0
+            }
+            CurApName => heirloom_mac68k_engine::lowmem::CUR_AP_NAME,
+            LaunchApplication => {
+                let id = if a0 == 0 { 0 } else { self.mac.mem.read_u16(a0 + 6).unwrap_or(0) };
+                if id != 0x4C43 { (-50i32) as u32 } else {
+                    let (flags, spec) = (self.mac.mem.read_u16(a0 + 14).unwrap_or(0), self.mac.mem.read_u32(a0 + 16).unwrap_or(0));
+                    let path = heirloom_mac68k_engine::fm::fsspec::spec_loc(&self.mac, spec).ok().and_then(|l| l.node).map(|n| self.mac.fm.full_path(n));
+                    let shown = path.map_or_else(|| String::from("(no such file)"), |p| p.iter().map(|&b| char::from(b)).collect());
+                    self.mac.log.push(format!("[process] LaunchApplication \"{shown}\" launchControlFlags {flags:#06x}: this machine runs ONE process -> memFullErr (a host may start it as its own Heirloom application)"));
+                    (-108i32) as u32
+                }
+            }
+            DateString | TimeString => {
+                let text = if f == DateString { heirloom_mac68k_engine::intl::date_text(a0, a1 as u8)? } else { heirloom_mac68k_engine::intl::time_text(a0, a1 & 0xFF != 0) };
+                self.put_pstr(a2, text.as_bytes(), &name)?;
+                self.mac.log.push(format!("[pack6] {name} {a0} -> \"{text}\"{}", if a3 != 0 { " (the intl handle is not consulted)" } else { "" }));
+                0
+            }
+            BootDrive => self.mac.fm.system_folder_wd().map_err(|e| format!("{name}: the boot volume's System Folder (OSErr {e})"))? as u16 as u32,
+            GetIntlResource => match heirloom_mac68k_engine::intl::intl_resource(&mut self.mac, a0 as u16 as i16) {
+                Ok((h, log)) => { self.mac.log.push(log); h }
+                Err(e) => { self.mac.note_refusal("GetIntlResource", e.0); 0 }
+            },
             GetGrayRgn => self.mac.mem.read_u32(heirloom_mac68k_engine::lowmem::GRAY_RGN).map_err(|_| format!("{name}: low memory leaves guest RAM"))?,
             NumToString => { let t = heirloom_mac68k_engine::pack7::num_text(a0 as i32); self.put_pstr(a1, t.as_bytes(), &name)?; 0 }
             StringToNum => { let s = self.pstr_bytes(a0, &name)?; let n = heirloom_mac68k_engine::pack7::parse_num(&s); self.mac.mem.write_u32(a1, n as u32).map_err(|_| format!("{name}: result pointer {a1:#x} leaves guest RAM"))?; 0 }
             // FindFolder(vRefNum, folderType, createFolder, &foundVRefNum, &foundDirID): the Folder Manager is the 68k engine's (fm/alias.rs), folders are made on first use
             FindFolder => {
                 let (vref, ty) = (a0 as u16 as i16, a1.to_be_bytes());
-                match self.mac.fm.find_folder(vref, ty) {
+                let found = self.mac.fm.find_folder(vref, ty);
+                self.mac.log.push(format!("[file] FindFolder vRef {vref} '{}' -> {found:?}", ty.iter().map(|&b| char::from(b)).collect::<String>()));
+                match found {
                     Ok((v, d)) => {
                         let dir_p = arg(self, cpu, 4)?;
                         self.mac.mem.write_u16(a3, v as u16).and_then(|_| self.mac.mem.write_u32(dir_p, d)).map_err(|_| format!("{name}: result pointers leave guest RAM"))?;

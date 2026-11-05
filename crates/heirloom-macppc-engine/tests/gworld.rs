@@ -188,3 +188,30 @@ fn the_roms_depth_and_flag_rules_for_newgworld() {
     call(&mut m, "SetGWorld", &[w2, 0]);
     assert_eq!(m.mac.gw_get().unwrap().1, m.mac.cqd.main_device, "SetGWorld with a NIL device and no world device keeps the main device");
 }
+
+/// The Carbon port accessors for the text fields, the visible region, the PixMap and the current port (Installer VISE's EULA calls
+/// GetPortTextFont unconditionally; it was a weak import relocated to 0): each reads the port record a 68k program reads directly.
+#[test]
+fn port_text_fields_visible_region_pixmap_and_the_current_port() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    call(&mut m, "InitGraf", &[0x1000]);
+    let port = new_world(&mut m, 8, 40, 20);
+    call(&mut m, "SetGWorld", &[port, 0]);
+    assert_eq!(call(&mut m, "GetQDGlobalsThePort", &[]), port, "SetGWorld made it the current port");
+    call(&mut m, "TextFont", &[3]);
+    call(&mut m, "TextSize", &[18]);
+    call(&mut m, "TextFace", &[1 | 4]);
+    call(&mut m, "TextMode", &[1]);
+    assert_eq!((call(&mut m, "GetPortTextFont", &[port]), call(&mut m, "GetPortTextSize", &[port]), call(&mut m, "GetPortTextFace", &[port]), call(&mut m, "GetPortTextMode", &[port])), (3, 18, 5, 1));
+    assert_eq!(call(&mut m, "GetPortPixMap", &[port]), call(&mut m, "GetGWorldPixMap", &[port]), "a world's port PixMap");
+    let rgn = call(&mut m, "NewRgn", &[]);
+    assert_eq!(call(&mut m, "GetPortVisibleRegion", &[port, rgn]), rgn, "the caller's region comes back");
+    call(&mut m, "GetRegionBounds", &[rgn, R2]);
+    let rd = |m: &M, o: u32| m.mac.mem.read_u16(R2 + o).unwrap() as i16;
+    assert_eq!((rd(&m, 0), rd(&m, 2), rd(&m, 4), rd(&m, 6)), (0, 0, 20, 40), "a copy of visRgn: the world's bounds");
+    assert_eq!((call(&mut m, "LockPortBits", &[port]), call(&mut m, "UnlockPortBits", &[port])), (0, 0), "noErr: the pixels never move");
+    assert_eq!(call(&mut m, "LockPortBits", &[0]) as i32, -50, "a NIL port is paramErr");
+    // NEGATIVE CONTROL: another port's fields are its own
+    let other = new_world(&mut m, 8, 8, 8);
+    assert_ne!(call(&mut m, "GetPortTextSize", &[other]), 18);
+}

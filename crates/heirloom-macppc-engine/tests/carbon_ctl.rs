@@ -43,6 +43,11 @@ fn appearance_registration_succeeds_and_theme_cursors_are_the_classic_ones_or_re
     assert_eq!(call(&mut m, "RegisterAppearanceClient", &[]), 0);
     assert_eq!(call(&mut m, "SetThemeCursor", &[0]), 0, "arrow");
     assert!(refused(&mut m, "SetThemeCursor", &[99]).contains("theme cursor 99 is not implemented"));
+    // kThemeWatchCursor is 7 (Appearance.h): the system watch, 'CURS' 4 - a machine without one answers resNotFound, never another shape
+    let r = call(&mut m, "SetThemeCursor", &[7]) as i32;
+    assert!(r == 0 || r == -192, "{r}");
+    assert!(m.mac.log.iter().any(|l| l.contains("GetCursor 4")), "the watch is CURS 4: {:?}", m.mac.log);
+    assert!(refused(&mut m, "SetThemeCursor", &[1]).contains("theme cursor 1"), "kThemeCopyArrowCursor is not the I-beam");
 }
 
 #[test]
@@ -367,4 +372,100 @@ fn shorten_ditl_removes_the_last_items_and_their_parts() {
     assert_eq!(call(&mut m, "CountDITL", &[dlg]), 2, "NEGATIVE CONTROL: 0 removes nothing");
     call(&mut m, "ShortenDITL", &[dlg, 99]);
     assert_eq!(call(&mut m, "CountDITL", &[dlg]), 0);
+}
+
+/// The Carbon accessors Installer VISE imports weakly (CarbonLib 1.4 has them): the control's hilite, the dialog behind a window, the default /
+/// cancel items, ValidWindowRect (InvalWindowRect's twin) and the two that have nothing to do on Mac OS 9 (InvalMenuBar draws, QDFlushPortBuffer).
+/// And a pop-up's menu through GetControlPopupMenuHandle / GetControlPopupMenuID: NIL / 0 for a control that is not a pop-up.
+#[test]
+fn hilite_dialog_from_window_default_cancel_valid_window_rect_and_popup_menu() {
+    let (mut m, win) = machine();
+    let b = new_button(&mut m, win);
+    call(&mut m, "HiliteControl", &[b, 255]);
+    assert_eq!(call(&mut m, "GetControlHilite", &[b]), 255);
+    call(&mut m, "HiliteControl", &[b, 0]);
+    assert_eq!(call(&mut m, "GetControlHilite", &[b]), 0);
+    assert_eq!(call(&mut m, "GetControlPopupMenuHandle", &[b]), 0, "a push button has no pop-up menu");
+    assert_eq!(call(&mut m, "GetControlPopupMenuID", &[b]), 0);
+    assert_eq!(call(&mut m, "GetDialogFromWindow", &[win]), win);
+    assert!(refused(&mut m, "GetDialogFromWindow", &[0x1234]).contains("is not an open window"), "NEGATIVE CONTROL");
+    assert_eq!(call(&mut m, "ValidWindowRect", &[win, RECT]), 0);
+    assert_eq!(call(&mut m, "InvalMenuBar", &[]), 0);
+    assert_eq!(call(&mut m, "QDFlushPortBuffer", &[win, 0]), 0);
+    let (mut m, d) = dialog_machine();
+    call(&mut m, "SetDialogDefaultItem", &[d, 2]);
+    call(&mut m, "SetDialogCancelItem", &[d, 1]);
+    assert_eq!((call(&mut m, "GetDialogDefaultItem", &[d]), call(&mut m, "GetDialogCancelItem", &[d])), (2, 1));
+    assert_eq!(call(&mut m, "GetSysDirection", &[]), 0, "left to right");
+}
+
+/// CreateCustomList is LNew with the definition its ListDefSpec names: the standard text type makes a native list like LNew(.., 0, ..); a
+/// program's own ListDefUPP (Installer VISE's file list) makes a list whose cells the program draws (a content plane, named), never a crash.
+#[test]
+fn create_custom_list_is_lnew_with_the_spec_definition() {
+    let (mut m, win) = machine();
+    const SPEC: u32 = 0x3400;
+    const BOUNDS: u32 = 0x3410;
+    for (i, v) in [0i16, 0, 0, 1].into_iter().enumerate() { m.mac.mem.write_u16(BOUNDS + 2 * i as u32, v as u16).unwrap(); }
+    let create = |m: &mut M, def_type: u32| {
+        m.mac.mem.write_u32(SPEC, def_type).unwrap();
+        m.mac.mem.write_u32(SPEC + 4, 0x0012_3450).unwrap();
+        m.bind("CreateCustomList");
+        let mut regs = [0u32; 32];
+        regs[1] = 0x3800;
+        regs[3..11].copy_from_slice(&[RECT, BOUNDS, 0, SPEC, win, 1, 0, 0]);
+        m.mac.mem.write_u32(0x3800 + 24 + 32, 1).unwrap(); // scrollVert
+        m.mac.mem.write_u32(0x3800 + 24 + 36, OUT).unwrap(); // &outList
+        assert_eq!(m.glue_call("CreateCustomList", &mut regs), GlueOutcome::Return, "{:?}", m.mac.refused);
+        (regs[3], m.mac.mem.read_u32(OUT).unwrap())
+    };
+    let (err, list) = create(&mut m, 2);
+    assert_eq!(err, 0);
+    assert_ne!(list, 0, "a ListHandle");
+    let (err, custom) = create(&mut m, 0);
+    assert_eq!(err, 0);
+    assert!(custom != 0 && custom != list);
+    assert!(m.mac.log.iter().any(|l| l.contains("ListDefUPP 0x123450")), "the custom definition is named");
+    m.mac.mem.write_u32(SPEC, 9).unwrap();
+    assert!(refused(&mut m, "CreateCustomList", &[RECT, BOUNDS, 0, SPEC, win]).contains("defType 9"), "NEGATIVE CONTROL");
+}
+
+/// GetThemeDrawingState / SetThemeDrawingState put the current port's pen, text and colours back after drawing changed them (Installer VISE
+/// wraps its own drawing in them); NormalizeThemeDrawingState is the normal state; the port's rectangle is never part of it.
+#[test]
+fn theme_drawing_state_saves_and_restores_pen_text_and_colours() {
+    let (mut m, win) = machine();
+    call(&mut m, "SetPort", &[win]);
+    call(&mut m, "TextSize", &[18]);
+    call(&mut m, "PenSize", &[3, 4]);
+    let size = |m: &M| (m.mac.mem.read_u16(win + 74).unwrap(), m.mac.mem.read_u32(win + 52).unwrap());
+    let before = size(&m);
+    assert_eq!(call(&mut m, "GetThemeDrawingState", &[OUT]), 0);
+    let state = m.mac.mem.read_u32(OUT).unwrap();
+    call(&mut m, "NormalizeThemeDrawingState", &[]);
+    assert_eq!(m.mac.mem.read_u32(win + 52).unwrap(), 0x0001_0001, "the normal pen is 1 x 1");
+    call(&mut m, "TextSize", &[9]);
+    let rect = rect_at(&m, win + 16);
+    assert_eq!(call(&mut m, "SetThemeDrawingState", &[state, 1]), 0);
+    assert_eq!(size(&m), before, "text size and pen size are back");
+    assert_eq!(rect_at(&m, win + 16), rect, "portRect is not part of the state");
+    assert!(m.mac.mm.dispose_ptr(&mut m.mac.heap, state).is_err(), "disposeNow freed the state");
+}
+
+/// GetWindowRegion(window, kWindowContentRgn, rgn) is GetWindowBounds' rectangle as a region; a frame region is refused by name.
+#[test]
+fn get_window_region_is_the_content_rectangle() {
+    let (mut m, win) = machine();
+    call(&mut m, "InitGraf", &[0x3F00]);
+    let rgn = call(&mut m, "NewRgn", &[]);
+    assert_eq!(call(&mut m, "GetWindowRegion", &[win, 33, rgn]), 0);
+    call(&mut m, "GetRegionBounds", &[rgn, OUT]);
+    call(&mut m, "GetWindowBounds", &[win, 33, BUF]);
+    assert_eq!(rect_at(&m, OUT), rect_at(&m, BUF));
+    assert_eq!(call(&mut m, "GetWindowRegion", &[win, 34, rgn]), 0, "the update region");
+    assert_eq!(call(&mut m, "GetWindowRegion", &[win, 32, rgn]), 0, "the structure (the frame model)");
+    call(&mut m, "GetRegionBounds", &[rgn, OUT]);
+    let (s, c) = (rect_at(&m, OUT), rect_at(&m, BUF));
+    assert!(s[0] < c[0] && s[2] > c[2], "the structure encloses the content: {s:?} {c:?}");
+    assert!(refused(&mut m, "GetWindowRegion", &[win, 0, rgn]).contains("region 0 is not implemented"), "NEGATIVE CONTROL: the title bar is host chrome");
 }

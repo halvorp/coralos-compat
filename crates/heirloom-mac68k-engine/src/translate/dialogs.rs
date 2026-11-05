@@ -59,6 +59,8 @@ pub const ITEM_TABLE: &[(u8, Item)] = &[
     (16, Item::EditText),
     (32, Item::NoContract("iconItem: an ICON is drawn by the program or not at all")),
     (64, Item::NoContract("picItem: a PICT is drawn by the program or not at all")),
+    // helpItem (Inside Macintosh: More Macintosh Toolbox 3-?): an invisible item naming the dialog's 'hdlg' Balloon Help resource
+    (1, Item::NoContract("helpItem: names a Balloon Help 'hdlg' resource; there are no balloons to show")),
     (0, Item::User),
 ];
 
@@ -249,6 +251,20 @@ impl<U: GuestUi> Mac<U> {
         Ok(true)
     }
 
+    /// The enabled item of the dialog under the global point `(v, h)` (front-most first: the item list's order), its pending native gesture
+    /// taken (TrackControl would take it). `None`: not a dialog's content, or no enabled item there.
+    pub(crate) fn item_at(&mut self, v: i16, h: i16) -> Option<(u32, i16)> {
+        let (part, win) = self.find_window(v, h);
+        if part != crate::toolbox::IN_CONTENT { return None }
+        let w = self.windows.get(&win)?.rect;
+        let (lv, lh) = (v.wrapping_sub(w.top), h.wrapping_sub(w.left));
+        let list = &self.tr.dlg.dialogs.get(&win)?.list;
+        let i = list.iter().position(|s| s.raw_type & 0x80 == 0 && s.rect.top <= lv && lv < s.rect.bottom && s.rect.left <= lh && lh < s.rect.right)?;
+        let handle = list[i].handle;
+        self.tr.tracks.remove(&handle);
+        Some((win, i as i16 + 1))
+    }
+
     pub(crate) fn take_hit(&mut self, win: u32) -> Option<i16> {
         let i = self.tr.dlg.hits.iter().position(|&(w, _)| w == win)?;
         self.tr.dlg.hits.remove(i).map(|(_, item)| item)
@@ -338,7 +354,11 @@ impl<U: GuestUi> Mac<U> {
             Item::ResControl => {
                 let id = r.data.get(..2).map(|d| i16::from_be_bytes([d[0], d[1]])).ok_or_else(|| Refusal(format!("GetNewDialog: item {n} is a resCtrl without a CNTL id")))?;
                 let h = self.get_resource(*b"CNTL", id, false).map_err(|e| Refusal(format!("GetNewDialog: item {n}: CNTL {id} is missing (resError {e})")))?;
-                self.control_from_cntl(h, id, win)?
+                let ctl = self.control_from_cntl(h, id, win)?;
+                // the Dialog Manager moves a CNTL-resource control to the item's top-left (its size stays the CNTL's): the DITL places it
+                // (Executor dialCreate.cpp; the Photoshop 7 installer's splash has its Continue CNTL at v 344 and the item at v 308)
+                if self.control_facts(ctl)?.rect.top != r.rect.top || self.control_facts(ctl)?.rect.left != r.rect.left { self.move_control_to(ctl, r.rect.top, r.rect.left)?; }
+                ctl
             }
             Item::StaticText | Item::EditText => {
                 let h = self.mm.new_handle(&mut self.mem, &mut self.heap, 0, false).map_err(|e| Refusal(format!("GetNewDialog: no memory for item {n} (memFullErr {e})")))?;
@@ -508,7 +528,13 @@ fn dialog_select<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<
         return Ok(Done { result: 0, log: format!("[dialog] DialogSelect -> FALSE (update event: {message:#x} is drawn)") });
     }
     let (dlg_out, item_out) = (c.args.get(1), c.args.get(2));
-    let Some((dlg, item)) = m.tr.dlg.hits.pop_front() else { return Ok(Done { result: 0, log: "[dialog] DialogSelect -> FALSE (no item hit pending)".into() }) };
+    // a mouseDown in an enabled item (the click a native hit was turned into, [`Mac::dialog_hit_to_click`]) is that item, as DialogSelect's own
+    // FindControl / TrackControl make it; the queued hits come first
+    let clicked = if what == crate::events::MOUSE_DOWN && m.tr.dlg.hits.is_empty() {
+        let (v, h) = (m.mem.read_i16(c.args.get(0) + 10).map_err(&e)?, m.mem.read_i16(c.args.get(0) + 12).map_err(&e)?);
+        m.item_at(v, h)
+    } else { None };
+    let Some((dlg, item)) = clicked.or_else(|| m.tr.dlg.hits.pop_front()) else { return Ok(Done { result: 0, log: "[dialog] DialogSelect -> FALSE (no item hit pending)".into() }) };
     m.mem.write_u32(dlg_out, dlg).map_err(Refusal::mem("DialogSelect theDialog"))?;
     m.mem.write_u16(item_out, item as u16).map_err(Refusal::mem("DialogSelect itemHit"))?;
     Ok(Done { result: 1, log: format!("[dialog] DialogSelect -> TRUE, dialog {dlg:#x} item {item}") })

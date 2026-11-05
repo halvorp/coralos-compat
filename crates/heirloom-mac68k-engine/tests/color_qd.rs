@@ -656,3 +656,42 @@ fn copybits_to_the_address_of_a_colour_ports_portbits_draws_in_the_window_not_th
     assert_eq!((20..28).map(|x| ink(x, 10)).collect::<Vec<_>>(), [true, true, true, true, false, false, false, false], "row 0");
     assert_eq!((20..28).map(|x| ink(x, 11)).collect::<Vec<_>>(), [false, false, false, false, true, true, true, true], "row 1");
 }
+
+/// A 'cicn' (8 x 8, 4 bits, two colours: white and pure red, every pixel red; the mask covers the LEFT half): GetCIcon builds the CIcon,
+/// PlotCIcon draws it through its mask into the colour window (the left half becomes red's pen, the right half is untouched), DisposeCIcon
+/// frees it; a missing 'cicn' is NIL. The Photoshop 7 installer plots its destination disk with one.
+#[test]
+fn get_plot_and_dispose_a_color_icon() {
+    let mut w = color_window();
+    let mut b = Vec::new();
+    let bm = |b: &mut Vec<u8>, row: u16| { b.extend_from_slice(&0u32.to_be_bytes()); b.extend_from_slice(&row.to_be_bytes()); for v in [0i16, 0, 8, 8] { b.extend_from_slice(&v.to_be_bytes()); } };
+    bm(&mut b, 0x8000 | 4); // iconPMap: baseAddr, rowBytes, bounds
+    for v in [0u16, 0] { b.extend_from_slice(&v.to_be_bytes()); } // pmVersion, packType
+    b.extend_from_slice(&0u32.to_be_bytes()); // packSize
+    b.extend_from_slice(&0x0048_0000u32.to_be_bytes()); b.extend_from_slice(&0x0048_0000u32.to_be_bytes()); // hRes, vRes
+    for v in [0u16, 4, 1, 4] { b.extend_from_slice(&v.to_be_bytes()); } // pixelType, pixelSize, cmpCount, cmpSize
+    for _ in 0..3 { b.extend_from_slice(&0u32.to_be_bytes()); } // planeBytes, pmTable, pmReserved
+    bm(&mut b, 2); // iconMask
+    bm(&mut b, 2); // iconBMap
+    b.extend_from_slice(&0u32.to_be_bytes()); // iconData
+    for _ in 0..8 { b.extend_from_slice(&[0xF0, 0]); } // mask: the left four columns
+    for _ in 0..8 { b.extend_from_slice(&[0xFF, 0]); } // the 1-bit image
+    b.extend_from_slice(&0u32.to_be_bytes()); b.extend_from_slice(&0u16.to_be_bytes()); b.extend_from_slice(&1u16.to_be_bytes()); // ctSeed, ctFlags, ctSize
+    for (v, c) in [(0u16, [0xFFFFu16, 0xFFFF, 0xFFFF]), (1, [0xFFFF, 0, 0])] { b.extend_from_slice(&v.to_be_bytes()); for x in c { b.extend_from_slice(&x.to_be_bytes()); } }
+    b.extend_from_slice(&[0x11; 32]); // every pixel colour 1 (red)
+    let fork = heirloom_fmt_resfork::writer::ForkBuilder::new().add(b"cicn", 128, None, &b).build();
+    w.m.rm.open_fork(heirloom_mac68k_engine::resmgr::APP_REF_NUM, heirloom_fmt_resfork::ResFork::parse(fork).unwrap());
+    w.m.mem.write_u32(0x3000, w.win).unwrap();
+    let h = w.m.pascal_call(0xAA1E, &[128]).unwrap().value;
+    assert_ne!(h, 0, "{:?}", w.m.log);
+    assert_eq!(w.m.pascal_call(0xAA1E, &[129]).unwrap().value, 0, "NEGATIVE CONTROL: no 'cicn' 129");
+    let (left0, right0) = (w.px(2, 2), w.px(6, 2));
+    w.script(&[call("SetPort", &[Lit(w.win)], None)]);
+    for (i, v) in [0i16, 0, 8, 8].into_iter().enumerate() { w.m.mem.write_u16(0x3100 + 2 * i as u32, v as u16).unwrap(); }
+    w.m.pascal_call(0xAA1F, &[0x3100, h]).unwrap();
+    assert!(w.m.refused.is_empty(), "{:?}", w.m.refused);
+    assert_ne!(w.px(2, 2), left0, "the masked half took the icon's red");
+    assert_eq!(w.px(6, 2), right0, "outside the mask nothing changed");
+    w.m.pascal_call(0xAA25, &[h]).unwrap();
+    assert!(w.m.mm.block(h).is_none(), "DisposeCIcon freed the record");
+}

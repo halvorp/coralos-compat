@@ -299,8 +299,9 @@ fn get_info<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, R
     let (h, id_p, ty_p, name_p) = (c.args.get(0), c.args.get(1), c.args.get(2), c.args.get(3));
     let Some((t, id, name)) = m.res_info(h) else { m.set_res_err(RES_NOT_FOUND); return Ok(Done { result: 0, log: format!("[res] GetResInfo {h:#x}: not a resource handle") }) };
     let e = Refusal::mem("GetResInfo");
-    m.mem.write_u16(id_p, id as u16).map_err(&e)?;
-    m.mem.write_u32(ty_p, u32::from_be_bytes(t)).map_err(&e)?;
+    // a NIL pointer is information the caller does not want (Resources.h; Installer VISE passes NIL for theID): nothing is written at 0
+    if id_p != 0 { m.mem.write_u16(id_p, id as u16).map_err(&e)?; }
+    if ty_p != 0 { m.mem.write_u32(ty_p, u32::from_be_bytes(t)).map_err(&e)?; }
     if name_p != 0 {
         let n = name.unwrap_or_default();
         m.mem.write_u8(name_p, n.len() as u8).map_err(&e)?;

@@ -57,14 +57,14 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> { m.register_
 fn mem<U: GuestUi>(_: &Mac<U>) -> impl Fn(heirloom_mem_flat32::MemError) -> i16 { |_| err::PARAM_ERR }
 
 /// An FSSpec in guest memory -> the entry it names.
-pub(super) fn spec_loc<U: GuestUi>(m: &Mac<U>, p: u32) -> Result<Located, i16> {
+pub fn spec_loc<U: GuestUi>(m: &Mac<U>, p: u32) -> Result<Located, i16> {
     let g = mem(m);
     let (vref, par) = (m.mem.read_i16(p + FSS_VREF).map_err(&g)?, m.mem.read_u32(p + FSS_PAR_ID).map_err(&g)?);
     let name = pascal::read_pstring_bytes(&m.mem, p + FSS_NAME).map_err(|_| err::BD_NAM_ERR)?;
     m.fm.locate(vref, par, Some(&name))
 }
 
-pub(super) fn write_spec<U: GuestUi>(m: &mut Mac<U>, p: u32, loc: &Located) -> Result<(), i16> {
+pub fn write_spec<U: GuestUi>(m: &mut Mac<U>, p: u32, loc: &Located) -> Result<(), i16> {
     let g = mem(m);
     let vol = loc.vol;
     let (name, par) = match (loc.node, &loc.leaf) {
@@ -207,8 +207,12 @@ impl<U: GuestUi> Mac<U> {
         let a = |i: usize| args.get(i).copied().unwrap_or(0);
         let name_at = if selector == sel::MAKE_FSSPEC { a(2) } else if a(0) != 0 { a(0) + FSS_NAME } else { 0 };
         let name = if name_at == 0 { alloc::string::String::new() } else { pascal::read_pstring(&self.mem, name_at).unwrap_or_default() };
+        // where the call looked: MakeFSSpec's (vRefNum, dirID) arguments, else the spec's own
+        let (vref, dir) = if selector == sel::MAKE_FSSPEC { (a(0) as u16 as i16, a(1)) } else if a(0) != 0 {
+            (self.mem.read_i16(a(0) + FSS_VREF).unwrap_or(0), self.mem.read_u32(a(0) + FSS_PAR_ID).unwrap_or(0))
+        } else { (0, 0) };
         let r = fsp(self, selector, &a);
-        self.log.push(format!("[file] FSp sel={selector} \"{name}\" -> {}", match r { Ok(v) => v as i64, Err(e) => i64::from(e) }));
+        self.log.push(format!("[file] FSp sel={selector} \"{name}\" vRef {vref} dirID {dir} -> {}", match r { Ok(v) => v as i64, Err(e) => i64::from(e) }));
         r
     }
 }

@@ -55,7 +55,11 @@ const C_HILITE: u32 = 17;
 const C_VALUE: u32 = 18;
 const C_MIN: u32 = 20;
 const C_MAX: u32 = 22;
+/// `contrlData`: the CDEF's private data (a pop-up's `PopupPrivateData` handle).
+const C_DATA: u32 = 28;
 const C_ACTION: u32 = 32;
+/// `PopupPrivateData`: mHandle (4) + mID (2).
+const POPUP_DATA_SIZE: u32 = 6;
 const C_REF_CON: u32 = 36;
 const C_TITLE: u32 = 40;
 /// `controlList` in a WindowRecord.
@@ -104,10 +108,14 @@ pub const PROCS: &[Proc] = &[
     Proc { proc_id: POPUP_PROC, name: "popupMenuProc", cdef: Cdef::PopupMenu },
 ];
 
-/// The row of a `procID`: the useWFont bit is masked, and a pop-up's variation bits 1/2/4 select the same CDEF.
+/// The Appearance Manager's pop-up button (`kControlPopupButtonProc` 400 = CDEF 25, the same variation bits): it takes the System 7 pop-up's
+/// parameters (menu ID in `minValue`, title width in `maxValue`), so it is the same CDEF row (Appearance Manager reference, "Pop-Up Menu Button").
+const APPEARANCE_POPUP_PROC: u16 = 400;
+
+/// The row of a `procID`: the useWFont bit is masked, and a pop-up's variation bits 1/2/4 select the same CDEF (System 7 1008 or Appearance 400).
 pub fn row_of(proc_id: u16) -> Option<&'static Proc> {
     let p = proc_id & !8;
-    let p = if p >> 3 == POPUP_PROC >> 3 { POPUP_PROC } else { p };
+    let p = if p >> 3 == POPUP_PROC >> 3 || p >> 3 == APPEARANCE_POPUP_PROC >> 3 { POPUP_PROC } else { p };
     PROCS.iter().find(|r| r.proc_id == p)
 }
 
@@ -257,7 +265,7 @@ impl<U: GuestUi> Mac<U> {
             vis: self.mem.read_u8(p + C_VIS).map_err(&e)? != 0, hilite: self.mem.read_u8(p + C_HILITE).map_err(&e)?,
             value: self.mem.read_i16(p + C_VALUE).map_err(&e)?, min: self.mem.read_i16(p + C_MIN).map_err(&e)?, max: self.mem.read_i16(p + C_MAX).map_err(&e)?,
             proc_id: self.tr.procs[&ctl], title: read_pstring(&self.mem, p + C_TITLE)?,
-            items: self.tr.popups.get(&ctl).map(|(_, items)| items.clone()).unwrap_or_default(),
+            items: self.tr.popups.get(&ctl).and_then(|&(_, h)| self.menu_view(h).ok()).map(|m| m.items.iter().map(|i| crate::menu::mac_text(&i.text)).collect()).unwrap_or_default(),
         })
     }
 
@@ -313,18 +321,25 @@ impl<U: GuestUi> Mac<U> {
         Ok(ctl)
     }
 
-    /// A pop-up's menu: `minValue` was the MENU resource ID; the CDEF publishes `contrlMin` 1 and `contrlMax` = the item count.
+    /// A pop-up's menu: `minValue` was the MENU resource ID; the CDEF publishes `contrlMin` 1 and `contrlMax` = the item count, and keeps
+    /// the menu in its private data: `contrlData` is a handle to `PopupPrivateData { MenuHandle mHandle; SInt16 mID; }` (Controls.h), what a
+    /// classic program reads and Carbon's `GetControlPopupMenuHandle` returns.
     fn make_popup(&mut self, ctl: u32, proc_id: u16, menu_id: i16) -> Result<(), Refusal> {
         let why = if proc_id & POPUP_USE_ADD_RES_MENU != 0 { Some("popupUseAddResMenu builds its menu from a resource TYPE at run time".to_string()) } else {
             match self.get_resource(*b"MENU", menu_id, false) {
                 Err(e) => Some(format!("no MENU resource {menu_id} (ResErr {e})")),
-                Ok(h) => match crate::menu::parse_block(&self.handle_bytes(h).unwrap_or_default()) {
+                Ok(h) => match self.menu_view(h) {
                     Err(e) => Some(e.0),
                     Ok(menu) => {
-                        let items: Vec<String> = menu.items.iter().map(|i| crate::menu::mac_text(&i.text)).collect();
                         self.set_control_field(ctl, C_MIN, 1)?;
-                        self.set_control_field(ctl, C_MAX, items.len().min(i16::MAX as usize) as i16)?;
-                        self.tr.popups.insert(ctl, (menu_id, items));
+                        self.set_control_field(ctl, C_MAX, menu.items.len().min(i16::MAX as usize) as i16)?;
+                        self.tr.popups.insert(ctl, (menu_id, h));
+                        self.menus.by_id.insert(menu_id, h);
+                        let data = self.mm.new_handle(&mut self.mem, &mut self.heap, POPUP_DATA_SIZE, true).map_err(|e| Refusal(format!("NewControl: no memory for the pop-up's private data (memFullErr {e})")))?;
+                        let (p, e) = (self.mm.block(data).map(|b| b.ptr).unwrap_or(0), Refusal::mem("PopupPrivateData"));
+                        self.mem.write_u32(p, h).and_then(|_| self.mem.write_u16(p + 4, menu_id as u16)).map_err(&e)?;
+                        let rec = self.control_rec(ctl, "NewControl")?;
+                        self.mem.write_u32(rec + C_DATA, data).map_err(&e)?;
                         None
                     }
                 },
@@ -348,10 +363,29 @@ impl<U: GuestUi> Mac<U> {
             }
         }
         if retire { self.sync_projection(f.owner, Obj::Control(ctl), None)?; }
+        // a pop-up's PopupPrivateData goes with it (read while the control is still known)
+        if self.tr.popups.remove(&ctl).is_some() {
+            let data = self.mem.read_u32(self.control_rec(ctl, "DisposeControl")? + C_DATA).map_err(Refusal::mem("contrlData"))?;
+            if data != 0 { let _ = self.dispose_handle(data); }
+        }
         self.tr.procs.remove(&ctl);
-        self.tr.popups.remove(&ctl);
         self.tr.tracks.remove(&ctl);
         self.dispose_handle(ctl).map_err(|e| Refusal(format!("DisposeControl: memory manager error {e}")))
+    }
+
+    /// A pop-up control's menu (`PopupPrivateData.mHandle` of its `contrlData`), `None` for any other control.
+    pub fn popup_menu(&self, ctl: u32) -> Option<(i16, u32)> { self.tr.popups.get(&ctl).copied() }
+
+    /// Carbon's `SetControlPopupMenuHandle`: the pop-up shows `menu` from now on (its private data and the item count follow it).
+    pub fn set_popup_menu(&mut self, ctl: u32, menu: u32) -> Result<(), Refusal> {
+        let (id, _) = self.popup_menu(ctl).ok_or_else(|| Refusal(format!("SetControlPopupMenuHandle: {ctl:#x} is not a pop-up control")))?;
+        let n = self.menu_view(menu)?.items.len();
+        let e = Refusal::mem("PopupPrivateData");
+        let data = self.mem.read_u32(self.control_rec(ctl, "SetControlPopupMenuHandle")? + C_DATA).map_err(&e)?;
+        if let Some(p) = self.mm.block(data).map(|b| b.ptr) { self.mem.write_u32(p, menu).map_err(&e)?; }
+        self.tr.popups.insert(ctl, (id, menu));
+        self.set_control_field(ctl, C_MAX, n.min(i16::MAX as usize) as i16)?;
+        self.sync_control(ctl)
     }
 
     pub fn kill_controls(&mut self, win: u32, retire: bool) -> Result<(), Refusal> {
@@ -370,6 +404,9 @@ impl<U: GuestUi> Mac<U> {
         if let Some(item) = self.dialog_item_of(f.owner, ctl) {
             // DialogSelect runs TrackControl first: the control's value is what the gesture left, THEN the item is reported
             if let Some(value) = g.value { self.set_control_field(ctl, C_VALUE, value)?; }
+            // the gesture is kept too: a program that handles the click itself (FindControl + TrackControl) gets it when the hit is made a click
+            // ([`Mac::dialog_hit_to_click`])
+            self.tr.tracks.insert(ctl, (g.part, g.value));
             self.dialog_hit(f.owner, item);
             self.restore_native(Obj::Control(ctl))?;
             return self.sync_control(ctl);
@@ -380,6 +417,26 @@ impl<U: GuestUi> Mac<U> {
         let (gv, gh) = (v.wrapping_add(w.top), h.wrapping_add(w.left));
         self.mouse_event(MOUSE_DOWN, gv, gh, 0)?;
         self.mouse_event(MOUSE_UP, gv, gh, 0)
+    }
+
+    /// The oldest pending dialog hit, when it is a CONTROL item's, made the click it stands for: a mouseDown + mouseUp at the control's click
+    /// point (window-global), its gesture already in `tracks` for TrackControl. For a program that waits in WaitNextEvent and handles a
+    /// dialog's clicks itself (FindWindow, FindControl, TrackControl: Installer VISE) - DialogSelect turns the same mouseDown back into the
+    /// item. `Ok(false)`: no hit, or one that is not a control's (a text field's commit stays a hit for DialogSelect's null event).
+    pub fn dialog_hit_to_click(&mut self) -> Result<bool, Refusal> {
+        let Some(&(win, item)) = self.tr.dlg.hits.front() else { return Ok(false) };
+        let slot = usize::try_from(i32::from(item) - 1).ok().and_then(|i| self.tr.dlg.dialogs.get(&win).and_then(|d| d.list.get(i))).cloned();
+        let Some(slot) = slot.filter(|s| matches!(s.item, super::dialogs::Item::Control { .. } | super::dialogs::Item::ResControl) && self.tr.procs.contains_key(&s.handle)) else { return Ok(false) };
+        let f = self.control_facts(slot.handle)?;
+        let Some(row) = row_of(f.proc_id) else { return Ok(false) };
+        let (v, h) = click_point(row, &f);
+        let Some(w) = self.windows.get(&win).map(|w| w.rect) else { return Ok(false) };
+        self.tr.dlg.hits.pop_front();
+        let (gv, gh) = (v.wrapping_add(w.top), h.wrapping_add(w.left));
+        self.log.push(format!("[dialog] item {item} of {win:#x}: the hit is the click it stands for, at ({gv},{gh})"));
+        self.mouse_event(MOUSE_DOWN, gv, gh, 0)?;
+        self.mouse_event(MOUSE_UP, gv, gh, 0)?;
+        Ok(true)
     }
 
     fn set_control_field(&mut self, ctl: u32, off: u32, v: i16) -> Result<(), Refusal> {
@@ -493,9 +550,16 @@ fn get_title<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, 
 
 fn move_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (ctl, h, v) = (c.args.get(0), c.args.get(1) as i16, c.args.get(2) as i16);
-    let r = m.control_facts(ctl)?.rect;
-    set_rect(m, ctl, Rect { top: v, left: h, bottom: v + (r.bottom - r.top), right: h + (r.right - r.left) })?;
+    m.move_control_to(ctl, v, h)?;
     done(format!("[control] MoveControl {ctl:#x} to ({v},{h})"))
+}
+
+impl<U: GuestUi> Mac<U> {
+    /// `MoveControl`'s body: the control keeps its size, its top-left moves to `(v, h)` (window-local).
+    pub(crate) fn move_control_to(&mut self, ctl: u32, v: i16, h: i16) -> Result<(), Refusal> {
+        let r = self.control_facts(ctl)?.rect;
+        set_rect(self, ctl, Rect { top: v, left: h, bottom: v + (r.bottom - r.top), right: h + (r.right - r.left) })
+    }
 }
 fn size_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (ctl, w, h) = (c.args.get(0), c.args.get(1) as i16, c.args.get(2) as i16);

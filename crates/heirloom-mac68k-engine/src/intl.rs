@@ -135,13 +135,18 @@ fn clear_cache<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done
 /// string ordering is [`compare_with`], not a table a program could read.
 fn get_intl<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let id = c.args.get(0) as u16 as i16;
+    intl_resource(m, id).map(|(result, log)| Done { result, log })
+}
+
+/// `IUGetIntl` / `GetIntlResource(theID)` (one body for the 68k package selector and the PowerPC C name): the handle and the log line.
+pub fn intl_resource<U: GuestUi>(m: &mut Mac<U>, id: i16) -> Result<(u32, String), Refusal> {
     let (ty, builtin) = match id {
         0 => (*b"itl0", itl0_us().to_vec()),
         1 => (*b"itl1", itl1_us()),
         2 => return Err(Refusal("IUGetIntl 2: the itl2 collation table is not provided (string ordering is built in); NIL returned".into())),
         n => return Err(Refusal(format!("IUGetIntl {n}: only itl0, itl1 and itl2 (IDs 0-2) are known"))),
     };
-    if let Ok(h) = m.get_resource(ty, 0, false) { return Ok(Done { result: h, log: format!("[pack6] IUGetIntl {id} -> {h:#x} (the application's own '{}')", core::str::from_utf8(&ty).unwrap_or("itl?")) }); }
+    if let Ok(h) = m.get_resource(ty, 0, false) { return Ok((h, format!("[pack6] IUGetIntl {id} -> {h:#x} (the application's own '{}')", core::str::from_utf8(&ty).unwrap_or("itl?")))); }
     let slot = id as usize;
     let cached = m.intl[slot].filter(|&h| m.mm.block(h).is_some());
     let h = match cached {
@@ -156,7 +161,7 @@ fn get_intl<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, R
             h
         }
     };
-    Ok(Done { result: h, log: format!("[pack6] IUGetIntl {id} -> {h:#x} (the engine's built-in US '{}')", core::str::from_utf8(&ty).unwrap_or("itl?")) })
+    Ok((h, format!("[pack6] IUGetIntl {id} -> {h:#x} (the engine's built-in US '{}')", core::str::from_utf8(&ty).unwrap_or("itl?"))))
 }
 
 /// The US `Intl0Rec` (32 bytes, Inside Macintosh V "The Script Manager"): decimalPt 0, thousSep 1, listSep 2, currSym1-3 3-5,

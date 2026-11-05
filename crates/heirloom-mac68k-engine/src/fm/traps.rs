@@ -257,7 +257,7 @@ fn fill_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, i: &CatInfo, cat: bool) -> Resu
     Ok(())
 }
 
-/// GetFileInfo (`cat` false: files only, indexes count files) and GetCatInfo / PBHGetFInfo (`cat` true).
+/// GetFileInfo / PBHGetFInfo (`cat` false: an 80-byte HFileParam; the MFS form's indexes count files only) and GetCatInfo (`cat` true: the 108-byte CInfoPBRec).
 fn get_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool, cat: bool) -> Result<(), i16> {
     let g = mem_err("block");
     let index = pb.i16(&m.mem, IO_FDIR_INDEX).map_err(&g)?;
@@ -278,7 +278,9 @@ fn get_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool, cat: bool) -> Result<
     if info.is_dir && !cat && !hfs { return Err(err::FNF_ERR); }
     if index != 0 { put_name(m, np, &info.name)?; }
     let ref_num = m.fm.open_forks().find(|(_, f)| f.node == node && !f.rsrc).map_or(0, |(&r, _)| r);
-    fill_info(m, pb, &info, cat || hfs)?;
+    // only GetCatInfo's CInfoPBRec reaches past offset 80 (ioFlBkDat .. ioFlClpSiz): PBHGetFInfo's HFileParam ENDS at ioFlMdDat, and a program
+    // may keep other data right after an 80-byte block (Installer VISE keeps its stack locals there)
+    fill_info(m, pb, &info, cat)?;
     pb.put_i16(&mut m.mem, IO_REF_NUM, ref_num).map_err(&g)
 }
 fn get_file_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool) -> Result<(), i16> { get_info(m, pb, hfs, false) }
@@ -428,8 +430,9 @@ fn get_wd_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
 
 fn get_fcb_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
     let g = mem_err("block");
-    let idx = pb.u32(&m.mem, IO_FCB_INDX).map_err(&g)?;
-    let r = if idx > 0 { m.fm.nth_open(idx).ok_or(err::RF_NUM_ERR)? } else { pb.i16(&m.mem, IO_REF_NUM).map_err(&g)? };
+    // ioFCBIndx is a short: > 0 indexes the open files, otherwise ioRefNum names the file (filler1 after it is not read)
+    let idx = pb.i16(&m.mem, IO_FCB_INDX).map_err(&g)?;
+    let r = if idx > 0 { m.fm.nth_open(idx as u32).ok_or(err::RF_NUM_ERR)? } else { pb.i16(&m.mem, IO_REF_NUM).map_err(&g)? };
     let (node, rsrc) = m.fm.fork_node(r)?;
     let (info, f) = (m.fm.cat_info(node), m.fm.open_fork(r).cloned().ok_or(err::RF_NUM_ERR)?);
     let (len, vol) = (m.fm.eof(r)?, m.fm.tree.volume_of(node));

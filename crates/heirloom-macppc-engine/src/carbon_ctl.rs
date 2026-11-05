@@ -45,6 +45,11 @@ impl CxState {
 }
 
 const CONTROL_PROPERTY_INVALID: i32 = -5603;
+/// The LDEF id `CreateCustomList` passes `LNew` for a ListDefUPP: not 0 (the standard text LDEF), not a real resource the program owns.
+const CUSTOM_LDEF_MARKER: i16 = -1;
+/// The span of a port a ThemeDrawingState holds: bkPat / bkPixPat (32) .. bkColor (84 + 4).
+const STATE_FROM: u32 = 32;
+const STATE_LEN: u32 = 56;
 const PROPERTY_NOT_FOUND: i32 = -5604;
 const C_OWNER: u32 = 4;
 const C_RECT: u32 = 8;
@@ -72,6 +77,22 @@ pub enum CxFn {
     GetControlData, SetControlData, SetControlFontStyle, SetControlViewSize, GetControlViewSize, GetDialogItemAsControl, SetThemeBackground,
     TestControl, KeyTranslate, StdFilterProc, SetDialogTracksCursor, DialogCut, DialogCopy, DialogPaste, DialogDelete, DrawThemeListBoxFrame, ShortenDITL,
     IsWindowVisible, IsWindowHilited, GetWindowFromPort, GetNextWindow, GetWindowList, GetWindowBounds, InvalWindowRect, GetRegionBounds,
+    /// The pop-up's menu (its `PopupPrivateData`): `GetControlPopupMenuHandle` / `SetControlPopupMenuHandle` / `GetControlPopupMenuID`.
+    GetControlPopupMenuHandle, SetControlPopupMenuHandle, GetControlPopupMenuID,
+    /// `GetControlHilite` (contrlHilite), `GetDialogFromWindow` (a dialog IS its window), `GetDialogDefaultItem` / `GetDialogCancelItem`, `ValidWindowRect`
+    /// (InvalWindowRect's twin), `InvalMenuBar` (the host draws the menu bar: DrawMenuBar's body), `QDFlushPortBuffer` (Mac OS 9 ports are unbuffered).
+    GetControlHilite, GetDialogFromWindow, GetDialogDefaultItem, GetDialogCancelItem, ValidWindowRect, InvalMenuBar, QDFlushPortBuffer,
+    /// `CreateCustomList(rView, dataBounds, cellSize, theSpec, theWindow, drawIt, hasGrow, scrollHoriz, scrollVert, &outList)`: `LNew` with the
+    /// definition `theSpec` names (Lists.h ListDefSpec: kListDefStandardTextType 2 = the standard text LDEF 0, kListDefClassicType 1 = that 'LDEF'
+    /// id, kListDefUserProcType 0 = the program's own ListDefUPP, which the List Manager table keeps as a custom LDEF: not shown natively, named).
+    CreateCustomList,
+    /// The Appearance Manager's drawing state of the current port (Appearance.h): Get makes an opaque block holding the port's pen, text, colour and
+    /// background fields (bytes 32..88 of a GrafPort or CGrafPort: bkPat/bkPixPat .. bkColor; never its rectangles or regions), Set puts them
+    /// back (disposing the block when `disposeNow`), Dispose frees it; Normalize sets the normal state: PenNormal, black on white, a white
+    /// background pattern, srcOr text.
+    GetThemeDrawingState, SetThemeDrawingState, DisposeThemeDrawingState, NormalizeThemeDrawingState,
+    /// `GetWindowRegion(window, regionCode, ioWinRgn)`: GetWindowBounds' rectangle as a region (RectRgn), for the codes it answers.
+    GetWindowRegion,
 }
 
 impl CxFn {
@@ -94,6 +115,11 @@ impl CxFn {
             "DrawThemeListBoxFrame" => DrawThemeListBoxFrame, "ShortenDITL" => ShortenDITL, "DialogCut" => DialogCut, "DialogCopy" => DialogCopy, "DialogPaste" => DialogPaste, "DialogDelete" => DialogDelete,
             "IsWindowVisible" => IsWindowVisible, "IsWindowHilited" => IsWindowHilited, "GetWindowFromPort" => GetWindowFromPort, "GetNextWindow" => GetNextWindow,
             "GetWindowList" => GetWindowList, "GetWindowBounds" => GetWindowBounds, "InvalWindowRect" => InvalWindowRect, "GetRegionBounds" => GetRegionBounds,
+            "GetControlPopupMenuHandle" => GetControlPopupMenuHandle, "SetControlPopupMenuHandle" => SetControlPopupMenuHandle, "GetControlPopupMenuID" => GetControlPopupMenuID,
+            "GetControlHilite" => GetControlHilite, "GetDialogFromWindow" => GetDialogFromWindow, "GetDialogDefaultItem" => GetDialogDefaultItem, "GetDialogCancelItem" => GetDialogCancelItem,
+            "ValidWindowRect" => ValidWindowRect, "InvalMenuBar" => InvalMenuBar, "QDFlushPortBuffer" => QDFlushPortBuffer, "CreateCustomList" => CreateCustomList,
+            "GetThemeDrawingState" => GetThemeDrawingState, "SetThemeDrawingState" => SetThemeDrawingState, "DisposeThemeDrawingState" => DisposeThemeDrawingState,
+            "NormalizeThemeDrawingState" => NormalizeThemeDrawingState, "GetWindowRegion" => GetWindowRegion,
             _ => return None,
         })
     }
@@ -128,14 +154,16 @@ impl<U: GuestUi> MacPpc<U> {
         let (a0, a1, a2, a3) = (arg(self, cpu, 0)?, arg(self, cpu, 1).unwrap_or(0), arg(self, cpu, 2).unwrap_or(0), arg(self, cpu, 3).unwrap_or(0));
         let r: u32 = match f {
             RegisterAppearanceClient => 0,
-            // ThemeCursor: kThemeArrowCursor 0, IBeam 1, Cross 2, Plus 3, Watch 4 are the classic cursors (`CURS` 0 = InitCursor, 1..4 the system resources)
+            // ThemeCursor (Appearance.h): kThemeArrowCursor 0, CopyArrow 1, AliasArrow 2, ContextualMenuArrow 3, IBeam 4, Cross 5, Plus 6, Watch 7,
+            // then the hands (8..13), Spinning 14 and the resize cursors. Arrow is InitCursor; IBeam / Cross / Plus / Watch are the system 'CURS'
+            // 1..4 (iBeamCursor, crossCursor, plusCursor, watchCursor).
             SetThemeCursor => match a0 {
                 0 => { self.cx_trap("InitCursor", &[])?; 0 }
-                1..=4 => {
-                    let h = self.cx_trap("GetCursor", &[a0])?;
+                4..=7 => {
+                    let h = self.cx_trap("GetCursor", &[a0 - 3])?;
                     if h == 0 { (-192i32) as u32 } else { let p = self.cx_rec(h, n)?; self.cx_trap("SetCursor", &[p])?; 0 }
                 }
-                c => return Err(format!("SetThemeCursor: theme cursor {c} is not implemented (arrow, I-beam, crosshair, plus and watch only)")),
+                c => return Err(format!("SetThemeCursor: theme cursor {c} is not implemented (arrow 0, I-beam 4, crosshair 5, plus 6 and watch 7 only)")),
             },
             // ---- controls: the record is guest memory
             GetControlBounds => { let p = self.cx_rec(a0, n)?; let r = self.cx_rect(p + C_RECT, n)?; self.cx_put_rect(a1, r, n)?; a1 }
@@ -150,6 +178,10 @@ impl<U: GuestUi> MacPpc<U> {
                 0
             }
             GetControlOwner => { let p = self.cx_rec(a0, n)?; self.cx_u32(p + C_OWNER, n)? }
+            // a control that is not a pop-up has no menu: NIL / 0, as the Control Manager answers
+            GetControlPopupMenuHandle => self.mac.popup_menu(a0).map_or(0, |(_, h)| h),
+            GetControlPopupMenuID => self.mac.popup_menu(a0).map_or(0, |(id, _)| id as u16 as u32),
+            SetControlPopupMenuHandle => { self.mac.set_popup_menu(a0, a1).map_err(|e| e.0)?; 0 }
             IsControlVisible => { let p = self.cx_rec(a0, n)?; u32::from(self.mac.mem.read_u8(p + C_VIS).map_err(|_| format!("{n}: control record leaves guest RAM"))? != 0) }
             SetControlVisibility => { self.cx_trap(if a1 & 0xFF != 0 { "ShowControl" } else { "HideControl" }, &[a0])?; 0 }
             ActivateControl => { self.cx_trap("HiliteControl", &[a0, 0])?; 0 }
@@ -208,6 +240,52 @@ impl<U: GuestUi> MacPpc<U> {
             GetDialogTextEditHandle => self.cx_u32(a0 + DR_TEXT_H, n)?,
             SetDialogDefaultItem => { self.mac.mem.write_u16(a0 + DR_DEF_ITEM, a1 as u16).map_err(|_| format!("{n}: dialog record leaves guest RAM"))?; 0 }
             SetDialogCancelItem => { self.cx.cancel.insert(a0, a1 as u16 as i16); 0 }
+            GetDialogDefaultItem => self.cx_u16(a0 + DR_DEF_ITEM, n)? as i16 as i32 as u32,
+            GetDialogCancelItem => self.cx.cancel.get(&a0).copied().unwrap_or(0) as i32 as u32,
+            GetDialogFromWindow => { self.cx_window(a0, n)?; a0 }
+            GetControlHilite => { let p = self.cx_rec(a0, n)?; u32::from(self.mac.mem.read_u8(p + 17).map_err(|_| format!("{n}: the ControlRecord leaves guest RAM"))?) }
+            InvalMenuBar => { self.cx_trap("DrawMenuBar", &[])?; 0 }
+            QDFlushPortBuffer => 0,
+            GetThemeDrawingState => {
+                let port = heirloom_mac68k_engine::qd::target::current_port(&self.mac).map_err(|e| e.0)?;
+                let bytes = self.mac.mem.span(port + STATE_FROM, STATE_LEN).and_then(|s| self.mac.mem.bytes(s).map(<[u8]>::to_vec)).map_err(|_| format!("{n}: the port {port:#x} leaves guest RAM"))?;
+                let block = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, STATE_LEN, false).map_err(|e| format!("{n}: no memory for the state (memFullErr {e})"))?;
+                self.mac.mem.write_bytes(block, &bytes).map_err(|_| format!("{n}: the state block leaves guest RAM"))?;
+                self.cx_put32(a0, block, n)?;
+                0
+            }
+            SetThemeDrawingState => {
+                let port = heirloom_mac68k_engine::qd::target::current_port(&self.mac).map_err(|e| e.0)?;
+                let bytes = self.mac.mem.span(a0, STATE_LEN).and_then(|s| self.mac.mem.bytes(s).map(<[u8]>::to_vec)).map_err(|_| format!("{n}: the state {a0:#x} leaves guest RAM"))?;
+                self.mac.mem.write_bytes(port + STATE_FROM, &bytes).map_err(|_| format!("{n}: the port {port:#x} leaves guest RAM"))?;
+                if a1 & 0xFF != 0 { self.mac.mm.dispose_ptr(&mut self.mac.heap, a0).map_err(|e| format!("{n}: the state {a0:#x} is not a block (memErr {e})"))?; }
+                0
+            }
+            DisposeThemeDrawingState => { self.mac.mm.dispose_ptr(&mut self.mac.heap, a0).map_err(|e| format!("{n}: the state {a0:#x} is not a block (memErr {e})"))?; 0 }
+            NormalizeThemeDrawingState => {
+                self.cx_trap("PenNormal", &[])?;
+                self.cx_trap("ForeColor", &[33])?; // blackColor
+                self.cx_trap("BackColor", &[30])?; // whiteColor
+                self.cx_trap("TextMode", &[1])?; // srcOr
+                // a white background pattern: eight zero bytes
+                let pat = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, 8, true).map_err(|e| format!("{n}: no memory (memFullErr {e})"))?;
+                let r = self.cx_trap("BackPat", &[pat]);
+                let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, pat);
+                r?;
+                0
+            }
+            CreateCustomList => {
+                let (def_type, def) = (self.cx_u32(a3, n)?, self.cx_u32(a3 + 4, n)?);
+                // the LDEF id LNew takes: 0 standard text; a classic 'LDEF' id; a user UPP has no id: the List Manager's custom marker (any non-zero id)
+                let proc = match def_type { 2 => 0, 1 => def as u16 as i16, 0 => CUSTOM_LDEF_MARKER, t => return Err(format!("{n}: ListDefSpec defType {t} is not a Lists.h type")) };
+                if def_type == 0 { self.mac.log.push(format!("[list] {n}: the program's own ListDefUPP {def:#x} draws its cells; it is not run (the list is a content plane)")); }
+                let mut regs = cpu.gpr;
+                regs[6] = proc as u16 as u32;
+                let out = arg(self, cpu, 9)?;
+                self.sel_call(crate::selector_c::SelFn::List(0x44), &mut regs)?;
+                self.cx_put32(out, regs[3], n)?;
+                if regs[3] == 0 { (-108i32) as u32 } else { 0 }
+            }
             // StdFilterProc(dialog, &event, &itemHit) -> Boolean (spec macos9-specs/DialogsLib/StdFilterProc.md): the standard filter. A keyDown/autoKey Return or
             // Enter hits the default item (aDefItem); Escape or Command-period hits the cancel item (SetDialogCancelItem); the hit goes to *itemHit and the answer is
             // TRUE. Every other event is FALSE with nothing written (the program, then ModalDialog, handle it). The button flash is the host's to show.
@@ -331,14 +409,31 @@ impl<U: GuestUi> MacPpc<U> {
                     c => return Err(format!("GetWindowBounds: window region {c} is not implemented (the content area, 33, and the port's global rectangle, 40, only: the frame is the host's chrome)")),
                 }
             }
-            // InvalWindowRect(window, rect): InvalRect in that window's port, thePort restored after
-            InvalWindowRect => {
+            // GetWindowRegion(window, code, rgn): a COPY of the record's region (winregions.rs keeps strucRgn / contRgn / updateRgn current, in global
+            // coordinates): kWindowStructureRgn 32 (the frame model FindWindow uses), kWindowContentRgn 33 and kWindowGlobalPortRgn 40 (the
+            // content), kWindowUpdateRgn 34; the frame's parts (title bar, close box ...) are the host's chrome and refused by name
+            GetWindowRegion => {
+                self.cx_window(a0, n)?;
+                use heirloom_mac68k_engine::winregions::{WR_CONT_RGN, WR_STRUC_RGN, WR_UPDATE_RGN};
+                let off = match a1 & 0xFFFF {
+                    32 => WR_STRUC_RGN,
+                    REGION_CONTENT | REGION_GLOBAL_PORT => WR_CONT_RGN,
+                    34 => WR_UPDATE_RGN,
+                    c => return Err(format!("GetWindowRegion: window region {c} is not implemented (structure 32, content 33, update 34 and the global port 40 only: the frame's parts are the host's chrome)")),
+                };
+                self.mac.sync_window_regions(a0).map_err(|e| e.0)?;
+                let src = self.cx_u32(a0 + off, n)?;
+                self.cx_trap("CopyRgn", &[src, a2])?;
+                0
+            }
+            // InvalWindowRect(window, rect) / ValidWindowRect: InvalRect / ValidRect in that window's port, thePort restored after
+            InvalWindowRect | ValidWindowRect => {
                 self.cx_window(a0, n)?;
                 let slot = self.mac.qd_globals;
                 if slot == 0 { return Err(String::from("InvalWindowRect: InitGraf has not run")); }
                 let old = self.cx_u32(slot, n)?;
                 self.cx_trap("SetPort", &[a0])?;
-                let r = self.cx_trap("InvalRect", &[a1]);
+                let r = self.cx_trap(if f == InvalWindowRect { "InvalRect" } else { "ValidRect" }, &[a1]);
                 self.cx_trap("SetPort", &[old])?;
                 r?;
                 0

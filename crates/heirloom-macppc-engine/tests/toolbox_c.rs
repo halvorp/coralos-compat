@@ -254,3 +254,141 @@ fn upper_string_gray_rgn_and_the_te_scrap_glue_follow_their_specs() {
     assert_eq!(call(&mut m, "TEToScrap", &[]), 0);
     assert_eq!(m.mac.scrap.get(*b"TEXT"), Some(&b"xy"[..]), "the TE scrap went back to the desk scrap");
 }
+
+/// `GetParamText` hands back what `ParamText` set (a NIL pointer skips a string); `LMGetCurApName` is the ADDRESS of the CurApName Str31;
+/// `LMSetResErr` / `LMGetResErr` and `LMSetRndSeed` / `LMGetRndSeed` are the low-memory words (Installer VISE calls each of them).
+#[test]
+fn get_param_text_cur_ap_name_res_err_and_rnd_seed() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    pstr(&mut m, A, "Photoshop");
+    pstr(&mut m, A + 0x40, "7.0");
+    call(&mut m, "ParamText", &[A, A + 0x40, 0, 0]);
+    pstr(&mut m, B + 0x80, "untouched");
+    call(&mut m, "GetParamText", &[B, B + 0x40, 0, B + 0xC0]);
+    assert_eq!((rd_p(&m, B), rd_p(&m, B + 0x40), rd_p(&m, B + 0xC0)), ("Photoshop".into(), "7.0".into(), String::new()), "^0, ^1, and an empty ^3");
+    assert_eq!(rd_p(&m, B + 0x80), "untouched", "NEGATIVE CONTROL: a NIL pointer is skipped");
+    assert_eq!(call(&mut m, "LMGetCurApName", &[]), heirloom_mac68k_engine::lowmem::CUR_AP_NAME);
+    call(&mut m, "LMSetResErr", &[(-192i16) as u16 as u32]);
+    assert_eq!(call(&mut m, "LMGetResErr", &[]) as u16 as i16, -192);
+    assert_eq!(call(&mut m, "ResError", &[]) as u16 as i16, -192, "the Resource Manager reads the same word");
+    assert_eq!(call(&mut m, "GetMBarHeight", &[]), 20, "GetMBarHeight reads MBarHeight");
+    assert_eq!(call(&mut m, "GetSysFont", &[]), 0, "systemFont (0): SysFontFam");
+    call(&mut m, "LMSetRndSeed", &[0x1234_5678]);
+    assert_eq!(call(&mut m, "LMGetRndSeed", &[]), 0x1234_5678);
+}
+
+/// The Universal Interfaces names of two traps whose trap-table names differ (`GetFontName` = _GetFName, `UpdateDialog` = _UpdtDialog) bind
+/// to them, also from CarbonLib; `GetResInfo` with NIL `theID` / `theType` writes nothing at address 0 (Installer VISE passes NIL, and the
+/// 'TEXT' it left at 0 then sent a call through an absent weak import to 0x54455854 instead of naming it).
+#[test]
+fn get_font_name_update_dialog_aliases_and_get_res_info_with_nil_pointers() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    for (lib, n) in [("InterfaceLib", "GetFontName"), ("CarbonLib", "GetFontName"), ("CarbonLib", "UpdateDialog")] {
+        assert!(!matches!(m.bind_from(lib, n), Binding::Unbound(_)), "{lib}/{n}: {:?}", m.bind_from(lib, n));
+    }
+    call(&mut m, "GetFontName", &[0, A]);
+    assert_eq!(rd_p(&m, A), "Chicago", "font family 0 is the system font");
+    let fork = ForkBuilder::new().add(b"TEXT", 9012, None, b"hello").build();
+    m.mac.rm.open_fork(heirloom_mac68k_engine::resmgr::APP_REF_NUM, heirloom_fmt_resfork::ResFork::parse(fork).unwrap());
+    let h = call(&mut m, "Get1Resource", &[u32::from_be_bytes(*b"TEXT"), 9012]);
+    assert_ne!(h, 0);
+    m.mac.mem.write_u32(0, 0xDEAD_BEEF).unwrap();
+    call(&mut m, "GetResInfo", &[h, 0, 0, 0]);
+    assert_eq!(m.mac.mem.read_u32(0).unwrap(), 0xDEAD_BEEF, "NIL theID / theType: address 0 untouched");
+    call(&mut m, "GetResInfo", &[h, B, B + 2, 0]);
+    assert_eq!((m.mac.mem.read_u16(B).unwrap(), m.mac.mem.read_u32(B + 2).unwrap().to_be_bytes()), (9012, *b"TEXT"), "POSITIVE CONTROL: real pointers are filled");
+}
+
+/// GetIntlResource(theID) is the 68k IUGetIntl body by C name: the built-in itl0 for 0 (".,;$" separators), the same handle again; an ID it
+/// does not provide (itl2's collation tables) is NIL and NAMED in refused, the program goes on (Installer VISE asks for itl0 / itl1).
+#[test]
+fn get_intl_resource_is_iugetintl() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let h = call(&mut m, "GetIntlResource", &[0]);
+    assert_ne!(h, 0);
+    let p = m.mac.mm.block(h).unwrap().ptr;
+    assert_eq!(m.get_bytes(p, 4, "t").unwrap(), b".,;$");
+    assert_eq!(call(&mut m, "GetIntlResource", &[0]), h, "the same handle");
+    assert_ne!(call(&mut m, "GetIntlResource", &[1]), 0, "itl1");
+    assert_eq!(call(&mut m, "GetIntlResource", &[2]), 0, "NEGATIVE CONTROL: no itl2");
+    assert!(m.mac.refused.iter().any(|r| r.contains("itl2")), "{:?}", m.mac.refused);
+}
+
+/// LMGetBootDrive is the System Folder's working directory: resolving it gives the boot volume's System Folder (what SysEnvirons answers too).
+#[test]
+fn lm_get_boot_drive_is_the_system_folder_working_directory() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let wd = call(&mut m, "LMGetBootDrive", &[]) as u16 as i16;
+    let (vref, dir) = m.mac.fm.find_folder(0, *b"macs").unwrap();
+    assert_eq!(wd, m.mac.fm.system_folder_wd().unwrap(), "the same WD every time");
+    let l = m.mac.fm.locate(wd, 0, None).unwrap();
+    assert_eq!((m.mac.fm.vref_of(l.vol), m.mac.fm.dir_id(l.node.unwrap())), (vref, dir), "it names the System Folder");
+}
+
+/// DateString / TimeString by C name are the 68k IUDateString / IUTimeString texts (the Photoshop 7 installer stamps its install log with them).
+#[test]
+fn date_string_and_time_string() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let t = heirloom_mac68k_engine::intl::mac_seconds(2002, 11, 5, 14, 7, 9);
+    call(&mut m, "DateString", &[t, 1, A, 0]);
+    assert_eq!(rd_p(&m, A), heirloom_mac68k_engine::intl::date_text(t, 1).unwrap());
+    call(&mut m, "TimeString", &[t, 1, A, 0]);
+    assert_eq!(rd_p(&m, A), "2:07:09 PM");
+    assert!(refused(&mut m, "DateString", &[t, 7, A, 0]).contains("DateForm 7"), "NEGATIVE CONTROL");
+}
+
+/// FindFolder's volume root ('root', kVolumeRootFolderType: Installer VISE resolves its "boot volume root" location with it), Application
+/// Support and Shutdown Items in the System Folder.
+#[test]
+fn find_folder_root_application_support_and_shutdown_items() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    assert_eq!(call(&mut m, "FindFolder", &[0xFFFF_8000, u32::from_be_bytes(*b"root"), 1, PB, PB + 4]), 0);
+    assert_eq!((m.mac.mem.read_u16(PB).unwrap() as i16, m.mac.mem.read_u32(PB + 4).unwrap()), (-1, 2), "the boot volume's root directory (fsRtDirID)");
+    for (ty, name) in [(*b"asup", "Application Support"), (*b"shdf", "Shutdown Items"), (*b"prof", "ColorSync Profiles")] {
+        assert_eq!(call(&mut m, "FindFolder", &[0xFFFF_8000, u32::from_be_bytes(ty), 1, PB, PB + 4]), 0);
+        let (vref, dir) = (m.mac.mem.read_u16(PB).unwrap() as i16, m.mac.mem.read_u32(PB + 4).unwrap());
+        let node = m.mac.fm.dir_node(m.mac.fm.volume_of_vref(vref).unwrap(), dir).unwrap();
+        assert_eq!(m.mac.fm.tree.name(node), name);
+        assert_eq!(m.mac.fm.tree.name(m.mac.fm.tree.parent(node)), "System Folder");
+    }
+    assert_eq!(call(&mut m, "FindFolder", &[0xFFFF_8000, u32::from_be_bytes(*b"apps"), 1, PB, PB + 4]), 0);
+    let node = m.mac.fm.dir_node(m.mac.fm.def_vol, m.mac.mem.read_u32(PB + 4).unwrap()).unwrap();
+    assert_eq!((m.mac.fm.tree.name(node), m.mac.fm.tree.parent(node)), ("Applications (Mac OS 9)", m.mac.fm.def_vol), "Applications at the root");
+}
+
+/// LaunchApplication: the one-process machine does not start a second application; it answers memFullErr and names the file it was asked
+/// for (a host may launch it on its own); a block that is not a LaunchParamBlockRec ('LC') is paramErr.
+#[test]
+fn launch_application_is_named_and_refused_with_mem_full() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    let root = m.mac.fm.def_vol;
+    m.mac.fm.tree.put_file(root, "VSetupT", vec![0; 4]).unwrap();
+    pstr(&mut m, B, "VSetupT");
+    assert_eq!(call(&mut m, "FSMakeFSSpec", &[0, 0, B, B + 0x100]), 0);
+    m.mac.mem.zero(PB, 44).unwrap();
+    m.mac.mem.write_u16(PB + 6, 0x4C43).unwrap();
+    m.mac.mem.write_u16(PB + 14, 0xC000).unwrap();
+    m.mac.mem.write_u32(PB + 16, B + 0x100).unwrap();
+    assert_eq!(call(&mut m, "LaunchApplication", &[PB]) as i32, -108);
+    assert!(m.mac.log.iter().any(|l| l.contains("LaunchApplication \"Macintosh HD:VSetupT\"")), "{:?}", m.mac.log.last());
+    m.mac.mem.write_u16(PB + 6, 0).unwrap();
+    assert_eq!(call(&mut m, "LaunchApplication", &[PB]) as i32, -50, "NEGATIVE CONTROL: not a LaunchParamBlockRec");
+}
+
+/// A Toolbox manager initialised before QuickDraw (a library's InitWindows / InitFonts before the application's InitGraf: Photoshop 7's DRM
+/// runs from static initialisers) gets the process's QuickDraw initialised first, instead of a refusal; the application's own InitGraf of the
+/// same `qd` block later is the same state.
+#[test]
+fn init_windows_before_init_graf_initialises_quickdraw_first() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    assert_eq!(m.mac.qd_globals, 0);
+    call(&mut m, "InitFonts", &[]);
+    call(&mut m, "InitWindows", &[]);
+    assert!(m.mac.refused.is_empty(), "{:?}", m.mac.refused);
+    assert_ne!(m.mac.qd_globals, 0, "QuickDraw was initialised for the process");
+    let qd = m.qd_block().unwrap();
+    assert_eq!(m.mac.qd_globals, qd + heirloom_macppc_engine::machine::QD_GLOBALS_SIZE - 4, "in the process's qd block (thePort, the last field)");
+    let q = m.mac.qd_globals;
+    call(&mut m, "InitGraf", &[q]);
+    assert!(m.mac.refused.is_empty(), "the application's own InitGraf afterwards is accepted: {:?}", m.mac.refused);
+}
