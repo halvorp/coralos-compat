@@ -355,3 +355,275 @@ pub(crate) fn alphamask(x: &mut X, pc: u32) -> Out {
     let next = if x.cpu.ctr == 0 { pc.wrapping_add(4 * ALPHAMASK.len() as u32) } else { pc };
     Some((next, ALPHAMASK_TRIP as u64 * trips as u64))
 }
+
+/// The 101 words of [`crate::jit_xnat::Routine::TileExpand`] (terrainTileBlend's 4 x 4 corner expansion of one dirty tile, at
+/// its head - the word after the 5-column average loop's bdnz): 16 words that load the tile's step r0 ([r27]), the averages'
+/// base r4 = r1 + 120, r5 = 0, the row step r17 = r31 * r0 and the destination r6 from the tile's column / row ([r1 + 56],
+/// [r1 + 60]) and the terrain map's origin and base ([r28 + 580 / 584 / 604]); then 4 rows (r5 < 4) of `li r8,4; mr r7,r6; mr
+/// r3,r4; mtctr r8` and 4 trips of 76 words: four average bytes at r3 + 0 / 1 / 8 / 9 as 8.8 fixed point, the corner deltas
+/// (srawi 2), 16 bytes (srawi 8) stored as four rows of 4 at r7, r7 + r31, + 2 r31, + 3 r31, r7 += r0; then `addi r5,r5,1;
+/// add r6,r6,r17; cmpwi r5,4; addi r4,r4,1; blt` - 44 srawi a trip, each an 8-instruction carry in JIT code.
+pub const TILEEXPAND: [u32; 101] = [
+    0x801B_0000, 0x3881_0078, 0x8061_0038, 0x38A0_0000, 0x80E1_003C, 0x7E3F_01D6, 0x80DC_0244, 0x813C_025C, 0x811C_0248,
+    0x7C63_01D6, 0x7C66_1850, 0x7CC7_01D6, 0x7C63_F9D6, 0x7CE8_3050, 0x7CC3_4A14, 0x7CC7_3214, 0x3900_0004, 0x7CC7_3378,
+    0x7C83_2378, 0x7D09_03A6, 0x8923_0000, 0x7D07_FA14, 0x8983_0001, 0x8963_0008, 0x5529_402E, 0x8943_0009, 0x558C_402E,
+    0x7E49_6050, 0x556B_402E, 0x554C_402E, 0x3863_0008, 0x7E4A_1670, 0x7E49_5850, 0x7D8B_6050, 0x7D8C_1670, 0x7E50_1670,
+    0x7D32_4670, 0x7D6B_6214, 0x7DE9_8214, 0x9A47_0000, 0x7DF2_4670, 0x7D29_5214, 0x7DEF_8214, 0x9A47_0001, 0x7DF3_4670,
+    0x7E49_5850, 0x7DEF_8214, 0x9A67_0002, 0x7DF3_4670, 0x7D6B_6214, 0x7E50_1670, 0x9A67_0003, 0x7D32_4670, 0x7CE7_0214,
+    0x7DE9_8214, 0x9A48_0000, 0x7DF2_4670, 0x7D29_5214, 0x7DEF_8214, 0x9A48_0001, 0x7DF3_4670, 0x7E49_5850, 0x7DEF_8214,
+    0x9A68_0002, 0x7DF3_4670, 0x7D6B_6214, 0x7E50_1670, 0x9A68_0003, 0x7D2C_4670, 0x7D08_FA14, 0x7DE9_8214, 0x9988_0000,
+    0x7DEC_4670, 0x7D29_5214, 0x7DEF_8214, 0x9988_0001, 0x7DEC_4670, 0x7D49_5850, 0x7DEF_8214, 0x9988_0002, 0x7DEB_4670,
+    0x7D4C_1670, 0x9968_0003, 0x7D2A_4670, 0x7D08_FA14, 0x7D69_6214, 0x9948_0000, 0x7D69_4670, 0x7D6B_6214, 0x9928_0001,
+    0x7D69_4670, 0x7D6B_6214, 0x9928_0002, 0x7D69_4670, 0x9928_0003, 0x4200_FED4, 0x38A5_0001, 0x7CC6_8A14, 0x2C05_0004,
+    0x3884_0001, 0x4180_FEB0,
+];
+/// The prefix (16), one row (4 + 4 trips of 76 + 5).
+pub(crate) const TILE_PREFIX: u32 = 16;
+pub(crate) const TILE_ROW: u32 = 4 + 4 * 76 + 5;
+/// The word index of the row loop's head (`li r8,4`).
+const TILE_HEAD: u32 = 16;
+
+/// srawi rA,rS,n (n < 32): the result and XER[CA].
+#[inline(always)]
+fn srawi(v: u32, n: u32) -> (u32, bool) { ((v as i32 >> n) as u32, (v as i32) < 0 && v & ((1u32 << n) - 1) != 0) }
+
+/// One trip's 16 bytes as four rows (each row's bytes in memory order, the first in the low byte) from its four average bytes as the original computes them: row k's left edge l = a << 8 +
+/// k (b - a) >> 2 ... (each a step of srawi 2 of the 8.8 differences), its step d = (right - left) >> 2, byte j = (l + j d)
+/// >> 8 - arithmetic shifts, the edges stepped as the original steps them (`tile_trip` is the word-for-word form).
+#[inline(always)]
+fn tile_rows(b: [u32; 4]) -> [u32; 4] {
+    #[cfg(target_feature = "sse2")]
+    { tile_rows_sse2(b) }
+    #[cfg(not(target_feature = "sse2"))]
+    { tile_rows_scalar(b) }
+}
+
+/// [`tile_rows`] four rows at a time in SSE2 lanes (lane k = row k): the edges L and R, the steps D = (R - L) >> 2, the
+/// columns L + j D >> 8 masked to a byte and shifted into byte j of the lane - the lanes ARE the rows' four bytes.
+#[cfg(target_feature = "sse2")]
+#[inline(always)]
+fn tile_rows_sse2(b: [u32; 4]) -> [u32; 4] {
+    use core::arch::x86_64::*;
+    let (l0, r0) = ((b[0] << 8) as i32, (b[2] << 8) as i32);
+    let dl = ((b[1] << 8) as i32).wrapping_sub(l0) >> 2;
+    let dr = ((b[3] << 8) as i32).wrapping_sub(r0) >> 2;
+    let mut o = [0u32; 4];
+    // SAFETY: SSE2 is enabled for this build (cfg above); the store writes the 16 bytes of `o`.
+    unsafe {
+        let l = _mm_setr_epi32(l0, l0.wrapping_add(dl), l0.wrapping_add(dl.wrapping_mul(2)), l0.wrapping_add(dl.wrapping_mul(3)));
+        let r = _mm_setr_epi32(r0, r0.wrapping_add(dr), r0.wrapping_add(dr.wrapping_mul(2)), r0.wrapping_add(dr.wrapping_mul(3)));
+        let d = _mm_srai_epi32(_mm_sub_epi32(r, l), 2);
+        let ff = _mm_set1_epi32(0xFF);
+        let x1 = _mm_add_epi32(l, d);
+        let x2 = _mm_add_epi32(x1, d);
+        let x3 = _mm_add_epi32(x2, d);
+        let b0 = _mm_and_si128(_mm_srai_epi32(l, 8), ff);
+        let b1 = _mm_slli_epi32(_mm_and_si128(_mm_srai_epi32(x1, 8), ff), 8);
+        let b2 = _mm_slli_epi32(_mm_and_si128(_mm_srai_epi32(x2, 8), ff), 16);
+        let b3 = _mm_slli_epi32(_mm_srai_epi32(x3, 8), 24);
+        let w = _mm_or_si128(_mm_or_si128(b0, b1), _mm_or_si128(b2, b3));
+        _mm_storeu_si128(o.as_mut_ptr() as *mut __m128i, w);
+    }
+    o
+}
+
+/// [`tile_rows`] one row and byte at a time (the build without SSE2; the tests hold the two equal).
+#[cfg(any(test, not(target_feature = "sse2")))]
+#[inline(always)]
+fn tile_rows_scalar(b: [u32; 4]) -> [u32; 4] {
+    let (l0, r0) = ((b[0] << 8) as i32, (b[2] << 8) as i32);
+    let dl = ((b[1] << 8) as i32).wrapping_sub(l0) >> 2;
+    let dr = ((b[3] << 8) as i32).wrapping_sub(r0) >> 2;
+    let mut o = [0u32; 4];
+    let (mut l, mut r) = (l0, r0);
+    for row in o.iter_mut() {
+        let d = r.wrapping_sub(l) >> 2;
+        let mut v = l;
+        for j in 0..4 { *row |= ((v >> 8) as u32 & 0xFF) << (8 * j); v = v.wrapping_add(d); }
+        l = l.wrapping_add(dl);
+        r = r.wrapping_add(dr);
+    }
+    o
+}
+
+/// One trip of [`TILEEXPAND`]'s inner loop on its four average bytes (r3 + 0 / 1 / 8 / 9), word for word on locals: the 16
+/// bytes in store order (rows of 4), r9 r10 r11 r12 r15 r16 r18 r19 after it, and XER[CA] of its last srawi (every earlier
+/// srawi's carry is overwritten before anything reads it).
+#[inline(always)]
+fn tile_trip(b: [u32; 4]) -> ([u8; 16], [u32; 8], bool) {
+    let s = |v: u32, n: u32| srawi(v, n).0;
+    let mut o = [0u8; 16];
+    let (mut r9, mut r12, mut r11, mut r10) = (b[0], b[1], b[2], b[3]);
+    r9 <<= 8;
+    r12 <<= 8;
+    let mut r18 = r12.wrapping_sub(r9);
+    r11 <<= 8;
+    r12 = r10 << 8;
+    r10 = s(r18, 2);
+    r18 = r11.wrapping_sub(r9);
+    r12 = r12.wrapping_sub(r11);
+    r12 = s(r12, 2);
+    let mut r16 = s(r18, 2);
+    r18 = s(r9, 8);
+    r11 = r11.wrapping_add(r12);
+    let mut r15 = r9.wrapping_add(r16);
+    o[0] = r18 as u8;
+    r18 = s(r15, 8);
+    r9 = r9.wrapping_add(r10);
+    r15 = r15.wrapping_add(r16);
+    o[1] = r18 as u8;
+    let mut r19 = s(r15, 8);
+    r18 = r11.wrapping_sub(r9);
+    r15 = r15.wrapping_add(r16);
+    o[2] = r19 as u8;
+    r19 = s(r15, 8);
+    r11 = r11.wrapping_add(r12);
+    r16 = s(r18, 2);
+    o[3] = r19 as u8;
+    r18 = s(r9, 8);
+    r15 = r9.wrapping_add(r16);
+    o[4] = r18 as u8;
+    r18 = s(r15, 8);
+    r9 = r9.wrapping_add(r10);
+    r15 = r15.wrapping_add(r16);
+    o[5] = r18 as u8;
+    r19 = s(r15, 8);
+    r18 = r11.wrapping_sub(r9);
+    r15 = r15.wrapping_add(r16);
+    o[6] = r19 as u8;
+    r19 = s(r15, 8);
+    r11 = r11.wrapping_add(r12);
+    r16 = s(r18, 2);
+    o[7] = r19 as u8;
+    r12 = s(r9, 8);
+    r15 = r9.wrapping_add(r16);
+    o[8] = r12 as u8;
+    r12 = s(r15, 8);
+    r9 = r9.wrapping_add(r10);
+    r15 = r15.wrapping_add(r16);
+    o[9] = r12 as u8;
+    r12 = s(r15, 8);
+    r10 = r11.wrapping_sub(r9);
+    r15 = r15.wrapping_add(r16);
+    o[10] = r12 as u8;
+    r11 = s(r15, 8);
+    r12 = s(r10, 2);
+    o[11] = r11 as u8;
+    r10 = s(r9, 8);
+    r11 = r9.wrapping_add(r12);
+    o[12] = r10 as u8;
+    r9 = s(r11, 8);
+    r11 = r11.wrapping_add(r12);
+    o[13] = r9 as u8;
+    r9 = s(r11, 8);
+    r11 = r11.wrapping_add(r12);
+    o[14] = r9 as u8;
+    let (r9, ca) = srawi(r11, 8);
+    o[15] = r9 as u8;
+    (o, [r9, r10, r11, r12, r15, r16, r18, r19], ca)
+}
+
+/// [`TILEEXPAND`] at its head `pc`: the prefix (its loads inside RAM, else a bail), then rows while r5 < 4 - each validated
+/// first (its 34 average bytes inside RAM, its 16 four-byte destination runs storable) and the budget holding a whole row - with
+/// every trip a word-for-word transcription on registers (its four loads first, then its 16 byte stores in the original's
+/// order on real memory: a destination over the averages is read back as the original reads it). Leaves every register the
+/// words write, CTR, XER[CA] (the last srawi's), CR0 = cmpwi r5,4; the pc after the routine after the last row, the row head
+/// (word 16) after a refusal at a later row.
+pub(crate) fn tileexpand(x: &mut X, pc: u32) -> Out {
+    let mut r = x.cpu.gpr;
+    let ld = |x: &X, ea: u32| if x.in_ram(ea, 4) { Some(x.rd32(ea)) } else { None };
+    if (TILE_PREFIX + TILE_ROW) as u64 > x.left { return None; }
+    let (Some(a0), Some(a3), Some(a7), Some(a6), Some(a9), Some(a8)) = (ld(x, r[27]), ld(x, r[1].wrapping_add(56)), ld(x, r[1].wrapping_add(60)),
+        ld(x, r[28].wrapping_add(580)), ld(x, r[28].wrapping_add(604)), ld(x, r[28].wrapping_add(584))) else { return None };
+    // the prefix, word by word
+    r[0] = a0;
+    r[4] = r[1].wrapping_add(120);
+    r[3] = a3;
+    r[5] = 0;
+    r[7] = a7;
+    r[17] = r[31].wrapping_mul(r[0]);
+    r[6] = a6;
+    r[9] = a9;
+    r[8] = a8;
+    r[3] = r[3].wrapping_mul(r[0]);
+    r[3] = r[3].wrapping_sub(r[6]);
+    r[6] = r[7].wrapping_mul(r[0]);
+    r[3] = r[3].wrapping_mul(r[31]);
+    r[7] = r[6].wrapping_sub(r[8]);
+    r[6] = r[3].wrapping_add(r[9]);
+    r[6] = r[7].wrapping_add(r[6]);
+    let mut n = TILE_PREFIX as u64;
+    let mut ca = x.cpu.xer & crate::cpu::XER_CA != 0;
+    let mut ctr = x.cpu.ctr;
+    loop {
+        // validate the row: its averages and its 16 destination runs
+        // (steps under 64 KiB: the runs lie in one box from r6, tested at once - stricter than the runs themselves)
+        let small = r[0] < 1 << 16 && r[31] < 1 << 16;
+        let ok = n + TILE_ROW as u64 <= x.left && x.in_ram(r[4], 34)
+            && ((small && x.storable(r[6], 3 * r[0] + 3 * r[31] + 4))
+                || (0..4u32).all(|t| (0..4u32).all(|k| x.storable(r[6].wrapping_add(t.wrapping_mul(r[0])).wrapping_add(k.wrapping_mul(r[31])), 4))));
+        if !ok {
+            x.cpu.gpr = r;
+            x.cpu.ctr = ctr;
+            x.set_ca(ca);
+            return Some((pc.wrapping_add(4 * TILE_HEAD), n));
+        }
+        // the row's 16 runs journaled once (lockstep only), then stored without a test each
+        if x.journaling() { for t in 0..4u32 { for k in 0..4u32 { x.note(r[6].wrapping_add(t.wrapping_mul(r[0])).wrapping_add(k.wrapping_mul(r[31])), 4); } } }
+        r[8] = 4;
+        r[7] = r[6];
+        r[3] = r[4];
+        ctr = r[8];
+        let mut b = [0u32; 4];
+        for _ in 0..4 {
+            b = [x.rd8(r[3]), x.rd8(r[3].wrapping_add(1)), x.rd8(r[3].wrapping_add(8)), x.rd8(r[3].wrapping_add(9))];
+            let out = tile_rows(b);
+            // the 16 stores in the original's order: rows r7, r7 + r31, + 2 r31, + 3 r31, 4 bytes each (a row's 4 bytes are
+            // distinct addresses, so one 4-byte write each, in row order, leaves what the byte stores leave even where rows
+            // or trips overlap)
+            for k in 0..4u32 { x.st4_bytes(r[7].wrapping_add(k.wrapping_mul(r[31])), out[k as usize]); }
+            r[8] = r[7].wrapping_add(r[31].wrapping_mul(3));
+            r[7] = r[7].wrapping_add(r[0]);
+            r[3] = r[3].wrapping_add(8);
+            ctr = ctr.wrapping_sub(1);
+        }
+        // the row's last trip leaves the registers (its word-for-word transcription, once a row)
+        let (_, v, c) = tile_trip(b);
+        (r[9], r[10], r[11], r[12], r[15], r[16], r[18], r[19]) = (v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+        ca = c;
+        // addi r5,r5,1; add r6,r6,r17; cmpwi r5,4; addi r4,r4,1; blt
+        r[5] = r[5].wrapping_add(1);
+        r[6] = r[6].wrapping_add(r[17]);
+        x.cmpw0(r[5], 4);
+        r[4] = r[4].wrapping_add(1);
+        n += TILE_ROW as u64 - (x.mutant == crate::jit_mutants::MUT_NAT_TILE_COUNT) as u64;
+        if (r[5] as i32) >= 4 {
+            x.cpu.gpr = r;
+            x.cpu.ctr = ctr;
+            x.set_ca(ca);
+            return Some((pc.wrapping_add(4 * TILEEXPAND.len() as u32), n));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The tile expansion's closed form gives the word-for-word transcription's 16 bytes for every corner pattern sampled (the
+    /// extremes and a pseudo-random sweep of all four bytes).
+    #[test]
+    fn tile_rows_agree_with_the_transcription() {
+        let mut s = 0x1234_5678u32;
+        let mut cases: alloc::vec::Vec<[u32; 4]> = alloc::vec::Vec::new();
+        for a in [0u32, 1, 127, 128, 254, 255] { for b in [0u32, 3, 128, 255] { cases.push([a, b, 255 - a, 255 - b]); cases.push([a, a, b, b]); } }
+        for _ in 0..200_000 {
+            s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+            cases.push([s & 0xFF, s >> 8 & 0xFF, s >> 16 & 0xFF, s >> 24]);
+        }
+        for b in cases {
+            let rows = super::tile_rows(b);
+            assert_eq!(rows, super::tile_rows_scalar(b), "{b:?}");
+            let bytes: alloc::vec::Vec<u8> = rows.iter().flat_map(|w| w.to_le_bytes()).collect();
+            assert_eq!(bytes[..], super::tile_trip(b).0[..], "{b:?}");
+        }
+    }
+}

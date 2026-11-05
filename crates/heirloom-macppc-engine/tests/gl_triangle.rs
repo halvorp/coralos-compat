@@ -623,6 +623,10 @@ fn wc3_host_run_with_a_gl_worker() {
     // per frame `F <swaps> <guest insns>`, then `S <fragment> <section> <offset> <insns> <ticks> <samples>` per function start
     // sampled in it - tools/ppc-profile-frames.py ranks the functions whose instructions grow in the heavy frames
     let mut prof_frames = std::env::var("WC3_PROFILE_FRAMES").ok().map(|p| std::io::BufWriter::new(std::fs::File::create(p).unwrap()));
+    // `WC3_KNOB_AB=<knobs>,<frames>`: tier 2's knobs alternate between 0 and <knobs> every <frames> swaps from gameplay (swap
+    // 1216) on, each switch said as `[KNOB-AB] swap=<n> knobs=<k>` - an A/B inside ONE run (a census dumps at each line)
+    let knob_ab: Option<(u32, usize)> = std::env::var("WC3_KNOB_AB").ok().and_then(|v| v.split_once(',').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))));
+    let mut ab_at = 0usize;
     let (mut pf_swaps, mut pf_insns, mut pf_prev): (usize, u64, std::collections::BTreeMap<u32, heirloom_macppc_engine::profile::Acc>) = (0, 0, Default::default());
     // `WC3_PERF=<frames>`: the engine's stage clock (heirloom_macppc_engine::perf) on host nanoseconds, a line every <frames> swaps
     if let Ok(every) = std::env::var("WC3_PERF") {
@@ -684,6 +688,15 @@ fn wc3_host_run_with_a_gl_worker() {
             }
         }
         pf_insns += stats.insns;
+        if let Some((k, every)) = knob_ab {
+            let swaps = seen.lock().unwrap().swaps;
+            if swaps >= 1216 && swaps >= ab_at + every {
+                let on = ((swaps - 1216) / every.max(1)) % 2 == 1;
+                m.exec().set_jit_knobs(if on { k } else { 0 });
+                eprintln!("[KNOB-AB] swap={swaps} knobs={:#x}", if on { k } else { 0 });
+                ab_at = swaps;
+            }
+        }
         if let Some(w) = prof_frames.as_mut() {
             let swaps = seen.lock().unwrap().swaps;
             if swaps != pf_swaps {

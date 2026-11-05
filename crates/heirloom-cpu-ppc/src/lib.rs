@@ -115,7 +115,7 @@ pub use jit_xbytes::{BLENDADD as XLATE_BLENDADD, MEMCMPB as XLATE_MEMCMPB};
 /// The guest words of the native routines (jit_xnat), for tests that place one.
 #[cfg(target_arch = "x86_64")]
 #[doc(hidden)]
-pub use jit_xpix::{ALPHAMASK as NAT_ALPHAMASK, ALPHASET as NAT_ALPHASET, BITSCAN as NAT_BITSCAN, PALBLIT as NAT_PALBLIT, TEXCONV as NAT_TEXCONV};
+pub use jit_xpix::{ALPHAMASK as NAT_ALPHAMASK, ALPHASET as NAT_ALPHASET, BITSCAN as NAT_BITSCAN, PALBLIT as NAT_PALBLIT, TEXCONV as NAT_TEXCONV, TILEEXPAND as NAT_TILEEXPAND};
 #[cfg(target_arch = "x86_64")]
 #[doc(hidden)]
 pub use jit_xscan::GRIDSCAN as NAT_GRIDSCAN;

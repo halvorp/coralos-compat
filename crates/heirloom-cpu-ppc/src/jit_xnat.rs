@@ -106,6 +106,9 @@ impl X<'_> {
     }
     // FAST PATHS: a unit whose whole destination range was validated (storable) and journaled ONCE (`note`) stores with the
     // `st*` forms - no per-store journal test; 
+    /// Whether stores are journaled (lockstep): a routine skips computing what it would journal otherwise.
+    #[inline(always)]
+    pub(crate) fn journaling(&self) -> bool { self.note.is_some() }
     /// Journal [ea, ea + n) once before a fast path writes it (lockstep only; nothing otherwise).
     #[inline(always)]
     pub(crate) fn note(&mut self, ea: u32, n: u32) { if let Some(f) = self.note.as_mut() { f(ea, n); } }
@@ -114,6 +117,13 @@ impl X<'_> {
         debug_assert!(self.storable(ea, 2));
         // SAFETY: the routine checked [ea, ea + 2) is inside RAM and storable, and journaled it.
         unsafe { (self.ram.add(ea as usize) as *mut [u8; 2]).write_unaligned((v as u16).to_be_bytes()) }
+    }
+    /// Four bytes at `ea` in memory order (`v`'s low byte first: the host is little-endian) - validated and journaled.
+    #[inline(always)]
+    pub(crate) fn st4_bytes(&mut self, ea: u32, v: u32) {
+        debug_assert!(self.storable(ea, 4));
+        // SAFETY: the routine checked [ea, ea + 4) is inside RAM and storable, and journaled it.
+        unsafe { (self.ram.add(ea as usize) as *mut [u8; 4]).write_unaligned(v.to_le_bytes()) }
     }
     #[inline(always)]
     pub(crate) fn st32(&mut self, ea: u32, v: u32) {
@@ -156,10 +166,12 @@ pub(crate) enum Routine {
     AlphaMask,
     /// jit_xscan::GRIDSCAN: checkCollisionDetection's cell loop.
     GridScan,
+    /// jit_xpix::TILEEXPAND: terrainTileBlend's 4 x 4 corner expansion of a dirty tile.
+    TileExpand,
 }
 
 impl Routine {
-    pub(crate) const ALL: [Routine; 6] = [Routine::PalBlit, Routine::TexConv, Routine::BitScan, Routine::AlphaSet, Routine::AlphaMask, Routine::GridScan];
+    pub(crate) const ALL: [Routine; 7] = [Routine::PalBlit, Routine::TexConv, Routine::BitScan, Routine::AlphaSet, Routine::AlphaMask, Routine::GridScan, Routine::TileExpand];
     /// The routine's exact words (recognised from its first word: one read for every other block).
     pub(crate) fn words(self) -> &'static [u32] {
         match self {
@@ -169,6 +181,7 @@ impl Routine {
             Routine::AlphaSet => &crate::jit_xpix::ALPHASET,
             Routine::AlphaMask => &crate::jit_xpix::ALPHAMASK,
             Routine::GridScan => &crate::jit_xscan::GRIDSCAN,
+            Routine::TileExpand => &crate::jit_xpix::TILEEXPAND,
         }
     }
     /// Its knob: set = the routine is not recognised (compiled block by block like any code).
@@ -180,6 +193,7 @@ impl Routine {
             Routine::BitScan => KNOB_NO_NAT_BITSCAN,
             Routine::AlphaSet | Routine::AlphaMask => KNOB_NO_NAT_ALPHA,
             Routine::GridScan => KNOB_NO_NAT_GRIDSCAN,
+            Routine::TileExpand => KNOB_NO_NAT_TILE,
         }
     }
     /// The fewest instructions one unit retires (the block's entry budget test; each unit tests its own exact need).
@@ -191,6 +205,7 @@ impl Routine {
             Routine::AlphaSet => crate::jit_xpix::ALPHASET_TRIP,
             Routine::AlphaMask => crate::jit_xpix::ALPHAMASK_TRIP,
             Routine::GridScan => crate::jit_xscan::GRIDSCAN_TRIP_MAX,
+            Routine::TileExpand => crate::jit_xpix::TILE_PREFIX + crate::jit_xpix::TILE_ROW,
         }
     }
     /// The budget the dispatcher wants before entering it (Slot::len): a few units, so a lockstep entry (budget = this + up to
@@ -203,6 +218,7 @@ impl Routine {
             Routine::AlphaSet => 4 * crate::jit_xpix::ALPHASET_TRIP,
             Routine::AlphaMask => 4 * crate::jit_xpix::ALPHAMASK_TRIP,
             Routine::GridScan => 64 * crate::jit_xscan::GRIDSCAN_TRIP_MAX,
+            Routine::TileExpand => crate::jit_xpix::TILE_PREFIX + 4 * crate::jit_xpix::TILE_ROW,
         }
     }
     fn id(self) -> u32 { Routine::ALL.iter().position(|&r| r == self).unwrap() as u32 }
@@ -214,6 +230,7 @@ impl Routine {
             Routine::AlphaSet => crate::jit_xpix::alphaset(x, pc),
             Routine::AlphaMask => crate::jit_xpix::alphamask(x, pc),
             Routine::GridScan => crate::jit_xscan::gridscan(x, pc),
+            Routine::TileExpand => crate::jit_xpix::tileexpand(x, pc),
         }
     }
 }

@@ -71,11 +71,11 @@ pub struct Window {
 /// (the first after a switch recompiles everything; the second is the warm one), so ONE Z83 deployment measures what each guard
 /// costs. Each knob drops a check that keeps the JIT exact for self-modifying code - a measurement setting, never a default.
 /// h86 native: the native routines (cpu-ppc jit_xnat) all off, then each alone - each prices itself on the Z83.
-pub const ABLATIONS: [(&str, u32); 20] = {
+pub const ABLATIONS: [(&str, u32); 21] = {
     use heirloom_os_abi::ppc::{KNOB_COLD_TAIL as T, KNOB_ENTRY_CHECKS as E, KNOB_FOLLOW_CALLS as C, KNOB_IBTC_BITS_SHIFT as I, KNOB_NO_DISPLACE as D, KNOB_NO_ENTRY_GEN as G, KNOB_LAZY_CA as L, KNOB_NO_SMC_STORE as S, KNOB_NO_XLATE as X};
     use heirloom_os_abi::ppc::{KNOB_SUPERBLOCK as B, KNOB_T1_FLUSH_DROPS as F, KNOB_NO_NAT as N, KNOB_NO_NAT_BITSCAN as NB, KNOB_NO_NAT_PALBLIT as NP, KNOB_NO_NAT_TEXCONV as NT};
-    use heirloom_os_abi::ppc::{KNOB_NO_NAT_ALPHA as NA, KNOB_NO_NAT_GRIDSCAN as NG};
-    [("base", 0), ("superblock", B), ("noxlate", X), ("t1flushdrops", F), ("nonat", N), ("nopalblit", NP), ("notexconv", NT), ("nobitscan", NB), ("noalpha", NA), ("nogridscan", NG), ("nodisplace", D), ("lazyca", L), ("followcalls", C), ("coldtail", T), ("entrychecks", E), ("nosmc", S), ("nogen", G), ("nosmc+nogen", S | G), ("ibtc12", 12 << I), ("ibtc14", 14 << I)]
+    use heirloom_os_abi::ppc::{KNOB_NO_NAT_ALPHA as NA, KNOB_NO_NAT_GRIDSCAN as NG, KNOB_NO_NAT_TILE as NI};
+    [("base", 0), ("superblock", B), ("noxlate", X), ("t1flushdrops", F), ("nonat", N), ("nopalblit", NP), ("notexconv", NT), ("nobitscan", NB), ("noalpha", NA), ("nogridscan", NG), ("notile", NI), ("nodisplace", D), ("lazyca", L), ("followcalls", C), ("coldtail", T), ("entrychecks", E), ("nosmc", S), ("nogen", G), ("nosmc+nogen", S | G), ("ibtc12", 12 << I), ("ibtc14", 14 << I)]
 };
 pub const ABLATE_WINDOWS: u64 = 2;
 

@@ -337,3 +337,43 @@ fn the_native_grid_scan_is_exact_and_its_mutant_goes_red() {
     let (got, _) = run_on(Tier::Jit, 50, &prog, 1_000_000, gs_setup);
     assert!(got != want, "mutant 50 (a failed flags test's count) stayed GREEN");
 }
+
+// ---- the terrain tile expansion (TILEEXPAND) ----
+
+const TSTK: u32 = 0x7_0000; // r1: the tile's column / row at + 56 / + 60, the 5 x 8 averages at + 120
+const TOBJ: u32 = 0x6_0000; // r28: the map's origin at + 580 / + 584, its base at + 604
+const TSTEP: u32 = 0x6_1000; // r27: the tile step
+const TDST: u32 = 0x8_0000;
+const T_ROW: u32 = 32;
+
+/// Rows: the row stride (r31), the tile step ([r27]), the column and row ([r1 + 56 / 60]), the base ([r28 + 604]). Cases: the
+/// game's shape (step 4); a wide stride; step 2 (trips overlap the next's columns: later stores win, in order); a destination
+/// ON the averages (each trip reads what the last wrote); on the routine's code page (refused: tier 1 runs the rows).
+fn te_rows() -> Vec<Vec<u32>> {
+    vec![vec![64, 4, 1, 1, TDST], vec![300, 4, 2, 0, TDST + 0x2000], vec![64, 2, 0, 3, TDST + 0x8000], vec![16, 4, 0, 0, TSTK + 116],
+         vec![64, 4, 0, 0, XR + 0x400]]
+}
+fn te_setup(c: &mut Cpu, m: &mut M) {
+    place(m, &heirloom_cpu_ppc::NAT_TILEEXPAND);
+    (c.gpr[1], c.gpr[27], c.gpr[28]) = (TSTK, TSTEP, TOBJ);
+    m.mem.write_bytes(TSTK + 120, &pat(64, 15)).unwrap();
+    for (o, v) in [(580u32, 0u32), (584, 0)] { m.mem.write_u32(TOBJ + o, v).unwrap(); }
+    table(m, T_ROW, &te_rows());
+}
+fn te_program() -> Vec<u32> {
+    let load = vec![lwz(31, 21, 0), lwz(22, 21, 4), stw(22, 27, 0), lwz(22, 21, 8), stw(22, 1, 56), lwz(22, 21, 12), stw(22, 1, 60),
+                    lwz(22, 21, 16), stw(22, 28, 604)];
+    let r = Regs { cnt: 20, tbl: 21, tmp: 22, acc: [23, 24, 25, 26, 29, 30] };
+    driver(te_rows().len() as u32, T_ROW, &load, XR, &[mfctr(14)], &[0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17, 18, 19, 14], &r, 30)
+}
+
+/// The tile expansion leaves tier 0's bytes and registers (XER[CA] of the last srawi, CR0, CTR) for every case, stores over its
+/// own averages and overlapping trips included, through tier 1 on a code page; mutant 51 (a row's count) goes RED. (Every
+/// operand of the last srawi is a non-negative 8.8 value - bytes and their weighted means - so its carry is always 0.)
+#[test]
+fn the_native_tile_expansion_is_exact_and_its_mutant_goes_red() {
+    let prog = te_program();
+    let want = check("tileexpand", &prog, te_setup, 1);
+    let (got, _) = run_on(Tier::Jit, 51, &prog, 1_000_000, te_setup);
+    assert!(got != want, "mutant 51 (a row's count) stayed GREEN");
+}

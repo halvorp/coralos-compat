@@ -495,8 +495,10 @@ pub const KNOB_SUPERBLOCK: u32 = 1 << 22;
 pub const KNOB_NO_NAT_ALPHA: u32 = 1 << 23;
 /// checkCollisionDetection's cell loop (h86 heavy: WC3's simulation tick).
 pub const KNOB_NO_NAT_GRIDSCAN: u32 = 1 << 24;
+/// terrainTileBlend's 4 x 4 corner expansion of a dirty tile.
+pub const KNOB_NO_NAT_TILE: u32 = 1 << 25;
 /// Every native routine off (their A/B together).
-pub const KNOB_NO_NAT: u32 = KNOB_NO_NAT_PALBLIT | KNOB_NO_NAT_TEXCONV | KNOB_NO_NAT_BITSCAN | KNOB_NO_NAT_ALPHA | KNOB_NO_NAT_GRIDSCAN;
+pub const KNOB_NO_NAT: u32 = KNOB_NO_NAT_PALBLIT | KNOB_NO_NAT_TEXCONV | KNOB_NO_NAT_BITSCAN | KNOB_NO_NAT_ALPHA | KNOB_NO_NAT_GRIDSCAN | KNOB_NO_NAT_TILE;
 /// The knob bits a library may be asked for (anything else: -1).
 pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_ENTRY_CHECKS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT | KNOB_NO_NAT | KNOB_T1_FLUSH_DROPS | KNOB_NO_SUPERBLOCK | KNOB_LAZY_CA | KNOB_SUPERBLOCK;
 

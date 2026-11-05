@@ -114,3 +114,5 @@ pub(crate) const MUT_REGION_BACK_CA: u8 = 48;
 pub(crate) const MUT_NAT_ALPHA_CA: u8 = 49;
 /// The native grid scan (jit_xscan GRIDSCAN) counts a trip whose flags test failed one instruction short.
 pub(crate) const MUT_NAT_GRID_COUNT: u8 = 50;
+/// The native tile expansion (jit_xpix TILEEXPAND) counts a row one instruction short.
+pub(crate) const MUT_NAT_TILE_COUNT: u8 = 51;
