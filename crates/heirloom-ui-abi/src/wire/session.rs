@@ -43,6 +43,14 @@ pub enum Control {
     Advance { virtual_us: u64 },
     /// `GuestMachine::step`; answered by [`Report::Stepped`].
     Step { budget: u64 },
+    /// A STANDING GRANT for this batch's `Step`: when the slice spends its budget, the engine may run up to `slices` more of the
+    /// same budget in the same batch, each answered by its own [`Report::Stepped`] in order, and each preceded by the clock
+    /// advance the host would have made: `(host millisecond tick - clock_base_ms) * 1000` virtual µs, never backwards - the
+    /// host's own per-slice clock. The engine stops at the first slice that does not spend its budget, when the host says it
+    /// has something for the guest (the session's attention word moved past `attention`, its value when the host sent this
+    /// batch), or when it owes the host a report that cannot wait (a GL frame to show). The engine owns this frame; a library
+    /// never sees it.
+    Grant { slices: u32, clock_base_ms: u64, attention: u64 },
     /// A guest-OS path alias the host's manifest set up before the program starts (AmigaDOS `Assign NAME: target`, `add` = the
     /// `ADD` form of a multi-directory assign). Only a family whose OS has assigns takes it; another refuses it by name.
     Assign { name: String, target: String, add: bool },
@@ -195,6 +203,12 @@ pub(super) fn put_machine_control(out: &mut Vec<u8>, c: &Control) {
             out.push(13);
             put_string(out, path);
         }
+        Control::Grant { slices, clock_base_ms, attention } => {
+            out.push(15);
+            put_u32(out, *slices);
+            put_u64(out, *clock_base_ms);
+            put_u64(out, *attention);
+        }
         Control::GpuImage(bytes) => {
             out.push(14);
             put_len(out, bytes.len());
@@ -260,6 +274,7 @@ pub(super) fn get_machine_control(r: &mut Reader<'_>) -> Result<Control, WireErr
             let len = r.u32()? as usize;
             Control::GpuImage(r.take(len)?.to_vec())
         }
+        15 => Control::Grant { slices: r.u32()?, clock_base_ms: r.u64()?, attention: r.u64()? },
         tag => return Err(WireError::UnknownTag { what: "Control", tag }),
     })
 }
