@@ -82,6 +82,11 @@ pub(crate) enum Continuation {
     Invoke(crate::invoke_c::Result_),
     /// The init routine of a library loaded while the program runs (its name): the loading call returns afterwards.
     LibInit(String),
+    /// A 68k routine Mixed Mode called from PowerPC ([`crate::xisa`]): it returns on the 68k CPU (to `CROSS_ISA_RETURN`), never to
+    /// `$CallbackReturn`; its result goes back to the caller.
+    M68k(crate::xisa::M68kCall),
+    /// A bound window definition's message ([`crate::wdef_c`]): the next message, a FindWindow walk's next window, or the call finished.
+    WindowDef(crate::wdef_c::WdefRun),
 }
 
 #[derive(Debug, Clone)]
@@ -180,6 +185,8 @@ impl<U: GuestUi> MacPpc<U> {
             Continuation::TimerTask | Continuation::IoCompletion => { frame.saved.restore(cpu); Ok(()) }
             Continuation::Invoke(res) => { self.invoke_returned(cpu, frame, res); Ok(()) }
             Continuation::LibInit(ref name) => { let name = name.clone(); self.lib_init_returned(cpu, frame, &name) }
+            Continuation::WindowDef(_) => self.wdef_returned(cpu, frame),
+            Continuation::M68k(ref c) => Err(format!("$CallbackReturn reached while the 68k routine at {:#x} runs: PowerPC code returned into a 68k call", c.code)),
         }
     }
 

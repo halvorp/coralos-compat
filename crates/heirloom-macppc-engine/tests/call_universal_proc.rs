@@ -77,10 +77,17 @@ fn a_powerpc_routine_runs_through_the_callback_machine_and_returns_its_result() 
 #[test]
 fn the_unimplemented_stub_and_nil_are_refused_by_name() {
     let (mut m, mut cpu, stub) = setup();
-    let unimp = trap_stub(&mut m, 0xA0FF);
+    // a Toolbox trap nobody registered answers with the _Unimplemented stub ($A89F; 0xA0FF was a SERVED trap's stub, which now runs as
+    // 68k code and is refused here only for its D0-dispatched convention)
+    let unimp = (0x300..0x3FF).find_map(|n| { let a = trap_stub(&mut m, n); (m.mac.mem.read_u16(a).unwrap() == 0xA89F).then_some(a) }).expect("an unregistered trap");
     cpu.gpr[3..6].copy_from_slice(&[unimp, 0x3E8, 0x0B]);
     m.native(&mut cpu, stub);
-    assert!(m.fault().is_some_and(|f| f.starts_with("[HEIRLOOM-MACPPC CallUniversalProc REFUSED trap=")), "{:?}", m.fault());
+    assert!(m.fault().is_some_and(|f| f.starts_with("[HEIRLOOM-MACPPC CallUniversalProc REFUSED trap=0xa89f")), "{:?}", m.fault());
+    let (mut m, mut cpu, stub) = setup();
+    let served = trap_stub(&mut m, 0xA0FF);
+    cpu.gpr[3..6].copy_from_slice(&[served, 0x3E8, 0x0B]);
+    m.native(&mut cpu, stub);
+    assert!(m.fault().is_some_and(|f| f.contains("kD0DispatchedPascalStackBased")), "{:?}", m.fault());
     let (mut m, mut cpu, stub) = setup();
     cpu.gpr[3..5].copy_from_slice(&[0, 0x3E8]);
     m.native(&mut cpu, stub);

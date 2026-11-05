@@ -34,6 +34,9 @@ pub struct Context {
     qd_globals: u32,
     the_port: u32,
     ae: crate::appleevents::AppleEvents,
+    /// CurrentA5: the process's A5 world (every process has one, a PowerPC one too: 68k code it calls through Mixed Mode runs with it,
+    /// and InitGraf stores the QuickDraw globals' address at 0(A5)).
+    current_a5: u32,
 }
 
 pub struct Process {
@@ -119,7 +122,8 @@ impl<U: GuestUi> Mac<U> {
             None => Vec::new(),
         };
         let ctx = Context { res_files, cur_res: res_ref.unwrap_or(crate::resmgr::SYSTEM_REF_NUM), cur_ap_name, cur_ap_ref_num: res_ref.unwrap_or(0) as u16, app,
-            menus: crate::menu::MenuMgr::default(), qd_globals: self.qd_globals, the_port: 0, ae: crate::appleevents::AppleEvents::default() };
+            menus: crate::menu::MenuMgr::default(), qd_globals: self.qd_globals, the_port: 0, ae: crate::appleevents::AppleEvents::default(),
+            current_a5: self.new_a5_world().unwrap_or(0) };
         let tick = self.mem.read_u32(crate::lowmem::TICKS).unwrap_or(0);
         let launcher = (0, self.current_psn());
         self.procs.table.insert(low, Process { name: name.to_vec(), file_type, creator, app, launcher, launch_tick: tick, saved: Some(ctx) });
@@ -144,7 +148,15 @@ impl<U: GuestUi> Mac<U> {
             qd_globals: self.qd_globals,
             the_port,
             ae: core::mem::take(&mut self.ae),
+            current_a5: self.mem.read_u32(crate::lowmem::CURRENT_A5).unwrap_or(0),
         }
+    }
+
+    /// A minimal A5 world for a process that has no jump table (a PowerPC application: the Process Manager gives every process one):
+    /// 32 zeroed bytes below A5 and 32 above (0(A5) = the QuickDraw globals' address once InitGraf runs). Returns A5.
+    pub fn new_a5_world(&mut self) -> Result<u32, crate::Refusal> {
+        let p = self.mm.new_ptr(&mut self.mem, &mut self.heap, 64, true).map_err(|e| crate::Refusal(alloc::format!("no memory for an A5 world (memFullErr {e})")))?;
+        Ok(p + 32)
     }
 
     fn put_context(&mut self, c: Context) {
@@ -157,6 +169,7 @@ impl<U: GuestUi> Mac<U> {
         self.qd_globals = c.qd_globals;
         if self.qd_globals != 0 && c.the_port != 0 { let _ = self.mem.write_u32(self.qd_globals, c.the_port); }
         self.ae = c.ae;
+        let _ = self.mem.write_u32(crate::lowmem::CURRENT_A5, c.current_a5);
     }
 
     /// Make process `to` the running one: the running process's context is saved, `to`'s restored. No-op when it already runs.

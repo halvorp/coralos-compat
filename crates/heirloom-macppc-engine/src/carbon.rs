@@ -464,6 +464,13 @@ impl<U: GuestUi> MacPpc<U> {
                     if out != 0 { m.put32(out, 0, "CreateCustomWindow")?; }
                     Ok(())
                 };
+                // kWindowDefProcPtr: the definition is a procedure; an explicit binding (wdef_c.rs) may name what its window means
+                if ty == 0 {
+                    match self.create_bound_window(cpu, v, a1, a2, a3, out) {
+                        Ok(()) => return Ok(()),
+                        Err(why) => { refuse(self, format!("the program's own window definition (WindowDefSpec type 0, UPP {v:#x}): {why}"))?; cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); }
+                    }
+                }
                 if ty != 2 { refuse(self, format!("the program's own window definition (WindowDefSpec type {ty}, {v:#x})"))?; cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); }
                 if let Err(e) = heirloom_mac68k_engine::toolbox::role_of(v as u16) { refuse(self, e.0)?; cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); }
                 match self.create_window(a1, a2, a3, out, Some(v as u16))? { Some(r) => r, None => { cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); } }

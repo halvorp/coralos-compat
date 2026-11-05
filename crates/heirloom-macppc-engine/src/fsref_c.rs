@@ -35,13 +35,13 @@ const P_DIR_ID: u32 = 48;
 const P_NEW_REF: u32 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FsrFn { FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo, FSOpenIterator, FSCloseIterator, FSGetCatalogInfoBulk }
+pub enum FsrFn { FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo, FSOpenIterator, FSCloseIterator, FSGetCatalogInfoBulk, PBGetCatalogInfoSync, FSOpenResFile }
 
 impl FsrFn {
     pub fn by_name(name: &str) -> Option<FsrFn> {
         use FsrFn::*;
         Some(match name {
-            "FSpMakeFSRef" => FSpMakeFSRef, "PBMakeFSRefSync" => PBMakeFSRefSync, "FSMakeFSRefUnicode" => FSMakeFSRefUnicode, "FSGetCatalogInfo" => FSGetCatalogInfo,
+            "FSpMakeFSRef" => FSpMakeFSRef, "PBMakeFSRefSync" => PBMakeFSRefSync, "FSMakeFSRefUnicode" => FSMakeFSRefUnicode, "FSGetCatalogInfo" => FSGetCatalogInfo, "PBGetCatalogInfoSync" => PBGetCatalogInfoSync, "FSOpenResFile" => FSOpenResFile,
             "FSDeleteObject" => FSDeleteObject, "FSCompareFSRefs" => FSCompareFSRefs, "FSRefMakePath" => FSRefMakePath, "FSPathMakeRef" => FSPathMakeRef, "FSSetCatalogInfo" => FSSetCatalogInfo,
             "FSOpenIterator" => FSOpenIterator, "FSCloseIterator" => FSCloseIterator, "FSGetCatalogInfoBulk" => FSGetCatalogInfoBulk,
             _ => return None,
@@ -172,6 +172,33 @@ impl<U: GuestUi> MacPpc<U> {
                         if live.is_empty() { NO_MORE_ITEMS } else { 0 }
                     }
                 }
+            }
+            // PBGetCatalogInfoSync(FSRefParam *pb): FSGetCatalogInfo's parameter-block form (Files.h FSRefParam: ref 28, whichInfo 32, catInfo 36,
+            // spec 52, parentRef 56, outName 68), the OSErr also in ioResult (16)
+            PBGetCatalogInfoSync => {
+                let pb = args[0];
+                let f = |m: &Self, off: u32| m.mac.mem.read_u32(pb + off).map_err(|_| m.fsr_err(&name, pb));
+                let (r, which, cat, spec, parent, out_name) = (f(self, 28)?, f(self, 32)?, f(self, 36)?, f(self, 52)?, f(self, 56)?, f(self, 68)?);
+                let e = match self.fsref_node(r) { Err(e) => i32::from(e), Ok(node) => { self.fsr_catalog_info(node, &[r, which, cat, out_name, spec, parent])?; 0 } };
+                self.mac.mem.write_u16(pb + P_RESULT, e as u16).map_err(|_| self.fsr_err(&name, pb))?;
+                e
+            }
+            // FSOpenResFile(const FSRef *ref, SInt8 permission) -> refNum (Resources.h, Mac OS 9 / CarbonLib): OpenRFPerm's FSRef form; the fork is
+            // opened by the same path, ResErr set; -1 on failure
+            FSOpenResFile => {
+                let r = match self.fsref_node(args[0]) {
+                    Err(e) => Err(e),
+                    Ok(node) => {
+                        let fm = &self.mac.fm;
+                        // the fork is opened by name in its folder, as OpenRFPerm's is (a node with no leaf is a directory to the File Manager)
+                        let loc = Located { vol: fm.tree.volume_of(node), parent: fm.tree.parent(node), leaf: Some(fm.tree.name(node).into()), node: Some(node) };
+                        self.mac.open_res_file(&loc, args[1] as u8)
+                    }
+                };
+                let (v, e) = match r { Ok(rn) => (i32::from(rn), 0i16), Err(e) => (-1, e) };
+                let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::RES_ERR, e as u16);
+                self.mac.log.push(format!("[res] FSOpenResFile -> {v} (ResErr {e})"));
+                v
             }
             FSGetCatalogInfo => match self.fsref_node(args[0]) {
                 Err(e) => i32::from(e),

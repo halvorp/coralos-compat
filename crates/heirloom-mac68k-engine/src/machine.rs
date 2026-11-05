@@ -65,6 +65,10 @@ pub struct MacWindow {
     pub proc_id: u16,
     /// A colour window (`NewCWindow` on a machine with Color QuickDraw): a CGrafPort over an 8-bit canvas.
     pub color: bool,
+    /// The role (and resizability) an explicit window-definition binding named for the program's own definition (heirloom-bind `wdef`;
+    /// HEIRLOOM-CUSTOM-WINDOW-NEEDS-A-BINDING). Such a window's strucRgn and contRgn are the DEFINITION's (its wCalcRgns writes them):
+    /// the engine never recomputes them. `None` = a system definition chosen by `proc_id`.
+    pub def_role: Option<(heirloom_ui_abi::WindowRole, bool)>,
 }
 
 pub struct Mac<U: GuestUi> {
@@ -141,6 +145,12 @@ pub struct Mac<U: GuestUi> {
     pub snd: crate::sound::SoundState,
     /// Which classic Mac this is (profile.rs): the CPU model, the boot address mode, what Gestalt / SysEnvirons answer.
     pub profile: crate::profile::MachineProfile,
+    /// A 68k routine Mixed Mode entered from another ISA is running (set by that caller, heirloom-macppc-engine `xisa`); only then is
+    /// [`crate::guestcall::CROSS_ISA_RETURN`] its return.
+    pub cross_isa_running: bool,
+    /// ... and it returned there, with (D0, A7) at its return: the 68k CPU halted and the caller's run loop takes the result. Cleared by
+    /// the caller before each call.
+    pub cross_isa_returned: Option<(u32, u32)>,
 }
 
 /// The prefix every unimplemented-trap refusal starts with (a census runner keys on it).
@@ -153,7 +163,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![], cursor_devices: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), procs: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT,
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), procs: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT, cross_isa_running: false, cross_isa_returned: None,
         };
         m.rm.add_system(crate::system_res::system_fork());
         m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start
@@ -278,7 +288,12 @@ impl<U: GuestUi> Host for Mac<U> {
     fn mem(&mut self) -> &mut GuestMem { &mut self.mem }
 
     /// The only `$4AFC` is the completion trampoline ([`crate::guestcall::TRAMPOLINE`]); any other ILLEGAL stays the 68k exception.
-    fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool { self.mem.strip(pc) == crate::guestcall::TRAMPOLINE && self.leave_guest(cpu) } // a 24-bit program returns through addresses it has flagged in the high byte (WriteNow's segment glue): the bus ignores it, so must this
+    fn illegal(&mut self, cpu: &mut Cpu, pc: u32) -> bool {
+        let pc = self.mem.strip(pc);
+        // a 68k routine Mixed Mode called from another ISA came back: stop here, the caller's run loop takes its result
+        if pc == crate::guestcall::CROSS_ISA_RETURN && self.cross_isa_running { self.cross_isa_returned = Some((cpu.dreg(0), cpu.areg(7))); cpu.halt(); return true; }
+        pc == crate::guestcall::TRAMPOLINE && self.leave_guest(cpu)
+    } // a 24-bit program returns through addresses it has flagged in the high byte (WriteNow's segment glue): the bus ignores it, so must this
 
     fn aline(&mut self, cpu: &mut Cpu, opcode: u16, pc: u32) -> bool {
         let pc = self.mem.strip(pc);

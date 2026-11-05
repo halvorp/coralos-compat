@@ -69,6 +69,35 @@ fn v_remove<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> Result<Str
 }
 
 impl<U: GuestUi> Mac<U> {
+    /// `VInstall(task)` for a caller that is not 68k code (heirloom-macppc-engine `vbl_c`): the same record checks and queue; the OSErr.
+    pub fn vbl_install(&mut self, task: u32) -> Result<i16, Refusal> {
+        let ty = self.mem.read_u16(task + Q_TYPE).map_err(Refusal::mem("VBLTask"))?;
+        if ty != V_TYPE { return Ok(VTYP_ERR); }
+        if !self.vbl.queue.contains(&task) { self.vbl.queue.push(task); }
+        Ok(0)
+    }
+
+    /// `VRemove(task)` likewise: 0, or qErr (-1) when it was not installed.
+    pub fn vbl_remove(&mut self, task: u32) -> i16 {
+        let was = self.vbl.queue.iter().position(|&t| t == task);
+        if let Some(i) = was { self.vbl.queue.remove(i); }
+        self.vbl.due.retain(|&t| t != task);
+        if was.is_some() { 0 } else { -1 }
+    }
+
+    /// A task whose count reached zero and is still installed, with its `vblAddr`, for a caller that runs it itself (taken off the due list).
+    pub fn vbl_take_due(&mut self) -> Option<(u32, u32)> {
+        while let Some(task) = self.vbl.due.pop_front() {
+            if !self.vbl.queue.contains(&task) { continue; }
+            let Ok(addr) = self.mem.read_u32(task + VBL_ADDR) else { continue };
+            return Some((task, addr));
+        }
+        None
+    }
+
+    /// Is a task due (a parked program wakes for it)?
+    pub fn vbl_due(&self) -> bool { !self.vbl.due.is_empty() }
+
     /// One retrace: count every installed task down, queue those that reached zero.
     pub(crate) fn vbl_tick(&mut self) {
         let tasks = self.vbl.queue.clone();

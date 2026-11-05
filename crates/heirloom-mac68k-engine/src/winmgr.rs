@@ -28,6 +28,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA919, &[Arg::P, Arg::P], None, get_w_title::<U>)?;
     m.register(0xA918, &[Arg::P, Arg::L], None, set_w_ref_con::<U>)?;
     m.register(0xA917, &[Arg::P], Some(Arg::L), get_w_ref_con::<U>)?;
+    m.register(0xA80A, &[Arg::P], Some(Arg::W), get_w_variant::<U>)?;
     m.register(0xA91B, &[Arg::P, Arg::W, Arg::W, Arg::B], None, move_window::<U>)?;
     m.register(0xA91D, &[Arg::P, Arg::W, Arg::W, Arg::B], None, size_window::<U>)?;
     m.register(0xAA45, &[Arg::L, Arg::L, Arg::L, Arg::B, Arg::W, Arg::L, Arg::B, Arg::L], Some(Arg::L), new_c_window::<U>)?;
@@ -138,6 +139,15 @@ fn set_w_ref_con<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
     m.open_win("SetWRefCon", win)?;
     m.mem.write_u32(win + WR_REF_CON, v).map_err(Refusal::mem("WindowRecord.refCon"))?;
     Ok(Done { result: 0, log: format!("[toolbox] SetWRefCon {win:#x} {v:#x}") })
+}
+
+/// `GetWVariant(window)` (Inside Macintosh I-286 / Toolbox Essentials): the variation code of the window's definition, the low four bits of
+/// its procID; a window whose definition a binding admitted was made from a definition procedure, not a procID: 0.
+fn get_w_variant<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let w = c.args.get(0);
+    let win = m.windows.get(&w).ok_or_else(|| Refusal(format!("GetWVariant: {w:#x} is not an open window")))?;
+    let v = if win.def_role.is_some() { 0 } else { win.proc_id & 15 };
+    Ok(Done { result: u32::from(v), log: format!("[toolbox] GetWVariant {w:#x} -> {v}") })
 }
 
 fn get_w_ref_con<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

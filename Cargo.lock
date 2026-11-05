@@ -245,6 +245,7 @@ dependencies = [
 name = "heirloom-macppc-engine"
 version = "0.1.0"
 dependencies = [
+ "heirloom-bind",
  "heirloom-common",
  "heirloom-cpu-ppc",
  "heirloom-cpu-ppc-client",

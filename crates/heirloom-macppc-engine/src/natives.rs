@@ -233,6 +233,10 @@ impl<U: GuestUi> MacPpc<U> {
                 let mut cpu = self.scratch_cpu(regs);
                 match self.tm_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::Vbl(f) => {
+                let mut cpu = self.scratch_cpu(regs);
+                match self.vbl_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
             Native::Qa(f) => {
                 let mut cpu = self.scratch_cpu(regs);
                 match self.qa_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }

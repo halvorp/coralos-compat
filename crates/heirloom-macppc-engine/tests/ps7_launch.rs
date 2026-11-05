@@ -9,6 +9,7 @@ use heirloom_macppc_engine::MacPpc;
 use heirloom_ui_abi::RecordingGuestUi;
 
 mod ps7_common;
+mod wdef_bindings;
 
 fn installed() -> String { std::env::var("PS7_INSTALLED").unwrap_or_else(|_| String::from("/data/build/corpus-bin/mac/photoshop7-tryout/installed")) }
 /// The application inside the package, relative to the export (`PS7_APP` runs another one of the tree: VSetupT, the tryout set-up tool the
@@ -37,6 +38,8 @@ fn started() -> Option<MacPpc<RecordingGuestUi>> {
     let creator = row.get(2).map_or(*b"????", |c| fourcc(c));
     let app = heirloom_fmt_resfork::writer::macbinary(&leaf, b"APPL", &creator, &data, &rsrc);
     let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
+    // the compat repo's window-definition bindings (DATA, bindings/macppc/*.sexp), as the host hands them to the engine
+    for b in wdef_bindings::load("macppc") { eprintln!("BINDING {}", b.id); m.add_window_def_binding(b); }
     let vol = GuestMachine::volume(&mut m);
     vol.enable_streams();
     vol.set_stream_source(Box::new(Files));
@@ -168,6 +171,19 @@ fn ps7_launch_host_run() {
                 // import word at 0xf47c6a, the run's placement): the import this TOC word stands for
                 let mirrored = slot.wrapping_add(0xf47c6a).wrapping_sub(0x0100_0700);
                 eprintln!("  MIRROR {mirrored:#x} {:?}", m.import_slots.get(&mirrored));
+                // the delta measured NOW: TOC words near the slot whose nonzero value equals exactly one import slot's value
+                let mut deltas: std::collections::BTreeMap<u32, u32> = Default::default();
+                for k in 0..64u32 {
+                    let w = slot.wrapping_sub(128).wrapping_add(4 * k);
+                    let v = m.mac.mem.read_u32(w).unwrap_or(0);
+                    if v == 0 { continue }
+                    let hits: Vec<u32> = m.import_slots.keys().copied().filter(|&a| m.mac.mem.read_u32(a).ok() == Some(v)).collect();
+                    if hits.len() == 1 { *deltas.entry(w.wrapping_sub(hits[0])).or_default() += 1; }
+                }
+                if let Some((&d, &n)) = deltas.iter().max_by_key(|(_, &n)| n) {
+                    let imp = slot.wrapping_sub(d);
+                    eprintln!("  MIRROR-NOW delta {d:#x} ({n} matches) -> import {imp:#x} {:?}", m.import_slots.get(&imp));
+                }
                 let near: Vec<_> = m.import_slots.range(toc - 0x8000..toc + 0x8000).take(3).collect();
                 let n = m.import_slots.range(toc - 0x8000..toc + 0x8000).count();
                 eprintln!("  {n} import slots within the TOC's 64K, first {near:?}; slot in {:?}, toc in {:?}", m.code_map.locate_any(slot), m.code_map.locate_any(toc));

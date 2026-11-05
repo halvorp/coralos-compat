@@ -80,6 +80,8 @@ pub enum Native { StandardAlert, GetSharedLibrary, GetDiskFragment, GetMemFragme
     Gl(crate::gl_c::GlFn),
     /// The Time Manager ([`crate::tm_c`]).
     Tm(crate::tm_c::TmFn),
+    /// The Vertical Retrace Manager ([`crate::vbl_c`]).
+    Vbl(crate::vbl_c::VblFn),
     /// Carbon QuickDraw accessors and small QuickDraw/OS routines ([`crate::qdacc_c`]).
     Qa(crate::qdacc_c::QaFn),
     /// InputSprocket over the host's keyboard and mouse ([`crate::isp_c`]).
@@ -160,6 +162,7 @@ impl Native {
             n if crate::dsp_c::DspFn::by_name(n).is_some() => Native::Dsp(crate::dsp_c::DspFn::by_name(n).expect("checked")),
             n if crate::gl_c::GlFn::by_name(n).is_some() => Native::Gl(crate::gl_c::GlFn::by_name(n).expect("checked")),
             n if crate::tm_c::TmFn::by_name(n).is_some() => Native::Tm(crate::tm_c::TmFn::by_name(n).expect("checked")),
+            n if crate::vbl_c::VblFn::by_name(n).is_some() => Native::Vbl(crate::vbl_c::VblFn::by_name(n).expect("checked")),
             n if crate::qdacc_c::QaFn::by_name(n).is_some() => Native::Qa(crate::qdacc_c::QaFn::by_name(n).expect("checked")),
             "CallUniversalProc" => Native::CallUniversalProc,
             n if crate::evloop_c::ElFn::by_name(n).is_some() => Native::El(crate::evloop_c::ElFn::by_name(n).expect("checked")),
@@ -272,7 +275,12 @@ pub const INTERFACELIB_ALIASES: &[(&str, &str)] = &[("GetMenu", "GetRMenu"), ("B
     ("GetFontName", "GetFName"), ("UpdateDialog", "UpdtDialog"),
     // Controls.h (Mac OS 8.5 / Carbon): DrawControlInCurrentPort draws the control as Draw1Control does (a native control is drawn by the host in
     // its own window whichever port is current)
-    ("DrawControlInCurrentPort", "Draw1Control")];
+    ("DrawControlInCurrentPort", "Draw1Control"),
+    // Resources.h / Quickdraw.h / Menus.h / Windows.h / Memory.h C names of trap-era spellings (a measured program imports them; the trap table names
+    // each after its trap): a name whose trap has no handler stays unbound by name (lookup below)
+    ("RemoveResource", "RmveResource"), ("Get1IndResource", "Get1IxResource"), ("Get1IndType", "Get1IxType"), ("SetRectRgn", "SetRecRgn"),
+    ("GetItemStyle", "GetItmStyle"), ("SetItemStyle", "SetItmStyle"), ("GetItemIcon", "GetItmIcon"), ("SetItemIcon", "SetItmIcon"),
+    ("SetItemMark", "SetItmMark"), ("GetItemMark", "GetItmMark"), ("CalcVisBehind", "CalcVBehind"), ("ReallocateHandle", "ReallocHandle"), ("SystemEdit", "SysEdit")];
 
 /// How `name` would be served, given the handlers `mac` has registered.
 pub fn lookup<U: GuestUi>(mac: &Mac<U>, name: &str) -> Binding {

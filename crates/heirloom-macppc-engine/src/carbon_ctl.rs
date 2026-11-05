@@ -7,8 +7,9 @@
 //! `RegisterAppearanceClient` is a truthful success: the Appearance Manager is part of this system and registering a client has no state to keep.
 //! Not done, left unbound so the program stops BY NAME: `HideWindow` (the host has no hide call, only open/close), `GetControlData`/`SetControlData` (tag-by-tag, as a program needs them),
 //! `StandardAlert`, `UseThemeFont`/`SetThemeBackground` (theme chrome is drawn by the host, never by the guest). The theme parts a program asks for inside its own
-//! content (DrawThemePrimaryGroup, DrawThemeEditTextFrame, DrawThemeFocusRect ...) stay unbound by name: they translate to the kit's parts
-//! (HEIRLOOM-TRANSLATION-BY-TOOLKIT-NOT-APP), not to a hand-drawn Platinum look.
+//! content translate to the KIT's parts by the toolkit table [`THEME_PARTS`] (HEIRLOOM-TRANSLATION-BY-TOOLKIT-NOT-APP), never to a hand-drawn
+//! Platinum look: a group box or an edit-text frame is the kit's recessed bevel (`DrawOp::Bevel`, the kit draws it); a focus ring is the
+//! kit's to show on its own controls, so a program-drawn one is validated and named, nothing drawn.
 //! `DrawThemeListBoxFrame` is answered (validated, nothing drawn): the List Manager's lists are native lists the host frames itself.
 use crate::clib::arg;
 use crate::machine::MacPpc;
@@ -18,6 +19,18 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::pascal::Rect;
+
+/// A kit part an Appearance theme call becomes (the toolkit table below).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KitPart { RecessedBevel, NotShown }
+
+/// The Appearance Manager's content theme parts -> the kit's parts (data: one row per call).
+pub const THEME_PARTS: &[(&str, KitPart)] = &[
+    ("DrawThemePrimaryGroup", KitPart::RecessedBevel),
+    ("DrawThemeSecondaryGroup", KitPart::RecessedBevel),
+    ("DrawThemeEditTextFrame", KitPart::RecessedBevel),
+    ("DrawThemeFocusRect", KitPart::NotShown),
+];
 use crate::cpu::Cpu;
 
 /// Control Manager / Window Manager bookkeeping with no home in the 68k records.
@@ -78,6 +91,8 @@ pub enum CxFn {
     SetMenuItemCommandID, GetMenuItemCommandID,
     GetControlData, SetControlData, SetControlFontStyle, SetControlViewSize, GetControlViewSize, GetDialogItemAsControl, SetThemeBackground,
     TestControl, KeyTranslate, StdFilterProc, SetDialogTracksCursor, DialogCut, DialogCopy, DialogPaste, DialogDelete, DrawThemeListBoxFrame, ShortenDITL,
+    /// Appearance theme parts inside the program's content, translated to the KIT's parts ([`THEME_PARTS`]).
+    DrawThemePrimaryGroup, DrawThemeSecondaryGroup, DrawThemeEditTextFrame, DrawThemeFocusRect,
     IsWindowVisible, IsWindowHilited, GetWindowFromPort, GetNextWindow, GetWindowList, GetWindowBounds, InvalWindowRect, GetRegionBounds,
     /// The pop-up's menu (its `PopupPrivateData`): `GetControlPopupMenuHandle` / `SetControlPopupMenuHandle` / `GetControlPopupMenuID`.
     GetControlPopupMenuHandle, SetControlPopupMenuHandle, GetControlPopupMenuID,
@@ -125,7 +140,8 @@ impl CxFn {
             "GetControlViewSize" => GetControlViewSize, "GetDialogItemAsControl" => GetDialogItemAsControl, "SetThemeBackground" => SetThemeBackground,
             "SetMenuItemCommandID" => SetMenuItemCommandID, "GetMenuItemCommandID" => GetMenuItemCommandID,
             "TestControl" => TestControl, "KeyTranslate" => KeyTranslate, "StdFilterProc" => StdFilterProc, "SetDialogTracksCursor" => SetDialogTracksCursor,
-            "DrawThemeListBoxFrame" => DrawThemeListBoxFrame, "ShortenDITL" => ShortenDITL, "DialogCut" => DialogCut, "DialogCopy" => DialogCopy, "DialogPaste" => DialogPaste, "DialogDelete" => DialogDelete,
+            "DrawThemeListBoxFrame" => DrawThemeListBoxFrame, "DrawThemePrimaryGroup" => DrawThemePrimaryGroup, "DrawThemeSecondaryGroup" => DrawThemeSecondaryGroup,
+            "DrawThemeEditTextFrame" => DrawThemeEditTextFrame, "DrawThemeFocusRect" => DrawThemeFocusRect, "ShortenDITL" => ShortenDITL, "DialogCut" => DialogCut, "DialogCopy" => DialogCopy, "DialogPaste" => DialogPaste, "DialogDelete" => DialogDelete,
             "IsWindowVisible" => IsWindowVisible, "IsWindowHilited" => IsWindowHilited, "GetWindowFromPort" => GetWindowFromPort, "GetNextWindow" => GetNextWindow,
             "GetWindowList" => GetWindowList, "GetWindowBounds" => GetWindowBounds, "InvalWindowRect" => InvalWindowRect, "GetRegionBounds" => GetRegionBounds,
             "GetControlPopupMenuHandle" => GetControlPopupMenuHandle, "SetControlPopupMenuHandle" => SetControlPopupMenuHandle, "GetControlPopupMenuID" => GetControlPopupMenuID,
@@ -347,6 +363,27 @@ impl<U: GuestUi> MacPpc<U> {
                     let r = self.cx_rect(a0, n)?;
                     if r.bottom <= r.top || r.right <= r.left { (-50i32) as u32 } else {
                         self.mac.log.push(format!("[appearance] DrawThemeListBoxFrame ({},{},{},{}): theme chrome, drawn by the host around its native list", r.top, r.left, r.bottom, r.right));
+                        0
+                    }
+                }
+            }
+            // DrawThemePrimaryGroup / DrawThemeSecondaryGroup / DrawThemeEditTextFrame (const Rect*, ThemeDrawState) and DrawThemeFocusRect
+            // (const Rect*, Boolean hasFocus): the toolkit table names the kit part; a NIL or empty rect is paramErr
+            DrawThemePrimaryGroup | DrawThemeSecondaryGroup | DrawThemeEditTextFrame | DrawThemeFocusRect => {
+                if a0 == 0 { (-50i32) as u32 } else {
+                    let r = self.cx_rect(a0, n)?;
+                    if r.bottom <= r.top || r.right <= r.left { (-50i32) as u32 } else {
+                        let part = THEME_PARTS.iter().find(|p| p.0 == n).map(|p| p.1);
+                        let local = (i32::from(r.left), i32::from(r.top), i32::from(r.right), i32::from(r.bottom));
+                        let drawn = match part {
+                            Some(KitPart::RecessedBevel) => heirloom_mac68k_engine::qd::plane::record_theme_part(&mut self.mac, local, |rect| heirloom_ui_abi::DrawOp::Bevel { rect, raised: false }).map_err(|e| format!("{n}: {}", e.0))?,
+                            Some(KitPart::NotShown) | None => false,
+                        };
+                        self.mac.log.push(format!("[appearance] {n} ({},{},{},{}) -> {}", r.top, r.left, r.bottom, r.right, match (part, drawn) {
+                            (Some(KitPart::RecessedBevel), true) => "the kit's recessed bevel",
+                            (Some(KitPart::RecessedBevel), false) => "the kit's recessed bevel, NOT recorded: the port is not a window plane",
+                            _ => "not shown: the kit shows focus on its own controls",
+                        }));
                         0
                     }
                 }

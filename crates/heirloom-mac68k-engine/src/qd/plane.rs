@@ -217,3 +217,22 @@ pub fn flush<U: GuestUi>(m: &mut Mac<U>) {
         }
     }
 }
+
+/// A theme part a program asked the Appearance Manager for inside its own content (`DrawThemePrimaryGroup`, `DrawThemeEditTextFrame`
+/// ...): a toolkit contract (HEIRLOOM-TRANSLATION-BY-TOOLKIT-NOT-APP), so the plane gets the KIT's part (`op_of` makes it from the part's
+/// pixel rectangle), never a hand-drawn Platinum look. `local` is in the current port's local coordinates. Nothing is drawn into the
+/// canvas (the part is the kit's to draw); a port that is not a recorded window plane (an offscreen port, planes refused) draws nothing
+/// and answers false, named by the caller.
+pub fn record_theme_part<U: GuestUi>(m: &mut Mac<U>, local: (i32, i32, i32, i32), op_of: impl FnOnce(GuestRect) -> DrawOp) -> Result<bool, crate::Refusal> {
+    let port = super::target::current_port(m)?;
+    let mut done = false;
+    super::target::with(m, port, |m, t| {
+        if !recording(&m.qd.plane, t) { return Ok(Rect::default()); }
+        t.recorded = true;
+        let r = t.to_pixels(Rect::new(local.0, local.1, local.2, local.3));
+        m.qd.plane.push(port, op_of(grect(&r)), r, false);
+        done = true;
+        Ok(Rect::default())
+    })?;
+    Ok(done)
+}

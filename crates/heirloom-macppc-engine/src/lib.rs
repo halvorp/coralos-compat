@@ -64,7 +64,10 @@ pub mod alias_c;
 pub mod carbon_ctl;
 pub mod scrap_c; // the Carbon Scrap Manager over the one desk scrap
 pub mod evloop_c; // the Carbon Event Loop: the main loop ref and its timers, fired at safepoints through the callback machine
-pub mod upp_c; // CallUniversalProc through the one callback machine, and the 68k traps served by value
+pub mod upp_c;
+pub mod xisa;
+pub mod vbl_c; // VInstall / VRemove from PowerPC: the Toolbox's VBL queue, tasks at safepoints
+pub mod wdef_c; // a program's own window definition admitted by a binding: run through the callback machine, presented native // cross-ISA calls: 68k routines called from PowerPC, on the 68k CPU through the one callback machine // CallUniversalProc through the one callback machine, and the 68k traps served by value
 pub mod snd_c; // Sound Manager 3.0 dispatch routines by C name
 pub mod selector_c; // the List Manager and styled TextEdit dispatch by C name, through the 68k selector bodies
 pub mod cf_more;

@@ -14,6 +14,10 @@ use crate::cpu::Cpu;
 /// The completion trampoline: `ILLEGAL` (handled by the host) then `RTS`.
 pub const TRAMPOLINE: u32 = 0x510;
 
+/// Where a 68k routine called from ANOTHER ISA returns (Mixed Mode's switch frame back, heirloom-macppc-engine `xisa`): `ILLEGAL`,
+/// handled by the host, which halts the 68k CPU and sets [`Mac::cross_isa_returned`]. Nothing else returns here.
+pub const CROSS_ISA_RETURN: u32 = 0x518;
+
 /// One request to run guest code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestCall {
@@ -50,7 +54,8 @@ pub(crate) enum Frame {
 impl<U: GuestUi> Mac<U> {
     /// Write the trampoline into low memory (once, at machine creation).
     pub(crate) fn install_trampoline(&mut self) -> Result<(), crate::Refusal> {
-        self.mem.write_u16(TRAMPOLINE, 0x4AFC).and_then(|_| self.mem.write_u16(TRAMPOLINE + 2, 0x4E75)).map_err(crate::Refusal::mem("completion trampoline"))
+        self.mem.write_u16(TRAMPOLINE, 0x4AFC).and_then(|_| self.mem.write_u16(TRAMPOLINE + 2, 0x4E75)).map_err(crate::Refusal::mem("completion trampoline"))?;
+        self.mem.write_u16(CROSS_ISA_RETURN, 0x4AFC).map_err(crate::Refusal::mem("cross-ISA return"))
     }
 
     /// Enter `call` as a JSR from the instruction at `pc` (return address `pc + 2`).

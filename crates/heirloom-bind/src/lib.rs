@@ -28,6 +28,7 @@ pub mod anchor;
 pub mod parse;
 pub mod spec;
 pub mod state;
+pub mod wdef;
 
 pub use parse::{parse, recognise, Group, Label, Parsed, Placement, Recognised, Refusal};
 pub use spec::{
@@ -35,3 +36,4 @@ pub use spec::{
     IntWidth, ItemLayout, PlacementLayout, StrListPick,
 };
 pub use state::Bindings;
+pub use wdef::{WindowDefBinding, WindowDefIdentity, WindowMeaning};

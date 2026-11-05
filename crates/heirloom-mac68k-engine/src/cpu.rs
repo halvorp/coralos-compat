@@ -9,3 +9,13 @@ pub use heirloom_cpu_68k_client::*;
 pub use heirloom_cpu_68k::*;
 #[cfg(not(any(feature = "cpu-static", feature = "cpu-library")))]
 compile_error!("enable exactly the CPU backend this build runs on: `cpu-library` (cpu-68k.library) or `cpu-static`");
+
+/// Whether the CPU this build runs on is there: cpu-68k.library's table is bound (`cpu-library`), or the static core is linked in.
+/// A caller that may run 68k code on a machine whose engine opened another CPU first (macppc.engine's Mixed Mode calls) asks this
+/// and refuses by name instead of reaching an unbound table.
+pub fn available() -> bool {
+    #[cfg(feature = "cpu-library")]
+    { heirloom_cpu_68k_client::is_bound() }
+    #[cfg(not(feature = "cpu-library"))]
+    { true }
+}

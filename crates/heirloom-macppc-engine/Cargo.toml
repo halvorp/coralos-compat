@@ -14,6 +14,8 @@ heirloom-fmt-resfork = { path = "../heirloom-fmt-resfork" }
 heirloom-mac68k-engine = { path = "../heirloom-mac68k-engine" }
 heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-gl-abi = { path = "../heirloom-gl-abi" }
+# window-definition bindings (data: heirloom-bind `wdef`), the one binding crate
+heirloom-bind = { path = "../heirloom-bind" }
 heirloom-cpu-ppc = { path = "../heirloom-cpu-ppc", optional = true }
 heirloom-cpu-ppc-client = { path = "../heirloom-cpu-ppc-client", optional = true }
 # `os-library`: os-mac.library's table (src/os_face.rs) - both Mac families behind heirloom-os-abi's OsVTable v2.

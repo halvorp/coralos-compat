@@ -128,6 +128,8 @@ pub struct MacPpc<U: GuestUi> {
     pub(crate) fsr: crate::fsref_c::FsrState,
     /// Carbon window classes and modality ([`crate::wclass_c`]).
     pub(crate) wc: crate::wclass_c::WcState,
+    /// Window-definition bindings, the code sections they are keyed by, and the windows they admitted ([`crate::wdef_c`]).
+    pub wdef: crate::wdef_c::WdefState,
 }
 
 /// Grow `mac`'s guest RAM to `ram` bytes (no-op when it already has that much): the extra memory joins the Memory Manager's heap
@@ -179,7 +181,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(heirloom_mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: Default::default(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), app_span: None, lib_locator: BTreeMap::new(), import_slots: BTreeMap::new(), perf: None, code_map: Default::default(), launch_policy: Default::default(), fsr: Default::default(), wc: Default::default() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: Default::default(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), app_span: None, lib_locator: BTreeMap::new(), import_slots: BTreeMap::new(), perf: None, code_map: Default::default(), launch_policy: Default::default(), fsr: Default::default(), wc: Default::default(), wdef: Default::default() })
     }
 
     /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.
@@ -230,8 +232,18 @@ impl<U: GuestUi> MacPpc<U> {
                 self.mac.log.push(alloc::format!("[cfm] the shared library \"{name}\" in the application's folder did not read back whole: not provided"));
                 continue;
             }
-            self.mac.log.push(alloc::format!("[cfm] shared library \"{name}\" found in the application's folder ({len} bytes)"));
-            self.provide_library(&name, &bytes);
+            // the CFM finds a library by its FRAGMENT name (its 'cfrg' member), not its file name; a file with no 'cfrg' is provided by its file name
+            let rsrc = self.mac.fm.tree.get(node).rsrc.clone();
+            let members = crate::source::library_fragments_of_forks(&rsrc, &bytes);
+            if members.is_empty() {
+                self.mac.log.push(alloc::format!("[cfm] shared library \"{name}\" found in the application's folder ({len} bytes; no 'cfrg': provided by its file name)"));
+                self.provide_library(&name, &bytes);
+            }
+            for (frag, frag_bytes) in members {
+                if self.libs.contains_key(frag.as_str()) { continue }
+                self.mac.log.push(alloc::format!("[cfm] shared library \"{frag}\" (the file \"{name}\", {} bytes) found in the application's folder", frag_bytes.len()));
+                self.provide_library(&frag, &frag_bytes);
+            }
         }
     }
 

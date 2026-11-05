@@ -114,13 +114,53 @@ pub fn ppc_record(d: &Descriptor) -> Result<Record, MixedModeError> {
         return Err(MixedModeError::NoRunnableRecord { at: d.at, why: format!("a selector-dispatched descriptor ({} records, flags {:#x}) is not resolved yet", d.records.len(), d.flags) });
     }
     let Some(r) = d.records.iter().find(|r| r.isa == ISA_PPC) else {
-        return Err(MixedModeError::NoRunnableRecord { at: d.at, why: String::from("68k code only: running 68k code from PowerPC is NEXT-NEEDED (cross-ISA calls)") });
+        return Err(MixedModeError::NoRunnableRecord { at: d.at, why: String::from("68k code only: this caller enters PowerPC routines only (CallUniversalProc runs 68k code: heirloom-macppc-engine xisa)") });
     };
     if r.flags & (PROC_DESCRIPTOR_IS_RELATIVE | FRAGMENT_NEEDS_PREPARING) != 0 {
         return Err(MixedModeError::NoRunnableRecord { at: d.at, why: format!("a relative or unprepared PowerPC record (routineFlags {:#x}) is not resolved yet", r.flags) });
     }
     if r.proc_descriptor == 0 { return Err(MixedModeError::NoRunnableRecord { at: d.at, why: String::from("a PowerPC record with a NIL procedure") }); }
     Ok(*r)
+}
+
+/// The routine a UPP names, by Mixed Mode's rule for a pointer handed to `CallUniversalProc` (MixedMode.h: a UniversalProcPtr is
+/// either a 68k ProcPtr or the address of a RoutineDescriptor): a descriptor (`$AAFE`) names its routines and their ISA, and the
+/// caller's own ISA wins when it has a record (no mode switch); ANY OTHER pointer is 68k code. Nothing here looks at what the code
+/// bytes are: the descriptor magic and the record's ISA byte decide, never a guess about which ISA some bytes resemble.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Routine {
+    /// A PowerPC record (its procedure is a TVector).
+    PowerPc(Record),
+    /// 68k code at `code`; `proc_info` is the record's when the routine came from a descriptor (a raw ProcPtr has none: the caller's
+    /// procInfo describes it).
+    M68k { code: u32, proc_info: Option<u32> },
+}
+
+/// `kOld68kRTA` is 0; the high nibble of the ISA byte names another 68k run-time architecture (CFM-68K, `kCFM68kRTA` = $10).
+const ISA_RTA_MASK: u8 = 0xF0;
+
+/// Resolve `upp` for a PowerPC caller ([`Routine`]). Refusals name what could not run, before anything changes.
+pub fn resolve(mem: &GuestMem, upp: u32) -> Result<Routine, MixedModeError> {
+    let d = match parse(mem, upp) {
+        Ok(d) => d,
+        Err(MixedModeError::NotADescriptor(_)) => return Ok(Routine::M68k { code: upp, proc_info: None }),
+        Err(e) => return Err(e),
+    };
+    if d.records.iter().any(|r| r.isa == ISA_PPC) { return ppc_record(&d).map(Routine::PowerPc); }
+    if d.records.len() > 2 || d.flags & 1 != 0 {
+        return Err(MixedModeError::NoRunnableRecord { at: d.at, why: format!("a selector-dispatched descriptor ({} records, flags {:#x}) is not resolved yet", d.records.len(), d.flags) });
+    }
+    let Some(r) = d.records.iter().find(|r| r.isa & 0x0F == ISA_M68K) else {
+        return Err(MixedModeError::NoRunnableRecord { at: d.at, why: format!("no record of a known ISA (ISA bytes {:?})", d.records.iter().map(|r| r.isa).collect::<Vec<_>>()) });
+    };
+    if r.isa & ISA_RTA_MASK != 0 {
+        return Err(MixedModeError::NoRunnableRecord { at: d.at, why: format!("a 68k record of run-time architecture {:#x} (CFM-68K) is not provided", r.isa & ISA_RTA_MASK) });
+    }
+    if r.flags & PROC_DESCRIPTOR_IS_RELATIVE != 0 {
+        return Err(MixedModeError::NoRunnableRecord { at: d.at, why: format!("a relative 68k record (routineFlags {:#x}) is not resolved yet", r.flags) });
+    }
+    if r.proc_descriptor == 0 { return Err(MixedModeError::NoRunnableRecord { at: d.at, why: String::from("a 68k record with a NIL procedure") }); }
+    Ok(Routine::M68k { code: r.proc_descriptor, proc_info: Some(r.proc_info) })
 }
 
 fn write_record(mem: &mut GuestMem, at: u32, r: &Record) -> Result<(), MixedModeError> {

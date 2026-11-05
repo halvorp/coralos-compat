@@ -19,7 +19,7 @@ use heirloom_mac68k_engine::osconv::Regs;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PbCall { kind: Kind, hfs: bool, async_call: bool }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind { Trap(u8), Selector(u16), NoAccessControl }
+enum Kind { Trap(u8), Selector(u16), NoAccessControl, OpenDeny { rsrc: bool } }
 
 /// (C name without `PB`/`H`/`Sync`/`Async`, trap name): the plain traps. The `H` prefix selects the HFS form of the same trap.
 const TRAPS: &[(&str, &str)] = &[
@@ -40,6 +40,10 @@ impl PbCall {
         // (PBHGetVolParms reports vMAttrib 0: bAccessCntl clear, which a program is meant to test): paramErr on a volume that exists, nsvErr else
         if let Some(rest) = name.strip_prefix("PBH").and_then(|r| r.strip_suffix("Sync").map(|c| (c, false)).or_else(|| r.strip_suffix("Async").map(|c| (c, true)))) {
             if matches!(rest.0, "GetDirAccess" | "SetDirAccess") { return Some(PbCall { kind: Kind::NoAccessControl, hfs: true, async_call: rest.1 }); }
+        }
+        // PBHOpenDeny / PBHOpenRFDeny (_HFSDispatch $38 / $39): the HFS Open / OpenRF with the access the block's ioDenyModes asks for
+        if let Some((rest, async_call)) = name.strip_prefix("PBH").and_then(|r| r.strip_suffix("Sync").map(|c| (c, false)).or_else(|| r.strip_suffix("Async").map(|c| (c, true)))) {
+            if rest == "OpenDeny" || rest == "OpenRFDeny" { return Some(PbCall { kind: Kind::OpenDeny { rsrc: rest == "OpenRFDeny" }, hfs: true, async_call }); }
         }
         let rest = name.strip_prefix("PB")?;
         let (core, async_call) = match (rest.strip_suffix("Sync"), rest.strip_suffix("Async")) { (Some(c), _) => (c, false), (_, Some(c)) => (c, true), _ => return None };
@@ -82,6 +86,19 @@ impl<U: GuestUi> MacPpc<U> {
                 let op = base | if c.hfs { 0x0200 } else { 0 } | if c.async_call { 0x0400 } else { 0 };
                 let (regs, _) = self.mac.os_call_regs(Regs { opcode: op, d0: 0, a0: pb, d1: 0, a1: 0 }).map_err(|e| format!("{}: {e}", TRAPS[i as usize].0))?;
                 Ok(regs.d0 as u16 as i16)
+            }
+            // ioDenyModes (26, a word over HIOParam's ioVersNum / ioPermssn): its access bits (dmRd 1, dmWr 2) are the open's permission (0 =
+            // fsCurPerm); its deny bits (dmNoneDenyRd 0x10, dmNoneDenyWr 0x20) are NOT enforced against other openers (one program opens these
+            // local volumes' files at a time here: named). The word is put back after the open.
+            Kind::OpenDeny { rsrc } => {
+                let at = pb.wrapping_add(26);
+                let modes = self.mac.mem.read_u16(at).map_err(|_| format!("PBHOpenDeny: the block {pb:#x} leaves guest RAM"))?;
+                let _ = self.mac.mem.write_u16(at, modes & 3);
+                let i = TRAPS.iter().position(|(n, _)| *n == if rsrc { "OpenRF" } else { "Open" }).expect("in the table") as u8;
+                let r = self.pb_run(PbCall { kind: Kind::Trap(i), hfs: true, async_call: c.async_call }, pb);
+                let _ = self.mac.mem.write_u16(at, modes);
+                self.mac.log.push(format!("[file] PBHOpen{}Deny ioDenyModes {modes:#x} -> {r:?} (deny bits not enforced: one opener)", if rsrc { "RF" } else { "" }));
+                r
             }
             Kind::NoAccessControl => {
                 let vref = self.mac.mem.read_u16(pb.wrapping_add(heirloom_mac68k_engine::fm::pb::IO_VREF_NUM)).map_err(|_| format!("PBHGet/SetDirAccess: the block {pb:#x} leaves guest RAM"))? as i16;

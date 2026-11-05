@@ -1,10 +1,14 @@
 //! `CallUniversalProc(upp, procInfo, ...)` (Mixed Mode, InterfaceLib; Inside Macintosh: PowerPC System Software 2-31): call the routine
-//! a UPP names with the arguments `procInfo` describes. Served by the run loop through the ONE callback machine ([`crate::callback`]):
-//! * a PowerPC routine descriptor, or a plain TVector -> the program's own code runs; its r3 comes back as the result;
+//! a UPP names with the arguments `procInfo` describes. Served by the run loop through the ONE callback machine ([`crate::callback`]).
+//! Which routine, by Mixed Mode's rule ([`heirloom_mac68k_engine::mixed_mode::resolve`]: a routine descriptor names its records' ISAs;
+//! any other pointer is a 68k ProcPtr):
+//! * a PowerPC record -> the program's own PowerPC code runs; its r3 comes back as the result;
 //! * a 68k TRAP's stub (the address `GetTrapAddress` gave, heirloom-mac68k-engine `traptable::in_stub`) whose trap the engine serves BY
 //!   VALUE -> the same body the 68k trap runs (today `_CursorDeviceDispatch` $AADB, D0-dispatched Pascal: Warcraft III's CursorDeviceLib);
-//! * anything else (other 68k code, the `_Unimplemented` stub, NIL) -> refused BY NAME: running arbitrary 68k code from a PowerPC call
-//!   is not provided here, and a real Mac calling `_Unimplemented` stops with a system error.
+//!   the `_Unimplemented` stub -> refused by name (a real Mac calling it stops with a system error);
+//! * any other 68k code (a 68k record, a plain ProcPtr, another trap's stub) -> runs on the 68k CPU ([`crate::xisa`]), marshalled by
+//!   `procInfo` (stack-based Pascal or C; other conventions are named refusals);
+//! * NIL -> refused by name.
 //! `procInfo`: bits 0-3 the calling convention, 4-5 the result size; for a D0-dispatched convention bits 6-7 the selector size and
 //! the parameters from bit 8, two bits each (Universal Interfaces MixedMode.h).
 use crate::callback::{Continuation, Frame, Saved};
@@ -18,6 +22,8 @@ use heirloom_ui_abi::GuestUi;
 
 /// kD0DispatchedPascalStackBased.
 const D0_DISPATCHED_PASCAL: u32 = 8;
+/// `_Unimplemented` (the stub every unimplemented trap's address is).
+const UNIMPLEMENTED_TRAP: u16 = 0xA89F;
 /// `_CursorDeviceDispatch`.
 const CURSOR_DEVICE_DISPATCH: u16 = 0xAADB;
 
@@ -41,19 +47,31 @@ impl<U: GuestUi> MacPpc<U> {
                 cpu.gpr[3] = e as i32 as u32;
                 return Ok(());
             }
-            let why = format!("[HEIRLOOM-MACPPC CallUniversalProc REFUSED trap={word:#06x} procInfo={info:#x}] the 68k trap behind {upp:#x} is not served by value from PowerPC");
-            self.mac.refused.push(why.clone());
-            return Err(why);
+            if word == UNIMPLEMENTED_TRAP {
+                let why = format!("[HEIRLOOM-MACPPC CallUniversalProc REFUSED trap={word:#06x} procInfo={info:#x}] the stub behind {upp:#x} is _Unimplemented (a real Mac stops with a system error)");
+                self.mac.refused.push(why.clone());
+                return Err(why);
+            }
+            // any other trap's stub is 68k code: it runs on the 68k CPU below, its trap served by the Toolbox like a 68k program's
         }
-        // the program's own PowerPC code: a routine descriptor, or (CarbonLib) a plain TVector
-        let n = param_count(info, if matches!(conv, 8 | 9 | 12) { 8 } else { 6 }).min(8);
-        let args: Vec<u32> = cpu.gpr[5..5 + n].to_vec();
-        let res = match (info >> 4) & 3 { 0 => Result_::None, 1 => Result_::Boolean, _ => Result_::Status };
-        let frame = Frame { saved: Saved::of(cpu, cpu.lr & !3), cont: Continuation::Invoke(res) };
-        let sp = cpu.gpr[1];
-        let r = if heirloom_mac68k_engine::mixed_mode::parse(&self.mac.mem, upp).is_ok() { self.enter_upp(cpu, upp, &args, sp) } else { self.enter_tvector(cpu, upp, &args, sp) };
-        r.map_err(|e| { let why = format!("[HEIRLOOM-MACPPC CallUniversalProc REFUSED upp={upp:#x}] {e}"); self.mac.refused.push(why.clone()); why })?;
-        self.rt.callbacks.push(frame);
+        let refuse = |m: &mut Self, e: String| { let why = format!("[HEIRLOOM-MACPPC CallUniversalProc REFUSED upp={upp:#x}] {e}"); m.mac.refused.push(why.clone()); why };
+        let routine = heirloom_mac68k_engine::mixed_mode::resolve(&self.mac.mem, upp).map_err(|e| refuse(self, format!("{e}")))?;
+        let n = param_count(info, if matches!(conv, 8 | 9 | 12) { 8 } else { 6 });
+        let args = crate::xisa::universal_args(&self.mac.mem, cpu, n).map_err(|e| refuse(self, e))?;
+        match routine {
+            heirloom_mac68k_engine::mixed_mode::Routine::PowerPc(record) => {
+                if n > 8 { return Err(refuse(self, format!("a PowerPC routine with {n} parameters (more than r3..r10) is not entered yet"))); }
+                let res = match (info >> 4) & 3 { 0 => Result_::None, 1 => Result_::Boolean, _ => Result_::Status };
+                let frame = Frame { saved: Saved::of(cpu, cpu.lr & !3), cont: Continuation::Invoke(res) };
+                let sp = cpu.gpr[1];
+                self.enter_tvector(cpu, record.proc_descriptor, &args, sp).map_err(|e| refuse(self, e))?;
+                self.rt.callbacks.push(frame);
+            }
+            // the caller's procInfo describes the call (Mixed Mode marshals by it, not by the record's)
+            heirloom_mac68k_engine::mixed_mode::Routine::M68k { code, .. } => {
+                self.enter_68k(cpu, code, info, &args).map_err(|e| refuse(self, format!("68k code at {code:#x}: {e}")))?;
+            }
+        }
         Ok(())
     }
 }

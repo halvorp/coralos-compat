@@ -6,6 +6,7 @@ use crate::machine::{Call, Done, Mac};
 use crate::pascal::Arg;
 use crate::Refusal;
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::GuestUi;
 use crate::cpu::Cpu;
@@ -13,7 +14,24 @@ use crate::cpu::Cpu;
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA9E0, &[Arg::P, Arg::L, Arg::P, Arg::L, Arg::P, Arg::L], Some(Arg::L), munger::<U>)?;
     m.register(0xA8CF, &[Arg::P, Arg::P, Arg::W], None, pack_bits::<U>)?;
-    m.register(0xA8D0, &[Arg::P, Arg::P, Arg::W], None, unpack_bits::<U>)
+    m.register(0xA8D0, &[Arg::P, Arg::P, Arg::W], None, unpack_bits::<U>)?;
+    m.register(0xA866, &[Arg::P, Arg::P], None, stuff_hex::<U>)
+}
+
+/// `StuffHex(thingPtr, s)` (Inside Macintosh I-465): the hexadecimal digits of the Pascal string `s`, two per byte, stored from
+/// `thingPtr`. No checking is done, as on the Mac: an odd final digit is stored as the high half of a byte whose low half is kept; a
+/// character that is not a hex digit is a named refusal (nothing is stored) rather than the Mac's garbage nibble.
+fn stuff_hex<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (dst, s) = (c.args.get(0), c.args.get(1));
+    let s = crate::pascal::read_pstring_bytes(&m.mem, s)?;
+    let digits: Vec<u8> = s.iter().map(|&ch| (ch as char).to_digit(16).map(|d| d as u8)).collect::<Option<Vec<u8>>>()
+        .ok_or_else(|| Refusal(format!("StuffHex: {:?} is not hexadecimal", String::from_utf8_lossy(&s))))?;
+    for (i, pair) in digits.chunks(2).enumerate() {
+        let at = dst.wrapping_add(i as u32);
+        let b = if pair.len() == 2 { pair[0] << 4 | pair[1] } else { pair[0] << 4 | (m.mem.read_u8(at).map_err(Refusal::mem("StuffHex"))? & 0x0F) };
+        m.mem.write_u8(at, b).map_err(Refusal::mem("StuffHex"))?;
+    }
+    Ok(Done { result: 0, log: format!("[toolutil] StuffHex {dst:#x}: {} byte(s)", digits.len().div_ceil(2)) })
 }
 
 /// The Munger algorithm over plain bytes: returns the new contents and the function result. `pat` is `ptr1`/`len1`, `rep`

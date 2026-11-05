@@ -22,6 +22,8 @@ pub enum TbFn {
     /// `GetParamText(param0..param3)`: `ParamText`'s four strings copied out (a NIL pointer skips one). `LMGetCurApName()`: the address of the
     /// CurApName low-memory Str31 (a StringPtr, not a value: the launch writes the application's name there).
     GetParamText, CurApName,
+    /// The Resource Manager's map globals from its own state (heirloom-mac68k-engine resmgr): `LMGetTopMapHndl` / `LMSetTopMapHndl`, `LMGetCurMap` / `LMSetCurMap`.
+    TopMapGet, TopMapSet, CurMapGet, CurMapSet,
     /// `GetIntlResource(theID)`: the 68k `IUGetIntl` (_Pack6 selector 6) body; an ID it does not provide is NIL, named in `refused`.
     GetIntlResource,
     /// `LMGetBootDrive()`: BootDrive, the working-directory reference number of the boot volume's System Folder (Inside Macintosh: Files;
@@ -85,7 +87,7 @@ impl TbFn {
             "FindFolder" => FindFolder, "SetEventMask" => SetEventMask, "GetDateTime" => GetDateTime, "GetDblTime" => GetDblTime, "GetCaretTime" => GetCaretTime, "Microseconds" => Microseconds, "UpTime" => UpTime,
             "AbsoluteToNanoseconds" => AbsoluteToNanoseconds,
             "TEToScrap" => TEToScrap, "TEFromScrap" => TEFromScrap, "UpperString" => UpperString, "GetGrayRgn" => GetGrayRgn,
-            "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
+            "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "LMGetTopMapHndl" => TopMapGet, "LMSetTopMapHndl" => TopMapSet, "LMGetCurMap" => CurMapGet, "LMSetCurMap" => CurMapSet, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
             "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString,
             "NavLibraryVersion" => NavLibraryVersion, "NavServicesCanRun" | "NavServicesAvailable" => NavServicesCanRun,
             // GetMBarHeight() / GetSysFont() are the Universal Interfaces' readers of MBarHeight and SysFontFam (Menus.h, Fonts.h)
@@ -210,6 +212,10 @@ impl<U: GuestUi> MacPpc<U> {
                 self.mac.log.push(format!("[pack6] {name} {a0} -> \"{text}\"{}", if a3 != 0 { " (the intl handle is not consulted)" } else { "" }));
                 0
             }
+            TopMapGet => self.mac.top_map_handle().map_err(|e| format!("{name}: {}", e.0))?,
+            TopMapSet => { if let Err(e) = self.mac.set_top_map_handle(a0) { self.mac.note_refusal(&name, e.0); } 0 }
+            CurMapGet => self.mac.rm.cur as u16 as u32,
+            CurMapSet => { if let Err(e) = self.mac.set_cur_map(a0 as u16 as i16) { self.mac.note_refusal(&name, e.0); } 0 }
             BootDrive => self.mac.fm.system_folder_wd().map_err(|e| format!("{name}: the boot volume's System Folder (OSErr {e})"))? as u16 as u32,
             GetIntlResource => match heirloom_mac68k_engine::intl::intl_resource(&mut self.mac, a0 as u16 as i16) {
                 Ok((h, log)) => { self.mac.log.push(log); h }

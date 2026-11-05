@@ -92,8 +92,8 @@ impl<U: GuestUi> Mac<U> {
 
     pub(crate) fn open_native(&mut self, win: u32) -> Result<(), Refusal> {
         let w = self.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?;
-        let (r, proc_id) = (w.rect, w.proc_id);
-        let role = self.window_role(proc_id)?;
+        let (r, proc_id, def_role) = (w.rect, w.proc_id, w.def_role);
+        let role = match def_role { Some(r) => r, None => self.window_role(proc_id)? };
         let w = self.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?;
         let model = WindowModel {
             title: w.title.clone(),
@@ -115,8 +115,19 @@ impl<U: GuestUi> Mac<U> {
     pub fn make_window(&mut self, s: WindowSpec) -> Result<u32, Refusal> { self.make_window_as(s, false) }
 
     /// [`Mac::make_window`], with a colour window's CGrafPort (8-bit canvas) when `color` and the machine has Color QuickDraw.
-    pub fn make_window_as(&mut self, s: WindowSpec, color: bool) -> Result<u32, Refusal> {
-        self.window_role(s.proc_id)?; // before anything is allocated or shown
+    pub fn make_window_as(&mut self, s: WindowSpec, color: bool) -> Result<u32, Refusal> { self.make_window_with(s, color, None) }
+
+    /// A window whose program-supplied definition an explicit binding names (`def_role`: the role and resizability the binding gives):
+    /// the WindowRecord, its port and its region handles are made exactly as for a system definition, but nothing is shown and its
+    /// strucRgn / contRgn start EMPTY - the caller runs the definition's wNew and wCalcRgns, which write them (heirloom-macppc-engine
+    /// `wdef_c`).
+    pub fn make_window_bound(&mut self, s: WindowSpec, def_role: (WindowRole, bool)) -> Result<u32, Refusal> {
+        if s.visible { return Err(Refusal(String::from("a definition-bound window is made invisible: its definition runs before it is shown"))); }
+        self.make_window_with(s, false, Some(def_role)) // as `make_window` (CreateNewWindow's port)
+    }
+
+    fn make_window_with(&mut self, s: WindowSpec, color: bool, def_role: Option<(WindowRole, bool)>) -> Result<u32, Refusal> {
+        if def_role.is_none() { self.window_role(s.proc_id)?; } // before anything is allocated or shown
         let color = color && self.profile.color_qd;
         let r = s.rect;
         let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
@@ -146,7 +157,7 @@ impl<U: GuestUi> Mac<U> {
         let undo = |m: &mut Self| if owned { let _ = m.mm.dispose_ptr(&mut m.heap, win); };
         if let Err(e) = fill { undo(self); return Err(e); }
         let title = s.title.clone();
-        self.windows.insert(win, MacWindow { native: None, owned, rect: r, title: s.title, go_away: s.go_away, visible: s.visible, proc_id: s.proc_id, color });
+        self.windows.insert(win, MacWindow { native: None, owned, rect: r, title: s.title, go_away: s.go_away, visible: s.visible, proc_id: s.proc_id, color, def_role });
         // behind: -1 = in front of all, 0 = behind all, else behind that window
         let at = match s.behind { 0xFFFF_FFFF => 0, 0 => self.z.len(), b => self.z.iter().position(|&z| z == b).map_or(0, |i| i + 1) };
         self.z.insert(at, win);

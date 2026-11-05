@@ -34,6 +34,17 @@ impl<U: GuestUi> Mac<U> {
     /// Rewrite `strucRgn`, `contRgn` and `updateRgn` of `win` from its rectangle and its update region.
     pub fn sync_window_regions(&mut self, win: u32) -> Result<(), Refusal> {
         let Some(w) = self.windows.get(&win) else { return Ok(()) };
+        if w.def_role.is_some() {
+            let (x0, y0) = (i32::from(w.rect.left), i32::from(w.rect.top));
+            // the program's own (bound) definition computes strucRgn and contRgn (wCalcRgns): never overwritten here; they start empty
+            for off in [WR_STRUC_RGN, WR_CONT_RGN] {
+                let h = self.mem.read_u32(win.wrapping_add(off)).map_err(Refusal::mem("WindowRecord"))?;
+                if h == 0 || self.mm.block(h).is_none() { self.put_window_region(win, off, &Region::default())?; }
+            }
+            let mut upd = self.qd.update.get(&win).cloned().unwrap_or_default();
+            upd.translate(x0, y0);
+            return self.put_window_region(win, WR_UPDATE_RGN, &upd);
+        }
         let r = Rect::new(i32::from(w.rect.left), i32::from(w.rect.top), i32::from(w.rect.right), i32::from(w.rect.bottom));
         let top = if titled(self, w.proc_id)? { TITLE_BAR + 1 } else { 1 };
         let struc = Region::from_rect(Rect::new(r.x0 - 1, r.y0 - top, r.x1 + 1, r.y1 + 1));

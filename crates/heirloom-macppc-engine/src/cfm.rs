@@ -195,6 +195,11 @@ impl<U: GuestUi> MacPpc<U> {
             .filter_map(|(i, s)| bases[i].map(|b| (i, matches!(s.kind, heirloom_fmt_pef::SectionKind::Code | heirloom_fmt_pef::SectionKind::ExecutableData), b, s.total_size)))
             .collect();
         let entries: Vec<u32> = [main, init, term].iter().flatten().map(|t| t.code).chain(exports.iter().map(|e| e.1)).collect();
+        // what each code section IS (window-definition bindings are keyed by it, wdef_c.rs): its length and the digest of the bytes the
+        // container shipped (before relocation, so the same build has the same digest wherever it is placed)
+        for &(i, is_code, base, size) in &secs {
+            if is_code { self.wdef.code.push(crate::wdef_c::CodeSection { fragment: name.into(), base, len: size, fnv1a64: heirloom_bind::wdef::fnv1a64(&pef.section_image(i)?) }); }
+        }
         let mem = &self.mac.mem;
         self.code_map.add(name, &secs, &|a| mem.read_u32(a).ok(), &entries);
         Ok(Fragment { name: name.into(), section_bases: bases, imports: resolved, main, init, term, exports })
@@ -208,6 +213,12 @@ impl<U: GuestUi> MacPpc<U> {
         let r1 = (stack + STACK_SIZE - 64) & !0xF;
         self.mac.mem.write_u32(r1, 0).map_err(mem_err("the stack back chain"))?;
         self.bindings.entry("ExitToShell".into()).or_insert(Binding::Native(crate::symbols::Native::Exit));
+        // the application's A5 world (the Process Manager gives every process one; a PowerPC application's is minimal): InitGraf stores the
+        // QuickDraw globals' address at 0(A5), and 68k code it calls through Mixed Mode runs with it
+        if self.mac.mem.read_u32(heirloom_mac68k_engine::lowmem::CURRENT_A5).unwrap_or(0) == 0 {
+            let a5 = self.mac.new_a5_world().map_err(|_| CfmError::NoMemory { what: "the A5 world", bytes: 64 })?;
+            self.mac.mem.write_u32(heirloom_mac68k_engine::lowmem::CURRENT_A5, a5).map_err(mem_err("CurrentA5"))?;
+        }
         let id = self.glue.intern(&mut self.mac, "InterfaceLib", "ExitToShell")?;
         let lr = self.glue.entry(id).map_or(0, |e| e.stub);
         Ok(StartState { pc: main.code, r1, r2: main.toc, lr })

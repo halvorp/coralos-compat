@@ -77,6 +77,7 @@ pub mod winregions;
 pub mod wdef_binding;
 pub mod traptable;
 pub mod mixed_mode;
+pub mod procinfo; // Mixed Mode calling conventions, 68k side (a frame for a 68k routine called from PowerPC)
 pub mod vbl;
 pub mod translate;
 pub mod trap_names;

@@ -93,6 +93,8 @@ pub struct Runtime {
     pub(crate) fault: Option<String>,
     /// Callbacks into the program in progress, innermost last (`crate::callback`).
     pub(crate) callbacks: alloc::vec::Vec<crate::callback::Frame>,
+    /// A 68k routine called from PowerPC, while it runs ([`crate::xisa`]).
+    pub(crate) xisa: crate::xisa::Xisa,
 }
 
 fn idle() -> RunStats { RunStats { insns: 0, halted: false, blocked: true, trap: None } }
@@ -174,11 +176,17 @@ impl<U: GuestUi> MacPpc<U> {
         let gone = RunStats { halted: true, blocked: false, ..idle() };
         if let Some(f) = &self.rt.fault { return (Step::Fault(f.clone()), gone); }
         let Some(mut cpu) = self.rt.cpu.take() else { return (Step::Exited, gone) };
+        // a 68k routine called from PowerPC runs: the 68k CPU has the step (xisa.rs); the PowerPC one waits on its call
+        if self.m68k_running() {
+            let r = self.step_68k(&mut cpu, budget);
+            self.rt.cpu = Some(cpu);
+            return r;
+        }
         if let Some(mask) = self.rt.wait_mask {
             self.mac.pump_ui();
             let timed_out = self.rt.wait_deadline.is_some_and(|d| self.mac.ev.ticks.wrapping_sub(d) < 0x8000_0000);
             // a Time Manager task that is due wakes the parked call too: the retried call is the safepoint that runs it
-            let timer_due = self.tm_next_wake().is_some_and(|w| w <= self.mac.ev.ticks_total);
+            let timer_due = self.tm_next_wake().is_some_and(|w| w <= self.mac.ev.ticks_total) || self.mac.vbl_due();
             // a dialog item the user hit (a native control's intent) with no ModalDialog to collect it: a CONTROL's hit becomes the click it
             // stands for (a mouseDown the program's own FindControl / TrackControl, or DialogSelect, turns back into the item: Installer
             // VISE's splash); any other hit wakes the call with a null event, which a modeless loop hands DialogSelect (IsDialogEvent takes a
@@ -238,6 +246,7 @@ impl<U: GuestUi> MacPpc<U> {
             self.rt.fault = Some(why);
         }
         let step = if let Some(f) = &self.rt.fault { Step::Fault(f.clone()) }
+            else if self.m68k_running() { Step::BudgetSpent } // the PowerPC CPU stopped to let a 68k routine run: no wait
             else if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked } else { Step::BudgetSpent };
         if step != Step::Exited { self.rt.cpu = Some(cpu); }
         (step, stats)
@@ -395,6 +404,11 @@ impl<U: GuestUi> MacPpc<U> {
                 Ok(false) => {}
                 Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
             }
+            match self.vbl_safepoint(cpu, addr) {
+                Ok(true) => { self.sync_natives(cpu); return true; }
+                Ok(false) => {}
+                Err(why) => { self.mac.log.push(why.clone()); self.rt.fault = Some(why); cpu.halt(); return true; }
+            }
             match self.tm_safepoint(cpu, addr) {
                 Ok(true) => { self.sync_natives(cpu); return true; }
                 Ok(false) => {}
@@ -495,6 +509,16 @@ impl<U: GuestUi> MacPpc<U> {
             }
             _ => None,
         };
+        // a Window Manager call on a window whose definition a binding admitted: the definition is sent its message first (wdef_c.rs)
+        if let Some(Binding::Pascal(_)) = binding {
+            if matches!(symbol, "FindWindow" | "ShowWindow" | "SelectWindow" | "MoveWindow" | "SizeWindow" | "DisposeWindow") {
+                match self.window_def_call(cpu, symbol) {
+                    Ok(true) => { self.sync_natives(cpu); return true; }
+                    Ok(false) => {}
+                    Err(why) => { self.mac.log.push(why.clone()); self.rt.fault = Some(why); cpu.halt(); return true; }
+                }
+            }
+        }
         if let Some(draw_of) = draw_of {
             match self.begin_user_items(cpu, addr, draw_of) {
                 Ok(true) => { self.sync_natives(cpu); return true; }

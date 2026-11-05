@@ -192,3 +192,31 @@ wDraw), in-memory PEF preparation through the one CFM loader (WDEF 129), and nat
 * Libraries: `glue::TOOLBOX_LIBRARIES` (InterfaceLib, CarbonLib, AppearanceLib, ControlsLib, DialogsLib, MenusLib, WindowsLib, NavigationLib) resolve through the one Toolbox name
   table; a symbol of any other library is recorded Unbound under its glue key, so CALLING it refuses `NEXT-NEEDED Lib::sym: library Lib is not provided by the engine`.
   The plan for a full Mac OS 9 game is `docs/consults/2026-10-24-macppc-full-app-gap-map.md`.
+
+## Cross-ISA calls and window-definition bindings (2026-11-05, ps7 part 3)
+
+**PowerPC -> 68k (`xisa.rs`, heirloom-mac68k-engine `procinfo.rs`).** Which ISA a UPP names is Mixed Mode's own rule
+(`mixed_mode::resolve`): a routine descriptor's records (the caller's ISA first: a fat descriptor makes no switch), ANY other
+pointer a 68k ProcPtr. `CallUniversalProc` of 68k code (a 68k record, a plain ProcPtr, a trap stub other than `_Unimplemented`
+and the by-value `_CursorDeviceDispatch`) runs on the machine's 68k CPU (heirloom-mac68k-engine `cpu`: cpu-68k.library in the
+product, which macppc.engine opens beside cpu-ppc.library and binds through os-mac.library's 68k family) through the one callback
+machine: `Continuation::M68k`, the frame built from the CALLER's procInfo (Pascal: result space, parameters left to right, a byte
+in the high half of its word, callee pops; C: right to left, caller pops, D0), return address `CROSS_ISA_RETURN` ($518, an
+`ILLEGAL` honoured only while such a call runs), A5 = CurrentA5 (every process has an A5 world now, a PowerPC one too), the stack
+1 KB below the caller's r1. The run loop steps the 68k CPU while it runs; A7 is checked against the convention at the return
+(XISA-68K-STACK). Named, not built: register-based / dispatched conventions, a 68k routine that waits for an event
+(XISA-68K-BLOCKED), PowerPC nested inside it (`_MixedModeMagic` is an unimplemented trap there: XISA-68K-STOPPED), bus faults.
+Witness: Photoshop 7.0's `MOVE.L A5,4(A7); RTS` routine (its "Scroller" code) returns its A5. `Invoke<Name>UPP` still reads a
+plain pointer as a TVector (CarbonLib on Mac OS X does; on 9.2.1 it would be 68k code): to be ruled with the first program that
+shows which it relies on.
+
+**Window definitions (`wdef_c.rs`, heirloom-bind `wdef.rs`, `bindings/macppc/*.sexp`).** `CreateCustomWindow` with a
+`kWindowDefProcPtr` spec is refused by name ([WDEF-UNSUPPORTED], with the definition's identity) unless binding DATA names that
+exact definition: the code section's length + FNV-1a 64 digest as shipped + the routine's offset. A bound window is made with the
+binding's native role and its definition RUNS through the callback machine with the Window Manager port current: GetFeatures,
+Initialize, CalculateShape, GetRegion (structure, content: into the record's own handles, never recomputed by the engine) at
+creation; Draw before ShowWindow / SelectWindow; CalculateShape + GetRegion after MoveWindow / SizeWindow; HitTest from
+FindWindow (front to back, only inside the definition's structure region, the answer mapped by the Window Manager's table);
+CleanUp before DisposeWindow. The frame the definition draws is not presented (the native frame is), counted per window. First
+binding: `privilege-drmpa-4.7.1.44.sexp` (the Aladdin Privilege dialog library's plain bordered box). The host reading
+`System/Heirloom/Bindings/macppc/` is not built yet (coralos); the harness reads the same files (tests/wdef_bindings).

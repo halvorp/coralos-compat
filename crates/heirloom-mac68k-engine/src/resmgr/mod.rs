@@ -41,6 +41,8 @@ pub struct ResFile {
     loaded: BTreeMap<usize, u32>,
     /// The resource map has changes the file does not hold yet (`mapChanged`): `UpdateResFile` / `CloseResFile` write the file.
     dirty: bool,
+    /// The guest handle that stands for this file's resource map (`TopMapHndl` / `LMGetTopMapHndl` answer it), made on first ask.
+    pub map_handle: u32,
 }
 
 #[derive(Default)]
@@ -49,6 +51,8 @@ pub struct ResMgr {
     pub files: Vec<ResFile>,
     /// CurResFile.
     pub cur: i16,
+    /// `TopMapHndl` as the program last set it (`LMSetTopMapHndl`), while that map's file stays open; None = the chain's real top.
+    pub top_set: Option<u32>,
     /// Handle -> (refNum, entry index) for every live resource handle.
     by_handle: BTreeMap<u32, (i16, usize)>,
 }
@@ -63,14 +67,14 @@ impl ResMgr {
         true
     }
     pub fn open_fork(&mut self, ref_num: i16, fork: ResFork) {
-        self.files.push(ResFile { ref_num, fork, loaded: BTreeMap::new(), dirty: false });
+        self.files.push(ResFile { ref_num, fork, loaded: BTreeMap::new(), dirty: false, map_handle: 0 });
         self.cur = ref_num;
     }
     /// The System file's resources (reference number 0): searched AFTER every other open file, so an application's own
     /// resource of the same type and ID wins. This is where the shared `'dcmp'` set comes from.
     pub fn add_system(&mut self, fork: ResFork) {
         self.files.retain(|f| f.ref_num != SYSTEM_REF_NUM);
-        self.files.insert(0, ResFile { ref_num: SYSTEM_REF_NUM, fork, loaded: BTreeMap::new(), dirty: false });
+        self.files.insert(0, ResFile { ref_num: SYSTEM_REF_NUM, fork, loaded: BTreeMap::new(), dirty: false, map_handle: 0 });
     }
     pub(crate) fn file(&self, ref_num: i16) -> Option<&ResFile> { self.files.iter().find(|f| f.ref_num == ref_num) }
     /// The files a plain `Get*` searches: the current one, then the older ones. `only_cur` limits it to the current one.
@@ -86,6 +90,51 @@ impl ResMgr {
         }
     }
     pub fn is_resource(&self, h: u32) -> bool { self.by_handle.contains_key(&h) }
+}
+
+/// The resource map header fields a map handle carries (Inside Macintosh: More Macintosh Toolbox 1-122, the resource map): the next
+/// (older) map's handle at 16, the file's reference number at 20, the map attributes at 22. The type and name lists that follow
+/// in a real map are NOT materialised (the maps live in the engine): a program that walks them is a named gap.
+const MAP_NEXT: u32 = 16;
+const MAP_REF_NUM: u32 = 20;
+const MAP_LEN: u32 = 28;
+
+impl<U: GuestUi> Mac<U> {
+    /// The handle standing for file `rn`'s resource map (made on first ask, its header fields written).
+    pub fn res_map_handle(&mut self, rn: i16) -> Result<u32, Refusal> {
+        let i = self.rm.files.iter().position(|f| f.ref_num == rn).ok_or_else(|| Refusal(format!("refNum {rn} is not an open resource file")))?;
+        if self.rm.files[i].map_handle == 0 {
+            let h = self.mm.new_handle(&mut self.mem, &mut self.heap, MAP_LEN, true).map_err(|e| Refusal(format!("no memory for a map handle (memory error {e})")))?;
+            self.rm.files[i].map_handle = h;
+        }
+        let h = self.rm.files[i].map_handle;
+        let next = if i > 0 { self.res_map_handle(self.rm.files[i - 1].ref_num)? } else { 0 };
+        let p = self.mem.read_u32(h).map_err(Refusal::mem("map handle"))?;
+        self.mem.write_u32(p + MAP_NEXT, next).and_then(|_| self.mem.write_u16(p + MAP_REF_NUM, rn as u16)).map_err(Refusal::mem("map handle"))?;
+        Ok(h)
+    }
+
+    /// `TopMapHndl`: what the program last set while that file is open, else the newest open file's map.
+    pub fn top_map_handle(&mut self) -> Result<u32, Refusal> {
+        if let Some(h) = self.rm.top_set { if self.rm.files.iter().any(|f| f.map_handle == h) { return Ok(h); } }
+        self.rm.top_set = None;
+        match self.rm.files.last().map(|f| f.ref_num) { Some(rn) => self.res_map_handle(rn), None => Ok(0) }
+    }
+
+    /// `LMSetTopMapHndl(h)`: a map handle of an open file is recorded (searches still start at CurMap and walk older maps, as the Resource
+    /// Manager's do); anything else is a named refusal and changes nothing.
+    pub fn set_top_map_handle(&mut self, h: u32) -> Result<(), Refusal> {
+        if !self.rm.files.iter().any(|f| f.map_handle == h && h != 0) { return Err(Refusal(format!("LMSetTopMapHndl({h:#x}): not the map handle of an open resource file"))); }
+        self.rm.top_set = Some(h);
+        Ok(())
+    }
+
+    /// `LMSetCurMap(rn)`: CurMap = an open file's refNum (as `UseResFile`, without its ResErr); another is a named refusal.
+    pub fn set_cur_map(&mut self, rn: i16) -> Result<(), Refusal> {
+        if !self.rm.files.iter().any(|f| f.ref_num == rn) { return Err(Refusal(format!("LMSetCurMap({rn}): not an open resource file"))); }
+        self.rm.cur = rn;
+        Ok(())
+    }
 }
 
 impl<U: GuestUi> Mac<U> {
