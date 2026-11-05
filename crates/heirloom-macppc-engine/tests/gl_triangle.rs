@@ -751,6 +751,8 @@ fn wc3_host_run_with_a_gl_worker() {
             eprintln!("ARENA-TAGS len={} -> {path}", tags.len());
             let words: Vec<u8> = e.jit_arena_words().iter().flat_map(|&(o, w, pc)| [(o as u32).to_le_bytes(), w.to_le_bytes(), pc.to_le_bytes()]).flatten().collect();
             std::fs::write(format!("{path}.words"), words).expect("WC3_ARENA_TAGS words");
+            let units: Vec<u8> = e.jit_arena_units().iter().flat_map(|&(o, l, pc, k)| [(o as u32).to_le_bytes(), l.to_le_bytes(), pc.to_le_bytes(), (k as u32).to_le_bytes()]).flatten().collect();
+            std::fs::write(format!("{path}.units"), units).expect("WC3_ARENA_TAGS units");
         }
         if churn_on {
             let (counts, log, drops, regions) = e.jit_churn();

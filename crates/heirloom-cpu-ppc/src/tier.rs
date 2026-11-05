@@ -164,6 +164,10 @@ impl Exec {
     #[cfg(target_arch = "x86_64")]
     #[doc(hidden)]
     pub fn jit_arena_words(&self) -> &[(u64, u32, u32)] { self.jit.as_ref().map_or(&[], |j| &j.tag_words) }
+    /// With the tag census: every unit placed (arena offset, bytes, head pc, kind: 0 block, 1 superblock, 2 region, 3 shape).
+    #[cfg(target_arch = "x86_64")]
+    #[doc(hidden)]
+    pub fn jit_arena_units(&self) -> &[(u64, u32, u32, u8)] { self.jit.as_ref().map_or(&[], |j| &j.units) }
     /// Tests: the code arena's size in bytes (default 32 MiB: the stub page and 16 segments), so a test can make segments
     /// fill and be reused. Takes effect for a JIT made after the call.
     #[doc(hidden)]

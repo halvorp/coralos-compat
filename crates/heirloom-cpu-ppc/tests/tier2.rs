@@ -127,6 +127,23 @@ fn programs_under_test() -> Vec<(&'static str, &'static [u32], Setup)> {
     ]
 }
 
+/// KNOB_NO_SUPERBLOCK (h86 native: the code-duplication A/B) changes code, not semantics: every program ends in tier 0's state
+/// with it, in any slicing, and no superblock is compiled.
+#[test]
+fn without_superblocks_every_program_ends_in_tier_0s_state() {
+    for (name, prog, setup) in programs_under_test() {
+        let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
+        for slice in [1, 7, 1_000, 1_000_000] {
+            let (mut c, mut m) = load(prog, &setup);
+            let mut e = exec(Tier::Jit, 0);
+            e.set_jit_knobs(heirloom_cpu_abi::ppc::KNOB_NO_SUPERBLOCK);
+            let got = finish(&mut e, &mut c, &mut m, slice);
+            assert!(got == want, "{name}: no superblocks, slice {slice}: differs from tier 0");
+            assert_eq!(e.jit_stats().superblocks, 0, "{name}: {:?}", e.jit_stats());
+        }
+    }
+}
+
 #[test]
 fn every_program_ends_in_tier_0s_state_on_tier_2_in_any_slicing() {
     for (name, prog, setup) in programs_under_test() {
@@ -881,4 +898,22 @@ fn the_translated_matrix_compare_is_exact_and_is_used() {
     }
     let (got, e) = run_on(Tier::JitLockstep, 0, &prog, 13, xlate_setup);
     assert!(got == want && e.divergence().is_none(), "{:?}", e.divergence());
+}
+
+/// The random-program fuzz with regions and KNOB_NO_SUPERBLOCK (region nodes then are single blocks): tier 0's state.
+#[test]
+fn a_random_program_fuzz_agrees_without_superblocks() {
+    for seed in 0..600u64 {
+        let prog = random_program(seed);
+        let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, fuzz_setup(seed));
+        for (slice, region) in [(37, Some(REGION_TEST)), (1_000, Some(REGION_TEST)), (37, None)] {
+            let (mut c, mut m) = load(&prog, fuzz_setup(seed));
+            let mut e = exec(Tier::Jit, 0);
+            e.set_jit_knobs(heirloom_cpu_abi::ppc::KNOB_NO_SUPERBLOCK);
+            if let Some(r) = region { e.set_jit_region_after(r); }
+            let got = finish(&mut e, &mut c, &mut m, slice);
+            assert!(got == want, "seed {seed} slice {slice} region {region:?}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} {:?}",
+                got.gpr, want.gpr, got.cr, want.cr, got.xer, want.xer, e.jit_stats());
+        }
+    }
 }

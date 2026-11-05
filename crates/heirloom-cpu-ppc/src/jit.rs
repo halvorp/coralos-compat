@@ -196,6 +196,10 @@ pub(crate) struct Jit {
     /// Diagnostics (with the tag map): (arena offset, guest word, guest pc) of every guest instruction's code start placed
     /// (a reused segment's old rows stay: a tool keeps the last row per offset).
     pub(crate) tag_words: Vec<(u64, u32, u32)>,
+    /// With the tag census: every unit placed (arena offset, bytes, head pc, kind: 0 block, 1 superblock, 2 region, 3 shape) and
+    /// the kind of the unit being emitted now.
+    pub(crate) units: Vec<(u64, u32, u32, u8)>,
+    unit_kind: u8,
 }
 
 impl Jit {
@@ -207,7 +211,7 @@ impl Jit {
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![[IBTC_EMPTY, 0]; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0, 0); 1 << IBTC_BITS].into_boxed_slice(), cold: None, pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, seen_t1_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
             logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(), knobs: 0,
-            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, churn: Default::default(), regions: BTreeMap::new(), page_gen: BTreeMap::new(), seen_bumps: 0, region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), so_aware: false,
+            region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, churn: Default::default(), regions: BTreeMap::new(), page_gen: BTreeMap::new(), seen_bumps: 0, region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), units: Vec::new(), unit_kind: 0, so_aware: false,
         };
         j.stats.arena_bytes = j.arena.len as u64;
         if !j.stubs() { return None; }
@@ -432,6 +436,7 @@ impl Jit {
         let pages: Vec<(usize, u64)> = plan.pages.iter().map(|p| (p.0, p.1)).collect();
         let len = plan.maxfwd[0];
         let pins = core::cell::Cell::new(0u32);
+        self.unit_kind = 2;
         let entry = self.emit_place(head, plan.pages[0].1, &pages, at, len, false, h_note::<H> as HNote as usize as u64, |env| {
             let r = jit_emit::compile_region(&plan.nodes, &plan.maxfwd, &plan.pages, &plan.rets, env);
             pins.set(env.displaced);
@@ -456,6 +461,7 @@ impl Jit {
     /// Compile the recognised whole function `s` at `pc` as one block (jit_xlate): its entry's budget test covers its longest path.
     fn compile_shape<H: Host>(&mut self, s: crate::jit_xlate::Shape, pc: u32, gen: u64, page: usize, at: u64) {
         let note = h_note::<H> as HNote as usize as u64;
+        self.unit_kind = 3;
         if self.emit_place(pc, gen, &[(page, gen)], at, crate::jit_xlate::slot_len(s), false, note, |env| crate::jit_xlate::compile(s, pc, gen, page, env)).is_some() {
             self.stats.translated += 1;
         }
@@ -477,6 +483,7 @@ impl Jit {
         let counter = (self.region_after != 0).then(|| (offset_of!(Ctx, counters) + 4 * c) as i32);
         self.ctx.counters[c] = self.region_after;
         let note = h_note::<H> as HNote as usize as u64;
+        self.unit_kind = may_refuse as u8; // a superblock (its first block alone is the retry)
         let r = self.emit_place(pc, gen, &[(page, gen)], at, ops.len() as u32, may_refuse, note, |env| {
             env.counter = counter;
             jit_emit::compile(ops, pc, gen, page, env)
@@ -530,7 +537,10 @@ impl Jit {
         let p = self.place(&code, inner, taken.iter().map(|t| t.0).collect(), pc, len, gen, at)?;
         for &(pg, g) in pages { self.page_gen.insert(pg, g); }
         self.tag_code(p, code.len(), &runs);
-        if self.tagmap.is_some() { self.tag_words.extend(words.iter().map(|&(o, w, pc)| (p - self.arena.base as u64 + o as u64, w, pc))); }
+        if self.tagmap.is_some() {
+            self.tag_words.extend(words.iter().map(|&(o, w, pc)| (p - self.arena.base as u64 + o as u64, w, pc)));
+            self.units.push((p - self.arena.base as u64, code.len() as u32, pc, self.unit_kind));
+        }
         // each slot's home is its exit tail in the placed code; it lands in its target if that is published (after any
         // eviction place() made), else at home
         debug_assert_eq!(homes.len(), taken.len());
@@ -826,6 +836,8 @@ pub(crate) extern "C" fn h_note<H: Host>(ctx: *mut Ctx, ea: u32, n: u32) {
 /// was measured on WC3: 0.6% fewer JIT host instructions than this for 38% more compiles and 2x the evictions.)
 pub(crate) fn superblock(cache: &Cache, mem: &heirloom_mem_flat32::GuestMem, first: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, knobs: u32) -> Vec<crate::t1op::Op> {
     let mut ops = first.to_vec();
+    // KNOB_NO_SUPERBLOCK: each block alone (no not-taken tail copied into the block before it) - the duplication A/B
+    if knobs & heirloom_cpu_abi::ppc::KNOB_NO_SUPERBLOCK != 0 { return ops; }
     while let Some(last) = ops.last() {
         let next = pc.wrapping_add(4 * ops.len() as u32);
         let forward = matches!(last.k, K::Bc | K::Bcl) && last.d & 0x14 != 0x14 && last.imm.wrapping_sub(next) < 0x8000_0000;
