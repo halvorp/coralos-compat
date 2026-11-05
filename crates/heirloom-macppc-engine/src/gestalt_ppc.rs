@@ -39,6 +39,13 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
         b"appr" => 0b01,
         // gestaltAppearanceVersion: Appearance Manager 1.1 (Mac OS 8.5+); the level carbon_ctl.rs serves
         b"apvr" => 0x0110,
+        // gestaltAppleEventsAttr: bit 0 gestaltAppleEventsPresent (ae_c.rs: descriptors, handlers, AESend between this machine's processes); bit 1
+        // gestaltScriptingSupport and bit 2 gestaltOSLInSystem (AEResolve, the Object Support Library) are NOT claimed
+        b"evnt" => 0b001,
+        // gestaltAliasMgrAttr: bit 0 gestaltAliasMgrPresent (alias_c.rs over the 68k _AliasDispatch bodies)
+        b"alis" => 0b1,
+        // gestaltFindFolderAttr: bit 0 gestaltFindFolderPresent (FindFolder, toolbox_c.rs); bit 1 (redirected desktop folder) is not claimed
+        b"fold" => 0b1,
         _ => return None,
     })
 }

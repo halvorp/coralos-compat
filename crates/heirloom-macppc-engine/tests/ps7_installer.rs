@@ -11,7 +11,7 @@ use heirloom_macppc_engine::MacPpc;
 use heirloom_ui_abi::RecordingGuestUi;
 
 mod ps7_common;
-use ps7_common::export;
+use ps7_common::{act, export};
 
 /// The installer as one MacBinary file: `HEIRLOOM_PS7_INSTALLER`, else the corpus lane's place.
 fn installer() -> String {
@@ -32,117 +32,6 @@ fn started() -> Option<MacPpc<RecordingGuestUi>> {
     GuestMachine::start_file(&mut m, &app, "Install Adobe Photoshop").unwrap();
     if let Some(n) = std::env::var("PS7_TRACE").ok().and_then(|v| v.parse().ok()) { m.trace_pcs(n); }
     Some(m)
-}
-
-/// Every log line since the last drain, appended to `PS7_LOG_FILE` when set (polling noise left out); else the newest 4000 kept.
-fn drain(m: &mut MacPpc<RecordingGuestUi>) {
-    let mut lines = core::mem::take(&mut m.mac.log);
-    let Ok(path) = std::env::var("PS7_LOG_FILE") else {
-        lines.drain(..lines.len().saturating_sub(4000));
-        m.mac.log = lines;
-        return;
-    };
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
-    for l in lines {
-        if ["PtInRect", "BlockMove", "IsDialogEvent", "null event", "GetMouse", "Button ->", "FrontWindow", "would idle"].iter().any(|n| l.contains(n)) { continue }
-        writeln!(f, "{l}").unwrap();
-    }
-}
-
-/// Run `slices` host slices of 5M instructions / 20 ms. False when the program stopped.
-fn run(m: &mut MacPpc<RecordingGuestUi>, t: &mut u64, slices: u32) -> bool {
-    for i in 0..slices {
-        drain(m);
-        let (st, _) = GuestMachine::step(m, 5_000_000);
-        if matches!(st, Step::Fault(_) | Step::Exited) {
-            drain(m);
-            eprintln!("slice {i}: {st:?} {:?}", m.fault());
-            if let Some(c) = m.cpu() {
-                let pcs: Vec<u32> = c.recent_pcs().collect();
-                eprintln!("PCS {pcs:x?}\nLR {:#x} CTR {:#x} GPR {:x?}", c.lr, c.ctr, c.gpr);
-                // a cross-TOC glue (lwz r12,d(r2) ... bctr) in the trace: the import its TOC slot holds
-                let toc = m.mac.mem.read_u32(c.gpr[1] + 20).unwrap_or(0);
-                for &pc in &pcs {
-                    let w = m.mac.mem.read_u32(pc).unwrap_or(0);
-                    if w >> 16 == 0x8182 { let slot = toc.wrapping_add(w as u16 as i16 as i32 as u32); eprintln!("GLUE at {pc:#x}: TOC {toc:#x} slot {slot:#x} -> {:?} value {:#x}", m.import_slots.get(&slot), m.mac.mem.read_u32(slot).unwrap_or(0)); }
-                }
-            }
-            return false;
-        }
-        *t += 20_000;
-        GuestMachine::advance_clock_to(m, *t).unwrap();
-    }
-    true
-}
-
-/// The newest window the program opened (its native ref).
-fn front(m: &MacPpc<RecordingGuestUi>) -> heirloom_ui_abi::UiObjectRef {
-    *m.mac.windows.values().filter_map(|w| w.native.as_ref()).max_by_key(|r| r.id).expect("a window")
-}
-
-/// The window's picture as the host shows it now: every pixel frame of every plane of the newest window, oldest first (PPM).
-fn shot(m: &MacPpc<RecordingGuestUi>, path: &str) {
-    let ui = GuestMachine::ui(m);
-    let Some((&(win, _), _)) = ui.plane_frames.iter().last() else { eprintln!("shot: no plane"); return };
-    let (mut w, mut h) = (1i32, 1i32);
-    for ((wid, _), frames) in &ui.plane_frames { if *wid == win { for f in frames { w = w.max(f.rect.left + f.rect.width); h = h.max(f.rect.top + f.rect.height); } } }
-    let mut img = vec![0x00C0_C0C0u32; (w * h) as usize];
-    for ((wid, _), frames) in &ui.plane_frames {
-        if *wid != win { continue }
-        for f in frames { for op in &f.ops { if let heirloom_ui_abi::DrawOp::Pixels { rect, rgb } = op {
-            for y in 0..rect.height { for x in 0..rect.width {
-                let (gx, gy) = (rect.left + x + f.rect.left, rect.top + y + f.rect.top);
-                if gx < w && gy < h { img[(gy * w + gx) as usize] = rgb[(y * rect.width + x) as usize]; }
-            } }
-        } } }
-    }
-    let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
-    for p in img { out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]); }
-    std::fs::write(path, out).unwrap();
-    eprintln!("shot: window {win} {w}x{h} -> {path}");
-}
-
-/// Drive the running installer with `;`-separated actions (the Warcraft III harness's verbs). False when the program stopped.
-fn act(m: &mut MacPpc<RecordingGuestUi>, t: &mut u64, actions: &str) -> bool {
-    use heirloom_ui_abi::{GuestUiEvent, PointerPhase};
-    for a in actions.split(';').filter(|a| !a.is_empty()) {
-        let (verb, arg) = a.split_once(':').unwrap_or((a, ""));
-        match verb {
-            "run" => if !run(m, t, arg.parse().unwrap()) { return false },
-            "shot" => shot(m, arg),
-            "click" => {
-                let (x, y) = arg.split_once(',').unwrap();
-                let (x, y): (i32, i32) = (x.parse().unwrap(), y.parse().unwrap());
-                let win = front(m);
-                GuestMachine::deliver(m, GuestUiEvent::primary(win, x, y, PointerPhase::Down)).unwrap();
-                if !run(m, t, 5) { return false }
-                GuestMachine::deliver(m, GuestUiEvent::primary(win, x, y, PointerPhase::Up)).unwrap();
-            }
-            "button" => {
-                let found = GuestMachine::ui(m).find_control(|c| c.label == arg && matches!(c.kind, heirloom_ui_abi::ControlKind::Button));
-                let (w, c, _) = found.unwrap_or_else(|| panic!("no live button {arg:?}"));
-                GuestMachine::ui_mut(m).push_intent(w, c, heirloom_ui_abi::Intent::Activate).unwrap();
-            }
-            "field" => {
-                let (n, text) = arg.split_once('=').unwrap();
-                let n: usize = n.parse().unwrap();
-                let ui = GuestMachine::ui(m);
-                let (id, (w, _)) = ui.controls.iter().filter(|(_, (_, c))| matches!(c.kind, heirloom_ui_abi::ControlKind::Field { .. })).nth(n).unwrap_or_else(|| panic!("no field {n}"));
-                let (w, c) = (*w, heirloom_ui_abi::UiObjectRef { id: *id, generation: 1 });
-                GuestMachine::ui_mut(m).push_intent(w, c, heirloom_ui_abi::Intent::CommitText(text.into())).unwrap();
-            }
-            // `answer:N`: the oldest open request (a native alert the program asked) is answered with button N
-            "answer" => {
-                let ui = GuestMachine::ui_mut(m);
-                let Some(req) = ui.open_requests().into_iter().next() else { panic!("no open request to answer") };
-                ui.answer_request(req, arg.parse().unwrap()).unwrap();
-            }
-            "controls" => for (id, (_, c)) in &GuestMachine::ui(m).controls { eprintln!("CONTROL {id} {:?} {:?} {:?}", c.kind, c.label, c.rect); },
-            other => panic!("action verb {other}"),
-        }
-    }
-    true
 }
 
 /// Diagnostic, not a gate: how far the installer gets, its last log lines, refusals, UI calls and what it wrote on Macintosh HD.

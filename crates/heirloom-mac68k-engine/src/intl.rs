@@ -59,8 +59,11 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 /// (year, month 1-12, day 1-31, weekday 0 = Sunday, hour, minute, second) of a Mac-epoch second count.
-pub fn civil(secs: u32) -> (i64, u32, u32, usize, u32, u32, u32) {
-    let unix = i64::from(secs) + SECS_1904_TO_1970;
+pub fn civil(secs: u32) -> (i64, u32, u32, usize, u32, u32, u32) { civil_long(i64::from(secs)) }
+
+/// [`civil`] of a LongDateTime (64-bit seconds since 1904, before 1904 negative): the Script Manager's LongSecondsToDate range.
+pub fn civil_long(secs: i64) -> (i64, u32, u32, usize, u32, u32, u32) {
+    let unix = secs + SECS_1904_TO_1970;
     let (days, tod) = (unix.div_euclid(86_400), unix.rem_euclid(86_400));
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -76,7 +79,10 @@ pub fn civil(secs: u32) -> (i64, u32, u32, usize, u32, u32, u32) {
 }
 
 /// Mac seconds of a civil date (the inverse of [`civil`]); out-of-range months carry into the year.
-pub fn mac_seconds(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64) -> u32 {
+pub fn mac_seconds(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64) -> u32 { mac_seconds_long(y, mo, d, h, mi, s) as u32 }
+
+/// [`mac_seconds`] as a LongDateTime (64-bit, no wrap).
+pub fn mac_seconds_long(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64) -> i64 {
     let (y, mo) = (y + (mo - 1).div_euclid(12), (mo - 1).rem_euclid(12) + 1);
     let y2 = if mo <= 2 { y - 1 } else { y };
     let era = y2.div_euclid(400);
@@ -84,7 +90,7 @@ pub fn mac_seconds(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64) -> u32 {
     let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
-    (days * 86_400 + h * 3600 + mi * 60 + s - SECS_1904_TO_1970) as u32
+    days * 86_400 + h * 3600 + mi * 60 + s - SECS_1904_TO_1970
 }
 
 /// `DateForm`: 0 short, 1 long, 2 abbreviated.

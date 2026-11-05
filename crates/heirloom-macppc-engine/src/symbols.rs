@@ -31,6 +31,10 @@ pub enum Native { StandardAlert, GetSharedLibrary, GetDiskFragment, GetMemFragme
     /// trap registry's (`heirloom_mac68k_engine::traptable::trap_address`), so a PowerPC program's availability check agrees with a
     /// 68k program's. The value is a guest 68k address: calling it is Mixed Mode's business, not a branch.
     TrapAddress(TrapQuery),
+    /// "Patch trap N": `NSetTrapAddress(addr, trapNum, TrapType)`, `SetOSTrapAddress(addr, trapNum)`, `SetToolTrapAddress(addr, trapNum)`,
+    /// `SetTrapAddress(addr, trapNum)`: the shared patch table (heirloom_mac68k_engine::traptable::patch_trap). A 68k caller of the trap then
+    /// runs the patch; a PowerPC caller of the trap's InterfaceLib import still reaches this engine's native (named in the log).
+    SetTrapAddress(TrapQuery),
     /// Mixed Mode's constructors and destructor (`heirloom_mac68k_engine::mixed_mode`): a real RoutineDescriptor in guest memory, never
     /// the procedure's own TVector. `NewRoutineDescriptor(proc, procInfo, ISA)`, `NewFatRoutineDescriptor(m68kProc, ppcProc,
     /// procInfo)`, `DisposeRoutineDescriptor(upp)`. CALLING a UPP is the callback machine's (Mixed Mode slice 3).
@@ -101,6 +105,7 @@ pub enum Native { StandardAlert, GetSharedLibrary, GetDiskFragment, GetMemFragme
     Spec(crate::fsspec::SpecCall),
     /// An Appearance Manager entry point or a Control / Dialog / Window Manager Carbon accessor ([`crate::carbon_ctl`]).
     Cx(crate::carbon_ctl::CxFn),
+    Wc(crate::wclass_c::WcFn),
     /// An offscreen graphics world / port accessor call ([`crate::gworld`]).
     Gw(crate::gworld::GwFn),
     /// A MathLib function ([`crate::clib_math`]): doubles in f1/f2.
@@ -144,6 +149,8 @@ impl Native {
             "MemError" => Native::MemError, "WaitNextEvent" => Native::WaitNextEvent, "GetNextEvent" => Native::GetNextEvent, "ModalDialog" => Native::ModalDialog, "StandardAlert" => Native::StandardAlert, "BlockZero" => Native::BlockZero, "SysBeep" => Native::SysBeep, "ExitToShell" => Native::Exit, "HasDepth" => Native::HasDepth, "SetDepth" => Native::SetDepth,
             "NGetTrapAddress" => Native::TrapAddress(TrapQuery::ByType), "GetOSTrapAddress" => Native::TrapAddress(TrapQuery::Os),
             "GetToolTrapAddress" => Native::TrapAddress(TrapQuery::Tool), "GetTrapAddress" => Native::TrapAddress(TrapQuery::Old),
+            "NSetTrapAddress" => Native::SetTrapAddress(TrapQuery::ByType), "SetOSTrapAddress" => Native::SetTrapAddress(TrapQuery::Os),
+            "SetToolTrapAddress" => Native::SetTrapAddress(TrapQuery::Tool), "SetTrapAddress" => Native::SetTrapAddress(TrapQuery::Old),
             "NewRoutineDescriptor" => Native::NewRoutineDescriptor, "NewFatRoutineDescriptor" => Native::NewFatRoutineDescriptor,
             "DisposeRoutineDescriptor" => Native::DisposeRoutineDescriptor,
             n if crate::ae_c::AeFn::by_name(n).is_some() => Native::Ae(crate::ae_c::AeFn::by_name(n).expect("checked")),
@@ -161,6 +168,7 @@ impl Native {
             n if crate::script_c::ScFn::by_name(n).is_some() => Native::Sc(crate::script_c::ScFn::by_name(n).expect("checked")),
             n if crate::textlayout_c::TlFn::by_name(n).is_some() => Native::Tl(crate::textlayout_c::TlFn::by_name(n).expect("checked")),
             n if crate::fsref_c::FsrFn::by_name(n).is_some() => Native::Fsr(crate::fsref_c::FsrFn::by_name(n).expect("checked")),
+            n if crate::wclass_c::WcFn::by_name(n).is_some() => Native::Wc(crate::wclass_c::WcFn::by_name(n).expect("checked")),
             n if crate::carbon_ctl::CxFn::by_name(n).is_some() => Native::Cx(crate::carbon_ctl::CxFn::by_name(n).expect("checked")),
             n if crate::gworld::GwFn::by_name(n).is_some() => Native::Gw(crate::gworld::GwFn::by_name(n).expect("checked")),
             n if crate::toolbox_c::TbFn::by_name(n).is_some() => Native::Tb(crate::toolbox_c::TbFn::by_name(n).expect("checked")),
@@ -261,7 +269,10 @@ const NEEDS_68K_RUN_LOOP: &[(&str, &str)] = &[
 pub const INTERFACELIB_ALIASES: &[(&str, &str)] = &[("GetMenu", "GetRMenu"), ("BeginUpdate", "BeginUpDate"), ("EndUpdate", "EndUpDate"), ("XorRgn", "XOrRgn"), ("SetPalette", "NSetPalette"), ("SetPortBits", "SetPBits"),
     ("DisableMenuItem", "DisableItem"), ("CountMenuItems", "CountMItems"), ("EnableMenuItem", "EnableItem"), ("InvertRect", "InverRect"), ("InvertRoundRect", "InverRoundRect"), ("InvertRgn", "InverRgn"),
     // Fonts.h / Dialogs.h names of _GetFName and _UpdtDialog (Installer VISE imports both)
-    ("GetFontName", "GetFName"), ("UpdateDialog", "UpdtDialog")];
+    ("GetFontName", "GetFName"), ("UpdateDialog", "UpdtDialog"),
+    // Controls.h (Mac OS 8.5 / Carbon): DrawControlInCurrentPort draws the control as Draw1Control does (a native control is drawn by the host in
+    // its own window whichever port is current)
+    ("DrawControlInCurrentPort", "Draw1Control")];
 
 /// How `name` would be served, given the handlers `mac` has registered.
 pub fn lookup<U: GuestUi>(mac: &Mac<U>, name: &str) -> Binding {

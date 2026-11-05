@@ -38,11 +38,13 @@ pub enum TState { Ready, Stopped, Running, Waiting }
 
 /// What a task is, for the API that created it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind { Main, Thread, Mp }
+pub enum Kind { Main, Thread, Mp, /// the main task of a process LaunchApplication started (process_c.rs)
+    Process }
 
 /// What a Waiting task waits on (Multiprocessing Services) and where its results go when it wakes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WaitOn { Queue(u32), Semaphore(u32), Region(u32) }
+pub enum WaitOn { Queue(u32), Semaphore(u32), Region(u32), /// AESend kAEWaitReply: the transaction (ae_c.rs)
+    AeReply(u32) }
 #[derive(Debug, Clone, Copy)]
 pub struct Wait { pub on: WaitOn, /// the tick at which the wait times out (None = forever)
     pub deadline: Option<u32>, /// MPWaitOnQueue's three result pointers
@@ -70,6 +72,9 @@ pub struct Task {
     pub notify: Option<(u32, u32, u32)>,
     /// How many glue entries the SAVED `cpu` already has bound (the live CPU always has `rt.bound`): a switch back binds only what was interned since.
     pub(crate) bound: usize,
+    /// The Mac process the task belongs to (the low word of its serial number, heirloom_mac68k_engine::processes): a switch to a task of
+    /// another process switches the process context too.
+    pub psn: u32,
 }
 
 #[derive(Default)]
@@ -104,7 +109,7 @@ impl<U: GuestUi> MacPpc<U> {
     /// The task table exists once anything schedules: task 1 is the application, running.
     pub(crate) fn ensure_sched(&mut self) {
         if self.rt.sched.tasks.is_empty() {
-            self.rt.sched.tasks.insert(MAIN_TASK, Task { cpu: None, callbacks: Vec::new(), state: TState::Running, kind: Kind::Main, stack: None, result_ptr: 0, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: None, bound: 0 });
+            self.rt.sched.tasks.insert(MAIN_TASK, Task { cpu: None, callbacks: Vec::new(), state: TState::Running, kind: Kind::Main, stack: None, result_ptr: 0, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: None, bound: 0, psn: self.mac.current_psn() });
             self.rt.sched.current = MAIN_TASK;
             self.rt.sched.next_id = MAIN_TASK + 1;
         }
@@ -161,6 +166,9 @@ impl<U: GuestUi> MacPpc<U> {
         } else if let Some(t) = self.rt.sched.tasks.remove(&cur) { dead_stack = t.stack; }
         self.rt.callbacks = next_callbacks;
         self.rt.sched.current = to;
+        // another process's task: the Process Manager's context switch (resource chain, CurApName, menus, port ...)
+        let to_psn = self.rt.sched.tasks.get(&to).map(|t| t.psn);
+        if let Some(p) = to_psn.filter(|&p| p != self.mac.current_psn()) { self.mac.switch_process(p)?; }
         self.rt.sched.turn_tb = cpu.tb;
         let pc = cpu.pc;
         cpu.set_pc(pc); // the native "returned" into the other task: the run loop must not overwrite pc with this task's LR

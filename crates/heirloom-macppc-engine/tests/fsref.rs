@@ -132,3 +132,42 @@ fn fssetcataloginfo_sets_finder_info_dates_and_the_lock() {
     assert_eq!(m.mac.mem.bytes(m.mac.mem.span(CAT + 72, 8).unwrap()).unwrap(), b"8BPSMeSa");
     assert_eq!(call(&mut m, "FSDeleteObject", &[REF]), -45, "fLckdErr: the lock is real");
 }
+
+/// FSOpenIterator / FSGetCatalogInfoBulk / FSCloseIterator: a folder's items one call at a time (a CarbonLib program enumerating a folder: the
+/// tryout DRM's License Manager reads its Licenses folder this way), then errFSNoMoreItems; a subtree iterator is refused by name.
+#[test]
+fn a_flat_catalog_iterator_returns_each_item_then_no_more_items() {
+    let (mut m, _) = machine();
+    let root = m.mac.fm.def_vol;
+    let adobe = m.mac.fm.tree.mkdirs(root, ["Adobe"].iter().copied()).unwrap();
+    m.mac.fm.tree.put_file(adobe, "Note", b"n".to_vec()).unwrap();
+    pstr(&mut m, NAME, "Adobe");
+    assert_eq!(call(&mut m, "FSMakeFSSpec", &[0, 0, NAME, SPEC]), 0);
+    assert_eq!(call(&mut m, "FSpMakeFSRef", &[SPEC, REF]), 0);
+    const IT: u32 = 0x3800; const N: u32 = 0x3804; const STACK: u32 = 0x5000;
+    assert_eq!(call(&mut m, "FSOpenIterator", &[REF, 1, IT]), -1423, "NEGATIVE CONTROL: kFSIterateSubtree is not provided");
+    assert_eq!(call(&mut m, "FSOpenIterator", &[REF, 0, IT]), 0);
+    let it = m.mac.mem.read_u32(IT).unwrap();
+    m.mac.mem.write_u32(STACK + 56, UNI).unwrap(); // the 9th argument (names) is in the caller's parameter area
+    let _ = m.bind("FSGetCatalogInfoBulk");
+    let mut names = Vec::new();
+    loop {
+        let mut regs = [0u32; 32];
+        regs[1] = STACK;
+        regs[3..11].copy_from_slice(&[it, 1, N, 0, 0x0800, CAT, REF2, 0]);
+        assert_eq!(m.glue_call("FSGetCatalogInfoBulk", &mut regs), GlueOutcome::Return);
+        if regs[3] as i32 == -1417 { assert_eq!(m.mac.mem.read_u32(N).unwrap(), 0); break }
+        assert_eq!(regs[3], 0);
+        assert_eq!(m.mac.mem.read_u32(N).unwrap(), 1);
+        let len = m.mac.mem.read_u16(UNI).unwrap();
+        names.push((0..len).map(|i| m.mac.mem.read_u16(UNI + 2 + 2 * u32::from(i)).unwrap() as u8 as char).collect::<String>());
+        assert!(names.len() < 5, "the iterator ends");
+    }
+    assert_eq!(names, ["Plug", "Note"]);
+    // the refs array got each item's FSRef: the last one names "Note"
+    m.mac.mem.write_u16(UNI, 0).unwrap();
+    assert_eq!(call(&mut m, "FSGetCatalogInfo", &[REF2, 0, 0, UNI, 0, 0]), 0);
+    assert_eq!((m.mac.mem.read_u16(UNI).unwrap(), m.mac.mem.read_u16(UNI + 2).unwrap()), (4, u16::from(b'N')));
+    assert_eq!(call(&mut m, "FSCloseIterator", &[it]), 0);
+    assert_eq!(call(&mut m, "FSCloseIterator", &[it]), -1420, "closed twice: errFSBadIterator");
+}

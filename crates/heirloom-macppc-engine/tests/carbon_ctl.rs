@@ -125,7 +125,11 @@ fn window_and_dialog_accessors_read_the_records() {
     assert_ne!(call(&mut m, "GetWindowList", &[]), 0);
     assert_eq!(call(&mut m, "GetWindowBounds", &[win, 33, OUT]), 0);
     assert_eq!(rect_at(&m, OUT), [100, 50, 220, 250], "the content area in global coordinates");
-    assert!(refused(&mut m, "GetWindowBounds", &[win, 32, OUT]).contains("window region 32 is not implemented"));
+    // kWindowStructureRgn: the bounds of the record's strucRgn (the frame model), which encloses the content
+    assert_eq!(call(&mut m, "GetWindowBounds", &[win, 32, OUT]), 0);
+    let s = rect_at(&m, OUT);
+    assert!(s[0] <= 100 && s[1] <= 50 && s[2] >= 220 && s[3] >= 250, "the structure encloses the content: {s:?}");
+    assert!(refused(&mut m, "GetWindowBounds", &[win, 0, OUT]).contains("window region 0 is not implemented"), "NEGATIVE CONTROL: the title bar is the host's chrome");
     // InvalWindowRect leaves thePort where it was
     let slot = m.mac.qd_globals;
     m.mac.mem.write_u32(slot, 0).unwrap();

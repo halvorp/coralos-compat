@@ -89,6 +89,8 @@ pub mod toolbox_c;
 pub mod stdio;
 pub mod symbols;
 pub mod ae_c;
+pub mod wclass_c; // the Carbon Window Manager's window-class calls (GetWindowClass, FrontNonFloatingWindow, RepositionWindow ...)
+pub mod process_c; // the Process Manager's PowerPC half: LaunchApplication of a second process, its start and end, events per process
 pub mod callback;
 pub mod carbon;
 pub mod cf;

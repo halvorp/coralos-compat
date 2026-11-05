@@ -6,7 +6,9 @@
 //! sub-control clipping or drawing order follows from it: the host draws the controls), and a root control is a real zeroed ControlRecord owned by its window.
 //! `RegisterAppearanceClient` is a truthful success: the Appearance Manager is part of this system and registering a client has no state to keep.
 //! Not done, left unbound so the program stops BY NAME: `HideWindow` (the host has no hide call, only open/close), `GetControlData`/`SetControlData` (tag-by-tag, as a program needs them),
-//! `StandardAlert`, `DrawThemeFocusRect`/`DrawThemeEditTextFrame`/`UseThemeFont`/`SetThemeBackground` (theme chrome is drawn by the host, never by the guest).
+//! `StandardAlert`, `UseThemeFont`/`SetThemeBackground` (theme chrome is drawn by the host, never by the guest). The theme parts a program asks for inside its own
+//! content (DrawThemePrimaryGroup, DrawThemeEditTextFrame, DrawThemeFocusRect ...) stay unbound by name: they translate to the kit's parts
+//! (HEIRLOOM-TRANSLATION-BY-TOOLKIT-NOT-APP), not to a hand-drawn Platinum look.
 //! `DrawThemeListBoxFrame` is answered (validated, nothing drawn): the List Manager's lists are native lists the host frames itself.
 use crate::clib::arg;
 use crate::machine::MacPpc;
@@ -82,6 +84,17 @@ pub enum CxFn {
     /// `GetControlHilite` (contrlHilite), `GetDialogFromWindow` (a dialog IS its window), `GetDialogDefaultItem` / `GetDialogCancelItem`, `ValidWindowRect`
     /// (InvalWindowRect's twin), `InvalMenuBar` (the host draws the menu bar: DrawMenuBar's body), `QDFlushPortBuffer` (Mac OS 9 ports are unbuffered).
     GetControlHilite, GetDialogFromWindow, GetDialogDefaultItem, GetDialogCancelItem, ValidWindowRect, InvalMenuBar, QDFlushPortBuffer,
+    /// `QDIsPortBuffered` (FALSE: Mac OS 9 ports are unbuffered), `IsPortColor` (portVersion's top two bits: a CGrafPort), `GetPixDepth`
+    /// (the PixMap's pixelSize), `GetAppFont` (applFont 1) / `GetDefFontSize` (12, the system font size), `IsControlActive` (contrlHilite is not
+    /// 255) / `IsControlHilited` (contrlHilite is a part, 1..253).
+    /// `InvalWindowRgn` / `ValidWindowRgn`: InvalRgn / ValidRgn with the window's port current (InvalWindowRect's region twins).
+    InvalWindowRgn, ValidWindowRgn,
+    /// `GetBestControlRect(ctl, &rect, &baselineOffset)`: the control's own rectangle (the host sizes its native control to it), baseline 0;
+    /// `GetControlFeatures(ctl, &features)`: 0 (the System 7 control definitions' answer: no Appearance features claimed); `SendControlMessage`
+    /// answers 0 without a definition to send it to (the control is native: logged); `HandleControlClick(ctl, pt, modifiers, action)` is
+    /// TrackControl; `HandleControlKey(ctl, key, char, modifiers)` answers kControlNoPart (keys reach a native control from the host, logged).
+    GetBestControlRect, GetControlFeatures, SendControlMessage, HandleControlClick, HandleControlKey,
+    QDIsPortBuffered, IsPortColor, GetPixDepth, GetAppFont, GetDefFontSize, IsControlActive, IsControlHilited,
     /// `CreateCustomList(rView, dataBounds, cellSize, theSpec, theWindow, drawIt, hasGrow, scrollHoriz, scrollVert, &outList)`: `LNew` with the
     /// definition `theSpec` names (Lists.h ListDefSpec: kListDefStandardTextType 2 = the standard text LDEF 0, kListDefClassicType 1 = that 'LDEF'
     /// id, kListDefUserProcType 0 = the program's own ListDefUPP, which the List Manager table keeps as a custom LDEF: not shown natively, named).
@@ -117,7 +130,10 @@ impl CxFn {
             "GetWindowList" => GetWindowList, "GetWindowBounds" => GetWindowBounds, "InvalWindowRect" => InvalWindowRect, "GetRegionBounds" => GetRegionBounds,
             "GetControlPopupMenuHandle" => GetControlPopupMenuHandle, "SetControlPopupMenuHandle" => SetControlPopupMenuHandle, "GetControlPopupMenuID" => GetControlPopupMenuID,
             "GetControlHilite" => GetControlHilite, "GetDialogFromWindow" => GetDialogFromWindow, "GetDialogDefaultItem" => GetDialogDefaultItem, "GetDialogCancelItem" => GetDialogCancelItem,
-            "ValidWindowRect" => ValidWindowRect, "InvalMenuBar" => InvalMenuBar, "QDFlushPortBuffer" => QDFlushPortBuffer, "CreateCustomList" => CreateCustomList,
+            "ValidWindowRect" => ValidWindowRect, "InvalMenuBar" => InvalMenuBar, "QDFlushPortBuffer" => QDFlushPortBuffer,
+            "GetBestControlRect" => GetBestControlRect, "GetControlFeatures" => GetControlFeatures, "SendControlMessage" => SendControlMessage,
+            "HandleControlClick" => HandleControlClick, "HandleControlKey" => HandleControlKey, "InvalWindowRgn" => InvalWindowRgn, "ValidWindowRgn" => ValidWindowRgn, "QDIsPortBuffered" => QDIsPortBuffered, "IsPortColor" => IsPortColor, "GetPixDepth" => GetPixDepth, "GetAppFont" => GetAppFont, "GetDefFontSize" => GetDefFontSize,
+            "IsControlActive" => IsControlActive, "IsControlHilited" => IsControlHilited, "CreateCustomList" => CreateCustomList,
             "GetThemeDrawingState" => GetThemeDrawingState, "SetThemeDrawingState" => SetThemeDrawingState, "DisposeThemeDrawingState" => DisposeThemeDrawingState,
             "NormalizeThemeDrawingState" => NormalizeThemeDrawingState, "GetWindowRegion" => GetWindowRegion,
             _ => return None,
@@ -246,6 +262,27 @@ impl<U: GuestUi> MacPpc<U> {
             GetControlHilite => { let p = self.cx_rec(a0, n)?; u32::from(self.mac.mem.read_u8(p + 17).map_err(|_| format!("{n}: the ControlRecord leaves guest RAM"))?) }
             InvalMenuBar => { self.cx_trap("DrawMenuBar", &[])?; 0 }
             QDFlushPortBuffer => 0,
+            QDIsPortBuffered => 0,
+            GetBestControlRect => {
+                let p = self.cx_rec(a0, n)?;
+                let r = self.cx_rect(p + C_RECT, n)?;
+                self.cx_put_rect(a1, r, n)?;
+                if a2 != 0 { self.mac.mem.write_u16(a2, 0).map_err(|_| format!("{n}: baselineOffset leaves guest RAM"))?; }
+                0
+            }
+            GetControlFeatures => { self.cx_rec(a0, n)?; self.put32(a1, 0, &n)?; 0 }
+            SendControlMessage => { self.mac.log.push(format!("[control] SendControlMessage {a0:#x} message {a1}: the control is native, no definition to send it to -> 0")); 0 }
+            HandleControlClick => self.cx_trap("TrackControl", &[a0, a1, a3])?,
+            HandleControlKey => { self.mac.log.push(format!("[control] HandleControlKey {a0:#x} char {:#x}: keys reach a native control from the host -> kControlNoPart", a2 & 0xFF)); 0 }
+            IsPortColor => u32::from(self.cx_u16(a0 + 6, n)? & 0xC000 == 0xC000),
+            GetPixDepth => { let pm = self.cx_u32(a0, n)?; u32::from(self.cx_u16(pm + 32, n)?) }
+            GetAppFont => 1,
+            GetDefFontSize => 12,
+            IsControlActive | IsControlHilited => {
+                let p = self.cx_rec(a0, n)?;
+                let h = self.mac.mem.read_u8(p + 17).map_err(|_| format!("{n}: the ControlRecord leaves guest RAM"))?;
+                u32::from(if f == IsControlActive { h != 255 } else { (1..=253).contains(&h) })
+            }
             GetThemeDrawingState => {
                 let port = heirloom_mac68k_engine::qd::target::current_port(&self.mac).map_err(|e| e.0)?;
                 let bytes = self.mac.mem.span(port + STATE_FROM, STATE_LEN).and_then(|s| self.mac.mem.bytes(s).map(<[u8]>::to_vec)).map_err(|_| format!("{n}: the port {port:#x} leaves guest RAM"))?;
@@ -406,7 +443,15 @@ impl<U: GuestUi> MacPpc<U> {
                 self.cx_window(a0, n)?;
                 match a1 & 0xFFFF {
                     REGION_CONTENT | REGION_GLOBAL_PORT => { let r = self.mac.windows[&a0].rect; self.cx_put_rect(a2, r, n)?; 0 }
-                    c => return Err(format!("GetWindowBounds: window region {c} is not implemented (the content area, 33, and the port's global rectangle, 40, only: the frame is the host's chrome)")),
+                    // kWindowStructureRgn: the bounds of the record's strucRgn (the frame model FindWindow and GetWindowRegion use)
+                    32 => {
+                        let rgn = self.cx_u32(a0 + heirloom_mac68k_engine::winregions::WR_STRUC_RGN, n)?;
+                        let p = self.cx_rec(rgn, n)?;
+                        let r = self.cx_rect(p + 2, n)?;
+                        self.cx_put_rect(a2, r, n)?;
+                        0
+                    }
+                    c => return Err(format!("GetWindowBounds: window region {c} is not implemented (structure 32, the content area 33 and the port's global rectangle 40 only: the frame's parts are the host's chrome)")),
                 }
             }
             // GetWindowRegion(window, code, rgn): a COPY of the record's region (winregions.rs keeps strucRgn / contRgn / updateRgn current, in global
@@ -427,13 +472,14 @@ impl<U: GuestUi> MacPpc<U> {
                 0
             }
             // InvalWindowRect(window, rect) / ValidWindowRect: InvalRect / ValidRect in that window's port, thePort restored after
-            InvalWindowRect | ValidWindowRect => {
+            InvalWindowRect | ValidWindowRect | InvalWindowRgn | ValidWindowRgn => {
                 self.cx_window(a0, n)?;
                 let slot = self.mac.qd_globals;
                 if slot == 0 { return Err(String::from("InvalWindowRect: InitGraf has not run")); }
                 let old = self.cx_u32(slot, n)?;
                 self.cx_trap("SetPort", &[a0])?;
-                let r = self.cx_trap(if f == InvalWindowRect { "InvalRect" } else { "ValidRect" }, &[a1]);
+                let trap = match f { InvalWindowRect => "InvalRect", ValidWindowRect => "ValidRect", InvalWindowRgn => "InvalRgn", _ => "ValidRgn" };
+                let r = self.cx_trap(trap, &[a1]);
                 self.cx_trap("SetPort", &[old])?;
                 r?;
                 0

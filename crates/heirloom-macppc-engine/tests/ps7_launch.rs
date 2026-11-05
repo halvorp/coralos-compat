@@ -92,8 +92,17 @@ fn drain(m: &mut MacPpc<RecordingGuestUi>) {
 #[ignore]
 fn ps7_launch_host_run() {
     let Some(mut m) = started() else { return };
-    let slices: u32 = std::env::var("PS7_SLICES").ok().and_then(|s| s.parse().ok()).unwrap_or(500);
+    // PS7_BINDCHECK=<file of names>: which CarbonLib imports this engine does not serve (a fragment's gap census), then stop
+    if let Ok(f) = std::env::var("PS7_BINDCHECK") {
+        for n in std::fs::read_to_string(f).unwrap().lines() {
+            if let heirloom_macppc_engine::symbols::Binding::Unbound(why) = m.bind_from(&std::env::var("PS7_BINDLIB").unwrap_or_else(|_| String::from("CarbonLib")), n) { eprintln!("UNBOUND {n}: {}", why.chars().take(80).collect::<String>()); }
+        }
+        return;
+    }
+    // PS7_ACTIONS: drive it first with the shared verbs (ps7_common::act), then PS7_SLICES more slices
     let mut t = 0u64;
+    if let Ok(actions) = std::env::var("PS7_ACTIONS") { let ok = ps7_common::act(&mut m, &mut t, &actions); eprintln!("ACTIONS DONE: {ok}"); }
+    let slices: u32 = std::env::var("PS7_SLICES").ok().and_then(|s| s.parse().ok()).unwrap_or(500);
     let mut stop = None;
     // PS7_BUDGET: instructions per slice (5M); PS7_STOP_REFUSED: stop at the first slice that adds a refusal (with a small budget and
     // PS7_TRACE, the trace ends right at the refused call)
@@ -134,6 +143,45 @@ fn ps7_launch_host_run() {
             for pc in c.recent_pcs() {
                 let w = m.mac.mem.read_u32(pc).unwrap_or(0);
                 if w >> 16 == 0x8182 && seen.insert(pc) { eprintln!("GLUESTUB {pc:#x} d={}", w as u16 as i16); }
+            }
+        }
+        // PS7_DUMP=<addr hex>,<len>: guest bytes to run/dump.bin (disassemble with llvm-objdump --triple=powerpc, base = addr)
+        if let Ok(d) = std::env::var("PS7_DUMP") {
+            let (a, n) = d.split_once(',').unwrap();
+            let (a, n) = (u32::from_str_radix(a.trim_start_matches("0x"), 16).unwrap(), n.parse::<u32>().unwrap());
+            let b: Vec<u8> = (0..n).map(|i| m.mac.mem.read_u8(a + i).unwrap_or(0)).collect();
+            std::fs::write("/build/patches/ps7/run/dump.bin", b).unwrap();
+            eprintln!("DUMPED {a:#x} {n}; GPR {:x?} CTR {:#x} LR {:#x}", c.gpr, c.ctr, c.lr);
+        }
+        // a call through a glue whose TVector is empty: the TOC slot the caller's glue named (caller TOC at 20(r1), d from the glue at LR-4's target)
+        if let Some(call) = m.mac.mem.read_u32(c.lr.wrapping_sub(4)).ok().filter(|w| w >> 26 == 18) {
+            let li = ((call & 0x03FF_FFFC) as i32) << 6 >> 6;
+            let glue = c.lr.wrapping_sub(4).wrapping_add(li as u32);
+            let first = m.mac.mem.read_u32(glue).unwrap_or(0);
+            if first >> 16 == 0x8182 {
+                let toc = m.mac.mem.read_u32(c.gpr[1] + 20).unwrap_or(0);
+                let slot = toc.wrapping_add(first as u16 as i16 as i32 as u32);
+                let tv = m.mac.mem.read_u32(slot).unwrap_or(0);
+                eprintln!("GLUESLOT glue {glue:#x} toc {toc:#x} slot {slot:#x} -> {:?} tvector {tv:#x} = [{:#x}, {:#x}] in {:?}", m.import_slots.get(&slot), m.mac.mem.read_u32(tv).unwrap_or(0), m.mac.mem.read_u32(tv + 4).unwrap_or(0), m.code_map.locate(tv));
+                for (a, v) in m.import_slots.range(slot.saturating_sub(0x40)..slot + 0x40) { eprintln!("  NEAR {a:#x} {v:?}"); }
+                // Photoshop's DRM-decrypted TOC copies its import words from the CFM-filled table (measured: TOC word 0x1000700 = the
+                // import word at 0xf47c6a, the run's placement): the import this TOC word stands for
+                let mirrored = slot.wrapping_add(0xf47c6a).wrapping_sub(0x0100_0700);
+                eprintln!("  MIRROR {mirrored:#x} {:?}", m.import_slots.get(&mirrored));
+                let near: Vec<_> = m.import_slots.range(toc - 0x8000..toc + 0x8000).take(3).collect();
+                let n = m.import_slots.range(toc - 0x8000..toc + 0x8000).count();
+                eprintln!("  {n} import slots within the TOC's 64K, first {near:?}; slot in {:?}, toc in {:?}", m.code_map.locate_any(slot), m.code_map.locate_any(toc));
+            }
+        }
+        // PS7_SLOTAT=<hex>,..: the import relocated into this guest word
+        if let Ok(v) = std::env::var("PS7_SLOTAT") { for x in v.split(',') { let x = u32::from_str_radix(x, 16).unwrap(); eprintln!("SLOTAT {x:#x} {:?} value {:#x}", m.import_slots.get(&x), m.mac.mem.read_u32(x).unwrap_or(0)); } }
+        // PS7_WHERE=<hex>,..: which fragment section / heap block holds an address
+        if let Ok(v) = std::env::var("PS7_WHERE") { for x in v.split(',') { let x = u32::from_str_radix(x, 16).unwrap(); let h = m.mac.mm.recover_handle(x & !3); eprintln!("WHERE {x:#x} section {:?} handle-of-ptr {h:?} resinfo {:?}", m.code_map.locate_any(x), h.and_then(|h| m.mac.res_info(h))); } }
+        // PS7_FIND=<hex>,<hex>..: the import slots that hold these values (which import a copied TOC word is)
+        if let Ok(v) = std::env::var("PS7_FIND") {
+            for x in v.split(',') {
+                let x = u32::from_str_radix(x, 16).unwrap();
+                for (a, s) in &m.import_slots { if m.mac.mem.read_u32(*a).unwrap_or(1) == x { eprintln!("FIND {x:#x} at {a:#x} {s:?} in {:?}", m.code_map.locate_any(*a)); } }
             }
         }
         eprintln!("CODEMAP {}", chain.iter().map(|&a| format!("{a:#x}={:?}", m.code_map.locate(a))).collect::<Vec<_>>().join(" "));

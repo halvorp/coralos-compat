@@ -35,7 +35,7 @@ const P_DIR_ID: u32 = 48;
 const P_NEW_REF: u32 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FsrFn { FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo }
+pub enum FsrFn { FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo, FSOpenIterator, FSCloseIterator, FSGetCatalogInfoBulk }
 
 impl FsrFn {
     pub fn by_name(name: &str) -> Option<FsrFn> {
@@ -43,10 +43,24 @@ impl FsrFn {
         Some(match name {
             "FSpMakeFSRef" => FSpMakeFSRef, "PBMakeFSRefSync" => PBMakeFSRefSync, "FSMakeFSRefUnicode" => FSMakeFSRefUnicode, "FSGetCatalogInfo" => FSGetCatalogInfo,
             "FSDeleteObject" => FSDeleteObject, "FSCompareFSRefs" => FSCompareFSRefs, "FSRefMakePath" => FSRefMakePath, "FSPathMakeRef" => FSPathMakeRef, "FSSetCatalogInfo" => FSSetCatalogInfo,
+            "FSOpenIterator" => FSOpenIterator, "FSCloseIterator" => FSCloseIterator, "FSGetCatalogInfoBulk" => FSGetCatalogInfoBulk,
             _ => return None,
         })
     }
 }
+
+/// errFSNoMoreItems, errFSBadIteratorFlags, errFSBadItemCount, errFSBadIterator (Files.h).
+const NO_MORE_ITEMS: i32 = -1417;
+const BAD_ITERATOR_FLAGS: i32 = -1423;
+const BAD_ITEM_COUNT: i32 = -1424;
+const BAD_ITERATOR: i32 = -1420;
+const HFS_UNI_STR_SIZE: u32 = 512;
+const FSSPEC_SIZE: u32 = 70;
+
+/// Open catalog iterators (`FSOpenIterator`): id -> (the folder, its items as they were at open, how many were returned). A growable table;
+/// an iterator id is never reused.
+#[derive(Default)]
+pub struct FsrState { iters: alloc::collections::BTreeMap<u32, (usize, Vec<usize>, usize)>, next: u32 }
 
 /// UTCDateTime (8 bytes) of 1904-based seconds.
 fn utc(secs: u32) -> [u8; 8] { let mut b = [0u8; 8]; b[2..6].copy_from_slice(&secs.to_be_bytes()); b }
@@ -83,7 +97,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub(crate) fn fsr_call(&mut self, f: FsrFn, cpu: &mut Cpu) -> Result<(), String> {
         use FsrFn::*;
         let name = format!("{f:?}");
-        let args: Vec<u32> = (0..6).map(|i| arg(self, cpu, i).unwrap_or(0)).collect();
+        let args: Vec<u32> = (0..9).map(|i| arg(self, cpu, i).unwrap_or(0)).collect();
         let r: i32 = match f {
             // FSpMakeFSRef(const FSSpec *source, FSRef *newRef)
             FSpMakeFSRef => match heirloom_mac68k_engine::fm::fsspec::spec_loc(&self.mac, args[0]).and_then(|l| l.node.ok_or(FNF_ERR)) {
@@ -116,6 +130,49 @@ impl<U: GuestUi> MacPpc<U> {
                 }
             },
             // FSGetCatalogInfo(const FSRef *ref, FSCatalogInfoBitmap whichInfo, FSCatalogInfo *catalogInfo, HFSUniStr255 *outName, FSSpec *fsSpec, FSRef *parentRef)
+            // FSOpenIterator(const FSRef *container, FSIteratorFlags flags, FSIterator *iterator): kFSIterateFlat (0) over a folder's items;
+            // kFSIterateSubtree (1) is only for FSCatalogSearch, which is not provided: errFSBadIteratorFlags, named
+            FSOpenIterator => match self.fsref_node(args[0]) {
+                Err(e) => i32::from(e),
+                Ok(_) if args[1] != 0 => { self.mac.log.push(format!("[file] FSOpenIterator flags {:#x}: only kFSIterateFlat is provided", args[1])); BAD_ITERATOR_FLAGS }
+                Ok(dir) if !self.mac.fm.tree.is_dir(dir) => -120, // dirNFErr
+                Ok(dir) => {
+                    let items: Vec<usize> = self.mac.fm.tree.children(dir).to_vec();
+                    self.fsr.next += 1;
+                    let id = 0x4954_0000 | self.fsr.next; // 'IT' + a counter: never 0, never reused
+                    self.fsr.iters.insert(id, (dir, items, 0));
+                    self.mac.mem.write_u32(args[2], id).map_err(|_| self.fsr_err(&name, args[2]))?;
+                    0
+                }
+            },
+            FSCloseIterator => if self.fsr.iters.remove(&args[0]).is_some() { 0 } else { BAD_ITERATOR },
+            // FSGetCatalogInfoBulk(iterator, maximumObjects, &actualObjects, &containerChanged, whichInfo, catalogInfos[], refs[], specs[], names[])
+            FSGetCatalogInfoBulk => {
+                let (it, max, actual, changed, which, cats, refs, specs, names) = (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]);
+                match self.fsr.iters.get(&it).cloned() {
+                    None => BAD_ITERATOR,
+                    Some(_) if max == 0 => BAD_ITEM_COUNT,
+                    Some((dir, items, done)) => {
+                        // the items still in the folder, in the order they were at open, up to maximumObjects
+                        let (mut live, mut next) = (Vec::new(), done);
+                        while next < items.len() && live.len() < max as usize {
+                            let n = items[next];
+                            next += 1;
+                            if self.mac.fm.tree.is_live(n) && self.mac.fm.tree.parent(n) == dir { live.push(n); }
+                        }
+                        for (i, &node) in live.iter().enumerate() {
+                            let i = i as u32;
+                            let at = |base: u32, size: u32| if base == 0 { 0 } else { base + i * size };
+                            self.fsr_catalog_info(node, &[0, which, at(cats, CAT_INFO_SIZE), at(names, HFS_UNI_STR_SIZE), at(specs, FSSPEC_SIZE), 0])?;
+                            if refs != 0 { self.put_fsref(refs + i * FSREF_SIZE, node)?; }
+                        }
+                        if let Some(e) = self.fsr.iters.get_mut(&it) { e.2 = next; }
+                        if actual != 0 { self.mac.mem.write_u32(actual, live.len() as u32).map_err(|_| self.fsr_err(&name, actual))?; }
+                        if changed != 0 { self.mac.mem.write_u8(changed, 0).map_err(|_| self.fsr_err(&name, changed))?; }
+                        if live.is_empty() { NO_MORE_ITEMS } else { 0 }
+                    }
+                }
+            }
             FSGetCatalogInfo => match self.fsref_node(args[0]) {
                 Err(e) => i32::from(e),
                 Ok(node) => { self.fsr_catalog_info(node, &args)?; 0 }

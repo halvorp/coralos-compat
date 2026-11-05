@@ -61,7 +61,9 @@ const FOUR_NULL: u32 = u32::from_be_bytes(*b"null");
 
 /// (event class, event id, isSysHandler) -> (handler address, refcon).
 #[derive(Default)]
-pub struct AppleEvents { pub handlers: BTreeMap<(u32, u32, bool), (u32, u32)>, oapp_sent: bool, interaction: Option<u16> }
+pub struct AppleEvents { pub handlers: BTreeMap<(u32, u32, bool), (u32, u32)>, oapp_sent: bool, interaction: Option<u16>,
+    /// The last return id `AECreateAppleEvent(kAutoGenerateReturnID)` handed out ([`crate::aedesc`]).
+    pub next_return_id: u32 }
 
 /// `kAEInteractWithLocal`: the level a process starts with (Inside Macintosh: Interapplication Communication, "Apple Event Manager").
 const INTERACT_WITH_LOCAL: u16 = 1;

@@ -1,12 +1,13 @@
 //! `_OSDispatch` ($A88F): the Process Manager and Temporary Memory routines of System 7 (Inside Macintosh: Processes;
 //! Memory). The selector is the word pushed last ([`crate::package`]).
 //!
-//! There is exactly ONE process, the application. Its serial number is `{0, 2}` (`kCurrentProcess`, which every routine accepts
-//! for "me"); `GetNextProcess` from `kNoProcess` finds it and from it finds nothing (`procNotFound`, -600); `SetFrontProcess` and
-//! `WakeUpProcess` on it succeed (it is already in front and awake). `GetProcessInformation` fills the `ProcessInfoRec` (60 bytes):
-//! the name from `CurApName`, type 'APPL', the launch mode from the application's `SIZE` resource (ID 0, else -1) and the heap
-//! sizes; the creator signature is '????' (the file's creator is not kept by the launcher) and the `FSSpec` (`processAppSpec`)
-//! names the application's own file (the File Manager's `app`, installed at launch; unfilled and named in the log without one). Temporary Memory is the application heap (there is no second pool): `TempNewHandle` is
+//! The processes are the machine's table ([`crate::processes`]): serial numbers are real (`{0, FIRST_PSN}` for the first), `kCurrentProcess`
+//! `{0, 2}` means the caller; `GetNextProcess` iterates the table in serial-number order from `kNoProcess` and ends with `procNotFound`
+//! (-600); `GetFrontProcess` answers the front process, `SetFrontProcess` moves it, `WakeUpProcess` succeeds for any running process.
+//! `GetProcessInformation` fills the `ProcessInfoRec` (60 bytes) for the process asked: name, type, signature, launcher and launch date
+//! from the table (CurApName for the caller), the launch mode from the caller's `SIZE` resource (ID 0, else -1; 0 for another process),
+//! the heap sizes, and `processAppSpec` = that process's application file (unfilled and named in the log without one). The 68k engine runs one
+//! process, whose table is empty: it answers as `{0, FIRST_PSN}`, type 'APPL', signature '????'. Temporary Memory is the application heap (there is no second pool): `TempNewHandle` is
 //! `NewHandle`, `TempFreeMem`/`TempMaxMem` the free bytes, `TempTopMem` the top of RAM. High-level events never arrive:
 //! `AcceptHighLevelEvent` answers `noOutstandingHLE` (-607). Any other selector halts the guest with a named refusal.
 use crate::lowmem::{CUR_AP_NAME, MEM_TOP, TICKS};
@@ -22,9 +23,7 @@ use crate::cpu::Cpu;
 
 pub const PROC_NOT_FOUND: i16 = -600;
 pub const NO_OUTSTANDING_HLE: i16 = -607;
-/// The application's serial number: high long, low long (`kCurrentProcess`).
-pub const APP_PSN: (u32, u32) = (0, 2);
-const NO_PROCESS: (u32, u32) = (0, 0);
+use crate::processes::NO_PROCESS;
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> { m.register_os(0xA88F, os_dispatch::<U>) }
 
@@ -47,7 +46,7 @@ fn lookup<U: GuestUi>(sel: u16) -> Option<Routine<U>> {
         0x33 => r("AcceptHighLevelEvent", &[P, P, P, P], W, accept_hle::<U>),
         0x37 => r("GetCurrentProcess", &[P], W, get_current::<U>),
         0x38 => r("GetNextProcess", &[P], W, get_next::<U>),
-        0x39 => r("GetFrontProcess", &[P], W, get_current::<U>),
+        0x39 => r("GetFrontProcess", &[P], W, get_current::<U>), // the front process, not the caller
         0x3A => r("GetProcessInformation", &[P, P], W, get_info::<U>),
         0x3B | 0x3C => r(if sel == 0x3B { "SetFrontProcess" } else { "WakeUpProcess" }, &[P], W, ok_if_app::<U>),
         0x3D => r("SameProcess", &[P, P, P], W, same_process::<U>),
@@ -61,65 +60,77 @@ fn psn<U: GuestUi>(m: &Mac<U>, at: u32) -> Result<(u32, u32), Refusal> {
 fn put_psn<U: GuestUi>(m: &mut Mac<U>, at: u32, v: (u32, u32)) -> Result<(), Refusal> {
     m.mem.write_u32(at, v.0).and_then(|_| m.mem.write_u32(at + 4, v.1)).map_err(Refusal::mem("ProcessSerialNumber"))
 }
-fn is_app(p: (u32, u32)) -> bool { p == APP_PSN }
 fn err(e: i16) -> u32 { e as u16 as u32 }
 
 fn get_current<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    put_psn(m, c.args.get(0), APP_PSN)?;
-    Ok(Done { result: 0, log: format!("[process] {} -> {{0,2}}", c.name) })
+    let me = m.current_psn();
+    let front = c.name == "GetFrontProcess";
+    let p = if front { m.front_psn() } else { me };
+    put_psn(m, c.args.get(0), (0, p))?;
+    Ok(Done { result: 0, log: format!("[process] {} -> {{0,{p:#x}}}", c.name) })
 }
 
 fn get_next<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let p = psn(m, c.args.get(0))?;
-    let (found, e) = if p == NO_PROCESS { (APP_PSN, 0) } else { (NO_PROCESS, PROC_NOT_FOUND) };
+    let found = if p == NO_PROCESS { m.next_psn(None) } else { m.resolve_psn(p).and_then(|l| m.next_psn(Some(l))) };
+    let (found, e) = match found { Some(l) => ((0, l), 0), None => (NO_PROCESS, PROC_NOT_FOUND) };
     put_psn(m, c.args.get(0), found)?;
-    Ok(Done { result: err(e), log: format!("[process] GetNextProcess {{{},{}}} -> {{{},{}}} err {e}", p.0, p.1, found.0, found.1) })
+    Ok(Done { result: err(e), log: format!("[process] GetNextProcess {{{},{:#x}}} -> {{{},{:#x}}} err {e}", p.0, p.1, found.0, found.1) })
 }
 
 fn ok_if_app<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let p = psn(m, c.args.get(0))?;
-    let e = if is_app(p) { 0 } else { PROC_NOT_FOUND };
-    Ok(Done { result: err(e), log: format!("[process] {} {{{},{}}} -> {e}", c.name, p.0, p.1) })
+    let e = match m.resolve_psn(p) {
+        Some(l) => { if c.name == "SetFrontProcess" && !m.procs.table.is_empty() { m.procs.front = l; } 0 }
+        None => PROC_NOT_FOUND,
+    };
+    Ok(Done { result: err(e), log: format!("[process] {} {{{},{:#x}}} -> {e}", c.name, p.0, p.1) })
 }
 
 fn same_process<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (a, b) = (psn(m, c.args.get(0))?, psn(m, c.args.get(1))?);
-    let (e, same) = if is_app(a) && is_app(b) { (0, true) } else if (is_app(a) || a == b) && (is_app(b) || a == b) && a != NO_PROCESS { (0, a == b) } else { (PROC_NOT_FOUND, false) };
+    let (e, same) = match (m.resolve_psn(a), m.resolve_psn(b)) { (Some(x), Some(y)) => (0, x == y), _ => (PROC_NOT_FOUND, false) };
     m.mem.write_u8(c.args.get(2), same as u8).map_err(Refusal::mem("SameProcess result"))?;
     Ok(Done { result: err(e), log: format!("[process] SameProcess -> {same} err {e}") })
 }
 
 /// `ProcessInfoRec` offsets (Inside Macintosh: Processes): processInfoLength 0, processName 4, processNumber 8, processType 16,
 /// processSignature 20, processMode 24, processLocation 28, processSize 32, processFreeMem 36, processLauncher 40,
-/// processLaunchDate 48, processActiveTime 52, processAppSpec 56; 60 bytes.
+/// processLaunchDate 48, processActiveTime 52, processAppSpec 56; 60 bytes. Another process's mode is 0 (its SIZE resource lives in
+/// its own resource chain, not the caller's; logged) and its location 0.
 fn get_info<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (p, info) = (psn(m, c.args.get(0))?, c.args.get(1));
-    if !is_app(p) { return Ok(Done { result: err(PROC_NOT_FOUND), log: format!("[process] GetProcessInformation {{{},{}}}: no such process", p.0, p.1) }); }
+    let Some(low) = m.resolve_psn(p) else { return Ok(Done { result: err(PROC_NOT_FOUND), log: format!("[process] GetProcessInformation {{{},{:#x}}}: no such process", p.0, p.1) }) };
+    let me = low == m.current_psn();
     let e = Refusal::mem("ProcessInfoRec");
     let len = m.mem.read_u32(info).map_err(&e)?;
     if len < 60 { return Err(Refusal(format!("GetProcessInformation: processInfoLength is {len}, a ProcessInfoRec is 60 bytes (the caller must set it)"))); }
+    let entry = m.procs.get(low).map(|p| (p.name.clone(), p.file_type, p.creator, p.app, p.launcher, p.launch_tick));
     let name_ptr = m.mem.read_u32(info + 4).map_err(&e)?;
     if name_ptr != 0 {
-        let name = crate::pascal::read_pstring_bytes(&m.mem, CUR_AP_NAME)?;
+        let name = match (&entry, me) { (Some(en), false) => en.0.clone(), _ => crate::pascal::read_pstring_bytes(&m.mem, CUR_AP_NAME)?.to_vec() };
         crate::pascal::write_pstring(&mut m.mem, name_ptr, &name)?;
     }
-    let mode = m.size_resource_flags();
+    let mode = if me { m.size_resource_flags() } else { 0 };
     let (size, free) = (crate::machine::HEAP_END - crate::machine::HEAP_START, m.heap.available(false));
     let ticks = m.mem.read_u32(TICKS).map_err(&e)?;
-    put_psn(m, info + 8, APP_PSN)?;
-    for (off, v) in [(16, u32::from_be_bytes(*b"APPL")), (20, u32::from_be_bytes(*b"????")), (24, mode), (28, m.seg.a5), (32, size), (36, free), (40, 0), (44, 1), (48, ticks), (52, ticks)] {
+    put_psn(m, info + 8, (0, low))?;
+    let (ty, sig, launcher, launched) = entry.as_ref().map_or((u32::from_be_bytes(*b"APPL"), u32::from_be_bytes(*b"????"), (0, 1), ticks), |en| (en.1, en.2, if en.4 == NO_PROCESS { (0, 1) } else { en.4 }, en.5));
+    let loc = if me { m.seg.a5 } else { 0 };
+    for (off, v) in [(16, ty), (20, sig), (24, mode), (28, loc), (32, size), (36, free), (40, launcher.0), (44, launcher.1), (48, launched), (52, ticks.wrapping_sub(launched))] {
         m.mem.write_u32(info + off, v).map_err(&e)?;
     }
     let spec = m.mem.read_u32(info + 56).map_err(&e)?;
-    let note = match spec {
-        0 => "",
-        p => match crate::fm::fsspec::write_app_spec(m, p) {
-            Ok(true) => "; processAppSpec = the application's file",
-            Ok(false) => "; processAppSpec is not filled (no application file was installed)",
+    let node = if me { m.fm.app } else { entry.and_then(|en| en.3) };
+    let note = match (spec, node) {
+        (0, _) => "",
+        (_, None) => "; processAppSpec is not filled (no application file was installed)",
+        (p, Some(n)) => match crate::fm::fsspec::write_node_spec(m, p, n) {
+            Ok(_) => "; processAppSpec = the application's file",
             Err(_) => return Err(Refusal(format!("GetProcessInformation: processAppSpec {p:#x} is not writable guest memory"))),
         },
     };
-    Ok(Done { result: 0, log: format!("[process] GetProcessInformation -> mode {mode:#x}, size {size}, free {free}{note}") })
+    Ok(Done { result: 0, log: format!("[process] GetProcessInformation {{0,{low:#x}}} -> mode {mode:#x}, size {size}, free {free}{note}") })
 }
 
 fn accept_hle<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {

@@ -83,6 +83,10 @@ pub struct Runtime {
     main_tvector: u32,    /// Init routines of libraries the program loaded while it RUNS (GetDiskFragment, GetMemFragment, a first import): each runs as a callback
     /// before the call that loaded it returns ([`MacPpc::begin_lib_init`]): (its TVector, the library's name, its CFragInitBlock).
     pub(crate) pending_inits: alloc::collections::VecDeque<(crate::cfm::Tv, String, u32)>,
+    /// Launched processes still running their init routines, by serial number low word (process_c.rs).
+    pub(crate) proc_starts: alloc::collections::BTreeMap<u32, crate::process_c::ProcStart>,
+    /// Tasks whose current event call already gave another process its turn (process_c.rs `process_turn`).
+    pub(crate) turn_given: alloc::collections::BTreeSet<u32>,
     /// The lowest address of the application thread's stack (for `ThreadCurrentStackSpace`; accurate to the 16-byte alignment of r1).
     pub(crate) main_stack: u32,
     /// A refusal or CPU trap; once set, every step reports it again (the program cannot continue).
@@ -365,6 +369,11 @@ impl<U: GuestUi> MacPpc<U> {
             cpu.set_pc(m.pc);
             return true;
         }
+        if symbol == crate::process_c::PROC_START {
+            if let Err(why) = self.proc_start_returned(cpu, addr) { self.rt.fault = Some(why); cpu.halt(); }
+            self.sync_natives(cpu);
+            return true;
+        }
         // idle sweep: every call is progress except a yield (unless its turn computed) and a call that parks (undone below)
         let progressed_before = self.rt.sched.sweep.as_ref().map(|s| s.progressed);
         // Not work by itself: a yield; a callback's return (a thread switcher, a dialog filter, a Time Manager task: what the
@@ -426,6 +435,11 @@ impl<U: GuestUi> MacPpc<U> {
             }
             Some(Binding::Native(Native::Carbon(f))) => {
                 if let Err(why) = self.carbon_call(f, cpu, addr) { self.rt.fault = Some(why); cpu.halt(); }
+                self.sync_natives(cpu);
+                return true;
+            }
+            Some(Binding::Native(Native::Wc(f))) => {
+                if let Err(why) = self.wc_call(f, cpu) { self.rt.fault = Some(why); cpu.halt(); }
                 self.sync_natives(cpu);
                 return true;
             }
@@ -507,16 +521,22 @@ impl<U: GuestUi> MacPpc<U> {
         match outcome {
             GlueOutcome::Return => {}
             GlueOutcome::Exit => {
-                // the guest call chain that ended the program (PowerPC frames: the caller's r1 at [r1], its saved LR at 8 of it)
-                let (mut sp, mut chain) = (cpu.gpr[1], alloc::vec![cpu.lr]);
-                while chain.len() < 12 {
-                    let Ok(next) = self.mac.mem.read_u32(sp) else { break };
-                    if next <= sp { break }
-                    chain.push(self.mac.mem.read_u32(next + 8).unwrap_or(0));
-                    sp = next;
+                // ExitToShell of a launched process ends that process only (process_c.rs); the first process's ends the machine
+                let alone = if matches!(binding, Some(Binding::Native(Native::Exit))) {
+                    match self.process_exit(cpu) { Ok(b) => b, Err(why) => { self.rt.fault = Some(why); cpu.halt(); true } }
+                } else { false };
+                if !alone {
+                    // the guest call chain that ended the program (PowerPC frames: the caller's r1 at [r1], its saved LR at 8 of it)
+                    let (mut sp, mut chain) = (cpu.gpr[1], alloc::vec![cpu.lr]);
+                    while chain.len() < 12 {
+                        let Ok(next) = self.mac.mem.read_u32(sp) else { break };
+                        if next <= sp { break }
+                        chain.push(self.mac.mem.read_u32(next + 8).unwrap_or(0));
+                        sp = next;
+                    }
+                    self.mac.log.push(format!("[cfm] {symbol} ends the program; called from {chain:x?}"));
+                    cpu.halt()
                 }
-                self.mac.log.push(format!("[cfm] {symbol} ends the program; called from {chain:x?}"));
-                cpu.halt()
             }
             GlueOutcome::Idle => {
                 // the call parked: it was not progress after all (note_call counted it before it ran)

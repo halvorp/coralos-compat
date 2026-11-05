@@ -59,7 +59,7 @@ pub enum CarbonFn {
     GetApplicationEventTarget, GetWindowEventTarget, GetEventDispatcherTarget, InstallEventHandler, RemoveEventHandler, InstallStandardEventHandler,
     GetEventClass, GetEventKind, GetEventParameter, SetEventParameter, CreateEvent, RetainEvent, ReleaseEvent, SendEventToEventTarget, CallNextEventHandler,
     ReceiveNextEvent, RunApplicationEventLoop, QuitApplicationEventLoop, GetMainEventQueue, GetCurrentEventQueue, GetCurrentEventTime, PostEventToQueue,
-    CreateNewWindow, SetWindowTitleWithCFString, GetWindowPort, SetPortWindowPort,
+    CreateNewWindow, CreateCustomWindow, SetWindowTitleWithCFString, GetWindowPort, SetPortWindowPort,
 }
 impl CarbonFn {
     pub fn by_name(name: &str) -> Option<CarbonFn> {
@@ -71,7 +71,7 @@ impl CarbonFn {
             "CreateEvent" => CreateEvent, "RetainEvent" => RetainEvent, "ReleaseEvent" => ReleaseEvent, "SendEventToEventTarget" => SendEventToEventTarget,
             "CallNextEventHandler" => CallNextEventHandler, "ReceiveNextEvent" => ReceiveNextEvent, "RunApplicationEventLoop" => RunApplicationEventLoop,
             "QuitApplicationEventLoop" => QuitApplicationEventLoop, "PostEventToQueue" => PostEventToQueue, "GetMainEventQueue" => GetMainEventQueue, "GetCurrentEventQueue" => GetCurrentEventQueue,
-            "GetCurrentEventTime" => GetCurrentEventTime, "CreateNewWindow" => CreateNewWindow, "SetWindowTitleWithCFString" => SetWindowTitleWithCFString,
+            "GetCurrentEventTime" => GetCurrentEventTime, "CreateNewWindow" => CreateNewWindow, "CreateCustomWindow" => CreateCustomWindow, "SetWindowTitleWithCFString" => SetWindowTitleWithCFString,
             "GetWindowPort" => GetWindowPort, "SetPortWindowPort" => SetPortWindowPort,
             _ => return None,
         })
@@ -199,7 +199,7 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// Call a Pascal Toolbox trap by name with value arguments; its result (0 when the call cannot be made).
-    fn toolbox_call(&mut self, name: &str, args: &[u32]) -> u32 {
+    pub(crate) fn toolbox_call(&mut self, name: &str, args: &[u32]) -> u32 {
         match trap_opcode(name) { Some(op) => self.mac.pascal_call(op, args).map_or(0, |r| r.value), None => 0 }
     }
 
@@ -447,25 +447,26 @@ impl<U: GuestUi> MacPpc<U> {
                 }
             }
             CreateNewWindow => { // (windowClass, attributes, const Rect* bounds, WindowRef* out)
-                let (class, attrs, bounds, out) = (a0, a1, a2, a3);
-                let g = |m: &Self, i: u32| m.mac.mem.read_i16(bounds + 2 * i).map_err(|_| String::from("CreateNewWindow: the bounds Rect leaves guest RAM"));
-                let rect = Rect { top: g(self, 0)?, left: g(self, 1)?, bottom: g(self, 2)?, right: g(self, 3)? };
-                let resizable = attrs & (1 << 4) != 0;
-                let zoom = attrs & 3 == 3;
-                let (proc_id, note) = match class {
-                    6 => (if resizable && zoom { 8u16 } else if resizable { 0 } else { 4 }, ""),
-                    13 => (2, ""),
-                    1 | 3 => (1, ""),
-                    2 | 4 => (5, ""),
-                    5 | 8 => (4, " (floating/utility windows are presented as document windows: the seam has no floating role yet)"),
-                    _ => { cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); }
+                match self.create_window(a0, a1, a2, a3, None)? { Some(r) => r, None => { cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); } }
+            }
+            // CreateCustomWindow(const WindowDefSpec* def, windowClass, attributes, const Rect* bounds, WindowRef* out): a kWindowDefProcID (2) spec
+            // names a procID, decoded whole through the Window Manager's one table (a system WDEF has a native role; any other is refused there);
+            // a program's OWN definition (kWindowDefProcPtr 0, kWindowDefObjectClass 1, kWindowDefHIView 3) has no native presentation contract
+            // and is refused BY NAME before anything is allocated (HEIRLOOM-CUSTOM-WINDOW-NEEDS-A-BINDING): *out = NULL, paramErr, and a
+            // [WDEF-UNSUPPORTED] note in the refusals.
+            CreateCustomWindow => {
+                let out = arg(self, cpu, 4)?;
+                let (ty, v) = (self.mac.mem.read_u32(a0).unwrap_or(0), self.mac.mem.read_u32(a0 + 4).unwrap_or(0));
+                let refuse = |m: &mut Self, why: String| -> Result<(), String> {
+                    let note = format!("[WDEF-UNSUPPORTED] CreateCustomWindow: {why}: no native presentation contract (HEIRLOOM-CUSTOM-WINDOW-NEEDS-A-BINDING) -> paramErr, no window");
+                    m.mac.log.push(note.clone());
+                    m.mac.refused.push(note);
+                    if out != 0 { m.put32(out, 0, "CreateCustomWindow")?; }
+                    Ok(())
                 };
-                let spec = WindowSpec { storage: 0, rect, title: String::new(), visible: false, proc_id, behind: u32::MAX, go_away: attrs & 1 != 0, ref_con: 0 };
-                let win = self.mac.make_window(spec).map_err(|e| format!("CreateNewWindow: {}", e.0))?;
-                if attrs & STANDARD_HANDLER_ATTR != 0 { self.rt.carbon.std_windows.insert(win); }
-                self.put32(out, win, "CreateNewWindow")?;
-                self.mac.log.push(format!("[carbon] CreateNewWindow class {class} attrs {attrs:#x} -> window {win:#x} (procID {proc_id}){note}"));
-                0
+                if ty != 2 { refuse(self, format!("the program's own window definition (WindowDefSpec type {ty}, {v:#x})"))?; cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); }
+                if let Err(e) = heirloom_mac68k_engine::toolbox::role_of(v as u16) { refuse(self, e.0)?; cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); }
+                match self.create_window(a1, a2, a3, out, Some(v as u16))? { Some(r) => r, None => { cpu.gpr[3] = PARAM_ERR as u32; return Ok(()); } }
             }
             SetWindowTitleWithCFString => {
                 let Some(bytes) = self.cf_bytes(a1).map(<[u8]>::to_vec) else { return Err(format!("SetWindowTitleWithCFString: {a1:#x} is not a CFString this engine made")) };
@@ -483,4 +484,31 @@ impl<U: GuestUi> MacPpc<U> {
         cpu.gpr[3] = r as u32;
         Ok(())
     }
+
+    /// A Carbon window of `class` with `attrs` (CreateNewWindow / CreateCustomWindow): Some(0) made, None = a class this seam has no window for (paramErr).
+    pub(crate) fn create_window(&mut self, class: u32, attrs: u32, bounds: u32, out: u32, forced: Option<u16>) -> Result<Option<i32>, String> {
+        let g = |m: &Self, i: u32| m.mac.mem.read_i16(bounds + 2 * i).map_err(|_| String::from("CreateNewWindow: the bounds Rect leaves guest RAM"));
+        let rect = Rect { top: g(self, 0)?, left: g(self, 1)?, bottom: g(self, 2)?, right: g(self, 3)? };
+        let resizable = attrs & (1 << 4) != 0;
+        let zoom = attrs & 3 == 3;
+        let (proc_id, note) = match (forced, class) {
+            (Some(p), _) => (p, ""),
+            (None, class) => match class {
+            6 => (if resizable && zoom { 8u16 } else if resizable { 0 } else { 4 }, ""),
+            13 => (2, ""),
+            1 | 3 => (1, ""),
+            2 | 4 => (5, ""),
+            5 | 8 => (4, " (floating/utility windows are presented as document windows: the seam has no floating role yet)"),
+            _ => return Ok(None),
+            },
+        };
+        let spec = WindowSpec { storage: 0, rect, title: String::new(), visible: false, proc_id, behind: u32::MAX, go_away: attrs & 1 != 0, ref_con: 0 };
+        let win = self.mac.make_window(spec).map_err(|e| format!("CreateNewWindow: {}", e.0))?;
+        if attrs & STANDARD_HANDLER_ATTR != 0 { self.rt.carbon.std_windows.insert(win); }
+        self.wc.class.insert(win, class);
+        self.put32(out, win, "CreateNewWindow")?;
+        self.mac.log.push(format!("[carbon] CreateNewWindow class {class} attrs {attrs:#x} -> window {win:#x} (procID {proc_id}){note}"));
+        Ok(Some(0))
+    }
+
 }

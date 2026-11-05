@@ -9,14 +9,14 @@ use heirloom_ui_abi::GuestUi;
 use crate::cpu::Cpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MathFn { Acos, Asin, Atan, Atan2, Ceil, Cos, Cosh, Exp, Fabs, Floor, Fmod, Frexp, Hypot, Ldexp, Log, Log10, Modf, Pow, Rint, Round, Sin, Sinh, Sqrt, Tan, Tanh, Dec2num, Num2dec, Nan }
+pub enum MathFn { Acos, Asin, Atan, Atan2, Ceil, Cos, Cosh, Exp, Fabs, Floor, Fmin, Fmax, Fmod, Frexp, Hypot, Ldexp, Log, Log2, Log10, Modf, Pow, Rint, Round, Sin, Sinh, Sqrt, Tan, Tanh, Dec2num, Num2dec, Nan }
 
 impl MathFn {
     pub fn by_name(name: &str) -> Option<MathFn> {
         use MathFn::*;
         Some(match name {
             "acos" => Acos, "asin" => Asin, "atan" => Atan, "atan2" => Atan2, "ceil" => Ceil, "cos" => Cos, "cosh" => Cosh, "exp" => Exp, "fabs" => Fabs,
-            "floor" => Floor, "fmod" => Fmod, "frexp" => Frexp, "hypot" => Hypot, "ldexp" => Ldexp, "log" => Log, "log10" => Log10, "modf" => Modf, "pow" => Pow,
+            "floor" => Floor, "fmod" => Fmod, "frexp" => Frexp, "hypot" => Hypot, "ldexp" => Ldexp, "log" => Log, "log2" => Log2, "log10" => Log10, "fmin" => Fmin, "fmax" => Fmax, "modf" => Modf, "pow" => Pow,
             "rint" => Rint, "round" => Round, "sin" => Sin, "sinh" => Sinh, "sqrt" => Sqrt, "tan" => Tan, "tanh" => Tanh, "dec2num" => Dec2num, "num2dec" => Num2dec, "nan" => Nan,
             _ => return None,
         })
@@ -47,7 +47,7 @@ impl<U: GuestUi> MacPpc<U> {
         let r = match f {
             Acos => libm::acos(x), Asin => libm::asin(x), Atan => libm::atan(x), Atan2 => libm::atan2(x, y), Ceil => libm::ceil(x), Cos => libm::cos(x),
             Cosh => libm::cosh(x), Exp => libm::exp(x), Fabs => libm::fabs(x), Floor => libm::floor(x), Fmod => libm::fmod(x, y), Hypot => libm::hypot(x, y),
-            Log => libm::log(x), Log10 => libm::log10(x), Pow => libm::pow(x, y), Rint => libm::rint(x), Round => libm::round(x), Sin => libm::sin(x),
+            Log => libm::log(x), Log2 => libm::log2(x), Log10 => libm::log10(x), Fmin => libm::fmin(x, y), Fmax => libm::fmax(x, y), Pow => libm::pow(x, y), Rint => libm::rint(x), Round => libm::round(x), Sin => libm::sin(x),
             Sinh => libm::sinh(x), Sqrt => libm::sqrt(x), Tan => libm::tan(x), Tanh => libm::tanh(x),
             Dec2num | Num2dec | Nan => unreachable!("handled above"),
             Ldexp => libm::ldexp(x, arg(self, cpu, 2)? as i32),

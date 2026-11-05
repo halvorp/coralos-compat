@@ -81,14 +81,22 @@ pub fn trap_address<U: GuestUi>(m: &mut Mac<U>, opcode: u16, number: u32) -> Res
 /// to the original with a `JMP` to the address `GetTrapAddress` returned before the patch, and returns with `RTS`. Setting a
 /// trap back to its own stub removes the patch (the `SetFunction` pattern of the Amiga engine, `exec_patch.rs`).
 fn set_trap_address<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> Result<String, Refusal> {
-    let (word, tool) = trap_word(r.opcode, r.d0);
-    let (key, to) = (trap_key(word), r.a0);
+    let line = patch_trap(m, r.opcode, r.d0, r.a0)?;
+    r.d0 = 0;
+    Ok(line)
+}
+
+/// THE trap patch, for every caller: the 68k `_SetTrapAddress` family above and the PowerPC imports of `NSetTrapAddress` /
+/// `SetOSTrapAddress` / `SetToolTrapAddress` / `SetTrapAddress` (heirloom-macppc-engine). `opcode` picks the table as in
+/// [`trap_address`]; `to` is the new routine (the original's stub = unpatch). Returns the log line.
+pub fn patch_trap<U: GuestUi>(m: &mut Mac<U>, opcode: u16, number: u32, to: u32) -> Result<String, Refusal> {
+    let (word, tool) = trap_word(opcode, number);
+    let key = trap_key(word);
     if to == stub_address(word) || (to == stub_address(UNIMPLEMENTED_TRAP) && !m.table.contains_key(&key)) {
         m.patches.remove(&key);
         return Ok(format!("[toolbox] SetTrapAddress {} {word:#06x}: back to the original", kind(tool)));
     }
     m.mem.read_u16(to).map_err(Refusal::mem("SetTrapAddress routine"))?; // the routine must be in guest RAM
     m.patches.insert(key, to);
-    r.d0 = 0;
     Ok(format!("[toolbox] SetTrapAddress {} {word:#06x} -> {to:#x} (a guest routine; it chains to the original through the stub GetTrapAddress gave)", kind(tool)))
 }

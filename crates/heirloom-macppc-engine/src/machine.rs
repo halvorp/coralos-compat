@@ -37,7 +37,17 @@ pub fn partition_bytes(program: &[u8]) -> Option<u32> {
     Some(preferred.max(minimum))
 }
 
-/// Total guest RAM for a program: base + SIZE partition + 8 MiB system
+/// The bytes the application fragment's instantiated sections take (code, data, zero fill, alignment), 0 when `program` has none to read.
+/// The Code Fragment Manager places them OUTSIDE the application partition (Mac OS 9 maps them from the file or puts them in temporary
+/// memory), so they are added to the RAM, not taken from the partition: the program's heap keeps what its SIZE asked for (Photoshop 7
+/// checks its free contiguous memory against it before it starts).
+pub fn fragment_bytes(program: &[u8]) -> usize {
+    let Ok((_, bytes)) = crate::source::fragment_bytes(program, None) else { return 0 };
+    let Ok(pef) = heirloom_fmt_pef::Pef::parse(&bytes) else { return 0 };
+    pef.sections.iter().filter(|s| s.kind.instantiated()).map(|s| s.total_size as usize + (1usize << s.alignment.min(12))).sum()
+}
+
+/// Total guest RAM for a program: base + SIZE partition + the application fragment's sections ([`fragment_bytes`]) + 8 MiB system
 /// heap/glue/stack, rounded up to 1 MiB.
 pub fn ram_for_program(base: usize, program: &[u8]) -> usize {
     const SYSTEM_OVERHEAD: usize = 8 << 20; // 8 MiB
@@ -45,6 +55,7 @@ pub fn ram_for_program(base: usize, program: &[u8]) -> usize {
     let partition = partition_bytes(program).unwrap_or(NO_SIZE_PARTITION) as usize;
     let raw = base
         .saturating_add(partition)
+        .saturating_add(fragment_bytes(program))
         .saturating_add(SYSTEM_OVERHEAD);
     // Guard the round-up so a saturated value cannot wrap.
     raw.checked_add(MIB - 1)
@@ -111,6 +122,12 @@ pub struct MacPpc<U: GuestUi> {
     pub(crate) perf: Option<alloc::boxed::Box<crate::perf::Perf>>,
     /// Every instantiated fragment's sections and function starts (profile.rs): the guest-PC profile's map, built at load.
     pub code_map: crate::profile::CodeMap,
+    /// Whether a guest LaunchApplication may start a second process in this machine ([`crate::process_c`]).
+    pub launch_policy: crate::process_c::LaunchPolicy,
+    /// Open FSRef catalog iterators ([`crate::fsref_c`]).
+    pub(crate) fsr: crate::fsref_c::FsrState,
+    /// Carbon window classes and modality ([`crate::wclass_c`]).
+    pub(crate) wc: crate::wclass_c::WcState,
 }
 
 /// Grow `mac`'s guest RAM to `ram` bytes (no-op when it already has that much): the extra memory joins the Memory Manager's heap
@@ -162,7 +179,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(heirloom_mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: Default::default(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), app_span: None, lib_locator: BTreeMap::new(), import_slots: BTreeMap::new(), perf: None, code_map: Default::default() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: Default::default(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), app_span: None, lib_locator: BTreeMap::new(), import_slots: BTreeMap::new(), perf: None, code_map: Default::default(), launch_policy: Default::default(), fsr: Default::default(), wc: Default::default() })
     }
 
     /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.
@@ -194,9 +211,11 @@ impl<U: GuestUi> MacPpc<U> {
     /// is a shared library the CFM finds there: provided under its file name (a bundle volume carries no `cfrg` resource to read another name
     /// from), unless a library of that name is already provided. Only the first eight bytes of each file are read now; the library loads on
     /// its first import. The log names each one.
-    pub fn provide_folder_libraries(&mut self) {
+    pub fn provide_folder_libraries(&mut self) { self.provide_libraries_in(self.mac.fm.def_dir); }
+
+    /// The PEF libraries in folder `dir` (see [`MacPpc::provide_folder_libraries`]; a launched process's own folder, process_c.rs).
+    pub(crate) fn provide_libraries_in(&mut self, dir: heirloom_volume::NodeId) {
         let fm = &self.mac.fm;
-        let dir = fm.def_dir;
         let mut found = Vec::new();
         for &c in fm.tree.children(dir) {
             if fm.tree.is_dir(c) { continue }

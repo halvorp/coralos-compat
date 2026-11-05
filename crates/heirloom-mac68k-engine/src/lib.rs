@@ -21,6 +21,7 @@ pub mod os_face; // os-mac.library: this machine behind heirloom-os-abi's OsVTab
 #[cfg(feature = "os-library")]
 pub use os_face::os_vtable;
 pub mod addrmode;
+pub mod aedesc;
 pub mod appleevents;
 pub mod clock;
 pub mod compressed;
@@ -52,6 +53,7 @@ pub mod package;
 pub mod cursor_device; // the Cursor Device Manager ($AADB): no guest cursor device (the host owns the pointer)
 pub mod pascal;
 pub mod procmgr;
+pub mod processes;
 pub mod profile;
 pub mod cqd;
 pub mod qd;

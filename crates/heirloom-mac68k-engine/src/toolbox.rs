@@ -59,7 +59,7 @@ fn done(log: String) -> Result<Done, Refusal> { Ok(Done { result: 0, log }) }
 /// (rDocProc 16: a rounded document window, no grow box, its variation is the corner size). Any other WDEF is the program's
 /// own window definition: no native presentation contract exists for it (HEIRLOOM-ROLES-REQUIRE-A-CONTRACT), so it is a named
 /// refusal (docs/consults/2026-10-20-wdef.md), never a document window by its low bits.
-pub(crate) fn role_of(proc_id: u16) -> Result<(WindowRole, bool), Refusal> {
+pub fn role_of(proc_id: u16) -> Result<(WindowRole, bool), Refusal> {
     match (proc_id >> 4, proc_id & 15) {
         (0, v) => Ok(match v & 7 { 0 => (WindowRole::Document, true), 4 => (WindowRole::Document, false), _ => (WindowRole::Dialog, false) }),
         (1, _) => Ok((WindowRole::Document, false)),

@@ -83,6 +83,11 @@ pub fn write_spec<U: GuestUi>(m: &mut Mac<U>, p: u32, loc: &Located) -> Result<(
 /// application file was installed (nothing is written).
 pub fn write_app_spec<U: GuestUi>(m: &mut Mac<U>, p: u32) -> Result<bool, i16> {
     let Some(app) = m.fm.app else { return Ok(false) };
+    write_node_spec(m, p, app)
+}
+
+/// An FSSpec naming file `node` (another process's application file, `GetProcessInformation`'s processAppSpec).
+pub fn write_node_spec<U: GuestUi>(m: &mut Mac<U>, p: u32, app: heirloom_volume::NodeId) -> Result<bool, i16> {
     let loc = Located { vol: m.fm.tree.volume_of(app), parent: m.fm.tree.parent(app), leaf: None, node: Some(app) };
     write_spec(m, p, &loc).map(|()| true)
 }

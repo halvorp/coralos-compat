@@ -374,7 +374,8 @@ fn os_dispatch_answers_the_process_manager_for_the_one_process() {
     g.m.mem.write_u32(OUT + 0x20, 0).unwrap(); g.m.mem.write_u32(OUT + 0x24, 2).unwrap();
     g.run(&p);
     g.no_refusals();
-    assert_eq!((l(&g, OUT), l(&g, OUT + 4)), (0, 2));
+    // a REAL serial number, not kCurrentProcess {0,2} (which only ever means "the caller": the GetProcessInformation above used it)
+    assert_eq!((l(&g, OUT), l(&g, OUT + 4)), (0, heirloom_mac68k_engine::processes::FIRST_PSN));
     assert_eq!((w(&g, OUT + 0x10), w(&g, OUT + 0x12), w(&g, OUT + 0x16)), (0, 0, 0));
     assert_eq!(g.m.mem.read_u8(OUT + 0x14).unwrap(), 1, "SameProcess is TRUE for the process and itself");
     assert_eq!(l(&g, OUT + 0x80 + 16), u32::from_be_bytes(*b"APPL"));

@@ -115,6 +115,11 @@ impl<U: GuestUi> MacPpc<U> {
                 Ok(()) => { self.mac.log.push(format!("[mixedmode] DisposeRoutineDescriptor {:#x}", a(0))); GlueOutcome::Return }
                 Err(e) => GlueOutcome::Refused(format!("{e}")),
             },
+            // (addr, trapNum[, tTyp]): the patch goes in the shared table; PowerPC callers of the trap's import keep reaching the native
+            Native::SetTrapAddress(q) => match heirloom_mac68k_engine::traptable::patch_trap(&mut self.mac, q.opcode(a(2)), a(1), a(0)) {
+                Ok(line) => { self.mac.log.push(format!("{line}; a PowerPC caller of the trap's import still reaches this engine's native")); GlueOutcome::Return }
+                Err(e) => GlueOutcome::Refused(e.0),
+            },
             Native::TrapAddress(q) => match heirloom_mac68k_engine::traptable::trap_address(&mut self.mac, q.opcode(a(1)), a(0)) {
                 Ok((at, line)) => { self.mac.log.push(line); regs[3] = at; GlueOutcome::Return }
                 Err(e) => GlueOutcome::Refused(format!("{n:?}: {}", e.0)),
@@ -137,6 +142,21 @@ impl<U: GuestUi> MacPpc<U> {
                 let Some(op) = heirloom_mac68k_engine::mixed::trap_opcode("WaitNextEvent") else { return GlueOutcome::Refused("WaitNextEvent has no trap word".into()) };
                 let timed_out = core::mem::take(&mut self.rt.wait_timed_out);
                 let sleep = if n == Native::WaitNextEvent { a(2) } else { 0 };
+                // another process ready to run gets its turn first (Mac OS 9 switches processes at every event call, sleep or not); the
+                // retried call then goes on (process_c.rs)
+                if self.process_turn() { return GlueOutcome::Idle; }
+                // the caller's own high-level events first; a background process sees no user events (process_c.rs)
+                if self.hle_deliver(a(0) as u16, a(1), false) { regs[3] = 1; return GlueOutcome::Return; }
+                if self.in_background() {
+                    self.null_event(a(1));
+                    if sleep != 0 && !timed_out {
+                        self.rt.wait_mask = Some(0x0400);
+                        self.rt.wait_deadline = (sleep < 0x0005_0000).then(|| self.mac.ev.ticks.wrapping_add(sleep.max(1)));
+                        return GlueOutcome::Idle;
+                    }
+                    regs[3] = 0;
+                    return GlueOutcome::Return;
+                }
                 let r = self.mac.pascal_call(op, &[a(0), a(1), 0, 0]);
                 if sleep != 0 && !timed_out && matches!(r, Ok(rr) if rr.value == 0 && !rr.halted) {
                     self.rt.wait_mask = Some(a(0) as u16);
@@ -265,7 +285,7 @@ impl<U: GuestUi> MacPpc<U> {
                 let args = match self.arg_values(c.arg_count(), regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("{}: {e}", c.name())) };
                 match self.spec_call(c, &args) { Ok(v) => { regs[3] = v; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
-            Native::C(_) | Native::Math(_) | Native::Stdio(_) | Native::Thread(_) | Native::Mp(_) | Native::Invoke(_) | Native::CallUniversalProc | Native::El(_) | Native::Carbon(_) | Native::Ae(_) => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
+            Native::C(_) | Native::Math(_) | Native::Stdio(_) | Native::Thread(_) | Native::Mp(_) | Native::Invoke(_) | Native::CallUniversalProc | Native::El(_) | Native::Carbon(_) | Native::Ae(_) | Native::Wc(_) => GlueOutcome::Refused(format!("{n:?} needs the CPU registers and is served by the run loop")),
             Native::MemError => { regs[3] = err(self.mac.mem_error()); GlueOutcome::Return }
             Native::BlockZero => {
                 let (dest, n) = (a(0), a(1));

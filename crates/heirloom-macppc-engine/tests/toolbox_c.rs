@@ -114,9 +114,9 @@ fn clocks_folders_and_the_memory_queries_answer_from_the_machine() {
 fn the_process_manager_knows_exactly_one_process_the_application() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     assert_eq!(call(&mut m, "GetCurrentProcess", &[PB]) as i32, 0);
-    assert_eq!((m.mac.mem.read_u32(PB).unwrap(), m.mac.mem.read_u32(PB + 4).unwrap()), (0, 2), "{{0, kCurrentProcess}}");
+    assert_eq!((m.mac.mem.read_u32(PB).unwrap(), m.mac.mem.read_u32(PB + 4).unwrap()), (0, heirloom_mac68k_engine::processes::FIRST_PSN), "a real serial number: kCurrentProcess {{0,2}} only means the caller");
     assert_eq!(call(&mut m, "SetFrontProcess", &[PB]) as i32, 0);
-    // SameProcess(psn1, psn2, Boolean*)
+    // SameProcess(psn1, psn2, Boolean*): the real serial number and kCurrentProcess are the same process
     m.mac.mem.write_u32(PB + 8, 0).unwrap(); m.mac.mem.write_u32(PB + 12, 2).unwrap();
     call(&mut m, "SameProcess", &[PB, PB + 8, PB + 16]);
     assert_eq!(m.mac.mem.read_u8(PB + 16).unwrap(), 1);
@@ -356,10 +356,11 @@ fn find_folder_root_application_support_and_shutdown_items() {
     assert_eq!((m.mac.fm.tree.name(node), m.mac.fm.tree.parent(node)), ("Applications (Mac OS 9)", m.mac.fm.def_vol), "Applications at the root");
 }
 
-/// LaunchApplication: the one-process machine does not start a second application; it answers memFullErr and names the file it was asked
-/// for (a host may launch it on its own); a block that is not a LaunchParamBlockRec ('LC') is paramErr.
+/// LaunchApplication is MEDIATED (process_c.rs): a host whose launch policy refuses a second process gets memFullErr naming the file; with
+/// the default policy a file that is not an application is paramErr, named; a block that is not a LaunchParamBlockRec ('LC') is paramErr.
+/// (tests/processes.rs launches a real second application.)
 #[test]
-fn launch_application_is_named_and_refused_with_mem_full() {
+fn launch_application_is_mediated_by_policy_and_file_type() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     let root = m.mac.fm.def_vol;
     m.mac.fm.tree.put_file(root, "VSetupT", vec![0; 4]).unwrap();
@@ -369,8 +370,12 @@ fn launch_application_is_named_and_refused_with_mem_full() {
     m.mac.mem.write_u16(PB + 6, 0x4C43).unwrap();
     m.mac.mem.write_u16(PB + 14, 0xC000).unwrap();
     m.mac.mem.write_u32(PB + 16, B + 0x100).unwrap();
+    m.launch_policy = heirloom_macppc_engine::process_c::LaunchPolicy::Refuse;
     assert_eq!(call(&mut m, "LaunchApplication", &[PB]) as i32, -108);
-    assert!(m.mac.log.iter().any(|l| l.contains("LaunchApplication \"Macintosh HD:VSetupT\"")), "{:?}", m.mac.log.last());
+    assert!(m.mac.log.iter().any(|l| l.contains("LaunchApplication \"Macintosh HD:VSetupT\"") && l.contains("policy refuses")), "{:?}", m.mac.log.last());
+    m.launch_policy = Default::default();
+    assert_eq!(call(&mut m, "LaunchApplication", &[PB]) as i32, -50, "a file that is not an 'APPL' is not launched");
+    assert!(m.mac.log.iter().any(|l| l.contains("is not an application")), "{:?}", m.mac.log.last());
     m.mac.mem.write_u16(PB + 6, 0).unwrap();
     assert_eq!(call(&mut m, "LaunchApplication", &[PB]) as i32, -50, "NEGATIVE CONTROL: not a LaunchParamBlockRec");
 }
@@ -391,4 +396,46 @@ fn init_windows_before_init_graf_initialises_quickdraw_first() {
     let q = m.mac.qd_globals;
     call(&mut m, "InitGraf", &[q]);
     assert!(m.mac.refused.is_empty(), "the application's own InitGraf afterwards is accepted: {:?}", m.mac.refused);
+}
+
+/// Photoshop 7's start-up calls (HANDOFF-2): LongSecondsToDate / LongDateToSeconds round trip (2002-04-30 13:45:10 is a Tuesday, day 120,
+/// week 18), the one heap zone (ApplicationZone = SystemZone = HandleZone = TheZone; GetApplLimit - ApplicationZone is the heap a program may
+/// grow into), RelString's three answers, Navigation Services' availability, the FractEnable / ROMMapInsert low-memory accessors and
+/// NSetTrapAddress going into the shared patch table (GetTrapAddress then answers the patch).
+#[test]
+fn photoshop_start_up_calls_long_dates_zones_rel_string_nav_low_memory_and_trap_patches() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    // 2002-04-30 13:45:10 = 3103019110 seconds since 1904 (a LongDateTime: high word 0)
+    m.mac.mem.write_u32(A, 0).unwrap(); m.mac.mem.write_u32(A + 4, 3_103_019_110).unwrap();
+    assert_eq!(call(&mut m, "LongSecondsToDate", &[A, B]), 0);
+    let f: Vec<i16> = (0..11).map(|i| m.mac.mem.read_u16(B + 2 * i).unwrap() as i16).collect();
+    assert_eq!(f, [0, 2002, 4, 30, 13, 45, 10, 3, 120, 18, 1], "era year month day hour minute second dayOfWeek(Tue=3) dayOfYear weekOfYear pm");
+    m.mac.mem.write_u32(A, 0xFFFF_FFFF).unwrap();
+    assert_eq!(call(&mut m, "LongDateToSeconds", &[B, A]), 0);
+    assert_eq!((m.mac.mem.read_u32(A).unwrap(), m.mac.mem.read_u32(A + 4).unwrap()), (0, 3_103_019_110));
+    // the zone calls
+    let z = call(&mut m, "ApplicationZone", &[]);
+    assert_eq!(z, call(&mut m, "SystemZone", &[]));
+    assert_eq!(z, m.mac.mem.read_u32(0x118).unwrap(), "TheZone");
+    let h = call(&mut m, "NewHandle", &[16]);
+    assert_eq!(call(&mut m, "HandleZone", &[h]), z);
+    assert!(call(&mut m, "GetApplLimit", &[]).wrapping_sub(z) >= 3 << 20, "the heap a program may grow into is the machine's, not 68k ApplLimit's 128 KB");
+    assert!(refused(&mut m, "SetZone", &[z + 0x100]).contains("the only heap zone"), "NEGATIVE CONTROL: another zone");
+    // RelString(a, b, caseSens, diacSens)
+    pstr(&mut m, A, "apple"); pstr(&mut m, B, "Apple");
+    assert_eq!(call(&mut m, "RelString", &[A, B, 0, 1]) as i32, 0);
+    assert_eq!(call(&mut m, "RelString", &[A, B, 1, 1]) as i32, 1, "case-sensitive: lowercase sorts after");
+    assert_eq!(call(&mut m, "RelString", &[B, A, 1, 1]) as i32, -1);
+    // Navigation Services is part of the Mac OS 9.2.1 personality
+    assert_eq!(call(&mut m, "NavServicesAvailable", &[]) & 0xFF, 1);
+    assert_eq!(call(&mut m, "NavLibraryVersion", &[]), 0x0110_8000);
+    // low memory accessors
+    call(&mut m, "LMSetROMMapInsert", &[0xFF]);
+    assert_eq!(call(&mut m, "LMGetROMMapInsert", &[]) & 0xFF, 0xFF);
+    assert_eq!(m.mac.mem.read_u8(0x0B9E).unwrap(), 0xFF);
+    // NSetTrapAddress(routine, _ExitToShell, ToolTrap): the shared patch table; GetToolTrapAddress answers the patch
+    m.mac.mem.write_u16(PB, 0x4E75).unwrap();
+    call(&mut m, "NSetTrapAddress", &[PB, 0xA9F4, 1]);
+    assert_eq!(call(&mut m, "GetToolTrapAddress", &[0xA9F4]), PB);
+    assert!(m.mac.log.iter().any(|l| l.contains("still reaches this engine's native")));
 }

@@ -30,17 +30,51 @@ pub enum TbFn {
     /// `DateString(dateTime, longFlag, result, intlHandle)` / `TimeString(dateTime, wantSeconds, result, intlHandle)`: the 68k IUDateString /
     /// IUTimeString text (heirloom_mac68k_engine::intl::date_text / time_text); the intl handle is not consulted (named in the log).
     DateString, TimeString,
-    /// `LaunchApplication(LaunchPBPtr)`: this machine hosts ONE process (heirloom_mac68k_engine::procmgr), so another application is not started
-    /// here: memFullErr (-108, "no room to launch it", IM: Processes) and a `[process] LaunchApplication` line naming the file (launchAppSpec)
-    /// and the control flags, for a host that can start it as an Heirloom application of its own. A NIL block or one that is not 'LC' is paramErr.
+    /// `LaunchApplication(LaunchPBPtr)`: [`crate::process_c`] (a second process in this machine, mediated by the loader and the host's launch
+    /// policy). A NIL block or one that is not 'LC' is paramErr.
     LaunchApplication,
+    /// `SetOutlinePreferred(Boolean)` / `GetOutlinePreferred()` (the Font Manager's outline-over-bitmap preference): recorded and answered; the
+    /// text here is drawn from one bitmap face either way.
+    SetOutlinePreferred, GetOutlinePreferred,
+    /// `GetCurrentKeyModifiers()` (Carbon): the modifier keys held now. The GuestUi seam carries modifiers WITH each key event, not a held
+    /// state between events, so the answer is "none held" (0).
+    GetCurrentKeyModifiers,
+    /// `LongSecondsToDate(const LongDateTime*, LongDateRec*)` / `LongDateToSeconds(const LongDateRec*, LongDateTime*)` (Script Manager, 64-bit
+    /// seconds since 1904): LongDateRec = era, year, month, day, hour, minute, second, dayOfWeek (Sunday 1), dayOfYear, weekOfYear (week 1 holds
+    /// January 1), pm, three reserved (14 shorts); era 0 (AD). The calendar is the one SecondsToDate uses (heirloom_mac68k_engine::intl).
+    LongSecondsToDate, LongDateToSeconds,
+    /// The Memory Manager's zone calls (Inside Macintosh: Memory): this machine has ONE heap zone (heirloom_mac68k_engine::lowmem::ZONE_STUB,
+    /// what TheZone / ApplZone / SysZone hold), so `ApplicationZone()`, `SystemZone()` and `HandleZone(h)` answer it, `SetZone(z)` accepts it and
+    /// refuses any other zone by name; `GetApplLimit()` is the limit the application heap may grow to - the top of the machine's heap (MemTop): a
+    /// PowerPC program's stack is a block of its own, not the space between the heap and ApplLimit (the 68k low-memory ApplLimit keeps its 68k
+    /// meaning for StackSpace); `SetApplLimit(p)` is noErr and changes nothing (logged). Photoshop 7 checks GetApplLimit() - ApplicationZone()
+    /// against the 3 MB it needs.
+    ApplicationZone, SystemZone, HandleZone, SetZone, GetApplLimit, SetApplLimit,
+    /// `SetGrowZone(proc)`: recorded and logged; the Memory Manager here does not call a grow-zone procedure when an allocation fails (the
+    /// allocation answers memFullErr as it would after a grow-zone procedure that freed nothing). Named limit.
+    SetGrowZone,
+    /// `RelString(str1, str2, caseSensitive, diacSensitive)` (Pascal strings): -1 / 0 / 1, the `_RelString` rule (heirloom_mac68k_engine::intl::compare_with).
+    RelString,
+    /// Navigation Services' availability queries (Navigation.h): the Mac OS 9.2.1 / CarbonLib 1.4 personality (gestalt_ppc.rs RULING) has
+    /// Navigation Services 1.1, so `NavLibraryVersion` answers 1.1 (a NumVersion) and `NavServicesCanRun()` / `NavServicesAvailable()` TRUE; a Nav
+    /// dialog call this engine does not serve yet (NavGetFile, NavPutFile, NavChooseFolder ...) is a per-call NAMED refusal, as the ruling has
+    /// every missing call (Photoshop 7 refuses to start without Navigation Services).
+    NavLibraryVersion, NavServicesCanRun,
     /// `LMGet<Name>` / `LMSet<Name>` over the table [`LOWMEM`]; the index is the row.
     LmGet(u8), LmSet(u8),
 }
 
 /// (accessor suffix, address, bytes): the low-memory globals programs read through the Universal Interfaces' `LMGet`/`LMSet` calls.
 pub const LOWMEM: &[(&str, u32, u32)] = &[("ResLoad", 0x0A5E, 1), ("MBarHeight", 0x0BAA, 2), ("CurDirStore", 0x0398, 4), ("Ticks", 0x016A, 4), ("DoubleTime", 0x02F0, 4), ("CaretTime", 0x02F4, 4), ("SFSaveDisk", 0x0214, 2), ("ApplLimit", 0x0130, 4),
-    ("ResErr", 0x0A60, 2), ("RndSeed", 0x0156, 4), ("SysFontFam", 0x0BA6, 2), ("TESysJust", 0x0BAC, 2), ("HiliteMode", 0x0938, 1)];
+    ("ResErr", 0x0A60, 2), ("RndSeed", 0x0156, 4), ("SysFontFam", 0x0BA6, 2), ("TESysJust", 0x0BAC, 2), ("HiliteMode", 0x0938, 1),
+    // FractEnable (Inside Macintosh: Text, the Font Manager: fractional widths on when nonzero)
+    ("FractEnable", 0x0BF4, 1),
+    // Inside Macintosh / LowMem.h addresses of more globals programs read and write by accessor; the engine keeps those it uses (WindowList, GrayRgn,
+    // TheZone, CurApRefNum ...) current in the same words, the rest are plain storage a program may set and read back
+    ("ROMMapInsert", 0x0B9E, 1), ("TmpResLoad", 0x0B9F, 1), ("SysFontSize", 0x0BA8, 2), ("KeyThresh", 0x018E, 2), ("CurApRefNum", 0x0900, 2),
+    ("CurActivate", 0x0A64, 4), ("CurDeactive", 0x0A68, 4), ("CrsrBusy", 0x08CD, 1), ("SysEvtMask", 0x0144, 2), ("WindowList", 0x09D6, 4),
+    ("CurStackBase", 0x0908, 4), ("GhostWindow", 0x0A84, 4), ("TheZone", 0x0118, 4), ("GZRootHnd", 0x0328, 4), ("GZMoveHnd", 0x0330, 4),
+    ("CurJTOffset", 0x0934, 2), ("LastSPExtra", 0x0B4C, 4), ("GrayRgn", 0x09EE, 4), ("TEScrpLength", 0x0AB0, 2)];
 
 impl TbFn {
     pub fn by_name(name: &str) -> Option<TbFn> {
@@ -51,7 +85,9 @@ impl TbFn {
             "FindFolder" => FindFolder, "SetEventMask" => SetEventMask, "GetDateTime" => GetDateTime, "GetDblTime" => GetDblTime, "GetCaretTime" => GetCaretTime, "Microseconds" => Microseconds, "UpTime" => UpTime,
             "AbsoluteToNanoseconds" => AbsoluteToNanoseconds,
             "TEToScrap" => TEToScrap, "TEFromScrap" => TEFromScrap, "UpperString" => UpperString, "GetGrayRgn" => GetGrayRgn,
-            "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication,
+            "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
+            "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString,
+            "NavLibraryVersion" => NavLibraryVersion, "NavServicesCanRun" | "NavServicesAvailable" => NavServicesCanRun,
             // GetMBarHeight() / GetSysFont() are the Universal Interfaces' readers of MBarHeight and SysFontFam (Menus.h, Fonts.h)
             "GetMBarHeight" => return TbFn::by_name("LMGetMBarHeight"),
             "GetSysFont" => return TbFn::by_name("LMGetSysFontFam"),
@@ -131,16 +167,43 @@ impl<U: GuestUi> MacPpc<U> {
                 0
             }
             CurApName => heirloom_mac68k_engine::lowmem::CUR_AP_NAME,
-            LaunchApplication => {
-                let id = if a0 == 0 { 0 } else { self.mac.mem.read_u16(a0 + 6).unwrap_or(0) };
-                if id != 0x4C43 { (-50i32) as u32 } else {
-                    let (flags, spec) = (self.mac.mem.read_u16(a0 + 14).unwrap_or(0), self.mac.mem.read_u32(a0 + 16).unwrap_or(0));
-                    let path = heirloom_mac68k_engine::fm::fsspec::spec_loc(&self.mac, spec).ok().and_then(|l| l.node).map(|n| self.mac.fm.full_path(n));
-                    let shown = path.map_or_else(|| String::from("(no such file)"), |p| p.iter().map(|&b| char::from(b)).collect());
-                    self.mac.log.push(format!("[process] LaunchApplication \"{shown}\" launchControlFlags {flags:#06x}: this machine runs ONE process -> memFullErr (a host may start it as its own Heirloom application)"));
-                    (-108i32) as u32
-                }
+            SetOutlinePreferred => { self.sys.outline_preferred = a0 & 0xFF != 0; 0 }
+            GetOutlinePreferred => u32::from(self.sys.outline_preferred),
+            GetCurrentKeyModifiers => 0,
+            RelString => {
+                let (x, y) = (self.pstr_bytes(a0, &name)?, self.pstr_bytes(a1, &name)?);
+                heirloom_mac68k_engine::intl::compare_with(&x, &y, a2 & 0xFF != 0, a3 & 0xFF != 0) as u32
             }
+            SetGrowZone => { self.mac.log.push(format!("[mem] SetGrowZone {a0:#x}: recorded; not called on a failed allocation here (memFullErr as after a grow-zone procedure that freed nothing)")); 0 }
+            NavLibraryVersion => 0x0110_8000,
+            NavServicesCanRun => 1,
+            ApplicationZone | SystemZone => heirloom_mac68k_engine::lowmem::ZONE_STUB,
+            HandleZone => { if self.mac.mm.block(a0).is_none() { self.mac.log.push(format!("[mem] HandleZone {a0:#x}: not a handle (answered the one zone)")); } heirloom_mac68k_engine::lowmem::ZONE_STUB }
+            SetZone => {
+                if a0 != heirloom_mac68k_engine::lowmem::ZONE_STUB { return Err(format!("SetZone {a0:#x}: the only heap zone is {:#x}", heirloom_mac68k_engine::lowmem::ZONE_STUB)); }
+                return Ok(());
+            }
+            GetApplLimit => self.mac.mem.read_u32(heirloom_mac68k_engine::lowmem::MEM_TOP).map_err(|_| format!("{name}: MemTop"))?,
+            SetApplLimit => { self.mac.log.push(format!("[mem] SetApplLimit {a0:#x}: noErr (the one zone is not bounded by a stack limit here)")); 0 }
+            LongSecondsToDate => {
+                let secs = (u64::from(self.mac.mem.read_u32(a0).map_err(|_| format!("{name}: the LongDateTime leaves guest RAM"))?) << 32
+                    | u64::from(self.mac.mem.read_u32(a0 + 4).map_err(|_| format!("{name}: the LongDateTime leaves guest RAM"))?)) as i64;
+                let (y, mo, d, wd, h, mi, s) = heirloom_mac68k_engine::intl::civil_long(secs);
+                let doy = heirloom_mac68k_engine::intl::mac_seconds_long(y, i64::from(mo), i64::from(d), 0, 0, 0).div_euclid(86_400)
+                    - heirloom_mac68k_engine::intl::mac_seconds_long(y, 1, 1, 0, 0, 0).div_euclid(86_400) + 1;
+                let jan1_wd = (i64::from(wd as u32) - (doy - 1)).rem_euclid(7);
+                let week = (doy - 1 + jan1_wd) / 7 + 1;
+                let f = [0, y as i16, mo as i16, d as i16, h as i16, mi as i16, s as i16, wd as i16 + 1, doy as i16, week as i16, i16::from(h >= 12), 0, 0, 0];
+                for (i, v) in f.iter().enumerate() { self.mac.mem.write_u16(a1 + 2 * i as u32, *v as u16).map_err(|_| format!("{name}: the LongDateRec leaves guest RAM"))?; }
+                0
+            }
+            LongDateToSeconds => {
+                let g = |m: &Self, i: u32| m.mac.mem.read_u16(a0 + 2 * i).map(|v| i64::from(v as i16)).map_err(|_| format!("{name}: the LongDateRec leaves guest RAM"));
+                let secs = heirloom_mac68k_engine::intl::mac_seconds_long(g(self, 1)?, g(self, 2)?, g(self, 3)?, g(self, 4)?, g(self, 5)?, g(self, 6)?);
+                self.mac.mem.write_u32(a1, (secs >> 32) as u32).and_then(|_| self.mac.mem.write_u32(a1 + 4, secs as u32)).map_err(|_| format!("{name}: the LongDateTime leaves guest RAM"))?;
+                0
+            }
+            LaunchApplication => return self.launch_application(a0, cpu), // process_c.rs: a second process, mediated
             DateString | TimeString => {
                 let text = if f == DateString { heirloom_mac68k_engine::intl::date_text(a0, a1 as u8)? } else { heirloom_mac68k_engine::intl::time_text(a0, a1 & 0xFF != 0) };
                 self.put_pstr(a2, text.as_bytes(), &name)?;

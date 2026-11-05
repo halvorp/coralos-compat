@@ -61,6 +61,9 @@ pub(crate) struct Region { owner: Option<u32>, depth: u32, waiters: VecDeque<u32
 #[derive(Default)]
 pub(crate) struct MpState { queues: BTreeMap<u32, Queue>, sems: BTreeMap<u32, Sem>, regions: BTreeMap<u32, Region>, next_id: u32 }
 
+/// What a timed-out wait returns: kMPTimeoutErr, or errAETimeout (-1712) for an Apple Event reply.
+fn timeout_status(on: WaitOn) -> i32 { if matches!(on, WaitOn::AeReply(_)) { crate::ae_c::ERR_AE_TIMEOUT } else { MP_TIMEOUT_ERR } }
+
 fn ticks_of(duration: u32) -> Option<u32> {
     match duration {
         0 => Some(0),
@@ -74,7 +77,7 @@ impl<U: GuestUi> MacPpc<U> {
     fn mp_id(&mut self) -> u32 { self.rt.mp.next_id += 1; 0x1000 + self.rt.mp.next_id }
 
     /// Wake task `t` with `status` in r3 (and drop it from whatever it waited on).
-    fn wake(&mut self, t: u32, status: i32) {
+    pub(crate) fn wake(&mut self, t: u32, status: i32) {
         if let Some(task) = self.rt.sched.tasks.get_mut(&t) {
             match task.cpu.as_mut() { Some(c) => c.gpr[3] = status as u32, None => task.woken = Some(status) }
             task.state = TState::Ready;
@@ -88,6 +91,7 @@ impl<U: GuestUi> MacPpc<U> {
             WaitOn::Queue(q) => { if let Some(x) = mp.queues.get_mut(&q) { x.waiters.retain(|&w| w != t); } }
             WaitOn::Semaphore(s) => { if let Some(x) = mp.sems.get_mut(&s) { x.waiters.retain(|&w| w != t); } }
             WaitOn::Region(r) => { if let Some(x) = mp.regions.get_mut(&r) { x.waiters.retain(|&w| w != t); } }
+            WaitOn::AeReply(txn) => { self.rt.ae.txns.remove(&txn); }
         }
     }
 
@@ -95,7 +99,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub(crate) fn expire_waits(&mut self) {
         let now = self.mac.ev.ticks;
         let due: Vec<(u32, WaitOn)> = self.rt.sched.tasks.iter().filter_map(|(&id, t)| t.wait.filter(|w| w.deadline.is_some_and(|d| now.wrapping_sub(d) < 0x8000_0000)).map(|w| (id, w.on))).collect();
-        for (id, on) in due { self.unlist(id, on); self.wake(id, MP_TIMEOUT_ERR); }
+        for (id, on) in due { self.unlist(id, on); self.wake(id, timeout_status(on)); }
     }
 
     /// Nothing is ready: advance the clock to the earliest deadline and time that waiter out. False when nobody waits with a deadline.
@@ -106,7 +110,7 @@ impl<U: GuestUi> MacPpc<U> {
         let ahead = w.deadline.expect("filtered").wrapping_sub(now);
         if ahead < 0x8000_0000 && ahead > 0 { self.mac.advance_ticks(ahead); }
         self.unlist(id, w.on);
-        self.wake(id, MP_TIMEOUT_ERR);
+        self.wake(id, timeout_status(w.on));
         true
     }
 
@@ -119,7 +123,7 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// Block the current task on `wait` (it resumes at `ret` with r3 set by whoever wakes it).
-    fn block(&mut self, cpu: &mut Cpu, wait: Wait, ret: u32, who: &str) -> Result<(), String> {
+    pub(crate) fn block(&mut self, cpu: &mut Cpu, wait: Wait, ret: u32, who: &str) -> Result<(), String> {
         let cur = self.rt.sched.current;
         if let Some(t) = self.rt.sched.tasks.get_mut(&cur) { t.wait = Some(wait); }
         let found = self.runnable_after(cur, true);
@@ -187,7 +191,7 @@ impl<U: GuestUi> MacPpc<U> {
                 c.gpr[1] = r1; c.gpr[2] = toc; c.gpr[3] = param; c.gpr[12] = tv; c.lr = exit; c.pc = code;
                 let id = self.rt.sched.next_id;
                 self.rt.sched.next_id += 1;
-                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state: TState::Ready, kind: Kind::Mp, stack: Some(block), result_ptr: 0, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: (notify_q != 0).then_some((notify_q, p1, p2)), bound: 0 });
+                self.rt.sched.tasks.insert(id, Task { cpu: Some(c), callbacks: Vec::new(), state: TState::Ready, kind: Kind::Mp, stack: Some(block), result_ptr: 0, wait: None, woken: None, terminator: None, switch_in: None, switch_out: None, notify: (notify_q != 0).then_some((notify_q, p1, p2)), bound: 0, psn: self.mac.current_psn() });
                 put(self, task_p, id, "MPCreateTask")?;
                 self.mac.log.push(format!("[mp] MPCreateTask -> task {id} (entry {tv:#x}, stack {size}, cooperative)"));
                 0

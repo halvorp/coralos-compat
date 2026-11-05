@@ -212,6 +212,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA80F, &[Arg::P, Arg::W], None, get1_ind_type::<U>)?;
     m.register(0xA9AF, &[], Some(Arg::W), res_error::<U>)?;
     m.register(0xA994, &[], Some(Arg::W), cur_res_file::<U>)?;
+    m.register(0xA9A4, &[Arg::P], Some(Arg::W), home_res_file::<U>)?;
     m.register(0xA998, &[Arg::W], None, use_res_file::<U>)?;
     write::register(m)
 }
@@ -317,6 +318,15 @@ fn res_error<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, 
 fn cur_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
     let c = m.rm.cur;
     Ok(Done { result: c as u16 as u32, log: format!("[res] CurResFile -> {c}") })
+}
+/// `HomeResFile(theResource)`: the reference number of the file the resource handle was read from; -1 and resNotFound for a handle
+/// that is not a resource (Inside Macintosh: More Macintosh Toolbox, 1-91).
+fn home_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let h = c.args.get(0);
+    let rn = m.rm.by_handle.get(&h).map(|&(rn, _)| rn);
+    m.set_res_err(if rn.is_some() { 0 } else { RES_NOT_FOUND });
+    let v = rn.unwrap_or(-1);
+    Ok(Done { result: v as u16 as u32, log: format!("[res] HomeResFile {h:#x} -> {v}") })
 }
 fn use_res_file<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let rn = c.args.get(0) as u16 as i16;

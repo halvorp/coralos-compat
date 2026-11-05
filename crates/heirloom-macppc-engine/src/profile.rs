@@ -99,6 +99,11 @@ impl CodeMap {
     }
 
     /// (fragment name, section index, section offset) of a guest address in a code section.
+    /// Like [`CodeMap::locate`] for ANY instantiated section (data too): (fragment, section index, offset).
+    pub fn locate_any(&self, a: u32) -> Option<(&str, usize, u32)> {
+        self.frags.iter().find_map(|f| f.secs.iter().find(|s| a >= s.base && a < s.base.saturating_add(s.size)).map(|s| (f.name.as_str(), s.index, a - s.base)))
+    }
+
     pub fn locate(&self, a: u32) -> Option<(&str, usize, u32)> {
         self.frags.iter().find_map(|f| f.secs.iter().find(|s| s.code && a >= s.base && a < s.base.saturating_add(s.size)).map(|s| (f.name.as_str(), s.index, a - s.base)))
     }
