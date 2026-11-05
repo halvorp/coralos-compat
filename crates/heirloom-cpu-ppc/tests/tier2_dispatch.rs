@@ -116,14 +116,20 @@ struct End { gpr: [u32; 32], cr: u32, lr: u32, ctr: u32, xer: u32, pc: u32, tb: 
 
 fn run(tier: Tier, mutant: u8, prog: &[u32], slice: u64) -> (End, Exec) { run_with(tier, mutant, prog, slice, Box::new(HostCodeMem::new())) }
 
-fn run_with(tier: Tier, mutant: u8, prog: &[u32], slice: u64, mem: Box<dyn CodeMem>) -> (End, Exec) {
+fn run_with(tier: Tier, mutant: u8, prog: &[u32], slice: u64, mem: Box<dyn CodeMem>) -> (End, Exec) { run_knobs(tier, mutant, 0, prog, slice, mem) }
+
+/// Superblocks on (KNOB_SUPERBLOCK: opt-in since h86 heavy) - for the tests whose subject is a superblock's side exit, or code
+/// that runs once and so reaches JIT code only inside the superblock of the block before it.
+fn run_sb(tier: Tier, mutant: u8, prog: &[u32], slice: u64) -> (End, Exec) { run_knobs(tier, mutant, heirloom_cpu_abi::ppc::KNOB_SUPERBLOCK, prog, slice, Box::new(HostCodeMem::new())) }
+
+fn run_knobs(tier: Tier, mutant: u8, knobs: u32, prog: &[u32], slice: u64, mem: Box<dyn CodeMem>) -> (End, Exec) {
     let (mut c, mut m) = load(prog);
     let mut e = Exec::new(tier);
     e.set_code_mem(mem);
     e.set_jit_publish_after(0);
     if mutant != 0 { e.plant_jit_mutant(mutant); }
     // mutant 17 (a stale inner landing) means something only where entries test their pages: KNOB_ENTRY_CHECKS (jit_inval)
-    if mutant == 17 { e.set_jit_knobs(heirloom_cpu_abi::ppc::KNOB_ENTRY_CHECKS); }
+    e.set_jit_knobs(knobs | if mutant == 17 { heirloom_cpu_abi::ppc::KNOB_ENTRY_CHECKS } else { 0 });
     let mut total = 0;
     let last = loop {
         let st = e.resume(&mut m, &mut c, slice);
@@ -230,12 +236,16 @@ fn a_superblock_side_exit_leaves_the_global_pins_and_memory_fields_exact() {
     let (want, _) = run(Tier::Interp, 0, &prog, 1_000_000);
     assert!(want.last.halted && want.gpr[5] != 0, "the reference run takes the side exit: {:?}", want.last);
     for slice in [1, 5, 37, 1_000_000] {
-        let (got, e) = run(Tier::Jit, 0, &prog, slice);
+        let (got, e) = run_sb(Tier::Jit, 0, &prog, slice);
         assert!(got == want, "slice {slice}: r7 {:#x}/{:#x} r5 {:#x}/{:#x} {:?}", got.gpr[7], want.gpr[7], got.gpr[5], want.gpr[5], e.jit_stats());
         if slice > 5 { assert!(e.jit_stats().superblocks > 0, "slice {slice}: a superblock was compiled: {:?}", e.jit_stats()); }
+        // the default (no superblocks): the same state, the branch an ordinary block exit
+        let (got, e) = run(Tier::Jit, 0, &prog, slice);
+        assert!(got == want && e.jit_stats().superblocks == 0, "slice {slice}: default {:?}", e.jit_stats());
     }
-    let (got, e) = run(Tier::JitLockstep, 0, &prog, 50);
-    assert!(e.divergence().is_none() && got == want, "lockstep: {:?}", e.divergence());
+    for (got, e) in [run_sb(Tier::JitLockstep, 0, &prog, 50), run(Tier::JitLockstep, 0, &prog, 50)] {
+        assert!(e.divergence().is_none() && got == want, "lockstep: {:?}", e.divergence());
+    }
 }
 
 /// CHAINED ENTRIES PAST THE GENERATION CHECK: a chained jump from a block on the same code page compiled at the same
@@ -355,8 +365,14 @@ fn an_inline_store_into_code_decoded_after_the_store_map_was_built_takes_the_slo
     }
     let (got, e) = run(Tier::JitLockstep, 0, &prog, 50);
     assert!(e.divergence().is_none() && got == want, "lockstep: {:?}", e.divergence());
+    // with superblocks (opt-in) too; the store runs ONCE, so it reaches JIT code only inside the superblock of the bne before it:
+    // the mutants are RED there (each block alone, it runs in tier 1, which always takes the slow path)
+    for slice in [1, 37, 1_000_000] {
+        let (got, e) = run_sb(Tier::Jit, 0, &prog, slice);
+        assert!(got == want, "slice {slice}: superblocks: r5 {}/{} {:?}", got.gpr[5], want.gpr[5], e.jit_stats());
+    }
     for mutant in [19, 3] {
-        let (got, _) = run(Tier::Jit, mutant, &prog, 1_000_000);
+        let (got, _) = run_sb(Tier::Jit, mutant, &prog, 1_000_000);
         assert!(got != want, "mutant {mutant} stayed GREEN: r5 {}", got.gpr[5]);
     }
 }

@@ -836,8 +836,10 @@ pub(crate) extern "C" fn h_note<H: Host>(ctx: *mut Ctx, ea: u32, n: u32) {
 /// was measured on WC3: 0.6% fewer JIT host instructions than this for 38% more compiles and 2x the evictions.)
 pub(crate) fn superblock(cache: &Cache, mem: &heirloom_mem_flat32::GuestMem, first: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, knobs: u32) -> Vec<crate::t1op::Op> {
     let mut ops = first.to_vec();
-    // KNOB_NO_SUPERBLOCK: each block alone (no not-taken tail copied into the block before it) - the duplication A/B
-    if knobs & heirloom_cpu_abi::ppc::KNOB_NO_SUPERBLOCK != 0 { return ops; }
+    // superblocks are opt-in (KNOB_SUPERBLOCK; KNOB_NO_SUPERBLOCK overrides): by default each block alone, no not-taken tail
+    // copied into the block before it - the Atom's front end pays more for the duplicated code than the block exits cost
+    use heirloom_cpu_abi::ppc::{KNOB_NO_SUPERBLOCK, KNOB_SUPERBLOCK};
+    if knobs & KNOB_SUPERBLOCK == 0 || knobs & KNOB_NO_SUPERBLOCK != 0 { return ops; }
     while let Some(last) = ops.last() {
         let next = pc.wrapping_add(4 * ops.len() as u32);
         let forward = matches!(last.k, K::Bc | K::Bcl) && last.d & 0x14 != 0x14 && last.imm.wrapping_sub(next) < 0x8000_0000;

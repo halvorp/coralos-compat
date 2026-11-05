@@ -85,12 +85,16 @@ fn a_lazy_carry_is_settled_at_side_exits_helpers_and_exits_and_its_mutant_goes_r
     let prog = lazy_ca_program();
     let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, |_, _| {});
     assert!(want.gpr[30] == 0 && want.gpr[22] > 0, "tier 0: the side path sees CA = 0 (r20 >= 100 is positive), the tail counts some: r30 {} r22 {}", want.gpr[30], want.gpr[22]);
-    // lazy carries are an opt-in knob (KNOB_LAZY_CA, off by default since h86 native): the test runs them on
-    use heirloom_cpu_abi::ppc::KNOB_LAZY_CA as Z;
+    // lazy carries are an opt-in knob (KNOB_LAZY_CA, off by default since h86 native): the test runs them on, with superblocks
+    // (KNOB_SUPERBLOCK, opt-in since h86 heavy) so the bge is a superblock SIDE exit, and without (each block alone)
+    use heirloom_cpu_abi::ppc::{KNOB_LAZY_CA, KNOB_SUPERBLOCK};
+    const Z: u32 = KNOB_LAZY_CA | KNOB_SUPERBLOCK;
     for slice in [1_000_000, 1_000, 61, 13, 3] {
         for region in [None, Some(REGION_TEST)] {
-            let (got, e) = run_full(Tier::Jit, 0, Z, &prog, slice, |_, _| {}, region);
-            assert!(got == want, "slice {slice} region {region:?}: r22 {} / {}, r30 {} / {}, xer {:#x} / {:#x} {:?}", got.gpr[22], want.gpr[22], got.gpr[30], want.gpr[30], got.xer, want.xer, e.jit_stats());
+            for knobs in [Z, KNOB_LAZY_CA] {
+                let (got, e) = run_full(Tier::Jit, 0, knobs, &prog, slice, |_, _| {}, region);
+                assert!(got == want, "slice {slice} region {region:?} knobs {knobs:#x}: r22 {} / {}, r30 {} / {}, xer {:#x} / {:#x} {:?}", got.gpr[22], want.gpr[22], got.gpr[30], want.gpr[30], got.xer, want.xer, e.jit_stats());
+            }
         }
     }
     let (got, e) = run_full(Tier::JitLockstep, 0, Z, &prog, 50, |_, _| {}, Some(REGION_TEST));
@@ -193,15 +197,16 @@ fn divide_program() -> Vec<u32> {
     p
 }
 
-/// The divide loop ends in tier 0's state with lazy carries and no superblocks (single-block nodes), regions on, in slicings
+/// The divide loop ends in tier 0's state with lazy carries and no superblocks (single-block nodes, the default), with superblocks
+/// (opt-in), regions on, in slicings
 /// small enough for back-edge budget exits, and in JitLockstep; with the back-edge settle planted back (mutant 48) RED.
 #[test]
 fn a_regions_back_edge_exit_does_not_settle_a_stale_lazy_carry_and_its_mutant_goes_red() {
-    use heirloom_cpu_abi::ppc::{KNOB_LAZY_CA as Z, KNOB_NO_SUPERBLOCK as B};
+    use heirloom_cpu_abi::ppc::{KNOB_LAZY_CA as Z, KNOB_NO_SUPERBLOCK as B, KNOB_SUPERBLOCK as S};
     let prog = divide_program();
     let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, |_, _| {});
     assert!(want.last.halted, "tier 0 runs it: {:?}", want.last);
-    for knobs in [Z | B, Z, B, 0] {
+    for knobs in [Z | B, Z, Z | S, S, 0] {
         for slice in [1_000_000, 1_000, 61, 23, 13] {
             let (got, e) = run_full(Tier::Jit, 0, knobs, &prog, slice, |_, _| {}, Some(REGION_TEST));
             assert!(got == want, "knobs {knobs:#x} slice {slice}: xer {:#x}/{:#x} r20 {:#x}/{:#x} {:?}", got.xer, want.xer, got.gpr[20], want.gpr[20], e.jit_stats());

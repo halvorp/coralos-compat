@@ -127,21 +127,27 @@ fn programs_under_test() -> Vec<(&'static str, &'static [u32], Setup)> {
     ]
 }
 
-/// KNOB_NO_SUPERBLOCK (h86 native: the code-duplication A/B) changes code, not semantics: every program ends in tier 0's state
-/// with it, in any slicing, and no superblock is compiled.
+/// Superblocks are opt-in (KNOB_SUPERBLOCK, off by default since h86 heavy) and change code, not semantics: every program ends
+/// in tier 0's state with them, in any slicing, and superblocks are really compiled; KNOB_NO_SUPERBLOCK overrides the opt-in
+/// and the default compiles none.
 #[test]
-fn without_superblocks_every_program_ends_in_tier_0s_state() {
+fn with_superblocks_every_program_ends_in_tier_0s_state() {
+    use heirloom_cpu_abi::ppc::{KNOB_NO_SUPERBLOCK, KNOB_SUPERBLOCK};
+    let mut superblocks = 0;
     for (name, prog, setup) in programs_under_test() {
         let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);
         for slice in [1, 7, 1_000, 1_000_000] {
-            let (mut c, mut m) = load(prog, &setup);
-            let mut e = exec(Tier::Jit, 0);
-            e.set_jit_knobs(heirloom_cpu_abi::ppc::KNOB_NO_SUPERBLOCK);
-            let got = finish(&mut e, &mut c, &mut m, slice);
-            assert!(got == want, "{name}: no superblocks, slice {slice}: differs from tier 0");
-            assert_eq!(e.jit_stats().superblocks, 0, "{name}: {:?}", e.jit_stats());
+            for (knobs, on) in [(KNOB_SUPERBLOCK, true), (KNOB_SUPERBLOCK | KNOB_NO_SUPERBLOCK, false), (0, false)] {
+                let (mut c, mut m) = load(prog, &setup);
+                let mut e = exec(Tier::Jit, 0);
+                e.set_jit_knobs(knobs);
+                let got = finish(&mut e, &mut c, &mut m, slice);
+                assert!(got == want, "{name}: knobs {knobs:#x}, slice {slice}: differs from tier 0");
+                if on { superblocks += e.jit_stats().superblocks; } else { assert_eq!(e.jit_stats().superblocks, 0, "{name}: knobs {knobs:#x}: {:?}", e.jit_stats()); }
+            }
         }
     }
+    assert!(superblocks > 0, "superblocks were compiled with KNOB_SUPERBLOCK");
 }
 
 #[test]
@@ -374,10 +380,18 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
         // a run slice publishes what it compiled: short slices make the fuzz's short loops run in JIT code
         for slice in [37, 1_000, 1_000_000] {
             let (got, e) = run_on(Tier::Jit, 0, &prog, slice, fuzz_setup(seed));
-            (compiled, superblocks) = (compiled + e.jit_stats().compiled, superblocks + e.jit_stats().superblocks);
+            compiled += e.jit_stats().compiled;
             assert!(got == want, "seed {seed} slice {slice}: gpr {:x?}/{:x?} cr {:#x}/{:#x} xer {:#x}/{:#x} tb {}/{} last {:?}/{:?} ram equal {} {:?}",
                 got.gpr, want.gpr, got.cr, want.cr, got.xer, want.xer, got.tb, want.tb, got.last, want.last, got.ram == want.ram, e.jit_stats());
         }
+        // superblocks (opt-in, KNOB_SUPERBLOCK): the same state, and in lockstep
+        for slice in [37, 1_000_000] {
+            let (got, e) = run_full(Tier::Jit, 0, heirloom_cpu_abi::ppc::KNOB_SUPERBLOCK, &prog, slice, fuzz_setup(seed), None);
+            superblocks += e.jit_stats().superblocks;
+            assert!(got == want, "seed {seed} slice {slice}: with superblocks {:?}", e.jit_stats());
+        }
+        let (got, e) = run_full(Tier::JitLockstep, 0, heirloom_cpu_abi::ppc::KNOB_SUPERBLOCK, &prog, 50, fuzz_setup(seed), None);
+        assert!(got == want && e.divergence().is_none(), "seed {seed}: lockstep with superblocks {:?}", e.divergence());
         // WIDE code (Tier::JitWide: every displacement and immediate 4 bytes long, the silicon code-size A/B): the same state
         for slice in [37, 1_000_000] {
             let (got, e) = run_on(Tier::JitWide, 0, &prog, slice, fuzz_setup(seed));
@@ -396,8 +410,8 @@ fn a_random_program_fuzz_agrees_with_tier_0_on_tier_2_and_jit_lockstep() {
     }
     // a floor that proves JIT code ran (~100k with this generator: programs that trap early compare less)
     assert!(compared > 50_000, "the fuzz really compared JIT code: {compared}");
-    // and superblocks (the generator's skip-the-next bc and the loop's own) were compiled and fuzzed
-    assert!(superblocks > 100, "superblocks were fuzzed: {superblocks} of {compiled} blocks");
+    // and superblocks (opt-in: the generator's skip-the-next bc and the loop's own) were compiled and fuzzed
+    assert!(superblocks > 100, "superblocks were fuzzed: {superblocks} (default runs compiled {compiled} blocks)");
 }
 
 /// A tiny code arena (the stub page and 16 segments of one page; the tests publish after every run, a page each time):
@@ -634,15 +648,21 @@ fn a_compare_fused_with_its_branch_ends_in_tier_0s_state() {
     let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, |_, _| {});
     // threshold 16: the loop head (entered every trip) runs out before the skip block (~3 trips in 4), so the region is headed
     // by the loop head and the branch's taken edge is a FORWARD one (a back edge may leave on its budget check: never fused)
+    // the fusion needs the not-taken path in the compare's node: superblocks (opt-in, KNOB_SUPERBLOCK); the default too
+    use heirloom_cpu_abi::ppc::KNOB_SUPERBLOCK as SB;
     for slice in [1_000_000, 1_000, 13, 3] {
-        let (got, e) = run_region(Tier::Jit, 0, &prog, slice, |_, _| {}, Some(16));
-        assert!(got == want, "slice {slice}: r5 {} r6 {} cr {:#x}/{:#x} {:?}", got.gpr[5], got.gpr[6], got.cr, want.cr, e.jit_stats());
-        // (a 3-instruction slice is shorter than the region's longest path: it never enters, it is refused)
-        assert!(slice < 13 || e.jit_stats().region_fused > 0, "slice {slice}: the compare was fused: {:?}", e.jit_stats());
+        for knobs in [SB, 0] {
+            let (got, e) = run_full(Tier::Jit, 0, knobs, &prog, slice, |_, _| {}, Some(16));
+            assert!(got == want, "slice {slice} knobs {knobs:#x}: r5 {} r6 {} cr {:#x}/{:#x} {:?}", got.gpr[5], got.gpr[6], got.cr, want.cr, e.jit_stats());
+            // (a 3-instruction slice is shorter than the region's longest path: it never enters, it is refused)
+            assert!(knobs == 0 || slice < 13 || e.jit_stats().region_fused > 0, "slice {slice}: the compare was fused: {:?}", e.jit_stats());
+        }
     }
     for region in [REGION_TEST, 16] {
-        let (got, e) = run_region(Tier::JitLockstep, 0, &prog, 13, |_, _| {}, Some(region));
-        assert!(got == want && e.divergence().is_none(), "threshold {region}: {:?}", e.divergence());
+        for knobs in [SB, 0] {
+            let (got, e) = run_full(Tier::JitLockstep, 0, knobs, &prog, 13, |_, _| {}, Some(region));
+            assert!(got == want && e.divergence().is_none(), "threshold {region} knobs {knobs:#x}: {:?}", e.divergence());
+        }
     }
 }
 
@@ -673,8 +693,12 @@ fn a_region_spanning_a_page_written_since_it_formed_is_not_run_stale() {
     for slice in [1_000_000, 1_000, 13] {
         let (got, e) = run_region(Tier::Jit, 0, &prog, slice, cross_page_setup, Some(REGION_TEST));
         assert!(got == want && e.jit_stats().regions > 0, "slice {slice}: r5 {} {:?}", got.gpr[5], e.jit_stats());
-        let (got, _) = run_region(Tier::Jit, 22, &prog, slice, cross_page_setup, Some(REGION_TEST));
+        // mutant 22 lives only under KNOB_ENTRY_CHECKS (run_shape sets it) and needs P2 to be a NON-head node: with superblocks
+        // (opt-in) the loop is one region of 3 nodes; each block alone, P2's block heads a region of its own (checked: GREEN)
+        let (got, _) = run_full(Tier::Jit, 22, heirloom_cpu_abi::ppc::KNOB_ENTRY_CHECKS | heirloom_cpu_abi::ppc::KNOB_SUPERBLOCK, &prog, slice, cross_page_setup, Some(REGION_TEST));
         assert!(got != want, "slice {slice}: mutant 22 (only the head's page checked) stayed GREEN");
+        let (got, e) = run_full(Tier::Jit, 0, heirloom_cpu_abi::ppc::KNOB_ENTRY_CHECKS | heirloom_cpu_abi::ppc::KNOB_SUPERBLOCK, &prog, slice, cross_page_setup, Some(REGION_TEST));
+        assert!(got == want && e.jit_stats().regions > 0, "slice {slice}: entry checks + superblocks: r5 {} {:?}", got.gpr[5], e.jit_stats());
     }
     let (got, e) = run_region(Tier::JitLockstep, 0, &prog, 13, cross_page_setup, Some(REGION_TEST));
     assert!(got == want && e.divergence().is_none(), "{:?}", e.divergence());

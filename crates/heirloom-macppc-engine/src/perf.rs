@@ -73,8 +73,8 @@ pub struct Window {
 /// h86 native: the native routines (cpu-ppc jit_xnat) all off, then each alone - each prices itself on the Z83.
 pub const ABLATIONS: [(&str, u32); 18] = {
     use heirloom_os_abi::ppc::{KNOB_COLD_TAIL as T, KNOB_ENTRY_CHECKS as E, KNOB_FOLLOW_CALLS as C, KNOB_IBTC_BITS_SHIFT as I, KNOB_NO_DISPLACE as D, KNOB_NO_ENTRY_GEN as G, KNOB_LAZY_CA as L, KNOB_NO_SMC_STORE as S, KNOB_NO_XLATE as X};
-    use heirloom_os_abi::ppc::{KNOB_NO_SUPERBLOCK as B, KNOB_T1_FLUSH_DROPS as F, KNOB_NO_NAT as N, KNOB_NO_NAT_BITSCAN as NB, KNOB_NO_NAT_PALBLIT as NP, KNOB_NO_NAT_TEXCONV as NT};
-    [("base", 0), ("nosuperblock", B), ("noxlate", X), ("t1flushdrops", F), ("nonat", N), ("nopalblit", NP), ("notexconv", NT), ("nobitscan", NB), ("nodisplace", D), ("lazyca", L), ("followcalls", C), ("coldtail", T), ("entrychecks", E), ("nosmc", S), ("nogen", G), ("nosmc+nogen", S | G), ("ibtc12", 12 << I), ("ibtc14", 14 << I)]
+    use heirloom_os_abi::ppc::{KNOB_SUPERBLOCK as B, KNOB_T1_FLUSH_DROPS as F, KNOB_NO_NAT as N, KNOB_NO_NAT_BITSCAN as NB, KNOB_NO_NAT_PALBLIT as NP, KNOB_NO_NAT_TEXCONV as NT};
+    [("base", 0), ("superblock", B), ("noxlate", X), ("t1flushdrops", F), ("nonat", N), ("nopalblit", NP), ("notexconv", NT), ("nobitscan", NB), ("nodisplace", D), ("lazyca", L), ("followcalls", C), ("coldtail", T), ("entrychecks", E), ("nosmc", S), ("nogen", G), ("nosmc+nogen", S | G), ("ibtc12", 12 << I), ("ibtc14", 14 << I)]
 };
 pub const ABLATE_WINDOWS: u64 = 2;
 
@@ -146,6 +146,9 @@ pub struct Perf {
 
 impl Perf {
     pub fn now(&self) -> u64 { (self.clock)() }
+    /// The running guest-PC profile (cpu-tier "jitprofile"), for a host tool that splits it by frame (the WC3 harness's
+    /// `WC3_PROFILE_FRAMES`): None with the profile off.
+    pub fn profile(&self) -> Option<&crate::profile::Profile> { self.profile.as_deref() }
     pub(crate) fn clock_fn(&self) -> fn() -> u64 { self.clock }
     pub(crate) fn add_native(&mut self, class: Class, dt: u64) {
         self.win.native_time[class as usize] += dt;

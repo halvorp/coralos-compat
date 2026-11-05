@@ -619,6 +619,11 @@ fn wc3_host_run_with_a_gl_worker() {
         m.exec().set_jit_region_shape(heirloom_cpu_ppc::RegionShape { max_nodes: f[0], max_insns: f[1], max_pages: f[2], follow_calls: f[3] != 0, spend: f[4] != 0 });
     }
     let (mut jf_swaps, mut jf_t, mut jf_tr, mut jf_n) = (0usize, host_ns(), 0u64, 0u64);
+    // `WC3_PROFILE_FRAMES=<file>` (with WC3_PROFILE): the guest-PC profile split by guest frame (swap to swap, at slice ends) -
+    // per frame `F <swaps> <guest insns>`, then `S <fragment> <section> <offset> <insns> <ticks> <samples>` per function start
+    // sampled in it - tools/ppc-profile-frames.py ranks the functions whose instructions grow in the heavy frames
+    let mut prof_frames = std::env::var("WC3_PROFILE_FRAMES").ok().map(|p| std::io::BufWriter::new(std::fs::File::create(p).unwrap()));
+    let (mut pf_swaps, mut pf_insns, mut pf_prev): (usize, u64, std::collections::BTreeMap<u32, heirloom_macppc_engine::profile::Acc>) = (0, 0, Default::default());
     // `WC3_PERF=<frames>`: the engine's stage clock (heirloom_macppc_engine::perf) on host nanoseconds, a line every <frames> swaps
     if let Ok(every) = std::env::var("WC3_PERF") {
         fn ns() -> u64 { static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new(); T0.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64 }
@@ -674,6 +679,26 @@ fn wc3_host_run_with_a_gl_worker() {
                 let mut v: Vec<_> = sites.iter().collect();
                 v.sort_by(|a, b| b.1.cmp(a.1));
                 for (s, n) in v.iter().take(6) { eprintln!("  POLL-SITE lr={:#x} {:#x} {:#x} insns={n}", s[0], s[1], s[2]); }
+            }
+        }
+        pf_insns += stats.insns;
+        if let Some(w) = prof_frames.as_mut() {
+            let swaps = seen.lock().unwrap().swaps;
+            if swaps != pf_swaps {
+                use std::io::Write;
+                if let Some(pr) = m.perf().and_then(|p| p.profile()) {
+                    // the profile restarts every PROFILE_WINDOWS windows (its sample count falls): count from zero then
+                    if pr.samples < pf_prev.values().map(|a| a.samples).sum::<u64>() { pf_prev.clear(); }
+                    writeln!(w, "F {swaps} {pf_insns}").unwrap();
+                    for (&start, a) in &pr.by_fn {
+                        let b = pf_prev.get(&start).copied().unwrap_or_default();
+                        if a.samples == b.samples { continue; }
+                        let at = m.code_map.locate(start).map_or_else(|| String::from("outside - 0"), |(f, sec, off)| format!("{f:?} {sec} {off:#x}"));
+                        writeln!(w, "S {at} {} {} {}", a.insns - b.insns, a.ticks - b.ticks, a.samples - b.samples).unwrap();
+                    }
+                    pf_prev = pr.by_fn.clone();
+                }
+                (pf_swaps, pf_insns) = (swaps, 0);
             }
         }
         if let Some(w) = jit_frames.as_mut() {
