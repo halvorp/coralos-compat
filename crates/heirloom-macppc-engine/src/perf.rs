@@ -65,6 +65,9 @@ pub struct Window {
     pub ledger: (Vec<crate::perf_ledger::Frame>, (usize, usize), bool),
     /// The tier-2 ablation setting this window ran under (cpu-tier "jitablate": [`ABLATIONS`]); empty = none.
     pub cfg: &'static str,
+    /// Resident arrays (gl_c/resident.rs): named and stored this window, and the entries held at its last swap.
+    pub resident: crate::gl_c::resident::ResidentCounts,
+    pub resident_held: u64,
 }
 
 /// cpu-tier "jitablate" (h86 aot-ledger): tier 2 with its guards switched off in turn, each for [`ABLATE_WINDOWS`] perf windows
@@ -284,6 +287,13 @@ interp={}% native={}% outside_step={}% gl_ring={}%{classes} clock_reads/frame={}
         w.draw_time / per_us.max(1) / n as u64, w.draws / n as u64, w.capture_time / per_us.max(1) / n as u64, w.capture_bytes / 1024 / n as u64,
         gl_own.saturating_mul(1000) / per_us.max(1) / w.native_calls[Class::Gl as usize].max(1),
         w.step_time / per_us.max(1) / w.steps.max(1), outside / per_us.max(1) / w.steps.max(1))
+        + &resident_suffix(w, n as u64)
+}
+
+/// ` | resident: refs= ref_kib= stores= store_kib= held=` per frame (gl_c/resident.rs): the array bytes named instead of sent.
+fn resident_suffix(w: &Window, n: u64) -> String {
+    let r = &w.resident;
+    format!(" | resident: refs={} ref_kib={} stores={} store_kib={} volatile={} held={}", r.refs / n, r.ref_bytes / 1024 / n, r.stores / n, r.store_bytes / 1024 / n, r.volatile, w.resident_held)
 }
 
 impl<U: GuestUi> MacPpc<U> {
@@ -495,7 +505,8 @@ mod tests {
         assert!(line.contains(" gl=10%/0"), "{line}");
         // the absolute times that tell a slow GL round trip from slow slicing on the Z83: 2_525_000 units outside step over 100
         // frames and 1000 slices; nothing in gl_ring
-        assert!(line.ends_with("| per frame: gl_ring_us=0 outside_us=25250 gl_us=5050 draw_us=0 draws=0 capture_us=0 draw_kib=0 | per gl call: ns=505000000 | per slice: step_us=2525 gap_us=2525"), "{line}");
+        assert!(line.contains("| per frame: gl_ring_us=0 outside_us=25250 gl_us=5050 draw_us=0 draws=0 capture_us=0 draw_kib=0 | per gl call: ns=505000000 | per slice: step_us=2525 gap_us=2525 |"), "{line}");
+        assert!(line.ends_with("| resident: refs=0 ref_kib=0 stores=0 store_kib=0 volatile=0 held=0"), "{line}");
     }
 
     #[test]

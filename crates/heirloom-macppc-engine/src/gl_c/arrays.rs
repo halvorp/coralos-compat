@@ -122,7 +122,10 @@ impl<U: GuestUi> MacPpc<U> {
         // the capture alone (copy + byte swap of the referenced guest bytes) and the bytes it queued: the perf line's
         // capture_us / draw_kib, which tell a per-byte cost (memory) from a per-draw one (code) on silicon
         let (t0, at) = (self.perf.as_ref().filter(|_| detail).map(|p| p.now()), self.gl.pending.len());
-        let r = Frame::encode_draw_elements_into(&mut self.gl.pending, token, mem, mode, off, count, ty, descs);
+        // resident arrays (resident.rs): an array whose pages were not written since the worker got its bytes is named by id
+        let gl = &mut self.gl;
+        let res = &mut gl.resident;
+        let r = Frame::encode_draw_elements_kept_into(&mut gl.pending, token, mem, mode, off, count, ty, descs, &mut |k, span| res.keep(mem, &descs[k], span));
         if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) {
             let dt = p.now().wrapping_sub(t0);
             let bytes = (self.gl.pending.len() - at) as u64;
@@ -151,6 +154,8 @@ impl<U: GuestUi> MacPpc<U> {
                 }
             }
         }
+        // the arrays it stored are the worker's now (or forgotten: the draw did not reach it)
+        self.gl.resident.encoded(r.is_ok());
         if let Err(e) = r {
             self.gl_set_error(GL_INVALID_VALUE);
             self.gl_note(format!("[HEIRLOOM-GL] {who} refused: {e:?}"));

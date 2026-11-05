@@ -1,7 +1,7 @@
 //! Ring frames. Layout, every field little-endian:
 //! `u16 abi_version | u16 kind | u32 payload_len | u32 token.slot | u32 token.incarnation | payload`.
 //! The version is FIRST so a reader refuses an unknown layout before it parses anything else.
-use crate::snapshot::{snapshot_array, snapshot_array_into, snapshot_indices_into, ArraySnapshot, Descriptor, ElemType, Role, SnapshotError};
+use crate::snapshot::{snapshot_array, snapshot_array_into, snapshot_indices_into, ArraySnapshot, Descriptor, ElemType, Keep, Role, SnapshotError};
 use crate::token::Token;
 use crate::wire::{Reader, WireError, Writer, ABI_VERSION};
 use crate::wire_copy::{append_swapped, put, put_words};
@@ -62,7 +62,7 @@ impl DrawCommand {
                 let n = (hi - lo).checked_add(1).ok_or(SnapshotError::Overflow)?;
                 for (k, d) in arrays.iter().enumerate() {
                     if self.arrays.len() <= k {
-                        let blank = || ArraySnapshot { role: d.role, unit: 0, size: 1, ty: d.ty, first: 0, count: 0, data: Vec::new() };
+                        let blank = || ArraySnapshot { role: d.role, unit: 0, size: 1, ty: d.ty, first: 0, count: 0, data: Vec::new(), keep: Keep::Copy };
                         self.arrays.push(spare.pop().unwrap_or_else(blank));
                     }
                     snapshot_array_into(mem, d, lo, n, &mut self.arrays[k])?;
@@ -252,12 +252,22 @@ impl Frame {
                     p.u8(a.role as u8);
                     p.u8(a.unit);
                     p.u8(a.size);
-                    p.u8(0);
+                    p.u8(keep_tag(a.keep));
                     p.u32(a.ty as u32);
                     p.u32(a.first);
                     p.u32(a.count);
-                    p.u32(a.data.len() as u32);
-                    p.bytes(&a.data);
+                    // a Ref's length is the kept bytes' (no data follows); a Ref built in memory has none, so it is computed
+                    let dlen = match a.keep {
+                        Keep::Ref(_) => a.count as usize * a.size as usize * a.ty.bytes(),
+                        _ => a.data.len(),
+                    };
+                    p.u32(dlen as u32);
+                    if let Keep::Store(id) | Keep::Ref(id) = a.keep {
+                        p.u32(id);
+                    }
+                    if !matches!(a.keep, Keep::Ref(_)) {
+                        p.bytes(&a.data);
+                    }
                 }
             }
             Command::FenceSet { id } => p.u32(*id),
@@ -304,8 +314,17 @@ impl Frame {
     /// index range is found in the same pass (no snapshot buffers, no second copy: a Warcraft III frame's ~300 draws carry
     /// ~470 KB). On an error `out` is as it was.
     pub fn encode_draw_elements_into(out: &mut Vec<u8>, token: Token, mem: &[u8], mode: u32, index_off: usize, count: u32, ty: ElemType, arrays: &[Descriptor]) -> Result<(), SnapshotError> {
+        Frame::encode_draw_elements_kept_into(out, token, mem, mode, index_off, count, ty, arrays, &mut |_, _| Keep::Copy)
+    }
+
+    /// [`Frame::encode_draw_elements_into`] with RESIDENT ARRAYS: `keep(k, span)` says how array `k` (its guest bytes `span`, the
+    /// vertices this draw references) travels - copied, copied and kept under an id, or named by the id it was kept under (no
+    /// bytes read, none written). The caller answers `Ref` only for bytes it proved unchanged since their `Store`. On an error
+    /// `out` is as it was (and the caller must forget the `Store`s it answered for this draw).
+    #[allow(clippy::too_many_arguments)] // delete-when: the draw's arguments become one struct (they mirror glDrawElements's, plus the frame's)
+    pub fn encode_draw_elements_kept_into(out: &mut Vec<u8>, token: Token, mem: &[u8], mode: u32, index_off: usize, count: u32, ty: ElemType, arrays: &[Descriptor], keep: &mut dyn FnMut(usize, core::ops::Range<usize>) -> Keep) -> Result<(), SnapshotError> {
         let start = out.len();
-        let r = encode_draw_body(out, token, mem, mode, index_off, count, ty, arrays);
+        let r = encode_draw_body(out, token, mem, mode, index_off, count, ty, arrays, keep);
         if r.is_err() {
             out.truncate(start);
         }
@@ -398,9 +417,14 @@ impl Frame {
     }
 }
 
-/// [`Frame::encode_draw_elements_into`] without the rollback.
+/// How many arrays of one draw have their [`Keep`] decided before any is copied (the fixed-function arrays: vertex, normal,
+/// colour, edge flag and a texture unit's coordinates each); past it an array is decided as it is copied - the same answer, only
+/// its prefetch is not skipped.
+const KEEP_AHEAD: usize = 16;
+
+/// [`Frame::encode_draw_elements_kept_into`] without the rollback.
 #[allow(clippy::too_many_arguments)]
-fn encode_draw_body(out: &mut Vec<u8>, token: Token, mem: &[u8], mode: u32, index_off: usize, count: u32, ty: ElemType, arrays: &[Descriptor]) -> Result<(), SnapshotError> {
+fn encode_draw_body(out: &mut Vec<u8>, token: Token, mem: &[u8], mode: u32, index_off: usize, count: u32, ty: ElemType, arrays: &[Descriptor], keep: &mut dyn FnMut(usize, core::ops::Range<usize>) -> Keep) -> Result<(), SnapshotError> {
     if !matches!(ty, ElemType::U8 | ElemType::U16 | ElemType::U32) {
         return Err(SnapshotError::BadIndexType);
     }
@@ -426,14 +450,27 @@ fn encode_draw_body(out: &mut Vec<u8>, token: Token, mem: &[u8], mode: u32, inde
     let range = index_range(ty, &out[at..]);
     if let Some((lo, hi)) = range {
         let n = (hi - lo).checked_add(1).ok_or(SnapshotError::Overflow)?;
-        // every array's lines asked for before the first is copied: the misses overlap instead of each copy waiting on its own
-        for d in arrays {
+        // each array's Keep, then the lines of every array that is copied asked for before the first is: the misses overlap
+        // instead of each copy waiting on its own (a kept array's bytes are not read at all)
+        let mut ahead = [None::<Keep>; KEEP_AHEAD];
+        for (k, d) in arrays.iter().enumerate() {
             if let Some(r) = array_span(mem, d, lo, n) {
-                prefetch(&mem[r]);
+                let kp = keep(k, r.clone());
+                if !matches!(kp, Keep::Ref(_)) {
+                    prefetch(&mem[r]);
+                }
+                if let Some(slot) = ahead.get_mut(k) {
+                    *slot = Some(kp);
+                }
             }
         }
-        for d in arrays {
-            encode_array(out, mem, d, lo, n)?;
+        for (k, d) in arrays.iter().enumerate() {
+            // an array whose span is not inside guest memory was not decided: encode_array names its error
+            let kp = match ahead.get(k).copied().flatten() {
+                Some(kp) => kp,
+                None => array_span(mem, d, lo, n).map_or(Keep::Copy, |r| keep(k, r)),
+            };
+            encode_array(out, mem, d, lo, n, kp)?;
         }
         out[start + 28..start + 32].copy_from_slice(&(arrays.len() as u32).to_le_bytes());
     }
@@ -480,7 +517,7 @@ fn prefetch(b: &[u8]) {
 
 /// One array's frame record and its vertices `first .. first+count` at the end of `out`, as `snapshot_array_into` + the draw's
 /// encoding would write them (the same checks, in the same order).
-fn encode_array(out: &mut Vec<u8>, mem: &[u8], d: &Descriptor, first: u32, count: u32) -> Result<(), SnapshotError> {
+fn encode_array(out: &mut Vec<u8>, mem: &[u8], d: &Descriptor, first: u32, count: u32, keep: Keep) -> Result<(), SnapshotError> {
     if !(1..=4).contains(&d.size) {
         return Err(SnapshotError::BadSize(d.size));
     }
@@ -493,18 +530,40 @@ fn encode_array(out: &mut Vec<u8>, mem: &[u8], d: &Descriptor, first: u32, count
     if end > mem.len() {
         return Err(SnapshotError::OutOfRange);
     }
-    let mut rec = [0u8; 20];
+    let mut rec = [0u8; 24];
     rec[0] = d.role as u8;
     rec[1] = d.unit;
     rec[2] = d.size;
+    rec[3] = keep_tag(keep);
     rec[4..8].copy_from_slice(&(d.ty as u32).to_le_bytes());
     rec[8..12].copy_from_slice(&first.to_le_bytes());
     rec[12..16].copy_from_slice(&count.to_le_bytes());
     rec[16..20].copy_from_slice(&(total as u32).to_le_bytes());
-    out.reserve(rec.len() + total);
-    put(out, rec);
+    match keep {
+        Keep::Copy => {
+            out.reserve(20 + total);
+            put(out, <[u8; 20]>::try_from(&rec[..20]).unwrap_or([0; 20]));
+        }
+        Keep::Store(id) | Keep::Ref(id) => {
+            rec[20..24].copy_from_slice(&id.to_le_bytes());
+            out.reserve(rec.len() + if matches!(keep, Keep::Ref(_)) { 0 } else { total });
+            put(out, rec);
+            if matches!(keep, Keep::Ref(_)) {
+                return Ok(()); // the kept bytes: none read, none written
+            }
+        }
+    }
     // one pass: each vertex's components copied and reversed together, no `memcpy` per vertex (wire_copy)
     append_swapped(out, mem, begin, stride, vbytes, count as usize, d.ty.bytes())
+}
+
+/// The record's byte 3: how the array's bytes travel ([`Keep`]).
+const fn keep_tag(k: Keep) -> u8 {
+    match k {
+        Keep::Copy => 0,
+        Keep::Store(_) => 1,
+        Keep::Ref(_) => 2,
+    }
 }
 
 fn decode_draw(p: &mut Reader) -> Result<DrawCommand, WireError> {
@@ -522,7 +581,7 @@ fn decode_draw(p: &mut Reader) -> Result<DrawCommand, WireError> {
         let role = Role::from_u8(p.u8()?).ok_or(WireError::BadValue("array role"))?;
         let unit = p.u8()?;
         let size = p.u8()?;
-        p.u8()?;
+        let tag = p.u8()?;
         let ty = ElemType::from_gl(p.u32()?).ok_or(WireError::BadValue("array type"))?;
         let first = p.u32()?;
         let count = p.u32()?;
@@ -534,7 +593,15 @@ fn decode_draw(p: &mut Reader) -> Result<DrawCommand, WireError> {
         if dlen != want {
             return Err(WireError::LengthMismatch);
         }
-        arrays.push(ArraySnapshot { role, unit, size, ty, first, count, data: p.take(dlen)?.to_vec() });
+        let keep = match tag {
+            0 => Keep::Copy,
+            1 => Keep::Store(p.u32()?),
+            2 => Keep::Ref(p.u32()?),
+            _ => return Err(WireError::BadValue("array keep")),
+        };
+        // a Ref carries no bytes: Resident::resolve puts the kept ones back
+        let data = if matches!(keep, Keep::Ref(_)) { Vec::new() } else { p.take(dlen)?.to_vec() };
+        arrays.push(ArraySnapshot { role, unit, size, ty, first, count, data, keep });
     }
     let range = index_range(ity, &idata);
     Ok(DrawCommand { mode, indices: crate::snapshot::IndexSnapshot { ty: ity, count: icount, data: idata, range }, arrays })

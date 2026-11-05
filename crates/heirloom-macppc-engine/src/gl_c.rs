@@ -15,7 +15,9 @@
 //!   (`[HEIRLOOM-GL-GETSTRING name=.. ]`): the first real run tells us which tokens the game asks for.
 //! * `APPLE_fence` is real: a fence is complete only after the worker reports the batch it was set in retired.
 //! * `APPLE_vertex_array_range` is accepted and validated; because arrays are snapshotted at draw time the hint changes
-//!   nothing the guest can observe (NAMED LIMIT: no client-memory aliasing of GPU storage).
+//!   nothing the guest can observe (NAMED LIMIT: no client-memory aliasing of GPU storage). An array whose guest bytes are the
+//!   ones the worker was last sent travels as an id (RESIDENT ARRAYS, `gl_c/resident.rs`): the same bytes, proved by comparing
+//!   them; a flush of the range stores what it covers again.
 //!
 //! NAMED LIMITS: one context current at a time; `aglSetDrawable` takes the port's `portRect` for the size; `aglSetFullScreen` is the
 //! games-windowed rule (the context's drawable becomes a window of the asked size, the display mode is never changed); the renderer
@@ -50,6 +52,7 @@ mod generic;
 mod shadow;
 mod hot;
 mod image;
+pub mod resident;
 mod state;
 
 const GL_INVALID_ENUM: u32 = 0x0500;
@@ -169,10 +172,12 @@ pub struct GlState {
     pub(crate) defer: defer::DeferQ,
     /// The worker's state as last sent, so a call that changes nothing is not sent (gl_c/shadow.rs).
     shadow: shadow::Shadow,
+    /// The arrays the worker holds, by the guest bytes they were stored from (gl_c/resident.rs).
+    pub(crate) resident: resident::Resident,
 }
 
 impl GlState {
-    pub fn attach(&mut self, w: Box<dyn GlWorker>) { self.worker = Some(w); }
+    pub fn attach(&mut self, w: Box<dyn GlWorker>) { self.worker = Some(w); self.resident.reset(); }
     pub fn has_worker(&self) -> bool { self.worker.is_some() }
 }
 
@@ -188,6 +193,8 @@ fn role_of(cap: u32) -> Option<Role> {
 impl<U: GuestUi> MacPpc<U> {
     /// Attach the worker that executes the program's GL (the host's `heirloom-gl.engine` transport).
     pub fn gl_attach(&mut self, w: Box<dyn GlWorker>) { self.gl.attach(w); }
+    /// Resident arrays on (the default) or off (every array copied: the A/B, gl_c/resident.rs).
+    pub fn gl_resident(&mut self, on: bool) { self.gl.resident.off = !on; self.gl.resident.reset(); }
 
     fn gl_queue(&mut self, token: Token, command: Command) { Frame { token, command }.encode_into(&mut self.gl.pending); }
 
@@ -394,7 +401,7 @@ impl<U: GuestUi> MacPpc<U> {
                             self.gl_note(format!("[HEIRLOOM-GL DRAWABLE-FOLLOWS-PORT {w0}x{h0} -> {w}x{h}] the port was resized after aglSetDrawable"));
                         }
                     }
-                    self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); let jit = self.jit_events(); let w0 = self.perf.as_ref().map_or(0, |p| p.ledger.windows); if let Some(p) = self.perf.as_mut() { p.swap(jit); } self.ablate_after_swap(w0);
+                    self.gl_queue(t, Command::Swap { drawable: t }); self.gl_flush(); let rc = core::mem::take(&mut self.gl.resident.counts); let held = self.gl.resident.len() as u64; self.gl.resident.swap(); if let Some(p) = self.perf.as_mut() { p.win.resident.add(&rc); p.win.resident_held = held; } let jit = self.jit_events(); let w0 = self.perf.as_ref().map_or(0, |p| p.ledger.windows); if let Some(p) = self.perf.as_mut() { p.swap(jit); } self.ablate_after_swap(w0);
                 }
             },
             "aglSetFullScreen" => match self.gl.ctxs.get(&a0).copied() {
@@ -505,7 +512,9 @@ impl<U: GuestUi> MacPpc<U> {
                 if name.ends_with("ObjectAPPLE") { /* the "object" is the vertex array range: its fence is the stream's */ }
             }
             // ---- APPLE_vertex_array_range ------------------------------------------------------------------------------
-            "glVertexArrayRangeAPPLE" | "glFlushVertexArrayRangeAPPLE" => { /* validated hint: nothing observable (see the module doc) */ }
+            // the range's bytes may have been written: a resident array over them is stored again (gl_c/resident.rs; its compare
+            // would also see the writes - the flush is the program saying so)
+            "glVertexArrayRangeAPPLE" | "glFlushVertexArrayRangeAPPLE" => { let at = self.mac.mem.strip(a1); self.gl.resident.flushed(at, a0); }
             "glVertexArrayParameteriAPPLE" => {
                 if a0 != GL_VERTEX_ARRAY_STORAGE_HINT_APPLE || !(a1 == GL_STORAGE_CACHED_APPLE || a1 == GL_STORAGE_SHARED_APPLE || a1 == 0x85BC /* GL_STORAGE_PRIVATE_APPLE */) { self.gl_set_error(GL_INVALID_ENUM); }
             }

@@ -5,7 +5,9 @@ use alloc::vec::Vec;
 /// 2: `CallData` and `ReplyData` (texture pixels and read-backs) joined the frame kinds; a version-1 peer refuses a version-2 ring.
 /// 3: `aglSetDrawable`'s Call carries THREE arguments - width, height and the drawable's host window id (0 = no shown window) -
 ///    so the window owner attaches the GL picture to exactly the drawable's window; a version-2 peer refuses a version-3 ring.
-pub const ABI_VERSION: u16 = 3;
+/// 4: a draw's array record carries how its bytes travel (byte 3: 0 copied, 1 stored under the id that follows, 2 the id's kept
+///    bytes - no data follows; `snapshot::Keep`): RESIDENT ARRAYS; a version-3 peer refuses a version-4 ring.
+pub const ABI_VERSION: u16 = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WireError {

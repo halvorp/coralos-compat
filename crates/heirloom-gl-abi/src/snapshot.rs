@@ -93,6 +93,20 @@ pub struct Descriptor {
     pub stride: u32,
 }
 
+/// RESIDENT ARRAYS (wire v4): an array's bytes may be KEPT by the worker under an id the engine chose, and a later draw whose
+/// array the engine proved unchanged (guest RAM's write watch: no byte of its source written since it was kept) names the id
+/// instead of carrying the bytes. The worker's [`Resident`] store puts them back, so every consumer after it sees whole data.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Keep {
+    /// The bytes travel and are not kept (today's path).
+    #[default]
+    Copy,
+    /// The bytes travel and the worker keeps them under this id (replacing what it held there).
+    Store(u32),
+    /// The bytes do not travel: they are the ones kept under this id.
+    Ref(u32),
+}
+
 /// Vertices `first .. first+count` of one array, packed (stride removed), little-endian.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArraySnapshot {
@@ -103,11 +117,59 @@ pub struct ArraySnapshot {
     pub first: u32,
     pub count: u32,
     pub data: Vec<u8>,
+    /// How the bytes travelled: a decoded `Ref` has empty `data` until [`Resident::resolve`] fills it.
+    pub keep: Keep,
+}
+
+/// The worker's resident arrays: the bytes each id was last stored with. Ids are the engine's (dense, reused once it dropped
+/// one), so the store is a growable table indexed by id; it holds at most the engine's working set.
+#[derive(Default)]
+pub struct Resident {
+    slots: Vec<Option<Vec<u8>>>,
+    /// Bytes put back from the store (the wire bytes saved), and stores taken.
+    pub refs: u64,
+    pub ref_bytes: u64,
+    pub stores: u64,
+}
+
+impl Resident {
+    /// Keep every `Store` of `arrays` and fill every `Ref` from what is kept. A `Ref` to an id never stored, or whose kept bytes
+    /// are not the length its record declares, is refused (the engine and the worker disagree: the draw cannot be trusted).
+    pub fn resolve(&mut self, arrays: &mut [ArraySnapshot]) -> Result<(), crate::wire::WireError> {
+        for a in arrays.iter_mut() {
+            match a.keep {
+                Keep::Copy => {}
+                Keep::Store(id) => {
+                    let i = id as usize;
+                    if self.slots.len() <= i {
+                        self.slots.resize_with(i.checked_add(1).ok_or(crate::wire::WireError::Overflow)?, || None);
+                    }
+                    match &mut self.slots[i] {
+                        Some(v) => { v.clear(); v.extend_from_slice(&a.data); }
+                        slot => *slot = Some(a.data.clone()),
+                    }
+                    self.stores += 1;
+                }
+                Keep::Ref(id) => {
+                    let want = (a.count as usize).checked_mul(a.size as usize).and_then(|n| n.checked_mul(a.ty.bytes())).ok_or(crate::wire::WireError::Overflow)?;
+                    let kept = self.slots.get(id as usize).and_then(|s| s.as_ref()).ok_or(crate::wire::WireError::BadValue("resident array id never stored"))?;
+                    if kept.len() != want {
+                        return Err(crate::wire::WireError::LengthMismatch);
+                    }
+                    a.data.clear();
+                    a.data.extend_from_slice(kept);
+                    self.refs += 1;
+                    self.ref_bytes += want as u64;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Snapshot vertices `first .. first+count` of `d` out of guest memory `mem`.
 pub fn snapshot_array(mem: &[u8], d: &Descriptor, first: u32, count: u32) -> Result<ArraySnapshot, SnapshotError> {
-    let mut out = ArraySnapshot { role: d.role, unit: d.unit, size: d.size, ty: d.ty, first, count, data: Vec::new() };
+    let mut out = ArraySnapshot { role: d.role, unit: d.unit, size: d.size, ty: d.ty, first, count, data: Vec::new(), keep: Keep::Copy };
     snapshot_array_into(mem, d, first, count, &mut out)?;
     Ok(out)
 }
@@ -121,7 +183,7 @@ pub fn snapshot_array_into(mem: &[u8], d: &Descriptor, first: u32, count: u32, o
     let vbytes = (d.size as usize).checked_mul(d.ty.bytes()).ok_or(SnapshotError::Overflow)?;
     let stride = if d.stride == 0 { vbytes } else { d.stride as usize };
     let total = (count as usize).checked_mul(vbytes).ok_or(SnapshotError::Overflow)?;
-    (out.role, out.unit, out.size, out.ty, out.first, out.count) = (d.role, d.unit, d.size, d.ty, first, count);
+    (out.role, out.unit, out.size, out.ty, out.first, out.count, out.keep) = (d.role, d.unit, d.size, d.ty, first, count, Keep::Copy);
     let data = &mut out.data;
     data.clear();
     if count > 0 {

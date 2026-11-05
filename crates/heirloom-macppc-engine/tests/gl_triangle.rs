@@ -38,6 +38,56 @@ struct Seen {
     names: u64,
     /// Swaps seen (a long run counts them here instead of rescanning `kinds`).
     swaps: usize,
+    /// `WC3_ARRAY_CENSUS`: what the request stream carries per window of swaps (see [`Census`]).
+    census: Census,
+}
+
+/// `WC3_ARRAY_CENSUS=<swaps>`: per window of that many swaps, the request bytes and the draws' array bytes, and how many of those
+/// array bytes repeat an array the PREVIOUS frame sent byte for byte (the most a resident-array cache could leave off the wire).
+#[derive(Default)]
+struct Census {
+    req: u64,
+    draws: u64,
+    arrays: u64,
+    array_bytes: u64,
+    index_bytes: u64,
+    repeat_bytes: u64,
+    repeat_arrays: u64,
+    prev: std::collections::HashSet<u64>,
+    cur: std::collections::HashSet<u64>,
+    swaps: usize,
+    /// A running hash of every draw as the worker replays it (resident arrays put back): equal with resident arrays on and off.
+    replay: u64,
+}
+
+impl Census {
+    fn draw(&mut self, d: &heirloom_gl_abi::DrawCommand) {
+        use std::hash::{Hash, Hasher};
+        self.draws += 1;
+        self.index_bytes += d.indices.data.len() as u64;
+        let mut r = std::collections::hash_map::DefaultHasher::new();
+        (self.replay, d.mode, &d.indices.data, d.arrays.iter().map(|a| (a.role as u8, a.unit, a.size, a.ty as u32, a.first, a.count, &a.data)).collect::<Vec<_>>()).hash(&mut r);
+        self.replay = r.finish();
+        for a in &d.arrays {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (a.role as u8, a.unit, a.size, a.ty as u32, a.first, a.count, &a.data).hash(&mut h);
+            let k = h.finish();
+            self.arrays += 1;
+            self.array_bytes += a.data.len() as u64;
+            if self.prev.contains(&k) { self.repeat_bytes += a.data.len() as u64; self.repeat_arrays += 1; }
+            self.cur.insert(k);
+        }
+    }
+    fn swap(&mut self, every: usize) -> Option<String> {
+        self.prev = core::mem::take(&mut self.cur);
+        self.swaps += 1;
+        if self.swaps % every != 0 { return None; }
+        let n = every as u64;
+        let l = format!("[WC3-ARRAY-CENSUS swaps={}] per frame: req_bytes={} draws={} arrays={} array_bytes={} index_bytes={} repeat_of_prev_frame: arrays={} bytes={} replay_hash={:016x}",
+            self.swaps, self.req / n, self.draws / n, self.arrays / n, self.array_bytes / n, self.index_bytes / n, self.repeat_arrays / n, self.repeat_bytes / n, self.replay);
+        (self.req, self.draws, self.arrays, self.array_bytes, self.index_bytes, self.repeat_bytes, self.repeat_arrays) = (0, 0, 0, 0, 0, 0, 0);
+        Some(l)
+    }
 }
 
 struct Mock {
@@ -46,6 +96,8 @@ struct Mock {
     gpu: bool,
     /// Keep every request byte (the triangle test's ring image); a long game run keeps none (its textures would fill the host).
     keep: bool,
+    /// The worker's resident arrays (heirloom-gl-abi): a named array is put back before anything reads the draw, as the worker does.
+    resident: heirloom_gl_abi::snapshot::Resident,
 }
 
 impl heirloom_macppc_engine::gl_c::GlWorker for Mock {
@@ -56,6 +108,8 @@ impl Mock {
     fn transact_mock(&mut self, req: &[u8]) -> Vec<u8> {
         let mut seen = self.seen.lock().unwrap();
         if self.keep { seen.stream.extend_from_slice(req); }
+        let census: Option<usize> = std::env::var("WC3_ARRAY_CENSUS").ok().and_then(|v| v.parse().ok());
+        if census.is_some() { seen.census.req += req.len() as u64; }
         let mut out = Vec::new();
         let reply = |out: &mut Vec<u8>, status: u32, words: Vec<u64>, text: &str| {
             out.extend(Frame { token: Token { slot: 0, incarnation: 0 }, command: Command::Reply { status, words, text: text.into() } }.encode());
@@ -113,7 +167,9 @@ impl Mock {
                         _ => {}
                     }
                 }
-                Command::Draw(d) => {
+                Command::Draw(mut d) => {
+                    self.resident.resolve(&mut d.arrays).unwrap_or_else(|e| panic!("a resident array the worker cannot back: {e:?}"));
+                    if census.is_some() { seen.census.draw(&d); }
                     seen.kinds.push("Draw".into());
                     if self.keep { seen.draws.push(d); } else { seen.draws_seen += 1; }
                 }
@@ -125,7 +181,11 @@ impl Mock {
                     }
                 }
                 Command::FenceSet { .. } => seen.kinds.push("FenceSet".into()),
-                Command::Swap { .. } => { seen.swaps += 1; seen.kinds.push("Swap".into()) }
+                Command::Swap { .. } => {
+                    seen.swaps += 1;
+                    seen.kinds.push("Swap".into());
+                    if let Some(l) = census.and_then(|every| seen.census.swap(every.max(1))) { eprintln!("{l}"); }
+                }
                 Command::BatchEnd { seq } => out.extend(Frame { token: Token { slot: 0, incarnation: 0 }, command: Command::Retired { seq } }.encode()),
                 other => panic!("the engine sent a worker-to-engine frame: {other:?}"),
             }
@@ -320,7 +380,7 @@ fn deferred_gl_calls_reach_the_worker_as_the_same_frames_as_native_calls() {
         let seen = Arc::new(Mutex::new(Seen::default()));
         let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
         m.gl_defer(defer);
-        m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: true }));
+        m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: true, resident: Default::default() }));
         let frag = m.instantiate("defer", &Pef::parse(&defer_pef()).unwrap()).unwrap();
         m.start(&frag).unwrap();
         assert_eq!(m.step(10_000_000).0, Step::Exited, "{:?}", m.fault());
@@ -355,7 +415,7 @@ fn run(gpu: bool) -> (M, Arc<Mutex<Seen>>, Layout, u32) {
     let seen = Arc::new(Mutex::new(Seen::default()));
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     if gpu {
-        m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu, keep: true }));
+        m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu, keep: true, resident: Default::default() }));
     }
     let frag = m.instantiate("tri", &Pef::parse(&bytes).unwrap()).unwrap();
     let data = frag.section_bases[1].unwrap();
@@ -448,7 +508,7 @@ fn the_gl_spinner_swaps_frame_after_frame_into_its_own_window() {
     }
     let seen = Arc::new(Mutex::new(Seen::default()));
     let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
-    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: true }));
+    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: true, resident: Default::default() }));
     m.start_file(&app, "GL Spinner").unwrap();
     let mut t = 0u64;
     for _ in 0..12 {
@@ -480,7 +540,7 @@ fn the_renderer_info_fullscreen_as_window_and_memory_hooks_answer_instead_of_sto
     use heirloom_macppc_engine::cpu::{Cpu, Host};
     let seen = Arc::new(Mutex::new(Seen::default()));
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
-    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: true }));
+    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: true, resident: Default::default() }));
     let mut call = |m: &mut M, name: &str, args: &[u32]| -> u32 {
         m.bind(name);
         let id = m.glue.intern(&mut m.mac, "CFM", name).unwrap();
@@ -541,7 +601,9 @@ fn wc3_host_run_with_a_gl_worker() {
     // for the C worker's host replay (heirloom-gl-host --dump), the way the triangle test hands over its ring.
     let ring_out = std::env::var("RGL_RING_OUT").ok();
     let ring_swaps: usize = std::env::var("WC3_RING_SWAPS").ok().and_then(|s| s.parse().ok()).unwrap_or(128);
-    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: ring_out.is_some() }));
+    m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: ring_out.is_some(), resident: Default::default() }));
+    // `WC3_NO_RESIDENT`: every array copied (the A/B of gl_c/resident.rs)
+    if std::env::var("WC3_NO_RESIDENT").is_ok() { m.gl_resident(false); }
     // The INSTALLED tree the owner-key Installer run exported (`WC3_INSTALLED`, tests/installer.rs INST_EXPORT_DIR): staged as the volume
     // "Macintosh HD" the way the Z83 bundle stages it (every file a stream read on demand), launched from the folder holding War3.mpq.
     // `WC3_DROP_RSRC=1` leaves the resource forks and Finder info out, as a bundle volume does today.
