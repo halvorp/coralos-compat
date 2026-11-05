@@ -36,6 +36,9 @@ impl Shape {
 
 const fn s(name: &'static str, ints: u8, dbls: u8, copy: u8) -> Shape { Shape { name, ints, dbls, copy } }
 
+/// The entry named `name`'s [`DEFERRED`] index + 1, 0 = not deferrable (the dispatch table's `shape`).
+pub(super) fn shape_of(name: &str) -> u8 { DEFERRED.iter().position(|s| s.name == name).map_or(0, |i| i as u8 + 1) }
+
 /// The deferred entries: void calls whose arguments are registers (or a fixed-length vector), and whose effect a later call
 /// observes only through the worker or the engine's client-array state - which every GL native drains the queue before.
 pub(super) const DEFERRED: &[Shape] = &[
@@ -71,8 +74,6 @@ pub(crate) struct DeferQ {
     /// The next free byte of the code pages, and their end.
     code_at: u32,
     code_end: u32,
-    /// Per contract entry: its [`DEFERRED`] index + 1 (0 = not deferrable), made at the first bind.
-    shape_of: Vec<u8>,
     /// Glue cells already pointed at their routine.
     bound: BTreeSet<usize>,
     /// The records being drained (host copy), and the register file they are served from: reused drain after drain.
@@ -112,10 +113,8 @@ impl<U: GuestUi> MacPpc<U> {
     /// is deferrable. A cell is pointed once.
     pub(crate) fn gl_defer_bind(&mut self, id: usize, f: GlFn) -> Result<(), String> {
         if self.gl.defer.off || self.gl.defer.bound.contains(&id) { return Ok(()); }
-        if self.gl.defer.shape_of.is_empty() {
-            self.gl.defer.shape_of = ENTRIES.iter().map(|e| DEFERRED.iter().position(|s| s.name == e.name).map_or(0, |i| i as u8 + 1)).collect();
-        }
-        let Some(k) = self.gl.defer.shape_of.get(usize::from(f.0)).copied().filter(|&k| k != 0) else { return Ok(()) };
+        let k = self.gl_disp(f.0).shape;
+        if k == 0 { return Ok(()); }
         let Some(e) = self.glue.entry(id).cloned() else { return Ok(()) };
         if self.gl.defer.ctl == 0 { self.gl_defer_make()?; }
         let code = stub(&DEFERRED[usize::from(k) - 1], f.0, self.gl.defer.ctl, e.stub);
@@ -161,17 +160,23 @@ impl<U: GuestUi> MacPpc<U> {
         let r = loop {
             let Some(&head) = words.get(at) else { break Ok(()) };
             let (entry, n) = ((head & 0xFFFF) as u16, (head >> 16) as usize);
-            let shape = self.gl.defer.shape_of.get(usize::from(entry)).copied().filter(|&k| k != 0).map(|k| &DEFERRED[usize::from(k) - 1]);
-            let Some(shape) = shape.filter(|s| s.words() as usize == n && at + 1 + n <= words.len()) else {
+            let d = self.gl_disp(entry);
+            let shape = DEFERRED.get(usize::from(d.shape).wrapping_sub(1));
+            let (Some(shape), Some(a)) = (shape.filter(|s| s.words() as usize == n), words.get(at + 1..at + 1 + n)) else {
                 break Err(format!("[HEIRLOOM-GL] the deferred GL call queue holds a record no routine writes ({head:#x} at word {at})"));
             };
-            let a = &words[at + 1..at + 1 + n];
             let ints = usize::from(shape.ints);
-            // a fixed trip count, unrolled: a copy of `ints` words would be a `memcpy` call per record
-            for (i, r) in cpu.gpr[3..7].iter_mut().enumerate() { if i < ints { *r = a[i]; } }
+            // only the shape's words, one store each (a copy of `ints` words would be a `memcpy` call per record)
+            match *a {
+                [w0, w1, w2, w3, ..] if ints == 4 => (cpu.gpr[3], cpu.gpr[4], cpu.gpr[5], cpu.gpr[6]) = (w0, w1, w2, w3),
+                [w0, w1, w2, ..] if ints == 3 => (cpu.gpr[3], cpu.gpr[4], cpu.gpr[5]) = (w0, w1, w2),
+                [w0, w1, ..] if ints == 2 => (cpu.gpr[3], cpu.gpr[4]) = (w0, w1),
+                [w0, ..] if ints == 1 => cpu.gpr[3] = w0,
+                _ => {}
+            }
             for j in 0..usize::from(shape.dbls) { cpu.fpr[1 + j] = u64::from(a[ints + 2 * j]) << 32 | u64::from(a[ints + 2 * j + 1]); }
             if shape.copy != 0 { cpu.gpr[3 + ints] = base + 4 * (at + 1 + ints + 2 * usize::from(shape.dbls)) as u32; }
-            if let Err(e) = self.gl_call_now(GlFn(entry), &mut cpu) { break Err(e); }
+            if let Err(e) = self.gl_call_with(GlFn(entry), d, &mut cpu) { break Err(e); }
             self.gl.defer.drained += 1;
             at += 1 + n;
         };

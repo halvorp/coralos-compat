@@ -106,8 +106,10 @@ impl<U: GuestUi> MacPpc<U> {
     pub(super) fn gl_queue_draw_elements(&mut self, token: Token, who: &str, mode: u32, off: usize, count: u32, ty: ElemType, descs: &[Descriptor]) -> Result<(), String> {
         let len = self.mac.mem.len().min(u32::MAX as usize) as u32;
         let mem = self.mac.mem.span(0, len).and_then(|s| self.mac.mem.bytes(s)).map_err(|_| format!("{who}: guest RAM is not addressable"))?;
-        // a sampled draw (perf on, one in CAPTURE_SAMPLE): the batch's next bytes written first, timed (capture_probe.rs)
-        let sampled = self.perf.as_mut().is_some_and(|p| p.capture_sample());
+        // With the stage clock's detail on (perf.rs `Perf::detail`), one draw in CAPTURE_SAMPLE is sampled: the batch's next bytes
+        // are written first, timed (capture_probe.rs). Without it no draw is timed.
+        let detail = self.perf.as_ref().is_some_and(|p| p.detail);
+        let sampled = detail && self.perf.as_mut().is_some_and(|p| p.capture_sample());
         let dst = match self.perf.as_ref().filter(|_| sampled) {
             Some(p) => {
                 capture_probe::reserve(&mut self.gl.pending, capture_probe::DST_TOUCH);
@@ -119,7 +121,7 @@ impl<U: GuestUi> MacPpc<U> {
         };
         // the capture alone (copy + byte swap of the referenced guest bytes) and the bytes it queued: the perf line's
         // capture_us / draw_kib, which tell a per-byte cost (memory) from a per-draw one (code) on silicon
-        let (t0, at) = (self.perf.as_ref().map(|p| p.now()), self.gl.pending.len());
+        let (t0, at) = (self.perf.as_ref().filter(|_| detail).map(|p| p.now()), self.gl.pending.len());
         let r = Frame::encode_draw_elements_into(&mut self.gl.pending, token, mem, mode, off, count, ty, descs);
         if let (Some(t0), Some(p)) = (t0, self.perf.as_mut()) {
             let dt = p.now().wrapping_sub(t0);

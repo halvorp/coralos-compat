@@ -25,7 +25,7 @@ const UNIT0: u32 = 0x84C0;
 
 /// How a call meets the shadow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Class { Unit, Mode, Enable(bool), Bind, Env, Param, Blend, Alpha, DepthFunc, DepthMask, Viewport, Scissor, DepthRange, ClearColor, LoadMatrix,
+pub(super) enum Class { Unit, Mode, Enable(bool), Bind, Env, Param, Blend, Alpha, DepthFunc, DepthMask, Viewport, Scissor, DepthRange, ClearColor, LoadMatrix,
     /// Changes no shadowed slot and does not depend on the active texture unit.
     Global,
     /// Changes no shadowed slot; depends on the active unit (the pending unit is sent first).
@@ -33,7 +33,7 @@ enum Class { Unit, Mode, Enable(bool), Bind, Env, Param, Blend, Alpha, DepthFunc
     /// Anything else: the pending unit is sent, then everything is forgotten.
     Forget }
 
-fn class_of(name: &str) -> Class {
+pub(super) fn class_of(name: &str) -> Class {
     match name {
         "glActiveTextureARB" => Class::Unit,
         "glMatrixMode" => Class::Mode,
@@ -89,7 +89,6 @@ fn tex_param(pname: u32, v: u32) -> bool {
 pub(crate) struct Shadow {
     /// Sending every call (the reference behaviour).
     pub(crate) off: bool,
-    class: Vec<Class>,
     /// The unit the worker has active, and the one the program selected last (sent when a call depends on it). None: unknown.
     sent_unit: Option<u32>,
     want_unit: Option<u32>,
@@ -117,8 +116,8 @@ pub(crate) struct Shadow {
 impl Shadow {
     /// Forget every slot (the pending unit must have been sent first).
     pub(super) fn forget(&mut self) {
-        let (off, class, dropped) = (self.off, core::mem::take(&mut self.class), self.dropped);
-        *self = Shadow { off, class, dropped, ..Shadow::default() };
+        let (off, dropped) = (self.off, self.dropped);
+        *self = Shadow { off, dropped, ..Shadow::default() };
     }
 }
 
@@ -145,12 +144,10 @@ impl<U: GuestUi> MacPpc<U> {
         self.gl_queue_call(t, e.0, w);
     }
 
-    /// Meet call `entry` (its arguments in `cpu`) with the shadow: true = it changes nothing the worker holds and is not sent.
+    /// Meet a call of shadow class `class` (its arguments in `cpu`) with the shadow: true = it changes nothing the worker holds and is not sent.
     /// `inside`: the current context is between glBegin/glEnd or compiling a display list (nothing is shadowed there).
-    pub(super) fn gl_shadow_meet(&mut self, entry: u16, cpu: &Cpu, inside: bool) -> Result<bool, String> {
+    pub(super) fn gl_shadow_meet(&mut self, class: Class, cpu: &Cpu, inside: bool) -> Result<bool, String> {
         if self.gl.shadow.off { return Ok(false); }
-        if self.gl.shadow.class.is_empty() { self.gl.shadow.class = ENTRIES.iter().map(|e| class_of(e.name)).collect(); }
-        let class = self.gl.shadow.class.get(usize::from(entry)).copied().unwrap_or(Class::Forget);
         if self.gl.current_token.is_none() || inside {
             // no context (the call is an error) or a glBegin / display list in progress: send everything, know nothing
             if class != Class::Global { self.gl_shadow_send_unit(); self.gl.shadow.forget(); }

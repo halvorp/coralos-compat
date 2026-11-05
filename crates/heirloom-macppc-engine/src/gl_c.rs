@@ -155,10 +155,9 @@ pub struct GlState {
     /// Per contract entry: its generated family signature (`heirloom_gl_abi::family::lookup` of its name), made once at the
     /// first call - the per-call path indexes it instead of scanning the 259-row table by name.
     sigs: Vec<Option<&'static heirloom_gl_abi::family::Sig>>,
-    /// Per contract entry: how `gl_call` dispatches it (`hot::Hot`), made once at the first call.
-    routes: Vec<hot::Hot>,
-    /// Per contract entry: [`MacPpc::gl_plain`], made once at the first call.
-    plain: Vec<bool>,
+    /// Per contract entry: everything the per-call path decides from the entry alone ([`Disp`]), made once at the first call and
+    /// read ONCE per call (it was four tables, each checked for its first use and bounds on every call).
+    disp: Vec<Disp>,
     /// The draw being captured, the array snapshots it does not use now, and its enabled arrays' descriptors: buffers reused draw
     /// after draw (`gl_queue_draw`), so a frame's draws allocate nothing once warm.
     draw: DrawCommand,
@@ -176,6 +175,11 @@ impl GlState {
     pub fn attach(&mut self, w: Box<dyn GlWorker>) { self.worker = Some(w); }
     pub fn has_worker(&self) -> bool { self.worker.is_some() }
 }
+
+/// How a call of one contract entry is dispatched: whether it is PLAIN ([`MacPpc::gl_disp`]), its route, how it meets the state
+/// shadow, and its deferred record's shape (`gl_c/defer.rs`: 0 none, else the DEFERRED index + 1).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Disp { plain: bool, route: hot::Hot, shadow: shadow::Class, shape: u8 }
 
 fn role_of(cap: u32) -> Option<Role> {
     Some(match cap { 0x8074 => Role::Vertex, 0x8075 => Role::Normal, 0x8076 => Role::Color, 0x8078 => Role::TexCoord, _ => return None })
@@ -245,14 +249,19 @@ impl<U: GuestUi> MacPpc<U> {
         self.gl_flush().into_iter().find_map(|c| if let Command::Reply { status, words, text } = c { Some((status, words, text)) } else { None })
     }
 
-    /// Whether `entry` is PLAIN: implemented (admit_call admits it), a `gl*` call, and not one of the calls the glBegin/glEnd and
-    /// display-list state machines act on (glBegin, glEnd, glNewList, glEndList). Outside glBegin/glEnd and list compilation such a
-    /// call's begin/end gate always passes, so `gl_call` routes it without the gate's name matching (made once per entry).
-    fn gl_plain(&mut self, entry: u16) -> bool {
-        if self.gl.plain.is_empty() {
-            self.gl.plain = ENTRIES.iter().map(|e| e.implemented && e.name.starts_with("gl") && !matches!(e.name, "glBegin" | "glEnd" | "glNewList" | "glEndList")).collect();
+    /// Contract entry `entry`'s dispatch. PLAIN: implemented (admit_call admits it), a `gl*` call, and not one of the calls the
+    /// glBegin/glEnd and display-list state machines act on (glBegin, glEnd, glNewList, glEndList): outside glBegin/glEnd and list
+    /// compilation such a call's begin/end gate always passes, so `gl_call` routes it without the gate's name matching.
+    pub(super) fn gl_disp(&mut self, entry: u16) -> Disp {
+        if self.gl.disp.is_empty() {
+            self.gl.disp = ENTRIES.iter().map(|e| Disp {
+                plain: e.implemented && e.name.starts_with("gl") && !matches!(e.name, "glBegin" | "glEnd" | "glNewList" | "glEndList"),
+                route: hot::hot_of(e.name),
+                shadow: shadow::class_of(e.name),
+                shape: defer::shape_of(e.name),
+            }).collect();
         }
-        self.gl.plain.get(usize::from(entry)).copied().unwrap_or(false)
+        self.gl.disp.get(usize::from(entry)).copied().unwrap_or(Disp { plain: false, route: hot::Hot::Rest, shadow: shadow::Class::Forget, shape: 0 })
     }
 
     /// The generated family signature of contract entry `entry`, if it is a family call.
@@ -278,16 +287,22 @@ impl<U: GuestUi> MacPpc<U> {
         self.gl_call_now(f, cpu)
     }
 
-    /// One GL call, as a native call or a drained record: the arguments are `cpu`'s registers (and memory they point at).
+    /// One GL call, as a native call: the arguments are `cpu`'s registers (and memory they point at).
     pub(crate) fn gl_call_now(&mut self, f: GlFn, cpu: &mut Cpu) -> Result<(), String> {
+        let d = self.gl_disp(f.0);
+        self.gl_call_with(f, d, cpu)
+    }
+
+    /// One GL call whose dispatch `d` is known (a drained record carries it). ONE call site of the shadow's meet: a second one
+    /// (a drained fast path, tried in h86 glcap increment 4) took it out of line and its entry and exit cost more than the path saved.
+    pub(super) fn gl_call_with(&mut self, f: GlFn, d: Disp, cpu: &mut Cpu) -> Result<(), String> {
         // a call that sets what the worker already holds is not sent (gl_c/shadow.rs)
         let inside = self.gl.begin_ctx == Some(self.gl.current) || self.gl.list_ctx == Some(self.gl.current);
-        if self.gl_shadow_meet(f.0, cpu, inside)? { return self.gl_finish(cpu, 0); }
+        if self.gl_shadow_meet(d.shadow, cpu, inside)? { return self.gl_finish(cpu, 0); }
         // the per-frame calls of a plain entry, outside glBegin/glEnd and display-list compilation: straight to their route
-        if self.gl_plain(f.0) {
-            let inside = self.gl.current_token.is_some() && (self.gl.begin_ctx == Some(self.gl.current) || self.gl.list_ctx == Some(self.gl.current));
-            if !inside {
-                match self.gl_route(f.0) {
+        if d.plain {
+            if !(inside && self.gl.current_token.is_some()) {
+                match d.route {
                     hot::Hot::Rest => {}
                     hot::Hot::State => {
                         let r = self.gl_state_call(ENTRIES[usize::from(f.0)].name, f.0, cpu)?;

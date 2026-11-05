@@ -49,15 +49,12 @@ pub(super) fn hot_of(name: &str) -> Hot {
 }
 
 impl<U: GuestUi> MacPpc<U> {
-    /// The route of contract entry `entry` (the table is made at the first call).
-    pub(super) fn gl_route(&mut self, entry: u16) -> Hot {
-        if self.gl.routes.is_empty() { self.gl.routes = ENTRIES.iter().map(|e| hot_of(e.name)).collect(); }
-        self.gl.routes.get(usize::from(entry)).copied().unwrap_or(Hot::Rest)
-    }
+    /// The route of contract entry `entry`.
+    pub(super) fn gl_route(&mut self, entry: u16) -> Hot { self.gl_disp(entry).route }
 
     /// `entry` reached the state calls through `gl_call`'s last arm: route it there directly from now on.
     pub(super) fn gl_route_state(&mut self, entry: u16) {
-        if let Some(r) = self.gl.routes.get_mut(usize::from(entry)).filter(|r| **r == Hot::Rest) { *r = Hot::State; }
+        if let Some(d) = self.gl.disp.get_mut(usize::from(entry)).filter(|d| d.route == Hot::Rest) { d.route = Hot::State; }
     }
 
     /// One routed call (`hot` is neither `Rest` nor `State`); the result register is 0 (none of these calls returns a value).

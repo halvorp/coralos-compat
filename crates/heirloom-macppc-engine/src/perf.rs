@@ -136,6 +136,10 @@ pub struct Perf {
     knobs_due: Option<u32>,
     tier_line_due: Vec<(usize, u64)>,
     jit_now: [u64; 4],
+    /// Measurement beyond the frame's account, off in the normal tier: the capture
+    /// probe and the per-draw capture timing (capture_us / draw_kib, [HEIRLOOM-CAPTURE]), and the counters around every CPU-library
+    /// run (the ledger's `sample_runs`). On with [`MacPpc::perf_detail`] and the census tiers (perf_census, jitprofile, jitablate).
+    pub(crate) detail: bool,
     /// Guest instructions retired at the last native's entry (the CPU's timebase): a swap is inside a native.
     pub(crate) tb: u64,
     /// cpu-tier "jitablate": rotate tier 2's knobs through [`ABLATIONS`] (the index of the running one).
@@ -287,13 +291,15 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn perf_enable(&mut self, clock: fn() -> u64) {
         self.perf = Some(alloc::boxed::Box::new(Perf {
             clock, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0,
-            ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false, knobs_due: None, tier_line_due: Vec::new(), jit_now: [0; 4],
+            ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false, knobs_due: None, tier_line_due: Vec::new(), jit_now: [0; 4], detail: false,
         }));
     }
     /// Report every `n` frames instead of [`REPORT_FRAMES`] (a host harness's finer view).
     pub fn perf_report_every(&mut self, n: usize) { if let Some(p) = self.perf.as_mut() { p.every = n.max(1); } }
     /// Diagnostic: keep poll instructions by call chain ([`Perf::sites`]).
-    pub fn perf_census(&mut self) { if let Some(p) = self.perf.as_mut() { p.sites = Some(Default::default()); } }
+    pub fn perf_census(&mut self) { if let Some(p) = self.perf.as_mut() { p.sites = Some(Default::default()); } self.perf_detail(true); }
+    /// The stage clock's detail ([`Perf::detail`]): the capture probe, per-draw capture timing and per-run counters.
+    pub fn perf_detail(&mut self, on: bool) { if let Some(p) = self.perf.as_mut() { p.detail = on; p.ledger.sample_runs = on; } }
     /// The stage clock, when on.
     pub fn perf(&self) -> Option<&Perf> { self.perf.as_deref() }
     /// The next closed window as its `[HEIRLOOM-PERF ...]` line (one per [`REPORT_FRAMES`] frames), with the clock's `per_us`
@@ -317,6 +323,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn perf_profile(&mut self, clock: fn() -> u64) {
         if self.perf.is_none() { self.perf_enable(clock); }
         if let Some(p) = self.perf.as_mut() { p.profile = Some(Default::default()); }
+        self.perf_detail(true);
     }
     /// The engine's half of the frame ledger ([`heirloom_os_abi::perf::PerfHost`]): turns the stage clock on (on `clock`).
     pub fn perf_attach(&mut self, clock: fn() -> u64, host: heirloom_os_abi::perf::PerfHost) {
@@ -396,6 +403,7 @@ impl<U: GuestUi> MacPpc<U> {
     pub fn perf_ablate(&mut self, clock: fn() -> u64) {
         if self.perf.is_none() { self.perf_enable(clock); }
         if let Some(p) = self.perf.as_mut() { p.ablate = Some(0); }
+        self.perf_detail(true);
         self.rt.exec.set_jit_knobs(ABLATIONS[0].1);
     }
 
@@ -463,7 +471,7 @@ mod tests {
     #[test]
     fn reads_on_the_same_tick_close_together_are_a_poll_and_a_far_or_new_tick_read_is_not() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false, knobs_due: None, tier_line_due: Vec::new(), jit_now: [0; 4] };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: REPORT_FRAMES, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false, knobs_due: None, tier_line_due: Vec::new(), jit_now: [0; 4], detail: false };
         p.clock_read(5, 100, [0; 3]);
         p.clock_read(5, 400, [0; 3]); // 300 insns later, same tick: a poll
         p.clock_read(6, 500, [0; 3]); // the tick moved: not a poll
@@ -511,7 +519,7 @@ mod tests {
     #[test]
     fn the_capture_line_shows_the_draws_shape_the_sampled_split_and_the_read_passes() {
         fn zero() -> u64 { 0 }
-        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false, knobs_due: None, tier_line_due: Vec::new(), jit_now: [0; 4] };
+        let mut p = Perf { clock: zero, win: Window::default(), last_swap: None, last_read: None, class_of: Vec::new(), done: Vec::new(), frames_total: 0, every: 2, sites: None, draw_seq: 0, ledger: Default::default(), pending: Default::default(), tb: 0, ablate: None, profile: None, profile_done: Vec::new(), lib_said: false, knobs_due: None, tier_line_due: Vec::new(), jit_now: [0; 4], detail: false };
         for _ in 0..98 { p.add_capture(2000, 2048); } // 1000 a KiB: bucket 9 = [512, 1024), the edge 1024
         p.add_capture(100_000, 1024); // two stalls: 100,000 a KiB, bucket 16 [65536, 131072)
         p.add_capture(50_000, 512);

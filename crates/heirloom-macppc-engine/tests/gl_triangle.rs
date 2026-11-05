@@ -630,6 +630,8 @@ fn wc3_host_run_with_a_gl_worker() {
         m.perf_enable(ns);
         m.perf_report_every(every.parse().unwrap_or(64));
         if std::env::var("WC3_PERF_SITES").is_ok() { m.perf_census(); }
+        // `WC3_PERF_DETAIL=1`: the capture probe, per-draw capture timing and per-run counters (off in the normal tier, perf.rs)
+        if std::env::var("WC3_PERF_DETAIL").is_ok() { m.perf_detail(true); }
         // `WC3_PROFILE=1`: the guest-PC profile (heirloom_macppc_engine::profile, cpu-tier "jitprofile" on CoralOS)
         if std::env::var("WC3_PROFILE").is_ok() { m.perf_profile(ns); }
         // `WC3_ABLATE=1`: cpu-tier "jitablate"'s knob rotation (perf.rs ABLATIONS) with its [CPU-PPC-TIER] proof line per window

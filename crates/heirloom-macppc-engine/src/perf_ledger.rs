@@ -135,6 +135,11 @@ pub struct Ledger {
     last: Option<Snap>,
     run_open: Option<(u64, Hw)>,
     run_acc: (u64, Hw),
+    /// The counters are also read around every run of the CPU library (`hw_run`: two samples - two system calls - a run, ~14
+    /// runs a Warcraft III frame, ~0.25 ms of the Z83's frame in `probe`). Off in the normal tier: the frame's own sample at the
+    /// swap stays, and [`lines`] prices the JIT's cycles at the frame's frequency. On with the stage clock's detail
+    /// ([`crate::MacPpc::perf_detail`], and the census tiers that turn it on).
+    pub(crate) sample_runs: bool,
     pub frames: Vec<Frame>,
     /// Windows closed (the pair rotation's counter).
     pub windows: u64,
@@ -187,7 +192,7 @@ impl Ledger {
 
     /// The CPU library's run begins / ends (around `Exec::resume`): the counters over the guest's instructions.
     pub fn run_begin(&mut self, now: fn() -> u64) {
-        let s = self.sample(now, hw::SELECT_KEEP);
+        let s = if self.sample_runs { self.sample(now, hw::SELECT_KEEP) } else { None };
         self.run_open = Some((now(), s.unwrap_or_default()));
         self.clock.enter(L_JIT, now());
     }
@@ -195,7 +200,7 @@ impl Ledger {
         self.clock.exit(now());
         let Some((t0, h0)) = self.run_open.take() else { return };
         let t1 = now();
-        if let Some(h1) = self.sample(now, hw::SELECT_KEEP) {
+        if let Some(h1) = if self.sample_runs { self.sample(now, hw::SELECT_KEEP) } else { None } {
             hw_add(&mut self.run_acc.1, &hw_sub(&h1, &h0));
         }
         self.run_acc.0 += t1.wrapping_sub(t0);
@@ -308,8 +313,18 @@ pub fn lines(frames: &[Frame], pair: (usize, usize), pair_refused: bool, per_us:
     let jit_ticks = sum(&|f| f.b[0]);
     let x100 = |a: u64, b: u64| if b == 0 { 0 } else { a.saturating_mul(100) / b };
     let fix2 = |v: u64| format!("{}.{:02}", v / 100, v % 100);
-    // the JIT's own core cycles: its TSC ticks at the runs' measured frequency (aperf/mperf over the runs)
-    let jit_core = if r_mperf == 0 { 0 } else { (jit_ticks as u128 * r_aperf as u128 / r_mperf as u128) as u64 };
+    // the JIT's own core cycles: its TSC ticks at the runs' measured frequency (aperf/mperf over the runs), or - runs not sampled,
+    // the normal tier - at the frame's
+    let (fa, fm) = if r_mperf == 0 { (aperf, mperf) } else { (r_aperf, r_mperf) };
+    let jit_core = (jit_ticks as u128 * fa as u128 / fm as u128) as u64;
+    if r_mperf == 0 {
+        out.push(format!("[HEIRLOOM-HW frames={frames_total}] freq_mhz={} run_freq_mhz=unsampled oncpu={}% switches/frame={} migrations/frame={} \
+| runs: guest_insns={g} ticks/ginsn={} core_cycles/ginsn=unsampled host_insns/ginsn=unsampled ipc=unsampled jit_core_cycles/ginsn={} (frame freq) \
+| pair: unsampled (the counters around each run are the census tiers' only: MacPpc::perf_detail)",
+            aperf.saturating_mul(per_us) / mperf, x100(sum(&|f| f.hw[HW_RUN]), wall), sum(&|f| f.hw[HW_SWITCHES]) / n as u64, sum(&|f| f.hw[HW_MIGR]) / n as u64,
+            fix2(x100(sum(&|f| f.run_ticks), g)), fix2(x100(jit_core, g))));
+        return out;
+    }
     let pmc = |k: usize| sum(&|f| f.hw_run[HW_PMC + k]);
     let ev = |k: usize, idx: usize| {
         let name = hw::HW_EVENTS.get(idx).copied().unwrap_or("?");
@@ -421,6 +436,7 @@ mod tests {
             hw::HW_OK
         }
         let mut l = Ledger::default();
+        l.sample_runs = true; // the census tiers' per-run counters
         l.attach(PerfHost { size: 0, flags: 0, ctx: core::ptr::null_mut(), phases: core::ptr::null(), sample: counts });
         at(0);
         l.swap(now, 0, [0; 4]);
@@ -450,5 +466,28 @@ mod tests {
         l.swap(now, 700, [0; 4]);
         let f = l.frames.last().unwrap();
         assert!(f.hw_run[HW_PMC] < 1_000 && f.hw_run[HW_PMC + 1] < 1_000, "no wrapped pmc delta: {:?}", f.hw_run);
+    }
+
+    #[test]
+    fn the_normal_tier_samples_the_counters_at_the_swap_only_and_prices_the_jit_at_the_frames_frequency() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        extern "C" fn counts(_: *mut core::ffi::c_void, _: u32, out: *mut HwSample) -> i32 {
+            let k = N.fetch_add(1, Ordering::Relaxed) + 1;
+            // SAFETY: the test passes a valid record.
+            unsafe { *out = HwSample { valid: 7, run_tsc: k * 1000, aperf: k * 1500, mperf: k * 1000, inst: k * 2000, core_cycles: k * 1500, ..HwSample::default() } };
+            hw::HW_OK
+        }
+        let mut l = Ledger::default();
+        l.attach(PerfHost { size: 0, flags: 0, ctx: core::ptr::null_mut(), phases: core::ptr::null(), sample: counts });
+        at(0);
+        l.swap(now, 0, [0; 4]);
+        for k in 0..14 { at(100 + 100 * k); l.run_begin(now); at(150 + 100 * k); l.run_end(now); }
+        at(2000);
+        l.swap(now, 500, [0; 4]);
+        assert_eq!(N.load(Ordering::Relaxed), 2, "one sample a swap, none around the 14 runs");
+        let hwl = &lines(&l.frames, PAIRS[0], false, 1, 2)[2];
+        // the JIT's 700 ticks at the frame's 1.5x: 1050 core cycles over 500 guest instructions
+        assert!(hwl.contains("run_freq_mhz=unsampled") && hwl.contains("jit_core_cycles/ginsn=2.10 (frame freq)"), "{hwl}");
+        assert_eq!(l.frames[0].b[12], 0, "no probe time");
     }
 }
