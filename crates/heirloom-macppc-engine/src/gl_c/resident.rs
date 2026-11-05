@@ -16,6 +16,8 @@
 //! every frame: callgrind priced the scan alone at 0.85-3.6 M host instructions a frame on the guest's core, more than the whole
 //! capture this saves.
 //!
+//! OFF BY DEFAULT ([`Resident::on`]): measured on the Z83 it cost more guest time than it saved; the copy path is today's.
+//!
 //! The program's `glFlushVertexArrayRangeAPPLE` / `glVertexArrayRangeAPPLE` drop the arrays they cover (the next draw stores them).
 //! An array smaller than [`MIN_KEPT`] is always copied (its id and compare would save little). An array found changed [`CHURN`]
 //! draws in a row is VOLATILE - copied, not compared, for [`VOLATILE_SWAPS`] swaps (a dynamic array would pay the compare AND
@@ -74,8 +76,10 @@ impl ResidentCounts {
 
 #[derive(Default)]
 pub(crate) struct Resident {
-    /// Off: every array is copied (the A/B; `MacPpc::gl_resident`).
-    pub(crate) off: bool,
+    /// On: arrays are kept and named (`MacPpc::gl_resident`, cpu-tier "jitresident"). OFF BY DEFAULT: on the Z83 the compare
+    /// (the source AND the kept copy read every frame, memory-bound on the Atom) cost the guest's core ~0.97 ms a frame of GL
+    /// time against 0.16 ms of ring push saved (h86 wc3budget, ring-batch9: gl mean 4,866 -> ~5,835 us, gl_push 273 -> ~115 us).
+    pub(crate) on: bool,
     map: BTreeMap<Key, Entry>,
     free: Vec<u32>,
     next: u32,
@@ -88,7 +92,7 @@ pub(crate) struct Resident {
 impl Resident {
     /// How the array `d` spanning guest bytes `mem[span]` travels in the draw being encoded.
     pub(crate) fn keep(&mut self, mem: &[u8], d: &Descriptor, span: Range<usize>) -> Keep {
-        if self.off || span.len() < MIN_KEPT {
+        if !self.on || span.len() < MIN_KEPT {
             return Keep::Copy;
         }
         let (Ok(begin), Ok(end), Some(now)) = (u32::try_from(span.start), u32::try_from(span.end), mem.get(span.clone())) else { return Keep::Copy };
@@ -173,8 +177,8 @@ impl Resident {
 
     /// A new worker: it holds nothing, so nothing is named until stored again.
     pub(crate) fn reset(&mut self) {
-        let off = self.off;
-        *self = Resident { off, ..Resident::default() };
+        let on = self.on;
+        *self = Resident { on, ..Resident::default() };
     }
 
     /// Entries held (ids live).
@@ -201,7 +205,7 @@ mod tests {
     #[test]
     fn an_array_is_named_only_while_guest_ram_holds_the_bytes_it_was_stored_with() {
         let mut m = vec![0u8; 0x10000];
-        let mut r = Resident::default();
+        let mut r = Resident { on: true, ..Resident::default() };
         let span = 0x2000..0x2000 + 12 * 600;
         assert_eq!(r.keep(&m, &d(), span.clone()), Keep::Store(0));
         r.encoded(true);
@@ -223,7 +227,7 @@ mod tests {
     #[test]
     fn an_array_changed_every_frame_is_copied_for_a_while() {
         let mut m = vec![0u8; 0x10000];
-        let mut r = Resident::default();
+        let mut r = Resident { on: true, ..Resident::default() };
         let span = 0x2000..0x3000;
         let mut kept = Vec::new();
         for i in 0..6u8 {
@@ -237,11 +241,23 @@ mod tests {
         assert_eq!(r.keep(&m, &d(), span.clone()), Keep::Store(0), "tried again once its time is up");
     }
 
+    /// Off (the default): every array is copied, nothing is kept (NEGATIVE CONTROL for the tests above).
+    #[test]
+    fn off_by_default_every_array_is_copied() {
+        let m = vec![0u8; 0x10000];
+        let mut r = Resident::default();
+        for _ in 0..3 {
+            assert_eq!(r.keep(&m, &d(), 0x2000..0x3000), Keep::Copy);
+            r.encoded(true);
+        }
+        assert_eq!(r.len(), 0);
+    }
+
     /// A draw that did not encode never reached the worker: its stores are forgotten (never named), and their ids reused.
     #[test]
     fn a_store_the_worker_never_got_is_never_named() {
         let m = vec![0u8; 0x10000];
-        let mut r = Resident::default();
+        let mut r = Resident { on: true, ..Resident::default() };
         assert_eq!(r.keep(&m, &d(), 0x2000..0x3000), Keep::Store(0));
         r.encoded(false);
         assert_eq!(r.keep(&m, &d(), 0x2000..0x3000), Keep::Store(0), "stored again under the freed id, not named");
@@ -253,7 +269,7 @@ mod tests {
     #[test]
     fn an_idle_array_gives_its_id_back() {
         let m = vec![0u8; 0x10000];
-        let mut r = Resident::default();
+        let mut r = Resident { on: true, ..Resident::default() };
         let (a, b) = (0x2000..0x3000, 0x8000..0x9000);
         assert_eq!((r.keep(&m, &d(), a.clone()), r.keep(&m, &d(), b.clone())), (Keep::Store(0), Keep::Store(1)));
         r.encoded(true);

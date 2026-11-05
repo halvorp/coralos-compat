@@ -602,8 +602,8 @@ fn wc3_host_run_with_a_gl_worker() {
     let ring_out = std::env::var("RGL_RING_OUT").ok();
     let ring_swaps: usize = std::env::var("WC3_RING_SWAPS").ok().and_then(|s| s.parse().ok()).unwrap_or(128);
     m.gl_attach(Box::new(Mock { tokens: TokenTable::default(), seen: seen.clone(), gpu: true, keep: ring_out.is_some(), resident: Default::default() }));
-    // `WC3_NO_RESIDENT`: every array copied (the A/B of gl_c/resident.rs)
-    if std::env::var("WC3_NO_RESIDENT").is_ok() { m.gl_resident(false); }
+    // `WC3_RESIDENT`: resident arrays on (gl_c/resident.rs; off by default)
+    if std::env::var("WC3_RESIDENT").is_ok() { m.gl_resident(true); }
     // The INSTALLED tree the owner-key Installer run exported (`WC3_INSTALLED`, tests/installer.rs INST_EXPORT_DIR): staged as the volume
     // "Macintosh HD" the way the Z83 bundle stages it (every file a stream read on demand), launched from the folder holding War3.mpq.
     // `WC3_DROP_RSRC=1` leaves the resource forks and Finder info out, as a bundle volume does today.

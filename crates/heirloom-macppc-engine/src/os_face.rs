@@ -93,13 +93,19 @@ impl OsFamily for MacPpcFamily {
             m.perf_ablate(tsc);
             return Ok(());
         }
+        // "jitresident": tier 2 with the GL's resident arrays on (gl_c/resident.rs, off by default) - its Z83 A/B
+        if bytes == b"jitresident" {
+            m.exec().tier = Tier::Jit;
+            m.gl_resident(true);
+            return Ok(());
+        }
         // "jitprofile": tier 2 with the guest-PC profile on (profile.rs) - the whole-function prototype's target list
         if bytes == b"jitprofile" {
             m.exec().tier = Tier::Jit;
             m.perf_profile(tsc);
             return Ok(());
         }
-        let t = core::str::from_utf8(&bytes).ok().and_then(Tier::parse).ok_or_else(|| format!("{CPU_TIER}: {:?} is not a tier (interp, blocks, jit, jitblocks, jitwide, jitablate or jitprofile)", String::from_utf8_lossy(&bytes)))?;
+        let t = core::str::from_utf8(&bytes).ok().and_then(Tier::parse).ok_or_else(|| format!("{CPU_TIER}: {:?} is not a tier (interp, blocks, jit, jitblocks, jitwide, jitablate, jitresident or jitprofile)", String::from_utf8_lossy(&bytes)))?;
         m.exec().tier = t;
         Ok(())
     }

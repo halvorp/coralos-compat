@@ -15,9 +15,9 @@
 //!   (`[HEIRLOOM-GL-GETSTRING name=.. ]`): the first real run tells us which tokens the game asks for.
 //! * `APPLE_fence` is real: a fence is complete only after the worker reports the batch it was set in retired.
 //! * `APPLE_vertex_array_range` is accepted and validated; because arrays are snapshotted at draw time the hint changes
-//!   nothing the guest can observe (NAMED LIMIT: no client-memory aliasing of GPU storage). An array whose guest bytes are the
-//!   ones the worker was last sent travels as an id (RESIDENT ARRAYS, `gl_c/resident.rs`): the same bytes, proved by comparing
-//!   them; a flush of the range stores what it covers again.
+//!   nothing the guest can observe (NAMED LIMIT: no client-memory aliasing of GPU storage). With RESIDENT ARRAYS on (off by
+//!   default, cpu-tier "jitresident"; `gl_c/resident.rs`) an array whose guest bytes are the ones the worker was last sent
+//!   travels as an id: the same bytes, proved by comparing them; a flush of the range stores what it covers again.
 //!
 //! NAMED LIMITS: one context current at a time; `aglSetDrawable` takes the port's `portRect` for the size; `aglSetFullScreen` is the
 //! games-windowed rule (the context's drawable becomes a window of the asked size, the display mode is never changed); the renderer
@@ -193,8 +193,8 @@ fn role_of(cap: u32) -> Option<Role> {
 impl<U: GuestUi> MacPpc<U> {
     /// Attach the worker that executes the program's GL (the host's `heirloom-gl.engine` transport).
     pub fn gl_attach(&mut self, w: Box<dyn GlWorker>) { self.gl.attach(w); }
-    /// Resident arrays on (the default) or off (every array copied: the A/B, gl_c/resident.rs).
-    pub fn gl_resident(&mut self, on: bool) { self.gl.resident.off = !on; self.gl.resident.reset(); }
+    /// Resident arrays on, or off (the default: every array copied; gl_c/resident.rs).
+    pub fn gl_resident(&mut self, on: bool) { self.gl.resident.on = on; self.gl.resident.reset(); }
 
     fn gl_queue(&mut self, token: Token, command: Command) { Frame { token, command }.encode_into(&mut self.gl.pending); }
 
