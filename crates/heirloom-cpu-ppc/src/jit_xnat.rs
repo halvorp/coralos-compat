@@ -76,6 +76,14 @@ impl X<'_> {
         // SAFETY: the routine checked [ea, ea + 2) is inside the `len` bytes at `ram`.
         u16::from_be_bytes(unsafe { (self.ram.add(ea as usize) as *const [u8; 2]).read_unaligned() }) as u32
     }
+    /// The two bytes at `ea` as the host loads them (little-endian: the big-endian halfword's bytes swapped) - for a test
+    /// against a mask swapped once instead of every value swapped.
+    #[inline(always)]
+    pub(crate) fn rd16_raw(&self, ea: u32) -> u16 {
+        debug_assert!(self.in_ram(ea, 2));
+        // SAFETY: the routine checked [ea, ea + 2) is inside RAM.
+        unsafe { (self.ram.add(ea as usize) as *const u16).read_unaligned() }
+    }
     #[inline(always)]
     pub(crate) fn rd32(&self, ea: u32) -> u32 {
         debug_assert!(self.in_ram(ea, 4));
@@ -89,6 +97,13 @@ impl X<'_> {
         // SAFETY: the routine checked [ea, ea + 2) is inside RAM and storable.
         unsafe { (self.ram.add(ea as usize) as *mut [u8; 2]).write_unaligned((v as u16).to_be_bytes()) }
     }
+    #[inline(always)]
+    pub(crate) fn wr32(&mut self, ea: u32, v: u32) {
+        debug_assert!(self.storable(ea, 4));
+        if let Some(n) = self.note.as_mut() { n(ea, 4); }
+        // SAFETY: the routine checked [ea, ea + 4) is inside RAM and storable.
+        unsafe { (self.ram.add(ea as usize) as *mut [u8; 4]).write_unaligned(v.to_be_bytes()) }
+    }
     // FAST PATHS: a unit whose whole destination range was validated (storable) and journaled ONCE (`note`) stores with the
     // `st*` forms - no per-store journal test; 
     /// Journal [ea, ea + n) once before a fast path writes it (lockstep only; nothing otherwise).
@@ -100,6 +115,15 @@ impl X<'_> {
         // SAFETY: the routine checked [ea, ea + 2) is inside RAM and storable, and journaled it.
         unsafe { (self.ram.add(ea as usize) as *mut [u8; 2]).write_unaligned((v as u16).to_be_bytes()) }
     }
+    #[inline(always)]
+    pub(crate) fn st32(&mut self, ea: u32, v: u32) {
+        debug_assert!(self.storable(ea, 4));
+        // SAFETY: the routine checked [ea, ea + 4) is inside RAM and storable, and journaled it.
+        unsafe { (self.ram.add(ea as usize) as *mut [u8; 4]).write_unaligned(v.to_be_bytes()) }
+    }
+    /// XER[CA] = `ca` (a srawi's carry: the last one a routine reproduces).
+    #[inline(always)]
+    pub(crate) fn set_ca(&mut self, ca: bool) { self.cpu.xer = (self.cpu.xer & !crate::cpu::XER_CA) | if ca { crate::cpu::XER_CA } else { 0 }; }
     /// CR field 0 from a compare's LT / GT / EQ and XER[SO].
     #[inline(always)]
     pub(crate) fn cr0(&mut self, lt: bool, gt: bool, eq: bool) {
@@ -126,31 +150,71 @@ pub(crate) enum Routine {
     TexConv,
     /// jit_xpix::BITSCAN: clearBitset's skip over zero words.
     BitScan,
+    /// jit_xpix::ALPHASET: alphaBlendMaskRows's unmasked rows (each 16-bit half's top bit from its low 15 bits).
+    AlphaSet,
+    /// jit_xpix::ALPHAMASK: alphaBlendMaskRows's masked rows.
+    AlphaMask,
+    /// jit_xscan::GRIDSCAN: checkCollisionDetection's cell loop.
+    GridScan,
 }
 
 impl Routine {
-    pub(crate) const ALL: [Routine; 3] = [Routine::PalBlit, Routine::TexConv, Routine::BitScan];
+    pub(crate) const ALL: [Routine; 6] = [Routine::PalBlit, Routine::TexConv, Routine::BitScan, Routine::AlphaSet, Routine::AlphaMask, Routine::GridScan];
     /// The routine's exact words (recognised from its first word: one read for every other block).
     pub(crate) fn words(self) -> &'static [u32] {
-        match self { Routine::PalBlit => &crate::jit_xpix::PALBLIT, Routine::TexConv => &crate::jit_xpix::TEXCONV, Routine::BitScan => &crate::jit_xpix::BITSCAN }
+        match self {
+            Routine::PalBlit => &crate::jit_xpix::PALBLIT,
+            Routine::TexConv => &crate::jit_xpix::TEXCONV,
+            Routine::BitScan => &crate::jit_xpix::BITSCAN,
+            Routine::AlphaSet => &crate::jit_xpix::ALPHASET,
+            Routine::AlphaMask => &crate::jit_xpix::ALPHAMASK,
+            Routine::GridScan => &crate::jit_xscan::GRIDSCAN,
+        }
     }
     /// Its knob: set = the routine is not recognised (compiled block by block like any code).
     pub(crate) fn knob(self) -> u32 {
         use heirloom_cpu_abi::ppc::*;
-        match self { Routine::PalBlit => KNOB_NO_NAT_PALBLIT, Routine::TexConv => KNOB_NO_NAT_TEXCONV, Routine::BitScan => KNOB_NO_NAT_BITSCAN }
+        match self {
+            Routine::PalBlit => KNOB_NO_NAT_PALBLIT,
+            Routine::TexConv => KNOB_NO_NAT_TEXCONV,
+            Routine::BitScan => KNOB_NO_NAT_BITSCAN,
+            Routine::AlphaSet | Routine::AlphaMask => KNOB_NO_NAT_ALPHA,
+            Routine::GridScan => KNOB_NO_NAT_GRIDSCAN,
+        }
     }
     /// The fewest instructions one unit retires (the block's entry budget test; each unit tests its own exact need).
     pub(crate) fn min_insns(self) -> u32 {
-        match self { Routine::PalBlit => crate::jit_xpix::PALBLIT_ROW_MIN, Routine::TexConv => crate::jit_xpix::TEXCONV_ROW_MIN, Routine::BitScan => 4 }
+        match self {
+            Routine::PalBlit => crate::jit_xpix::PALBLIT_ROW_MIN,
+            Routine::TexConv => crate::jit_xpix::TEXCONV_ROW_MIN,
+            Routine::BitScan => 4,
+            Routine::AlphaSet => crate::jit_xpix::ALPHASET_TRIP,
+            Routine::AlphaMask => crate::jit_xpix::ALPHAMASK_TRIP,
+            Routine::GridScan => crate::jit_xscan::GRIDSCAN_TRIP_MAX,
+        }
     }
     /// The budget the dispatcher wants before entering it (Slot::len): a few units, so a lockstep entry (budget = this + up to
     /// 63) runs the routine instead of bailing.
     pub(crate) fn slot_len(self) -> u32 {
-        match self { Routine::PalBlit => 2 * crate::jit_xpix::PALBLIT_ROW_MAX, Routine::TexConv => 4 * 14 + 4 * 64, Routine::BitScan => 64 * crate::jit_xpix::BITSCAN_ZERO }
+        match self {
+            Routine::PalBlit => 2 * crate::jit_xpix::PALBLIT_ROW_MAX,
+            Routine::TexConv => 4 * 14 + 4 * 64,
+            Routine::BitScan => 64 * crate::jit_xpix::BITSCAN_ZERO,
+            Routine::AlphaSet => 4 * crate::jit_xpix::ALPHASET_TRIP,
+            Routine::AlphaMask => 4 * crate::jit_xpix::ALPHAMASK_TRIP,
+            Routine::GridScan => 64 * crate::jit_xscan::GRIDSCAN_TRIP_MAX,
+        }
     }
     fn id(self) -> u32 { Routine::ALL.iter().position(|&r| r == self).unwrap() as u32 }
     fn run(self, x: &mut X, pc: u32) -> Out {
-        match self { Routine::PalBlit => crate::jit_xpix::palblit(x, pc), Routine::TexConv => crate::jit_xpix::texconv(x, pc), Routine::BitScan => crate::jit_xpix::bitscan(x, pc) }
+        match self {
+            Routine::PalBlit => crate::jit_xpix::palblit(x, pc),
+            Routine::TexConv => crate::jit_xpix::texconv(x, pc),
+            Routine::BitScan => crate::jit_xpix::bitscan(x, pc),
+            Routine::AlphaSet => crate::jit_xpix::alphaset(x, pc),
+            Routine::AlphaMask => crate::jit_xpix::alphamask(x, pc),
+            Routine::GridScan => crate::jit_xscan::gridscan(x, pc),
+        }
     }
 }
 

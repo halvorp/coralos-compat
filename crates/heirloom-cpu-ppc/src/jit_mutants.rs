@@ -110,3 +110,7 @@ pub(crate) const MUT_NAT_BITSCAN_COUNT: u8 = 46;
 pub(crate) const MUT_NATIVES_KEEP_CODE: u8 = 47;
 /// A region's back-edge budget exits settle the carry the LAST node left pending (jit_emit emit_region), not the edge's own.
 pub(crate) const MUT_REGION_BACK_CA: u8 = 48;
+/// The native alpha-set rows (jit_xpix ALPHASET) leave XER[CA] from the last word's FIRST srawi, not its second.
+pub(crate) const MUT_NAT_ALPHA_CA: u8 = 49;
+/// The native grid scan (jit_xscan GRIDSCAN) counts a trip whose flags test failed one instruction short.
+pub(crate) const MUT_NAT_GRID_COUNT: u8 = 50;

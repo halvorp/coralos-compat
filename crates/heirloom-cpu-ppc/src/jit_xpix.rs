@@ -1,11 +1,14 @@
-//! Native routines (jit_xnat) for two of Warcraft III's PIXEL LOOPS, chosen by the gameplay census (callgrind over the JIT
-//! arena, per guest loop: /build/patches/h86/native): each runs row by row in Rust, every pixel in the original's order on
-//! real guest memory (a source the destination overlaps reads exactly what the original would), every register the loop
-//! leaves exact.
+//! Native routines (jit_xnat) for Warcraft III's PIXEL LOOPS (and clearBitset's word scan), chosen by the gameplay census
+//! (callgrind over the JIT arena, per guest loop: /build/patches/h86/native): each runs row by row in Rust, every pixel in the
+//! original's order on real guest memory (a source the destination overlaps reads exactly what the original would), every
+//! register the loop leaves exact.
 //! * [`PALBLIT`] (resizePaletteAndBlit, 2.5 % of the JIT's host instructions): rows of 16 palette-indexed bytes to 16-bit
 //!   pixels through a 512-entry table, the upper half chosen per pixel by a mask byte's bit 4 while a flag word is set.
 //! * [`TEXCONV`] (texture_format_convert, ~1.4 %): rows of 16-bit pixels rotated left by a nibble (ARGB4444 -> RGBA4444), an
 //!   8-pixel unrolled loop and a 1-pixel tail.
+//! * [`ALPHASET`] / [`ALPHAMASK`] (alphaBlendMaskRows: the simulation tick's fog-of-war mask, h86 heavy - 40k JIT host
+//!   instructions a gameplay frame on average, ~6x that in a tick frame): rows of 16-bit pixels whose top bit becomes whether
+//!   their low 15 bits are not zero (where a mask word's bits allow it); the JIT's four 8-instruction srawi carries a word go.
 use crate::jit_xnat::{Out, X};
 
 /// The 53 words of [`crate::jit_xnat::Routine::PalBlit`] (the outer loop over rows, at its head): `li r6,8; mr r12,r4; mr r24,r5;
@@ -214,4 +217,141 @@ pub(crate) fn bitscan(x: &mut X, pc: u32) -> Out {
             return Some((pc.wrapping_add(4 * BITSCAN.len() as u32), n));
         }
     }
+}
+
+/// srawi rX,rY,31: (the result, XER[CA] - the value negative with a 1 shifted out of its low 31 bits).
+#[inline(always)]
+fn sraw31(v: u32) -> (u32, bool) { ((v as i32 >> 31) as u32, (v as i32) < 0 && v & 0x7FFF_FFFF != 0) }
+
+/// The 62 words of [`crate::jit_xnat::Routine::AlphaSet`] (alphaBlendMaskRows's unmasked row loop, at its head - h86 heavy: the
+/// simulation tick's fog-of-war mask): 4 x `lwz r0,4k(r21); clrlwi r29,r0,17; rlwinm r11,r0,0,1,15; neg r7,r29; and r0,r0,r5;
+/// or r29,r7,r29; neg r7,r11; srawi r29,r29,31; or r7,r7,r11; srawi r7,r7,31; and r11,r12,r29; and r7,r6,r7; or r11,r11,r7; or
+/// r0,r0,r11; stw r0,4k(r21)`, `addi r21,r21,16; bdnz` - each 16-bit half's top bit set from whether its low 15 bits are not
+/// zero (r5 = 0x7FFF7FFF, r12 = 0x8000, r6 = 0x80000000 in the game; any values are reproduced).
+pub const ALPHASET: [u32; 62] = [
+    0x8015_0000, 0x541D_047E, 0x540B_005E, 0x7CFD_00D0, 0x7C00_2838, 0x7CFD_EB78, 0x7CEB_00D0, 0x7FBD_FE70, 0x7CE7_5B78,
+    0x7CE7_FE70, 0x7D8B_E838, 0x7CC7_3838, 0x7D6B_3B78, 0x7C00_5B78, 0x9015_0000, 0x8015_0004, 0x541D_047E, 0x540B_005E,
+    0x7CFD_00D0, 0x7C00_2838, 0x7CFD_EB78, 0x7CEB_00D0, 0x7FBD_FE70, 0x7CE7_5B78, 0x7CE7_FE70, 0x7D8B_E838, 0x7CC7_3838,
+    0x7D6B_3B78, 0x7C00_5B78, 0x9015_0004, 0x8015_0008, 0x541D_047E, 0x540B_005E, 0x7CFD_00D0, 0x7C00_2838, 0x7CFD_EB78,
+    0x7CEB_00D0, 0x7FBD_FE70, 0x7CE7_5B78, 0x7CE7_FE70, 0x7D8B_E838, 0x7CC7_3838, 0x7D6B_3B78, 0x7C00_5B78, 0x9015_0008,
+    0x8015_000C, 0x541D_047E, 0x540B_005E, 0x7CFD_00D0, 0x7C00_2838, 0x7CFD_EB78, 0x7CEB_00D0, 0x7FBD_FE70, 0x7CE7_5B78,
+    0x7CE7_FE70, 0x7D8B_E838, 0x7CC7_3838, 0x7D6B_3B78, 0x7C00_5B78, 0x9015_000C, 0x3AB5_0010, 0x4200_FF0C,
+];
+/// One trip of [`ALPHASET`]: every word of it.
+pub(crate) const ALPHASET_TRIP: u32 = 62;
+
+/// One word of [`ALPHASET`]: (the word stored, r29, r7, r11, XER[CA] of its second srawi - the later one).
+#[inline(always)]
+fn alphaset_word(w: u32, r5: u32, r6: u32, r12: u32, mutant: u8) -> (u32, u32, u32, u32, bool) {
+    let (a, b) = (w & 0x7FFF, w & 0x7FFF_0000);
+    let (t29, ca29) = sraw31(a.wrapping_neg() | a);
+    let (t7, ca7) = sraw31(b.wrapping_neg() | b);
+    let r7 = r6 & t7;
+    let r11 = (r12 & t29) | r7;
+    (w & r5 | r11, t29, r7, r11, if mutant == crate::jit_mutants::MUT_NAT_ALPHA_CA { ca29 } else { ca7 })
+}
+
+/// [`ALPHASET`] at its head `pc`: CTR trips (CTR = 0 at the head would run 2^32: refused) of 4 words at r21, each rewritten in
+/// place in order; trips while the budget holds a whole trip and its 16 bytes are storable (the row checked once: then
+/// journaled once). Leaves r0 r7 r11 r29 and XER[CA] of the last word, r21 += 16 a trip, CTR -= trips; the pc after the loop
+/// once CTR reaches 0, else the head (a refusal at the first trip is a bail).
+pub(crate) fn alphaset(x: &mut X, pc: u32) -> Out {
+    let ctr = x.cpu.ctr;
+    let g = &x.cpu.gpr;
+    let (r5, r6, r12, base) = (g[5], g[6], g[12], g[21]);
+    let max = (x.left / ALPHASET_TRIP as u64).min(ctr as u64) as u32;
+    if max == 0 { return None; }
+    let whole = (max as u64) * 16 <= u32::MAX as u64 && x.storable(base, 16 * max);
+    if whole { x.note(base, 16 * max); }
+    let mut last = (0, 0, 0, 0, false);
+    let mut trips = 0u32;
+    while trips < max {
+        let at = base.wrapping_add(16 * trips);
+        if !whole && !x.storable(at, 16) { break; }
+        for k in 0..4u32 {
+            let ea = at.wrapping_add(4 * k);
+            last = alphaset_word(x.rd32(ea), r5, r6, r12, x.mutant);
+            if whole { x.st32(ea, last.0) } else { x.wr32(ea, last.0) }
+        }
+        trips += 1;
+    }
+    if trips == 0 { return None; }
+    let g = &mut x.cpu.gpr;
+    (g[0], g[29], g[7], g[11]) = (last.0, last.1, last.2, last.3);
+    g[21] = base.wrapping_add(16 * trips);
+    x.set_ca(last.4);
+    x.cpu.ctr = ctr - trips;
+    let next = if x.cpu.ctr == 0 { pc.wrapping_add(4 * ALPHASET.len() as u32) } else { pc };
+    Some((next, ALPHASET_TRIP as u64 * trips as u64))
+}
+
+/// The 59 words of [`crate::jit_xnat::Routine::AlphaMask`] (alphaBlendMaskRows's MASKED row loop, at its head): two words a
+/// trip, each `lwz r30,j(r4); lwz r27,j(r5)`, its halves' low-15-bit tests (as [`ALPHASET`]) and the mask word's
+/// `and r25,r27,r11` / `and r27,r27,r12` tests, four srawi and the merge `andc r28,r30,r23; and r30,r23,r25; or r30,r28,r30;
+/// stw r30,j(r4)` (the second word's instructions in another order; `addi r5,r5,8` after its loads), `addi r4,r4,8; bdnz` -
+/// a half's top bit, where the mask word's matching bits are set, becomes whether its low 15 bits are not zero.
+pub const ALPHAMASK: [u32; 59] = [
+    0x83C4_0000, 0x8365_0000, 0x57D7_047E, 0x57D6_005E, 0x7EB7_00D0, 0x7F79_5838, 0x7EB5_BB78, 0x7EF6_00D0, 0x7F59_00D0,
+    0x7F7B_6038, 0x7F9B_00D0, 0x7EB5_FE70, 0x7EF7_B378, 0x7F5A_CB78, 0x7EF7_FE70, 0x7F9C_DB78, 0x7F5A_FE70, 0x7C19_A838,
+    0x7F15_B838, 0x7F9C_FE70, 0x7C17_D038, 0x7F16_E038, 0x7F39_AB78, 0x7EF7_B378, 0x7FDC_B878, 0x7EFE_C838, 0x7F9E_F378,
+    0x93C4_0000, 0x83C4_0004, 0x8365_0004, 0x38A5_0008, 0x57D7_047E, 0x57D6_005E, 0x7F79_5838, 0x7F7B_6038, 0x7EB7_00D0,
+    0x7EB5_BB78, 0x7EF6_00D0, 0x7F59_00D0, 0x7F9B_00D0, 0x7EB5_FE70, 0x7EF7_B378, 0x7F5A_CB78, 0x7F9C_DB78, 0x7EF7_FE70,
+    0x7C19_A838, 0x7F5A_FE70, 0x7F15_B838, 0x7F9C_FE70, 0x7C17_D038, 0x7F16_E038, 0x7F39_AB78, 0x7EF7_B378, 0x7FDC_B878,
+    0x7EFE_C838, 0x7F9E_F378, 0x93C4_0004, 0x3884_0008, 0x4200_FF18,
+];
+pub(crate) const ALPHAMASK_TRIP: u32 = 59;
+
+/// One word of [`ALPHAMASK`] (`d` the destination word, `m` the mask word): r21 r22 r23 r25 r26 r27 r28 r30 (= the word
+/// stored) and XER[CA] of its last srawi (r28's).
+#[inline(always)]
+fn alphamask_word(d: u32, m: u32, r0: u32, r11: u32, r12: u32, r24: u32) -> ([u32; 8], bool) {
+    let (a, b) = (d & 0x7FFF, d & 0x7FFF_0000);
+    let (ma, mb) = (m & r11, m & r12);
+    let (t21, _) = sraw31(a.wrapping_neg() | a);
+    let (t23, _) = sraw31(b.wrapping_neg() | b);
+    let (t26, _) = sraw31(ma.wrapping_neg() | ma);
+    let (t28, ca) = sraw31(mb.wrapping_neg() | mb);
+    let r21 = r24 & t23;
+    let r22 = r24 & t28;
+    let r23 = (r0 & t26) | r22;
+    let r25 = (r0 & t21) | r21;
+    let r28 = d & !r23;
+    ([r21, r22, r23, r25, t26, mb, r28, r28 | (r23 & r25)], ca)
+}
+
+/// [`ALPHAMASK`] at its head `pc`: CTR trips (0 refused, as [`alphaset`]) of 2 words, destination r4 (rewritten in place) and
+/// mask r5, each word read and written in the original's order; a trip runs while the budget holds it and its 8 destination
+/// bytes are storable and its 8 mask bytes in RAM. A row whose destination does not overlap its mask is checked once (then
+/// journaled once); else trip by trip, word by word on real memory. Leaves the last word's r21 r22 r23 r25 r26 r27 r28 r30
+/// and XER[CA], r4 and r5 += 8 a trip, CTR -= trips; the pc after the loop once CTR reaches 0, else the head.
+pub(crate) fn alphamask(x: &mut X, pc: u32) -> Out {
+    let ctr = x.cpu.ctr;
+    let g = &x.cpu.gpr;
+    let (r0, r11, r12, r24, dst, src) = (g[0], g[11], g[12], g[24], g[4], g[5]);
+    let max = (x.left / ALPHAMASK_TRIP as u64).min(ctr as u64) as u32;
+    if max == 0 { return None; }
+    let span = 8 * max as u64;
+    let whole = span <= u32::MAX as u64 && x.storable(dst, 8 * max) && x.in_ram(src, 8 * max) && !crate::jit_xnat::overlap(dst, 8 * max, src, 8 * max);
+    if whole { x.note(dst, 8 * max); }
+    let mut last = ([0u32; 8], false);
+    let mut trips = 0u32;
+    while trips < max {
+        let (d, m) = (dst.wrapping_add(8 * trips), src.wrapping_add(8 * trips));
+        if !whole && !(x.storable(d, 8) && x.in_ram(m, 8)) { break; }
+        for k in 0..2u32 {
+            let (de, me) = (d.wrapping_add(4 * k), m.wrapping_add(4 * k));
+            last = alphamask_word(x.rd32(de), x.rd32(me), r0, r11, r12, r24);
+            if whole { x.st32(de, last.0[7]) } else { x.wr32(de, last.0[7]) }
+        }
+        trips += 1;
+    }
+    if trips == 0 { return None; }
+    let g = &mut x.cpu.gpr;
+    let r = last.0;
+    (g[21], g[22], g[23], g[25], g[26], g[27], g[28], g[30]) = (r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+    (g[4], g[5]) = (dst.wrapping_add(8 * trips), src.wrapping_add(8 * trips));
+    x.set_ca(last.1);
+    x.cpu.ctr = ctr - trips;
+    let next = if x.cpu.ctr == 0 { pc.wrapping_add(4 * ALPHAMASK.len() as u32) } else { pc };
+    Some((next, ALPHAMASK_TRIP as u64 * trips as u64))
 }

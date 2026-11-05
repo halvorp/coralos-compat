@@ -81,7 +81,9 @@ mod jit_xbytes; // translated byte-string shapes (jit_xlate's family): an unsign
 #[cfg(target_arch = "x86_64")]
 mod jit_xnat; // native routines (jit_xlate's family): a recognised hot guest routine run as Rust code over guest RAM
 #[cfg(target_arch = "x86_64")]
-mod jit_xpix; // native routines: Warcraft III's palette blit, texture nibble rotate and bitset scan loops
+mod jit_xpix; // native routines: Warcraft III's palette blit, texture nibble rotate, bitset scan and alpha-mask row loops
+#[cfg(target_arch = "x86_64")]
+mod jit_xscan; // native routines: Warcraft III's simulation-tick scans (the collision cell loop)
 #[cfg(target_arch = "x86_64")]
 mod jit_xlate; // translated functions: a recognised guest function compiled whole, exactly (the Z83 profile's rank 1 first)
 mod jit_stats;
@@ -113,7 +115,10 @@ pub use jit_xbytes::{BLENDADD as XLATE_BLENDADD, MEMCMPB as XLATE_MEMCMPB};
 /// The guest words of the native routines (jit_xnat), for tests that place one.
 #[cfg(target_arch = "x86_64")]
 #[doc(hidden)]
-pub use jit_xpix::{BITSCAN as NAT_BITSCAN, PALBLIT as NAT_PALBLIT, TEXCONV as NAT_TEXCONV};
+pub use jit_xpix::{ALPHAMASK as NAT_ALPHAMASK, ALPHASET as NAT_ALPHASET, BITSCAN as NAT_BITSCAN, PALBLIT as NAT_PALBLIT, TEXCONV as NAT_TEXCONV};
+#[cfg(target_arch = "x86_64")]
+#[doc(hidden)]
+pub use jit_xscan::GRIDSCAN as NAT_GRIDSCAN;
 
 #[cfg(target_arch = "x86_64")]
 pub use jit_mem::CodeMem;

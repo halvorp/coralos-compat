@@ -210,3 +210,130 @@ fn the_native_bitset_scan_is_exact_and_its_mutant_goes_red() {
     let (got, _) = run_on(Tier::Jit, 46, &prog, 1_000_000, bs_setup);
     assert!(got != want, "mutant 46 (a set word's count) stayed GREEN");
 }
+
+// ---- the alpha-mask rows (ALPHASET, ALPHAMASK: h86 heavy) ----
+
+const ABUF: u32 = 0x7_0000;
+const A_ROW: u32 = 16;
+fn mfctr(rt: u32) -> u32 { mfspr(rt, 9) }
+fn mtctr(rs: u32) -> u32 { mtspr(9, rs) }
+
+/// Rows: the destination (r21), the trips (CTR). Cases: 1, 7 and 40 trips; one ending in a word whose low half is zero and
+/// high half not (the two srawi carries differ); unaligned; overlapping the row before (in
+/// place, rows re-read what the last rewrote); on the routine's code page (refused: tier 1). The buffer holds every half kind
+/// (low 15 bits zero or not, top bit set or not) through `pat` and four fixed words.
+fn as_rows() -> Vec<Vec<u32>> {
+    vec![vec![ABUF, 1], vec![ABUF + 0x40, 1], vec![ABUF + 0x101, 7], vec![ABUF + 0x200, 40], vec![ABUF + 0x208, 3], vec![XR + 0x800, 2]]
+}
+fn as_setup(c: &mut Cpu, m: &mut M) {
+    place(m, &heirloom_cpu_ppc::NAT_ALPHASET);
+    (c.gpr[5], c.gpr[12], c.gpr[6]) = (0x7FFF_7FFF, 0x8000, 0x8000_0000);
+    m.mem.write_bytes(ABUF, &pat(0x800, 7)).unwrap();
+    for (i, w) in [0u32, 0x8000_8000, 0x0001_0000, 0x7FFF_0000].iter().enumerate() { m.mem.write_u32(ABUF + 0x40 + 4 * i as u32, *w).unwrap(); }
+    table(m, A_ROW, &as_rows());
+}
+fn as_program() -> Vec<u32> {
+    let load = vec![lwz(21, 23, 0), lwz(24, 23, 4), mtctr(24)];
+    let r = Regs { cnt: 22, tbl: 23, tmp: 24, acc: [14, 15, 16, 17, 18, 19] };
+    driver(as_rows().len() as u32, A_ROW, &load, XR, &[mfctr(20)], &[0, 7, 11, 29, 21, 20], &r, 40)
+}
+
+/// The unmasked alpha-set rows leave tier 0's words and registers (XER[CA] of the last word's second srawi), in place and
+/// overlapping, through tier 1 on a code page; mutant 49 (the first srawi's carry) goes RED.
+#[test]
+fn the_native_alpha_set_rows_are_exact_and_their_mutant_goes_red() {
+    let prog = as_program();
+    let want = check("alphaset", &prog, as_setup, 1);
+    let (got, _) = run_on(Tier::Jit, 49, &prog, 1_000_000, as_setup);
+    assert!(got != want, "mutant 49 (XER[CA] from the first srawi) stayed GREEN");
+}
+
+const MSRC: u32 = 0x7_8000;
+/// Rows: the destination (r4), the mask words (r5), the trips (CTR), the mask's low half (r11; r12 = it << 16). Cases: 1, 3
+/// and 30 trips; a mask with bit 15 (r12's bit 31: a srawi of 0x80000000 carries nothing); the mask 4 bytes after the
+/// destination and on it (memory order); on the code page (refused).
+fn am_rows() -> Vec<Vec<u32>> {
+    vec![vec![ABUF, MSRC, 1, 0x7FFF], vec![ABUF + 0x40, MSRC + 8, 3, 0x8001], vec![ABUF + 0x100, MSRC + 0x20, 30, 0xFFFF],
+         vec![ABUF + 0x300, ABUF + 0x304, 5, 0x00F0], vec![ABUF + 0x400, ABUF + 0x400, 4, 0x8000], vec![XR + 0x800, MSRC, 2, 0x7FFF]]
+}
+fn am_setup(c: &mut Cpu, m: &mut M) {
+    place(m, &heirloom_cpu_ppc::NAT_ALPHAMASK);
+    (c.gpr[0], c.gpr[24]) = (0x8000, 0x8000_0000);
+    m.mem.write_bytes(ABUF, &pat(0x800, 8)).unwrap();
+    m.mem.write_bytes(MSRC, &pat(0x400, 9)).unwrap();
+    for (i, w) in [0u32, 0x8000_8000, 0xFFFF_0000, 0x0000_FFFF, 0x8000_0001].iter().enumerate() { m.mem.write_u32(MSRC + 8 + 4 * i as u32, *w).unwrap(); }
+    table(m, A_ROW, &am_rows());
+}
+fn am_program() -> Vec<u32> {
+    let load = vec![lwz(4, 7, 0), lwz(5, 7, 4), lwz(8, 7, 8), mtctr(8), lwz(11, 7, 12), rlwinm(12, 11, 16, 0, 15, false)];
+    let r = Regs { cnt: 6, tbl: 7, tmp: 8, acc: [9, 10, 13, 14, 15, 16] };
+    driver(am_rows().len() as u32, A_ROW, &load, XR, &[mfctr(17)], &[21, 22, 23, 25, 26, 27, 28, 30, 4, 5, 17], &r, 40)
+}
+
+/// The masked alpha rows leave tier 0's words and registers for every mask kind, with the mask on or just after the
+/// destination (word by word in the original's order), through tier 1 on a code page.
+#[test]
+fn the_native_alpha_mask_rows_are_exact() {
+    check("alphamask", &am_program(), am_setup, 1);
+}
+
+// ---- the collision cell scan (GRIDSCAN: h86 heavy) ----
+
+const GGRID: u32 = 0x7_0000; // the 16-bit flag grid (r21 / r16 / r30 + r21 + 2)
+const GREC: u32 = 0x8_0000; // the 28-byte cell records (r19; the halfword at + 12)
+const GOBJ: u32 = 0x6_0000; // r17: width at + 164, height at + 168, the records at + 212
+const G_ROW: u32 = 32;
+
+/// Rows: the grid pointer (r21), the next row (r16), the records (r19), the first column (r25), the end (r23), the row stride in
+/// bytes (r30), the mask (r31). Cases: a whole row; one cell; the mask 0 (every cell's first test fails); a mask with bit 15;
+/// records whose bits mismatch (the update path, with its calls); an end far past RAM (the row is not validated at once: the
+/// load-by-load path), which the update callee cuts short (r23 >= 0x1000: r23 = 0) at the row's first mismatch.
+fn gs_rows() -> Vec<Vec<u32>> {
+    vec![vec![GGRID, GGRID + 0x100, GREC, 0, 60, 0x100, 0x00FF], vec![GGRID + 0x20, GGRID + 0x120, GREC + 0x400, 3, 4, 0x100, 0x0F0F],
+         vec![GGRID + 0x40, GGRID + 0x140, GREC + 0x800, 0, 20, 0x100, 0], vec![GGRID + 0x60, GGRID + 0x160, GREC + 0xC00, 2, 40, 0x100, 0x8001],
+         vec![GGRID + 0x200, GGRID + 0x300, GREC + 0x1000, 0, 30, 0x100, 0xFFFF], vec![GGRID + 0x400, GGRID + 0x500, GREC + 0x2000, 5, 25, 0x80, 0x0001],
+         vec![GGRID + 0x600, GGRID + 0x700, GREC + 0x2400, 1, 0x8000, 0x100, 0xFFFF]]
+}
+fn gs_setup(c: &mut Cpu, m: &mut M) {
+    // `mflr r12; b XR` before it (the update path's calls take LR), `mtlr r12; blr` after it; the two callees: `li r3,1; blr`
+    // (FUN_108ece40: the cell may change) and `cmplwi r23,0x1000; blt +8; li r23,0; blr` (FUN_108ecb50: the update; it ends a
+    // row whose end is past RAM)
+    m.mem.write_u32(XR - 8, 0x7D88_02A6).unwrap();
+    m.mem.write_u32(XR - 4, 0x4800_0004).unwrap();
+    place(m, &heirloom_cpu_ppc::NAT_GRIDSCAN);
+    m.mem.write_u32(XR + 4 * 67, 0x7D88_03A6).unwrap();
+    m.mem.write_u32(XR + 4 * 68, 0x4E80_0020).unwrap();
+    m.mem.write_u32(XR + 4 * 52 + 0x358, li(3, 1)).unwrap();
+    m.mem.write_u32(XR + 4 * 52 + 0x35C, 0x4E80_0020).unwrap();
+    for (k, w) in [0x2817_1000u32, 0x4180_0008, 0x3AE0_0000, 0x4E80_0020].iter().enumerate() { m.mem.write_u32(XR + 4 * 60 + 0x48 + 4 * k as u32, *w).unwrap(); }
+    c.gpr[17] = GOBJ;
+    for (o, v) in [(164u32, 40u32), (168, 30), (212, GREC)] { m.mem.write_u32(GOBJ + o, v).unwrap(); }
+    (c.gpr[27], c.gpr[26]) = (5, 0);
+    // flags: mostly set (all four tests pass), some zero; records: bit 2 equal to the cell's u, except every 7th
+    let grid = pat(0x1000, 11);
+    m.mem.write_bytes(GGRID, &grid).unwrap();
+    for k in 0..0x200u32 {
+        let off = GGRID + 2 * k;
+        let v = if k % 5 == 3 { 0 } else { 0xFFFF };
+        m.mem.write_bytes(off, &(v as u16 | (grid[k as usize] as u16)).to_be_bytes()).unwrap();
+    }
+    m.mem.write_bytes(GREC, &pat(0x3000, 12)).unwrap();
+    for k in 0..0x180u32 { let at = GREC + 28 * k + 12; let h = if k % 7 == 0 { 0x0004 } else { 0x0000 }; m.mem.write_bytes(at, &(h as u16).to_be_bytes()).unwrap(); }
+    table(m, G_ROW, &gs_rows());
+}
+fn gs_program() -> Vec<u32> {
+    let load: Vec<u32> = [21, 16, 19, 25, 23, 30, 31].iter().enumerate().map(|(k, &r)| lwz(r, 20, 4 * k as u32)).collect();
+    let r = Regs { cnt: 22, tbl: 20, tmp: 8, acc: [9, 10, 11, 13, 14, 15] };
+    driver(gs_rows().len() as u32, G_ROW, &load, XR - 8, &[], &[0, 3, 4, 18, 21, 16, 19, 25, 26], &r, 30)
+}
+
+/// The cell scan leaves tier 0's registers and CR0 over matching rows, leaves at the update path where a record's bit
+/// differs (the original runs it, with its calls), handles a zero mask and a mask with bit 15, and its planted count
+/// mutant (50) goes RED.
+#[test]
+fn the_native_grid_scan_is_exact_and_its_mutant_goes_red() {
+    let prog = gs_program();
+    let want = check("gridscan", &prog, gs_setup, 1);
+    let (got, _) = run_on(Tier::Jit, 50, &prog, 1_000_000, gs_setup);
+    assert!(got != want, "mutant 50 (a failed flags test's count) stayed GREEN");
+}
