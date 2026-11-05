@@ -67,6 +67,7 @@ pub mod evloop_c; // the Carbon Event Loop: the main loop ref and its timers, fi
 pub mod upp_c;
 pub mod xisa;
 pub mod vbl_c; // VInstall / VRemove from PowerPC: the Toolbox's VBL queue, tasks at safepoints
+pub mod wdef_res; // a program's own WDEF RESOURCE in PowerPC code (an accelerated resource): prepared by the CFM, admitted by a binding
 pub mod wdef_c; // a program's own window definition admitted by a binding: run through the callback machine, presented native // cross-ISA calls: 68k routines called from PowerPC, on the 68k CPU through the one callback machine // CallUniversalProc through the one callback machine, and the 68k traps served by value
 pub mod snd_c; // Sound Manager 3.0 dispatch routines by C name
 pub mod selector_c; // the List Manager and styled TextEdit dispatch by C name, through the 68k selector bodies
@@ -75,6 +76,8 @@ pub mod decimal;
 pub mod dsp_c;
 pub mod qdacc_c;
 pub mod script_c;
+pub mod appletalk_c; // AppleTalk on a machine with none: MPPOpen answers portNotCf (AppleTalk inactive)
+pub mod tec_c; // the Text Encoding Converter (TextCommon, TextEncodingConverter, UnicodeConverter) over the shared textenc model and the one Mac Roman table
 pub mod fsref_c; // the FSRef calls (FSpMakeFSRef, PBMakeFSRefSync, FSGetCatalogInfo, FSDeleteObject ...) over the one volume tree
 pub mod textlayout_c; // the Script Manager's line layout (StyledLineBreak, PortionLine, DrawJustified, PixelToChar ...), Roman, over the drawn font
 pub mod stdalert_c;

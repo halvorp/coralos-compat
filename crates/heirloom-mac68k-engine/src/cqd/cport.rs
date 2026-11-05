@@ -81,6 +81,22 @@ impl<U: GuestUi> Mac<U> {
     }
 }
 
+/// The colour Window Manager port (`WMgrCPort`, low memory $D2C): a CGrafPort over the main screen device, opened on first ask (as
+/// `OpenCPort` opens one) without changing `thePort`. What a program draws into it is not shown (the host draws the desktop), as with
+/// `WMgrPort`. Machines without Color QuickDraw have none: refused by name.
+pub(crate) fn wmgr_cport<U: GuestUi>(m: &mut Mac<U>) -> Result<u32, Refusal> {
+    let e = Refusal::mem("WMgrCPort");
+    let have = m.mem.read_u32(crate::lowmem::WMGR_CPORT).map_err(&e)?;
+    if have != 0 { return Ok(have); }
+    if !m.profile.color_qd { return Err(Refusal(format!("GetCWMgrPort: Color QuickDraw is not present on machine profile {}", m.profile.name))); }
+    let port = m.mm.new_ptr(&mut m.mem, &mut m.heap, PORT_SIZE, true).map_err(|x| Refusal(format!("GetCWMgrPort: no memory for the port (memFullErr {x})")))?;
+    let current = crate::qd::target::current_port(m).unwrap_or(0);
+    open_or_init(m, port, true, "GetCWMgrPort")?;
+    if current != 0 { set_the_port(m, current)?; }
+    m.mem.write_u32(crate::lowmem::WMGR_CPORT, port).map_err(&e)?;
+    Ok(port)
+}
+
 /// The record's regions and pixel map for a (re)opened colour port, then the common fields; the port becomes `thePort`.
 fn open_or_init<U: GuestUi>(m: &mut Mac<U>, port: u32, fresh: bool, name: &str) -> Result<Done, Refusal> {
     if m.profile.color_qd { m.init_devices()?; } else { return Err(Refusal(format!("{name}: Color QuickDraw is not present on machine profile {}", m.profile.name))); }

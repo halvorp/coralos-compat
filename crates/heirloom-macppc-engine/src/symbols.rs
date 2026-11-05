@@ -74,6 +74,10 @@ pub enum Native { StandardAlert, GetSharedLibrary, GetDiskFragment, GetMemFragme
     Mn(crate::menu_c::MnFn),
     /// DM screen devices, the machine location, DebugStr ([`crate::sysmisc_c`]).
     Sys(crate::sysmisc_c::SysFn),
+    /// AppleTalk with no network ([`crate::appletalk_c`]).
+    At(crate::appletalk_c::AtFn),
+    /// The Text Encoding Converter: TextCommon, TextEncodingConverter, UnicodeConverter ([`crate::tec_c`]).
+    Tec(crate::tec_c::TecFn),
     /// DrawSprocket, windowed ([`crate::dsp_c`]).
     Dsp(crate::dsp_c::DspFn),
     /// An OpenGL / AGL / glm / GLU entry point, by contract-table index ([`crate::gl_c`]); refused by name unless the table says implemented.
@@ -159,6 +163,7 @@ impl Native {
             n if crate::pb::PbCall::by_name(n).is_some() => Native::Pb(crate::pb::PbCall::by_name(n).expect("checked")),
             n if crate::menu_c::MnFn::by_name(n).is_some() => Native::Mn(crate::menu_c::MnFn::by_name(n).expect("checked")),
             n if crate::sysmisc_c::SysFn::by_name(n).is_some() => Native::Sys(crate::sysmisc_c::SysFn::by_name(n).expect("checked")),
+            n if crate::appletalk_c::AtFn::by_name(n).is_some() => Native::At(crate::appletalk_c::AtFn::by_name(n).expect("checked")),
             n if crate::dsp_c::DspFn::by_name(n).is_some() => Native::Dsp(crate::dsp_c::DspFn::by_name(n).expect("checked")),
             n if crate::gl_c::GlFn::by_name(n).is_some() => Native::Gl(crate::gl_c::GlFn::by_name(n).expect("checked")),
             n if crate::tm_c::TmFn::by_name(n).is_some() => Native::Tm(crate::tm_c::TmFn::by_name(n).expect("checked")),

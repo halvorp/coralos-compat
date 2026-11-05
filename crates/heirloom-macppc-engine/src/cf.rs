@@ -1,7 +1,7 @@
 //! The CoreFoundation minimum a Carbon program needs to name a window: `CFString`s. A CFStringRef is an OPAQUE id (never dereferenced by a
-//! program) into a host table of byte strings with a retain count. Bytes are kept as given -- MacRoman for `kCFStringEncodingMacRoman` (0) -- with no
-//! transcoding, which is exact for ASCII and for MacRoman text; a UTF-8 source keeps its UTF-8 bytes (so a non-ASCII title would show as MacRoman bytes:
-//! stated, not hidden).
+//! program) into a host table of byte strings with a retain count. The bytes are Mac Roman: text given in another encoding (UTF-8, UTF-16, ISO Latin-1,
+//! ASCII) is converted on the way in and out through `heirloom_mac68k_engine::textenc` (the one Mac Roman table); a character Mac Roman lacks is refused by
+//! name on the way in (the store holds Mac Roman), and makes CFStringGet[C|Pascal]String answer false on the way out; an encoding with no table is refused by name.
 //! `CFSTR("...")` compiles to a call of `__CFStringMakeConstantString`; equal constants share one object and are never freed (as in CoreFoundation).
 use crate::clib::arg;
 use crate::machine::MacPpc;
@@ -61,10 +61,11 @@ impl<U: GuestUi> MacPpc<U> {
                 let s = self.cstr(a0, "__CFStringMakeConstantString")?;
                 match self.rt.cf.constants.get(&s) { Some(&id) => id, None => { let id = self.cf_new(s.clone(), true); self.rt.cf.constants.insert(s, id); id } }
             }
-            CreateWithCString => { let s = self.cstr(a1, "CFStringCreateWithCString")?; self.cf_new(s, false) }
+            CreateWithCString => { let s = self.cstr(a1, "CFStringCreateWithCString")?; let s = cf_import(&s, a2, "CFStringCreateWithCString")?; self.cf_new(s, false) }
             CreateWithPascalString => {
                 let n = self.mac.mem.read_u8(a1).map_err(|_| String::from("CFStringCreateWithPascalString: the string leaves guest RAM"))?;
                 let s = self.get_bytes(a1 + 1, u32::from(n), "CFStringCreateWithPascalString")?;
+                let s = cf_import(&s, a2, "CFStringCreateWithPascalString")?;
                 self.cf_new(s, false)
             }
             // CFStringCreateWithFormat(alloc, formatOptions, CFStringRef format, ...) (spec: macos9-specs/CoreFoundationLib/CFStringCreateWithFormat): the printf engine over the variadic
@@ -91,12 +92,17 @@ impl<U: GuestUi> MacPpc<U> {
             }
             GetLength => self.rt.cf.strings.get(&a0).ok_or_else(|| bad("CFStringGetLength", a0))?.0.len() as u32,
             GetCString => {
-                // CFStringGetCString(str, buffer, bufferSize, encoding) -> Boolean: false when the text and its NUL do not fit
+                // CFStringGetCString(str, buffer, bufferSize, encoding) -> Boolean: false when the text and its NUL do not fit, or when the encoding cannot hold
+                // a character of it
                 let s = self.rt.cf.strings.get(&a0).ok_or_else(|| bad("CFStringGetCString", a0))?.0.clone();
-                if (s.len() as u64) + 1 > u64::from(a2) { 0 } else { let mut b = s; b.push(0); self.put_bytes(a1, &b, "CFStringGetCString")?; 1 }
+                match cf_export(&s, a3, "CFStringGetCString")? {
+                    Some(s) if (s.len() as u64) + 1 <= u64::from(a2) => { let mut b = s; b.push(0); self.put_bytes(a1, &b, "CFStringGetCString")?; 1 }
+                    _ => 0,
+                }
             }
             GetPascalString => {
                 let s = self.rt.cf.strings.get(&a0).ok_or_else(|| bad("CFStringGetPascalString", a0))?.0.clone();
+                let Some(s) = cf_export(&s, a3, "CFStringGetPascalString")? else { cpu.gpr[3] = 0; return Ok(()) };
                 if s.len() > 255 || (s.len() as u64) + 1 > u64::from(a2) { 0 } else { let mut b = alloc::vec![s.len() as u8]; b.extend(s); self.put_bytes(a1, &b, "CFStringGetPascalString")?; 1 }
             }
             // "may return NULL": the internal storage is not exposed
@@ -104,11 +110,28 @@ impl<U: GuestUi> MacPpc<U> {
             NoBundle => 0,
             GetCharacterAtIndex => {
                 let s = &self.rt.cf.strings.get(&a0).ok_or_else(|| bad("CFStringGetCharacterAtIndex", a0))?.0;
-                u32::from(*s.get(a1 as usize).ok_or_else(|| format!("CFStringGetCharacterAtIndex: index {a1} is past the end ({} characters)", s.len()))?)
+                u32::from(heirloom_mac68k_engine::macroman::to_char(*s.get(a1 as usize).ok_or_else(|| format!("CFStringGetCharacterAtIndex: index {a1} is past the end ({} characters)", s.len()))?))
             }
         };
         let _ = (a2, a3);
         cpu.gpr[3] = r;
         Ok(())
     }
+}
+
+/// Text given to CoreFoundation in `enc`, as the Mac Roman bytes the store keeps (the one table, `textenc`).
+fn cf_import(bytes: &[u8], enc: u32, who: &str) -> Result<Vec<u8>, String> {
+    use heirloom_mac68k_engine::textenc;
+    let from = textenc::charset(enc).ok_or_else(|| format!("{who}: encoding {enc:#x} has no conversion table in this engine (Mac Roman, UTF-16, UTF-8, ISO Latin-1, ASCII)"))?;
+    let c = textenc::convert(from, textenc::Charset::MacRoman { euro: true }, bytes, usize::MAX, None);
+    if c.status != 0 { return Err(format!("{who}: the text does not convert from encoding {enc:#x} to the Mac Roman this store keeps (TEC status {}, at byte {})", c.status, c.read)); }
+    Ok(c.out)
+}
+
+/// Mac Roman store bytes in `enc`; None when `enc` cannot hold one of its characters.
+fn cf_export(bytes: &[u8], enc: u32, who: &str) -> Result<Option<Vec<u8>>, String> {
+    use heirloom_mac68k_engine::textenc;
+    let to = textenc::charset(enc).ok_or_else(|| format!("{who}: encoding {enc:#x} has no conversion table in this engine (Mac Roman, UTF-16, UTF-8, ISO Latin-1, ASCII)"))?;
+    let c = textenc::convert(textenc::Charset::MacRoman { euro: true }, to, bytes, usize::MAX, None);
+    Ok((c.status == 0).then_some(c.out))
 }

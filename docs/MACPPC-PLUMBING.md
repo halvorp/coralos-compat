@@ -220,3 +220,22 @@ FindWindow (front to back, only inside the definition's structure region, the an
 CleanUp before DisposeWindow. The frame the definition draws is not presented (the native frame is), counted per window. First
 binding: `privilege-drmpa-4.7.1.44.sexp` (the Aladdin Privilege dialog library's plain bordered box). The host reading
 `System/Heirloom/Bindings/macppc/` is not built yet (coralos); the harness reads the same files (tests/wdef_bindings).
+
+## Text encodings, and window definitions in WDEF resources (2026-11-05, ps7 part 4)
+
+- ONE Mac Roman table: heirloom-mac68k-engine `macroman.rs`, generated from the Unicode Consortium's `ROMAN.TXT` (Apple, c02; sha256 in
+  the module doc). Every path that shows or takes Mac text goes through it: menus / controls / dialog and alert text / window titles /
+  typed and pasted dialog text (68k translate layer), QuickDraw text runs recorded for the host (`qd/plane.rs`), `read_pstring`,
+  CoreFoundation strings (`cf.rs` / `cf_more.rs`: the store is Mac Roman, other encodings convert in and out), Unicode file and volume
+  names (`fsref_c.rs`). "Read Me..." (0xC9) is an ellipsis now, not Latin-1 'É'. Internal tree names (`fm::name_of`) stay byte-exact.
+- The Text Encoding Converter's model: heirloom-mac68k-engine `textenc.rs` (TextEncoding words, `ResolveDefaultTextEncoding` as 9.2.1's
+  TextCommon does it, conversion between Mac Roman / UTF-16 BE / UTF-8 / ISO Latin-1 / ASCII with named stops: unmappable, output full,
+  partial, malformed). heirloom-macppc-engine `tec_c.rs` provides the libraries TextCommon, TextEncodingConverter and UnicodeConverter
+  (the calls Photoshop 7, its ACELib and MSL import); any other encoding is kTECNoConversionPathErr, logged by name.
+- `wdef_res.rs`: a procID that selects a WDEF RESOURCE of PowerPC code (an accelerated resource: RoutineDescriptor + PEF) is prepared
+  like Mixed Mode does it (CFM instantiates the container as fragment `WDEF <id>`, the record becomes absolute) and goes through the
+  same binding rule as CreateCustomWindow's procedure definitions (identity = its code section; DATA binding; its own code runs for
+  regions and hits, the frame is native). First binding: `bindings/macppc/photoshop-7.0-emptywdef.sexp` (a frameless utility window).
+- Smaller: FSGetVolumeInfo, MPPOpen (portNotCf: no AppleTalk), ShowHide, SetWinColor / GetAuxWin, GetWMgrPort / GetCWMgrPort (a
+  colour WM port made on first ask), SetPreserveGlyph, IsMetric (= IUMetric, from the served itl0), NavLoad / NavUnload,
+  InstallWindowContentPaintProc (recorded, never called: this Window Manager never erases content).

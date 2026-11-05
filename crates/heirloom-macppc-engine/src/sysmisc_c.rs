@@ -18,7 +18,9 @@ const SCREEN_ACTIVE: u16 = 1 << 11;
 
 #[derive(Default)]
 pub struct SysState { location: [u8; 12], /// the Font Manager's SetOutlinePreferred (toolbox_c.rs)
-    pub(crate) outline_preferred: bool }
+    pub(crate) outline_preferred: bool,
+    /// the Font Manager's SetPreserveGlyph (toolbox_c.rs)
+    pub(crate) preserve_glyph: bool }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SysFn { DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr, DMGetDisplayIDByGDevice, UpdateSystemActivity, RegisterComponentResourceFile, OpenADefaultComponent }

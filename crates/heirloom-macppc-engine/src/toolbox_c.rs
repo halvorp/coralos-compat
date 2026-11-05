@@ -38,6 +38,11 @@ pub enum TbFn {
     /// `SetOutlinePreferred(Boolean)` / `GetOutlinePreferred()` (the Font Manager's outline-over-bitmap preference): recorded and answered; the
     /// text here is drawn from one bitmap face either way.
     SetOutlinePreferred, GetOutlinePreferred,
+    /// `SetPreserveGlyph(Boolean)` / `GetPreserveGlyph()` (the Font Manager's keep-outline-glyphs-unscaled preference, `_FontDispatch` 0x0A / 0x0B):
+    /// recorded and answered (FALSE until set: the start value is not checked against 9.2.1); the text here is drawn from one host face either way.
+    SetPreserveGlyph, GetPreserveGlyph,
+    /// `IsMetric()`: the 68k `IUMetric` body (`_Pack6` selector 4): metricSys of the itl0 `GetIntlResource(0)` answers.
+    IsMetric,
     /// `GetCurrentKeyModifiers()` (Carbon): the modifier keys held now. The GuestUi seam carries modifiers WITH each key event, not a held
     /// state between events, so the answer is "none held" (0).
     GetCurrentKeyModifiers,
@@ -62,6 +67,9 @@ pub enum TbFn {
     /// dialog call this engine does not serve yet (NavGetFile, NavPutFile, NavChooseFolder ...) is a per-call NAMED refusal, as the ruling has
     /// every missing call (Photoshop 7 refuses to start without Navigation Services).
     NavLibraryVersion, NavServicesCanRun,
+    /// `NavLoad()` / `NavUnload()` (Navigation.h: preload / release the Navigation Services library): noErr; the Nav calls here are natives, there is
+    /// nothing to load or release.
+    NavLoad,
     /// `LMGet<Name>` / `LMSet<Name>` over the table [`LOWMEM`]; the index is the row.
     LmGet(u8), LmSet(u8),
 }
@@ -87,9 +95,9 @@ impl TbFn {
             "FindFolder" => FindFolder, "SetEventMask" => SetEventMask, "GetDateTime" => GetDateTime, "GetDblTime" => GetDblTime, "GetCaretTime" => GetCaretTime, "Microseconds" => Microseconds, "UpTime" => UpTime,
             "AbsoluteToNanoseconds" => AbsoluteToNanoseconds,
             "TEToScrap" => TEToScrap, "TEFromScrap" => TEFromScrap, "UpperString" => UpperString, "GetGrayRgn" => GetGrayRgn,
-            "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "LMGetTopMapHndl" => TopMapGet, "LMSetTopMapHndl" => TopMapSet, "LMGetCurMap" => CurMapGet, "LMSetCurMap" => CurMapSet, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
+            "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "LMGetTopMapHndl" => TopMapGet, "LMSetTopMapHndl" => TopMapSet, "LMGetCurMap" => CurMapGet, "LMSetCurMap" => CurMapSet, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "SetPreserveGlyph" => SetPreserveGlyph, "GetPreserveGlyph" => GetPreserveGlyph, "IsMetric" => IsMetric, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
             "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString,
-            "NavLibraryVersion" => NavLibraryVersion, "NavServicesCanRun" | "NavServicesAvailable" => NavServicesCanRun,
+            "NavLibraryVersion" => NavLibraryVersion, "NavServicesCanRun" | "NavServicesAvailable" => NavServicesCanRun, "NavLoad" | "NavUnload" => NavLoad,
             // GetMBarHeight() / GetSysFont() are the Universal Interfaces' readers of MBarHeight and SysFontFam (Menus.h, Fonts.h)
             "GetMBarHeight" => return TbFn::by_name("LMGetMBarHeight"),
             "GetSysFont" => return TbFn::by_name("LMGetSysFontFam"),
@@ -171,6 +179,9 @@ impl<U: GuestUi> MacPpc<U> {
             CurApName => heirloom_mac68k_engine::lowmem::CUR_AP_NAME,
             SetOutlinePreferred => { self.sys.outline_preferred = a0 & 0xFF != 0; 0 }
             GetOutlinePreferred => u32::from(self.sys.outline_preferred),
+            SetPreserveGlyph => { self.sys.preserve_glyph = a0 & 0xFF != 0; 0 }
+            GetPreserveGlyph => u32::from(self.sys.preserve_glyph),
+            IsMetric => u32::from(heirloom_mac68k_engine::intl::is_metric(&mut self.mac).map_err(|e| format!("IsMetric: {}", e.0))?),
             GetCurrentKeyModifiers => 0,
             RelString => {
                 let (x, y) = (self.pstr_bytes(a0, &name)?, self.pstr_bytes(a1, &name)?);
@@ -179,6 +190,7 @@ impl<U: GuestUi> MacPpc<U> {
             SetGrowZone => { self.mac.log.push(format!("[mem] SetGrowZone {a0:#x}: recorded; not called on a failed allocation here (memFullErr as after a grow-zone procedure that freed nothing)")); 0 }
             NavLibraryVersion => 0x0110_8000,
             NavServicesCanRun => 1,
+            NavLoad => 0,
             ApplicationZone | SystemZone => heirloom_mac68k_engine::lowmem::ZONE_STUB,
             HandleZone => { if self.mac.mm.block(a0).is_none() { self.mac.log.push(format!("[mem] HandleZone {a0:#x}: not a handle (answered the one zone)")); } heirloom_mac68k_engine::lowmem::ZONE_STUB }
             SetZone => {

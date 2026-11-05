@@ -30,7 +30,7 @@ impl<U: GuestUi> Mac<U> {
         if !f.vis { return Ok(()); }
         let ink = if f.hilite == 0xFF { &DIMMED } else { &BLACK };
         let (w, h) = (r.x1 - r.x0, r.y1 - r.y0);
-        let title: alloc::vec::Vec<u8> = f.title.chars().map(|c| c as u8).collect();
+        let title: alloc::vec::Vec<u8> = f.title.chars().map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect();
         let text_w = self.qd.font.text_length(&title) as i32;
         paint(self, port, &Shape::Rect.frame(r, 1, 1), PAT_COPY, ink)?;
         let (h0, v0) = (r.x0 + (w - text_w).max(0) / 2, r.y0 + (h - GLYPH_H) / 2 + GLYPH_H);

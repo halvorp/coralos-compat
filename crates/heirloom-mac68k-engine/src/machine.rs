@@ -69,6 +69,10 @@ pub struct MacWindow {
     /// HEIRLOOM-CUSTOM-WINDOW-NEEDS-A-BINDING). Such a window's strucRgn and contRgn are the DEFINITION's (its wCalcRgns writes them):
     /// the engine never recomputes them. `None` = a system definition chosen by `proc_id`.
     pub def_role: Option<(heirloom_ui_abi::WindowRole, bool)>,
+    /// The window colour table `SetWinColor` gave it (a `WCTabHandle`, the program's; 0 = the default).
+    pub wctab: u32,
+    /// The window's own AuxWinRec handle (`GetAuxWin`, made on first ask once it has a colour table; freed with the window), 0 = none yet.
+    pub aux: u32,
 }
 
 pub struct Mac<U: GuestUi> {

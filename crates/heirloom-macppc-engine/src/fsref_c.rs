@@ -10,7 +10,8 @@
 //! nodeID 8, sharingFlags 12, userPrivileges 13, createDate 16, contentModDate 24, attributeModDate 32, accessDate 40, backupDate 48,
 //! permissions 56, finderInfo 72, extFinderInfo 88, data sizes 104 / 112, resource sizes 120 / 128, valence 136, textEncodingHint 140; 144
 //! bytes); UTCDateTime is {highSeconds, lowSeconds, fraction} from the catalog's 1904-based seconds. `outName` is an HFSUniStr255 of the
-//! name's characters as the volume holds them (one UTF-16 unit each).
+//! name's Mac Roman bytes as Unicode (`heirloom_mac68k_engine::macroman`, the one table; every Mac Roman character is one UTF-16 unit), and
+//! FSMakeFSRefUnicode's name goes the other way (a character Mac Roman lacks cannot name an item on these volumes: refused by name).
 use crate::clib::arg;
 use crate::machine::MacPpc;
 use alloc::format;
@@ -35,7 +36,7 @@ const P_DIR_ID: u32 = 48;
 const P_NEW_REF: u32 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FsrFn { FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo, FSOpenIterator, FSCloseIterator, FSGetCatalogInfoBulk, PBGetCatalogInfoSync, FSOpenResFile }
+pub enum FsrFn { FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo, FSOpenIterator, FSCloseIterator, FSGetCatalogInfoBulk, PBGetCatalogInfoSync, FSOpenResFile, FSGetVolumeInfo }
 
 impl FsrFn {
     pub fn by_name(name: &str) -> Option<FsrFn> {
@@ -43,7 +44,7 @@ impl FsrFn {
         Some(match name {
             "FSpMakeFSRef" => FSpMakeFSRef, "PBMakeFSRefSync" => PBMakeFSRefSync, "FSMakeFSRefUnicode" => FSMakeFSRefUnicode, "FSGetCatalogInfo" => FSGetCatalogInfo, "PBGetCatalogInfoSync" => PBGetCatalogInfoSync, "FSOpenResFile" => FSOpenResFile,
             "FSDeleteObject" => FSDeleteObject, "FSCompareFSRefs" => FSCompareFSRefs, "FSRefMakePath" => FSRefMakePath, "FSPathMakeRef" => FSPathMakeRef, "FSSetCatalogInfo" => FSSetCatalogInfo,
-            "FSOpenIterator" => FSOpenIterator, "FSCloseIterator" => FSCloseIterator, "FSGetCatalogInfoBulk" => FSGetCatalogInfoBulk,
+            "FSOpenIterator" => FSOpenIterator, "FSCloseIterator" => FSCloseIterator, "FSGetCatalogInfoBulk" => FSGetCatalogInfoBulk, "FSGetVolumeInfo" => FSGetVolumeInfo,
             _ => return None,
         })
     }
@@ -123,7 +124,7 @@ impl<U: GuestUi> MacPpc<U> {
                     let mut leaf = Vec::with_capacity(args[1] as usize);
                     for i in 0..args[1] {
                         let u = self.mac.mem.read_u16(args[2] + 2 * i).map_err(|_| self.fsr_err(&name, args[2]))?;
-                        leaf.push(u8::try_from(u).map_err(|_| format!("{name}: U+{u:04X} has no single-byte form on this volume (names are bytes)"))?);
+                        leaf.push(char::from_u32(u32::from(u)).and_then(heirloom_mac68k_engine::macroman::from_char).ok_or_else(|| format!("{name}: U+{u:04X} has no Mac Roman byte (names on these volumes are Mac Roman)"))?);
                     }
                     let (vref, dir) = (self.mac.fm.vref_of(self.mac.fm.tree.volume_of(parent)), self.mac.fm.dir_id(parent));
                     match self.fsr_locate(vref, dir, Some(&leaf)) { Ok(node) => { self.put_fsref(args[4], node)?; 0 } Err(e) => i32::from(e) }
@@ -271,6 +272,58 @@ impl<U: GuestUi> MacPpc<U> {
                     e
                 }
             },
+            // FSGetVolumeInfo(FSVolumeRefNum volume, ItemCount volumeIndex, FSVolumeRefNum *actualVolume, FSVolumeInfoBitmap whichInfo, FSVolumeInfo *info,
+            // HFSUniStr255 *volumeName, FSRef *rootDirectory): volumeIndex > 0 picks the index-th mounted volume (nsvErr past the last), else `volume` names it
+            // (nsvErr when it names none). The FSVolumeInfo fields asked for in whichInfo are filled from the same geometry PBHGetVInfo / PBXGetVolInfo report
+            // (Files.h layout, pack(2): dates 0/8/16/24, fileCount 32, folderCount 36, totalBytes 40, freeBytes 48, blockSize 56, totalBlocks 60, freeBlocks
+            // 64, nextAllocation 68, rsrcClumpSize 72, dataClumpSize 76, nextCatalogID 80, finderInfo 84, flags 116, filesystemID 118, signature 120,
+            // driveNumber 122, driverRefNum 124; 126 bytes); fields not asked for are left as the caller had them
+            FSGetVolumeInfo => {
+                let (volume, index, actual, which, info_p, name_p, root_p) = (args[0] as u16 as i16, args[1], args[2], args[3], args[4], args[5], args[6]);
+                let picked = if index > 0 { self.mac.fm.pick_volume(i16::try_from(index).unwrap_or(i16::MAX), 0, None) } else if volume == 0 { Err(-35) } else { self.mac.fm.volume_of_vref(volume) };
+                match picked {
+                    Err(e) => i32::from(e),
+                    Ok(vol) => {
+                        let i = self.mac.fm.vol_info(vol);
+                        let mm = &mut self.mac.mem;
+                        let e = |_| format!("{name}: the FSVolumeInfo at {info_p:#x} leaves guest RAM");
+                        if actual != 0 { mm.write_u16(actual, i.vref as u16).map_err(|_| format!("{name}: actualVolume leaves guest RAM"))?; }
+                        if info_p != 0 {
+                            let (total, free) = (u64::from(i.total_blocks) * u64::from(i.block_size), u64::from(i.free_blocks) * u64::from(i.block_size));
+                            if which & 0x0001 != 0 { mm.write_bytes(info_p, &utc(i.created)).map_err(e)?; }
+                            if which & 0x0002 != 0 { mm.write_bytes(info_p + 8, &utc(i.created)).map_err(e)?; }
+                            if which & 0x0004 != 0 { mm.write_bytes(info_p + 16, &[0; 8]).map_err(e)?; }
+                            if which & 0x0008 != 0 { mm.write_bytes(info_p + 24, &[0; 8]).map_err(e)?; }
+                            if which & 0x0010 != 0 { mm.write_bytes(info_p + 32, &i.file_count.to_be_bytes()).map_err(e)?; }
+                            if which & 0x0020 != 0 { mm.write_bytes(info_p + 36, &i.dir_count.to_be_bytes()).map_err(e)?; }
+                            if which & 0x0040 != 0 { mm.write_bytes(info_p + 40, &total.to_be_bytes()).map_err(e)?; mm.write_bytes(info_p + 48, &free.to_be_bytes()).map_err(e)?; }
+                            if which & 0x0080 != 0 {
+                                mm.write_bytes(info_p + 56, &i.block_size.to_be_bytes()).map_err(e)?;
+                                mm.write_bytes(info_p + 60, &u32::from(i.total_blocks).to_be_bytes()).map_err(e)?;
+                                mm.write_bytes(info_p + 64, &u32::from(i.free_blocks).to_be_bytes()).map_err(e)?;
+                            }
+                            if which & 0x0100 != 0 { mm.write_bytes(info_p + 68, &0u32.to_be_bytes()).map_err(e)?; }
+                            if which & 0x0200 != 0 { mm.write_bytes(info_p + 72, &i.block_size.to_be_bytes()).map_err(e)?; }
+                            if which & 0x0400 != 0 { mm.write_bytes(info_p + 76, &i.block_size.to_be_bytes()).map_err(e)?; }
+                            if which & 0x0800 != 0 { mm.write_bytes(info_p + 80, &0x1000u32.to_be_bytes()).map_err(e)?; }
+                            if which & 0x1000 != 0 { mm.write_bytes(info_p + 84, &[0; 32]).map_err(e)?; }
+                            if which & 0x2000 != 0 { mm.write_bytes(info_p + 116, &i.attrib.to_be_bytes()).map_err(e)?; }
+                            // filesystemID 0 (HFS, the Mac OS's own) and the signature 'BD', as PBHGetVInfo answers
+                            if which & 0x4000 != 0 { mm.write_bytes(info_p + 118, &[0, 0, 0x42, 0x44]).map_err(e)?; }
+                            if which & 0x8000 != 0 { mm.write_bytes(info_p + 122, &i.drive.to_be_bytes()).map_err(e)?; mm.write_bytes(info_p + 124, &0u16.to_be_bytes()).map_err(e)?; }
+                        }
+                        if name_p != 0 {
+                            let mut u = Vec::with_capacity(2 + 2 * i.name.len());
+                            u.extend_from_slice(&(i.name.len() as u16).to_be_bytes());
+                            for &c in &i.name { u.extend_from_slice(&(u32::from(heirloom_mac68k_engine::macroman::to_char(c)) as u16).to_be_bytes()); }
+                            self.mac.mem.write_bytes(name_p, &u).map_err(|_| self.fsr_err("FSGetVolumeInfo volumeName", name_p))?;
+                        }
+                        if root_p != 0 { self.put_fsref(root_p, vol)?; }
+                        self.mac.log.push(format!("[file] FSGetVolumeInfo(volume {volume}, index {index}, which {which:#x}) -> \"{}\" vRef {}", heirloom_mac68k_engine::macroman::decode(&i.name), i.vref));
+                        0
+                    }
+                }
+            }
             // FSCompareFSRefs(ref1, ref2): noErr when both name one object, diffVolErr on two volumes, errFSRefsDifferent (-1420) otherwise
             FSCompareFSRefs => match (self.fsref_node(args[0]), self.fsref_node(args[1])) {
                 (Err(e), _) | (_, Err(e)) => i32::from(e),
@@ -315,7 +368,7 @@ impl<U: GuestUi> MacPpc<U> {
         if out_name != 0 {
             let mut u = Vec::with_capacity(2 + 2 * info.name.len());
             u.extend_from_slice(&(info.name.len() as u16).to_be_bytes());
-            for &c in &info.name { u.extend_from_slice(&u16::from(c).to_be_bytes()); }
+            for &c in &info.name { u.extend_from_slice(&(u32::from(heirloom_mac68k_engine::macroman::to_char(c)) as u16).to_be_bytes()); }
             self.mac.mem.write_bytes(out_name, &u).map_err(|_| self.fsr_err("FSGetCatalogInfo outName", out_name))?;
         }
         if spec != 0 {

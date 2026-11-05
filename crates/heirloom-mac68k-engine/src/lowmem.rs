@@ -36,6 +36,7 @@ pub const CUR_STACK_BASE: u32 = 0x908; // Ptr: top of the application's stack
 pub const CUR_AP_NAME: u32 = 0x910; // Str31 (the table gives 32 bytes)
 pub const CUR_JT_OFFSET: u32 = 0x934; // short: the jump table's offset from A5
 pub const WINDOW_LIST: u32 = 0x9D6; // WindowPeek: front window
+pub const WMGR_CPORT: u32 = 0xD2C; // CGrafPtr: the colour Window Manager port (cqd/cport.rs wmgr_cport, made on first GetCWMgrPort)
 pub const WMGR_PORT: u32 = 0x9DE; // GrafPtr: the Window Manager port (the desktop; toolbox.rs InitWindows)
 pub const DESK_PORT: u32 = 0x9E2; // GrafPtr: the port desk accessories draw the desktop with (the Window Manager port)
 pub const GRAY_RGN: u32 = 0x9EE; // RgnHandle: the desktop (the screen minus the menu bar and the rounded corners)

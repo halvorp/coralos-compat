@@ -1,4 +1,4 @@
-//! CoreFoundation breadth by C name: strings from UniChars, mutation, substring, search, split/join, bytes out; arrays, dictionaries, numbers, file-system URLs, retain counts.
+//! CoreFoundation breadth by C name: strings from UniChars (through the one Mac Roman table), mutation, substring, search, split/join, bytes out in any encoding with a table; arrays, dictionaries, numbers, file-system URLs, retain counts.
 use heirloom_ui_abi::RecordingGuestUi;
 use heirloom_macppc_engine::symbols::Binding;
 use heirloom_macppc_engine::{GlueOutcome, MacPpc, PpcHost};
@@ -63,8 +63,11 @@ fn strings_from_unichars_mutation_substring_search_split_join_and_bytes() {
     assert_eq!(call(&mut m, "CFStringGetBytes", &[mu, 0, 5, 0, 0, 0, 0, 0, OUT]), 5);
     assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), 5);
     assert_eq!(call(&mut m, "CFStringGetBytes", &[mu, 0, 5, 0x0800_0100, 0, 0, BUF, 16, OUT]), 5);
-    // NEGATIVE control: UTF-16 (0x100) is a real conversion and is refused by name
-    assert!(refused(&mut m, "CFStringGetBytes", &[mu, 0, 5, 0x0100, 0, 0, BUF, 16, OUT]).contains("not implemented"));
+    // UTF-16 (0x100) converts through the one Mac Roman table: two bytes a character
+    assert_eq!(call(&mut m, "CFStringGetBytes", &[mu, 0, 5, 0x0100, 0, 0, BUF, 16, OUT]), 5);
+    assert_eq!((m.get_bytes(BUF, 2, "t").unwrap(), m.mac.mem.read_u32(OUT).unwrap()), (vec![0, b'H'], 10));
+    // NEGATIVE control: an encoding with no table here (Windows Latin-1, 0x500) is refused by name
+    assert!(refused(&mut m, "CFStringGetBytes", &[mu, 0, 5, 0x0500, 0, 0, BUF, 16, OUT]).contains("no conversion table"));
     // GetCharacters widens to UniChar
     call(&mut m, "CFStringGetCharacters", &[s, 0, 2, CHARS]);
     assert_eq!((m.mac.mem.read_u16(CHARS).unwrap(), m.mac.mem.read_u16(CHARS + 2).unwrap()), (u16::from(b'H'), u16::from(b'e')));
@@ -78,9 +81,13 @@ fn strings_from_unichars_mutation_substring_search_split_join_and_bytes() {
     let joined = call(&mut m, "CFStringCreateByCombiningStrings", &[0, arr, dash]);
     assert_eq!(text(&m, joined), "a-b--c");
     assert_eq!(call(&mut m, "CFStringGetSystemEncoding", &[]), 0);
-    // NEGATIVE CONTROLS, refused by name: a non-ASCII UniChar, a range off the end, an index past the array, a non-CFString
+    // the euro is Mac Roman 0xDB: a UniChar outside ASCII is stored through the one table
     m.mac.mem.write_u16(CHARS, 0x20AC).unwrap();
-    assert!(refused(&mut m, "CFStringCreateWithCharacters", &[0, CHARS, 1]).contains("not ASCII"));
+    let euro = call(&mut m, "CFStringCreateWithCharacters", &[0, CHARS, 1]);
+    assert_eq!(m.cf_bytes(euro).unwrap(), [0xDB]);
+    // NEGATIVE CONTROLS, refused by name: a UniChar Mac Roman lacks, a range off the end, an index past the array, a non-CFString
+    m.mac.mem.write_u16(CHARS, 0x65E5).unwrap();
+    assert!(refused(&mut m, "CFStringCreateWithCharacters", &[0, CHARS, 1]).contains("no Mac Roman byte"));
     assert!(refused(&mut m, "CFStringCreateWithSubstring", &[0, s, 3, 9]).contains("outside the 5-character string"));
     assert!(refused(&mut m, "CFArrayGetValueAtIndex", &[arr, 9]).contains("past the end"));
     assert!(refused(&mut m, "CFStringCreateWithSubstring", &[0, 0x1234, 0, 1]).contains("not a CFString"));

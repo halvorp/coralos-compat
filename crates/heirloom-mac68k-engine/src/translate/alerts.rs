@@ -46,7 +46,7 @@ impl<U: GuestUi> Mac<U> {
         let (mut text, mut buttons) = (Vec::new(), Vec::new());
         for (i, it) in items.iter().enumerate() {
             let n = i as i16 + 1;
-            let label: String = it.data.iter().map(|&c| char::from(c)).collect();
+            let label: String = it.data.iter().map(|&c| crate::macroman::to_char(c)).collect();
             match it.ty & 0x7F {
                 4 => buttons.push((it.rect.left, n, label)),
                 8 => text.push((it.rect.top, self.substitute_params(&label))),

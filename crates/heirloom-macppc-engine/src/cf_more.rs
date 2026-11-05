@@ -1,8 +1,8 @@
 //! CoreFoundation breadth beyond [`crate::cf`]'s minimum, measured from what Warcraft III, its World Editors and BNUpdate import: string creation from UniChars, mutable
 //! strings, substrings, search, splitting/joining, `CFStringGetBytes`/`GetCharacters`; `CFArray`, `CFDictionary`, `CFNumber`, file-system-path `CFURL`s; `CFGetRetainCount`, `CFShow`,
 //! `CFStringGetSystemEncoding`; and the allocator constants (`kCFAllocatorDefault` ... are data: NULL means "the default allocator", which is all there is).
-//! Same model as `cf.rs`: every object is an OPAQUE id in a host table with a retain count; strings are bytes kept as given (MacRoman = ASCII-exact; a UniChar above 0x7F is REFUSED
-//! BY NAME rather than guessed into MacRoman -- no mapping table is in the tree). Named limits: mutable and immutable strings are not told apart (a program that mutates an
+//! Same model as `cf.rs`: every object is an OPAQUE id in a host table with a retain count; strings are Mac Roman bytes (UniChars in and out through
+//! `heirloom_mac68k_engine::macroman`, the one table; a character Mac Roman lacks is REFUSED BY NAME). Named limits: mutable and immutable strings are not told apart (a program that mutates an
 //! immutable string is not caught); `CFArray`/`CFDictionary` callbacks are ignored (values are not retained, dictionary keys are equal when both are strings with the same bytes, else
 //! when the pointers are); a `CFURL` is its path string plus style, nothing else. Stay unbound (stop by name): `CFStringCreateWithFormat` (variadic, `%@`),
 //! `CFPropertyListCreateFromXMLData`, `CFURLCreateDataAndPropertiesFromResource`, `CFURLCreateFromFSRef` (no FSRef); `CFBundleCreate` answers NULL (there are no bundles).
@@ -61,13 +61,14 @@ impl<U: GuestUi> MacPpc<U> {
     fn cfx_id(&mut self) -> u32 { self.rt.cf.next_id() }
     fn cfx_str(&self, r: u32, who: &str) -> Result<Vec<u8>, String> { self.rt.cf.string(r).map(<[u8]>::to_vec).ok_or_else(|| format!("{who}: {r:#x} is not a CFString this engine made")) }
     fn cfx_new_str(&mut self, b: Vec<u8>) -> u32 { self.cf_make(b) }
-    /// UniChars at `p` as bytes: ASCII only (see the module doc).
+    /// UniChars at `p` as Mac Roman bytes through the one table; a character Mac Roman lacks is refused by name (the strings here are Mac Roman bytes).
     fn cfx_unichars(&self, p: u32, n: u32, who: &str) -> Result<Vec<u8>, String> {
         let mut out = Vec::with_capacity(n as usize);
         for i in 0..n {
             let c = self.mac.mem.read_u16(p.wrapping_add(2 * i)).map_err(|_| format!("{who}: the UniChars at {p:#x} leave guest RAM"))?;
-            if c > 0x7F { return Err(format!("{who}: UniChar {c:#06x} is not ASCII and no MacRoman mapping table is available (refused rather than guessed)")); }
-            out.push(c as u8);
+            let b = char::from_u32(u32::from(c)).and_then(heirloom_mac68k_engine::macroman::from_char)
+                .ok_or_else(|| format!("{who}: UniChar {c:#06x} has no Mac Roman byte, and the strings here are Mac Roman (refused rather than guessed)"))?;
+            out.push(b);
         }
         Ok(out)
     }
@@ -119,29 +120,32 @@ impl<U: GuestUi> MacPpc<U> {
                 }
             }
             // CFStringGetBytes(str, range, encoding, lossByte, isExternalRepresentation, buffer, maxBufLen, CFIndex *usedBufLen) -> characters converted
-            // (spec: macos9-specs/CoreFoundationLib/CFStringGetBytes). The strings here are 8-bit MacRoman, the system default encoding, so the fast path applies: the bytes are copied directly,
-            // count = min(range length, maxBufLen); a NULL buffer copies nothing and reports the count that WOULD convert (maxBufLen ignored). ASCII, ISO Latin-1 and UTF-8 requests are
-            // the same bytes for ASCII text; non-ASCII text in those encodings (a real conversion) and every other encoding are refused by name. isExternalRepresentation (a BOM/header) is
-            // only meaningful for the Unicode encodings, which are refused.
+            // (spec: macos9-specs/CoreFoundationLib/CFStringGetBytes). The strings here are 8-bit Mac Roman (the system encoding); every other encoding is converted
+            // character by character through heirloom_mac68k_engine::textenc (the one Mac Roman table): whole characters only, at most maxBufLen bytes; a character
+            // the encoding cannot hold is lossByte when that is non-zero, else conversion stops there (the count says how far it got). A NULL buffer converts
+            // nothing and reports the count that WOULD convert (maxBufLen ignored). isExternalRepresentation for a Unicode encoding (a BOM) is refused by name;
+            // an encoding with no table here is refused by name.
             StringGetBytes => {
-                let (loc, len, enc, buf, max, used) = (a1, a2, a3, arg(self, cpu, 6)?, arg(self, cpu, 7)?, arg(self, cpu, 8)?);
+                use heirloom_mac68k_engine::textenc;
+                let (loc, len, enc, loss, external, buf, max, used) = (a1, a2, a3, arg(self, cpu, 4)? as u8, arg(self, cpu, 5)? & 0xFF != 0, arg(self, cpu, 6)?, arg(self, cpu, 7)?, arg(self, cpu, 8)?);
                 let s = self.cfx_str(a0, n)?;
                 let rg = Self::cfx_range(s.len(), loc, len, n)?;
-                let ascii_only = s[rg.clone()].iter().all(|&b| b < 0x80);
-                let ok = match enc { 0 => true, 0x0600 | 0x0201 | 0x0800_0100 => ascii_only, _ => false };
-                if !ok { return Err(format!("{n}: encoding {enc:#x} for this text is not implemented (MacRoman 0, and ASCII 0x600 / ISO Latin-1 0x201 / UTF-8 0x8000100 for ASCII text only)")); }
-                let take = if buf == 0 { rg.len() } else { rg.len().min(max as usize) };
-                if buf != 0 { let b = s[rg.start..rg.start + take].to_vec(); self.put_bytes(buf, &b, n)?; }
-                if used != 0 { self.mac.mem.write_u32(used, take as u32).map_err(|_| format!("{n}: usedBufLen leaves guest RAM"))?; }
-                take as u32
+                let to = textenc::charset(enc).ok_or_else(|| format!("{n}: encoding {enc:#x} has no conversion table in this engine (Mac Roman, UTF-16, UTF-8, ISO Latin-1, ASCII)"))?;
+                if external && matches!(to, textenc::Charset::Utf16) { return Err(format!("{n}: isExternalRepresentation (a byte-order mark) for UTF-16 is not implemented")); }
+                let cap = if buf == 0 { usize::MAX } else { max as usize };
+                let fallback = [loss];
+                let c = textenc::convert(textenc::Charset::MacRoman { euro: true }, to, &s[rg], cap, (loss != 0).then_some(&fallback[..]));
+                if buf != 0 { self.put_bytes(buf, &c.out, n)?; }
+                if used != 0 { self.mac.mem.write_u32(used, c.out.len() as u32).map_err(|_| format!("{n}: usedBufLen leaves guest RAM"))?; }
+                c.offsets.len() as u32
             }
-            // CFStringGetCharacters(str, CFRange, UniChar *buffer)
+            // CFStringGetCharacters(str, CFRange, UniChar *buffer): each Mac Roman byte widened through the one table (every one is a BMP character)
             StringGetCharacters => {
                 let s = self.cfx_str(a0, n)?;
                 let rg = Self::cfx_range(s.len(), a1, a2, n)?;
                 for (i, b) in s[rg].iter().enumerate() {
-                    if *b > 0x7F { return Err(format!("{n}: byte {b:#04x} is MacRoman text this engine cannot widen to UTF-16 (no mapping table)")); }
-                    self.mac.mem.write_u16(a3.wrapping_add(2 * i as u32), u16::from(*b)).map_err(|_| format!("{n}: the buffer at {a3:#x} leaves guest RAM"))?;
+                    let u = u32::from(heirloom_mac68k_engine::macroman::to_char(*b)) as u16;
+                    self.mac.mem.write_u16(a3.wrapping_add(2 * i as u32), u).map_err(|_| format!("{n}: the buffer at {a3:#x} leaves guest RAM"))?;
                 }
                 0
             }
@@ -170,7 +174,7 @@ impl<U: GuestUi> MacPpc<U> {
             StringGetSystemEncoding => 0,
             GetRetainCount => self.cfx_retain_count(a0).ok_or_else(|| format!("{n}: {a0:#x} is not a CoreFoundation object this engine made"))?,
             Show => {
-                let text = match self.rt.cf.string(a0) { Some(s) => String::from_utf8_lossy(s).into_owned(), None => format!("<CF object {a0:#x}>") };
+                let text = match self.rt.cf.string(a0) { Some(s) => heirloom_mac68k_engine::macroman::decode(s), None => format!("<CF object {a0:#x}>") };
                 self.mac.log.push(format!("[cf] CFShow: {text}"));
                 self.console.extend_from_slice(text.as_bytes()); self.console.push(b'\n');
                 0

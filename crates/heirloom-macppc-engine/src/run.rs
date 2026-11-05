@@ -511,7 +511,7 @@ impl<U: GuestUi> MacPpc<U> {
         };
         // a Window Manager call on a window whose definition a binding admitted: the definition is sent its message first (wdef_c.rs)
         if let Some(Binding::Pascal(_)) = binding {
-            if matches!(symbol, "FindWindow" | "ShowWindow" | "SelectWindow" | "MoveWindow" | "SizeWindow" | "DisposeWindow") {
+            if matches!(symbol, "FindWindow" | "ShowWindow" | "SelectWindow" | "MoveWindow" | "SizeWindow" | "DisposeWindow" | "NewWindow" | "NewCWindow" | "GetNewWindow" | "GetNewCWindow") {
                 match self.window_def_call(cpu, symbol) {
                     Ok(true) => { self.sync_natives(cpu); return true; }
                     Ok(false) => {}

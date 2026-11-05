@@ -97,6 +97,8 @@ pub struct MacPpc<U: GuestUi> {
     pub(crate) sc: crate::script_c::ScriptState,
     pub(crate) sys: crate::sysmisc_c::SysState,
     pub(crate) dsp: crate::dsp_c::DspState,
+    /// The Text Encoding Converter's objects ([`crate::tec_c`]).
+    pub(crate) tec: crate::tec_c::TecState,
     pub(crate) tm: crate::tm_c::TmState,
     /// The Carbon Event Loop's timers ([`crate::evloop_c`]).
     pub(crate) el: crate::evloop_c::ElState,
@@ -181,7 +183,7 @@ impl<U: GuestUi> MacPpc<U> {
         }
         // PowerPC Mac OS is always 32-bit addressed: the engine's 24-bit default is the 68k personality's.
         mac.set_address_mode(heirloom_mac68k_engine::addrmode::AddrMode::Bit32).map_err(|e| CfmError::Memory(alloc::format!("{}", e.0)))?;
-        Ok(MacPpc { mac, glue: Glue::default(), bindings: Default::default(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), app_span: None, lib_locator: BTreeMap::new(), import_slots: BTreeMap::new(), perf: None, code_map: Default::default(), launch_policy: Default::default(), fsr: Default::default(), wc: Default::default(), wdef: Default::default() })
+        Ok(MacPpc { mac, glue: Glue::default(), bindings: Default::default(), strict_imports: false, connections: Vec::new(), qd: None, rt: Default::default(), unbound_data: Vec::new(), cdata: BTreeMap::new(), cx: Default::default(), tsm: Default::default(), rt_mn: Default::default(), sc: Default::default(), sys: Default::default(), dsp: Default::default(), tec: Default::default(), tm: Default::default(), el: Default::default(), gl: Default::default(), qa: Default::default(), isp: Default::default(), qt: Default::default(), console: Vec::new(), libs: BTreeMap::new(), lib_inits: Vec::new(), app_span: None, lib_locator: BTreeMap::new(), import_slots: BTreeMap::new(), perf: None, code_map: Default::default(), launch_policy: Default::default(), fsr: Default::default(), wc: Default::default(), wdef: Default::default() })
     }
 
     /// A machine with `ram` bytes of guest RAM (at least the 68k engine's 16 MB): the extra memory joins the Memory Manager's heap.
@@ -347,6 +349,14 @@ impl<U: GuestUi> MacPpc<U> {
                 Some(f) => { let b = Binding::Native(crate::symbols::Native::Dsp(f)); self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
                 None => {
                     let b = Binding::Unbound(alloc::format!("{name} is not in the part of DrawSprocketLib this engine provides"));
+                    self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
+                    b
+                }
+            },
+            l if crate::tec_c::provided(l) => match crate::tec_c::TecFn::by_name(l, name) {
+                Some(f) => { let b = Binding::Native(crate::symbols::Native::Tec(f)); self.bindings.insert(crate::glue::binding_key(lib, name), b.clone()); b }
+                None => {
+                    let b = Binding::Unbound(alloc::format!("{name} is not in the part of {l} this engine provides (heirloom-macppc-engine tec_c)"));
                     self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
                     b
                 }

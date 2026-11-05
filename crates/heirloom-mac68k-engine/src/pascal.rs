@@ -96,10 +96,9 @@ pub fn complete(mem: &mut GuestMem, sp: u32, layout: &[Arg], result: Option<(Arg
     Ok(new_sp)
 }
 
-/// A Str255 (length byte + that many bytes) at `addr`. Bytes above 0x7F are shown as their Latin-1 character (a
-/// MacRoman table is a later step).
+/// A Str255 (length byte + that many bytes) at `addr`, its Mac Roman bytes read through [`crate::macroman`] (the one table).
 pub fn read_pstring(mem: &GuestMem, addr: u32) -> Result<alloc::string::String, Refusal> {
-    Ok(read_pstring_bytes(mem, addr)?.iter().map(|&b| char::from(b)).collect())
+    Ok(read_pstring_bytes(mem, addr)?.iter().map(|&b| crate::macroman::to_char(b)).collect())
 }
 
 /// The raw bytes of a Str255 at `addr` (no character mapping), for byte-exact name matching.

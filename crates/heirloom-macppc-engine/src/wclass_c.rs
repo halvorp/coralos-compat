@@ -13,6 +13,10 @@
 //!   centered on `parent` for the *OnParentWindow methods), through the same MoveWindow trap a program calls; cascades are placed like a
 //!   center (logged).
 //! * `IsValidWindowPtr(win)`, `SetWindowKind(win, kind)` (the record's windowKind at 108).
+//! * `InstallWindowContentPaintProc(win, paintProc, options, refCon)` (Mac OS 9 WindowsLib): the Window Manager calls such a procedure
+//!   INSTEAD of erasing an exposed part of the content to the window's background. This Window Manager never erases or repaints content:
+//!   a window's canvas starts as its background and keeps what the program drew, and every exposure is the program's update event. So
+//!   the procedure is recorded (the latest per window, NULL removes it) and never called, said once per window by name in the log.
 use crate::clib::arg;
 use crate::machine::MacPpc;
 use alloc::collections::BTreeMap;
@@ -36,10 +40,12 @@ pub struct WcState {
     pub(crate) class: BTreeMap<u32, u32>,
     /// window -> (modality kind, unavailable window) as SetWindowModality set it.
     modality: BTreeMap<u32, (u32, u32)>,
+    /// window -> (content paint procedure, options, refCon) as InstallWindowContentPaintProc recorded it (never called: see the module doc).
+    pub(crate) paint_proc: BTreeMap<u32, (u32, u32, u32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WcFn { GetWindowClass, GetFrontWindowOfClass, GetNextWindowOfClass, FrontNonFloatingWindow, GetWindowModality, SetWindowModality, RepositionWindow, IsValidWindowPtr, SetWindowKind }
+pub enum WcFn { GetWindowClass, GetFrontWindowOfClass, GetNextWindowOfClass, FrontNonFloatingWindow, GetWindowModality, SetWindowModality, RepositionWindow, IsValidWindowPtr, SetWindowKind, InstallWindowContentPaintProc }
 
 impl WcFn {
     pub fn by_name(name: &str) -> Option<WcFn> {
@@ -47,7 +53,7 @@ impl WcFn {
         Some(match name {
             "GetWindowClass" => GetWindowClass, "GetFrontWindowOfClass" => GetFrontWindowOfClass, "GetNextWindowOfClass" => GetNextWindowOfClass,
             "FrontNonFloatingWindow" => FrontNonFloatingWindow, "GetWindowModality" => GetWindowModality, "SetWindowModality" => SetWindowModality,
-            "RepositionWindow" => RepositionWindow, "IsValidWindowPtr" => IsValidWindowPtr, "SetWindowKind" => SetWindowKind,
+            "RepositionWindow" => RepositionWindow, "IsValidWindowPtr" => IsValidWindowPtr, "SetWindowKind" => SetWindowKind, "InstallWindowContentPaintProc" => InstallWindowContentPaintProc,
             _ => return None,
         })
     }
@@ -86,6 +92,15 @@ impl<U: GuestUi> MacPpc<U> {
             SetWindowModality => if valid(self, a0) { self.wc.modality.insert(a0, (a1, a2)); 0 } else { ERR_INVALID_WINDOW_REF as u32 },
             IsValidWindowPtr => u32::from(valid(self, a0)),
             SetWindowKind => { if valid(self, a0) { let _ = self.mac.mem.write_u16(a0 + WINDOW_KIND, a1 as u16); } 0 }
+            InstallWindowContentPaintProc => {
+                if !valid(self, a0) { ERR_INVALID_WINDOW_REF as u32 } else {
+                    let refcon = a(self, 3).unwrap_or(0);
+                    if a1 == 0 { self.wc.paint_proc.remove(&a0); } else if self.wc.paint_proc.insert(a0, (a1, a2, refcon)).is_none() {
+                        self.mac.log.push(format!("[window] InstallWindowContentPaintProc {a0:#x} proc {a1:#x} options {a2:#x}: recorded, never called (this Window Manager does not erase or repaint content; exposures are the program's update events)"));
+                    }
+                    0
+                }
+            }
             RepositionWindow => { // (window, parentWindow, WindowPositionMethod)
                 if !valid(self, a0) { ERR_INVALID_WINDOW_REF as u32 } else {
                     let m = &self.mac.mem;
@@ -161,6 +176,22 @@ mod tests {
         assert_eq!(call(&mut m, WcFn::RepositionWindow, &[modal, 0, 1]) as i32, 0);
         assert!(m.mac.log.iter().any(|l| l.contains("RepositionWindow") && l.contains("method 1")), "{:?}", m.mac.log.last());
         assert_eq!(call(&mut m, WcFn::RepositionWindow, &[modal, 0, 99]) as i32, PARAM_ERR, "NEGATIVE CONTROL: no such method");
+    }
+
+    #[test]
+    fn a_content_paint_proc_is_recorded_and_named_never_called() {
+        let mut m: M = MacPpc::new(RecordingGuestUi::new()).unwrap();
+        m.implicit_graf();
+        for (i, v) in [40i16, 40, 140, 240].iter().enumerate() { m.mac.mem.write_u16(R + 2 * i as u32, *v as u16).unwrap(); }
+        assert_eq!(m.create_window(6, 0, R, R + 16, None).unwrap(), Some(0));
+        let w = m.mac.mem.read_u32(R + 16).unwrap();
+        assert_eq!(call(&mut m, WcFn::InstallWindowContentPaintProc, &[w, 0x5000, 0, 7]), 0);
+        assert_eq!(m.wc.paint_proc.get(&w), Some(&(0x5000, 0, 7)));
+        assert!(m.mac.log.iter().any(|l| l.contains("InstallWindowContentPaintProc") && l.contains("never called")));
+        // NULL removes it; NEGATIVE CONTROL: not a window -> errInvalidWindowRef
+        assert_eq!(call(&mut m, WcFn::InstallWindowContentPaintProc, &[w, 0, 0, 0]), 0);
+        assert!(m.wc.paint_proc.is_empty());
+        assert_eq!(call(&mut m, WcFn::InstallWindowContentPaintProc, &[R, 0x5000, 0, 7]) as i32, ERR_INVALID_WINDOW_REF);
     }
 
     /// HEIRLOOM-CUSTOM-WINDOW-NEEDS-A-BINDING: CreateCustomWindow with the program's own definition (a WindowDefUPP) or a procID of a

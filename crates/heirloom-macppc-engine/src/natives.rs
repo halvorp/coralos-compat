@@ -23,7 +23,7 @@ pub const SYMBOL_CLASS_TVECTOR: u8 = 2;
 /// The libraries `GetSharedLibrary` can hand out: the ones whose symbols the binding table resolves.
 /// Whether the engine provides library `l`: the Toolbox libraries (one list, [`crate::glue::TOOLBOX_LIBRARIES`]) and StdCLib.
 pub fn provided(l: &str) -> bool {
-    crate::glue::TOOLBOX_LIBRARIES.contains(&l) || l == crate::stdclib::NAME || l == crate::stdclib::MATH_NAME || l == crate::threads::NAME || l == crate::mp::NAME || l == crate::dsp_c::NAME || l == crate::isp_c::NAME || crate::gl_c::provided(l)
+    crate::glue::TOOLBOX_LIBRARIES.contains(&l) || l == crate::stdclib::NAME || l == crate::stdclib::MATH_NAME || l == crate::threads::NAME || l == crate::mp::NAME || l == crate::dsp_c::NAME || l == crate::isp_c::NAME || crate::gl_c::provided(l) || crate::tec_c::provided(l)
 }
 
 fn err(e: i16) -> u32 { e as i32 as u32 }
@@ -253,6 +253,14 @@ impl<U: GuestUi> MacPpc<U> {
             Native::Tsm(f) => {
                 let mut cpu = self.scratch_cpu(regs);
                 match self.tsm_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
+            Native::At(f) => {
+                let mut cpu = self.scratch_cpu(regs);
+                match self.at_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
+            Native::Tec(f) => {
+                let mut cpu = self.scratch_cpu(regs);
+                match self.tec_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Sc(f) => {
                 let mut cpu = self.scratch_cpu(regs);

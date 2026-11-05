@@ -88,7 +88,7 @@ impl<U: GuestUi> Mac<U> {
     /// Store `title` in the WindowRecord's `titleHandle` (a Pascal string), making the handle the first time.
     pub(crate) fn put_window_title(&mut self, win: u32, title: &str) -> Result<(), Refusal> {
         let e = Refusal::mem("WindowRecord.titleHandle");
-        let bytes: alloc::vec::Vec<u8> = title.chars().map(|ch| ch as u32 as u8).take(255).collect();
+        let bytes: alloc::vec::Vec<u8> = title.chars().map(|ch| crate::macroman::from_char(ch).unwrap_or(b'?')).take(255).collect();
         let at = win + WR_TITLE_HANDLE;
         let mut h = self.mem.read_u32(at).map_err(&e)?;
         if h == 0 || self.mm.block(h).is_none() {
@@ -129,7 +129,7 @@ fn get_w_title<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     let (win, at) = (c.args.get(0), c.args.get(1));
     m.open_win("GetWTitle", win)?;
     let title: String = m.windows[&win].title.clone();
-    let bytes: alloc::vec::Vec<u8> = title.chars().map(|ch| ch as u32 as u8).take(255).collect();
+    let bytes: alloc::vec::Vec<u8> = title.chars().map(|ch| crate::macroman::from_char(ch).unwrap_or(b'?')).take(255).collect();
     write_pstring(&mut m.mem, at, &bytes)?;
     Ok(Done { result: 0, log: format!("[toolbox] GetWTitle {win:#x} -> \"{title}\"") })
 }

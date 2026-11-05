@@ -142,11 +142,11 @@ impl<U: GuestUi> Mac<U> {
     fn handle_text(&self, h: u32) -> Result<String, Refusal> {
         let b = self.mm.block(h).ok_or_else(|| Refusal(format!("{h:#x} is not a live handle")))?;
         let bytes = self.mem.bytes(self.mem.span(b.ptr, b.size).map_err(Refusal::mem("item text"))?).map_err(Refusal::mem("item text"))?;
-        Ok(bytes.iter().map(|&c| char::from(c)).collect())
+        Ok(bytes.iter().map(|&c| crate::macroman::to_char(c)).collect())
     }
 
     fn set_handle_text(&mut self, h: u32, text: &str) -> Result<(), Refusal> {
-        let bytes: Vec<u8> = text.chars().map(|c| c as u8).collect();
+        let bytes: Vec<u8> = text.chars().map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect();
         self.mm.set_handle_size(&mut self.mem, &mut self.heap, h, bytes.len() as u32).map_err(|e| Refusal(format!("item text: no memory for {} bytes (memFullErr {e})", bytes.len())))?;
         let p = self.mm.block(h).map(|b| b.ptr).ok_or_else(|| Refusal(format!("{h:#x} is not a live handle")))?;
         self.mem.write_bytes(p, &bytes).map_err(Refusal::mem("item text"))
@@ -218,12 +218,12 @@ impl<U: GuestUi> Mac<U> {
         let text = self.handle_text(h)?;
         if matches!(op, DialogEdit::Cut | DialogEdit::Copy) {
             self.scrap.zero();
-            self.scrap.put(*b"TEXT", text.chars().map(|c| c as u32 as u8).collect());
+            self.scrap.put(*b"TEXT", text.chars().map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect());
         }
         let new = match op {
             DialogEdit::Copy => return Ok(true),
             DialogEdit::Cut | DialogEdit::Delete => String::new(),
-            DialogEdit::Paste => match self.scrap.get(*b"TEXT") { Some(t) => t.iter().map(|&b| char::from(b)).collect(), None => return Ok(false) },
+            DialogEdit::Paste => match self.scrap.get(*b"TEXT") { Some(t) => t.iter().map(|&b| crate::macroman::to_char(b)).collect(), None => return Ok(false) },
         };
         self.set_handle_text(h, &new)?;
         self.sync_text(win, idx)?;
@@ -244,7 +244,7 @@ impl<U: GuestUi> Mac<U> {
         };
         let h = self.tr.dlg.dialogs[&win].list[idx].handle;
         let mut text = self.handle_text(h)?;
-        match ch { 0x08 => { text.pop(); } c if c >= 0x20 && c != 0x7F => text.push(char::from(c)), _ => return Ok(false) }
+        match ch { 0x08 => { text.pop(); } c if c >= 0x20 && c != 0x7F => text.push(crate::macroman::to_char(c)), _ => return Ok(false) }
         self.set_handle_text(h, &text)?;
         self.sync_text(win, idx)?;
         self.dialog_hit(win, idx as i16 + 1);
@@ -294,7 +294,7 @@ impl<U: GuestUi> Mac<U> {
         let b = self.handle_bytes(dh).unwrap_or_default();
         if b.len() < 21 || b.len() < 21 + b[20] as usize { return Err(Refusal(format!("GetNewDialog {id}: DLOG resource is {} bytes, too short for its fields and title", b.len()))); }
         let be = |i: usize| i16::from_be_bytes([b[i], b[i + 1]]);
-        let title: String = b[21..21 + b[20] as usize].iter().map(|&x| char::from(x)).collect();
+        let title: String = b[21..21 + b[20] as usize].iter().map(|&x| crate::macroman::to_char(x)).collect();
         let def = Def { what: format!("GetNewDialog {id}"), rect: Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) }, title, proc_id: be(8) as u16, go_away: b[12] != 0,
             ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]), ditl: be(18), show: b[10] != 0, color: self.profile.color_qd && self.get_resource(*b"dctb", id, false).is_ok(), items: None };
         self.build_dialog(def, storage, behind).map(Some)
@@ -348,7 +348,7 @@ impl<U: GuestUi> Mac<U> {
     fn make_item(&mut self, win: u32, n: i16, r: &Raw) -> Result<Slot, Refusal> {
         let item = item_of(r.ty).ok_or_else(|| Refusal(format!("GetNewDialog: item {n} has type {}, which is not in the Dialog Manager table", r.ty)))?;
         // A DITL item's data IS the text (the item's length byte counts it); there is no Pascal length inside (Inside Macintosh: Dialog Manager).
-        let pstr = |d: &[u8]| -> String { d.iter().map(|&c| char::from(c)).collect() };
+        let pstr = |d: &[u8]| -> String { d.iter().map(|&c| crate::macroman::to_char(c)).collect() };
         let handle = match item {
             Item::Control { proc_id } => self.create_control(win, r.rect, &pstr(&r.data), true, 0, 0, 1, proc_id, 0)?,
             Item::ResControl => {
@@ -443,7 +443,7 @@ fn get_dialog_item_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Re
     let h = c.args.get(0);
     let t = if m.tr.procs.contains_key(&h) { m.control_facts(h)?.title } else if m.text_slot(h).is_some() { m.handle_text(h)? }
         else { return Err(Refusal(format!("GetDialogItemText: {h:#x} is not a dialog item handle"))); };
-    let bytes: Vec<u8> = t.chars().take(255).map(|c| c as u8).collect();
+    let bytes: Vec<u8> = t.chars().take(255).map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect();
     m.mem.write_u8(c.args.get(1), bytes.len() as u8).map_err(Refusal::mem("text result"))?;
     m.mem.write_bytes(c.args.get(1) + 1, &bytes).map_err(Refusal::mem("text result"))?;
     done(format!("[dialog] GetDialogItemText {h:#x} -> \"{t}\""))
@@ -488,7 +488,7 @@ impl<U: GuestUi> Mac<U> {
         let mut it = text.chars().peekable();
         while let Some(c) = it.next() {
             match (c, it.peek().and_then(|d| d.to_digit(10))) {
-                ('^', Some(n)) if n < 4 => { it.next(); out.extend(self.tr.dlg.params[n as usize].iter().map(|&b| char::from(b))); }
+                ('^', Some(n)) if n < 4 => { it.next(); out.extend(self.tr.dlg.params[n as usize].iter().map(|&b| crate::macroman::to_char(b))); }
                 _ => out.push(c),
             }
         }
@@ -546,7 +546,7 @@ fn param_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
         let p = c.args.get(i);
         if p != 0 { m.tr.dlg.params[i] = crate::pascal::read_pstring_bytes(&m.mem, p)?; }
     }
-    let shown: Vec<String> = m.tr.dlg.params.iter().map(|p| p.iter().map(|&b| char::from(b)).collect()).collect();
+    let shown: Vec<String> = m.tr.dlg.params.iter().map(|p| p.iter().map(|&b| crate::macroman::to_char(b)).collect()).collect();
     Ok(Done { result: 0, log: format!("[dialog] ParamText {shown:?}") })
 }
 

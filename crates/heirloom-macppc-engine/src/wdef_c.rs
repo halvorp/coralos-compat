@@ -68,7 +68,13 @@ pub struct CodeSection { pub fragment: String, pub base: u32, pub len: u32, pub 
 
 /// A window whose definition a binding admitted.
 #[derive(Debug, Clone)]
-pub struct BoundWindow { pub binding: String, pub tv: u32, pub def_handle: u32, pub frame_draws: u32, pub features: u32, scratch: u32 }
+pub struct BoundWindow {
+    pub binding: String, pub tv: u32, pub def_handle: u32, pub frame_draws: u32, pub features: u32, pub(crate) scratch: u32,
+    /// The procID's variation (0 for a procedure definition, which has no procID).
+    pub var_code: u32,
+    /// `def_handle` is the engine's (a procedure definition's), freed with the window; else it is the program's WDEF resource handle.
+    pub owns_handle: bool,
+}
 
 #[derive(Default, Debug)]
 pub struct WdefState {
@@ -90,6 +96,9 @@ pub(crate) enum Then {
     Call(&'static str, Vec<u32>),
     /// Nothing more: return to the caller (r3 untouched since the call was made).
     Return,
+    /// `NewWindow` / `NewCWindow` / `GetNewWindow` / `GetNewCWindow` made `win` from a WDEF resource ([`crate::wdef_res`]): shown when the
+    /// program asked for a visible window (its Draw was queued), r3 = the window.
+    Opened { show: bool },
     /// `FindWindow(pt, &w)`: walking `order` front to back from `next`; `engine` = the engine's answer for the unbound windows.
     Find { pt: u32, out: u32, order: Vec<u32>, next: usize, engine: (u16, u32) },
 }
@@ -117,6 +126,11 @@ impl<U: GuestUi> MacPpc<U> {
             Routine::PowerPc(r) => r.proc_descriptor,
             Routine::M68k { code, .. } => return Err(format!("a 68k window definition procedure at {code:#x} (not run from the Window Manager yet)")),
         };
+        self.tvector_identity(tv)
+    }
+
+    /// What the PowerPC routine behind TVector `tv` IS (see [`MacPpc::window_def_identity`]).
+    pub(crate) fn tvector_identity(&self, tv: u32) -> Result<(u32, WindowDefIdentity, String), String> {
         let code = self.mac.mem.read_u32(tv).map_err(|e| format!("the definition's TVector at {tv:#x}: {e}"))?;
         let s = self.wdef.code.iter().find(|s| code >= s.base && code - s.base < s.len)
             .ok_or_else(|| format!("the definition's code {code:#x} lies in no instantiated code section"))?;
@@ -140,7 +154,7 @@ impl<U: GuestUi> MacPpc<U> {
         self.put32(win + WR_DEF_PROC, def_handle, "CreateCustomWindow")?;
         self.wc.class.insert(win, class);
         self.mac.log.push(format!("[WDEF-BOUND binding={} window={win:#x}] CreateCustomWindow class {class} attrs {attrs:#x}: the definition in {frag} {id} means {:?}; its own code runs for regions and hits, the frame is native", b.id, b.meaning));
-        self.wdef.bound.insert(win, BoundWindow { binding: b.id.clone(), tv, def_handle, frame_draws: 0, features: 0, scratch });
+        self.wdef.bound.insert(win, BoundWindow { binding: b.id.clone(), tv, def_handle, frame_draws: 0, features: 0, scratch, var_code: 0, owns_handle: true });
         self.begin_wdef(cpu, win, &[Msg::Features, Msg::Plain(W_NEW), Msg::Plain(W_CALC_RGNS), Msg::Region(REGION_STRUCTURE), Msg::Region(REGION_CONTENT)], Then::Created { out })
     }
 
@@ -168,6 +182,7 @@ impl<U: GuestUi> MacPpc<U> {
                 self.begin_wdef(cpu, w, &[Msg::Plain(W_CALC_RGNS), Msg::Region(REGION_STRUCTURE), Msg::Region(REGION_CONTENT)], Then::Return)?;
                 Ok(true)
             }
+            "NewWindow" | "NewCWindow" | "GetNewWindow" | "GetNewCWindow" => self.open_resource_window(cpu, name),
             "DisposeWindow" if self.wdef.bound.contains_key(&w) => { self.begin_wdef(cpu, w, &[Msg::Plain(W_DISPOSE)], Then::Call("DisposeWindow", alloc::vec![w]))?; Ok(true) }
             _ => Ok(false),
         }
@@ -181,7 +196,7 @@ impl<U: GuestUi> MacPpc<U> {
     }
 
     /// Save the interrupted call and send `win`'s definition `msgs` in order; `then` afterwards.
-    fn begin_wdef(&mut self, cpu: &mut Cpu, win: u32, msgs: &[Msg], then: Then) -> Result<(), String> {
+    pub(crate) fn begin_wdef(&mut self, cpu: &mut Cpu, win: u32, msgs: &[Msg], then: Then) -> Result<(), String> {
         let port = self.current_port();
         let frame = Frame { saved: Saved::of(cpu, cpu.lr & !3), cont: Continuation::WindowDef(WdefRun { win, port, todo: msgs.iter().copied().collect(), then, msg: Msg::Plain(0) }) };
         self.next_wdef(cpu, frame)
@@ -190,12 +205,12 @@ impl<U: GuestUi> MacPpc<U> {
     /// Enter the definition with `msg` (param `param`). The current port is the Window Manager port, as the classic Window Manager
     /// calls a definition (what it draws there is not shown: the frame on screen is the native one).
     fn send(&mut self, cpu: &mut Cpu, win: u32, msg: u32, param: u32, sp: u32) -> Result<(), String> {
-        let tv = self.wdef.bound.get(&win).map(|b| b.tv).ok_or_else(|| format!("window {win:#x} has no bound definition"))?;
+        let (tv, var_code) = self.wdef.bound.get(&win).map(|b| (b.tv, b.var_code)).ok_or_else(|| format!("window {win:#x} has no bound definition"))?;
         let wmgr = self.mac.mem.read_u32(heirloom_mac68k_engine::lowmem::WMGR_PORT).unwrap_or(0);
         if wmgr != 0 { self.toolbox_call("SetPort", &[wmgr]); }
         if msg == W_DRAW { if let Some(b) = self.wdef.bound.get_mut(&win) { b.frame_draws += 1; } }
         self.mac.log.push(format!("[wdef] window {win:#x}: message {msg} param {param:#x}"));
-        self.enter_tvector(cpu, tv, &[0, win, msg, param], sp).map_err(|e| format!("window {win:#x}'s definition (message {msg}): {e}"))
+        self.enter_tvector(cpu, tv, &[var_code, win, msg, param], sp).map_err(|e| format!("window {win:#x}'s definition (message {msg}): {e}"))
     }
 
     /// The message's number and parameter; None = not sent (a GetRegion the definition's features do not offer).
@@ -241,7 +256,7 @@ impl<U: GuestUi> MacPpc<U> {
                 if name == "DisposeWindow" {
                     if let Some(b) = self.wdef.bound.remove(&run.win) {
                         let _ = self.put32(run.win + WR_DEF_PROC, 0, "DisposeWindow");
-                        let _ = self.mac.mm.dispose_handle(&mut self.mac.mem, &mut self.mac.heap, b.def_handle);
+                        if b.owns_handle { let _ = self.mac.mm.dispose_handle(&mut self.mac.mem, &mut self.mac.heap, b.def_handle); }
                         let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, b.scratch);
                         self.mac.log.push(format!("[WDEF-BOUND binding={} window={:#x}] disposed: {} frame draw(s) by the definition, presented as the native frame instead", b.binding, run.win, b.frame_draws));
                     }
@@ -249,6 +264,11 @@ impl<U: GuestUi> MacPpc<U> {
                 cpu.gpr[3] = self.toolbox_call(name, &args);
             }
             Then::Return => { self.note_regions(run.win); }
+            Then::Opened { show } => {
+                self.note_regions(run.win);
+                if show { self.toolbox_call("ShowWindow", &[run.win]); }
+                cpu.gpr[3] = run.win;
+            }
             Then::Find { .. } => unreachable!(),
         }
         Ok(())

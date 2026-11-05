@@ -40,6 +40,7 @@ pub mod keyboard; // the installed 'KCHR' (British): KeyTranslate's layout and t
 pub mod fixture;
 pub mod lowmem;
 pub mod machine;
+pub mod macroman; // Mac OS Roman <-> Unicode: the one table (Unicode Consortium ROMAN.TXT)
 pub mod memmgr;
 pub mod memtraps;
 pub mod menu;
@@ -70,6 +71,7 @@ pub mod sound;
 pub mod system_res;
 pub mod sysenv;
 pub mod textedit;
+pub mod textenc; // the Text Encoding Converter's model: TextEncoding words and conversion through macroman
 pub mod toolbox;
 pub mod toolutil;
 pub mod winmgr;

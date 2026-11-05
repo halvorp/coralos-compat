@@ -156,8 +156,8 @@ pub struct Run<'a> {
     pub back: &'a [u8; 8],
 }
 
-/// Mac Roman above 0x7F is shown as its Latin-1 neighbour; the glyph shapes come from the host's face either way.
-fn to_string(b: &[u8]) -> String { b.iter().map(|&c| char::from(c)).collect() }
+/// Mac Roman text through [`crate::macroman`] (the one table); the glyph shapes come from the host's face.
+fn to_string(b: &[u8]) -> String { b.iter().map(|&c| crate::macroman::to_char(c)).collect() }
 
 /// A text run drawn into the canvas. `clip` is the pixel clip the bitmap used.
 pub fn record_text(planes: &mut Planes, t: &mut Target, run: &Run, clip: &Region) {

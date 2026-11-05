@@ -121,9 +121,12 @@ impl<U: GuestUi> Mac<U> {
     /// the WindowRecord, its port and its region handles are made exactly as for a system definition, but nothing is shown and its
     /// strucRgn / contRgn start EMPTY - the caller runs the definition's wNew and wCalcRgns, which write them (heirloom-macppc-engine
     /// `wdef_c`).
-    pub fn make_window_bound(&mut self, s: WindowSpec, def_role: (WindowRole, bool)) -> Result<u32, Refusal> {
+    pub fn make_window_bound(&mut self, s: WindowSpec, def_role: (WindowRole, bool)) -> Result<u32, Refusal> { self.make_window_bound_as(s, false, def_role) }
+
+    /// [`Mac::make_window_bound`] with a colour window's CGrafPort when `color` (NewCWindow / GetNewCWindow) and the machine has Color QuickDraw.
+    pub fn make_window_bound_as(&mut self, s: WindowSpec, color: bool, def_role: (WindowRole, bool)) -> Result<u32, Refusal> {
         if s.visible { return Err(Refusal(String::from("a definition-bound window is made invisible: its definition runs before it is shown"))); }
-        self.make_window_with(s, false, Some(def_role)) // as `make_window` (CreateNewWindow's port)
+        self.make_window_with(s, color, Some(def_role))
     }
 
     fn make_window_with(&mut self, s: WindowSpec, color: bool, def_role: Option<(WindowRole, bool)>) -> Result<u32, Refusal> {
@@ -157,7 +160,7 @@ impl<U: GuestUi> Mac<U> {
         let undo = |m: &mut Self| if owned { let _ = m.mm.dispose_ptr(&mut m.heap, win); };
         if let Err(e) = fill { undo(self); return Err(e); }
         let title = s.title.clone();
-        self.windows.insert(win, MacWindow { native: None, owned, rect: r, title: s.title, go_away: s.go_away, visible: s.visible, proc_id: s.proc_id, color, def_role });
+        self.windows.insert(win, MacWindow { native: None, owned, rect: r, title: s.title, go_away: s.go_away, visible: s.visible, proc_id: s.proc_id, color, def_role, wctab: 0, aux: 0 });
         // behind: -1 = in front of all, 0 = behind all, else behind that window
         let at = match s.behind { 0xFFFF_FFFF => 0, 0 => self.z.len(), b => self.z.iter().position(|&z| z == b).map_or(0, |i| i + 1) };
         self.z.insert(at, win);
@@ -199,6 +202,11 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA914, &[Arg::P], None, dispose_window::<U>)?;
     m.register(0xA915, &[Arg::P], None, show_window::<U>)?;
     m.register(0xA916, &[Arg::P], None, hide_window_trap::<U>)?;
+    m.register(0xA908, &[Arg::P, Arg::B], None, show_hide::<U>)?;
+    m.register(0xAA41, &[Arg::P, Arg::P], None, set_win_color::<U>)?;
+    m.register(0xAA42, &[Arg::P, Arg::P], Some(Arg::B), get_aux_win::<U>)?;
+    m.register(0xA910, &[Arg::P], None, get_wmgr_port::<U>)?;
+    m.register(0xAA48, &[Arg::P], None, get_cwmgr_port::<U>)?;
     m.register(0xA91F, &[Arg::P], None, select_window::<U>)?;
     m.register(0xA925, &[Arg::P, Arg::L, Arg::P], None, drag_window::<U>)?;
     m.register(0xA924, &[], Some(Arg::L), front_window::<U>)?;
@@ -270,7 +278,7 @@ pub(crate) fn get_new_window_named<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &
     if b.len() < 19 || b.len() < 19 + b[18] as usize { return Err(Refusal(format!("{what} {id}: WIND resource is {} bytes, too short for its fields and title", b.len()))); }
     let spec = WindowSpec {
         storage: c.args.get(1), rect: Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) },
-        title: b[19..19 + b[18] as usize].iter().map(|&x| char::from(x)).collect(),
+        title: b[19..19 + b[18] as usize].iter().map(|&x| crate::macroman::to_char(x)).collect(),
         proc_id: be(8) as u16, visible: be(10) != 0, go_away: be(12) != 0,
         ref_con: u32::from_be_bytes([b[14], b[15], b[16], b[17]]), behind: c.args.get(2),
     };
@@ -300,6 +308,7 @@ impl<U: GuestUi> Mac<U> {
         let dialog_storage = self.release_dialog(win);
         let w = self.windows.remove(&win).ok_or_else(|| Refusal(format!("DisposeWindow: {win:#x} is not an open window")))?;
         self.free_window_title(win);
+        if w.aux != 0 { let _ = self.mm.dispose_handle(&mut self.mem, &mut self.heap, w.aux); }
         crate::qd::lifecycle::window_disposed(self, win);
         if let Some(n) = w.native { self.ui.close_window(n).map_err(Refusal::ui)?; }
         if w.owned { self.mm.dispose_ptr(&mut self.heap, win).map_err(|e| Refusal(format!("DisposeWindow: {e}")))?; }
@@ -343,6 +352,64 @@ fn hide_window_trap<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result
     let win = c.args.get(0);
     m.hide_window(win)?;
     done(format!("[toolbox] HideWindow {win:#x}"))
+}
+
+/// `ShowHide(window, showFlag)` ($A908): the window becomes visible or invisible WITHOUT changing its hiliting or its place in the window
+/// order (Inside Macintosh: Macintosh Toolbox Essentials, Window Manager) - the visibility half of ShowWindow / HideWindow, which here
+/// change nothing else either.
+fn show_hide<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (win, show) = (c.args.get(0), c.args.get(1) & 0xFF != 0);
+    if show { m.show_window(win)?; } else { m.hide_window(win)?; }
+    done(format!("[toolbox] ShowHide {win:#x} {show}"))
+}
+
+/// `SetWinColor(window, newColorTable)` ($AA41, Color Window Manager): the window's colour table becomes `newColorTable` (the handle itself, as
+/// Inside Macintosh: Imaging With QuickDraw / Toolbox Essentials say: not a copy). The frame on screen is the native one, so its frame
+/// colours are not presented (said in the log); the content is the program's drawing, which this Window Manager never erases, so its
+/// content colour changes nothing on screen either. NIL keeps the default table.
+fn set_win_color<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (win, ctab) = (c.args.get(0), c.args.get(1));
+    let w = m.windows.get_mut(&win).ok_or_else(|| Refusal(format!("SetWinColor: {win:#x} is not an open window")))?;
+    w.wctab = ctab;
+    done(format!("[toolbox] SetWinColor {win:#x} wctab {ctab:#x} (kept; the native frame does not take a program's frame colours)"))
+}
+
+/// `GetAuxWin(window, &awHndl)` ($AA42) -> Boolean: TRUE and the window's own AuxWinRec when it has one, which here is a window
+/// `SetWinColor` gave a colour table. The record (Inside Macintosh: Macintosh Toolbox Essentials, "AuxWinRec": awNext 0, awOwner 4, awCTable 8,
+/// dialogCItem 12, awFlags 16, awReserved 20, awRefCon 24; 28 bytes) is made on first ask and freed with the window. A window with no colour
+/// table of its own would get the DEFAULT record, whose table is the System's default 'wctb': this machine has none, so that case is refused
+/// by name (awHndl untouched, FALSE).
+fn get_aux_win<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (win, out) = (c.args.get(0), c.args.get(1));
+    let w = m.windows.get(&win).ok_or_else(|| Refusal(format!("GetAuxWin: {win:#x} is not an open window")))?;
+    let (wctab, aux) = (w.wctab, w.aux);
+    if wctab == 0 { return Err(Refusal(format!("GetAuxWin {win:#x}: the window has no colour table of its own, and the default AuxWinRec needs the System's default 'wctb', which this machine does not have"))); }
+    let h = if aux != 0 && m.mm.block(aux).is_some() { aux } else {
+        let h = m.mm.new_handle(&mut m.mem, &mut m.heap, 28, true).map_err(|e| Refusal(format!("GetAuxWin: no memory (memFullErr {e})")))?;
+        if let Some(w) = m.windows.get_mut(&win) { w.aux = h; }
+        h
+    };
+    let p = m.mm.block(h).map(|b| b.ptr).ok_or_else(|| Refusal("GetAuxWin: the record handle has no block".into()))?;
+    let e = Refusal::mem("AuxWinRec");
+    m.mem.write_u32(p + 4, win).map_err(&e)?;
+    m.mem.write_u32(p + 8, wctab).map_err(&e)?;
+    if out != 0 { m.mem.write_u32(out, h).map_err(&e)?; }
+    Ok(Done { result: 1, log: format!("[toolbox] GetAuxWin {win:#x} -> TRUE, record {h:#x} (awCTable {wctab:#x})") })
+}
+
+/// `GetWMgrPort(&port)` ($A910): the Window Manager port `InitWindows` made (low memory WMgrPort).
+fn get_wmgr_port<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let port = m.mem.read_u32(WMGR_PORT).map_err(Refusal::mem("WMgrPort"))?;
+    if port == 0 { return Err(Refusal("GetWMgrPort: InitWindows has not run (no Window Manager port)".into())); }
+    m.mem.write_u32(c.args.get(0), port).map_err(Refusal::mem("GetWMgrPort result"))?;
+    done(format!("[toolbox] GetWMgrPort -> {port:#x}"))
+}
+
+/// `GetCWMgrPort(&cport)` ($AA48): the colour Window Manager port (`crate::cqd::cport::wmgr_cport`).
+fn get_cwmgr_port<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let port = crate::cqd::cport::wmgr_cport(m)?;
+    m.mem.write_u32(c.args.get(0), port).map_err(Refusal::mem("GetCWMgrPort result"))?;
+    done(format!("[toolbox] GetCWMgrPort -> {port:#x}"))
 }
 
 fn select_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {

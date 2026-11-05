@@ -153,10 +153,10 @@ pub fn parse_append(s: &[u8]) -> Vec<(Item, bool)> {
     out
 }
 
-/// Mac text for GuestUi: Latin-1 for the printable range, the system font's Apple glyph ($14) as "Apple".
+/// Mac text for GuestUi: Mac Roman through [`crate::macroman`] (the one table), the system font's Apple glyph ($14) as "Apple".
 pub fn mac_text(b: &[u8]) -> String {
     if b == [0x14] { return "Apple".to_string(); }
-    b.iter().map(|&c| char::from(c)).collect()
+    b.iter().map(|&c| crate::macroman::to_char(c)).collect()
 }
 
 impl<U: GuestUi> Mac<U> {

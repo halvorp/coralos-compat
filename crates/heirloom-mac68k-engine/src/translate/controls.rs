@@ -301,7 +301,7 @@ impl<U: GuestUi> Mac<U> {
         let ctl = self.mm.new_handle(&mut self.mem, &mut self.heap, RECORD_SIZE, true).map_err(|e| Refusal(format!("NewControl: no memory for a ControlRecord (memFullErr {e})")))?;
         let p = self.mm.block(ctl).map(|b| b.ptr).ok_or_else(|| Refusal("NewControl: the new handle has no block".into()))?;
         let head = self.mem.read_u32(win + WR_CONTROL_LIST).map_err(&e)?;
-        let t = title.chars().take(255).map(|c| c as u8).collect::<Vec<u8>>();
+        let t = title.chars().take(255).map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect::<Vec<u8>>();
         self.mem.write_u32(p + C_NEXT, head).map_err(&e)?;
         self.mem.write_u32(p + C_OWNER, win).map_err(&e)?;
         for (i, v) in [rect.top, rect.left, rect.bottom, rect.right].into_iter().enumerate() { self.mem.write_u16(p + C_RECT + 2 * i as u32, v as u16).map_err(&e)?; }
@@ -471,7 +471,7 @@ impl<U: GuestUi> Mac<U> {
         let b = self.handle_bytes(h).unwrap_or_default();
         if b.len() < 23 || b.len() < 23 + b[22] as usize { return Err(Refusal(format!("GetNewControl {id}: CNTL resource is {} bytes, too short for its fields and title", b.len()))); }
         let be = |i: usize| i16::from_be_bytes([b[i], b[i + 1]]);
-        let title: String = b[23..23 + b[22] as usize].iter().map(|&x| char::from(x)).collect();
+        let title: String = b[23..23 + b[22] as usize].iter().map(|&x| crate::macroman::to_char(x)).collect();
         self.create_control(win, Rect { top: be(0), left: be(2), bottom: be(4), right: be(6) }, &title, b[10] != 0, be(8), be(14), be(12), be(16) as u16, u32::from_be_bytes([b[18], b[19], b[20], b[21]]))
     }
 }
@@ -528,7 +528,7 @@ impl<U: GuestUi> Mac<U> {
     /// Replace a control's title (SetControlTitle, and `SetDialogItemText` on a button item).
     pub(crate) fn set_control_title(&mut self, ctl: u32, title: &str) -> Result<(), Refusal> {
         let p = self.control_rec(ctl, "SetControlTitle")?;
-        let t = title.chars().take(255).map(|c| c as u8).collect::<Vec<u8>>();
+        let t = title.chars().take(255).map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect::<Vec<u8>>();
         let e = Refusal::mem("ControlRecord");
         self.mem.write_u8(p + C_TITLE, t.len() as u8).map_err(&e)?;
         self.mem.write_bytes(p + C_TITLE + 1, &t).map_err(&e)?;
@@ -542,7 +542,7 @@ fn set_title<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, 
 }
 fn get_title<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let f = m.control_facts(c.args.get(0))?;
-    let t: Vec<u8> = f.title.chars().map(|c| c as u8).collect();
+    let t: Vec<u8> = f.title.chars().map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect();
     m.mem.write_u8(c.args.get(1), t.len() as u8).map_err(Refusal::mem("title"))?;
     m.mem.write_bytes(c.args.get(1) + 1, &t).map_err(Refusal::mem("title"))?;
     done(format!("[control] GetControlTitle {:#x} -> \"{}\"", c.args.get(0), f.title))

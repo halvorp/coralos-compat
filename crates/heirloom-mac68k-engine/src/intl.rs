@@ -128,8 +128,17 @@ fn time_string<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     Ok(Done { result: 0, log: note_handle(c, &text, &format!("{} {}", c.name, c.args.get(0))) })
 }
 
-fn metric<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
-    Ok(Done { result: 0, log: "[pack6] IUMetric -> FALSE (US English: inches)".into() })
+fn metric<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
+    let metric = is_metric(m)?;
+    Ok(Done { result: u32::from(metric), log: format!("[pack6] IUMetric -> {metric} (the itl0 IUGetIntl answers: metricSys)") })
+}
+
+/// `IUMetric` / `IsMetric` (one body): the `metricSys` byte (29) of the `itl0` that `IUGetIntl(0)` answers is 255 (Inside Macintosh: Text,
+/// "Intl0Rec": 255 metric, 0 inches), so the answer always agrees with the record a program can read.
+pub fn is_metric<U: GuestUi>(m: &mut Mac<U>) -> Result<bool, Refusal> {
+    let (h, _) = intl_resource(m, 0)?;
+    let p = m.mm.block(h).map(|b| b.ptr).ok_or_else(|| Refusal("IsMetric: the itl0 handle has no block".into()))?;
+    Ok(m.mem.read_u8(p + 29).map_err(Refusal::mem("itl0"))? == 0xFF)
 }
 
 fn clear_cache<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
