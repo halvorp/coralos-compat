@@ -782,9 +782,13 @@ fn returns_whose_addresses_collide_in_a_16k_table_hit_the_64k_ibtc() {
 /// Tier 2 with ablation knobs (h86 aot-ledger: cpu-tier "jitablate", the Z83's guard-cost A/B): the knobs `knobs`, regions on
 /// (REGION_TEST) so both entry kinds are compiled under them.
 fn run_knobs(knobs: u32, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut M)) -> (End, Exec) {
+    run_full(Tier::Jit, 0, knobs, prog, slice, setup, Some(REGION_TEST))
+}
+/// A run with any tier, planted mutant, knobs and region threshold (None = the production default).
+fn run_full(tier: Tier, mutant: u8, knobs: u32, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut M), region: Option<u32>) -> (End, Exec) {
     let (mut c, mut m) = load(prog, &setup);
-    let mut e = exec(Tier::Jit, 0);
-    e.set_jit_region_after(REGION_TEST);
+    let mut e = exec(tier, mutant);
+    if let Some(r) = region { e.set_jit_region_after(r); }
     e.set_jit_knobs(knobs);
     let end = finish(&mut e, &mut c, &mut m, slice);
     (end, e)
@@ -796,8 +800,8 @@ fn run_knobs(knobs: u32, prog: &[u32], slice: u64, setup: impl Fn(&mut Cpu, &mut
 #[test]
 fn every_ablation_knob_keeps_code_that_does_not_rewrite_itself_exact() {
     use heirloom_cpu_abi::ppc::{KNOB_IBTC_BITS_SHIFT as I, KNOB_NO_ENTRY_GEN as G, KNOB_NO_SMC_STORE as S};
-    use heirloom_cpu_abi::ppc::{KNOB_COLD_TAIL as T, KNOB_FOLLOW_CALLS as C, KNOB_NO_DISPLACE as D, KNOB_NO_LAZY_CA as L};
-    for knobs in [S, G, S | G, 12 << I, 14 << I, 8 << I, T, C, D | L, T | C] {
+    use heirloom_cpu_abi::ppc::{KNOB_COLD_TAIL as T, KNOB_FOLLOW_CALLS as C, KNOB_NO_DISPLACE as D, KNOB_NO_LAZY_CA as L, KNOB_LAZY_CA as Z};
+    for knobs in [S, G, S | G, 12 << I, 14 << I, 8 << I, T, C, D | L, T | C, Z, Z | D] {
         // bench_smc / smc_native rewrite their own code: exactly what the guard knobs stop seeing (the negative control below)
         for (name, prog, setup) in programs_under_test().into_iter().filter(|p| !p.0.contains("smc") || knobs & (S | G) == 0) {
             let (want, _) = run_on(Tier::Interp, 0, prog, 1_000_000, setup);

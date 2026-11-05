@@ -480,10 +480,14 @@ pub const KNOB_T1_FLUSH_DROPS: u32 = 1 << 19;
 /// then exists once, as their own blocks, instead of once more inside each superblock that reaches them) - the code
 /// DUPLICATION A/B (h86 native); code, not semantics.
 pub const KNOB_NO_SUPERBLOCK: u32 = 1 << 20;
+/// LAZY XER[CA] ON (h86 fnreg's lazy carry, OFF by default since h86 native 2026-11-05: with no superblocks it diverged in
+/// XER[CA] in WC3 JitLockstep - a region of single-block nodes - and the Z83 priced it at ~0): the opt-in A/B; code, not
+/// semantics where it is right. KNOB_NO_LAZY_CA (16) and KNOB_NO_SUPERBLOCK still turn it off.
+pub const KNOB_LAZY_CA: u32 = 1 << 21;
 /// Every native routine off (their A/B together).
 pub const KNOB_NO_NAT: u32 = KNOB_NO_NAT_PALBLIT | KNOB_NO_NAT_TEXCONV | KNOB_NO_NAT_BITSCAN;
 /// The knob bits a library may be asked for (anything else: -1).
-pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_ENTRY_CHECKS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT | KNOB_NO_NAT | KNOB_T1_FLUSH_DROPS | KNOB_NO_SUPERBLOCK;
+pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_ENTRY_CHECKS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT | KNOB_NO_NAT | KNOB_T1_FLUSH_DROPS | KNOB_NO_SUPERBLOCK | KNOB_LAZY_CA;
 
 /// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
 /// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;

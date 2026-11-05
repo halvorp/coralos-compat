@@ -85,18 +85,22 @@ fn a_lazy_carry_is_settled_at_side_exits_helpers_and_exits_and_its_mutant_goes_r
     let prog = lazy_ca_program();
     let (want, _) = run_on(Tier::Interp, 0, &prog, 1_000_000, |_, _| {});
     assert!(want.gpr[30] == 0 && want.gpr[22] > 0, "tier 0: the side path sees CA = 0 (r20 >= 100 is positive), the tail counts some: r30 {} r22 {}", want.gpr[30], want.gpr[22]);
+    // lazy carries are an opt-in knob (KNOB_LAZY_CA, off by default since h86 native): the test runs them on
+    use heirloom_cpu_abi::ppc::KNOB_LAZY_CA as Z;
     for slice in [1_000_000, 1_000, 61, 13, 3] {
         for region in [None, Some(REGION_TEST)] {
-            let (got, e) = run_region(Tier::Jit, 0, &prog, slice, |_, _| {}, region);
+            let (got, e) = run_full(Tier::Jit, 0, Z, &prog, slice, |_, _| {}, region);
             assert!(got == want, "slice {slice} region {region:?}: r22 {} / {}, r30 {} / {}, xer {:#x} / {:#x} {:?}", got.gpr[22], want.gpr[22], got.gpr[30], want.gpr[30], got.xer, want.xer, e.jit_stats());
         }
     }
-    let (got, e) = run_region(Tier::JitLockstep, 0, &prog, 50, |_, _| {}, Some(REGION_TEST));
+    let (got, e) = run_full(Tier::JitLockstep, 0, Z, &prog, 50, |_, _| {}, Some(REGION_TEST));
     assert!(got == want && e.divergence().is_none(), "lockstep: {:?}", e.divergence());
+    let (got, _) = run_on(Tier::Jit, 0, &prog, 1_000_000, |_, _| {});
+    assert!(got == want, "the default (no lazy carries): tier 0's state");
     let (got, _) = run_knobs(heirloom_cpu_abi::ppc::KNOB_NO_LAZY_CA, &prog, 1_000_000, |_, _| {});
     assert!(got == want, "the A/B knob: tier 0's state");
     // negative control: the side exit leaves with the addic.'s older carry (1) where the srawi's (0) belongs
-    let (got, _) = run_on(Tier::Jit, 42, &prog, 1_000_000, |_, _| {});
+    let (got, _) = run_full(Tier::Jit, 42, Z, &prog, 1_000_000, |_, _| {}, Some(REGION_TEST));
     assert!(got != want, "mutant 42 (side exits do not settle the carry) stayed GREEN");
 }
 
