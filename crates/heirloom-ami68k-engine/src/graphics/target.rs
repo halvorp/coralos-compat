@@ -92,7 +92,7 @@ pub fn read_pixel<U: GuestUi>(a: &mut Amiga<U>, rp: u32, x: i32, y: i32) -> Resu
             super::bitmaps::ensure_source(a, bm)?;
             let g = a.gfx.bitmaps.get(&bm).ok_or_else(|| Refusal(format!("ReadPixel: BitMap {bm:#x} vanished")))?;
             let clip = Clip { rect: g.bm.rect(), region: region.as_ref() };
-            if clip.allows(bx, by) { g.bm.get(bx, by) } else { None }
+            if clip.allows(bx, by) { g.bm.get(bx, by).map(|p| p as u8) } else { None }
         }
     })
 }

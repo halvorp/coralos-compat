@@ -524,7 +524,7 @@ fn a_bodychunk_decodes_planar_rows_plain_and_byterun1_the_same() {
 fn a_bitmap_draws_the_program_bitmap_with_its_source_colours_clipped_to_its_box() {
     let mut a = machine();
     let bm = crate::graphics::bitmaps::create(&mut a, 4, 4, 2, None).unwrap();
-    { let g = a.gfx.bitmaps.get_mut(&bm).unwrap(); for y in 0..4 { for x in 0..4 { g.bm.set(x, y, ((x + y) % 4) as u8); } } }
+    { let g = a.gfx.bitmaps.get_mut(&bm).unwrap(); for y in 0..4 { for x in 0..4 { g.bm.set(x, y, ((x + y) % 4) as u32); } } }
     // SourceColors: ULONG red, green, blue per pen (top byte used): pen 0 white, 1 red, 2 green, 3 blue.
     let mut cols = Vec::new();
     for (r, g, b) in [(255u32, 255, 255), (255, 0, 0), (0, 255, 0), (0, 0, 255)] { for v in [r, g, b] { cols.extend((v << 24).to_be_bytes()); } }

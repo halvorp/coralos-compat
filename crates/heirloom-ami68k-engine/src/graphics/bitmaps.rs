@@ -52,7 +52,7 @@ pub fn ensure_source<U: GuestUi>(a: &mut Amiga<U>, bm: u32) -> Result<(), Refusa
         }
     }
     let g = a.gfx.bitmaps.get_mut(&bm).expect("ensured");
-    for y in 0..rows as i32 { for x in 0..(bpr * 8) as i32 { g.bm.set(x, y, pens[(y as u32 * bpr * 8 + x as u32) as usize]); } }
+    for y in 0..rows as i32 { for x in 0..(bpr * 8) as i32 { g.bm.set(x, y, u32::from(pens[(y as u32 * bpr * 8 + x as u32) as usize])); } }
     let rect = g.bm.rect();
     let sum = super::surface::fnv1a(0xcbf29ce484222325, &bytes);
     let old = a.gfx.surfaces.get(bm).map_or(0, |s| s.sum);

@@ -8,11 +8,12 @@ pub const JAM2: u8 = 1;
 pub const COMPLEMENT: u8 = 2;
 pub const INVERSVID: u8 = 4;
 
-/// What to paint with: pens, draw mode (graphics/rastport.h RP_DrawMode bits) and the RastPort write mask.
+/// What to paint with: pixel values (pens of an indexed bitmap, colours of a direct one), draw mode (graphics/rastport.h
+/// RP_DrawMode bits) and the write mask (the RastPort's; all ones writes every bit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Brush { pub fg: u8, pub bg: u8, pub mode: u8, pub mask: u8 }
+pub struct Brush { pub fg: u32, pub bg: u32, pub mode: u8, pub mask: u32 }
 impl Brush {
-    pub fn new(fg: u8, bg: u8, mode: u8) -> Brush { Brush { fg, bg, mode, mask: 0xFF } }
+    pub fn new(fg: u32, bg: u32, mode: u8) -> Brush { Brush { fg, bg, mode, mask: u32::MAX } }
 }
 
 /// Where drawing may land: a rectangle and, optionally, a region inside it.
@@ -32,13 +33,14 @@ impl<'a> Clip<'a> {
     }
 }
 
-fn combine(old: u8, new: u8, mask: u8) -> u8 { (old & !mask) | (new & mask) }
+fn combine(old: u32, new: u32, mask: u32) -> u32 { (old & !mask) | (new & mask) }
 
 /// Paint every pixel of `area` whose stencil bit `ink(x, y)` (absolute bitmap coordinates) is set (`INVERSVID` flips
 /// the bit): JAM1 writes the foreground pen there; JAM2 writes foreground there and background elsewhere;
-/// COMPLEMENT inverts the pixel there. Returns the touched rectangle (empty if the clip rejected everything).
+/// COMPLEMENT inverts the pixel's colour bits there ([`Bitmap::color_mask`]). Returns the touched rectangle (empty if the clip
+/// rejected everything).
 pub fn stencil(dst: &mut Bitmap, area: Rect, b: &Brush, clip: &Clip, ink: impl Fn(i32, i32) -> bool) -> Rect {
-    let full = dst.pen_mask();
+    let full = dst.color_mask();
     stencil_with(dst, area, clip, |x, y, old| {
         let bit = ink(x, y) ^ (b.mode & INVERSVID != 0);
         let new = if b.mode & COMPLEMENT != 0 { if bit { Some(old ^ full) } else { None } }
@@ -50,7 +52,7 @@ pub fn stencil(dst: &mut Bitmap, area: Rect, b: &Brush, clip: &Clip, ink: impl F
 /// The loop under every stencil: for each pixel of `area` the clip allows, `f(x, y, old)` gives the pixel's new pen
 /// (`None` leaves it). A caller whose rule is not a brush (a raster operation over the destination pens, as QuickDraw's
 /// Boolean transfer modes are) supplies its own `f`. Returns the touched rectangle.
-pub fn stencil_with(dst: &mut Bitmap, area: Rect, clip: &Clip, mut f: impl FnMut(i32, i32, u8) -> Option<u8>) -> Rect {
+pub fn stencil_with(dst: &mut Bitmap, area: Rect, clip: &Clip, mut f: impl FnMut(i32, i32, u32) -> Option<u32>) -> Rect {
     let mut touched = Rect::default();
     for p in clip.pieces(area.intersect(&dst.rect())) {
         for y in p.y0..p.y1 {
@@ -135,7 +137,7 @@ mod tests {
     fn stencil_with_runs_the_callers_rule_inside_the_clip_only() {
         let mut b = bm();
         let clip = Clip::rect(Rect::new(1, 1, 3, 2));
-        let t = stencil_with(&mut b, Rect::new(0, 0, 16, 8), &clip, |x, _, old| Some(old | (x as u8 + 1)));
+        let t = stencil_with(&mut b, Rect::new(0, 0, 16, 8), &clip, |x, _, old| Some(old | (x as u32 + 1)));
         assert_eq!(b.pixels().iter().filter(|&&p| p != 0).count(), 2);
         assert_eq!((b.get(1, 1), b.get(2, 1), b.get(0, 1)), (Some(2), Some(3), Some(0)));
         assert_eq!(t, Rect::new(1, 1, 3, 2));
@@ -162,7 +164,7 @@ mod tests {
     fn write_mask_protects_other_planes() {
         let mut b = bm();
         let clip = Clip::rect(b.rect());
-        b.set(1, 1, 0b110);
+        b.set(1, 1, 0b110u32);
         let br = Brush { fg: 0b001, bg: 0, mode: JAM1, mask: 0b001 };
         plot(&mut b, 1, 1, &br, &clip);
         assert_eq!(b.get(1, 1), Some(0b111));
@@ -195,5 +197,20 @@ mod tests {
         fill_rect(&mut b, Rect::new(0, 0, 4, 2), &Brush::new(3, 0, JAM1), Some(&p), &clip);
         assert_eq!(&b.row(0)[..4], &[3, 0, 3, 0]);
         assert_eq!(&b.row(1)[..4], &[0, 3, 0, 3]);
+    }
+    #[test]
+    fn complement_on_a_direct_bitmap_inverts_colour_bits_only() {
+        let mut b = Bitmap::new(2, 1, 32).unwrap();
+        b.set(0, 0, 0xAA12_3456u32);
+        let clip = Clip::rect(b.rect());
+        fill_rect(&mut b, Rect::new(0, 0, 1, 1), &Brush::new(0u32, 0u32, COMPLEMENT), None, &clip);
+        assert_eq!(b.get(0, 0), Some(0xAAED_CBA9), "RGB inverted, the unused byte kept");
+        fill_rect(&mut b, Rect::new(0, 0, 2, 1), &Brush::new(0x00FF_8000u32, 0u32, JAM1), None, &clip);
+        assert_eq!(b.get(1, 0), Some(0x00FF_8000), "a direct brush writes its colour value");
+        let mut s = Bitmap::new(1, 1, 16).unwrap();
+        s.set(0, 0, 0x8000u32);
+        let sc = Clip::rect(s.rect());
+        fill_rect(&mut s, Rect::new(0, 0, 1, 1), &Brush::new(0, 0, COMPLEMENT), None, &sc);
+        assert_eq!(s.get(0, 0), Some(0xFFFF), "x555: bit 15 kept, 15 colour bits inverted");
     }
 }

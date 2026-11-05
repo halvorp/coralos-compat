@@ -51,7 +51,7 @@ fn color_window() -> Win {
     Win { m, win }
 }
 impl Win {
-    fn px(&self, x: i32, y: i32) -> u8 { self.m.qd.canvases[&self.win].get(x, y).unwrap() }
+    fn px(&self, x: i32, y: i32) -> u8 { self.m.qd.canvases[&self.win].get(x, y).unwrap() as u8 }
     fn script(&mut self, calls: &[ScriptCall]) {
         let mut p = Prog::new();
         p.script(&self.m, calls).exit();
@@ -402,12 +402,12 @@ fn an_unsupported_pixel_depth_is_a_named_refusal() {
     let mut m = machine("mac-ii");
     run(&mut m, Prog::new().l(PORT).trap(0xAA00).exit());
     let pm = m.mem.read_u32(m.mem.read_u32(PORT + 2).unwrap()).unwrap();
-    m.mem.write_u16(pm + 32, 32).unwrap(); // a direct-colour pixel map
+    m.mem.write_u16(pm + 32, 12).unwrap(); // NEGATIVE: 12 bits is no QuickDraw depth (16 and 32 are, direct)
     m.mem.write_u32(pm, PIX).unwrap();
     for (i, v) in [0u16, 0, 8, 16].into_iter().enumerate() { m.mem.write_u16(pm + 6 + 2 * i as u32, v).unwrap(); }
     set_rect(&mut m, R1, 0, 0, 4, 4);
     script(&mut m, &[call("PaintRect", &[Lit(R1)], None)]);
-    assert!(m.refused.iter().any(|r| r.contains("32-bit pixels are not implemented")), "{:?}", m.refused);
+    assert!(m.refused.iter().any(|r| r.contains("12-bit pixels are not a QuickDraw depth")), "{:?}", m.refused);
 }
 
 #[test]

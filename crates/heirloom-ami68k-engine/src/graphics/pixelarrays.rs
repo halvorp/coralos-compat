@@ -31,8 +31,8 @@ fn transfer<U: GuestUi>(a: &mut Amiga<U>, rp: u32, (x0, y0): (i32, i32), (w, h):
                 let (px, py) = (x0 + i - ox, y0 + j - oy);
                 let k = (j * w + i) as usize;
                 if !clip.allows(px, py) || bm.get(px, py).is_none() { continue; }
-                if write { bm.set(px, py, data[k]); touched = touched.union(&Rect::new(px, py, px + 1, py + 1)); }
-                else { out[k] = bm.get(px, py).unwrap_or(0); }
+                if write { bm.set(px, py, u32::from(data[k])); touched = touched.union(&Rect::new(px, py, px + 1, py + 1)); }
+                else { out[k] = bm.get(px, py).unwrap_or(0) as u8; }
             }
         }
         touched

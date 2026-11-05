@@ -44,7 +44,8 @@ impl Default for Memo {
 /// ControlsLib, DialogsLib, MenusLib, WindowsLib, NavigationLib; metamage_1 `Roles/libcarbon/A-line.confd/PPC.conf` imports the same four).
 /// One name table serves them all, so an import resolves by name whichever of them the fragment names; a name the table cannot serve is
 /// NEXT-NEEDED with the library in its message.
-pub const TOOLBOX_LIBRARIES: &[&str] = &["InterfaceLib", "CarbonLib", "AppearanceLib", "ControlsLib", "DialogsLib", "MenusLib", "WindowsLib", "NavigationLib"];
+/// UTCUtils (Mac OS 9.0+) is the Toolbox's own date library: its names are unique, so they bind bare like the others (sysmisc_c.rs).
+pub const TOOLBOX_LIBRARIES: &[&str] = &["InterfaceLib", "CarbonLib", "AppearanceLib", "ControlsLib", "DialogsLib", "MenusLib", "WindowsLib", "NavigationLib", "UTCUtils"];
 
 /// The key a symbol's [`crate::symbols::Binding`] is stored under: the bare name for the Toolbox libraries and the
 /// engine's own pseudo-library, `Library::name` for every other provided library, so two libraries exporting one name

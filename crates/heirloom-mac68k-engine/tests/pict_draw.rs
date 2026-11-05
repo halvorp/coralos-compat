@@ -95,7 +95,7 @@ fn a_mask_region_limits_an_unscaled_bitmap_and_is_refused_scaled() {
     draw(&mut g, &pic, (10, 20, 12, 28));
     g.no_refusals();
     assert!((20..24).all(|x| g.black(x, 10)) && !(24..28).any(|x| g.black(x, 10)), "row 0 draws only inside the mask\n{}", g.pic(18, 8, 30, 14));
-    // scaled: refused by name
+    // scaled 2x: the mask region is mapped with the picture (MapRgn): columns 20..24 of the frame become 20..28
     let mut g = Rig::new();
     let h = handle_of(&mut g, &pic);
     set_rect(&mut g.m, 0x3100, 10, 20, 14, 36);
@@ -103,7 +103,8 @@ fn a_mask_region_limits_an_unscaled_bitmap_and_is_refused_scaled() {
     p.set_port(g.win).l(h).l(0x3100).trap(0xA8F6).exit();
     g.m.start(&p.0, 0).unwrap();
     let _ = g.m.run_loop(1_000_000);
-    assert!(g.m.refused.iter().any(|r| r.contains("mask region is drawn only unscaled")), "{:?}", g.m.refused);
+    g.no_refusals();
+    assert!((20..28).all(|x| g.black(x, 10)) && !(28..36).any(|x| g.black(x, 10)), "the mapped mask\n{}", g.pic(18, 8, 38, 16));
 }
 
 #[test]

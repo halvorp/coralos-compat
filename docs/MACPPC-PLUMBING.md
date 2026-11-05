@@ -239,3 +239,16 @@ binding: `privilege-drmpa-4.7.1.44.sexp` (the Aladdin Privilege dialog library's
 - Smaller: FSGetVolumeInfo, MPPOpen (portNotCf: no AppleTalk), ShowHide, SetWinColor / GetAuxWin, GetWMgrPort / GetCWMgrPort (a
   colour WM port made on first ask), SetPreserveGlyph, IsMetric (= IUMetric, from the served itl0), NavLoad / NavUnload,
   InstallWindowContentPaintProc (recorded, never called: this Window Manager never erases content).
+
+## Direct colour (16 and 32-bit pixels) - one Color QuickDraw for both engines
+
+Design: /build/patches/ps7/HANDOFF-5.md (section 1), summarised. `heirloom-raster::Bitmap` holds 16/32-bit pixels (u32 storage; indexed
+maps keep one byte a pixel) and speaks u32 pixel values, so every drawing primitive serves every depth. The Mac meaning lives in
+`heirloom-mac68k-engine/src/cqd/direct.rs`: x1R5G5B5 / x8R8G8B8 formats (colour -> pixel = top bits, pixel -> colour = replicated
+bits), the inverse table (exact nearest entry per 4-bit cell), the ONE row-wise depth converter `Conv` that CopyBits, CopyMask,
+CopyDeepMask and PICT bits all use, and the arithmetic modes 32..39 on 16-bit components with OpColor (Inside Macintosh: Imaging With
+QuickDraw pp. 4-38..4-40; Executor qIMVxfer.cpp (MIT) for the formulas, systemless (GPL) facts only). On a DIRECT destination the
+Boolean modes follow IWQ's colour definitions (black-ish source = ink: or -> foreground, xor -> invert colour bits, bic -> background);
+on indexed and 1-bit destinations they act on pixel values as before. Offscreen worlds may be 16/32-bit; window canvases keep the main
+device's 8 bits and reach the screen through heirloom-present -> the GPU compositor; a direct main device is a later, separately graded
+step. PICT DirectBitsRect/Rgn ($9A/$9B, packTypes 1-4) draw through the same CopyBits.

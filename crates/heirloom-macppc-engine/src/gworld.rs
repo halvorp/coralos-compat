@@ -1,6 +1,6 @@
 //! Offscreen graphics worlds and the Carbon port accessors for PowerPC programs: the C names (`NewGWorld`, `LockPixels`, `GetPortBitMapForCopyBits` ...) bound onto the bodies
 //! `heirloom-mac68k-engine` keeps ONCE in `cqd/gworld.rs` (the 68k personality shares the same world records). The pixels are guest memory; `CopyBits` between a world and a window is the
-//! shared trap, which presents through the native path. Direct (16/32 bit) worlds are refused by name by the shared body.
+//! shared trap, which presents through the native path. Direct (16/32 bit) worlds are the shared body's too (`cqd/direct.rs`).
 //! `GetPortBounds`/`GetWindowPortBounds` read the port's `portRect`; `GetPortBitMapForCopyBits` is the port's `portBits`/PixMap address (the thing `CopyBits` takes).
 use crate::clib::arg;
 use crate::machine::MacPpc;

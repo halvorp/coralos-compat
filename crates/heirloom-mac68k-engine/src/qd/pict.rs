@@ -77,26 +77,63 @@ fn unpack_rows(b: &[u8], at: &mut usize, rows: usize, row_bytes: usize, packed: 
             *at += row_bytes;
             continue;
         }
-        let n = if row_bytes > 250 { let v = heirloom_common::bytes::be16(b, *at).ok_or("row count past the end")? as usize; *at += 2; v } else { let v = *b.get(*at).ok_or("row count past the end")? as usize; *at += 1; v };
-        let packed_row = b.get(*at..*at + n).ok_or_else(|| format!("packed row {r} runs past the end of the picture"))?;
-        *at += n;
-        let start = out.len();
-        let mut i = 0;
-        while i < packed_row.len() && out.len() - start < row_bytes {
-            let c = packed_row[i] as i8;
-            i += 1;
-            if c >= 0 {
-                let k = c as usize + 1;
-                out.extend_from_slice(packed_row.get(i..i + k).ok_or("a literal run runs past its packed row")?);
-                i += k;
-            } else {
-                let k = (1 - i16::from(c)) as usize;
-                let v = *packed_row.get(i).ok_or("a repeat run has no byte")?;
-                i += 1;
-                out.extend(core::iter::repeat(v).take(k));
-            }
+        let row = packed_row(b, at, r, row_bytes, row_bytes, 1)?;
+        out.extend_from_slice(&row);
+    }
+    Ok(out)
+}
+
+/// One PackBits row: its byte count (a word when `row_bytes > 250`, else a byte), then runs of `unit`-byte items (1: PackBits;
+/// 2: the 16-bit pixel form of packType 3) unpacking to exactly `want` bytes.
+fn packed_row(b: &[u8], at: &mut usize, r: usize, row_bytes: usize, want: usize, unit: usize) -> Result<Vec<u8>, String> {
+    let n = if row_bytes > 250 { let v = heirloom_common::bytes::be16(b, *at).ok_or("row count past the end")? as usize; *at += 2; v } else { let v = *b.get(*at).ok_or("row count past the end")? as usize; *at += 1; v };
+    let packed = b.get(*at..*at + n).ok_or_else(|| format!("packed row {r} runs past the end of the picture"))?;
+    *at += n;
+    let mut out = Vec::with_capacity(want);
+    let mut i = 0;
+    while i < packed.len() && out.len() < want {
+        let c = packed[i] as i8;
+        i += 1;
+        if c >= 0 {
+            let k = (c as usize + 1) * unit;
+            out.extend_from_slice(packed.get(i..i + k).ok_or("a literal run runs past its packed row")?);
+            i += k;
+        } else {
+            let k = (1 - i16::from(c)) as usize;
+            let v = packed.get(i..i + unit).ok_or("a repeat run has no item")?;
+            i += unit;
+            for _ in 0..k { out.extend_from_slice(v); }
         }
-        if out.len() - start != row_bytes { return Err(format!("packed row {r} unpacks to {} bytes, not {row_bytes}", out.len() - start)); }
+    }
+    if out.len() != want { return Err(format!("packed row {r} unpacks to {} bytes, not {want}", out.len())); }
+    Ok(out)
+}
+
+/// The pixel data of a DirectBitsRect / DirectBitsRgn (IWQ Appendix A, "PixData"): `rows` rows of `width` direct pixels of
+/// `pixel_size` bits, as big-endian guest rows of `row_bytes`. packType 1 (or rowBytes < 8): raw rows; 2: three bytes a pixel
+/// (the pad byte dropped); 3: 16-bit pixels, PackBits over words; 4 (32-bit): PackBits rows of `cmp_count` component planes
+/// (alpha first when there are four), each `width` bytes. packType 0 is the depth's default (3 at 16 bits, 4 at 32).
+fn direct_rows(b: &[u8], at: &mut usize, rows: usize, width: usize, row_bytes: usize, pixel_size: u16, pack: u16, cmp_count: u16) -> Result<Vec<u8>, String> {
+    let pack = match (pack, pixel_size) { (0, 16) => 3, (0, _) => 4, (p, _) => p };
+    if row_bytes < 8 || pack == 1 { return unpack_rows(b, at, rows, row_bytes, false); }
+    let mut out = alloc::vec![0u8; rows * row_bytes];
+    for r in 0..rows {
+        let dst = &mut out[r * row_bytes..(r + 1) * row_bytes];
+        match (pack, pixel_size) {
+            (2, 32) => {
+                let raw = b.get(*at..*at + 3 * width).ok_or_else(|| format!("row {r} runs past the end of the picture"))?;
+                *at += 3 * width;
+                for x in 0..width { dst[4 * x + 1..4 * x + 4].copy_from_slice(&raw[3 * x..3 * x + 3]); }
+            }
+            (3, 16) => { let row = packed_row(b, at, r, row_bytes, 2 * width, 2)?; dst[..2 * width].copy_from_slice(&row); }
+            (4, 32) => {
+                let planes = usize::from(cmp_count.clamp(3, 4));
+                let row = packed_row(b, at, r, row_bytes, planes * width, 1)?;
+                let first = 4 - planes; // three planes are R, G, B (bytes 1..3); four are A, R, G, B
+                for x in 0..width { for p in 0..planes { dst[4 * x + first + p] = row[p * width + x]; } }
+            }
+            (p, d) => return Err(format!("packType {p} for {d}-bit pixels is not a PICT direct-pixel form")),
+        }
     }
     Ok(out)
 }
@@ -148,7 +185,31 @@ pub fn next(b: &[u8], at: &mut usize, v2: bool) -> Result<Op, String> {
             *at = i;
             Ok(Op::Bits(Bits { op, pixmap, row_bytes, bounds, pixel_size, clut, src, dst, mode, rgn, pixels }))
         }
-        0x9A | 0x9B => Ok(Op::Unsupported(op, op_name(op))),
+        0x9A | 0x9B => {
+            // baseAddr ($000000FF), then a PixMap without its baseAddr, srcRect, dstRect, mode (+ maskRgn), PixData (IWQ Appendix A)
+            let mut i = *at + 4;
+            let rb_raw = heirloom_common::bytes::be16(b, i).ok_or("DirectBits has no rowBytes")?;
+            let row_bytes = rb_raw & 0x3FFF;
+            i += 2;
+            let rect = |i: &mut usize| -> Result<[i16; 4], String> { let mut r = [0i16; 4]; for (k, v) in r.iter_mut().enumerate() { *v = heirloom_common::bytes::be16(b, *i + 2 * k).ok_or("rect past the end")? as i16; } *i += 8; Ok(r) };
+            let bounds = rect(&mut i)?;
+            let field = |o: usize| heirloom_common::bytes::be16(b, i + o).ok_or("PixMap past the end");
+            let (pack, pixel_size, cmp_count) = (field(2)?, field(18)?, field(20)?);
+            i += 36;
+            if pixel_size != 16 && pixel_size != 32 { return Err(format!("DirectBits with {pixel_size}-bit pixels (16 or 32 only)")); }
+            let src = rect(&mut i)?;
+            let dst = rect(&mut i)?;
+            let mode = heirloom_common::bytes::be16(b, i).ok_or("mode past the end")?;
+            i += 2;
+            let rgn = if op == 0x9B { let n = heirloom_common::bytes::be16(b, i).ok_or("mask region past the end")? as usize; let r = b.get(i..i + n).ok_or("mask region past the end")?.to_vec(); i += n; Some(r) } else { None };
+            let rows = (i32::from(bounds[2]) - i32::from(bounds[0])).max(0) as usize;
+            let width = (i32::from(bounds[3]) - i32::from(bounds[1])).max(0) as usize;
+            if usize::from(row_bytes) < width * usize::from(pixel_size) / 8 { return Err(format!("DirectBits rowBytes {row_bytes} is too small for {width} pixels of {pixel_size} bits")); }
+            let pixels = direct_rows(b, &mut i, rows, width, usize::from(row_bytes), pixel_size, pack, cmp_count)?;
+            *at = i;
+            Ok(Op::Bits(Bits { op, pixmap: true, row_bytes, bounds, pixel_size, clut: Vec::new(), src, dst, mode, rgn, pixels }))
+        }
+        0x1A | 0x1B | 0x1D | 0x1F => skip(at, 6), // RGBFgCol, RGBBkCol, OpColor, HiliteColor: one RGBColor (playback keeps the port's pens; named in pictplay)
         other => Ok(Op::Unsupported(other, op_name(other))),
     }
 }
@@ -220,5 +281,61 @@ pub(crate) mod tests {
         let Op::Bits(bits) = next(&b, &mut at, false).unwrap() else { panic!("bits") };
         assert_eq!((bits.pixmap, bits.pixel_size, bits.mode, bits.pixels.as_slice()), (false, 1, 1, &[0xA5u8, 0x00][..]));
         assert_eq!(next(&b, &mut at, false).unwrap(), Op::End);
+    }
+
+    /// A DirectBitsRect opcode body (after the opcode word): a `w` x `h` PixMap of `size`-bit pixels, `rb` rowBytes, `pack` packType,
+    /// `cmp` components, srcRect = dstRect = bounds, mode 0, then `data`.
+    fn direct_op(w_: u16, h: u16, size: u16, rb: u16, pack: u16, cmp: u16, data: &[u8]) -> Vec<u8> {
+        let mut b = Vec::new();
+        w(&mut b, &[0x009A, 0, 0xFF, 0x8000 | rb, 0, 0, h, w_]); // opcode, baseAddr $000000FF, rowBytes, bounds
+        w(&mut b, &[0, pack, 0, 0, 0x48, 0, 0x48, 0, 16, size, cmp, if size == 16 { 5 } else { 8 }, 0, 0, 0, 0, 0, 0]); // pmVersion .. pmReserved
+        w(&mut b, &[0, 0, h, w_, 0, 0, h, w_, 0]);
+        b.extend_from_slice(data);
+        b.extend([0, 0xFF]); // pad + end
+        b
+    }
+    fn direct_bits(body: &[u8]) -> Result<Bits, String> {
+        let mut at = 0;
+        match next(body, &mut at, true)? { Op::Bits(b) => Ok(b), o => Err(format!("{o:?}")) }
+    }
+
+    #[test]
+    fn direct_bits_rect_unpacks_every_pack_type() {
+        // packType 1 (raw), 2 pixels of 32 bits, rowBytes 8 (= 8: not "short", raw because packType 1)
+        let b = direct_bits(&direct_op(2, 1, 32, 8, 1, 3, &[0, 0x11, 0x22, 0x33, 0, 0xAA, 0xBB, 0xCC])).unwrap();
+        assert_eq!((b.op, b.pixel_size, b.row_bytes, b.pixels.as_slice()), (0x9A, 32, 8, &[0, 0x11, 0x22, 0x33, 0, 0xAA, 0xBB, 0xCC][..]));
+        // packType 4: three planes R, G, B of 4 pixels, PackBits: count byte 12-ish; R = repeat 4 x 0x10, G = literal 1 2 3 4, B = repeat 4 x 0xF0
+        let row = [0xFDu8, 0x10, 3, 1, 2, 3, 4, 0xFD, 0xF0];
+        let mut data = alloc::vec![row.len() as u8];
+        data.extend_from_slice(&row);
+        let b = direct_bits(&direct_op(4, 1, 32, 16, 4, 3, &data)).unwrap();
+        assert_eq!(b.pixels, [0, 0x10, 1, 0xF0, 0, 0x10, 2, 0xF0, 0, 0x10, 3, 0xF0, 0, 0x10, 4, 0xF0]);
+        // packType 4 with four components: alpha first
+        let row4 = [0xFDu8, 0x7F, 0xFD, 1, 0xFD, 2, 0xFD, 3];
+        let mut d4 = alloc::vec![row4.len() as u8];
+        d4.extend_from_slice(&row4);
+        let b = direct_bits(&direct_op(4, 1, 32, 16, 4, 4, &d4)).unwrap();
+        assert_eq!(&b.pixels[..4], &[0x7F, 1, 2, 3]);
+        // packType 3: 16-bit pixels, PackBits over WORDS: a repeat of 3 x 0x7C00 then a literal word 0x001F
+        let row3 = [0xFEu8, 0x7C, 0x00, 0, 0x00, 0x1F];
+        let mut d3 = alloc::vec![row3.len() as u8];
+        d3.extend_from_slice(&row3);
+        let b = direct_bits(&direct_op(4, 1, 16, 8, 3, 3, &d3)).unwrap();
+        assert_eq!(b.pixels, [0x7C, 0, 0x7C, 0, 0x7C, 0, 0, 0x1F]);
+        // packType 2: three bytes a pixel, the pad byte dropped
+        let b = direct_bits(&direct_op(3, 1, 32, 12, 2, 3, &[1, 2, 3, 4, 5, 6, 7, 8, 9])).unwrap();
+        assert_eq!(b.pixels, [0, 1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9]);
+    }
+
+    #[test]
+    fn a_short_or_malformed_direct_row_is_refused_by_name() {
+        // NEGATIVE: a packType 4 row that unpacks to 3 bytes instead of 12
+        let e = direct_bits(&direct_op(4, 1, 32, 16, 4, 3, &[2, 0xFE, 9])).unwrap_err();
+        assert!(e.contains("unpacks to 3 bytes, not 12"), "{e}");
+        // NEGATIVE: a row whose count runs past the picture
+        assert!(direct_bits(&direct_op(4, 1, 32, 16, 4, 3, &[40, 1])).unwrap_err().contains("runs past the end"));
+        // NEGATIVE: 24-bit pixels are no DirectBits depth; a too-small rowBytes is refused
+        assert!(direct_bits(&direct_op(4, 1, 24, 16, 4, 3, &[])).unwrap_err().contains("24-bit pixels"));
+        assert!(direct_bits(&direct_op(4, 1, 32, 8, 1, 3, &[0; 8])).unwrap_err().contains("too small"));
     }
 }

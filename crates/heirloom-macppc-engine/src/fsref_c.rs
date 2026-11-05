@@ -1,5 +1,6 @@
 //! The HFS Plus File Manager's `FSRef` calls (Files.h, Mac OS 9.0 and CarbonLib) over the SAME volume tree the `FSSpec` / parameter-block calls
-//! use (`heirloom_mac68k_engine::fm`): `FSpMakeFSRef`, `PBMakeFSRefSync`, `FSMakeFSRefUnicode`, `FSGetCatalogInfo`, `FSDeleteObject`, `FSCompareFSRefs`.
+//! use (`heirloom_mac68k_engine::fm`): `FSpMakeFSRef`, `PBMakeFSRefSync`, `FSMakeFSRefUnicode`, `FSCreateDirectoryUnicode`, `FSCreateFileUnicode`, `FSGetCatalogInfo`, `FSDeleteObject`,
+//! `FSCompareFSRefs`.
 //!
 //! An `FSRef` is 80 opaque bytes (Files.h) the program only stores and hands back. Here it is `"HlFR"` (0), the volume's vRefNum (4, a short),
 //! the catalog node (8, a long) and zeros: a reference names an EXISTING object (fnfErr otherwise), and one whose object was deleted is
@@ -36,13 +37,13 @@ const P_DIR_ID: u32 = 48;
 const P_NEW_REF: u32 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FsrFn { FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo, FSOpenIterator, FSCloseIterator, FSGetCatalogInfoBulk, PBGetCatalogInfoSync, FSOpenResFile, FSGetVolumeInfo }
+pub enum FsrFn { FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo, FSOpenIterator, FSCloseIterator, FSGetCatalogInfoBulk, PBGetCatalogInfoSync, FSOpenResFile, FSGetVolumeInfo, FSCreateDirectoryUnicode, FSCreateFileUnicode }
 
 impl FsrFn {
     pub fn by_name(name: &str) -> Option<FsrFn> {
         use FsrFn::*;
         Some(match name {
-            "FSpMakeFSRef" => FSpMakeFSRef, "PBMakeFSRefSync" => PBMakeFSRefSync, "FSMakeFSRefUnicode" => FSMakeFSRefUnicode, "FSGetCatalogInfo" => FSGetCatalogInfo, "PBGetCatalogInfoSync" => PBGetCatalogInfoSync, "FSOpenResFile" => FSOpenResFile,
+            "FSpMakeFSRef" => FSpMakeFSRef, "PBMakeFSRefSync" => PBMakeFSRefSync, "FSMakeFSRefUnicode" => FSMakeFSRefUnicode, "FSCreateDirectoryUnicode" => FSCreateDirectoryUnicode, "FSCreateFileUnicode" => FSCreateFileUnicode, "FSGetCatalogInfo" => FSGetCatalogInfo, "PBGetCatalogInfoSync" => PBGetCatalogInfoSync, "FSOpenResFile" => FSOpenResFile,
             "FSDeleteObject" => FSDeleteObject, "FSCompareFSRefs" => FSCompareFSRefs, "FSRefMakePath" => FSRefMakePath, "FSPathMakeRef" => FSPathMakeRef, "FSSetCatalogInfo" => FSSetCatalogInfo,
             "FSOpenIterator" => FSOpenIterator, "FSCloseIterator" => FSCloseIterator, "FSGetCatalogInfoBulk" => FSGetCatalogInfoBulk, "FSGetVolumeInfo" => FSGetVolumeInfo,
             _ => return None,
@@ -95,6 +96,43 @@ impl<U: GuestUi> MacPpc<U> {
         l.node.ok_or(FNF_ERR)
     }
 
+    /// The FSSetCatalogInfo fields of `which` from the FSCatalogInfo at `cat` onto `node`: the result code.
+    fn fsr_set_cat(&mut self, node: usize, which: u32, cat: u32) -> Result<i32, String> {
+        let rd = |s: &Self, o: u32| s.mac.mem.read_u32(cat + o).map_err(|_| s.fsr_err("FSSetCatalogInfo catalogInfo", cat));
+        let info = self.mac.fm.cat_info(node);
+        let mut finfo = info.finfo;
+        if which & 0x0800 != 0 && !info.is_dir {
+            finfo.file_type = rd(self, 72)?.to_be_bytes();
+            finfo.creator = rd(self, 76)?.to_be_bytes();
+            let w = rd(self, 80)?;
+            finfo.flags = (w >> 16) as u16;
+            finfo.v = w as u16 as i16;
+            finfo.h = (rd(self, 84)? >> 16) as u16 as i16;
+        }
+        let created = if which & 0x0020 != 0 { rd(self, 18)? } else { info.created };
+        let modified = if which & 0x0040 != 0 { rd(self, 26)? } else { info.modified };
+        let mut e = self.mac.fm.set_cat(node, Some(finfo), created, modified).err().map_or(0, i32::from);
+        if e == 0 && which & 0x0002 != 0 {
+            let lock = self.mac.mem.read_u16(cat).map_err(|_| self.fsr_err("FSSetCatalogInfo catalogInfo", cat))? & 1 != 0;
+            let fm = &self.mac.fm;
+            let loc = Located { vol: fm.tree.volume_of(node), parent: fm.tree.parent(node), leaf: None, node: Some(node) };
+            e = self.mac.fm.set_lock(&loc, lock).err().map_or(0, i32::from);
+        }
+        let ignored = which & !(0x0002 | 0x0020 | 0x0040 | 0x0800);
+        if ignored != 0 { self.mac.log.push(format!("[file] FSSetCatalogInfo: whichInfo bits {ignored:#x} have no place on this volume (not kept)")); }
+        Ok(e)
+    }
+
+    /// A Unicode name of `len` UniChars at `p` as Mac Roman bytes (names on these volumes are Mac Roman; a character it lacks is refused by name).
+    fn unicode_leaf(&self, who: &str, p: u32, len: u32) -> Result<Vec<u8>, String> {
+        let mut leaf = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            let u = self.mac.mem.read_u16(p + 2 * i).map_err(|_| self.fsr_err(who, p))?;
+            leaf.push(char::from_u32(u32::from(u)).and_then(heirloom_mac68k_engine::macroman::from_char).ok_or_else(|| format!("{who}: U+{u:04X} has no Mac Roman byte (names on these volumes are Mac Roman)"))?);
+        }
+        Ok(leaf)
+    }
+
     pub(crate) fn fsr_call(&mut self, f: FsrFn, cpu: &mut Cpu) -> Result<(), String> {
         use FsrFn::*;
         let name = format!("{f:?}");
@@ -121,13 +159,36 @@ impl<U: GuestUi> MacPpc<U> {
                 Err(e) => i32::from(e),
                 Ok(parent) if !self.mac.fm.tree.is_dir(parent) => i32::from(FNF_ERR),
                 Ok(parent) => {
-                    let mut leaf = Vec::with_capacity(args[1] as usize);
-                    for i in 0..args[1] {
-                        let u = self.mac.mem.read_u16(args[2] + 2 * i).map_err(|_| self.fsr_err(&name, args[2]))?;
-                        leaf.push(char::from_u32(u32::from(u)).and_then(heirloom_mac68k_engine::macroman::from_char).ok_or_else(|| format!("{name}: U+{u:04X} has no Mac Roman byte (names on these volumes are Mac Roman)"))?);
-                    }
+                    let leaf = self.unicode_leaf(&name, args[2], args[1])?;
                     let (vref, dir) = (self.mac.fm.vref_of(self.mac.fm.tree.volume_of(parent)), self.mac.fm.dir_id(parent));
                     match self.fsr_locate(vref, dir, Some(&leaf)) { Ok(node) => { self.put_fsref(args[4], node)?; 0 } Err(e) => i32::from(e) }
+                }
+            },
+            // FSCreateDirectoryUnicode(parentRef, nameLength, name, whichInfo, catalogInfo, newRef, newSpec, newDirID)
+            // FSCreateFileUnicode(parentRef, nameLength, name, whichInfo, catalogInfo, newRef, newSpec): the File Manager's DirCreate /
+            // Create under a Unicode name (Mac Roman on these volumes), then FSSetCatalogInfo's fields; dupFNErr when it exists
+            FSCreateDirectoryUnicode | FSCreateFileUnicode => match self.fsref_node(args[0]) {
+                Err(e) => i32::from(e),
+                Ok(parent) if !self.mac.fm.tree.is_dir(parent) => -120, // dirNFErr
+                Ok(parent) => {
+                    let leaf = self.unicode_leaf(&name, args[2], args[1])?;
+                    let (vref, dir) = (self.mac.fm.vref_of(self.mac.fm.tree.volume_of(parent)), self.mac.fm.dir_id(parent));
+                    let made = self.mac.fm.locate(vref, dir, Some(&leaf)).and_then(|loc| if f == FSCreateDirectoryUnicode { self.mac.fm.create_dir(&loc) } else { self.mac.fm.create_file(&loc) });
+                    match made {
+                        Err(e) => i32::from(e),
+                        Ok(node) => {
+                            let e = if args[3] != 0 && args[4] != 0 { self.fsr_set_cat(node, args[3], args[4])? } else { 0 };
+                            if args[5] != 0 { self.put_fsref(args[5], node)?; }
+                            if args[6] != 0 {
+                                let fm = &self.mac.fm;
+                                let loc = Located { vol: fm.tree.volume_of(node), parent: fm.tree.parent(node), leaf: None, node: Some(node) };
+                                heirloom_mac68k_engine::fm::fsspec::write_spec(&mut self.mac, args[6], &loc).map_err(|e| format!("{name} newSpec: OSErr {e}"))?;
+                            }
+                            if f == FSCreateDirectoryUnicode && args[7] != 0 { let id = self.mac.fm.dir_id(node); self.mac.mem.write_u32(args[7], id).map_err(|_| self.fsr_err(&name, args[7]))?; }
+                            self.mac.log.push(format!("[file] {name} {:?} in dirID {dir} -> node {node}", String::from_utf8_lossy(&leaf)));
+                            e
+                        }
+                    }
                 }
             },
             // FSGetCatalogInfo(const FSRef *ref, FSCatalogInfoBitmap whichInfo, FSCatalogInfo *catalogInfo, HFSUniStr255 *outName, FSSpec *fsSpec, FSRef *parentRef)
@@ -245,32 +306,7 @@ impl<U: GuestUi> MacPpc<U> {
             // has nowhere to go on this volume and is named in the log, as Mac OS 9 ignores what HFS does not keep
             FSSetCatalogInfo => match self.fsref_node(args[0]) {
                 Err(e) => i32::from(e),
-                Ok(node) => {
-                    let (which, cat) = (args[1], args[2]);
-                    let rd = |s: &Self, o: u32| s.mac.mem.read_u32(cat + o).map_err(|_| s.fsr_err("FSSetCatalogInfo catalogInfo", cat));
-                    let info = self.mac.fm.cat_info(node);
-                    let mut finfo = info.finfo;
-                    if which & 0x0800 != 0 && !info.is_dir {
-                        finfo.file_type = rd(self, 72)?.to_be_bytes();
-                        finfo.creator = rd(self, 76)?.to_be_bytes();
-                        let w = rd(self, 80)?;
-                        finfo.flags = (w >> 16) as u16;
-                        finfo.v = w as u16 as i16;
-                        finfo.h = (rd(self, 84)? >> 16) as u16 as i16;
-                    }
-                    let created = if which & 0x0020 != 0 { rd(self, 18)? } else { info.created };
-                    let modified = if which & 0x0040 != 0 { rd(self, 26)? } else { info.modified };
-                    let mut e = self.mac.fm.set_cat(node, Some(finfo), created, modified).err().map_or(0, i32::from);
-                    if e == 0 && which & 0x0002 != 0 {
-                        let lock = self.mac.mem.read_u16(cat).map_err(|_| self.fsr_err("FSSetCatalogInfo catalogInfo", cat))? & 1 != 0;
-                        let fm = &self.mac.fm;
-                        let loc = Located { vol: fm.tree.volume_of(node), parent: fm.tree.parent(node), leaf: None, node: Some(node) };
-                        e = self.mac.fm.set_lock(&loc, lock).err().map_or(0, i32::from);
-                    }
-                    let ignored = which & !(0x0002 | 0x0020 | 0x0040 | 0x0800);
-                    if ignored != 0 { self.mac.log.push(format!("[file] FSSetCatalogInfo: whichInfo bits {ignored:#x} have no place on this volume (not kept)")); }
-                    e
-                }
+                Ok(node) => self.fsr_set_cat(node, args[1], args[2])?,
             },
             // FSGetVolumeInfo(FSVolumeRefNum volume, ItemCount volumeIndex, FSVolumeRefNum *actualVolume, FSVolumeInfoBitmap whichInfo, FSVolumeInfo *info,
             // HFSUniStr255 *volumeName, FSRef *rootDirectory): volumeIndex > 0 picks the index-th mounted volume (nsvErr past the last), else `volume` names it

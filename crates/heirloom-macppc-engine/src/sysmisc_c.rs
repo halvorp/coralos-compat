@@ -5,6 +5,10 @@
 //!   (screenActive, 0x0800); `Next` returns the first such device AFTER `theDevice`, NULL if `theDevice` is NULL or not in the list.
 //! * The machine location is 12 bytes of extended PRAM at offset 0xE4 (`ReadXPRam(0xE4, 12)`): zeros until written (latitude 0, longitude 0, gmtDelta 0 = UTC, no DST flag).
 //! * `DebugStr` logs the Pascal string and returns: no debugger is installed.
+//! * UTCUtils (Mac OS 9 DateTimeUtils.h): `ConvertLocalTimeToUTC` / `ConvertUTCToLocalTime` (UInt32 seconds since 1904) and
+//!   `ConvertUTCToLocalDateTime` / `ConvertLocalToUTCDateTime` (UTCDateTime / LocalDateTime: highSeconds 2, lowSeconds 4, fraction 2) move
+//!   by the machine location's gmtDelta (the signed low 24 bits of its third long, seconds east of UTC; IM Operating System Utilities),
+//!   the same offset `ReadLocation` reports. A NULL result pointer is paramErr.
 use crate::clib::arg;
 use crate::machine::MacPpc;
 use alloc::format;
@@ -23,14 +27,14 @@ pub struct SysState { location: [u8; 12], /// the Font Manager's SetOutlinePrefe
     pub(crate) preserve_glyph: bool }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SysFn { DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr, DMGetDisplayIDByGDevice, UpdateSystemActivity, RegisterComponentResourceFile, OpenADefaultComponent }
+pub enum SysFn { ConvertLocalTimeToUTC, ConvertUTCToLocalTime, ConvertUTCToLocalDateTime, ConvertLocalToUTCDateTime, DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr, DMGetDisplayIDByGDevice, UpdateSystemActivity, RegisterComponentResourceFile, OpenADefaultComponent }
 
 impl SysFn {
     pub fn by_name(name: &str) -> Option<SysFn> {
         use SysFn::*;
         Some(match name {
             "DMGetFirstScreenDevice" => DMGetFirstScreenDevice, "DMGetNextScreenDevice" => DMGetNextScreenDevice,
-            "ReadLocation" => ReadLocation, "WriteLocation" => WriteLocation, "DMGetDisplayIDByGDevice" => DMGetDisplayIDByGDevice, "DebugStr" => DebugStr, "UpdateSystemActivity" => UpdateSystemActivity, "RegisterComponentResourceFile" => RegisterComponentResourceFile, "OpenADefaultComponent" => OpenADefaultComponent,
+            "ReadLocation" => ReadLocation, "ConvertLocalTimeToUTC" => ConvertLocalTimeToUTC, "ConvertUTCToLocalTime" => ConvertUTCToLocalTime, "ConvertUTCToLocalDateTime" => ConvertUTCToLocalDateTime, "ConvertLocalToUTCDateTime" => ConvertLocalToUTCDateTime, "WriteLocation" => WriteLocation, "DMGetDisplayIDByGDevice" => DMGetDisplayIDByGDevice, "DebugStr" => DebugStr, "UpdateSystemActivity" => UpdateSystemActivity, "RegisterComponentResourceFile" => RegisterComponentResourceFile, "OpenADefaultComponent" => OpenADefaultComponent,
             _ => return None,
         })
     }
@@ -84,6 +88,21 @@ impl<U: GuestUi> MacPpc<U> {
                 (-3000i32) as u32
             }
             ReadLocation => { let loc = self.sys.location; self.put_bytes(a0, &loc, &n)?; 0 }
+            ConvertLocalTimeToUTC | ConvertUTCToLocalTime => if a1 == 0 { (-50i32) as u32 } else {
+                let d = if f == ConvertUTCToLocalTime { self.gmt_delta() } else { -self.gmt_delta() };
+                self.mac.mem.write_u32(a1, (a0 as i64 + d) as u32).map_err(|_| format!("{n}: the result pointer leaves guest RAM"))?; 0
+            },
+            ConvertUTCToLocalDateTime | ConvertLocalToUTCDateTime => if a1 == 0 || a0 == 0 { (-50i32) as u32 } else {
+                let b = self.get_bytes(a0, 8, &n)?;
+                let secs = (u64::from(u16::from_be_bytes([b[0], b[1]])) << 32 | u64::from(u32::from_be_bytes([b[2], b[3], b[4], b[5]]))) as i64;
+                let d = if f == ConvertUTCToLocalDateTime { self.gmt_delta() } else { -self.gmt_delta() };
+                let t = (secs + d).max(0) as u64;
+                let mut o = [0u8; 8];
+                o[0..2].copy_from_slice(&((t >> 32) as u16).to_be_bytes());
+                o[2..6].copy_from_slice(&(t as u32).to_be_bytes());
+                o[6..8].copy_from_slice(&b[6..8]);
+                self.put_bytes(a1, &o, &n)?; 0
+            },
             WriteLocation => { let b = self.get_bytes(a0, 12, &n)?; self.sys.location.copy_from_slice(&b); 0 }
             DebugStr => {
                 let len = self.mac.mem.read_u8(a0).map_err(|_| format!("DebugStr: the string at {a0:#x} leaves guest RAM"))?;
@@ -95,4 +114,9 @@ impl<U: GuestUi> MacPpc<U> {
         cpu.gpr[3] = r;
         Ok(())
     }
+}
+
+impl<U: GuestUi> MacPpc<U> {
+    /// The machine location's gmtDelta: seconds east of UTC, the signed low 24 bits of its third long (0 until WriteLocation).
+    fn gmt_delta(&self) -> i64 { let l = &self.sys.location; i64::from((i32::from_be_bytes([l[8], l[9], l[10], l[11]]) << 8) >> 8) }
 }

@@ -239,7 +239,8 @@ fn te_set_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     let n = usize::try_from(len).map_err(|_| Refusal(format!("TESetText: negative length {len}")))?;
     let bytes = m.mem.bytes(m.mem.span(src, n as u32).map_err(Refusal::mem("TESetText text"))?).map_err(Refusal::mem("TESetText text"))?.to_vec();
     m.te_store_text(h, &bytes)?;
-    done(c, &format!(" {n} bytes"))
+    let head: alloc::string::String = bytes.iter().take(80).map(|&b| if b == b'\r' { '|' } else { crate::macroman::to_char(b) }).collect();
+    done(c, &format!(" {n} bytes {head:?}"))
 }
 
 /// `FUNCTION TEGetText(hTE): CharsHandle`: the record's own text handle.

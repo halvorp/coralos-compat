@@ -171,3 +171,36 @@ fn a_flat_catalog_iterator_returns_each_item_then_no_more_items() {
     assert_eq!(call(&mut m, "FSCloseIterator", &[it]), 0);
     assert_eq!(call(&mut m, "FSCloseIterator", &[it]), -1420, "closed twice: errFSBadIterator");
 }
+
+#[test]
+fn fscreate_directory_and_file_unicode_make_new_items_and_refuse_duplicates() {
+    let (mut m, dir) = machine();
+    pstr(&mut m, NAME, "");
+    // a reference to the Adobe folder (the FSSpec of the folder itself: its parent's dirID and its name)
+    pstr(&mut m, NAME, "Plug");
+    assert_eq!(call(&mut m, "FSMakeFSSpec", &[0, dir, NAME, SPEC]), 0);
+    assert_eq!(call(&mut m, "FSpMakeFSRef", &[SPEC, REF]), 0);
+    assert_eq!(call(&mut m, "FSGetCatalogInfo", &[REF, 0, 0, 0, 0, REF2]), 0); // REF2 = the folder
+    let put = |m: &mut M, s: &str| for (i, c) in s.bytes().enumerate() { m.mac.mem.write_u16(UNI + 2 * i as u32, u16::from(c)).unwrap(); };
+    put(&mut m, "Settings");
+    let (new_ref, new_spec, new_id) = (0x3800u32, 0x3880u32, 0x38F0u32);
+    assert_eq!(call(&mut m, "FSCreateDirectoryUnicode", &[REF2, 8, UNI, 0, 0, new_ref, new_spec, new_id]), 0);
+    let made = m.mac.mem.read_u32(new_id).unwrap();
+    assert_ne!(made, 0);
+    assert_eq!(m.mac.mem.read_u32(new_spec + 2).unwrap(), dir, "the new folder's spec names its parent, Adobe");
+    assert_eq!(call(&mut m, "FSGetCatalogInfo", &[new_ref, 0x2 | 0x10, CAT, 0, 0, 0]), 0);
+    assert_eq!((m.mac.mem.read_u16(CAT).unwrap() & 0x10, m.mac.mem.read_u32(CAT + 8).unwrap()), (0x10, made), "a directory whose node ID is the new dirID");
+    // a file inside it, with Finder info from the catalogInfo (whichInfo kFSCatInfoFinderInfo)
+    put(&mut m, "Prefs");
+    m.mac.mem.zero(CAT, 144).unwrap();
+    m.mac.mem.write_bytes(CAT + 72, b"8BPF8BIM").unwrap();
+    assert_eq!(call(&mut m, "FSCreateFileUnicode", &[new_ref, 5, UNI, 0x800, CAT, REF, 0]), 0);
+    m.mac.mem.zero(CAT, 144).unwrap();
+    assert_eq!(call(&mut m, "FSGetCatalogInfo", &[REF, 0x800 | 0x8, CAT, 0, 0, 0]), 0);
+    assert_eq!((&m.mac.mem.read_u32(CAT + 72).unwrap().to_be_bytes(), m.mac.mem.read_u32(CAT + 4).unwrap()), (b"8BPF", made));
+    // NEGATIVE controls: the same name again is dupFNErr (-48); a file reference as the parent is dirNFErr (-120)
+    assert_eq!(call(&mut m, "FSCreateFileUnicode", &[new_ref, 5, UNI, 0, 0, 0, 0]), -48);
+    put(&mut m, "Settings");
+    assert_eq!(call(&mut m, "FSCreateDirectoryUnicode", &[REF2, 8, UNI, 0, 0, 0, 0, 0]), -48);
+    assert_eq!(call(&mut m, "FSCreateDirectoryUnicode", &[REF, 8, UNI, 0, 0, 0, 0, 0]), -120);
+}

@@ -21,12 +21,14 @@ use heirloom_raster::{Rect, Region};
 
 pub const BLACK: [u8; 8] = [0xFF; 8];
 
-/// Transfer mode -> the raster brush for text and templates, with the pen numbers of the foreground and background.
-pub fn brush_for(mode: u16, fg: u8, bg: u8) -> Brush {
+/// Transfer mode -> the raster brush for text and templates, with the pixel values of the foreground and background. `bic` is
+/// what srcBic writes under the ink: pen 0 on a 1-bit or indexed target (white, the pixel-value rule); the BACKGROUND colour on a
+/// direct one (IWQ "Boolean transfer modes with color pixels": srcBic sets the destination to the background colour).
+pub fn brush_for(mode: u16, fg: u32, bg: u32, bic: u32) -> Brush {
     match mode & 7 {
-        0 => Brush::new(fg, bg, JAM2), 1 => Brush::new(fg, bg, JAM1), 2 => Brush::new(fg, bg, COMPLEMENT), 3 => Brush::new(0, 0, JAM1),
+        0 => Brush::new(fg, bg, JAM2), 1 => Brush::new(fg, bg, JAM1), 2 => Brush::new(fg, bg, COMPLEMENT), 3 => Brush::new(bic, bic, JAM1),
         4 => Brush::new(fg, bg, JAM2 | INVERSVID), 5 => Brush::new(fg, bg, JAM1 | INVERSVID), 6 => Brush::new(fg, bg, COMPLEMENT | INVERSVID),
-        _ => Brush::new(0, 0, JAM1 | INVERSVID),
+        _ => Brush::new(bic, bic, JAM1 | INVERSVID),
     }
 }
 
@@ -34,14 +36,26 @@ pub fn brush_for(mode: u16, fg: u8, bg: u8) -> Brush {
 /// over the pen numbers `fg` (pattern bit 1) and `bg` (bit 0). The pattern bit selects the PIXEL (`fg` or `bg`) and the
 /// mode combines it with what is there, bit by bit: Boolean modes on an indexed device act on pixel values (Imaging With
 /// QuickDraw, "Transfer Modes"). With `fg` 1 and `bg` 0 in a 1-bit target this is the classic black-and-white table.
+/// On a DIRECT target pixel values are colours (black is 0), so the modes take IWQ's colour definitions instead ("Boolean
+/// transfer modes with color pixels"): where the pattern bit is set, copy writes the foreground, or writes the foreground,
+/// xor inverts the destination's colour bits, bic writes the background; where it is clear, copy writes the background and
+/// the others leave the destination ([`PenOp::direct`] = the colour mask).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PenOp { pub op: u8, pub invert: bool, pub fg: u8, pub bg: u8 }
+pub struct PenOp { pub op: u8, pub invert: bool, pub fg: u32, pub bg: u32, pub direct: Option<u32> }
 
 impl PenOp {
-    pub fn new(mode: u16, fg: u8, bg: u8) -> PenOp { PenOp { op: (mode & 3) as u8, invert: mode & 4 != 0, fg, bg } }
+    pub fn new(mode: u16, fg: u32, bg: u32) -> PenOp { PenOp { op: (mode & 3) as u8, invert: mode & 4 != 0, fg, bg, direct: None } }
+    /// The op for a target: [`PenOp::new`] on an indexed one, the colour definitions on a direct one.
+    pub fn for_target(mode: u16, fg: u32, bg: u32, bm: &heirloom_raster::Bitmap) -> PenOp {
+        PenOp { direct: bm.is_direct().then(|| bm.color_mask()), ..PenOp::new(mode, fg, bg) }
+    }
     /// The pixel after the mode, for pattern bit `bit` over the old pixel `old`.
-    pub fn apply(&self, bit: bool, old: u8) -> u8 {
-        let p = if bit ^ self.invert { self.fg } else { self.bg };
+    pub fn apply(&self, bit: bool, old: u32) -> u32 {
+        let ink = bit ^ self.invert;
+        if let Some(cm) = self.direct {
+            return match (self.op, ink) { (0, true) | (1, true) => self.fg, (0, false) => self.bg, (2, true) => old ^ cm, (3, true) => self.bg, _ => old };
+        }
+        let p = if ink { self.fg } else { self.bg };
         match self.op { 0 => p, 1 => old | p, 2 => old ^ p, _ => old & !p }
     }
 }
@@ -56,7 +70,7 @@ fn paint_with<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16,
     let pt = pattern(pat);
     target::with(m, port, |m, t| {
         let (fg, bg) = target::pens(m, port, t)?;
-        let op = PenOp::new(mode, fg, bg);
+        let op = PenOp::for_target(mode, fg, bg, &t.bm);
         let (mut g, ph) = (region.clone(), t.local0);
         g.translate(-t.local0.0, -t.local0.1);
         let clip = clip_region(m, t)?;

@@ -354,6 +354,13 @@ fn find_folder_root_application_support_and_shutdown_items() {
     assert_eq!(call(&mut m, "FindFolder", &[0xFFFF_8000, u32::from_be_bytes(*b"apps"), 1, PB, PB + 4]), 0);
     let node = m.mac.fm.dir_node(m.mac.fm.def_vol, m.mac.mem.read_u32(PB + 4).unwrap()).unwrap();
     assert_eq!((m.mac.fm.tree.name(node), m.mac.fm.tree.parent(node)), ("Applications (Mac OS 9)", m.mac.fm.def_vol), "Applications at the root");
+    // kChewableItemsFolderType 'flnt': Temporary Items:Cleanup At Startup; kOnAppropriateDisk (-32767) is the boot volume on Mac OS 9
+    assert_eq!(call(&mut m, "FindFolder", &[0xFFFF_8001, u32::from_be_bytes(*b"flnt"), 1, PB, PB + 4]), 0);
+    let node = m.mac.fm.dir_node(m.mac.fm.def_vol, m.mac.mem.read_u32(PB + 4).unwrap()).unwrap();
+    assert_eq!((m.mac.fm.tree.name(node), m.mac.fm.tree.name(m.mac.fm.tree.parent(node))), ("Cleanup At Startup", "Temporary Items"));
+    // NEGATIVE controls: a type with no folder is fnfErr (-43); a domain this Mac OS 9 volume set does not have stays nsvErr (-35)
+    assert_eq!(call(&mut m, "FindFolder", &[0xFFFF_8000, u32::from_be_bytes(*b"zzzz"), 1, PB, PB + 4]) as i32, -43);
+    assert_eq!(call(&mut m, "FindFolder", &[0xFFFF_8006, u32::from_be_bytes(*b"flnt"), 1, PB, PB + 4]) as i32, -35);
 }
 
 /// LaunchApplication is MEDIATED (process_c.rs): a host whose launch policy refuses a second process gets memFullErr naming the file; with

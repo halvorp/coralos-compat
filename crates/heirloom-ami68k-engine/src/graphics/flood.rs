@@ -26,7 +26,7 @@ pub fn flood<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
         let bounds = bm.rect();
         if !clip.allows(sx, sy) || bm.get(sx, sy).is_none() { return Rect::default(); }
         let seed = bm.get(sx, sy).unwrap_or(0);
-        let want = |v: u8| if mode == 0 { v != aol } else { v == seed };
+        let want = |v: u32| if mode == 0 { v != u32::from(aol) } else { v == seed };
         let mut touched = Rect::default();
         let mut seen = alloc::collections::BTreeSet::new();
         let mut stack: Vec<(i32, i32)> = alloc::vec![(sx, sy)];

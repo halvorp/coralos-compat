@@ -7,20 +7,24 @@
 //! the same row is drawn again (a stretch repeats rows). Horizontally a 16-bit fraction does the same per pixel: stretching
 //! repeats a source pixel until the carry, shrinking ORs the source pixels that fall into one destination pixel.
 //! Source pixels the DDA reads beyond the srcRect are the bitmap's own neighbours (the original reads whole rows).
+//!
+//! Merging is the 1-bit rule (OR keeps thin black lines). Pixels deeper than 1 bit are VALUES (pens, colours) that do not OR:
+//! a shrinking transfer keeps the FIRST source pixel (and row) that falls into a destination pixel (Color QuickDraw's
+//! srcCopy shrink drops pixels unless dithering is asked for; no averaging is done here, ditherCopy included).
 use alloc::vec;
 use alloc::vec::Vec;
 use heirloom_raster::{Bitmap, Rect};
 
-/// One source row as `0`/`1` pens, `sw` of them plus the bitmap's neighbours past the rectangle (reads outside: white).
-fn read_row(src: &Bitmap, sr: Rect, row: i32, sw: i32, extra: i32) -> Vec<u8> {
-    (0..sw + extra).map(|x| u8::from(src.get(sr.x0 + x, sr.y0 + row) == Some(1))).collect()
+/// One source row of pixel values, `sw` of them plus the bitmap's neighbours past the rectangle (reads outside: 0).
+fn read_row(src: &Bitmap, sr: Rect, row: i32, sw: i32, extra: i32) -> Vec<u32> {
+    (0..sw + extra).map(|x| src.get(sr.x0 + x, sr.y0 + row).unwrap_or(0)).collect()
 }
 
-/// `Stretch.a` STRETCH / SHRINK: map `sw` source pens to `dw` destination pens.
-pub fn stretch_row(src: &[u8], sw: i32, dw: i32) -> Vec<u8> {
+/// `Stretch.a` STRETCH / SHRINK: map `sw` source pixels to `dw` destination pixels (`or_merge`: the 1-bit OR; else the first).
+pub fn stretch_row(src: &[u32], sw: i32, dw: i32, or_merge: bool) -> Vec<u32> {
     if sw <= 0 || dw <= 0 { return Vec::new(); } // SetupStretch aborts on a non-positive ratio; never size a buffer from it
     let (sw_u, dw_u) = (sw as usize, dw as usize);
-    let mut dst = vec![0u8; dw_u];
+    let mut dst = vec![0u32; dw_u];
     let at = |i: usize| src.get(i).copied().unwrap_or(0);
     if dw == sw { for (i, d) in dst.iter_mut().enumerate() { *d = at(i); } return dst; }
     let err_carry = |err: &mut u32, f: u32| { *err += f; let c = *err >= 0x1_0000; *err &= 0xFFFF; c };
@@ -33,19 +37,21 @@ pub fn stretch_row(src: &[u8], sw: i32, dw: i32) -> Vec<u8> {
         }
     } else {
         let f = (((i64::from(dw)) << 16) / i64::from(sw)) as u32 & 0xFFFF; // FixRatio(numer, denom)
-        let (mut err, mut d, mut s, mut cur) = (f >> 1, 0usize, 0usize, 0u8);
+        let (mut err, mut d, mut s, mut cur, mut first) = (f >> 1, 0usize, 0usize, 0u32, true);
         while d < dw_u {
-            cur |= at(s);
+            if or_merge { cur |= at(s); } else if first { cur = at(s); }
+            first = false;
             s += 1;
-            if err_carry(&mut err, f) { dst[d] = cur; d += 1; cur = 0; }
+            if err_carry(&mut err, f) { dst[d] = cur; d += 1; cur = 0; first = true; }
             if s > sw_u + dw_u + 16 { break; } // a fraction of 0 never carries: stop instead of spinning
         }
     }
     dst
 }
 
-/// Call `emit(dst_row, pens)` for every destination row `0..dh` of `sr` stretched to `dw` x `dh`, top to bottom.
-pub fn stretch<E: FnMut(i32, &[u8]) -> Result<(), crate::Refusal>>(src: &Bitmap, sr: Rect, dw: i32, dh: i32, mut emit: E) -> Result<(), crate::Refusal> {
+/// Call `emit(dst_row, pixels)` for every destination row `0..dh` of `sr` stretched to `dw` x `dh`, top to bottom.
+pub fn stretch<E: FnMut(i32, &[u32]) -> Result<(), crate::Refusal>>(src: &Bitmap, sr: Rect, dw: i32, dh: i32, mut emit: E) -> Result<(), crate::Refusal> {
+    let or_merge = src.depth() == 1;
     let (sw, sh) = (sr.width(), sr.height());
     if dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 { return Ok(()); } // SetupStretch: numer or denom <= 0 aborts
     let extra = (dw.max(sw) / 8).max(16) + 16; // the DDA may read a little past the rect
@@ -57,11 +63,11 @@ pub fn stretch<E: FnMut(i32, &[u8]) -> Result<(), crate::Refusal>>(src: &Bitmap,
         next_src += 1;
         verror += dh;
         while verror <= 0 && src_ok(next_src) { // SRCLOOP: merge further source rows
-            for (b, n) in buf.iter_mut().zip(read_row(src, sr, next_src, sw, extra)) { *b |= n; }
+            if or_merge { for (b, n) in buf.iter_mut().zip(read_row(src, sr, next_src, sw, extra)) { *b |= n; } }
             next_src += 1;
             verror += dh;
         }
-        let row = stretch_row(&buf, sw, dw);
+        let row = stretch_row(&buf, sw, dw, or_merge);
         loop {
             emit(vert, &row)?;
             vert += 1;
@@ -77,8 +83,9 @@ pub fn stretch<E: FnMut(i32, &[u8]) -> Result<(), crate::Refusal>>(src: &Bitmap,
 mod tests {
     use super::*;
     use heirloom_raster::Bitmap;
-    fn bits(s: &str) -> Vec<u8> { s.bytes().map(|b| u8::from(b == b'#')).collect() }
-    fn show(v: &[u8]) -> String { v.iter().map(|&p| if p == 1 { '#' } else { '.' }).collect() }
+    fn bits(s: &str) -> Vec<u32> { s.bytes().map(|b| u32::from(b == b'#')).collect() }
+    fn stretch_row(src: &[u32], sw: i32, dw: i32) -> Vec<u32> { super::stretch_row(src, sw, dw, true) }
+    fn show(v: &[u32]) -> String { v.iter().map(|&p| if p == 1 { '#' } else { '.' }).collect() }
     /// SetupStretch DOUBLE / TRIPLE: every source pixel becomes two (three) destination pixels.
     #[test]
     fn whole_number_stretches_repeat_each_pixel() {
@@ -107,7 +114,7 @@ mod tests {
         let mut b = Bitmap::new(8, 4, 1).unwrap();
         b.set(3, 1, 1);
         b.set(5, 3, 1);
-        let mut rows: Vec<(i32, Vec<u8>)> = Vec::new();
+        let mut rows: Vec<(i32, Vec<u32>)> = Vec::new();
         stretch(&b, Rect::new(0, 0, 8, 4), 8, 2, |r, p| { rows.push((r, p.to_vec())); Ok(()) }).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(show(&rows[0].1), "...#....");
@@ -122,5 +129,15 @@ mod tests {
     fn stretch_row_refuses_degenerate_sizes_instead_of_panicking() {
         assert!(stretch_row(&[1, 1], -3, 4).is_empty() && stretch_row(&[1, 1], 4, -3).is_empty() && stretch_row(&[], 0, 0).is_empty());
         assert_eq!(show(&stretch_row(&[1], 4, 4)), "#...", "a short source reads as white past its end");
+    }
+    #[test]
+    fn deep_pixels_are_sampled_not_ored() {
+        assert_eq!(super::stretch_row(&[0x00FF_0000, 0x0000_00FF, 0x0000_FF00, 0x0012_3456], 4, 2, false), [0x00FF_0000, 0x0000_FF00], "the first of each pair");
+        assert_eq!(super::stretch_row(&[7, 9], 2, 4, false), [7, 7, 9, 9]);
+        let mut b = Bitmap::new(2, 4, 32).unwrap();
+        for y in 0..4 { b.set(0, y, 0x10 * (y as u32 + 1)); }
+        let mut rows = Vec::new();
+        stretch(&b, Rect::new(0, 0, 2, 4), 2, 2, |_, p| { rows.push(p[0]); Ok(()) }).unwrap();
+        assert_eq!(rows, [0x10, 0x30], "rows 0 and 2: not 0x10 | 0x20");
     }
 }

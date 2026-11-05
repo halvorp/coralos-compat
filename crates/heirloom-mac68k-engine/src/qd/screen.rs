@@ -95,7 +95,7 @@ fn compare<U: GuestUi>(m: &mut Mac<U>, sw: i16, sh: i16, bytes: u32) {
             for y in r.y0..r.y1 {
                 for x in r.x0..r.x1 {
                     let i = y as usize * w + x as usize;
-                    if m.qd.screen.shadow[i] != now[i] { t.bm.set(x - wr.x0, y - wr.y0, now[i]); touched = touched.union(&Rect::new(x - wr.x0, y - wr.y0, x - wr.x0 + 1, y - wr.y0 + 1)); }
+                    if m.qd.screen.shadow[i] != now[i] { t.bm.set(x - wr.x0, y - wr.y0, u32::from(now[i])); touched = touched.union(&Rect::new(x - wr.x0, y - wr.y0, x - wr.x0 + 1, y - wr.y0 + 1)); }
                 }
             }
         }

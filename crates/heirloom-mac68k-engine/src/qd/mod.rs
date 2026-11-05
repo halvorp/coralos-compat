@@ -15,7 +15,7 @@
 //!
 //! Substitutions, named once here: text is drawn in `heirloom-raster`'s topaz-8 for EVERY font id and size (Chicago and
 //! Geneva are not bundled), see [`text`]; each window has its own canvas, so `visRgn` is the window's portRect and
-//! never carves out overlapping windows; direct (16/32-bit) pixel maps and colour patterns are refused by name.
+//! never carves out overlapping windows; colour patterns (PixPat type 1/2) are refused by name; direct (16/32-bit) pixel maps are drawn (`crate::cqd::direct`).
 pub mod colorpen;
 pub mod copybits;
 pub mod draw;

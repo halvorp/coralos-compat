@@ -46,7 +46,7 @@ impl<U: GuestUi> Mac<U> {
         let e = Refusal::mem("ColorTable");
         self.mem.write_u32(p + CT_SEED, seed).map_err(&e)?;
         self.mem.write_u16(p + CT_FLAGS, flags).map_err(&e)?;
-        self.mem.write_u16(p + CT_SIZE, (colors.len() - 1) as u16).map_err(&e)?;
+        self.mem.write_u16(p + CT_SIZE, (colors.len() as u16).wrapping_sub(1)).map_err(&e)?; // ctSize = entries - 1 (-1: none, a direct map's table)
         for (i, c) in colors.iter().enumerate() {
             let at = p + CT_TABLE + SPEC * i as u32;
             self.mem.write_u16(at, i as u16).map_err(&e)?;
@@ -59,7 +59,9 @@ impl<U: GuestUi> Mac<U> {
     pub fn read_ctab(&self, h: u32) -> Result<Vec<Rgb>, Refusal> {
         let p = self.deref_handle(h, "CTabHandle")?;
         let e = Refusal::mem("ColorTable");
-        let (flags, n) = (self.mem.read_u16(p + CT_FLAGS).map_err(&e)?, usize::from(self.mem.read_u16(p + CT_SIZE).map_err(&e)?) + 1);
+        let (flags, size) = (self.mem.read_u16(p + CT_FLAGS).map_err(&e)?, self.mem.read_u16(p + CT_SIZE).map_err(&e)?);
+        if size == 0xFFFF { return Ok(Vec::new()); } // ctSize -1: no entries (a direct pixel map's table)
+        let n = usize::from(size) + 1;
         if n > 256 { return Err(Refusal(format!("CTabHandle {h:#x}: {n} entries (an indexed table holds at most 256)"))); }
         let mut t = alloc::vec![Rgb::BLACK; n];
         for i in 0..n {

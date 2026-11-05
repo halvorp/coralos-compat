@@ -4,8 +4,10 @@
 //! rectangle to its destination rectangle mapped from the picture frame to `dstRect`, and the temporary is freed.
 //!
 //! What is not drawn is refused BY NAME with the opcode's number and name, never skipped (the picture stops there; what was drawn before
-//! stays). Named limits: the picture's `Clip` region is skipped (the port's own clip applies); a mask region (`BitsRgn`, `PackBitsRgn`) is
-//! honoured only when the picture is drawn unscaled; transfer modes above 7 (patterns) and direct (16 / 32-bit) pixels are refused.
+//! stays). Named limits: the picture's `Clip` region is skipped (the port's own clip applies); a mask region (`BitsRgn`, `PackBitsRgn`,
+//! `DirectBitsRgn`) is mapped with the picture (MapRgn: each of its rectangles through the frame -> destination map); transfer modes above 7 (patterns) are refused. Direct pixels (DirectBitsRect /
+//! DirectBitsRgn, 16 and 32 bits) are drawn like the others. RGBFgCol / RGBBkCol / OpColor / HiliteColor are stepped over: the port's own
+//! pens stay (named: a picture that recolours its own bitmaps is drawn in the port's colours).
 use super::copybits::copy_through;
 use super::pict::{self, Bits, Op};
 use super::port::{bits_addr, raster};
@@ -38,8 +40,8 @@ pub(crate) fn play<U: GuestUi>(m: &mut Mac<U>, h: u32, dst_at: u32) -> Result<St
             Op::Unsupported(op, name) => return Err(Refusal(format!("DrawPicture {h:#x}: picture opcode {op:#06x} ({name}) is not interpreted (only bitmap opcodes are drawn; {drawn} drawn before it)"))),
             Op::Bits(b) => {
                 let d = Rect::new(map_x(b.dst[1]), map_y(b.dst[0]), map_x(b.dst[3]), map_y(b.dst[2]));
-                let unscaled = (fw, fh) == (dw, dh);
-                draw_bits(m, h, &b, d, db, unscaled, (i32::from(dst.left) - i32::from(head.left), i32::from(dst.top) - i32::from(head.top)))?;
+                let map = |x: i32, y: i32| (map_x(x as i16), map_y(y as i16));
+                draw_bits(m, h, &b, d, db, &map)?;
                 drawn += 1;
             }
         }
@@ -49,22 +51,24 @@ pub(crate) fn play<U: GuestUi>(m: &mut Mac<U>, h: u32, dst_at: u32) -> Result<St
        else { format!("[quickdraw] DrawPicture {h:#x} into ({},{},{},{}): {drawn} bitmap(s)", r.top, r.left, r.bottom, r.right) })
 }
 
-fn draw_bits<U: GuestUi>(m: &mut Mac<U>, h: u32, b: &Bits, dst: Rect, db: u32, unscaled: bool, shift: (i32, i32)) -> Result<(), Refusal> {
+/// `map`: a picture-frame point to the destination (local coordinates), the same linear map the bitmap's rectangles take.
+fn draw_bits<U: GuestUi>(m: &mut Mac<U>, h: u32, b: &Bits, dst: Rect, db: u32, map: &dyn Fn(i32, i32) -> (i32, i32)) -> Result<(), Refusal> {
     let mode = b.mode & !64;
-    if mode > 7 { return Err(Refusal(format!("DrawPicture {h:#x}: bitmap opcode {:#04x} with transfer mode {} (pattern and arithmetic modes) is not drawn", b.op, b.mode))); }
+    if mode > 7 && !(32..=39).contains(&mode) { return Err(Refusal(format!("DrawPicture {h:#x}: bitmap opcode {:#04x} with transfer mode {} (pattern and hilite modes) is not drawn", b.op, b.mode))); }
     let mask = match &b.rgn {
         None => None,
         Some(r) => {
-            if !unscaled { return Err(Refusal(format!("DrawPicture {h:#x}: bitmap opcode {:#04x} with a mask region is drawn only unscaled", b.op))); }
-            let mut g: Region = super::regions::unpack(r).map_err(|e| Refusal(format!("DrawPicture {h:#x}: mask region: {e}")))?;
-            g.translate(shift.0, shift.1);
-            Some(g)
+            // MapRgn: every rectangle of the region through the frame -> destination map (a translation when unscaled)
+            let g: Region = super::regions::unpack(r).map_err(|e| Refusal(format!("DrawPicture {h:#x}: mask region: {e}")))?;
+            let mut out = Region::new();
+            for r in g.rects() { let (a, b) = (map(r.x0, r.y0), map(r.x1, r.y1)); out.or_rect(Rect::new(a.0, a.1, b.0, b.1)); }
+            Some(out)
         }
     };
     // the temporary BitMap / PixMap: record, then pixels
     let rec = if b.pixmap { crate::cqd::pixmap::PM_SIZE } else { 14 };
     let block = m.mm.new_ptr(&mut m.mem, &mut m.heap, rec + b.pixels.len() as u32, true).map_err(|e| Refusal(format!("DrawPicture: no memory for a {}-byte bitmap (memFullErr {e})", b.pixels.len())))?;
-    let ct = if b.pixmap && b.pixel_size > 1 { Some(build_ctab(m, b)?) } else { None };
+    let ct = if b.pixmap && b.pixel_size > 1 && b.pixel_size <= 8 { Some(build_ctab(m, b)?) } else { None }; // a direct map has no table
     let result = (|| {
         let e = Refusal::mem("DrawPicture bitmap");
         m.mem.write_u32(block, block + rec).map_err(&e)?;

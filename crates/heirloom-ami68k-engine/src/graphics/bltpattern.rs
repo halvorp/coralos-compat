@@ -57,16 +57,16 @@ pub fn paint_mask<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mask: u32, r: (i32, i32
         let tr = area.translate(-ox, -oy);
         let keep = |x: i32, y: i32| { let (rx, ry) = at(x, y); bit(rx, ry) };
         if mode & (COMPLEMENT | JAM2) == (COMPLEMENT | JAM2) {
-            let b = Brush { fg: st.fg, bg: st.bg, mode: JAM1 | COMPLEMENT, mask: st.mask };
+            let b = Brush { fg: st.fg.into(), bg: st.bg.into(), mode: JAM1 | COMPLEMENT, mask: st.mask.into() };
             return paint::stencil(bm, tr, &b, clip, keep);
         }
         match &pat {
             None => {
-                let b = Brush { fg: st.fg, bg: st.bg, mode: if mode & 3 == JAM2 { (mode & !3) | JAM1 } else { mode } & 7, mask: st.mask };
+                let b = Brush { fg: st.fg.into(), bg: st.bg.into(), mode: if mode & 3 == JAM2 { (mode & !3) | JAM1 } else { mode } & 7, mask: st.mask.into() };
                 paint::stencil(bm, tr, &b, clip, keep)
             }
             Some(p) => {
-                let b = Brush { fg: st.fg, bg: st.bg, mode: mode & 7, mask: st.mask };
+                let b = Brush { fg: st.fg.into(), bg: st.bg.into(), mode: mode & 7, mask: st.mask.into() };
                 let mut hit = Rect::default();
                 for run in if mask == 0 { alloc::vec![area] } else { runs(&rows, r) } {
                     hit = hit.union(&paint::stencil(bm, run.translate(-ox, -oy), &b, clip, |x, y| { let (rx, ry) = at(x, y); p.bit(rx, ry) }));

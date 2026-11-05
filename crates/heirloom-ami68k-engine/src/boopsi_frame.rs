@@ -112,7 +112,7 @@ fn framebox<U: GuestUi>(a: &mut Amiga<U>, cl: u32, o: u32, msg: u32) -> Result<u
 /// RectFill with one pen (JAM1), inclusive corners, RastPort coordinates.
 fn rect<U: GuestUi>(a: &mut Amiga<U>, rp: u32, (x0, y0, x1, y1): (i32, i32, i32, i32), pen: u8) -> Result<(), Refusal> {
     if x1 < x0 || y1 < y0 { return Ok(()); }
-    let (b, r) = (Brush::new(pen, 0, 0), Rect::from_inclusive(x0, y0, x1, y1));
+    let (b, r) = (Brush::new(u32::from(pen), 0, 0), Rect::from_inclusive(x0, y0, x1, y1));
     crate::graphics::target::paint(a, rp, "frameiclass draw", |bm, clip, (ox, oy)| paint::fill_rect(bm, r.translate(-ox, -oy), &b, None, clip))?;
     Ok(())
 }

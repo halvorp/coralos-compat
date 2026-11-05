@@ -89,7 +89,7 @@ impl G {
     /// the DEFAULT font is the Gute Form face (heirloom-theme), so tests of topaz mechanics say so explicitly.
     pub fn set_topaz(&mut self, rp: u32) { self.run(&[gfx(-66, &[a(1, rp), a(0, 0x8000)])]); }
     /// The host-side pixel of a guest bitmap.
-    pub fn px(&self, bm: u32, x: i32, y: i32) -> Option<u8> { self.a.gfx.bitmaps[&bm].bm.get(x, y) }
+    pub fn px(&self, bm: u32, x: i32, y: i32) -> Option<u8> { self.a.gfx.bitmaps[&bm].bm.get(x, y).map(|p| p as u8) }
     pub fn rows(&self, bm: u32, x0: i32, y0: i32, w: i32, h: i32) -> Vec<Vec<u8>> {
         (y0..y0 + h).map(|y| (x0..x0 + w).map(|x| self.px(bm, x, y).unwrap_or(255)).collect()).collect()
     }

@@ -5,7 +5,7 @@
 //! * [`color`]: `RGBColor`, the standard colour tables, nearest-colour search.
 //! * [`ctab`]: `ColorTable` / `CTabHandle` (`GetCTable`, `DisposeCTable`, `GetCTSeed`) and the Color Manager's
 //!   `Index2Color` / `Color2Index` / `InvertColor` / `RealColor`.
-//! * [`pixmap`]: `PixMap` / `PixMapHandle` records and reading/writing pixels of a packed guest pixel map (1, 2, 4, 8 bits).
+//! * [`pixmap`]: `PixMap` / `PixMapHandle` records and reading/writing pixels of a packed guest pixel map (1, 2, 4, 8, 16, 32 bits).
 //! * [`gdevice`]: `GDevice` / `GDHandle`: the main screen device (8 bits deep, the standard 8-bit table),
 //!   `GetMainDevice`/`GetGDevice`/`SetGDevice`/`GetDeviceList`/`GetNextDevice`/`TestDeviceAttribute`/`GetMaxDevice`.
 //! * [`depth`]: `HasDepth` / `SetDepth` of the Palette Manager's dispatch trap.
@@ -13,19 +13,23 @@
 //! * [`pens`]: the pen colours, `RGBForeColor`/`RGBBackColor`/`GetForeColor`/`GetBackColor` and the classic `ForeColor`.
 //!
 //! **One implementation of the drawing ops.** There is no colour code path beside the 1-bit one: the shared QuickDraw ops
-//! ([`crate::qd`]) draw into a chunky `heirloom_raster::Bitmap` whose depth is 1 for a classic port and 8 for a colour one,
-//! the pen is a pair of pen NUMBERS (index 1/0 in a 1-bit port; `Color2Index` of `rgbFgColor`/`rgbBkColor` in an indexed
-//! one), and the Boolean transfer modes act on pixel values, which is what QuickDraw does on an indexed device (the
-//! standard table puts white at 0 and black at 255 so that or/xor/bic read as black-and-white there).
+//! ([`crate::qd`]) draw into a chunky `heirloom_raster::Bitmap` whose depth is the port's (1 classic; 2-8 indexed; 16/32 direct),
+//! the pen is a pair of pixel VALUES (index 1/0 in a 1-bit port; `Color2Index` of `rgbFgColor`/`rgbBkColor` in an indexed
+//! one; the colour itself in a direct one), and the Boolean transfer modes act on pixel values on indexed devices (the standard
+//! table puts white at 0 and black at 255 so that or/xor/bic read as black-and-white there) and by IWQ's colour definitions on
+//! direct ones ([`direct`], `qd::draw::PenOp`).
 //!
-//! Not modelled, by name (each one is a refusal when called, never a fake): direct (16/32-bit) pixel maps, the inverse
-//! table (`gdITable` is NIL: the engine answers `Color2Index` itself), device search/complement procedures, gamma, the
-//! arithmetic transfer modes 32..39, colour patterns other than `patType` 0, colour cursors ('crsr'). Colour icons ('cicn') are [`cicon`].
+//! * [`direct`]: 16/32-bit pixels (x1R5G5B5 / x8R8G8B8), the inverse table, the one depth converter, the arithmetic transfer modes.
+//!
+//! Not modelled, by name (each one is a refusal when called, never a fake): `gdITable` stays NIL (the engine keeps its own inverse
+//! tables, `Mac::inverse_table`), device search/complement procedures, gamma, hilite mode 50, colour patterns other than `patType` 0,
+//! colour cursors ('crsr'). Colour icons ('cicn') are [`cicon`].
 pub mod cicon;
 pub mod cport;
 pub mod color;
 pub mod ctab;
 pub mod depth;
+pub mod direct;
 pub mod gdevice;
 pub mod gworld;
 pub mod pens;
@@ -50,6 +54,8 @@ pub struct Cqd {
     pub window_pix: alloc::collections::BTreeMap<u32, u32>,
     /// Every live offscreen graphics world by its port ([`gworld`]).
     pub gworlds: alloc::collections::BTreeMap<u32, gworld::Gw>,
+    /// Recently used inverse tables, most recent first: (the colour table, its inverse table). A cache (`Mac::inverse_table`).
+    pub itabs: alloc::vec::Vec<(alloc::vec::Vec<color::Rgb>, direct::ITab)>,
 }
 
 /// Seeds below this are the standard tables' (their `'clut'` id); `GetCTSeed` starts above it (Imaging With QuickDraw).

@@ -7,8 +7,8 @@
 //! hRes 22 (Fixed)    vRes 26 (Fixed)              pixelType 30       pixelSize 32  cmpCount 34    cmpSize 36
 //! planeBytes 38 (long)   pmTable 42 (CTabHandle)  pmReserved 46 (long)         = 50 bytes
 //! ```
-//! Pixels of 1, 2, 4 and 8 bits are packed most-significant-bit first, rows `rowBytes` apart. Deeper (direct) pixel maps are a
-//! named refusal: the engine's rasteriser is indexed (one pen number per pixel).
+//! Pixels of 1, 2, 4 and 8 bits are packed most-significant-bit first, rows `rowBytes` apart; 16 and 32-bit (direct) pixels are
+//! big-endian words and longs (`crate::cqd::direct`).
 use crate::Refusal;
 use alloc::format;
 use heirloom_raster::Bitmap;
@@ -30,40 +30,56 @@ pub const PM_TABLE: u32 = 42;
 pub const PM_SIZE: u32 = 50;
 /// `rowBytes` bit 15: this record is a PixMap, not a BitMap.
 pub const PIXMAP_FLAG: u16 = 0x8000;
+/// `pixelType` of a direct map (RGBDirect).
+pub const RGB_DIRECT: u16 = 16;
 /// 72 dpi as a Fixed.
 pub const DPI_72: u32 = 0x0048_0000;
 
 /// Bytes per row of `width` pixels of `depth` bits, rounded up to a whole word (what NewGWorld/NewPixMap use).
 pub fn row_bytes(width: i32, depth: u8) -> u32 { ((width as u32 * u32::from(depth) + 15) / 16) * 2 }
 
-/// Unpack `rows` rows of `width` pixels of `depth` (1, 2, 4 or 8) bits from `bytes` (rows `row` bytes apart).
+/// Unpack `rows` rows of `width` pixels of `depth` (1, 2, 4, 8, 16 or 32) bits from `bytes` (rows `row` bytes apart).
 pub fn unpack(bytes: &[u8], row: usize, width: i32, height: i32, depth: u8) -> Result<Bitmap, Refusal> {
-    let mut b = Bitmap::new(width, height, depth).ok_or_else(|| Refusal(format!("pixel map {width}x{height}x{depth}: empty, too large, or a depth the rasteriser does not have")))?;
+    let mut b = Bitmap::new(width, height, depth).filter(|_| supported_depth(u16::from(depth))).ok_or_else(|| Refusal(format!("pixel map {width}x{height}x{depth}: empty, too large, or a depth the rasteriser does not have")))?;
+    if super::direct::is_direct(depth) {
+        let mut v = alloc::vec![0u32; width as usize];
+        for y in 0..height as usize { super::direct::unpack_row(&bytes[y * row..], depth, &mut v); b.write_span(y as i32, 0, &v); }
+        return Ok(b);
+    }
     let per = 8 / usize::from(depth);
     for y in 0..height as usize {
         for x in 0..width as usize {
             let byte = bytes[y * row + x / per];
             let shift = 8 - usize::from(depth) * (x % per + 1);
-            b.set(x as i32, y as i32, (byte >> shift) & b.pen_mask());
+            b.set(x as i32, y as i32, u32::from(byte >> shift) & b.pen_mask());
         }
     }
     Ok(b)
 }
 
 /// Pack a bitmap into rows `row` bytes apart (`out` is zeroed first: the row padding is cleared).
-pub fn pack(b: &Bitmap, row: usize, out: &mut [u8]) {
+pub fn pack(b: &Bitmap, row: usize, out: &mut [u8]) { pack_rows(b, row, 0..b.height(), out) }
+
+/// Pack rows `rows` of a bitmap into `out` (its first byte is row `rows.start`; padding cleared).
+pub fn pack_rows(b: &Bitmap, row: usize, rows: core::ops::Range<i32>, out: &mut [u8]) {
     out.fill(0);
-    let (depth, per) = (b.depth(), 8 / usize::from(b.depth()));
-    for y in 0..b.height() as usize {
+    let depth = b.depth();
+    if b.is_direct() {
+        let mut v = alloc::vec::Vec::with_capacity(b.width() as usize);
+        for (i, y) in rows.enumerate() { v.clear(); b.read_span(y, 0, b.width(), &mut v); super::direct::pack_row(&v, depth, &mut out[i * row..]); }
+        return;
+    }
+    let per = 8 / usize::from(depth);
+    for (i, y) in rows.enumerate() {
         for x in 0..b.width() as usize {
             let shift = 8 - usize::from(depth) * (x % per + 1);
-            out[y * row + x / per] |= b.get(x as i32, y as i32).unwrap_or(0) << shift;
+            out[i * row + x / per] |= (b.get(x as i32, y).unwrap_or(0) as u8) << shift;
         }
     }
 }
 
-/// The depths the rasteriser can hold.
-pub fn supported_depth(d: u16) -> bool { matches!(d, 1 | 2 | 4 | 8) }
+/// The depths QuickDraw pixel maps have and the rasteriser holds: indexed 1, 2, 4, 8; direct 16, 32.
+pub fn supported_depth(d: u16) -> bool { matches!(d, 1 | 2 | 4 | 8 | 16 | 32) }
 
 #[cfg(test)]
 mod tests {
@@ -74,20 +90,32 @@ mod tests {
         for depth in [1u8, 2, 4, 8] {
             let mut b = Bitmap::new(5, 3, depth).unwrap();
             let max = b.pen_mask();
-            for y in 0..3 { for x in 0..5 { b.set(x, y, ((x * 3 + y * 7 + 1) as u8) & max); } }
+            for y in 0..3 { for x in 0..5 { b.set(x, y, ((x * 3 + y * 7 + 1) as u32) & max); } }
             let row = row_bytes(5, depth) as usize;
             let mut buf = alloc::vec![0xEEu8; row * 3];
             pack(&b, row, &mut buf);
             assert_eq!(unpack(&buf, row, 5, 3, depth).unwrap(), b, "depth {depth}");
         }
         let mut b = Bitmap::new(4, 1, 2).unwrap();
-        for (x, p) in [1u8, 2, 3, 0].into_iter().enumerate() { b.set(x as i32, 0, p); }
+        for (x, p) in [1u32, 2, 3, 0].into_iter().enumerate() { b.set(x as i32, 0, p); }
         let mut buf = [0u8; 2];
         pack(&b, 2, &mut buf);
         assert_eq!(buf, [0b01_10_11_00, 0], "2-bit pixels, first pixel in the top bits; padding cleared");
         assert_eq!(row_bytes(5, 8), 6);
         assert_eq!(row_bytes(512, 8), 512);
-        assert!(unpack(&[0; 4], 4, 4, 1, 16).is_err() && !supported_depth(16));
+        assert!(unpack(&[0; 4], 4, 1, 1, 12).is_err() && !supported_depth(12) && !supported_depth(24), "negative: 12 and 24 are not pixel-map depths");
+        let mut d = Bitmap::new(3, 2, 32).unwrap();
+        d.set(2, 1, 0x00AB_CDEF);
+        let mut buf = alloc::vec![0xEEu8; 12 * 2];
+        pack(&d, 12, &mut buf);
+        assert_eq!(&buf[20..24], &[0, 0xAB, 0xCD, 0xEF], "32-bit pixels are big-endian longs");
+        assert_eq!(unpack(&buf, 12, 3, 2, 32).unwrap(), d);
+        let mut s = Bitmap::new(2, 1, 16).unwrap();
+        s.set(1, 0, 0x7C1F);
+        let mut sb = [0u8; 4];
+        pack(&s, 4, &mut sb);
+        assert_eq!(sb, [0, 0, 0x7C, 0x1F]);
+        assert_eq!(unpack(&sb, 4, 2, 1, 16).unwrap(), s);
     }
 }
 
@@ -98,8 +126,8 @@ use crate::pascal::Rect;
 use heirloom_ui_abi::GuestUi;
 
 impl<U: GuestUi> Mac<U> {
-    /// A new `PixMapHandle` of `depth`-bit chunky pixels over `bounds`, pixels at `base` (0: none yet), `row` bytes a row,
-    /// color table `table` (0: none). Resolution 72 dpi, one component of `depth` bits (Imaging With QuickDraw).
+    /// A new `PixMapHandle` of `depth`-bit pixels over `bounds`, pixels at `base` (0: none yet), `row` bytes a row,
+    /// color table `table` (0: none). Resolution 72 dpi; one component of `depth` bits, or RGBDirect at 16/32 (Imaging With QuickDraw).
     pub fn new_pixmap(&mut self, depth: u8, bounds: Rect, base: u32, row: u32, table: u32) -> Result<u32, Refusal> {
         let (h, p) = self.alloc_handle(PM_SIZE, "PixMap")?;
         let e = Refusal::mem("PixMap");
@@ -108,7 +136,9 @@ impl<U: GuestUi> Mac<U> {
         crate::qd::port::write_rect(&mut self.mem, p + PM_BOUNDS, bounds)?;
         self.mem.write_u32(p + PM_HRES, DPI_72).map_err(&e)?;
         self.mem.write_u32(p + PM_VRES, DPI_72).map_err(&e)?;
-        for (off, v) in [(PM_PIXEL_SIZE, u16::from(depth)), (PM_CMP_COUNT, 1), (PM_CMP_SIZE, u16::from(depth))] { self.mem.write_u16(p + off, v).map_err(&e)?; }
+        // a direct map is RGBDirect (pixelType 16) with three components of 5 or 8 bits (IWQ "PixMap"); an indexed one has one of `depth` bits
+        let (ptype, count, size) = if super::direct::is_direct(depth) { (RGB_DIRECT, 3, if depth == 16 { 5 } else { 8 }) } else { (0, 1, u16::from(depth)) };
+        for (off, v) in [(PM_PIXEL_TYPE, ptype), (PM_PIXEL_SIZE, u16::from(depth)), (PM_CMP_COUNT, count), (PM_CMP_SIZE, size)] { self.mem.write_u16(p + off, v).map_err(&e)?; }
         self.mem.write_u32(p + PM_TABLE, table).map_err(&e)?;
         Ok(h)
     }

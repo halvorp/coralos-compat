@@ -1,15 +1,16 @@
 //! A drawing destination: the chunky [`Bitmap`] a port draws into, taken out of its home (the window's canvas, or a real
 //! 1-bit BitMap in guest memory) for the duration of one operation and put back (and its damage recorded) after.
 //!
-//! * A target is 1 bit deep (a classic port) or an indexed colour depth (2, 4 or 8 bits: a CGrafPort or a PixMap), and then
-//!   carries the colour table that gives its pixel values meaning ([`Target::clut`]). Every drawing op reads its pens from
-//!   [`pens`], so one implementation serves both.
+//! * A target is 1 bit deep (a classic port), an indexed colour depth (2, 4 or 8 bits: a CGrafPort or a PixMap; it carries the
+//!   colour table that gives its pixel values meaning, [`Target::clut`]) or a DIRECT depth (16 or 32 bits: its pixel values are
+//!   colours, `crate::cqd::direct`). Every drawing op reads its pens from [`pens`], so one implementation serves all three.
 //! * `local0`: the LOCAL coordinate of pixel (0,0): `pixel = local - local0`.
 //! * Pattern alignment is to LOCAL coordinates (Atkinson's QuickDraw/Util.a PATEXPAND "ALIGN TO LOCAL COORDS": the
 //!   pattern is rotated by the global-local offset), so a pattern bit is chosen by `pixel + local0`, in a window and in an
 //!   offscreen BitMap alike.
 use super::port::*;
 use crate::cqd::color::{self, Rgb};
+use crate::cqd::direct::{self, Space};
 use crate::cqd::pixmap::{self, PIXMAP_FLAG, PM_PIXEL_SIZE, PM_TABLE};
 use crate::machine::Mac;
 use crate::pascal::read_rect;
@@ -32,19 +33,27 @@ impl Target {
     /// Local rectangle -> pixel rectangle.
     pub fn to_pixels(&self, r: Rect) -> Rect { r.translate(-self.local0.0, -self.local0.1) }
 
-    /// A pen number as the host's `0x00RRGGBB`.
-    pub fn host_color(&self, pen: u8) -> u32 {
-        match &self.clut { Some(t) => t.get(usize::from(pen)).map_or(0, |c| c.to_host()), None => super::PALETTE[usize::from(pen).min(1)] }
+    /// A pixel value as the host's `0x00RRGGBB`.
+    pub fn host_color(&self, pen: u32) -> u32 {
+        if self.bm.is_direct() { return direct::rgb_of(self.bm.depth(), pen).to_host(); }
+        match &self.clut { Some(t) => t.get(pen as usize).map_or(0, |c| c.to_host()), None => super::PALETTE[(pen as usize).min(1)] }
+    }
+    /// What this target's pixel values mean.
+    pub fn space(&self) -> Space<'_> {
+        if self.bm.is_direct() { Space::Direct(self.bm.depth()) } else { self.clut.as_deref().map_or(Space::Mono, Space::Indexed) }
     }
 }
 
-/// The pen numbers of `port`'s foreground and background colours in `t`: 1 and 0 in a 1-bit target (black ink, white
-/// paper; a colour on a classic port is not rendered), else the nearest entries of the target's table to the port's RGB pens.
-pub fn pens<U: GuestUi>(m: &Mac<U>, port: u32, t: &Target) -> Result<(u8, u8), Refusal> {
-    let Some(table) = &t.clut else { return Ok((1, 0)) };
-    if port == 0 { return Ok((color::nearest(table, Rgb::BLACK), color::nearest(table, Rgb::WHITE))); }
-    let (fg, bg) = port_rgb(&m.mem, port)?;
-    Ok((color::nearest(table, fg), color::nearest(table, bg)))
+/// The pixel values of `port`'s foreground and background colours in `t`: 1 and 0 in a 1-bit target (black ink, white
+/// paper; a colour on a classic port is not rendered), the nearest entries of the target's table to the port's RGB pens in an
+/// indexed one, the colours themselves as direct pixels in a 16/32-bit one.
+pub fn pens<U: GuestUi>(m: &Mac<U>, port: u32, t: &Target) -> Result<(u32, u32), Refusal> {
+    let (fg, bg) = if port == 0 { (Rgb::BLACK, Rgb::WHITE) } else { port_rgb(&m.mem, port)? };
+    Ok(match t.space() {
+        Space::Mono => (1, 0),
+        Space::Indexed(table) => (u32::from(color::nearest(table, fg)), u32::from(color::nearest(table, bg))),
+        Space::Direct(d) => (direct::pixel_of(d, fg), direct::pixel_of(d, bg)),
+    })
 }
 
 /// thePort, or the refusal that says there is none.
@@ -73,7 +82,7 @@ pub fn read_bitmap<U: GuestUi>(m: &Mac<U>, bm: u32) -> Result<Unpacked, Refusal>
     let (base, raw_row) = (m.mem.strip(m.mem.read_u32(bm.wrapping_add(BM_BASE)).map_err(&e)?), m.mem.read_u16(bm.wrapping_add(BM_ROW)).map_err(&e)?);
     let is_pixmap = raw_row & PIXMAP_FLAG != 0;
     let (row, depth) = if is_pixmap { (raw_row & 0x3FFF, m.mem.read_u16(bm.wrapping_add(PM_PIXEL_SIZE)).map_err(&e)?) } else { (raw_row, 1) };
-    if !pixmap::supported_depth(depth) { return Err(Refusal(format!("PixMap {bm:#x}: {depth}-bit pixels are not implemented (indexed 1, 2, 4 and 8 bits only)"))); }
+    if !pixmap::supported_depth(depth) { return Err(Refusal(format!("PixMap {bm:#x}: {depth}-bit pixels are not a QuickDraw depth (1, 2, 4, 8 indexed; 16, 32 direct)"))); }
     let b = read_rect(&m.mem, bm.wrapping_add(BM_BOUNDS))?;
     let (w, h) = (i32::from(b.right) - i32::from(b.left), i32::from(b.bottom) - i32::from(b.top));
     if w <= 0 || h <= 0 { return Err(Refusal(format!("BitMap {bm:#x}: bounds ({},{},{},{}) are empty {EMPTY_BITMAP}", b.top, b.left, b.bottom, b.right))); }
@@ -81,14 +90,18 @@ pub fn read_bitmap<U: GuestUi>(m: &Mac<U>, bm: u32) -> Result<Unpacked, Refusal>
     if i32::from(row) * 8 < w * i32::from(depth) { return Err(Refusal(format!("BitMap {bm:#x}: rowBytes {row} is too small for {w} pixels of {depth} bits"))); }
     let bytes = m.mem.bytes(m.mem.span(base, u32::from(row) * h as u32).map_err(&e)?).map_err(&e)?;
     let out = pixmap::unpack(bytes, usize::from(row), w, h, depth as u8)?;
-    let clut = if is_pixmap && depth > 1 { Some(m.pixmap_clut(bm, depth as u8)?) } else { None };
+    let clut = if is_pixmap && depth > 1 && depth <= 8 { Some(m.pixmap_clut(bm, depth as u8)?) } else { None };
     Ok((out, base, row, Rect::new(i32::from(b.left), i32::from(b.top), i32::from(b.right), i32::from(b.bottom)), clut))
 }
 
-fn write_bitmap<U: GuestUi>(m: &mut Mac<U>, bm: &Bitmap, base: u32, row: u16) -> Result<(), Refusal> {
-    let mut out = alloc::vec![0u8; usize::from(row) * bm.height() as usize];
-    pixmap::pack(bm, usize::from(row), &mut out);
-    m.mem.write_bytes(base, &out).map_err(Refusal::mem("BitMap"))
+/// Pack rows `rows` of `bm` back into the guest map (only the rows a drawing touched: the rest of the guest's pixels are
+/// left as they are, which also keeps whatever the program wrote there itself).
+fn write_bitmap<U: GuestUi>(m: &mut Mac<U>, bm: &Bitmap, base: u32, row: u16, rows: core::ops::Range<i32>) -> Result<(), Refusal> {
+    let (y0, y1) = (rows.start.max(0), rows.end.min(bm.height()));
+    if y0 >= y1 { return Ok(()); }
+    let mut out = alloc::vec![0u8; usize::from(row) * (y1 - y0) as usize];
+    pixmap::pack_rows(bm, usize::from(row), y0..y1, &mut out);
+    m.mem.write_bytes(base.wrapping_add(u32::from(row) * y0 as u32), &out).map_err(Refusal::mem("BitMap"))
 }
 
 impl<U: GuestUi> Mac<U> {
@@ -143,7 +156,7 @@ pub fn open_bits<U: GuestUi>(m: &mut Mac<U>, bm_addr: u32) -> Result<Target, Ref
 /// Open the destination of `port`'s drawing.
 pub fn open<U: GuestUi>(m: &mut Mac<U>, port: u32) -> Result<Target, Refusal> {
     let mut t = open_bits(m, bits_addr(&m.mem, port)?)
-        .map_err(|Refusal(e)| Refusal(format!("port {port:#x} has no drawable bitmap ({e}); it is neither a window nor an OpenPort'd/OpenCPort'd port over an indexed (1, 2, 4 or 8 bit) pixel map")))?;
+        .map_err(|Refusal(e)| Refusal(format!("port {port:#x} has no drawable bitmap ({e}); it is neither a window nor an OpenPort'd/OpenCPort'd port over a pixel map")))?;
     t.port = port;
     Ok(t)
 }
@@ -157,7 +170,7 @@ pub fn finish<U: GuestUi>(m: &mut Mac<U>, t: Target, touched: Rect) -> Result<()
             m.qd.present.add_damage(t.port, touched);
             Ok(())
         }
-        Home::Guest { addr, row_bytes } => if touched.is_empty() { Ok(()) } else { write_bitmap(m, &t.bm, addr, row_bytes) },
+        Home::Guest { addr, row_bytes } => if touched.is_empty() { Ok(()) } else { write_bitmap(m, &t.bm, addr, row_bytes, touched.y0..touched.y1) },
     }
 }
 

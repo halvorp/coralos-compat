@@ -99,15 +99,15 @@ fn one_bit_worlds_pad_rows_and_update_replaces_the_world() {
 }
 
 #[test]
-fn direct_depths_and_bad_geometry_are_named_refusals_not_silent_success() {
+fn odd_depths_and_bad_geometry_are_named_refusals_not_silent_success() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     call(&mut m, "InitGraf", &[0x1000]);
     rect(&mut m, R1, 0, 0, 8, 8);
-    for d in [16u32, 32] {
-        let why = refused(&mut m, "NewGWorld", &[OUT, d, R1, 0, 0, 0]);
-        assert!(why.contains(&format!("{d}-bit pixels are not implemented")), "{why}");
-    }
-    assert_eq!(m.mac.cqd.gworlds.len(), 0, "a refused world leaves nothing behind");
+    // the direct depths are worlds (tests/direct_color.rs draws in them); 12 bits is no QuickDraw depth: refused by name
+    for d in [16u32, 32] { assert_eq!(call(&mut m, "NewGWorld", &[OUT, d, R1, 0, 0, 0]), 0, "{d}-bit world"); }
+    let why = refused(&mut m, "NewGWorld", &[OUT, 12, R1, 0, 0, 0]);
+    assert!(why.contains("12-bit pixels are not a QuickDraw depth"), "{why}");
+    assert_eq!(m.mac.cqd.gworlds.len(), 2, "a refused world leaves nothing behind");
     // an empty rectangle is paramErr (-50), reported as the QDErr result, and the out pointer is zeroed
     rect(&mut m, R1, 0, 0, 0, 0);
     m.mac.mem.write_u32(OUT, 0xDEAD).unwrap();
@@ -164,9 +164,12 @@ fn the_roms_depth_and_flag_rules_for_newgworld() {
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     call(&mut m, "InitGraf", &[0x1000]);
     rect(&mut m, R1, 0, 0, 8, 8);
-    // depth 24 is treated as 32 (which this engine then refuses by name); NEGATIVE control: it is not "24-bit pixels"
-    let why = refused(&mut m, "NewGWorld", &[OUT, 24, R1, 0, 0, 0]);
-    assert!(why.contains("32-bit pixels are not implemented"), "{why}");
+    // depth 24 is treated as 32: the world's PixMap is 32 bits deep, RGBDirect, three 8-bit components (NEGATIVE control: never 24)
+    assert_eq!(call(&mut m, "NewGWorld", &[OUT, 24, R1, 0, 0, 0]), 0);
+    let w24 = m.mac.mem.read_u32(OUT).unwrap();
+    let pm = m.mac.gw_pixmap(w24).unwrap();
+    let p = m.mac.mm.block(pm).unwrap().ptr;
+    assert_eq!((m.mac.mem.read_u16(p + 30).unwrap(), m.mac.mem.read_u16(p + 32).unwrap(), m.mac.mem.read_u16(p + 34).unwrap(), m.mac.mem.read_u16(p + 36).unwrap()), (16, 32, 3, 8));
     // depth > 32 is cDepthErr (-157), a QDErr result, not a refusal; the out pointer is zeroed
     m.mac.mem.write_u32(OUT, 0xDEAD).unwrap();
     assert_eq!(call(&mut m, "NewGWorld", &[OUT, 33, R1, 0, 0, 0]) as i32, -157);

@@ -95,9 +95,10 @@ impl FileMgr {
         Ok(self.wd_for(vol, dir))
     }
 
-    /// `FindFolder`: the (vRefNum, dirID) of a standard folder, made on first use. `vref` 0 / -32768 (kOnSystemDisk) is the boot volume.
+    /// `FindFolder`: the (vRefNum, dirID) of a standard folder, made on first use. `vref` 0, -32768 (kOnSystemDisk) and -32767
+    /// (kOnAppropriateDisk: on Mac OS 9 the system disk, Folders.h) are the boot volume; a type with no folder here is fnfErr.
     pub fn find_folder(&mut self, vref: i16, folder_type: [u8; 4]) -> Result<(i16, u32), i16> {
-        let vol = if vref == 0 || vref == i16::MIN { self.tree.volume(BOOT_VOLUME).unwrap_or(self.def_vol) } else { self.volume_of_vref(vref)? };
+        let vol = if vref == 0 || vref == i16::MIN || vref == i16::MIN + 1 { self.tree.volume(BOOT_VOLUME).unwrap_or(self.def_vol) } else { self.volume_of_vref(vref)? };
         let make = |fm: &mut FileMgr, parent, name: &str| -> Result<_, i16> {
             match fm.tree.find_child(parent, name) {
                 Some(d) if fm.tree.is_dir(d) => Ok(d),
@@ -116,6 +117,9 @@ impl FileMgr {
             b"shdf" => { let sys = make(self, vol, "System Folder")?; make(self, sys, "Shutdown Items")? }
             // kApplicationsFolderType: Mac OS 9.1 and later name it "Applications (Mac OS 9)", at the volume's root
             b"apps" => make(self, vol, "Applications (Mac OS 9)")?,
+            // kChewableItemsFolderType 'flnt' (Folders.h, "items deleted at boot"): Mac OS 8/9's "Cleanup At Startup", inside Temporary
+            // Items. Named limit: nothing empties it at start-up here (the volume persists; a program's own clean-up still works)
+            b"flnt" => { let sys = make(self, vol, "System Folder")?; let tmp = make(self, sys, "Temporary Items")?; make(self, tmp, "Cleanup At Startup")? }
             // kColorSyncProfilesFolderType (Mac OS 8.5+): System Folder:ColorSync Profiles
             b"prof" => { let sys = make(self, vol, "System Folder")?; make(self, sys, "ColorSync Profiles")? }
             t => {

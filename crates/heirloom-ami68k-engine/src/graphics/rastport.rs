@@ -21,7 +21,7 @@ pub struct Rp {
 }
 
 impl Rp {
-    pub fn brush(&self) -> Brush { Brush { fg: self.fg, bg: self.bg, mode: self.mode & 7, mask: self.mask } }
+    pub fn brush(&self) -> Brush { Brush { fg: self.fg.into(), bg: self.bg.into(), mode: self.mode & 7, mask: self.mask.into() } }
 }
 
 pub fn read<U: GuestUi>(a: &Amiga<U>, rp: u32) -> Result<Rp, Refusal> {

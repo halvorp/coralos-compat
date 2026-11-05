@@ -85,7 +85,7 @@ fn draw_chain<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut im: u32, left: i32, top
                 let (bx, by) = (x0 + x - ox, y0 + y - oy);
                 if clip.allows(bx, by) {
                     let old = bm.get(bx, by).unwrap_or(0);
-                    bm.set(bx, by, (old & !mask) | (pens[(y * i.w + x) as usize] & mask));
+                    bm.set(bx, by, (old & !u32::from(mask)) | (u32::from(pens[(y * i.w + x) as usize]) & u32::from(mask)));
                     hit = hit.union(&Rect::new(bx, by, bx + 1, by + 1));
                 }
             } }
@@ -144,7 +144,7 @@ pub fn draw_image_state<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
 pub fn erase_image<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (rp, mut im, l, t) = (cpu.areg(0), cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1)));
     let st = rastport::read(a, rp)?;
-    let b = Brush { fg: st.bg, bg: st.bg, mode: JAM2, mask: st.mask };
+    let b = Brush { fg: st.bg.into(), bg: st.bg.into(), mode: JAM2, mask: st.mask.into() };
     let mut n = 0;
     while im != 0 && n < 64 {
         let i = read_image(a, im)?;
@@ -181,7 +181,7 @@ pub(crate) fn draw_borders<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut bd: u32, l
         let (fg, bg, mode) = (a.mem.read_u8(bd + BD_FRONT_PEN).map_err(&m)?, a.mem.read_u8(bd + BD_BACK_PEN).map_err(&m)?, a.mem.read_u8(bd + BD_DRAW_MODE).map_err(&m)?);
         let (count, xy, next) = (a.mem.read_u8(bd + BD_COUNT).map_err(&m)? as i8, a.mem.read_u32(bd + BD_XY).map_err(&m)?, a.mem.read_u32(bd + BD_NEXT).map_err(&m)?);
         let pts: Vec<(i32, i32)> = (0..count.max(0) as u32).map(|i| Ok((l + bl + a.mem.read_i16(xy + 4 * i).map_err(&m)? as i32, t + bt + a.mem.read_i16(xy + 4 * i + 2).map_err(&m)? as i32))).collect::<Result<_, Refusal>>()?;
-        let brush = Brush { fg, bg, mode: mode & 7, mask: st.mask };
+        let brush = Brush { fg: fg.into(), bg: bg.into(), mode: mode & 7, mask: st.mask.into() };
         let mut phase = 15u8;
         let prim = (mode & 7 <= 1 && st.mask == 0xFF && !pts.is_empty()).then(|| super::record::Prim::Lines { pts: pts.clone(), pen: fg });
         target::paint_as(a, rp, "DrawBorder", prim, |bm, clip, (ox, oy)| {
@@ -224,7 +224,7 @@ pub(crate) fn print_itexts<U: GuestUi>(a: &mut Amiga<U>, rp: u32, mut it: u32, l
         let tf = itext_font(a, it, if rp_font == 0 { fonts::default_font(a)? } else { rp_font })?;
         let font = fonts::font_at(a, tf)?;
         let text = if tp == 0 { Vec::new() } else { a.mem.read_cstr(tp).map_err(&m)?.into_bytes() };
-        let brush = Brush { fg, bg, mode: mode & 7, mask };
+        let brush = Brush { fg: fg.into(), bg: bg.into(), mode: mode & 7, mask: mask.into() };
         let base = font.baseline as i32;
         let prim = super::record::text(&rastport::Rp { fg, bg, mode: mode & 7, ..saved }, &font, &text, (x, y + base));
         target::paint_as(a, rp, "PrintIText", prim, |bm, clip, (ox, oy)| heirloom_raster::font::draw_text(bm, &font, &text, x - ox, y + base - oy, &brush, saved.algo, clip).1)?;
@@ -297,7 +297,7 @@ pub fn draw_image_at<U: GuestUi>(a: &mut Amiga<U>, rp: u32, img: u32, x: i32, y:
 /// SetRast-style fill of the box (x, y, w, h) of `rp` in pen `pen` (a Requester's BackFill, requesters.c:91).
 pub(crate) fn fill_pen<U: GuestUi>(a: &mut Amiga<U>, rp: u32, (x, y, w, h): (i32, i32, i32, i32), pen: u8) -> Result<(), Refusal> {
     let st = rastport::read(a, rp)?;
-    let b = Brush { fg: pen, bg: pen, mode: JAM2, mask: st.mask };
+    let b = Brush { fg: pen.into(), bg: pen.into(), mode: JAM2, mask: st.mask.into() };
     let r = Rect::from_size(x, y, w, h);
     target::paint(a, rp, "Requester BackFill", |bm, clip, (ox, oy)| paint::fill_rect(bm, r.translate(-ox, -oy), &b, None, clip))?;
     Ok(())

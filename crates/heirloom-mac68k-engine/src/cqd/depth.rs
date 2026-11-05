@@ -8,11 +8,10 @@
 //! answer.
 //!
 //! `FUNCTION HasDepth(gd: GDHandle; depth, whichFlags, flags: INTEGER): INTEGER` is non-zero when the device can show `depth`
-//! bits per pixel. The screen device is the only one that can, at 1, 2, 4 and 8 bits (the engine's rasteriser depths);
-//! another device, or a deeper depth, answers 0. `FUNCTION SetDepth(...): INTEGER` returns an error code: 0 when the device is
+//! bits per pixel. The screen device is the only one that can, at 1, 2, 4 and 8 bits (window canvases are indexed; 16/32-bit
+//! maps exist offscreen only, HANDOFF-5 1f); another device, or 16/32, answers 0. `FUNCTION SetDepth(...): INTEGER` returns an error code: 0 when the device is
 //! already at `depth`; switching the screen's depth is not modelled, so any other depth is a refusal (`paramErr` is the
 //! answer the caller sees, and the guest goes on).
-use super::pixmap::supported_depth;
 use crate::machine::Mac;
 use crate::osconv::{Regs, PARAM_ERR};
 use crate::Refusal;
@@ -49,7 +48,11 @@ fn palette_dispatch<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> Re
 
 
 /// `HasDepth(gd, depth, ...)`: non-zero when the device can show `depth` bits per pixel (the PowerPC adapter calls this too).
-pub fn has_depth<U: GuestUi>(m: &Mac<U>, gd: u32, depth: u16) -> u16 { u16::from(gd == m.cqd.main_device && gd != 0 && supported_depth(depth)) }
+pub fn has_depth<U: GuestUi>(m: &Mac<U>, gd: u32, depth: u16) -> u16 { u16::from(gd == m.cqd.main_device && gd != 0 && screen_depth(depth)) }
+
+/// The depths the SCREEN's windows can be shown at: the indexed ones. Direct pixel maps exist offscreen (`cqd/direct.rs`), but a
+/// window canvas is indexed until the main device can be direct (HANDOFF-5 1f), so HasDepth answers 0 for 16 and 32.
+fn screen_depth(d: u16) -> bool { matches!(d, 1 | 2 | 4 | 8) }
 
 /// `SetDepth(gd, depth, ...)`: 0, or `paramErr` with the refusal recorded by name.
 pub fn set_depth<U: GuestUi>(m: &mut Mac<U>, gd: u32, depth: u16) -> i16 {

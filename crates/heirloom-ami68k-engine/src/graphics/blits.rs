@@ -27,11 +27,11 @@ fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: 
     let hit = if bm == src {
         let g = a.gfx.bitmaps.get_mut(&bm).ok_or_else(|| Refusal(format!("blit: BitMap {bm:#x} vanished")))?;
         let clip = Clip { rect: g.bm.rect(), region: region.as_ref() };
-        blit_within(&mut g.bm, bx, by, sxx, syy, w, h, mt, planes, mask, &clip)
+        blit_within(&mut g.bm, bx, by, sxx, syy, w, h, mt, u32::from(planes), mask, &clip)
     } else {
         let s = a.gfx.bitmaps.remove(&src).ok_or_else(|| Refusal(format!("blit: source BitMap {src:#x} vanished")))?;
         let r = match a.gfx.bitmaps.get_mut(&bm) {
-            Some(g) => { let clip = Clip { rect: g.bm.rect(), region: region.as_ref() }; Ok(blit(&mut g.bm, bx, by, &s.bm, sxx, syy, w, h, mt, planes, mask, &clip)) }
+            Some(g) => { let clip = Clip { rect: g.bm.rect(), region: region.as_ref() }; Ok(blit(&mut g.bm, bx, by, &s.bm, sxx, syy, w, h, mt, u32::from(planes), mask, &clip)) }
             None => Err(Refusal(format!("blit: destination BitMap {bm:#x} vanished"))),
         };
         a.gfx.bitmaps.insert(src, s);

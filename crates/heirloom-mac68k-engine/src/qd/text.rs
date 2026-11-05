@@ -48,7 +48,7 @@ pub(crate) fn draw_on<U: GuestUi>(m: &mut Mac<U>, port: u32, bytes: &[u8], name:
         let style = style_of(face);
         target::with(m, port, |m, t| {
             let (fg, bg) = target::pens(m, port, t)?;
-            let brush = brush_for(tmode, fg, bg);
+            let brush = brush_for(tmode, fg, bg, if t.bm.is_direct() { bg } else { 0 });
             let clip = clip_region(m, t)?;
             let c = clip_of(&clip, t);
             let touched = draw_text(&mut t.bm, &m.qd.font, bytes, i32::from(pen.h) - t.local0.0, i32::from(pen.v) - t.local0.1 - 1, &brush, style, &c).1;

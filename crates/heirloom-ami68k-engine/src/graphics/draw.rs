@@ -20,7 +20,7 @@ pub(super) fn pattern<U: GuestUi>(a: &Amiga<U>, st: &Rp) -> Result<Option<Patter
 }
 
 /// A brush that paints `pen` solidly, whatever the RastPort's mode (the erase calls).
-fn solid(pen: u8, mask: u8) -> Brush { Brush { fg: pen, bg: pen, mode: JAM2, mask } }
+fn solid(pen: u8, mask: u8) -> Brush { Brush { fg: pen.into(), bg: pen.into(), mode: JAM2, mask: mask.into() } }
 
 /// Draw(a1 = rp, d0 = x, d1 = y): a line from the cursor, in the pen/mode/LinePtrn; the cursor moves to (x,y).
 pub fn draw<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { draw_to(a, cpu.areg(1), sx(cpu.dreg(0)), sx(cpu.dreg(1))) }
@@ -134,7 +134,7 @@ pub fn scroll<U: GuestUi>(a: &mut Amiga<U>, rp: u32, dx: i32, dy: i32, r: Rect) 
         let r = r.translate(-ox, -oy).intersect(&bm.rect());
         let inner = Clip { rect: r.intersect(&clip.rect), region: clip.region };
         // destination (x,y) takes the pixel at (x+dx, y+dy): a within-bitmap blit from the shifted source
-        let moved = blit_within(bm, r.x0, r.y0, r.x0 + dx, r.y0 + dy, r.width(), r.height(), 0xC0, mask, None, &inner);
+        let moved = blit_within(bm, r.x0, r.y0, r.x0 + dx, r.y0 + dy, r.width(), r.height(), 0xC0, u32::from(mask), None, &inner);
         // what was not fed from inside the rectangle: r minus (r shifted by -d)
         let keep = r.intersect(&r.translate(-dx, -dy));
         let mut hit = moved;

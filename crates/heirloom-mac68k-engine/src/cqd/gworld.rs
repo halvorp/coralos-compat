@@ -5,7 +5,9 @@
 //! A GWorld is exactly what the rest of Color QuickDraw already draws into: a `CGrafPort` ([`super::cport`]) over a `PixMap` whose `baseAddr` is a block of GUEST MEMORY
 //! (packed 1, 2, 4 or 8 bit pixels, rows padded to 32 bits as QuickDraw does), so every drawing op and `CopyBits` between a GWorld and a window already work through
 //! `qd::target` with no second code path; the window side of a `CopyBits` presents through the native path like any other drawing.
-//! Not modelled, by name: DIRECT pixel depths (16 and 32 bits: the raster is indexed -- see `cqd/mod.rs`), a GWorld on a caller-supplied `GDHandle` of another device,
+//! A world may be indexed (1, 2, 4, 8 bits; its colour table the caller's or the standard one) or DIRECT (16 bits x1R5G5B5, 32 bits x8R8G8B8: `cqd/direct.rs`; its
+//! PixMap says RGBDirect with three components and carries an empty colour table, as IWQ's direct PixMaps do).
+//! Not modelled, by name: a GWorld on a caller-supplied `GDHandle` of another device,
 //! purgeable pixels (they are always resident, so `LockPixels` is TRUE and the purge flags only record the program's state), `useTempMem` (one heap).
 //! The 68k `_QDExtensions` ($AB1D) selector numbers are NOT registered here: no verified table of them is in the reference tree and a guessed one would bind the wrong routine.
 use super::pixmap::{PM_BASE, PM_BOUNDS, PM_ROW, PM_TABLE};
@@ -43,7 +45,7 @@ impl<U: GuestUi> Mac<U> {
         let (main_depth, main_table) = self.device_pixmap(self.cqd.main_device)?;
         let (depth, ctab) = match depth { 0 => (main_depth as u16, if ctab != 0 { ctab } else { main_table }), 24 => (32, ctab), d if d > 32 => return Ok(Err(CDEPTH_ERR)), d => (d, ctab) };
         if !super::pixmap::supported_depth(depth) {
-            return Err(Refusal(format!("NewGWorld: {depth}-bit pixels are not implemented (indexed 1, 2, 4 and 8 bits only; direct 16/32-bit offscreen worlds need direct-colour QuickDraw)")));
+            return Err(Refusal(format!("NewGWorld: {depth}-bit pixels are not a QuickDraw depth (1, 2, 4, 8 indexed; 16, 24 = 32 direct)")));
         }
         let depth = depth as u8;
         let (w, h) = (i32::from(bounds.right) - i32::from(bounds.left), i32::from(bounds.bottom) - i32::from(bounds.top));
@@ -51,7 +53,7 @@ impl<U: GuestUi> Mac<U> {
         let row = row_bytes(w, depth);
         let Some(size) = row.checked_mul(h as u32) else { return Ok(Err(MEM_FULL_ERR)) };
         let Ok(base) = self.mm.new_ptr(&mut self.mem, &mut self.heap, size, true) else { return Ok(Err(MEM_FULL_ERR)) };
-        let colors = if ctab != 0 { self.read_ctab(ctab)? } else {
+        let colors = if super::direct::is_direct(depth) { alloc::vec::Vec::new() } else if ctab != 0 { self.read_ctab(ctab)? } else {
             match depth { 4 => super::color::clut4(), 8 => super::color::clut8(), d => super::color::gray(d) }
         };
         let table = self.new_ctab(&colors, u32::from(depth), super::ctab::DEVICE_TABLE)?;
@@ -63,6 +65,10 @@ impl<U: GuestUi> Mac<U> {
         let (vis, clip) = (self.new_region(&Region::from_rect(r))?, self.new_region(&Region::from_rect(crate::qd::regions::WIDE_OPEN))?);
         crate::qd::lifecycle::init_common_fields(self, port, vis, clip)?;
         let device = if flags & NO_NEW_DEVICE != 0 { 0 } else { self.new_device_record(pm, bounds, 0)? };
+        if device != 0 && super::direct::is_direct(depth) { // gdType directType (2): a device whose pixels are colours (IWQ "GDevice")
+            let p = self.deref_handle(device, "GDevice")?;
+            self.mem.write_u16(p + super::gdevice::GD_TYPE, 2).map_err(Refusal::mem("GDevice"))?;
+        }
         self.cqd.gworlds.insert(port, Gw { pixmap: pm, device, base, row, bounds, depth, state: flags & PIXELS_PURGEABLE });
         self.log.push(format!("[quickdraw] NewGWorld {w}x{h} {depth}-bit -> port {port:#x}, {size} bytes of pixels at {base:#x}"));
         Ok(Ok(port))

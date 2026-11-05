@@ -38,7 +38,7 @@ fn scroll_rect<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
         vacated.clear_region(&dst);
         let d = t.to_pixels(rect);
         let (inside, wide) = (|x: i32, y: i32| dst.contains(x, y), Clip::rect(t.bm.rect()));
-        Ok(blit_within(&mut t.bm, d.x0, d.y0, d.x0 - dh, d.y0 - dv, d.width(), d.height(), super::copybits::minterm(0), 0xFF, Some(&inside), &wide))
+        Ok(blit_within(&mut t.bm, d.x0, d.y0, d.x0 - dh, d.y0 - dv, d.width(), d.height(), super::copybits::minterm(0), u32::MAX, Some(&inside), &wide))
     })?;
     vacated.translate(origin.0, origin.1);
     m.write_region(upd, &vacated)?;
