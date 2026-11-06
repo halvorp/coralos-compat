@@ -104,6 +104,8 @@ pub enum Refusal {
     Busy,
     /// The guest called a lazy-binding stub: an import was left for dyld_stub_binder.
     StubBinder,
+    /// The Objective-C runtime or a native entry ended the guest by name (an unrecognized selector, an unsupported feature).
+    Fatal(String),
 }
 
 impl Refusal {
@@ -123,6 +125,7 @@ impl Refusal {
             Refusal::Publish(why) => format!("[OSXX86 REFUSE PUBLISH {}]", why),
             Refusal::Busy => String::from("[OSXX86 REFUSE BUSY]"),
             Refusal::StubBinder => String::from("[OSXX86 REFUSE STUB-BINDER]"),
+            Refusal::Fatal(why) => format!("[OSXX86 RUNTIME-FATAL {}]", why),
         }
     }
 }

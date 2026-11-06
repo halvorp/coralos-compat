@@ -11,6 +11,15 @@ pub const MH_PIE: u32 = 0x0020_0000;
 pub const LC_SEGMENT_64: u32 = 0x19;
 pub const LC_LOAD_DYLINKER: u32 = 0x0e;
 pub const LC_LOAD_DYLIB: u32 = 0x0c;
+pub const LC_ID_DYLIB: u32 = 0x0d;
+pub const LC_LOAD_WEAK_DYLIB: u32 = 0x8000_0018;
+pub const LC_REEXPORT_DYLIB: u32 = 0x8000_001f;
+pub const LC_LAZY_LOAD_DYLIB: u32 = 0x20;
+pub const LC_LOAD_UPWARD_DYLIB: u32 = 0x8000_0023;
+pub const LC_RPATH: u32 = 0x8000_001c;
+pub const LC_SYMTAB: u32 = 0x02;
+pub const LC_VERSION_MIN_MACOSX: u32 = 0x24;
+pub const LC_BUILD_VERSION: u32 = 0x32;
 pub const LC_UNIXTHREAD: u32 = 0x05;
 pub const LC_MAIN: u32 = 0x8000_0028;
 pub const LC_DYLD_INFO: u32 = 0x22;
@@ -122,6 +131,8 @@ pub struct DyldInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dylib {
+    /// The load command that named it (`LC_LOAD_DYLIB`, `LC_LOAD_WEAK_DYLIB`, `LC_REEXPORT_DYLIB`, ...): every one of them takes the next ordinal.
+    pub kind: u32,
     pub path: String,
     pub current_version: u32,
     pub compatibility_version: u32,
@@ -138,6 +149,16 @@ pub struct MachO<'a> {
     pub dyld_info: Option<DyldInfo>,
     pub has_chained_fixups: bool,
     pub dylinker: Option<String>,
+    /// `LC_RPATH` strings in file order.
+    pub rpaths: Vec<String>,
+    /// The `LC_ID_DYLIB` install name of a dylib or framework image.
+    pub install_name: Option<String>,
+    /// The `LC_SYMTAB` ranges `(symoff, nsyms, stroff, strsize)`.
+    pub symtab: Option<(u32, u32, u32, u32)>,
+    /// The minimum OS version (`X.Y.Z` packed `xxxx.yy.zz`) from `LC_VERSION_MIN_MACOSX` or `LC_BUILD_VERSION`.
+    pub min_os: Option<u32>,
+    /// Every load command id in file order.
+    pub commands: Vec<u32>,
 }
 
 impl<'a> MachO<'a> {
@@ -215,6 +236,11 @@ impl<'a> MachO<'a> {
             dyld_info: None,
             has_chained_fixups: false,
             dylinker: None,
+            rpaths: Vec::new(),
+            install_name: None,
+            symtab: None,
+            min_os: None,
+            commands: Vec::new(),
         };
 
         let mut pos = 32usize;
@@ -252,9 +278,10 @@ impl<'a> MachO<'a> {
                 });
             }
 
+            result.commands.push(cmd);
             match cmd {
                 LC_SEGMENT_64 => parse_segment(file, pos, cmdsize, index, &mut result)?,
-                LC_LOAD_DYLIB => {
+                LC_LOAD_DYLIB | LC_LOAD_WEAK_DYLIB | LC_REEXPORT_DYLIB | LC_LAZY_LOAD_DYLIB | LC_LOAD_UPWARD_DYLIB | LC_ID_DYLIB => {
                     if cmdsize < 24 {
                         return Err(bad_command(index, "dylib command is too small"));
                     }
@@ -262,11 +289,41 @@ impl<'a> MachO<'a> {
                     let current_version = read_u32(file, pos + 16, "dylib")?;
                     let compatibility_version = read_u32(file, pos + 20, "dylib")?;
                     let path = command_string(file, pos, next, name_offset, index)?;
+                    if cmd == LC_ID_DYLIB {
+                        result.install_name = Some(path);
+                        pos = next;
+                        continue;
+                    }
                     result.dylibs.push(Dylib {
+                        kind: cmd,
                         path,
                         current_version,
                         compatibility_version,
                     });
+                }
+                LC_RPATH => {
+                    if cmdsize < 12 {
+                        return Err(bad_command(index, "rpath command is too small"));
+                    }
+                    let name_offset = read_u32(file, pos + 8, "rpath")?;
+                    result.rpaths.push(command_string(file, pos, next, name_offset, index)?);
+                }
+                LC_SYMTAB => {
+                    if cmdsize < 24 {
+                        return Err(bad_command(index, "symtab command is too small"));
+                    }
+                    result.symtab = Some((
+                        read_u32(file, pos + 8, "symtab")?,
+                        read_u32(file, pos + 12, "symtab")?,
+                        read_u32(file, pos + 16, "symtab")?,
+                        read_u32(file, pos + 20, "symtab")?,
+                    ));
+                }
+                LC_VERSION_MIN_MACOSX if cmdsize >= 16 => {
+                    result.min_os = Some(read_u32(file, pos + 8, "version min")?);
+                }
+                LC_BUILD_VERSION if cmdsize >= 24 => {
+                    result.min_os = Some(read_u32(file, pos + 12, "build version")?);
                 }
                 LC_LOAD_DYLINKER => {
                     if cmdsize < 12 {
@@ -387,6 +444,43 @@ impl<'a> MachO<'a> {
 
     pub fn is_pie(&self) -> bool {
         self.flags & MH_PIE != 0
+    }
+}
+
+impl<'a> MachO<'a> {
+    /// The slice offset of virtual address `addr` when a file-backed segment maps it, else None.
+    pub fn vm_to_offset(&self, addr: u64) -> Option<usize> {
+        let seg = self
+            .segments
+            .iter()
+            .find(|s| !s.is_pagezero() && addr >= s.vmaddr && addr - s.vmaddr < s.filesize)?;
+        usize::try_from(seg.fileoff.checked_add(addr - seg.vmaddr)?).ok()
+    }
+
+    /// `len` file-backed bytes at virtual address `addr`.
+    pub fn bytes_at(&self, addr: u64, len: usize) -> Option<&'a [u8]> {
+        let at = self.vm_to_offset(addr)?;
+        self.slice.get(at..at.checked_add(len)?)
+    }
+
+    /// The little-endian u64 at virtual address `addr`.
+    pub fn u64_at(&self, addr: u64) -> Option<u64> {
+        let b = self.bytes_at(addr, 8)?;
+        Some(u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+    }
+
+    /// The NUL-terminated string at virtual address `addr` (UTF-8 lossy), at most 4096 bytes.
+    pub fn cstr_at(&self, addr: u64) -> Option<String> {
+        let at = self.vm_to_offset(addr)?;
+        let tail = self.slice.get(at..)?;
+        let tail = &tail[..tail.len().min(4096)];
+        let end = tail.iter().position(|b| *b == 0)?;
+        Some(String::from_utf8_lossy(&tail[..end]).into_owned())
+    }
+
+    /// The section `sect` of segment `seg`.
+    pub fn section(&self, seg: &str, sect: &str) -> Option<&Section> {
+        self.segments.iter().filter(|s| s.name == seg).flat_map(|s| s.sections.iter()).find(|s| s.sectname == sect)
     }
 }
 
@@ -725,5 +819,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn weak_and_reexport_dylibs_take_ordinals_and_rpaths_are_read() {
+        use crate::header::{LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB};
+        let image = ImageBuilder::new()
+            .dylib(LC_LOAD_WEAK_DYLIB, "/usr/lib/libweak.dylib")
+            .rpath("@executable_path/../Frameworks")
+            .dylib(LC_REEXPORT_DYLIB, "/usr/lib/libre.dylib")
+            .build();
+        let m = MachO::parse(&image.bytes).unwrap();
+        let got: Vec<_> = m.dylibs.iter().map(|d| (d.kind, d.path.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![
+                (LC_LOAD_DYLIB, "/usr/lib/libSystem.B.dylib"),
+                (LC_LOAD_WEAK_DYLIB, "/usr/lib/libweak.dylib"),
+                (LC_REEXPORT_DYLIB, "/usr/lib/libre.dylib"),
+            ],
+            "ordinal 2 is the weak library, ordinal 3 the re-export; the rpath takes none"
+        );
+        assert_eq!(m.rpaths, vec!["@executable_path/../Frameworks".to_string()]);
+        assert_eq!(m.commands.len(), 11);
+    }
+
+    #[test]
+    fn vm_addresses_map_to_file_bytes() {
+        let mut b = ImageBuilder::new().code(&[0xC3]).data(b"abc\0def\0");
+        b.import("_write");
+        let image = b.build();
+        let m = MachO::parse(&image.bytes).unwrap();
+        assert_eq!(m.cstr_at(image.data_vmaddr).as_deref(), Some("abc"));
+        assert_eq!(m.cstr_at(image.data_vmaddr + 4).as_deref(), Some("def"));
+        assert_eq!(m.bytes_at(image.code_vmaddr, 1), Some(&[0xC3][..]));
+        assert_eq!(m.vm_to_offset(image.code_vmaddr), Some(0x400));
+        assert_eq!(m.vm_to_offset(0x10), None, "PAGEZERO is not file backed");
+        assert_eq!(m.vm_to_offset(BASE + 0x10_0000), None);
+        assert_eq!(m.section("__TEXT", "__text").map(|s| s.size), Some(1));
+        assert!(m.section("__TEXT", "__nope").is_none());
+        assert_eq!(m.u64_at(image.got_vmaddr), Some(0), "the GOT slot is zero in the file");
     }
 }

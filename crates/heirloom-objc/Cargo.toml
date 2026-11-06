@@ -1,0 +1,8 @@
+[package]
+name = "heirloom-objc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Apple Objective-C 2 runtime for the osxx86 personality, clean room: metadata realization, selector table, objc_msgSend family, ARC entry points, autorelease pools, a native NSObject (no_std + alloc)"
+
+[dependencies]

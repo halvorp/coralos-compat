@@ -7,6 +7,7 @@ description = "Mac OS X x86_64 personality (osxx86): Mach-O loader, native libSy
 
 [dependencies]
 heirloom-fmt-macho = { path = "../heirloom-fmt-macho" }
+heirloom-objc = { path = "../heirloom-objc" }
 # the admission scan decodes instructions (0BSD, no_std): a byte search for syscall / int 0x80 refuses real apps by chance
 yaxpeax-x86 = { version = "2", default-features = false }
 yaxpeax-arch = { version = "0.3", default-features = false }

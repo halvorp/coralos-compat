@@ -24,11 +24,16 @@ struct SessionGuard;
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         libsystem::end();
+        // the guest's pages are released by now: forget its classes so no registry entry dangles
+        heirloom_objc::runtime::reset();
     }
 }
 
 /// Loads `file`, runs it natively on its own stack until it exits, and reports how it ended. One guest at a time per process.
 pub fn run(file: &[u8], args: &[&str], host: &mut dyn Host, mem: &mut dyn CodeMem) -> Outcome {
+    heirloom_objc::runtime::reset();
+    heirloom_objc::nsobject::install();
+    heirloom_objc::runtime::set_fatal_hook(libsystem::runtime_fatal);
     let mut save = SavedCtx::default();
     let mut session = libsystem::Session::new(host, &mut save, Vec::new());
     if !libsystem::begin(&mut session) {
@@ -99,7 +104,11 @@ pub fn run(file: &[u8], args: &[&str], host: &mut dyn Host, mem: &mut dyn CodeMe
 
     mem.release(stack, STACK);
     mem.release(l.base, l.reserved);
-    if session.stub_binder_hit {
+    if let Some(why) = session.fatal.take() {
+        let r = Refusal::Fatal(why);
+        host.marker(&r.marker());
+        Outcome::Refused(r)
+    } else if session.stub_binder_hit {
         host.marker(&Refusal::StubBinder.marker());
         Outcome::Refused(Refusal::StubBinder)
     } else {

@@ -16,6 +16,8 @@ pub struct Session {
     pub readable: Vec<(usize, usize)>,
     /// Set when the guest called `dyld_stub_binder`.
     pub stub_binder_hit: bool,
+    /// The reason the runtime ended the guest, when it did.
+    pub fatal: Option<alloc::string::String>,
 }
 
 impl Session {
@@ -24,7 +26,7 @@ impl Session {
         let host = host as *mut dyn Host;
         // SAFETY: `run` keeps the host borrow and this session alive until `end` clears ACTIVE.
         let host = unsafe { core::mem::transmute::<*mut dyn Host, *mut (dyn Host + 'static)>(host) };
-        Session { host, save, readable, stub_binder_hit: false }
+        Session { host, save, readable, stub_binder_hit: false, fatal: None }
     }
 }
 
@@ -49,6 +51,19 @@ pub fn resolve(symbol: &str) -> Option<usize> {
         "_exit" | "__exit" => Some(osx_exit as *const () as usize),
         "dyld_stub_binder" => Some(osx_stub_binder as *const () as usize),
         _ => None,
+    }
+}
+
+/// The Objective-C runtime's fatal hook: records why and ends the guest through the same exit path as `exit`.
+pub fn runtime_fatal(message: &str) -> ! {
+    let session = ACTIVE.load(Ordering::SeqCst);
+    if session.is_null() {
+        no_guest_is_running();
+    }
+    // SAFETY: the session is active; its fields are owned by the running guest's `run` frame.
+    unsafe {
+        (*session).fatal = Some(alloc::string::String::from(message));
+        osxx86_leave((*session).save, -1)
     }
 }
 

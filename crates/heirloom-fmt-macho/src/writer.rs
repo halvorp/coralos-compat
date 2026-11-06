@@ -34,6 +34,8 @@ pub struct ImageBuilder {
     arch: u32,
     unixthread: bool,
     chained: bool,
+    /// Extra dylib / rpath load commands `(cmd, string)` after libSystem, in order.
+    extra: Vec<(u32, String)>,
     base: u64,
 }
 
@@ -55,6 +57,7 @@ impl ImageBuilder {
             arch: CPU_TYPE_X86_64,
             unixthread: false,
             chained: false,
+            extra: Vec::new(),
             base: DEFAULT_BASE,
         }
     }
@@ -104,6 +107,18 @@ impl ImageBuilder {
 
     pub fn entry_unixthread(mut self) -> Self {
         self.unixthread = true;
+        self
+    }
+
+    /// Adds a dylib load command of kind `cmd` (`LC_LOAD_WEAK_DYLIB`, `LC_REEXPORT_DYLIB`, ...) after libSystem; it takes the next ordinal.
+    pub fn dylib(mut self, cmd: u32, path: &str) -> Self {
+        self.extra.push((cmd, path.to_string()));
+        self
+    }
+
+    /// Adds an `LC_RPATH` command.
+    pub fn rpath(mut self, path: &str) -> Self {
+        self.extra.push((crate::header::LC_RPATH, path.to_string()));
         self
     }
 
@@ -247,7 +262,14 @@ impl ImageBuilder {
             push_u64(&mut commands, CODE_FILE_OFFSET);
             push_u64(&mut commands, 0);
         }
-        write_dylib(&mut commands, "/usr/lib/libSystem.B.dylib");
+        write_dylib(&mut commands, LC_LOAD_DYLIB, "/usr/lib/libSystem.B.dylib");
+        for (cmd, text) in &self.extra {
+            if *cmd == crate::header::LC_RPATH {
+                write_rpath(&mut commands, text);
+            } else {
+                write_dylib(&mut commands, *cmd, text);
+            }
+        }
         if self.chained {
             push_u32(&mut commands, LC_DYLD_CHAINED_FIXUPS);
             push_u32(&mut commands, 16);
@@ -255,7 +277,7 @@ impl ImageBuilder {
             push_u32(&mut commands, 0);
         }
 
-        let ncmds = 8 + usize::from(self.chained);
+        let ncmds = 8 + usize::from(self.chained) + self.extra.len();
         debug_assert!(32 + commands.len() <= CODE_FILE_OFFSET as usize);
         let mut code = self.code.clone();
         for patch in &self.patches {
@@ -418,9 +440,19 @@ fn write_dylinker(output: &mut Vec<u8>, path: &str) {
     output.resize(output.len() + size - 12 - path.len() - 1, 0);
 }
 
-fn write_dylib(output: &mut Vec<u8>, path: &str) {
+fn write_rpath(output: &mut Vec<u8>, path: &str) {
+    let size = round_up(12 + path.len() as u64 + 1, 8) as usize;
+    push_u32(output, crate::header::LC_RPATH);
+    push_u32(output, size as u32);
+    push_u32(output, 12);
+    output.extend_from_slice(path.as_bytes());
+    output.push(0);
+    output.resize(output.len() + size - 12 - path.len() - 1, 0);
+}
+
+fn write_dylib(output: &mut Vec<u8>, cmd: u32, path: &str) {
     let size = round_up(24 + path.len() as u64 + 1, 8) as usize;
-    push_u32(output, LC_LOAD_DYLIB);
+    push_u32(output, cmd);
     push_u32(output, size as u32);
     push_u32(output, 24);
     push_u32(output, 0);

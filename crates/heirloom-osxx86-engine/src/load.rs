@@ -109,6 +109,29 @@ pub(crate) fn code_ranges(seg: &Segment, header_len: usize) -> Vec<(usize, usize
     ranges
 }
 
+/// The resolver for a library the engine serves natively, by install name; None for every other library.
+fn served_library(path: &str) -> Option<fn(&str) -> Option<usize>> {
+    match path {
+        "/usr/lib/libSystem.B.dylib" | "/usr/lib/libSystem.dylib" => Some(libsystem::resolve),
+        "/usr/lib/libobjc.A.dylib" => Some(heirloom_objc::libobjc::symbol),
+        _ => None,
+    }
+}
+
+/// Where the image's Objective-C metadata sections are in memory (slid addresses) and how many entries each holds.
+fn objc_meta(image: &MachO<'_>, base: usize, lo: u64) -> heirloom_objc::ImageMeta {
+    let find = |name: &str| {
+        image
+            .segments
+            .iter()
+            .flat_map(|s| s.sections.iter())
+            .find(|s| s.sectname == name)
+            .map(|s| (base + (s.addr - lo) as usize, (s.size / 8) as usize))
+            .unwrap_or((0, 0))
+    };
+    heirloom_objc::ImageMeta { selrefs: find("__objc_selrefs"), classlist: find("__objc_classlist"), catlist: find("__objc_catlist") }
+}
+
 /// Maps `file` into pages from `mem`; see the module documentation for the order of the steps.
 pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
     let image = MachO::parse(file).map_err(Refusal::Image)?;
@@ -179,12 +202,12 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
             continue;
         };
         let path = &image.dylibs[ordinal - 1].path;
-        if path != "/usr/lib/libSystem.B.dylib" && path != "/usr/lib/libSystem.dylib" {
+        let Some(resolver) = served_library(path) else {
             return Err(Refusal::ForeignDylib { path: path.clone() });
-        }
+        };
         let seg = &image.segments[b.segment];
         let word = at(seg, b.offset, 8).ok_or(Refusal::BadFixup("bind outside the reservation"))?;
-        let value = match libsystem::resolve(&b.symbol) {
+        let value = match resolver(&b.symbol) {
             Some(addr) => (addr as u64).wrapping_add(b.addend as u64),
             None if b.weak_import => 0,
             None => {
@@ -200,6 +223,13 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
     }
     if !unbound.is_empty() {
         return Err(Refusal::Unbound { symbols: unbound });
+    }
+
+    // 3b. Objective-C: unique selectors, realized classes and attached categories, while the pages are still writable
+    let meta = objc_meta(&image, base as usize, lo);
+    if meta != heirloom_objc::ImageMeta::default() {
+        // SAFETY: the sections were copied, rebased and bound above; the pages are read-write until published.
+        unsafe { heirloom_objc::register_image(&meta) };
     }
 
     // 4. admission: sweep the final code of every executable segment for raw traps

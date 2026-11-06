@@ -608,3 +608,69 @@ fn toolchain_gui_fixture_is_refused_until_the_objc_runtime_exists() {
     assert!(matches!(out, Outcome::Refused(Refusal::ForeignDylib { .. })), "{out:?}");
     assert!(host.writes.is_empty());
 }
+
+// ---- rung 2: the Objective-C runtime under a real compiler-built app ---------------------------------------------------------
+
+fn objc_smoke() -> Option<Vec<u8>> {
+    toolchain_image_with(
+        "objc-smoke",
+        "objc/OsxObjcSmoke.m",
+        "10.13",
+        &[],
+        &["libSystem.tbd", "objc/libobjc.tbd"],
+        &["-x", "objective-c", "-fobjc-runtime=macosx", "-fno-objc-arc", "-fno-builtin", &std::format!("-I{}/fixtures/objc", env!("CARGO_MANIFEST_DIR"))],
+    )
+}
+
+#[test]
+fn objc_smoke_app_passes_every_check_natively() {
+    let Some(bytes) = objc_smoke() else { return };
+    let (out, host) = run_image(&bytes);
+    let text: String = host.writes.iter().map(|(_, b)| String::from_utf8_lossy(b).into_owned()).collect();
+    assert!(!text.contains("FAIL"), "the app reported failures:\n{text}");
+    let want = [
+        "ok initialize has not run before the first message",
+        "ok initialize ran once on the first message",
+        "ok instance method and ivar",
+        "ok category method",
+        "ok double argument and return",
+        "ok structure return through objc_msgSend_stret",
+        "ok eight arguments, two on the stack",
+        "ok isKindOfClass",
+        "ok isMemberOfClass",
+        "ok respondsToSelector",
+        "ok performSelector",
+        "ok super calls and a subclass override",
+        "ok subclass is a kind of its superclass",
+        "ok synthesized retain property",
+        "ok the property retains and the getter autoreleases",
+        "ok autorelease pool pop deallocated the counter and the subclass instance",
+        "done failures=0",
+    ];
+    let got: Vec<&str> = text.lines().collect();
+    assert_eq!(got, want, "the app's output");
+    assert_eq!(out, Outcome::Exited(0));
+    let _g = GUEST.lock().unwrap_or_else(|e| e.into_inner());
+    assert!(heirloom_objc::runtime::class_named("Counter").is_null(), "the finished guest's classes are forgotten, not left pointing into released pages");
+}
+
+#[test]
+fn an_unrecognized_selector_ends_the_app_by_name() {
+    let Some(bytes) = toolchain_image_with(
+        "objc-fatal",
+        "objc/OsxObjcFatal.m",
+        "10.13",
+        &[],
+        &["libSystem.tbd", "objc/libobjc.tbd"],
+        &["-x", "objective-c", "-fobjc-runtime=macosx", "-fno-objc-arc", "-fno-builtin", &std::format!("-I{}/fixtures/objc", env!("CARGO_MANIFEST_DIR"))],
+    ) else {
+        return;
+    };
+    let (out, host) = run_image(&bytes);
+    assert_eq!(out, Outcome::Refused(Refusal::Fatal("OBJC-UNRECOGNIZED-SELECTOR -[Foo missing]".to_string())));
+    assert!(host.writes.is_empty(), "nothing after the failing message ran");
+    assert_eq!(host.markers.last().map(String::as_str), Some("[OSXX86 RUNTIME-FATAL OBJC-UNRECOGNIZED-SELECTOR -[Foo missing]]"));
+    // the engine survives and the next guest starts with a clean runtime
+    let (hello, _) = run_image(&hello_program(false).bytes);
+    assert_eq!(hello, Outcome::Exited(7));
+}
