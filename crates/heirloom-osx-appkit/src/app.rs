@@ -75,11 +75,15 @@ fn respond_bool(obj: Id, sel_name: &str, arg: Id) -> Option<bool> {
     Some(f(obj, sel, arg))
 }
 
-fn first_report(w: Id) {
+pub(crate) fn first_report(w: Id) {
     let r = reg();
     if !r.reported.contains(&(w as usize)) {
         r.reported.push(w as usize);
         state::marker(&format!("[OSXX86-WINDOW OK] {}", window::describe(w)));
+        let controls = r.controls.iter().filter(|c| crate::view::view_of(**c as Id).window == w as usize).count();
+        if controls > 0 {
+            state::marker(&format!("[OSXX86-GUI OK] window=\"{}\" controls={}", crate::string::text(window::window_of(w).title as Id), controls));
+        }
     }
 }
 

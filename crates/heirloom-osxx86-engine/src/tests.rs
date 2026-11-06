@@ -45,8 +45,6 @@ struct Scripted {
     controls: Vec<(UiObjectRef, CallbackToken)>,
 }
 
-// delete-when: the rung-4 control tests construct Activate, StaleActivate and Commit
-#[allow(dead_code)]
 #[derive(Clone)]
 enum Step {
     Resize { win: usize, width: i32, height: i32 },
@@ -873,4 +871,86 @@ fn a_weak_import_from_an_absent_weak_library_binds_to_null() {
     let image = ImageBuilder::new().dylib(LC_LOAD_WEAK_DYLIB, "/usr/lib/libabsent.dylib").code(&[0xB8, 0x05, 0, 0, 0, 0xC3]).build();
     let (out, _) = run_image(&image.bytes);
     assert_eq!(out, Outcome::Exited(5));
+}
+
+// ---- rung 4: controls and the action round trip ---------------------------------------------------------------------------------
+
+fn gui_hello(test: &str, extra: &[&str]) -> Option<Vec<u8>> {
+    let inc = std::format!("-I{}/fixtures/gui", env!("CARGO_MANIFEST_DIR"));
+    let mut cflags = std::vec!["-x", "objective-c", "-fobjc-runtime=macosx", "-fno-objc-arc", "-fno-builtin"];
+    cflags.extend_from_slice(extra);
+    cflags.push(&inc);
+    toolchain_image_with(test, "gui/OsxGuiHello.m", "10.13", &[], &GUI_TBDS, &cflags)
+}
+
+#[test]
+fn a_click_reaches_the_apps_action_and_the_field_changes() {
+    let Some(bytes) = gui_hello("gui-click", &[]) else { return };
+    // the field is published first (index 0), the button second (index 1) although the button was created first
+    let ui = Scripted::with(std::vec![Step::Activate { control: 1 }]);
+    let (out, host) = run_image_with(&bytes, Some(ui));
+    assert_eq!(out, Outcome::Exited(0));
+    let calls = window_calls(&host);
+    // OpenWindow, AddControl(field), AddControl(button), SetControl(field, "clicked")
+    assert_eq!(calls.len(), 4, "{calls:?}");
+    let UiCall::AddControl(win, field) = &calls[1] else { panic!("{calls:?}") };
+    assert_eq!(*win, UiObjectRef { id: 1, generation: 1 });
+    assert_eq!(field.kind, heirloom_ui_abi::ControlKind::Field { text: String::new(), max_len: 4096, editable: true, integer: false });
+    assert_eq!(field.rect, GuestRect { left: 20, top: 26, width: 280, height: 24 }, "Cocoa's bottom-left origin becomes the host's top-left");
+    let UiCall::AddControl(_, button) = &calls[2] else { panic!("{calls:?}") };
+    assert_eq!(button.kind, heirloom_ui_abi::ControlKind::Button);
+    assert_eq!(button.label, "Click");
+    assert_eq!(button.rect, GuestRect { left: 20, top: 70, width: 100, height: 30 });
+    assert_ne!(field.token, button.token);
+    let UiCall::SetControl(_, target, value) = &calls[3] else { panic!("{calls:?}") };
+    assert_eq!(*value, ControlValue::Text("clicked".to_string()), "the action wrote into the field");
+    assert_eq!(target.id, 2, "into the FIELD (the first control the host issued), not the button");
+    assert!(
+        !calls.iter().any(|c| matches!(c, UiCall::PresentContent { .. } | UiCall::PresentPlane(..))),
+        "raw=0: nothing is drawn by the guest"
+    );
+    let want = [
+        "[OSXX86-WINDOW OK] title=\"Hello\" w=320 h=120",
+        "[OSXX86-GUI OK] window=\"Hello\" controls=2",
+        "[OSXX86-ACTION OK] sel=\"clicked:\"",
+    ];
+    for m in want {
+        assert!(host.markers.contains(&m.to_string()), "missing {m}: {:?}", host.markers);
+    }
+    let pos = |m: &str| host.markers.iter().position(|x| x == m).unwrap();
+    assert!(pos(want[0]) < pos(want[1]) && pos(want[1]) < pos(want[2]));
+}
+
+#[test]
+fn an_intent_with_a_stale_generation_does_not_reach_the_action() {
+    let Some(bytes) = gui_hello("gui-stale", &[]) else { return };
+    let ui = Scripted::with(std::vec![Step::StaleActivate { control: 1 }]);
+    let (_, host) = run_image_with(&bytes, Some(ui));
+    assert!(host.markers.iter().any(|m| m.starts_with("[OSXX86 UI-STALE-EVENT intent")), "{:?}", host.markers);
+    assert!(!host.markers.iter().any(|m| m.contains("ACTION OK")));
+    assert!(!window_calls(&host).iter().any(|c| matches!(c, UiCall::SetControl(..))), "the action never ran");
+}
+
+#[test]
+fn committed_text_is_what_the_app_reads_back_and_a_retitled_control_is_a_new_incarnation() {
+    let Some(bytes) = gui_hello("gui-echo", &["-DECHO"]) else { return };
+    // type, click (the action reads the field and retitles the button), click the OLD reference (stale), click the NEW one
+    let ui = Scripted::with(std::vec![
+        Step::Commit { control: 0, text: "typed" },
+        Step::Activate { control: 1 },
+        Step::Activate { control: 1 },
+        Step::Activate { control: 2 },
+    ]);
+    let (out, host) = run_image_with(&bytes, Some(ui));
+    assert_eq!(out, Outcome::Exited(0));
+    let calls = window_calls(&host);
+    let titles: Vec<_> = calls.iter().filter_map(|c| if let UiCall::SetWindowTitle(_, t) = c { Some(t.as_str()) } else { None }).collect();
+    assert_eq!(titles, std::vec!["typed", "typed"], "the action read the committed text, twice (first click and the click on the new button): {calls:?}");
+    assert!(!calls.iter().any(|c| matches!(c, UiCall::SetControl(..))), "a committed text is not echoed back to the host");
+    let removes = calls.iter().filter(|c| matches!(c, UiCall::RemoveControl(..))).count();
+    assert_eq!(removes, 2, "each retitle replaced the control: {calls:?}");
+    let labels: Vec<_> = calls.iter().filter_map(|c| if let UiCall::AddControl(_, m) = c { Some(m.label.as_str()) } else { None }).collect();
+    assert_eq!(labels, std::vec!["", "Click", "Done", "Done"], "{calls:?}");
+    assert_eq!(host.markers.iter().filter(|m| m.contains("UI-STALE-EVENT intent")).count(), 1, "the second click used the replaced reference");
+    assert_eq!(host.markers.iter().filter(|m| m.contains("ACTION OK")).count(), 2);
 }

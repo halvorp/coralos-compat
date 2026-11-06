@@ -70,7 +70,7 @@ extern "C" fn add_subview(this: Id, _cmd: Sel, child: Id) {
     let c = view_of(child);
     c.superview = this as usize;
     adopt(child, parent.window);
-    if parent.window != 0 {
+    if parent.window != 0 && crate::window::window_of(parent.window as Id).opened != 0 {
         crate::window::publish_view(parent.window as Id, child);
     }
 }

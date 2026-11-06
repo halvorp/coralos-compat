@@ -25,6 +25,8 @@ pub(crate) struct Registry {
     pub windows: Vec<usize>,
     /// Windows that already produced `[OSXX86-WINDOW OK]`.
     pub reported: Vec<usize>,
+    /// Controls published to the host, in the order they were added.
+    pub controls: Vec<usize>,
     pub stop: bool,
 }
 
@@ -32,7 +34,7 @@ struct Cell(UnsafeCell<Registry>);
 // SAFETY: one guest runs per process on one thread; `begin` and `end` bracket its life.
 unsafe impl Sync for Cell {}
 
-static REG: Cell = Cell(UnsafeCell::new(Registry { host: None, app: 0, nsapp: 0, windows: Vec::new(), reported: Vec::new(), stop: false }));
+static REG: Cell = Cell(UnsafeCell::new(Registry { host: None, app: 0, nsapp: 0, windows: Vec::new(), reported: Vec::new(), controls: Vec::new(), stop: false }));
 
 pub(crate) fn reg() -> &'static mut Registry {
     // SAFETY: single guest thread, no overlapping borrows across message sends (callers copy what they need out first).
@@ -49,6 +51,7 @@ pub unsafe fn begin(host: &mut dyn AppHost) {
     r.nsapp = 0;
     r.windows.clear();
     r.reported.clear();
+    r.controls.clear();
     r.stop = false;
     // SAFETY: the lifetime is erased for the guest's duration, which the caller bounds.
     r.host = Some(unsafe { core::mem::transmute::<*mut dyn AppHost, *mut (dyn AppHost + 'static)>(host as *mut dyn AppHost) });
@@ -59,6 +62,7 @@ pub fn end() {
     let r = reg();
     r.host = None;
     r.windows.clear();
+    r.controls.clear();
     r.app = 0;
 }
 
