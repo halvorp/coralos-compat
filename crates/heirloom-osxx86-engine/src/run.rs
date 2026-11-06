@@ -1,10 +1,10 @@
-use alloc::{format, vec, vec::Vec};
+use alloc::{format, string::String, vec, vec::Vec};
 use core::ptr::null;
 
 use crate::{
     enter::{osxx86_enter, SavedCtx},
     libsystem, load,
-    CodeMem, Host, Prot, Refusal,
+    CodeMem, Host, ImageSource, NoImages, Prot, Refusal,
 };
 
 /// How a guest ended.
@@ -48,6 +48,12 @@ impl Drop for SessionGuard {
 
 /// Loads `file`, runs it natively on its own stack until it exits, and reports how it ended. One guest at a time per process.
 pub fn run(file: &[u8], args: &[&str], host: &mut dyn Host, mem: &mut dyn CodeMem) -> Outcome {
+    run_with(file, args, host, mem, &mut NoImages)
+}
+
+/// [`run`] with a source for the libraries the program links by path (`@rpath`, `@loader_path`, `@executable_path` resolve against
+/// `args[0]`).
+pub fn run_with(file: &[u8], args: &[&str], host: &mut dyn Host, mem: &mut dyn CodeMem, images: &mut dyn ImageSource) -> Outcome {
     heirloom_objc::runtime::reset();
     heirloom_objc::nsobject::install();
     heirloom_osx_appkit::install();
@@ -65,26 +71,31 @@ pub fn run(file: &[u8], args: &[&str], host: &mut dyn Host, mem: &mut dyn CodeMe
     // SAFETY: as above.
     unsafe { heirloom_osx_appkit::begin(&mut bridge) };
 
-    let l = match load::load(file, mem) {
+    let exe_path: String = args.first().map(|a| String::from(*a)).unwrap_or_else(|| String::from("a.out"));
+    let mut l = match load::load_program(file, &exe_path, images, mem) {
         Ok(l) => l,
         Err(r) => {
             host.marker(&r.marker());
             return Outcome::Refused(r);
         }
     };
-    host.marker(&format!("[OSXX86 LOAD OK] segments={} imports={}", l.segments, l.imports));
+    if l.libraries > 0 {
+        host.marker(&format!("[OSXX86 LOAD OK] segments={} imports={} libraries={}", l.segments, l.imports, l.libraries));
+    } else {
+        host.marker(&format!("[OSXX86 LOAD OK] segments={} imports={}", l.segments, l.imports));
+    }
 
     let stack = match mem.reserve(STACK) {
         Some(stack) => stack,
         None => {
-            mem.release(l.base, l.reserved);
+            l.release(mem);
             host.marker(&Refusal::OutOfMemory.marker());
             return Outcome::Refused(Refusal::OutOfMemory);
         }
     };
     if let Err(why) = mem.publish(stack, &[(0, 0x1000, Prot::None), (0x1000, STACK - 0x1000, Prot::RW)]) {
         mem.release(stack, STACK);
-        mem.release(l.base, l.reserved);
+        l.release(mem);
         host.marker(&Refusal::Publish(why).marker());
         return Outcome::Refused(Refusal::Publish(why));
     }
@@ -109,13 +120,16 @@ pub fn run(file: &[u8], args: &[&str], host: &mut dyn Host, mem: &mut dyn CodeMe
     let apple_ptrs = vec![apple_owned.as_ptr(), null()];
     let argc = (argv_ptrs.len() - 1) as i32;
 
-    session.readable = vec![l.span(), (stack as usize + 0x1000, top)];
+    session.readable = l.spans();
+    session.readable.push((stack as usize + 0x1000, top));
+    session.entry = l.entry;
+    session.startup = core::mem::take(&mut l.startup.steps);
     // SAFETY: entry is the published executable address of the admitted image; top is the
     // 16-aligned top of its writable stack reservation. `save` outlives the call, and all
     // pointer arrays and NUL-terminated strings remain owned by this frame throughout it.
     let code = unsafe {
         osxx86_enter(
-            l.entry,
+            libsystem::osx_startup as *const () as usize,
             argc,
             argv_ptrs.as_ptr(),
             envp_ptrs.as_ptr(),
@@ -126,7 +140,7 @@ pub fn run(file: &[u8], args: &[&str], host: &mut dyn Host, mem: &mut dyn CodeMe
     };
 
     mem.release(stack, STACK);
-    mem.release(l.base, l.reserved);
+    l.release(mem);
     if let Some(why) = session.fatal.take() {
         let r = Refusal::Fatal(why);
         host.marker(&r.marker());

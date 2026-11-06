@@ -27,7 +27,7 @@ pub mod trap;
 #[cfg(any(test, feature = "host-mem"))]
 pub mod hostmem;
 
-pub use run::{run, Outcome};
+pub use run::{run, run_with, Outcome};
 #[cfg(test)]
 mod tests;
 
@@ -49,6 +49,21 @@ pub trait CodeMem {
     fn publish(&mut self, base: *mut u8, ranges: &[(usize, usize, Prot)]) -> Result<(), &'static str>;
     /// Returns a reservation.
     fn release(&mut self, base: *mut u8, len: usize);
+}
+
+/// Where the libraries a program links by path come from (the volume the app's bundle sits on).
+pub trait ImageSource {
+    /// The bytes of the file at the absolute, normalized `path`, or None.
+    fn read(&mut self, path: &str) -> Option<Vec<u8>>;
+}
+
+/// An [`ImageSource`] with no files: a program that links only the libraries the engine serves natively.
+pub struct NoImages;
+
+impl ImageSource for NoImages {
+    fn read(&mut self, _path: &str) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// The outside world of one guest: its console and the engine's marker log.

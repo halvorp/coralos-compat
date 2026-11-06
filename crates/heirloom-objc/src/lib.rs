@@ -22,7 +22,7 @@ pub mod runtime;
 #[cfg(test)]
 mod tests;
 
-pub use runtime::{register_image, ImageMeta};
+pub use runtime::{call_load_methods, register_image, ImageMeta};
 
 /// The address of the `objc_msgSend` trampoline (tests and tools call it directly).
 pub fn msgsend_address() -> usize {

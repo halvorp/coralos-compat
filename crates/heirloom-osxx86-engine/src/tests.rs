@@ -954,3 +954,117 @@ fn committed_text_is_what_the_app_reads_back_and_a_retitled_control_is_a_new_inc
     assert_eq!(host.markers.iter().filter(|m| m.contains("UI-STALE-EVENT intent")).count(), 1, "the second click used the replaced reference");
     assert_eq!(host.markers.iter().filter(|m| m.contains("ACTION OK")).count(), 2);
 }
+
+// ---- rung 5: a second image (the dyld subset) ---------------------------------------------------------------------------------
+
+struct MapSource(std::collections::BTreeMap<String, Vec<u8>>);
+
+impl crate::ImageSource for MapSource {
+    fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+        self.0.get(path).cloned()
+    }
+}
+
+fn run_program(app: &[u8], libs: &[(&str, &[u8])]) -> (Outcome, RecordingHost) {
+    let _g = GUEST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut host = RecordingHost::default();
+    let mut src = MapSource(libs.iter().map(|(p, b)| (p.to_string(), b.to_vec())).collect());
+    let out = crate::run_with(app, &["/app/MacOS/app"], &mut host, &mut HostMem, &mut src);
+    (out, host)
+}
+
+/// Builds the fixture dylib from `source` and an app linked against the full `greet.m` dylib through `@rpath`.
+fn dylib_pair(test: &str, lib_source: &str) -> Option<(Vec<u8>, Vec<u8>)> {
+    if !tool("clang") || !tool("ld64.lld") {
+        std::eprintln!("SKIP {test}: clang / ld64.lld not found");
+        return None;
+    }
+    let fx = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let dir = std::env::temp_dir().join(std::format!("osxx86-{}-{test}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cflags = ["-target", "x86_64-apple-macos10.13", "-x", "objective-c", "-fobjc-runtime=macosx", "-fno-objc-arc", "-fno-builtin", "-O1", "-fno-stack-protector"];
+    let run = |cmd: &str, args: &[&std::ffi::OsStr]| {
+        let o = std::process::Command::new(cmd).args(args).output().unwrap();
+        assert!(o.status.success(), "{cmd}: {}", String::from_utf8_lossy(&o.stderr));
+    };
+    let os = |s: &str| std::ffi::OsString::from(s);
+    let build_lib = |src: &str, out: &str| {
+        let obj = dir.join(std::format!("{out}.o"));
+        let mut a: Vec<std::ffi::OsString> = cflags.iter().map(|s| os(s)).collect();
+        a.extend([os("-c"), fx.join(src).into_os_string(), os("-o"), obj.clone().into_os_string()]);
+        let refs: Vec<&std::ffi::OsStr> = a.iter().map(|s| s.as_os_str()).collect();
+        run("clang", &refs);
+        let lib = dir.join(out);
+        let l: Vec<std::ffi::OsString> = std::vec![
+            os("-dylib"), os("-arch"), os("x86_64"), os("-platform_version"), os("macos"), os("10.13"), os("10.13"), os("-install_name"), os("@rpath/libgreet.dylib"),
+            os("-o"), lib.clone().into_os_string(), obj.into_os_string(), fx.join("libSystem.tbd").into_os_string(), fx.join("objc/libobjc.tbd").into_os_string(),
+        ];
+        let refs: Vec<&std::ffi::OsStr> = l.iter().map(|s| s.as_os_str()).collect();
+        run("ld64.lld", &refs);
+        lib
+    };
+    let full = build_lib("dylib/greet.m", "libgreet.dylib");
+    let other = if lib_source == "dylib/greet.m" { full.clone() } else { build_lib(lib_source, "libgreet-other.dylib") };
+    let app_obj = dir.join("app.o");
+    let mut a: Vec<std::ffi::OsString> = cflags.iter().map(|s| os(s)).collect();
+    a.extend([os("-c"), fx.join("dylib/DylibApp.m").into_os_string(), os("-o"), app_obj.clone().into_os_string()]);
+    let refs: Vec<&std::ffi::OsStr> = a.iter().map(|s| s.as_os_str()).collect();
+    run("clang", &refs);
+    let app = dir.join("app");
+    let l: Vec<std::ffi::OsString> = std::vec![
+        os("-arch"), os("x86_64"), os("-platform_version"), os("macos"), os("10.13"), os("10.13"), os("-rpath"), os("@executable_path/../Frameworks"),
+        os("-o"), app.clone().into_os_string(), app_obj.into_os_string(), full.into_os_string(), fx.join("libSystem.tbd").into_os_string(), fx.join("objc/libobjc.tbd").into_os_string(),
+        os("-e"), os("_main"),
+    ];
+    let refs: Vec<&std::ffi::OsStr> = l.iter().map(|s| s.as_os_str()).collect();
+    run("ld64.lld", &refs);
+    let r = (std::fs::read(&app).unwrap(), std::fs::read(&other).unwrap());
+    std::fs::remove_dir_all(&dir).ok();
+    Some(r)
+}
+
+const LIB_PATH: &str = "/app/Frameworks/libgreet.dylib";
+
+#[test]
+fn an_app_and_its_rpath_library_run_as_two_images() {
+    let Some((app, lib)) = dylib_pair("dylib-run", "dylib/greet.m") else { return };
+    let (out, host) = run_program(&app, &[(LIB_PATH, &lib)]);
+    let text: String = host.writes.iter().map(|(_, b)| String::from_utf8_lossy(b).into_owned()).collect();
+    assert_eq!(
+        text.lines().collect::<Vec<_>>(),
+        std::vec![
+            "ok a function of the library",
+            "ok a data symbol of the library",
+            "ok the library's constructor ran once before main",
+            "ok the library's +load ran once before main",
+            "ok a class of the library",
+            "done failures=0",
+        ]
+    );
+    assert_eq!(out, Outcome::Exited(0));
+    assert!(host.markers[0].starts_with("[OSXX86 LOAD OK] segments=6 ") && host.markers[0].ends_with(" libraries=1"), "{:?}", host.markers[0]);
+}
+
+#[test]
+fn a_missing_rpath_library_refuses_the_program_by_name() {
+    let Some((app, _)) = dylib_pair("dylib-missing", "dylib/greet.m") else { return };
+    let (out, host) = run_program(&app, &[]);
+    assert_eq!(out, Outcome::Refused(Refusal::ForeignDylib { path: "@rpath/libgreet.dylib".to_string() }));
+    assert!(host.writes.is_empty());
+}
+
+#[test]
+fn a_library_without_a_symbol_the_app_needs_leaves_that_symbol_unbound() {
+    let Some((app, stale)) = dylib_pair("dylib-stale", "dylib/greet_variant.m") else { return };
+    let (out, host) = run_program(&app, &[(LIB_PATH, &stale)]);
+    assert_eq!(out, Outcome::Refused(Refusal::Unbound { symbols: std::vec!["_greet_add".to_string()] }));
+    assert!(host.writes.is_empty(), "nothing ran");
+}
+
+#[test]
+fn a_raw_trap_in_a_library_refuses_the_program_before_anything_runs() {
+    let Some((app, evil)) = dylib_pair("dylib-trap", "dylib/greet_trap.m") else { return };
+    let (out, host) = run_program(&app, &[(LIB_PATH, &evil)]);
+    assert!(matches!(out, Outcome::Refused(Refusal::RawTrap { kind: TrapKind::Syscall, .. })), "{out:?}");
+    assert!(host.writes.is_empty());
+}

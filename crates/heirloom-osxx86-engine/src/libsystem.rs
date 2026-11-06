@@ -18,6 +18,10 @@ pub struct Session {
     pub stub_binder_hit: bool,
     /// The reason the runtime ended the guest, when it did.
     pub fatal: Option<alloc::string::String>,
+    /// The main entry point `osx_startup` calls after the startup steps.
+    pub entry: usize,
+    /// Per image, dependencies first: its `+load` methods (the metadata) and its initializers.
+    pub startup: Vec<(Option<heirloom_objc::ImageMeta>, Vec<usize>)>,
 }
 
 impl Session {
@@ -26,7 +30,7 @@ impl Session {
         let host = host as *mut dyn Host;
         // SAFETY: `run` keeps the host borrow and this session alive until `end` clears ACTIVE.
         let host = unsafe { core::mem::transmute::<*mut dyn Host, *mut (dyn Host + 'static)>(host) };
-        Session { host, save, readable, stub_binder_hit: false, fatal: None }
+        Session { host, save, readable, stub_binder_hit: false, fatal: None, entry: 0, startup: Vec::new() }
     }
 }
 
@@ -131,4 +135,28 @@ pub extern "C" fn osx_stub_binder() -> ! {
     }
     // SAFETY: the session is active and `save` belongs to the frame that called osxx86_enter.
     unsafe { osxx86_leave((*session).save, -1) }
+}
+/// What the engine enters on the guest's stack instead of `main`: runs every image's `+load` methods and initializers (libraries
+/// before the programs that link them), then the program's own entry point with the same arguments.
+pub extern "C" fn osx_startup(argc: i32, argv: *const *const u8, envp: *const *const u8, apple: *const *const u8) -> i32 {
+    let session = ACTIVE.load(Ordering::SeqCst);
+    if session.is_null() {
+        no_guest_is_running();
+    }
+    // SAFETY: the session is active and owned by the `run` frame; the startup plan is moved out so no borrow outlives the calls.
+    let (entry, steps) = unsafe { ((*session).entry, core::mem::take(&mut (*session).startup)) };
+    for (meta, inits) in steps {
+        if let Some(m) = meta {
+            // SAFETY: the metadata was registered when the image was loaded.
+            unsafe { heirloom_objc::call_load_methods(&m) };
+        }
+        for init in inits {
+            // SAFETY: an initializer is `void (*)(int, char **, char **, char **)` inside a published, admitted image.
+            let f: extern "C" fn(i32, *const *const u8, *const *const u8, *const *const u8) = unsafe { core::mem::transmute(init) };
+            f(argc, argv, envp, apple);
+        }
+    }
+    // SAFETY: entry is the published `main` of the admitted program: `int main(int, char **, char **, char **)`.
+    let main: extern "C" fn(i32, *const *const u8, *const *const u8, *const *const u8) -> i32 = unsafe { core::mem::transmute(entry) };
+    main(argc, argv, envp, apple)
 }

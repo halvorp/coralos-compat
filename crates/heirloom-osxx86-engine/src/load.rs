@@ -1,61 +1,27 @@
-//! The Mach-O loader: maps an x86_64 executable into engine-owned pages, applies the slide, binds every import to the native
-//! [`libsystem`] table, refuses images that carry a raw trap, and publishes the pages with their final protections.
+//! The program loader, a dyld subset: maps the main executable and every Mach-O library it links (found through `@rpath`,
+//! `@loader_path` and `@executable_path`), applies each slide, binds every import to the native tables or to the export trie of
+//! the library that provides it, registers the Objective-C metadata of each image dependencies first, refuses images that carry a
+//! raw trap, and publishes the pages with their final protections.
 //!
-//! Order matters and is fixed: copy, rebase, bind (pages are read-write and never executable), scan the final code bytes, then
-//! publish. Every error after the reservation releases it.
+//! Order is fixed: map every image (copy, rebase), bind every image (pages are read-write and never executable), register the
+//! Objective-C metadata, scan the final code bytes, then publish. Every error releases every reservation made so far.
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
 
-use heirloom_fmt_macho::header::{LC_LOAD_WEAK_DYLIB, MH_EXECUTE, VM_PROT_EXECUTE, VM_PROT_READ, VM_PROT_WRITE};
+use heirloom_fmt_macho::header::{LC_LOAD_WEAK_DYLIB, MH_DYLIB, MH_EXECUTE, VM_PROT_EXECUTE, VM_PROT_READ, VM_PROT_WRITE};
 use heirloom_fmt_macho::{Entry, MachO, MachoError, Segment};
 
-use crate::{libsystem, trap, CodeMem, Prot, Refusal};
+use crate::{libsystem, trap, CodeMem, ImageSource, Prot, Refusal};
 
 /// `S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS`: a section with either bit holds machine code.
 const SECTION_HOLDS_CODE: u32 = 0x8000_0400;
 const PAGE_MASK: u64 = 0xfff;
-
-/// A mapped image.
-pub struct Loaded {
-    /// The start of the reservation (the lowest non-PAGEZERO segment).
-    pub base: *mut u8,
-    /// Bytes reserved.
-    pub reserved: usize,
-    /// The lowest segment address the file asked for.
-    pub lo: u64,
-    /// `base - lo`, wrapping.
-    pub slide: i64,
-    /// The absolute address of the entry point.
-    pub entry: usize,
-    /// Segments mapped (PAGEZERO excluded).
-    pub segments: usize,
-    /// Bind records written.
-    pub imports: usize,
-}
-
-impl Loaded {
-    /// The address range `[start, end)` of the reservation.
-    pub fn span(&self) -> (usize, usize) {
-        (self.base as usize, self.base as usize + self.reserved)
-    }
-}
-
-/// Releases the reservation on every early return; disarmed once the image is handed over.
-struct ReleaseGuard<'a> {
-    mem: &'a mut dyn CodeMem,
-    base: *mut u8,
-    len: usize,
-    armed: bool,
-}
-
-impl Drop for ReleaseGuard<'_> {
-    fn drop(&mut self) {
-        if self.armed {
-            self.mem.release(self.base, self.len);
-        }
-    }
-}
+/// `S_MOD_INIT_FUNC_POINTERS`: a section of initializer function pointers.
+const S_MOD_INIT_FUNC_POINTERS: u32 = 0x9;
+const SECTION_TYPE_MASK: u32 = 0xff;
+/// How many libraries a program may map (a cycle or a runaway closure ends here).
+const MAX_IMAGES: usize = 256;
 
 /// `v` rounded up to a page, or None on overflow.
 fn page_up(v: u64) -> Option<u64> {
@@ -140,19 +106,285 @@ fn objc_meta(image: &MachO<'_>, base: usize, lo: u64) -> heirloom_objc::ImageMet
     heirloom_objc::ImageMeta { selrefs: find("__objc_selrefs"), classlist: find("__objc_classlist"), catlist: find("__objc_catlist") }
 }
 
-/// Maps `file` into pages from `mem`; see the module documentation for the order of the steps.
-pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
-    let image = MachO::parse(file).map_err(Refusal::Image)?;
+
+/// Where a library import binds: a native table, another mapped image, or nowhere (an absent weak library).
+#[derive(Clone, Copy)]
+enum Dep {
+    Served(fn(&str) -> Option<usize>),
+    Image(usize),
+    Absent,
+}
+
+/// One mapped Mach-O image.
+struct Img {
+    path: String,
+    file: Vec<u8>,
+    base: *mut u8,
+    reserved: usize,
+    lo: u64,
+    slide: i64,
+    deps: Vec<Dep>,
+    imports: usize,
+}
+
+/// What runs on the guest's stack before `main`: per image, dependencies first, its `+load` methods and then its initializers.
+#[derive(Default)]
+pub struct Startup {
+    pub steps: Vec<(Option<heirloom_objc::ImageMeta>, Vec<usize>)>,
+}
+
+/// A mapped program: the main executable, its libraries and what the guest runs first.
+pub struct Program {
+    images: Vec<Img>,
+    /// The absolute address of the main entry point.
+    pub entry: usize,
+    /// Segments mapped over all images (PAGEZERO excluded).
+    pub segments: usize,
+    /// Bind records written over all images.
+    pub imports: usize,
+    /// Libraries mapped besides the main executable.
+    pub libraries: usize,
+    /// `+load` methods and initializers to run before `main`.
+    pub startup: Startup,
+}
+
+impl Program {
+    /// The address ranges `[start, end)` of every mapped image.
+    pub fn spans(&self) -> Vec<(usize, usize)> {
+        self.images.iter().map(|i| (i.base as usize, i.base as usize + i.reserved)).collect()
+    }
+    /// Returns every reservation to `mem`.
+    pub fn release(&mut self, mem: &mut dyn CodeMem) {
+        for i in self.images.drain(..) {
+            mem.release(i.base, i.reserved);
+        }
+    }
+}
+
+/// Resolves `@executable_path`, `@loader_path` and `@rpath` in `template` to candidate absolute paths, normalized.
+fn expand(template: &str, exe_dir: &str, loader_dir: &str, rpaths: &[String]) -> Vec<String> {
+    if let Some(rest) = template.strip_prefix("@executable_path/") {
+        return alloc::vec![normalize(&format!("{exe_dir}/{rest}"))];
+    }
+    if let Some(rest) = template.strip_prefix("@loader_path/") {
+        return alloc::vec![normalize(&format!("{loader_dir}/{rest}"))];
+    }
+    if let Some(rest) = template.strip_prefix("@rpath/") {
+        let mut out = Vec::new();
+        for r in rpaths {
+            for base in expand(&format!("{r}/"), exe_dir, loader_dir, &[]) {
+                out.push(normalize(&format!("{base}/{rest}")));
+            }
+        }
+        return out;
+    }
+    alloc::vec![normalize(template)]
+}
+
+/// Collapses `.`, `..` and repeated slashes.
+fn normalize(path: &str) -> String {
+    let absolute = path.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for p in path.split('/') {
+        match p {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    let joined = parts.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+fn dir_of(path: &str) -> String {
+    match path.rfind('/') {
+        Some(0) => String::from("/"),
+        Some(i) => String::from(&path[..i]),
+        None => String::new(),
+    }
+}
+
+fn is_main_dylib_check(image: &MachO<'_>, main: bool) -> Result<(), Refusal> {
     if image.has_chained_fixups {
         return Err(Refusal::UnsupportedFixups);
     }
-    if image.filetype != MH_EXECUTE {
-        return Err(bad_image("not an executable"));
+    if main {
+        if image.filetype != MH_EXECUTE {
+            return Err(bad_image("not an executable"));
+        }
+        if !matches!(image.entry, Some(Entry::Main { .. })) {
+            return Err(Refusal::NoEntry);
+        }
+    } else if image.filetype != MH_DYLIB {
+        return Err(bad_image("a linked library is not a dylib"));
     }
-    let entryoff = match image.entry {
-        Some(Entry::Main { entryoff, .. }) => entryoff,
-        _ => return Err(Refusal::NoEntry),
-    };
+    Ok(())
+}
+
+/// The address of `name` exported by image `j` (following re-exports through that image's own library list).
+fn lookup_export(images: &[Img], j: usize, name: &str, depth: u8) -> Option<usize> {
+    if depth > 8 {
+        return None;
+    }
+    let img = &images[j];
+    let m = MachO::parse(&img.file).ok()?;
+    let e = m.export(name).ok()??;
+    if let Some((ordinal, original)) = e.reexport {
+        let target = img.deps.get((ordinal as usize).checked_sub(1)?)?;
+        let n = if original.is_empty() { name } else { original.as_str() };
+        return match *target {
+            Dep::Served(r) => r(n),
+            Dep::Image(k) => lookup_export(images, k, n, depth + 1),
+            Dep::Absent => None,
+        };
+    }
+    let text = m.segments.iter().find(|s| s.name == "__TEXT")?;
+    Some(img.base as usize + (text.vmaddr - img.lo) as usize + e.address as usize)
+}
+
+/// Maps `file` (the main executable at `exe_path`) and every library it links, binds, registers and publishes them.
+pub fn load_program(file: &[u8], exe_path: &str, source: &mut dyn ImageSource, mem: &mut dyn CodeMem) -> Result<Program, Refusal> {
+    let mut program = Program { images: Vec::new(), entry: 0, segments: 0, imports: 0, libraries: 0, startup: Startup::default() };
+    match load_into(&mut program, file, exe_path, source, mem) {
+        Ok(()) => Ok(program),
+        Err(e) => {
+            program.release(mem);
+            Err(e)
+        }
+    }
+}
+
+fn load_into(p: &mut Program, file: &[u8], exe_path: &str, source: &mut dyn ImageSource, mem: &mut dyn CodeMem) -> Result<(), Refusal> {
+    let exe_dir = dir_of(exe_path);
+    // 1. discover: the main image first, then every library breadth first
+    p.images.push(Img { path: String::from(exe_path), file: file.to_vec(), base: core::ptr::null_mut(), reserved: 0, lo: 0, slide: 0, deps: Vec::new(), imports: 0 });
+    let main_rpaths: Vec<String> = MachO::parse(file).map_err(Refusal::Image)?.rpaths;
+    let mut next = 0;
+    while next < p.images.len() {
+        let (path, bytes) = (p.images[next].path.clone(), p.images[next].file.clone());
+        let m = MachO::parse(&bytes).map_err(Refusal::Image)?;
+        is_main_dylib_check(&m, next == 0)?;
+        let mut rpaths = m.rpaths.clone();
+        rpaths.extend(main_rpaths.iter().cloned());
+        let loader_dir = dir_of(&path);
+        let mut deps = Vec::new();
+        for d in &m.dylibs {
+            if let Some(r) = served_library(&d.path) {
+                deps.push(Dep::Served(r));
+                continue;
+            }
+            let found = expand(&d.path, &exe_dir, &loader_dir, &rpaths).into_iter().find_map(|cand| {
+                if let Some(i) = p.images.iter().position(|x| x.path == cand) {
+                    return Some((cand, None, Some(i)));
+                }
+                source.read(&cand).map(|b| (cand, Some(b), None))
+            });
+            match found {
+                Some((_, _, Some(i))) => deps.push(Dep::Image(i)),
+                Some((cand, Some(b), None)) => {
+                    if p.images.len() >= MAX_IMAGES {
+                        return Err(Refusal::BadFixup("too many libraries"));
+                    }
+                    p.images.push(Img { path: cand, file: b, base: core::ptr::null_mut(), reserved: 0, lo: 0, slide: 0, deps: Vec::new(), imports: 0 });
+                    deps.push(Dep::Image(p.images.len() - 1));
+                }
+                _ if d.kind == LC_LOAD_WEAK_DYLIB => deps.push(Dep::Absent),
+                _ => return Err(Refusal::ForeignDylib { path: d.path.clone() }),
+            }
+        }
+        p.images[next].deps = deps;
+        next += 1;
+    }
+    p.libraries = p.images.len() - 1;
+
+    // 2. map: reserve, copy, rebase
+    for idx in 0..p.images.len() {
+        map_image(p, idx, mem)?;
+    }
+    // 3. bind
+    let mut unbound: Vec<String> = Vec::new();
+    for idx in 0..p.images.len() {
+        bind_image(p, idx, &mut unbound)?;
+    }
+    if !unbound.is_empty() {
+        return Err(Refusal::Unbound { symbols: unbound });
+    }
+    p.imports = p.images.iter().map(|i| i.imports).sum();
+
+    // 4. Objective-C metadata and initializers, dependencies first
+    let order = post_order(&p.images);
+    for &idx in &order {
+        let img = &p.images[idx];
+        let m = MachO::parse(&img.file).map_err(Refusal::Image)?;
+        let meta = objc_meta(&m, img.base as usize, img.lo);
+        let has_meta = meta != heirloom_objc::ImageMeta::default();
+        if has_meta {
+            // SAFETY: the image was copied, rebased and bound above; its pages are read-write until published.
+            unsafe { heirloom_objc::register_image(&meta) };
+        }
+        let mut inits = Vec::new();
+        for seg in &m.segments {
+            for s in &seg.sections {
+                if s.flags & SECTION_TYPE_MASK == S_MOD_INIT_FUNC_POINTERS {
+                    for k in 0..(s.size / 8) {
+                        let at = img.base as usize + (s.addr - img.lo) as usize + (k * 8) as usize;
+                        // SAFETY: the section lies inside the reservation and was rebased above.
+                        inits.push(unsafe { core::ptr::read_unaligned(at as *const usize) });
+                    }
+                }
+            }
+        }
+        if has_meta || !inits.is_empty() {
+            p.startup.steps.push((has_meta.then_some(meta), inits));
+        }
+    }
+
+    // 5. admission scan and publish
+    for idx in 0..p.images.len() {
+        scan_and_publish(p, idx, mem)?;
+    }
+
+    // 6. the entry point
+    let img = &p.images[0];
+    let m = MachO::parse(&img.file).map_err(Refusal::Image)?;
+    let Some(Entry::Main { entryoff, .. }) = m.entry else { return Err(Refusal::NoEntry) };
+    let text = &m.segments[m.segment_index("__TEXT").ok_or(Refusal::NoEntry)?];
+    if entryoff >= text.filesize {
+        return Err(Refusal::NoEntry);
+    }
+    p.entry = img.base as usize + (text.vmaddr - img.lo) as usize + entryoff as usize;
+    Ok(())
+}
+
+/// Image indices with every image after the libraries it links (the main executable last).
+fn post_order(images: &[Img]) -> Vec<usize> {
+    fn visit(images: &[Img], i: usize, seen: &mut Vec<usize>, out: &mut Vec<usize>) {
+        if seen.contains(&i) {
+            return;
+        }
+        seen.push(i);
+        for d in &images[i].deps {
+            if let Dep::Image(j) = d {
+                visit(images, *j, seen, out);
+            }
+        }
+        out.push(i);
+    }
+    let mut out = Vec::new();
+    let mut seen = Vec::new();
+    visit(images, 0, &mut seen, &mut out);
+    out
+}
+
+fn map_image(p: &mut Program, idx: usize, mem: &mut dyn CodeMem) -> Result<(), Refusal> {
+    let file = p.images[idx].file.clone();
+    let image = MachO::parse(&file).map_err(Refusal::Image)?;
     let (lo, hi) = image.vm_span().ok_or(Refusal::NoEntry)?;
     // a segment starts on a page; its size may stop short of one (the linker leaves __LINKEDIT unrounded), and the pages are whole
     let hi = page_up(hi).ok_or_else(|| bad_image("segment range overflows"))?;
@@ -161,18 +393,20 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
             return Err(bad_image("segment not page aligned"));
         }
     }
-    if !image.is_pie() {
+    if idx == 0 && !image.is_pie() {
         return Err(Refusal::FixedBase { vmaddr: lo });
     }
-
     let reserved = usize::try_from(hi - lo).map_err(|_| Refusal::OutOfMemory)?;
     let base = mem.reserve(reserved).ok_or(Refusal::OutOfMemory)?;
-    let slide = (base as u64).wrapping_sub(lo) as i64;
-    let mut guard = ReleaseGuard { mem, base, len: reserved, armed: true };
-    let at = |seg: &Segment, offset: u64, len: usize| slot(base as usize, reserved, lo, seg.vmaddr, offset, len);
-
-    // 1. copy the file-backed part of every segment; the rest of the reservation is already zero
-    let mut segments = 0;
+    {
+        let img = &mut p.images[idx];
+        img.base = base;
+        img.reserved = reserved;
+        img.lo = lo;
+        img.slide = (base as u64).wrapping_sub(lo) as i64;
+    }
+    let (slide, base_u) = (p.images[idx].slide, base as usize);
+    let at = |seg: &Segment, offset: u64, len: usize| slot(base_u, reserved, lo, seg.vmaddr, offset, len);
     for (index, seg) in image.segments.iter().enumerate() {
         if seg.is_pagezero() {
             continue;
@@ -181,10 +415,8 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
         let dest = at(seg, 0, bytes.len()).ok_or(Refusal::BadFixup("segment outside the reservation"))?;
         // SAFETY: `slot` proved [dest, dest + len) lies inside the reservation, which is writable; the source is a file slice.
         unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dest as *mut u8, bytes.len()) };
-        segments += 1;
+        p.segments += 1;
     }
-
-    // 2. rebase: add the slide to every pointer that holds an address of the image
     for r in image.rebases().map_err(Refusal::Image)? {
         let seg = &image.segments[r.segment];
         let word = at(seg, r.offset, 8).ok_or(Refusal::BadFixup("rebase outside the image"))?;
@@ -196,36 +428,29 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
         // SAFETY: the same proven slot.
         unsafe { core::ptr::write_unaligned(word as *mut u64, value.wrapping_add(slide as u64)) };
     }
+    Ok(())
+}
 
-    // 2b. a library the image links must be served whether or not it binds anything from it (weak links may be missing)
-    for d in image.dylibs.iter().filter(|d| d.kind != LC_LOAD_WEAK_DYLIB) {
-        if served_library(&d.path).is_none() {
-            return Err(Refusal::ForeignDylib { path: d.path.clone() });
-        }
-    }
-
-    // 3. bind: eager, for the bind and the lazy-bind streams alike
-    let mut unbound: Vec<String> = Vec::new();
+fn bind_image(p: &mut Program, idx: usize, unbound: &mut Vec<String>) -> Result<(), Refusal> {
+    let file = p.images[idx].file.clone();
+    let image = MachO::parse(&file).map_err(Refusal::Image)?;
+    let (base_u, reserved, lo) = (p.images[idx].base as usize, p.images[idx].reserved, p.images[idx].lo);
     let mut imports = 0;
     for b in image.binds().map_err(Refusal::Image)? {
-        let named_dylib = usize::try_from(b.dylib_ordinal).ok().filter(|o| *o >= 1 && *o <= image.dylibs.len());
-        let Some(ordinal) = named_dylib else {
-            // flat lookup, main-executable and self ordinals name no library this table serves
-            if !unbound.contains(&b.symbol) {
-                unbound.push(b.symbol.clone());
-            }
-            continue;
-        };
-        let path = &image.dylibs[ordinal - 1].path;
-        let resolver = match served_library(path) {
-            Some(r) => r,
-            // a weak library this engine does not serve is absent: its weak symbols bind to null, its strong ones stay unbound
-            None if image.dylibs[ordinal - 1].kind == LC_LOAD_WEAK_DYLIB => |_: &str| None,
-            None => return Err(Refusal::ForeignDylib { path: path.clone() }),
-        };
         let seg = &image.segments[b.segment];
-        let word = at(seg, b.offset, 8).ok_or(Refusal::BadFixup("bind outside the reservation"))?;
-        let value = match resolver(&b.symbol) {
+        let word = slot(base_u, reserved, lo, seg.vmaddr, b.offset, 8).ok_or(Refusal::BadFixup("bind outside the reservation"))?;
+        let found: Option<usize> = match b.dylib_ordinal {
+            0 => lookup_export(&p.images, idx, &b.symbol, 0),
+            -1 => lookup_export(&p.images, 0, &b.symbol, 0),
+            -2 => (0..p.images.len()).find_map(|j| lookup_export(&p.images, j, &b.symbol, 0)),
+            n if n >= 1 && (n as usize) <= p.images[idx].deps.len() => match p.images[idx].deps[n as usize - 1] {
+                Dep::Served(r) => r(&b.symbol),
+                Dep::Image(j) => lookup_export(&p.images, j, &b.symbol, 0),
+                Dep::Absent => None,
+            },
+            _ => None,
+        };
+        let value = match found {
             Some(addr) => (addr as u64).wrapping_add(b.addend as u64),
             None if b.weak_import => 0,
             None => {
@@ -239,23 +464,20 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
         unsafe { core::ptr::write_unaligned(word as *mut u64, value) };
         imports += 1;
     }
-    if !unbound.is_empty() {
-        return Err(Refusal::Unbound { symbols: unbound });
-    }
+    p.images[idx].imports = imports;
+    Ok(())
+}
 
-    // 3b. Objective-C: unique selectors, realized classes and attached categories, while the pages are still writable
-    let meta = objc_meta(&image, base as usize, lo);
-    if meta != heirloom_objc::ImageMeta::default() {
-        // SAFETY: the sections were copied, rebased and bound above; the pages are read-write until published.
-        unsafe { heirloom_objc::register_image(&meta) };
-    }
-
-    // 4. admission: sweep the final code of every executable segment for raw traps
+fn scan_and_publish(p: &mut Program, idx: usize, mem: &mut dyn CodeMem) -> Result<(), Refusal> {
+    let file = p.images[idx].file.clone();
+    let image = MachO::parse(&file).map_err(Refusal::Image)?;
+    let (base, base_u, reserved, lo) = (p.images[idx].base, p.images[idx].base as usize, p.images[idx].reserved, p.images[idx].lo);
+    let at = |seg: &Segment, offset: u64, len: usize| slot(base_u, reserved, lo, seg.vmaddr, offset, len);
     let header_len = image.slice.get(20..24).map_or(0, |b| 32 + u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
     for seg in image.segments.iter().filter(|s| !s.is_pagezero() && s.is_executable()) {
         let len = usize::try_from(seg.filesize).map_err(|_| Refusal::BadFixup("segment outside the reservation"))?;
         let start = at(seg, 0, len).ok_or(Refusal::BadFixup("segment outside the reservation"))?;
-        // SAFETY: `slot` proved the range lies inside the reservation; nothing else touches it while the engine holds the guard.
+        // SAFETY: `slot` proved the range lies inside the reservation; nothing else touches it before publication.
         let mapped = unsafe { core::slice::from_raw_parts(start as *const u8, len) };
         for (from, to) in code_ranges(seg, header_len) {
             if let Some((hit, kind)) = trap::scan_code(&mapped[from..to]) {
@@ -268,9 +490,7 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
             }
         }
     }
-
-    // 5. publish with the final protections; a segment that asks for write and execute is refused
-    let mut ranges = Vec::with_capacity(segments);
+    let mut ranges = Vec::new();
     for seg in image.segments.iter().filter(|s| !s.is_pagezero()) {
         if seg.initprot & VM_PROT_WRITE != 0 && seg.initprot & VM_PROT_EXECUTE != 0 {
             return Err(Refusal::Publish("segment is writable and executable"));
@@ -288,21 +508,30 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
         let length = usize::try_from(page_up(seg.vmsize).ok_or(Refusal::OutOfMemory)?).map_err(|_| Refusal::OutOfMemory)?;
         ranges.push((offset, length, prot));
     }
-    guard.mem.publish(base, &ranges).map_err(Refusal::Publish)?;
-
-    // 6. the entry point: LC_MAIN's offset is a file offset into __TEXT
-    let text = &image.segments[image.segment_index("__TEXT").ok_or(Refusal::NoEntry)?];
-    if entryoff >= text.filesize {
-        return Err(Refusal::NoEntry);
-    }
-    let entry = at(text, entryoff, 1).ok_or(Refusal::NoEntry)?;
-    guard.armed = false;
-    Ok(Loaded { base, reserved, lo, slide, entry, segments, imports })
+    mem.publish(base, &ranges).map_err(Refusal::Publish)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_normalize_and_the_dyld_variables_expand() {
+        assert_eq!(normalize("/a/b/../c/./d//e"), "/a/c/d/e");
+        assert_eq!(normalize("a/../../x"), "x");
+        assert_eq!(dir_of("/app/MacOS/app"), "/app/MacOS");
+        assert_eq!(dir_of("/app"), "/");
+        assert_eq!(
+            expand("@rpath/Foo.framework/Foo", "/app/MacOS", "/app/MacOS", &[String::from("@executable_path/../Frameworks"), String::from("/opt/lib")]),
+            alloc::vec![String::from("/app/Frameworks/Foo.framework/Foo"), String::from("/opt/lib/Foo.framework/Foo")]
+        );
+        assert_eq!(expand("@loader_path/../lib/x.dylib", "/e", "/app/Frameworks", &[]), alloc::vec![String::from("/app/lib/x.dylib")]);
+        assert_eq!(expand("@executable_path/x", "/app/MacOS", "/elsewhere", &[]), alloc::vec![String::from("/app/MacOS/x")]);
+        assert_eq!(expand("/usr/lib/libz.1.dylib", "/e", "/l", &[]), alloc::vec![String::from("/usr/lib/libz.1.dylib")]);
+        // an @rpath entry that is itself relative to the loader resolves against the LOADER's directory
+        assert_eq!(expand("@rpath/x", "/app/MacOS", "/app/Frameworks/Sub", &[String::from("@loader_path/..")]), alloc::vec![String::from("/app/Frameworks/x")]);
+    }
+
     use alloc::vec;
     use heirloom_fmt_macho::Section;
 

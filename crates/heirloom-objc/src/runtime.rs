@@ -293,6 +293,40 @@ pub unsafe fn register_image(meta: &ImageMeta) {
     });
 }
 
+/// Sends `+load` to each class of an image that implements it itself (not inherited), superclasses first, once per class.
+/// Runs on the guest's stack at startup, after every image is registered.
+///
+/// # Safety
+/// `meta` must describe a registered image.
+pub unsafe fn call_load_methods(meta: &ImageMeta) {
+    let load = sel_register("load");
+    let mut done: Vec<usize> = Vec::new();
+    for i in 0..meta.classlist.1 {
+        // SAFETY: the classlist slot is readable (registered image).
+        let c = unsafe { *((meta.classlist.0 + i * 8) as *const usize) };
+        load_class(c, load, &mut done);
+    }
+}
+
+fn load_class(c: usize, load: Sel, done: &mut Vec<usize>) {
+    if c == 0 || done.contains(&c) {
+        return;
+    }
+    done.push(c);
+    let (sup, imp) = with(|s| {
+        let sup = s.classes.get(&c).map(|i| i.superclass).unwrap_or(0);
+        // SAFETY: a registered class is a valid ClassT whose isa is its metaclass.
+        let meta = unsafe { (*(c as Class)).isa } as usize;
+        (sup, s.classes.get(&meta).and_then(|i| i.methods.get(&(load as usize)).copied()))
+    });
+    load_class(sup, load, done);
+    if let Some(imp) = imp {
+        // SAFETY: +load is an `extern "C" fn(Id, Sel)` registered under that selector.
+        let f: extern "C" fn(Id, Sel) = unsafe { core::mem::transmute(imp) };
+        f(c as Id, load);
+    }
+}
+
 /// Realizes `c` and everything it needs; idempotent.
 ///
 /// # Safety

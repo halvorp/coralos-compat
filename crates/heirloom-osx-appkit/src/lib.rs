@@ -15,6 +15,8 @@ pub mod state;
 pub mod string;
 pub mod view;
 pub mod window;
+#[cfg(test)]
+mod tests;
 
 pub use state::{begin, end, AppHost};
 

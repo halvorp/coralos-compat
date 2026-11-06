@@ -318,7 +318,7 @@ fn stream_error(kind: &'static str, at: usize, why: &'static str) -> MachoError 
     }
 }
 
-fn read_uleb(
+pub(crate) fn read_uleb(
     stream: &[u8],
     pos: &mut usize,
     kind: &'static str,

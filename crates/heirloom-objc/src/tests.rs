@@ -610,3 +610,29 @@ fn a_refusal_raised_inside_a_table_access_does_not_wedge_the_next_guest() {
     nsobject::install();
     assert!(!runtime::class_named("NSObject").is_null());
 }
+
+static LOAD_ORDER: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+extern "C" fn load_a(_c: Id, _cmd: Sel) {
+    LOAD_ORDER.lock().unwrap().push("A");
+}
+extern "C" fn load_b(_c: Id, _cmd: Sel) {
+    LOAD_ORDER.lock().unwrap().push("B");
+}
+
+#[test]
+fn load_methods_run_once_superclass_first_and_only_the_classes_own() {
+    let _g = fresh();
+    LOAD_ORDER.lock().unwrap().clear();
+    let ns = runtime::class_named("NSObject");
+    let a = build_class("LA", ns, 8, 8, &[], &[("load", imp(load_a as extern "C" fn(Id, Sel)))], &[]);
+    let b = build_class("LB", a.class, 8, 8, &[], &[("load", imp(load_b as extern "C" fn(Id, Sel)))], &[]);
+    let c = build_class("LC", a.class, 8, 8, &[], &[], &[]); // inherits +load: not called a second time for it
+    let list = std::boxed::Box::leak(std::vec![c.class as usize, b.class as usize, a.class as usize].into_boxed_slice());
+    let meta = ImageMeta { classlist: (list.as_ptr() as usize, 3), ..Default::default() };
+    // SAFETY: the metadata was built by build_class.
+    unsafe {
+        runtime::register_image(&meta);
+        runtime::call_load_methods(&meta);
+    }
+    assert_eq!(*LOAD_ORDER.lock().unwrap(), std::vec!["A", "B"]);
+}
