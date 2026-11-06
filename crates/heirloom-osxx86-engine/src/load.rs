@@ -7,7 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
 
-use heirloom_fmt_macho::header::{MH_EXECUTE, VM_PROT_EXECUTE, VM_PROT_READ, VM_PROT_WRITE};
+use heirloom_fmt_macho::header::{LC_LOAD_WEAK_DYLIB, MH_EXECUTE, VM_PROT_EXECUTE, VM_PROT_READ, VM_PROT_WRITE};
 use heirloom_fmt_macho::{Entry, MachO, MachoError, Segment};
 
 use crate::{libsystem, trap, CodeMem, Prot, Refusal};
@@ -114,8 +114,16 @@ fn served_library(path: &str) -> Option<fn(&str) -> Option<usize>> {
     match path {
         "/usr/lib/libSystem.B.dylib" | "/usr/lib/libSystem.dylib" => Some(libsystem::resolve),
         "/usr/lib/libobjc.A.dylib" => Some(heirloom_objc::libobjc::symbol),
+        _ if is_framework(path, &["AppKit", "Foundation", "Cocoa", "CoreFoundation"]) => Some(heirloom_osx_appkit::symbol),
         _ => None,
     }
+}
+
+/// Whether `path` is `/System/Library/Frameworks/<name>.framework/...` for one of `names`.
+fn is_framework(path: &str, names: &[&str]) -> bool {
+    path.strip_prefix("/System/Library/Frameworks/")
+        .and_then(|rest| rest.split_once(".framework/"))
+        .is_some_and(|(name, _)| names.contains(&name))
 }
 
 /// Where the image's Objective-C metadata sections are in memory (slid addresses) and how many entries each holds.
@@ -189,6 +197,13 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
         unsafe { core::ptr::write_unaligned(word as *mut u64, value.wrapping_add(slide as u64)) };
     }
 
+    // 2b. a library the image links must be served whether or not it binds anything from it (weak links may be missing)
+    for d in image.dylibs.iter().filter(|d| d.kind != LC_LOAD_WEAK_DYLIB) {
+        if served_library(&d.path).is_none() {
+            return Err(Refusal::ForeignDylib { path: d.path.clone() });
+        }
+    }
+
     // 3. bind: eager, for the bind and the lazy-bind streams alike
     let mut unbound: Vec<String> = Vec::new();
     let mut imports = 0;
@@ -202,8 +217,11 @@ pub fn load(file: &[u8], mem: &mut dyn CodeMem) -> Result<Loaded, Refusal> {
             continue;
         };
         let path = &image.dylibs[ordinal - 1].path;
-        let Some(resolver) = served_library(path) else {
-            return Err(Refusal::ForeignDylib { path: path.clone() });
+        let resolver = match served_library(path) {
+            Some(r) => r,
+            // a weak library this engine does not serve is absent: its weak symbols bind to null, its strong ones stay unbound
+            None if image.dylibs[ordinal - 1].kind == LC_LOAD_WEAK_DYLIB => |_: &str| None,
+            None => return Err(Refusal::ForeignDylib { path: path.clone() }),
         };
         let seg = &image.segments[b.segment];
         let word = at(seg, b.offset, 8).ok_or(Refusal::BadFixup("bind outside the reservation"))?;

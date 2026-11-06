@@ -19,11 +19,28 @@ pub enum Outcome {
 /// The guest stack: 64 pages, the lowest one a guard page.
 const STACK: usize = 0x40000;
 
+/// The UI session's view of the engine's host.
+struct HostBridge {
+    host: *mut dyn Host,
+}
+
+impl heirloom_osx_appkit::AppHost for HostBridge {
+    fn ui(&mut self) -> Option<&mut dyn heirloom_ui_abi::GuestUi> {
+        // SAFETY: `run` keeps the host borrowed until the session guard ends the UI session.
+        unsafe { (*self.host).ui() }
+    }
+    fn marker(&mut self, line: &str) {
+        // SAFETY: as above.
+        unsafe { (*self.host).marker(line) }
+    }
+}
+
 struct SessionGuard;
 
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         libsystem::end();
+        heirloom_osx_appkit::end();
         // the guest's pages are released by now: forget its classes so no registry entry dangles
         heirloom_objc::runtime::reset();
     }
@@ -33,6 +50,7 @@ impl Drop for SessionGuard {
 pub fn run(file: &[u8], args: &[&str], host: &mut dyn Host, mem: &mut dyn CodeMem) -> Outcome {
     heirloom_objc::runtime::reset();
     heirloom_objc::nsobject::install();
+    heirloom_osx_appkit::install();
     heirloom_objc::runtime::set_fatal_hook(libsystem::runtime_fatal);
     let mut save = SavedCtx::default();
     let mut session = libsystem::Session::new(host, &mut save, Vec::new());
@@ -41,6 +59,11 @@ pub fn run(file: &[u8], args: &[&str], host: &mut dyn Host, mem: &mut dyn CodeMe
         return Outcome::Refused(Refusal::Busy);
     }
     let _guard = SessionGuard;
+    // SAFETY: the bridge lives to the end of `run`; the guard ends the UI session before it is dropped.
+    // SAFETY: the lifetime is erased for the guest's duration, which the guard bounds.
+    let mut bridge = HostBridge { host: unsafe { core::mem::transmute::<*mut dyn Host, *mut (dyn Host + 'static)>(host as *mut dyn Host) } };
+    // SAFETY: as above.
+    unsafe { heirloom_osx_appkit::begin(&mut bridge) };
 
     let l = match load::load(file, mem) {
         Ok(l) => l,

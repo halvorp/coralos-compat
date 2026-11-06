@@ -1,0 +1,10 @@
+[package]
+name = "heirloom-osx-appkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The native seed classes of the osxx86 personality (NSString, NSApplication, NSWindow, NSView, NSControl family) and the GuestUi adapter they publish windows, controls and actions through (no_std + alloc)"
+
+[dependencies]
+heirloom-objc = { path = "../heirloom-objc" }
+heirloom-ui-abi = { path = "../heirloom-ui-abi" }

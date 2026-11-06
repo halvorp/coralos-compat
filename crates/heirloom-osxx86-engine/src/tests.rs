@@ -9,6 +9,7 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 use heirloom_fmt_macho::writer::{BuiltImage, ImageBuilder, Patch};
+use heirloom_ui_abi::{CallbackToken, ControlModel, ControlValue, GuestRect, GuestUi, GuestUiEvent, Intent, MenuModel, RecordingGuestUi, UiCall, UiObjectRef, UiRefusal, WindowModel};
 use heirloom_fmt_macho::{MachO, MachoError};
 use std::sync::Mutex;
 
@@ -18,6 +19,7 @@ static GUEST: Mutex<()> = Mutex::new(());
 struct RecordingHost {
     markers: Vec<String>,
     writes: Vec<(i32, Vec<u8>)>,
+    ui: Option<Scripted>,
 }
 
 impl Host for RecordingHost {
@@ -28,7 +30,100 @@ impl Host for RecordingHost {
         self.writes.push((fd, bytes.to_vec()));
         bytes.len() as isize
     }
+    fn ui(&mut self) -> Option<&mut dyn heirloom_ui_abi::GuestUi> {
+        self.ui.as_mut().map(|u| u as &mut dyn heirloom_ui_abi::GuestUi)
+    }
 }
+
+/// A host UI that records every call and plays a script of user actions back as host events, built from the windows and controls the
+/// app actually opened (the tokens are guest addresses the test cannot know in advance).
+#[derive(Default)]
+struct Scripted {
+    rec: RecordingGuestUi,
+    script: std::collections::VecDeque<Step>,
+    windows: Vec<(UiObjectRef, CallbackToken)>,
+    controls: Vec<(UiObjectRef, CallbackToken)>,
+}
+
+// delete-when: the rung-4 control tests construct Activate, StaleActivate and Commit
+#[allow(dead_code)]
+#[derive(Clone)]
+enum Step {
+    Resize { win: usize, width: i32, height: i32 },
+    Close { win: usize },
+    /// A close request carrying a generation the host never issued.
+    StaleClose { win: usize },
+    Activate { control: usize },
+    /// An Activate whose control generation is stale.
+    StaleActivate { control: usize },
+    Commit { control: usize, text: &'static str },
+}
+
+impl Scripted {
+    fn with(steps: Vec<Step>) -> Self {
+        Scripted { script: steps.into(), ..Default::default() }
+    }
+}
+
+impl GuestUi for Scripted {
+    fn open_window(&mut self, model: WindowModel) -> Result<UiObjectRef, UiRefusal> {
+        let token = model.token;
+        let r = self.rec.open_window(model)?;
+        self.windows.push((r, token));
+        Ok(r)
+    }
+    fn close_window(&mut self, win: UiObjectRef) -> Result<(), UiRefusal> {
+        self.rec.close_window(win)
+    }
+    fn set_window_title(&mut self, win: UiObjectRef, title: String) -> Result<(), UiRefusal> {
+        self.rec.set_window_title(win, title)
+    }
+    fn set_menu_strip(&mut self, win: UiObjectRef, menu: MenuModel) -> Result<(), UiRefusal> {
+        self.rec.set_menu_strip(win, menu)
+    }
+    fn clear_menu_strip(&mut self, win: UiObjectRef) -> Result<(), UiRefusal> {
+        self.rec.clear_menu_strip(win)
+    }
+    fn add_control(&mut self, win: UiObjectRef, control: ControlModel) -> Result<UiObjectRef, UiRefusal> {
+        let token = control.token;
+        let r = self.rec.add_control(win, control)?;
+        self.controls.push((r, token));
+        Ok(r)
+    }
+    fn remove_control(&mut self, win: UiObjectRef, control: UiObjectRef) -> Result<(), UiRefusal> {
+        self.rec.remove_control(win, control)
+    }
+    fn set_control(&mut self, win: UiObjectRef, control: UiObjectRef, value: ControlValue) -> Result<(), UiRefusal> {
+        self.rec.set_control(win, control, value)
+    }
+    fn set_control_rect(&mut self, win: UiObjectRef, control: UiObjectRef, rect: GuestRect) -> Result<(), UiRefusal> {
+        self.rec.set_control_rect(win, control, rect)
+    }
+    fn poll_event(&mut self) -> Option<GuestUiEvent> {
+        let step = self.script.pop_front()?;
+        Some(match step {
+            Step::Resize { win, width, height } => GuestUiEvent::Resized { win: self.windows[win].0, rect: GuestRect { left: 0, top: 0, width, height } },
+            Step::Close { win } => GuestUiEvent::CloseRequested { win: self.windows[win].0, token: self.windows[win].1 },
+            Step::StaleClose { win } => {
+                let (r, token) = self.windows[win];
+                GuestUiEvent::CloseRequested { win: UiObjectRef { id: r.id, generation: r.generation + 8 }, token }
+            }
+            Step::Activate { control } => {
+                let (r, token) = self.controls[control];
+                GuestUiEvent::intent(self.windows[0].0, r, token, Intent::Activate)
+            }
+            Step::StaleActivate { control } => {
+                let (r, token) = self.controls[control];
+                GuestUiEvent::Intent { win: self.windows[0].0, control: r, token, generation: r.generation + 5, intent: Intent::Activate }
+            }
+            Step::Commit { control, text } => {
+                let (r, token) = self.controls[control];
+                GuestUiEvent::intent(self.windows[0].0, r, token, Intent::CommitText(text.to_string()))
+            }
+        })
+    }
+}
+
 
 /// A tiny x86_64 assembler: just the encodings these programs need, recording RIP-relative patches.
 #[derive(Default)]
@@ -117,8 +212,12 @@ fn hello_program(lazy: bool) -> BuiltImage {
 }
 
 fn run_image(bytes: &[u8]) -> (Outcome, RecordingHost) {
+    run_image_with(bytes, None)
+}
+
+fn run_image_with(bytes: &[u8], ui: Option<Scripted>) -> (Outcome, RecordingHost) {
     let _g = GUEST.lock().unwrap_or_else(|e| e.into_inner());
-    let mut host = RecordingHost::default();
+    let mut host = RecordingHost { ui, ..Default::default() };
     let mut mem = HostMem;
     let out = run(bytes, &["a.out"], &mut host, &mut mem);
     (out, host)
@@ -592,23 +691,6 @@ fn toolchain_no_pie_is_refused() {
     assert!(matches!(refused(&bytes), Refusal::FixedBase { .. }), "{:?}", MachO::parse(&bytes).unwrap().flags);
 }
 
-/// The first GUI fixture (a Cocoa app in our own source, built against our own declarations) is a real Mach-O with Apple ObjC2
-/// metadata whose class references bind to AppKit and whose `objc_msgSend` binds to libobjc. Rung 1 serves libSystem only, so
-/// it is refused by name: the negative control that keeps rung 2 honest (it must turn green only when the runtime exists).
-#[test]
-fn toolchain_gui_fixture_is_refused_until_the_objc_runtime_exists() {
-    let tbds = ["libSystem.tbd", "gui/appkit.tbd", "gui/libobjc.tbd"];
-    let Some(bytes) = toolchain_image_with("gui", "gui/OsxGuiHello.m", "10.13", &[], &tbds, &["-x", "objective-c", "-fobjc-runtime=macosx", "-fno-objc-arc"]) else { return };
-    let m = MachO::parse(&bytes).unwrap();
-    assert!(m.dylibs.iter().any(|d| d.path.ends_with("AppKit")), "{:?}", m.dylibs);
-    let binds = m.binds().unwrap();
-    assert!(binds.iter().any(|b| b.symbol == "_OBJC_CLASS_$_NSWindow"), "the class references bind by name");
-    assert!(binds.iter().any(|b| b.symbol == "_objc_msgSend"));
-    let (out, host) = run_image(&bytes);
-    assert!(matches!(out, Outcome::Refused(Refusal::ForeignDylib { .. })), "{out:?}");
-    assert!(host.writes.is_empty());
-}
-
 // ---- rung 2: the Objective-C runtime under a real compiler-built app ---------------------------------------------------------
 
 fn objc_smoke() -> Option<Vec<u8>> {
@@ -673,4 +755,122 @@ fn an_unrecognized_selector_ends_the_app_by_name() {
     // the engine survives and the next guest starts with a clean runtime
     let (hello, _) = run_image(&hello_program(false).bytes);
     assert_eq!(hello, Outcome::Exited(7));
+}
+
+// ---- rung 3: a window under a recording UI ------------------------------------------------------------------------------------
+
+const GUI_TBDS: [&str; 4] = ["libSystem.tbd", "objc/libobjc.tbd", "gui/appkit.tbd", "gui/foundation.tbd"];
+
+fn gui_image(test: &str, source: &str) -> Option<Vec<u8>> {
+    toolchain_image_with(
+        test,
+        source,
+        "10.13",
+        &[],
+        &GUI_TBDS,
+        &["-x", "objective-c", "-fobjc-runtime=macosx", "-fno-objc-arc", "-fno-builtin", &std::format!("-I{}/fixtures/gui", env!("CARGO_MANIFEST_DIR"))],
+    )
+}
+
+fn window_calls(host: &RecordingHost) -> Vec<UiCall> {
+    host.ui.as_ref().map(|u| u.rec.calls.clone()).unwrap_or_default()
+}
+
+#[test]
+fn window_hello_opens_a_window_and_the_host_event_comes_back() {
+    let Some(bytes) = gui_image("window-hello", "gui/OsxWindowHello.m") else { return };
+    let ui = Scripted::with(std::vec![Step::Close { win: 0 }]);
+    let (out, host) = run_image_with(&bytes, Some(ui));
+    assert_eq!(out, Outcome::Exited(0));
+    let calls = window_calls(&host);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    let UiCall::OpenWindow(model) = &calls[0] else { panic!("{calls:?}") };
+    assert_eq!(model.title, "Hello");
+    assert_eq!(model.rect, GuestRect { left: 100, top: 100, width: 320, height: 120 });
+    assert!(model.closable && model.resizable, "style mask 15 is titled, closable, miniaturizable, resizable");
+    assert_ne!(model.token.0, 0, "the token names the guest's NSWindow");
+    assert!(matches!(calls[1], UiCall::CloseWindow(r) if r == UiObjectRef { id: 1, generation: 1 }), "{calls:?}");
+    assert_eq!(
+        host.markers,
+        std::vec![
+            "[OSXX86 LOAD OK] segments=3 imports=6".to_string(),
+            "[OSXX86-WINDOW OK] title=\"Hello\" w=320 h=120".to_string(),
+            "[OSXX86 WRITE fd=1 n=13]".to_string(),
+            "[OSXX86 EXIT code=0]".to_string(),
+        ]
+    );
+    assert_eq!(host.writes, std::vec![(1, b"run returned\n".to_vec())]);
+}
+
+#[test]
+fn style_mask_bits_become_window_capabilities() {
+    // NSTitledWindowMask = 1 only: not closable (2), not resizable (8)
+    let Some(bytes) = toolchain_image_with(
+        "window-style",
+        "gui/OsxWindowHello.m",
+        "10.13",
+        &[],
+        &GUI_TBDS,
+        &["-x", "objective-c", "-fobjc-runtime=macosx", "-fno-objc-arc", "-fno-builtin", "-DSTYLE=1", &std::format!("-I{}/fixtures/gui", env!("CARGO_MANIFEST_DIR"))],
+    ) else {
+        return;
+    };
+    let (_, host) = run_image_with(&bytes, Some(Scripted::default()));
+    let UiCall::OpenWindow(model) = &window_calls(&host)[0] else { panic!() };
+    assert!(!model.closable && !model.resizable);
+}
+
+#[test]
+fn a_resize_event_updates_the_window_the_app_sees() {
+    let Some(bytes) = gui_image("window-resize", "gui/OsxWindowHello.m") else { return };
+    let ui = Scripted::with(std::vec![Step::Resize { win: 0, width: 400, height: 200 }]);
+    let (out, host) = run_image_with(&bytes, Some(ui));
+    assert_eq!(out, Outcome::Exited(0));
+    assert!(host.markers.contains(&"[OSXX86-WINDOW OK] title=\"Hello\" w=400 h=200".to_string()), "{:?}", host.markers);
+}
+
+#[test]
+fn an_event_with_a_stale_generation_is_refused_by_name_and_does_nothing() {
+    let Some(bytes) = gui_image("window-stale", "gui/OsxWindowHello.m") else { return };
+    let ui = Scripted::with(std::vec![Step::StaleClose { win: 0 }]);
+    let (out, host) = run_image_with(&bytes, Some(ui));
+    assert_eq!(out, Outcome::Exited(0));
+    assert!(host.markers.contains(&"[OSXX86 UI-STALE-EVENT close id=1 generation=9]".to_string()), "{:?}", host.markers);
+    assert!(!host.markers.iter().any(|m| m.contains("WINDOW OK")), "a stale event must not count as the host answering");
+    assert_eq!(window_calls(&host).len(), 1, "no CloseWindow was issued");
+}
+
+#[test]
+fn a_host_without_a_ui_ends_the_app_by_name() {
+    let Some(bytes) = gui_image("window-noui", "gui/OsxWindowHello.m") else { return };
+    let (out, host) = run_image_with(&bytes, None);
+    assert_eq!(out, Outcome::Refused(Refusal::Fatal("OSXX86-UI-UNAVAILABLE the host offers no UI seam".to_string())));
+    assert!(host.writes.is_empty());
+}
+
+// ---- the dylib check covers every linked library, not only those that bind ---------------------------------------------------
+
+#[test]
+fn a_linked_library_that_binds_nothing_is_still_checked() {
+    use heirloom_fmt_macho::header::{LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB};
+    let strong = ImageBuilder::new().dylib(LC_LOAD_DYLIB, "/usr/lib/libnothing.dylib").code(&[0x31, 0xC0, 0xC3]).build();
+    assert_eq!(refused(&strong.bytes), Refusal::ForeignDylib { path: "/usr/lib/libnothing.dylib".to_string() }, "linked_but_unbound");
+    // the same library linked weakly may be absent
+    let weak = ImageBuilder::new().dylib(LC_LOAD_WEAK_DYLIB, "/usr/lib/libnothing.dylib").code(&[0x31, 0xC0, 0xC3]).build();
+    let (out, _) = run_image(&weak.bytes);
+    assert_eq!(out, Outcome::Exited(0));
+    // and a served framework that binds nothing is accepted
+    let served = ImageBuilder::new().dylib(LC_LOAD_DYLIB, "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa").code(&[0x31, 0xC0, 0xC3]).build();
+    let (out, _) = run_image(&served.bytes);
+    assert_eq!(out, Outcome::Exited(0));
+}
+
+#[test]
+fn a_weak_import_from_an_absent_weak_library_binds_to_null() {
+    use heirloom_fmt_macho::header::LC_LOAD_WEAK_DYLIB;
+    // the writer binds every import to ordinal 1 (libSystem), so this checks the other half of the rule through the loader's
+    // own ordinal handling: a weak library at ordinal 2 contributes no symbols and does not refuse the image
+    let image = ImageBuilder::new().dylib(LC_LOAD_WEAK_DYLIB, "/usr/lib/libabsent.dylib").code(&[0xB8, 0x05, 0, 0, 0, 0xC3]).build();
+    let (out, _) = run_image(&image.bytes);
+    assert_eq!(out, Outcome::Exited(5));
 }

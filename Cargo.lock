@@ -309,12 +309,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-osx-appkit"
+version = "0.1.0"
+dependencies = [
+ "heirloom-objc",
+ "heirloom-ui-abi",
+]
+
+[[package]]
 name = "heirloom-osxx86-engine"
 version = "0.1.0"
 dependencies = [
  "heirloom-fmt-macho",
  "heirloom-objc",
+ "heirloom-osx-appkit",
  "heirloom-osxx86-engine",
+ "heirloom-ui-abi",
  "libc",
  "yaxpeax-arch",
  "yaxpeax-x86",

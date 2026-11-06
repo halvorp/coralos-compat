@@ -56,4 +56,5 @@ __attribute__((objc_root_class)) @interface NSObject { Class isa; }
 - (void)run;
 - (void)terminate:(id)sender;
 @end
+long write(int, const void *, unsigned long);
 #endif

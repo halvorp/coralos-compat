@@ -57,6 +57,11 @@ pub trait Host {
     fn marker(&mut self, line: &str);
     /// The guest wrote `bytes` to file descriptor `fd` (1 or 2); returns the byte count written, or a negative value.
     fn write(&mut self, fd: i32, bytes: &[u8]) -> isize;
+    /// The UI seam windows and controls are published through; None for a host without a UI (the guest then ends by name when it
+    /// uses the UI).
+    fn ui(&mut self) -> Option<&mut dyn heirloom_ui_abi::GuestUi> {
+        None
+    }
 }
 
 /// The trap encodings the admission scan refuses.
