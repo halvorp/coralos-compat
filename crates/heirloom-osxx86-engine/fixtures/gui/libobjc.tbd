@@ -1,0 +1,10 @@
+--- !tapi-tbd
+tbd-version:     4
+targets:         [ x86_64-macos ]
+install-name:    '/usr/lib/libobjc.A.dylib'
+current-version: 228
+exports:
+  - targets:         [ x86_64-macos ]
+    symbols:         [ _objc_msgSend, __objc_empty_cache ]
+    objc-classes:    [ NSObject ]
+...

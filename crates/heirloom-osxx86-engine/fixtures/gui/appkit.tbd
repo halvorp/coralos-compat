@@ -1,0 +1,9 @@
+--- !tapi-tbd
+tbd-version:     4
+targets:         [ x86_64-macos ]
+install-name:    '/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit'
+current-version: 1
+exports:
+  - targets:         [ x86_64-macos ]
+    objc-classes:    [ NSApplication, NSWindow, NSView, NSControl, NSButton, NSTextField, NSString ]
+...

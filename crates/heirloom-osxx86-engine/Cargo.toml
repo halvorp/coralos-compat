@@ -1,0 +1,20 @@
+[package]
+name = "heirloom-osxx86-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mac OS X x86_64 personality (osxx86): Mach-O loader, native libSystem table, raw-trap admission scan, guest-stack enter / exit (no_std + alloc; the app's code runs natively)"
+
+[dependencies]
+heirloom-fmt-macho = { path = "../heirloom-fmt-macho" }
+# the admission scan decodes instructions (0BSD, no_std): a byte search for syscall / int 0x80 refuses real apps by chance
+yaxpeax-x86 = { version = "2", default-features = false }
+yaxpeax-arch = { version = "0.3", default-features = false }
+libc = { version = "0.2", optional = true, default-features = false }
+
+[features]
+# HostMem: a CodeMem over mmap / mprotect for host tests and tools (the product engine gets its code memory from the OS).
+host-mem = ["dep:libc"]
+
+[dev-dependencies]
+heirloom-osxx86-engine = { path = ".", features = ["host-mem"] }

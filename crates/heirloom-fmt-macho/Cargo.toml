@@ -1,0 +1,8 @@
+[package]
+name = "heirloom-fmt-macho"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mach-O x86_64 containers (Mac OS X executables and dylibs): bounds-checked parser, rebase and bind opcode decoders, writer for tests (no_std)"
+
+[dependencies]

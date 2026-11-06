@@ -14,6 +14,7 @@
   526acfa); each adapted file names its origin in a header, the full notice is in the crate's README.md (THIRD_PARTY),
   and its tests port rax's generated and hand-written AArch32 tests. Its test vectors' expectations come from Unicorn
   (host-side tooling in `tools/`, not a dependency or part of any binary).
+- `crates/heirloom-fmt-macho` and `crates/heirloom-osxx86-engine` (the Mac OS X x86_64 personality) are original MIT code written from Apple's published Mach-O file format and checked against `llvm-objdump` on linker output; nothing is copied from Darling (GPLv3), dyld or objc4 (APSL), which were read for facts only. `heirloom-osxx86-engine` depends on `yaxpeax-x86` and `yaxpeax-arch` (0BSD, crates.io, not vendored) for its instruction sweep, and on `libc` (MIT or Apache-2.0) in tests only. Its fixtures are our own C and Objective-C sources and own `.tbd` stubs built on the host by tests; no Apple binary or header is stored.
 - No GPL code is in the repository today: Musashi's MAME-derived FPU/PMMU files were replaced (2026-10-17) so the
   engines can link CoralOS's own user-mode libraries. GPL code may be added later, but any GPL code makes every
   binary that links it GPL as a whole, and a CoralOS engine statically links CoralOS libraries: GPL parts must
