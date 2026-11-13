@@ -94,10 +94,15 @@ pub fn avail_mem<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
 /// CopyMem(a0 = source, a1 = dest, d0 = size); overlapping copies are undefined on AmigaOS, copied forwards here.
 pub fn copy_mem<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (src, dst, n) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0));
-    let mut buf = vec![0u8; n as usize];
-    for (i, b) in buf.iter_mut().enumerate() { *b = a.mem.read_u8(src + i as u32).map_err(Refusal::mem("CopyMem source"))?; }
-    for (i, b) in buf.iter().enumerate() { a.mem.write_u8(dst + i as u32, *b).map_err(Refusal::mem("CopyMem dest"))?; }
+    copy_guest(a, src, dst, n)?;
     Ok(format!("[exec] CopyMem {src:#x} -> {dst:#x} n={n}"))
+}
+
+/// CopyMem's copy: both ranges are checked against guest RAM first, then moved in place (no host buffer of the guest's size).
+fn copy_guest<U: GuestUi>(a: &mut Amiga<U>, src: u32, dst: u32, n: u32) -> Result<(), Refusal> {
+    a.mem.check(src, n).map_err(Refusal::mem("CopyMem source"))?;
+    a.mem.check(dst, n).map_err(Refusal::mem("CopyMem dest"))?;
+    a.mem.copy_within(src, dst, n).map_err(Refusal::mem("CopyMem"))
 }
 
 /// SetSignal(d0 = newSignals, d1 = signalMask) -> d0 = the old signals: the running task's own tc_SigRecvd.
@@ -131,11 +136,20 @@ const TC_SP_UPPER: u32 = 62;
 /// with the same struct swaps back (exec/tasks.h). The trap runs with A7 at the JSR's return address; it is moved to
 /// the top of the new stack so the slot's RTS returns there.
 pub fn stack_swap<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let new_sp = swap_stacks(a, cpu.areg(0), cpu.areg(7))?;
+    cpu.set_areg(7, new_sp);
+    Ok(format!("[exec] StackSwap -> sp={new_sp:#x}"))
+}
+
+/// StackSwap's work on guest memory: `sss` is the StackSwapStruct, `old_sp` the caller's A7 (at the JSR's return address).
+/// Returns the new A7.
+fn swap_stacks<U: GuestUi>(a: &mut Amiga<U>, sss: u32, old_sp: u32) -> Result<u32, Refusal> {
     let m = Refusal::mem;
-    let sss = cpu.areg(0);
-    let (new_lower, new_upper, new_ptr) = (a.mem.read_u32(sss).map_err(m("stk_Lower"))?, a.mem.read_u32(sss + 4).map_err(m("stk_Upper"))?, a.mem.read_u32(sss + 8).map_err(m("stk_Pointer"))?);
-    if !(new_lower < new_ptr && new_ptr <= new_upper) { return Err(Refusal(format!("StackSwap: stk_Pointer {new_ptr:#x} outside [{new_lower:#x}, {new_upper:#x}]"))); }
-    let old_sp = cpu.areg(7);
+    let field = |off: u32, what: &'static str| sss.checked_add(off).ok_or_else(|| Refusal(format!("StackSwap: the StackSwapStruct at {sss:#x} runs past the address space ({what})")));
+    let (new_lower, new_upper, new_ptr) = (a.mem.read_u32(sss).map_err(m("stk_Lower"))?, a.mem.read_u32(field(4, "stk_Upper")?).map_err(m("stk_Upper"))?, a.mem.read_u32(field(8, "stk_Pointer")?).map_err(m("stk_Pointer"))?);
+    // The return slot (new_ptr - 4) must itself lie inside the new stack, and the caller's SP once the call returns (old_sp + 4) must exist.
+    if !(new_lower < new_ptr && new_ptr <= new_upper) || new_ptr - 4 < new_lower { return Err(Refusal(format!("StackSwap: stk_Pointer {new_ptr:#x} outside [{new_lower:#x}, {new_upper:#x}]"))); }
+    let caller_sp = old_sp.checked_add(4).ok_or_else(|| Refusal(format!("StackSwap: the caller's stack pointer {old_sp:#x} leaves no room for its return address")))?;
     let ret = a.mem.read_u32(old_sp).map_err(m("return address"))?;
     let task = a.sched.cur;
     let (old_lower, old_upper) = (a.mem.read_u32(task + TC_SP_LOWER).map_err(m("tc_SPLower"))?, a.mem.read_u32(task + TC_SP_UPPER).map_err(m("tc_SPUpper"))?);
@@ -143,10 +157,9 @@ pub fn stack_swap<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
     a.mem.write_u32(task + TC_SP_LOWER, new_lower).map_err(m("tc_SPLower"))?;
     a.mem.write_u32(task + TC_SP_UPPER, new_upper).map_err(m("tc_SPUpper"))?;
     a.mem.write_u32(sss, old_lower).map_err(m("stk_Lower"))?;
-    a.mem.write_u32(sss + 4, old_upper).map_err(m("stk_Upper"))?;
-    a.mem.write_u32(sss + 8, old_sp + 4).map_err(m("stk_Pointer"))?; // the caller's SP once the call has returned
-    cpu.set_areg(7, new_ptr - 4);
-    Ok(format!("[exec] StackSwap -> [{new_lower:#x}, {new_upper:#x}] sp={:#x}", new_ptr - 4))
+    a.mem.write_u32(field(4, "stk_Upper")?, old_upper).map_err(m("stk_Upper"))?;
+    a.mem.write_u32(field(8, "stk_Pointer")?, caller_sp).map_err(m("stk_Pointer"))?; // the caller's SP once the call has returned
+    Ok(new_ptr - 4)
 }
 
 pub const LVO_CREATE_POOL: i32 = -696;
@@ -211,16 +224,23 @@ pub fn alloc_vec_pooled<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
 
 /// FreeVecPooled(a0 = pool, a1 = block): NULL is ignored; otherwise FreePooled of the block and the longword before it.
 pub fn free_vec_pooled<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let at = cpu.areg(1);
+    let (pool, at) = (cpu.areg(0), cpu.areg(1));
     if at == 0 { return Ok("[exec] FreeVecPooled NULL".into()); }
-    let size = a.mem.read_u32(at - 4).map_err(Refusal::mem("FreeVecPooled size"))?;
-    (cpu.set_areg(1, at - 4), cpu.set_dreg(0, size));
-    free_pooled(a, cpu)
+    free_vec_pooled_block(a, pool, at)
+}
+
+fn free_vec_pooled_block<U: GuestUi>(a: &mut Amiga<U>, pool: u32, at: u32) -> Result<String, Refusal> {
+    let head = at.checked_sub(4).ok_or_else(|| Refusal(format!("FreeVecPooled: {at:#x} is too low to have a size longword before it")))?;
+    let size = a.mem.read_u32(head).map_err(Refusal::mem("FreeVecPooled size"))?;
+    free_pooled_block(a, pool, head, size)
 }
 
 /// FreePooled(a0 = pool, a1 = block, d0 = size). A block of another pool, or a wrong size, is refused by name.
 pub fn free_pooled<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let (pool, at, size) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0));
+    free_pooled_block(a, cpu.areg(0), cpu.areg(1), cpu.dreg(0))
+}
+
+fn free_pooled_block<U: GuestUi>(a: &mut Amiga<U>, pool: u32, at: u32, size: u32) -> Result<String, Refusal> {
     let pl = a.pools.get_mut(&pool).ok_or_else(|| Refusal(format!("FreePooled: {pool:#x} is not a pool")))?;
     match pl.1.get(&at) {
         Some(&s) if s == size => { pl.1.remove(&at); }
@@ -240,4 +260,69 @@ pub fn delete_pool<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     for (at, size) in blocks { a.heap.free(at, size).map_err(|e| Refusal(format!("DeletePool: {e}")))?; }
     a.heap.free(pool, POOL_HANDLE_SIZE).map_err(|e| Refusal(format!("DeletePool: {e}")))?;
     Ok(format!("[exec] DeletePool {pool:#x} ({n} blocks returned)"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use guestui_abi::RecordingGuestUi;
+
+    fn machine() -> Amiga<RecordingGuestUi> { Amiga::new(RecordingGuestUi::new()).unwrap() }
+
+    #[test]
+    fn copymem_of_a_range_outside_ram_is_a_named_refusal_and_allocates_nothing_the_size_of_the_request() {
+        let mut a = machine();
+        let ram = a.mem.len() as u32;
+        let src = a.heap.alloc(64).unwrap();
+        // 4 GiB - 1 bytes: the old code built a host Vec of that size before reading a single byte.
+        let e = copy_guest(&mut a, src, src, u32::MAX).unwrap_err();
+        assert!(e.0.contains("CopyMem"), "{}", e.0);
+        let e = copy_guest(&mut a, ram - 8, src, 64).unwrap_err();
+        assert!(e.0.contains("CopyMem source"), "{}", e.0);
+        let e = copy_guest(&mut a, src, ram - 8, 64).unwrap_err();
+        assert!(e.0.contains("CopyMem dest"), "{}", e.0);
+        // a source range that wraps the 32-bit space must be refused, not read as low RAM
+        assert!(copy_guest(&mut a, u32::MAX - 3, src, 16).is_err());
+    }
+
+    #[test]
+    fn copymem_copies_forwards_and_an_overlapping_copy_reads_the_source_before_it_is_written() {
+        let mut a = machine();
+        let p = a.heap.alloc(32).unwrap();
+        a.mem.write_bytes(p, &(1u8..=16).collect::<alloc::vec::Vec<_>>()).unwrap();
+        copy_guest(&mut a, p, p + 4, 12).unwrap(); // overlapping, destination above the source
+        let got: alloc::vec::Vec<u8> = (0..16).map(|i| a.mem.read_u8(p + i).unwrap()).collect();
+        assert_eq!(got, [1, 2, 3, 4, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], "memmove semantics, as before");
+        copy_guest(&mut a, p, p, 0).unwrap(); // control: zero bytes
+    }
+
+    #[test]
+    fn stackswap_with_a_struct_or_stack_at_the_top_of_the_address_space_is_refused_not_wrapped() {
+        let mut a = machine();
+        let e = swap_stacks(&mut a, u32::MAX - 5, 0x1000).unwrap_err();
+        assert!(e.0.contains("stk_"), "{}", e.0);
+        // the new stack's return slot must lie inside [lower, upper]: stk_Pointer one above lower leaves no room for it
+        let sss = a.heap.alloc(12).unwrap();
+        let stack = a.heap.alloc(256).unwrap();
+        for (i, v) in [stack, stack + 256, stack + 1].into_iter().enumerate() { a.mem.write_u32(sss + 4 * i as u32, v).unwrap(); }
+        let sp = a.heap.alloc(8).unwrap();
+        a.mem.write_u32(sp, 0x4000).unwrap();
+        let e = swap_stacks(&mut a, sss, sp).unwrap_err();
+        assert!(e.0.contains("StackSwap"), "{}", e.0);
+        // an A7 so high that the saved caller SP (old_sp + 4) wraps
+        a.mem.write_u32(sss + 8, stack + 256).unwrap();
+        assert!(swap_stacks(&mut a, sss, u32::MAX - 1).is_err());
+        // control: a sound swap returns the slot below stk_Pointer
+        assert_eq!(swap_stacks(&mut a, sss, sp).unwrap(), stack + 256 - 4);
+    }
+
+    #[test]
+    fn freevecpooled_of_a_pointer_below_the_size_longword_is_refused_not_underflowed() {
+        let mut a = machine();
+        let pool = new_pool(&mut a, 0);
+        for bad in [1u32, 3] {
+            let e = free_vec_pooled_block(&mut a, pool, bad).unwrap_err();
+            assert!(e.0.contains("FreeVecPooled"), "{}", e.0);
+        }
+    }
 }

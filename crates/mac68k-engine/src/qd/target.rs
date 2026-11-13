@@ -87,7 +87,7 @@ pub fn read_bitmap<U: GuestUi>(m: &Mac<U>, bm: u32) -> Result<Unpacked, Refusal>
 
 fn write_bitmap<U: GuestUi>(m: &mut Mac<U>, bm: &Bitmap, base: u32, row: u16) -> Result<(), Refusal> {
     let mut out = alloc::vec![0u8; usize::from(row) * bm.height() as usize];
-    pixmap::pack(bm, usize::from(row), &mut out);
+    pixmap::pack(bm, usize::from(row), &mut out)?;
     m.mem.write_bytes(base, &out).map_err(Refusal::mem("BitMap"))
 }
 

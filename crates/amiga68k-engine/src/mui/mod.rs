@@ -223,3 +223,5 @@ pub fn try_deliver<U: GuestUi>(a: &mut Amiga<U>, ev: &GuestUiEvent) -> Result<Op
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_guest; // guest-chosen sizes, counts and values are refused by name

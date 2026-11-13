@@ -34,11 +34,22 @@ pub const PIXMAP_FLAG: u16 = 0x8000;
 pub const DPI_72: u32 = 0x0048_0000;
 
 /// Bytes per row of `width` pixels of `depth` bits, rounded up to a whole word (what NewGWorld/NewPixMap use).
-pub fn row_bytes(width: i32, depth: u8) -> u32 { ((width as u32 * u32::from(depth) + 15) / 16) * 2 }
+pub fn row_bytes(width: i32, depth: u8) -> u32 { u32::try_from((width.max(0) as u64 * u64::from(depth) + 15) / 16 * 2).unwrap_or(u32::MAX) }
 
-/// Unpack `rows` rows of `width` pixels of `depth` (1, 2, 4 or 8) bits from `bytes` (rows `row` bytes apart).
+/// The bytes a `width` x `height` map of `depth`-bit pixels occupies with rows `row` bytes apart (the last row needs only its pixel
+/// bytes, not the padding after them), or the named refusal when the rows are narrower than their pixels or the size overflows.
+fn extent(row: usize, width: i32, height: i32, depth: u8) -> Result<usize, Refusal> {
+    let pixel_bytes = (width.max(0) as usize).saturating_mul(usize::from(depth)).div_ceil(8);
+    if row < pixel_bytes { return Err(Refusal(format!("pixel map {width}x{height}x{depth}: rowBytes {row} is too small for {width} pixels of {depth} bits"))); }
+    (height.max(1) as usize - 1).checked_mul(row).and_then(|n| n.checked_add(pixel_bytes)).ok_or_else(|| Refusal(format!("pixel map {width}x{height}x{depth}: rowBytes {row} makes the size overflow")))
+}
+
+/// Unpack `rows` rows of `width` pixels of `depth` (1, 2, 4 or 8) bits from `bytes` (rows `row` bytes apart). A buffer too short
+/// for the map, or rows narrower than their pixels, is a named refusal.
 pub fn unpack(bytes: &[u8], row: usize, width: i32, height: i32, depth: u8) -> Result<Bitmap, Refusal> {
     let mut b = Bitmap::new(width, height, depth).ok_or_else(|| Refusal(format!("pixel map {width}x{height}x{depth}: empty, too large, or a depth the rasteriser does not have")))?;
+    let need = extent(row, width, height, depth)?;
+    if bytes.len() < need { return Err(Refusal(format!("pixel map {width}x{height}x{depth}: {} bytes given, {need} needed", bytes.len()))); }
     let per = 8 / usize::from(depth);
     for y in 0..height as usize {
         for x in 0..width as usize {
@@ -51,7 +62,9 @@ pub fn unpack(bytes: &[u8], row: usize, width: i32, height: i32, depth: u8) -> R
 }
 
 /// Pack a bitmap into rows `row` bytes apart (`out` is zeroed first: the row padding is cleared).
-pub fn pack(b: &Bitmap, row: usize, out: &mut [u8]) {
+pub fn pack(b: &Bitmap, row: usize, out: &mut [u8]) -> Result<(), Refusal> {
+    let need = extent(row, b.width(), b.height(), b.depth())?;
+    if out.len() < need { return Err(Refusal(format!("pixel map {}x{}x{}: {} bytes given, {need} needed", b.width(), b.height(), b.depth(), out.len()))); }
     out.fill(0);
     let (depth, per) = (b.depth(), 8 / usize::from(b.depth()));
     for y in 0..b.height() as usize {
@@ -60,6 +73,7 @@ pub fn pack(b: &Bitmap, row: usize, out: &mut [u8]) {
             out[y * row + x / per] |= b.get(x as i32, y as i32).unwrap_or(0) << shift;
         }
     }
+    Ok(())
 }
 
 /// The depths the rasteriser can hold.
@@ -77,17 +91,44 @@ mod tests {
             for y in 0..3 { for x in 0..5 { b.set(x, y, ((x * 3 + y * 7 + 1) as u8) & max); } }
             let row = row_bytes(5, depth) as usize;
             let mut buf = alloc::vec![0xEEu8; row * 3];
-            pack(&b, row, &mut buf);
+            pack(&b, row, &mut buf).unwrap();
             assert_eq!(unpack(&buf, row, 5, 3, depth).unwrap(), b, "depth {depth}");
         }
         let mut b = Bitmap::new(4, 1, 2).unwrap();
         for (x, p) in [1u8, 2, 3, 0].into_iter().enumerate() { b.set(x as i32, 0, p); }
         let mut buf = [0u8; 2];
-        pack(&b, 2, &mut buf);
+        pack(&b, 2, &mut buf).unwrap();
         assert_eq!(buf, [0b01_10_11_00, 0], "2-bit pixels, first pixel in the top bits; padding cleared");
         assert_eq!(row_bytes(5, 8), 6);
         assert_eq!(row_bytes(512, 8), 512);
         assert!(unpack(&[0; 4], 4, 4, 1, 16).is_err() && !supported_depth(16));
+    }
+
+    #[test]
+    fn a_buffer_or_row_that_cannot_hold_the_pixels_is_a_named_refusal_not_an_index_panic() {
+        // 8 x 4 pixels at 8 bits need 4 rows of 8 bytes (32): a 31-byte buffer is one byte short
+        let e = unpack(&[0; 31], 8, 8, 4, 8).unwrap_err().0;
+        assert!(e.contains("pixel map") && e.contains("31"), "{e}");
+        // rowBytes narrower than a row of pixels would read each row from inside the previous one
+        let e = unpack(&[0; 64], 7, 8, 4, 8).unwrap_err().0;
+        assert!(e.contains("rowBytes 7"), "{e}");
+        // the same for packing into a short output
+        let b = Bitmap::new(8, 4, 8).unwrap();
+        assert!(pack(&b, 8, &mut [0u8; 31]).unwrap_err().0.contains("pixel map"));
+        assert!(pack(&b, 7, &mut [0u8; 64]).unwrap_err().0.contains("rowBytes 7"));
+        // a row stride that overflows the product is refused, not wrapped
+        assert!(unpack(&[0; 64], usize::MAX, 8, 4, 8).is_err());
+        // CONTROL: exactly enough works; the last row needs only its pixel bytes, not the padding after them
+        assert!(unpack(&[0; 8 * 3 + 8], 8, 8, 4, 8).is_ok());
+        assert!(unpack(&[0; 8 * 3 + 6], 8, 6, 4, 8).is_ok());
+        let mut out = [0u8; 32];
+        assert!(pack(&b, 8, &mut out).is_ok());
+    }
+
+    #[test]
+    fn row_bytes_of_a_hostile_width_saturates_instead_of_overflowing() {
+        assert_eq!(row_bytes(-5, 8), 0);
+        assert_eq!(row_bytes(i32::MAX, 8), 2_147_483_648u32.min(((i32::MAX as u64 * 8 + 15) / 16 * 2) as u32));
     }
 }
 

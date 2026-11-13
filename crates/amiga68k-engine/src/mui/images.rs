@@ -22,6 +22,17 @@ pub fn is_image(k: Kind) -> bool { matches!(k, Kind::Bitmap | Kind::ChunkyImage 
 /// MUI's size answer for the class (min, default): Bitmap family 1x1, Imagedisplay 3x3 / 16x16. Both stretch.
 pub fn size(k: Kind) -> (i32, i32) { let d = if k == Kind::Imagedisplay { 16 } else { 1 }; (d, d) }
 
+/// The most pixels one image object may hold (4096 x 4096): what a guest states is bounded before anything is allocated or read.
+const MAX_PIC_PIXELS: usize = 1 << 24;
+
+/// `w x h` as a pixel count, or the named refusal for a picture that is empty, negative or past [`MAX_PIC_PIXELS`] (never a wrapped product).
+fn pixel_count(what: &str, w: i64, h: i64) -> Result<usize, Refusal> {
+    match w.checked_mul(h).and_then(|n| usize::try_from(n).ok()) {
+        Some(n) if w >= 0 && h >= 0 && n <= MAX_PIC_PIXELS => Ok(n),
+        _ => Err(Refusal(format!("{what}: {w} x {h} pixels is too large for an image object (at most {MAX_PIC_PIXELS} pixels)"))),
+    }
+}
+
 /// A decoded picture: `w x h` colours and which pixels are drawn (a transparent pen is not).
 struct Pic { w: i32, h: i32, rgb: Vec<u32>, solid: Vec<bool> }
 
@@ -57,11 +68,13 @@ fn pic_bitmap<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<Option<Pic>, Ref
         (g.bm.pixels().to_vec(), g.bm.width(), g.bm.height(), g.bm.depth())
     };
     let (w, h) = (w.min(bw), h.min(bh));
+    let n = pixel_count("Bitmap.mui", w as i64, h as i64)?;
     let tr = transparent(a, obj);
     let mut cache = alloc::collections::BTreeMap::new();
-    let (mut rgb, mut solid) = (Vec::with_capacity((w * h) as usize), Vec::with_capacity((w * h) as usize));
+    let (mut rgb, mut solid) = (Vec::with_capacity(n), Vec::with_capacity(n));
     for y in 0..h { for x in 0..w {
-        let pen = pens[(y * bw + x) as usize] as u32;
+        let at = (y as i64 * bw as i64 + x as i64) as usize; // w <= bw, h <= bh, and the bitmap holds bw x bh pens
+        let pen = *pens.get(at).ok_or_else(|| Refusal(format!("Bitmap.mui {obj:#x}: pixel {x},{y} is outside the BitMap's {bw} x {bh} pens")))? as u32;
         let c = match cache.get(&pen) { Some(&c) => c, None => { let c = colour(a, obj, pen, 1 << depth)?; cache.insert(pen, c); c } };
         rgb.push(c); solid.push(tr != Some(pen));
     } }
@@ -75,12 +88,17 @@ fn pic_chunky<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<Option<Pic>, Ref
     if px == 0 || w < 1 || h < 1 || n < 1 || n > 256 {
         return Err(Refusal(format!("ChunkyImage.mui {obj:#x}: pixels {px:#x}, {w}x{h}, {n} colours: chunkyimage.c make_bitmap fails, so MUIM_Setup is FALSE and Zune would not open the window")));
     }
+    let count = pixel_count("ChunkyImage.mui", w as i64, h as i64)?;
     let modulo = match a.objects.num(obj, MUIA_ChunkyImage_Modulo) { Some(m) if m != 0xFFFF => m, _ => w as u32 };
     let tr = transparent(a, obj);
-    let (mut rgb, mut solid) = (Vec::new(), Vec::new());
+    let (mut rgb, mut solid) = (Vec::with_capacity(count), Vec::with_capacity(count));
+    let wrap = || Refusal(format!("ChunkyImage.mui {obj:#x}: the pixel or palette address wraps the 32-bit address space (modulo {modulo})"));
     for y in 0..h as u32 { for x in 0..w as u32 {
-        let pen = rd8(a, px + y * modulo + x, "MUIA_ChunkyImage_Pixels")? as u32;
-        let c = if pal != 0 && pen < n { rgb8(rd8(a, pal + pen * 3, "ChunkyImage palette")? as u32, rd8(a, pal + pen * 3 + 1, "ChunkyImage palette")? as u32, rd8(a, pal + pen * 3 + 2, "ChunkyImage palette")? as u32) }
+        let at = y.checked_mul(modulo).and_then(|o| o.checked_add(x)).and_then(|o| px.checked_add(o)).ok_or_else(wrap)?;
+        let pen = rd8(a, at, "MUIA_ChunkyImage_Pixels")? as u32;
+        let c = if pal != 0 && pen < n {
+            let at = pal.checked_add(pen * 3).ok_or_else(wrap)?; // pen < n <= 256
+            rgb8(rd8(a, at, "ChunkyImage palette")? as u32, rd8(a, at.checked_add(1).ok_or_else(wrap)?, "ChunkyImage palette")? as u32, rd8(a, at.checked_add(2).ok_or_else(wrap)?, "ChunkyImage palette")? as u32) }
             else { colour(a, obj, pen, n)? };
         rgb.push(c); solid.push(tr != Some(pen));
     } }
@@ -105,6 +123,7 @@ fn pic_body<U: GuestUi>(a: &mut Amiga<U>, obj: u32) -> Result<Option<Pic>, Refus
     if body == 0 || w < 1 || h < 1 || depth < 1 || depth > 8 || comp > 1 {
         return Err(Refusal(format!("Bodychunk.mui {obj:#x}: body {body:#x}, {w}x{h}x{depth}, compression {comp}: bodychunk.c make_bitmap fails, so MUIM_Setup is FALSE and Zune would not open the window")));
     }
+    pixel_count("Bodychunk.mui", w as i64, h as i64)?;
     let bpr = (((w + 15) & !15) / 8) as usize;
     let bpl = bpr * (depth as usize + (mask == 1) as usize);
     let (mut at, tr) = (body, transparent(a, obj));
@@ -213,7 +232,7 @@ fn spec_ops<U: GuestUi>(a: &mut Amiga<U>, obj: u32, spec: &str, r: GuestRect) ->
             let (kind, n) = (data.chars().next().unwrap_or(' '), data.get(1..).and_then(|s| s.trim().parse::<i32>().ok()));
             match (kind, n) {
                 ('m', Some(n)) => fill(mui_pen_role(n).ok_or_else(|| nope("a MUI pen outside 0..8"))?),
-                ('p', Some(n)) if (0..256).contains(&n) => alloc::vec![DrawOp::Pixels { rect: r, rgb: alloc::vec![a.gfx.palette().rgb[n as usize]; (r.width * r.height).max(0) as usize] }],
+                ('p', Some(n)) if (0..256).contains(&n) => alloc::vec![DrawOp::Pixels { rect: r, rgb: alloc::vec![a.gfx.palette().rgb[n as usize]; pixel_count("Imagedisplay.mui", r.width.max(0) as i64, r.height.max(0) as i64)?] }],
                 _ => return Err(nope("this pen spec (system and RGB pens)")),
             }
         }
@@ -245,8 +264,9 @@ pub fn present<U: GuestUi>(a: &mut Amiga<U>, win: guestui_abi::UiObjectRef, obj:
     let ops = ops(a, obj, r)?;
     if ops.is_empty() && !a.objects.images.contains_key(&obj) { return Ok(()); } // nothing to show and nothing shown
     if a.objects.images.get(&obj).is_some_and(|(rr, oo)| *rr == r && *oo == ops) { return Ok(()); }
-    a.objects.images.insert(obj, (r, ops.clone()));
-    a.ui.present_plane(win, Plane { id: obj, rect: r, ops }).map_err(Refusal::ui)
+    a.ui.present_plane(win, Plane { id: obj, rect: r, ops: ops.clone() }).map_err(Refusal::ui)?;
+    a.objects.images.insert(obj, (r, ops)); // remembered as shown only once the host has shown it
+    Ok(())
 }
 
 /// Window `w` closed: what was shown for its images is forgotten.

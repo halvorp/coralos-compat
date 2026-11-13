@@ -82,6 +82,16 @@ impl GuestMem {
         self.ram[addr as usize..addr as usize + src.len()].copy_from_slice(src);
         Ok(())
     }
+    /// Copy `len` bytes from `src` to `dst` inside guest RAM, both ranges checked first; an overlap behaves as `memmove`.
+    /// Nothing the size of `len` is allocated on the host.
+    pub fn copy_within(&mut self, src: u32, dst: u32, len: u32) -> Result<(), MemError> {
+        self.check(src, len)?;
+        self.check(dst, len)?;
+        let (s, d) = (self.strip(src), self.strip(dst));
+        self.hooks.before_write(&self.ram, d, len);
+        self.ram.copy_within(s as usize..s as usize + len as usize, d as usize);
+        Ok(())
+    }
     pub fn zero(&mut self, addr: u32, len: u32) -> Result<(), MemError> {
         self.check(addr, len)?;
         let addr = self.strip(addr);
@@ -152,6 +162,20 @@ mod tests {
         assert_eq!(m.read_cstr(10), Err(MemError::Unterminated { addr: 10, max: MAX_CSTR }), "the bounded read keeps its limit");
         m.write_bytes(900, &[b'y'; 124]).unwrap();
         assert_eq!(m.read_cstr_long(900), Err(MemError::Unterminated { addr: 900, max: 124 }), "NEGATIVE CONTROL: no NUL before the end of RAM");
+    }
+
+    #[test]
+    fn copy_within_moves_checked_ranges_with_memmove_semantics_and_refuses_the_rest() {
+        let mut m = GuestMem::new(64);
+        m.write_bytes(0, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        m.copy_within(0, 2, 6).unwrap();
+        assert_eq!((0..8).map(|i| m.read_u8(i).unwrap()).collect::<Vec<_>>(), [1, 2, 1, 2, 3, 4, 5, 6]);
+        m.copy_within(2, 0, 0).unwrap();
+        assert!(m.copy_within(0, 60, 8).is_err(), "destination runs off RAM");
+        assert!(m.copy_within(60, 0, 8).is_err(), "source runs off RAM");
+        assert!(m.copy_within(u32::MAX - 3, 0, 16).is_err(), "a wrapping source must not alias low RAM");
+        assert!(m.copy_within(0, 0, u32::MAX).is_err(), "a 4 GiB request is refused before anything is touched");
+        assert_eq!(m.read_u8(7), Ok(6), "a refused copy changed nothing");
     }
 
     #[test]

@@ -88,7 +88,8 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_Application_PushMethod if kind == Kind::Application => {
             let (dest, n) = (arg(0)?, arg(1)? as usize);
             let follow = args.get(2..2 + n).ok_or_else(|| Refusal("MUIM_Application_PushMethod: the message is short".into()))?;
-            app::post(a, obj, app::Inbound::Push { dest, id: follow[0], args: follow[1..].to_vec() })?;
+            let Some((&id, rest)) = follow.split_first() else { return Err(Refusal("MUIM_Application_PushMethod: the message has no method id (count 0)".into())) };
+            app::post(a, obj, app::Inbound::Push { dest, id, args: rest.to_vec() })?;
             Ok(0)
         }
         MUIM_Application_AddInputHandler if kind == Kind::Application => { handlers::add_input(a, obj, arg(0)?)?; Ok(1) }
@@ -123,7 +124,7 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
         MUIM_Family_Remove if kind.is_a(Kind::Family) => { remove_child(a, obj, arg(0)?)?; Ok(0) }
         MUIM_Numeric_Increase | MUIM_Numeric_Decrease if kind.is_a(Kind::Numeric) => {
             let step = arg(0)? as i32;
-            let step = if id == MUIM_Numeric_Increase { step } else { -step };
+            let step = if id == MUIM_Numeric_Increase { step } else { step.wrapping_neg() }; // C's -step: i32::MIN stays i32::MIN, then the sum saturates
             let v = (a.objects.num_or(obj, MUIA_Numeric_Value, 0) as i32).saturating_add(step);
             object::set_attr(a, obj, MUIA_Numeric_Value, v as u32)?;
             Ok(0)
