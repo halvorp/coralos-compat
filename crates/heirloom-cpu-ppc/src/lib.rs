@@ -79,6 +79,10 @@ mod jit_lazyca; // lazy XER[CA]: srawi / addic leave the carry pending, settled 
 #[cfg(target_arch = "x86_64")]
 mod jit_xbytes; // translated byte-string shapes (jit_xlate's family): an unsigned byte compare, a saturating byte-add loop
 #[cfg(target_arch = "x86_64")]
+mod jit_xnat; // native routines (jit_xlate's family): a recognised hot guest routine run as Rust code over guest RAM
+#[cfg(target_arch = "x86_64")]
+mod jit_xpix; // native routines: Warcraft III's palette blit, texture nibble rotate and bitset scan loops
+#[cfg(target_arch = "x86_64")]
 mod jit_xlate; // translated functions: a recognised guest function compiled whole, exactly (the Z83 profile's rank 1 first)
 mod jit_stats;
 #[cfg(target_arch = "x86_64")]
@@ -104,6 +108,11 @@ pub use jit_xlate::CMP16F as XLATE_CMP16F;
 #[cfg(target_arch = "x86_64")]
 #[doc(hidden)]
 pub use jit_xbytes::{BLENDADD as XLATE_BLENDADD, MEMCMPB as XLATE_MEMCMPB};
+/// The guest words of the native routines (jit_xnat), for tests that place one.
+#[cfg(target_arch = "x86_64")]
+#[doc(hidden)]
+pub use jit_xpix::{BITSCAN as NAT_BITSCAN, PALBLIT as NAT_PALBLIT, TEXCONV as NAT_TEXCONV};
+
 #[cfg(target_arch = "x86_64")]
 pub use jit_mem::CodeMem;
 #[cfg(all(feature = "host-codemem", target_arch = "x86_64", target_os = "linux"))]

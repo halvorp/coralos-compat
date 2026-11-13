@@ -465,8 +465,18 @@ pub const KNOB_ENTRY_CHECKS: u32 = 64;
 /// Bits 8..12 of the knobs: the IBTC's index bits (8..=16 entries' log2; 0 = the default 16, 64K entries / 512 KiB).
 pub const KNOB_IBTC_BITS_SHIFT: u32 = 8;
 pub const KNOB_IBTC_BITS_MASK: u32 = 0x1F;
+/// The NATIVE ROUTINES (h86 native: a recognised hot guest routine run as Rust code over guest RAM, jit_xnat), one knob each so
+/// the Z83's jitablate prices each: set = that routine is compiled block by block like any other code. Code, not semantics.
+/// resizePaletteAndBlit's palette-to-16-bit row loop.
+pub const KNOB_NO_NAT_PALBLIT: u32 = 1 << 16;
+/// texture_format_convert's nibble-rotate row loop.
+pub const KNOB_NO_NAT_TEXCONV: u32 = 1 << 17;
+/// clearBitset's skip over zero words.
+pub const KNOB_NO_NAT_BITSCAN: u32 = 1 << 18;
+/// Every native routine off (their A/B together).
+pub const KNOB_NO_NAT: u32 = KNOB_NO_NAT_PALBLIT | KNOB_NO_NAT_TEXCONV | KNOB_NO_NAT_BITSCAN;
 /// The knob bits a library may be asked for (anything else: -1).
-pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_ENTRY_CHECKS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT;
+pub const KNOBS_KNOWN: u32 = KNOB_NO_SMC_STORE | KNOB_NO_ENTRY_GEN | KNOB_NO_XLATE | KNOB_NO_DISPLACE | KNOB_NO_LAZY_CA | KNOB_FOLLOW_CALLS | KNOB_COLD_TAIL | KNOB_ENTRY_CHECKS | KNOB_IBTC_BITS_MASK << KNOB_IBTC_BITS_SHIFT | KNOB_NO_NAT;
 
 /// Executable memory the ENGINE provides for tier 2 (`set_code_mem`), under the PUBLISH model (CoralOS: EXEC_CODE_RESERVE /
 /// EXEC_CODE_PROTECT, syscalls 132/133, behind the engine process's CapKind::ExecRegion — libcoral::codemem fills this record;

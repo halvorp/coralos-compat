@@ -174,7 +174,7 @@ fn arith_inner(cpu: &mut Cpu, w: W, op: Op, single: bool) -> R {
 /// TwoSum gives the exact sum as s+t; round that to ODD in f64 (truncate toward zero, force the lsb when inexact),
 /// then the f64->f32 nearest-even rounding is correct because f64 has >= 2 more bits than f32 (PEM fmadds).
 /// Operands that are not single-representable are undefined on hardware; they take the plain fma.
-fn fma_single(a: f64, c: f64, b: f64) -> f64 {
+pub(crate) fn fma_single(a: f64, c: f64, b: f64) -> f64 {
     let exact_single = |x: f64| !x.is_finite() || (x as f32) as f64 == x;
     if !(exact_single(a) && exact_single(b) && exact_single(c)) { return libm::fma(a, c, b); }
     let p = a * c; // exact: 24 x 24 bits

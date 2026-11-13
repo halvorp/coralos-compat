@@ -15,7 +15,7 @@
 use alloc::vec::Vec;
 use heirloom_mem_flat32::{GuestMem, RawRam};
 
-const PAGE_SHIFT: u32 = 12;
+pub(crate) const PAGE_SHIFT: u32 = 12;
 
 /// Entries of the map: one per page of the whole 32-bit address space, so every masked EA indexes inside it whatever the mask.
 pub(crate) const MAP_PAGES: usize = 1 << (32 - PAGE_SHIFT);

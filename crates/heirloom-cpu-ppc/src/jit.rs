@@ -411,7 +411,7 @@ impl Jit {
         let hot = |pc: u32| blocks.contains(pc) && after.wrapping_sub(counters[Self::counter(pc)]) >= crate::jit_region::edge_min(after);
         // the A/B knob KNOB_FOLLOW_CALLS: call edges followed into the callee (inline return checks) whatever the shape says
         let shape = if self.knobs & heirloom_cpu_abi::ppc::KNOB_FOLLOW_CALLS != 0 { crate::RegionShape { follow_calls: true, ..self.region_shape } } else { self.region_shape };
-        let Some(plan) = crate::jit_region::form(cache, mem, head, mem.raw().gen_pages as usize, shape, hot) else { self.stats.region_refused += 1; return };
+        let Some(plan) = crate::jit_region::form(cache, mem, head, mem.raw().gen_pages as usize, shape, self.knobs, hot) else { self.stats.region_refused += 1; return };
         if shape.spend {
             // its other nodes form no region of their own (their counters wrap far from zero; they still read as hot)
             for n in &plan.nodes[1..] { self.ctx.counters[Self::counter(n.0)] = after.wrapping_sub(1 << 31); }
@@ -695,6 +695,7 @@ impl Jit {
         c.ibtc = self.ibtc.as_ptr() as *const u64;
         c.trap = None;
         c.native = h_native::<H> as HNative as usize as u64;
+        c.xnat = crate::jit_xnat::h_xnat::<H> as HXnat as usize as u64;
         c.natives = 0;
         c.helpers = 0;
         c.fprf_kind = 0;
@@ -740,6 +741,7 @@ fn landing(s: &Slot, link_gen: u64, mutant: u8) -> u64 {
 type HOne = extern "C" fn(*mut Ctx, u32, u32, u64) -> u32;
 type HNote = extern "C" fn(*mut Ctx, u32, u32);
 type HNative = extern "C" fn(*mut Ctx, u32, u64) -> u32;
+type HXnat = extern "C" fn(*mut Ctx, u32, u32) -> u32;
 
 /// A native block's call: the host's native bound at `pc` with `done` instructions of this entry retired before it, as
 /// tier 1's dispatcher runs it (t1::native): the time base exact, the pc noted, one retired instruction. Answers 0 = go on
@@ -806,14 +808,14 @@ pub(crate) extern "C" fn h_note<H: Host>(ctx: *mut Ctx, ea: u32, n: u32) {
 /// page, so one generation check covers it, and the taken edge is a side exit. A BACKWARD branch is usually a loop's back
 /// edge, taken, its fall-through the loop's exit: cold code that would only be duplicated. (Tracing through `b` / `bl` too
 /// was measured on WC3: 0.6% fewer JIT host instructions than this for 38% more compiles and 2x the evictions.)
-pub(crate) fn superblock(cache: &Cache, mem: &heirloom_mem_flat32::GuestMem, first: &[crate::t1op::Op], pc: u32, gen: u64, page: usize) -> Vec<crate::t1op::Op> {
+pub(crate) fn superblock(cache: &Cache, mem: &heirloom_mem_flat32::GuestMem, first: &[crate::t1op::Op], pc: u32, gen: u64, page: usize, knobs: u32) -> Vec<crate::t1op::Op> {
     let mut ops = first.to_vec();
     while let Some(last) = ops.last() {
         let next = pc.wrapping_add(4 * ops.len() as u32);
         let forward = matches!(last.k, K::Bc | K::Bcl) && last.d & 0x14 != 0x14 && last.imm.wrapping_sub(next) < 0x8000_0000;
         if !forward || ops.len() >= SUPER_MAX || (mem.strip(next) >> heirloom_mem_flat32::CODE_PAGE_SHIFT) as usize != page { break; }
         // a translated shape (jit_xlate) starts its own block: the not-taken path into a loop shape's head stops here
-        if crate::jit_xlate::recognise(next, heirloom_mem_flat32::CODE_PAGE_SHIFT, |a| mem.read_u32(a).ok()).is_some() { break; }
+        if crate::jit_xlate::recognise(next, heirloom_mem_flat32::CODE_PAGE_SHIFT, knobs, |a| mem.read_u32(a).ok()).is_some() { break; }
         if !cache.peek(mem, next, gen, SUPER_MAX - ops.len(), &mut ops) { break; }
     }
     ops
@@ -915,11 +917,11 @@ pub(crate) fn run<H: Host>(host: &mut H, cpu: &mut Cpu, budget: u64, prof: &mut 
             if page < host.mem().raw().gen_pages as usize {
                 // a recognised whole function (jit_xlate) is compiled whole; any other block as before
                 let mem = host.mem();
-                let shape = (jit.mask == u32::MAX && jit.knobs & heirloom_cpu_abi::ppc::KNOB_NO_XLATE == 0).then(|| crate::jit_xlate::recognise(pc, heirloom_mem_flat32::CODE_PAGE_SHIFT, |a| mem.read_u32(a).ok())).flatten();
+                let shape = (jit.mask == u32::MAX).then(|| crate::jit_xlate::recognise(pc, heirloom_mem_flat32::CODE_PAGE_SHIFT, jit.knobs, |a| mem.read_u32(a).ok())).flatten();
                 if let Some(s) = shape {
                     jit.compile_shape::<H>(s, pc, gen, page, n);
                 } else {
-                    let ops = superblock(cache, host.mem(), &cache.ops[start..start + len], pc, gen, page);
+                    let ops = superblock(cache, host.mem(), &cache.ops[start..start + len], pc, gen, page, jit.knobs);
                     jit.stats.superblocks += (ops.len() > len) as u64;
                     jit.compile::<H>(&ops, len, pc, gen, page, n);
                 }
