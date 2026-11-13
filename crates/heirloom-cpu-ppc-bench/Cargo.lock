@@ -19,64 +19,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
-name = "heirloom-ui-abi"
-version = "0.1.0"
-
-[[package]]
-name = "libm"
-version = "0.2.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
-
-[[package]]
-name = "heirloom-mac68k-engine"
-version = "0.1.0"
-dependencies = [
- "heirloom-ui-abi",
- "heirloom-common",
- "heirloom-mem-flat32",
- "heirloom-cpu-68k",
- "heirloom-present",
- "heirloom-raster",
- "heirloom-fmt-resfork",
- "heirloom-translate",
- "heirloom-volume",
-]
-
-[[package]]
-name = "heirloom-macppc-engine"
-version = "0.1.0"
-dependencies = [
- "heirloom-ui-abi",
- "libm",
- "heirloom-mac68k-engine",
- "heirloom-common",
- "heirloom-mem-flat32",
- "heirloom-fmt-pef",
- "heirloom-cpu-ppc",
- "heirloom-fmt-resfork",
- "heirloom-volume",
-]
-
-[[package]]
 name = "heirloom-common"
 version = "0.1.0"
 dependencies = [
- "heirloom-ui-abi",
  "heirloom-mem-flat32",
+ "heirloom-ui-abi",
  "heirloom-volume",
 ]
-
-[[package]]
-name = "heirloom-mem-flat32"
-version = "0.1.0"
 
 [[package]]
 name = "heirloom-cpu-68k"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "heirloom-cpu-abi",
  "heirloom-mem-flat32",
+]
+
+[[package]]
+name = "heirloom-cpu-abi"
+version = "0.1.0"
+dependencies = [
+ "heirloom-mem-abi",
+]
+
+[[package]]
+name = "heirloom-cpu-ppc"
+version = "0.1.0"
+dependencies = [
+ "heirloom-cpu-abi",
+ "heirloom-mem-flat32",
+ "libm",
+]
+
+[[package]]
+name = "heirloom-cpu-ppc-bench"
+version = "0.1.0"
+dependencies = [
+ "heirloom-cpu-ppc",
+ "heirloom-fmt-pef",
+ "heirloom-macppc-engine",
+ "heirloom-mem-flat32",
+ "heirloom-ui-abi",
 ]
 
 [[package]]
@@ -87,30 +71,64 @@ dependencies = [
 ]
 
 [[package]]
-name = "heirloom-cpu-ppc"
+name = "heirloom-fmt-resfork"
 version = "0.1.0"
 dependencies = [
- "libm",
- "heirloom-mem-flat32",
+ "heirloom-common",
 ]
 
 [[package]]
-name = "heirloom-cpu-ppc-bench"
+name = "heirloom-gl-abi"
+version = "0.1.0"
+
+[[package]]
+name = "heirloom-mac68k-engine"
 version = "0.1.0"
 dependencies = [
- "heirloom-ui-abi",
- "heirloom-macppc-engine",
+ "heirloom-common",
+ "heirloom-cpu-68k",
+ "heirloom-fmt-resfork",
  "heirloom-mem-flat32",
- "heirloom-fmt-pef",
+ "heirloom-present",
+ "heirloom-raster",
+ "heirloom-translate",
+ "heirloom-ui-abi",
+ "heirloom-volume",
+]
+
+[[package]]
+name = "heirloom-macppc-engine"
+version = "0.1.0"
+dependencies = [
+ "heirloom-common",
  "heirloom-cpu-ppc",
+ "heirloom-fmt-pef",
+ "heirloom-fmt-resfork",
+ "heirloom-gl-abi",
+ "heirloom-mac68k-engine",
+ "heirloom-mem-flat32",
+ "heirloom-ui-abi",
+ "heirloom-volume",
+ "libm",
+]
+
+[[package]]
+name = "heirloom-mem-abi"
+version = "0.1.0"
+
+[[package]]
+name = "heirloom-mem-flat32"
+version = "0.1.0"
+dependencies = [
+ "heirloom-mem-abi",
 ]
 
 [[package]]
 name = "heirloom-present"
 version = "0.1.0"
 dependencies = [
- "heirloom-ui-abi",
  "heirloom-raster",
+ "heirloom-ui-abi",
 ]
 
 [[package]]
@@ -118,13 +136,6 @@ name = "heirloom-raster"
 version = "0.1.0"
 dependencies = [
  "heirloom-theme",
-]
-
-[[package]]
-name = "heirloom-fmt-resfork"
-version = "0.1.0"
-dependencies = [
- "heirloom-common",
 ]
 
 [[package]]
@@ -139,8 +150,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-ui-abi"
+version = "0.1.0"
+
+[[package]]
 name = "heirloom-volume"
 version = "0.1.0"
+
+[[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "shlex"
