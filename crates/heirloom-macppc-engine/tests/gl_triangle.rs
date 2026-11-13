@@ -491,6 +491,7 @@ fn wc3_host_run_with_a_gl_worker() {
     let mut drive = wc3_drive::Drive::from_env();
     let (mut click_phase, mut click_kinds) = (0u8, 0usize);
     let mut ui_seen = 0usize;
+    let mut ui_census_at = 0usize;
     for i in 0..slices {
         let (st, stats) = GuestMachine::step(&mut m, budget);
         if matches!(st, Step::Fault(_) | Step::Exited) {
@@ -506,6 +507,16 @@ fn wc3_host_run_with_a_gl_worker() {
         if std::env::var("WC3_STEPS").is_ok() && i % 50 == 0 { eprintln!("STEP {i}: {st:?} {stats:?} pc={:#x} lr={:#x} cb={}", m.cpu().map_or(0, |c| c.pc), m.cpu().map_or(0, |c| c.lr), m.callback_depth()); }
         while let Some(l) = m.perf_take_line(1000) {
             eprintln!("{l} (slice {i})");
+            // `WC3_UI_CENSUS`: the GuestUi calls the guest made since the last line, by kind (what Heirloom.app redraws per frame)
+            if std::env::var("WC3_UI_CENSUS").is_ok() {
+                let mut kinds = std::collections::BTreeMap::<String, usize>::new();
+                for c in &m.ui().calls[ui_census_at.min(m.ui().calls.len())..] {
+                    let k = format!("{c:?}");
+                    *kinds.entry(k.split(|ch: char| !ch.is_alphanumeric()).next().unwrap_or("").to_string()).or_insert(0) += 1;
+                }
+                ui_census_at = m.ui().calls.len();
+                eprintln!("  UI-CENSUS {kinds:?}");
+            }
             if let Some(sites) = m.perf().and_then(|p| p.sites.as_ref()) {
                 let mut v: Vec<_> = sites.iter().collect();
                 v.sort_by(|a, b| b.1.cmp(a.1));
