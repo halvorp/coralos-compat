@@ -1,0 +1,85 @@
+==> RAM-slot admission: 0 acquired (2 slot(s) total, /home/peter/.cache/coral-host-locks/cargo-slots)
+==> cargo-capped: token 0 of 2, MemoryMax=8G
+warning: variable does not need to be mutable
+   --> crates/heirloom-macppc-engine/src/fixture.rs:168:9
+    |
+168 |     let mut put = |b: &[u8], tail: &mut Vec<u8>| -> i32 {
+    |         ----^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `heirloom-macppc-engine` (lib) generated 1 warning (run `cargo fix --lib -p heirloom-macppc-engine` to apply 1 suggestion)
+warning: unused import: `heirloom_ui_abi::UiCall`
+   --> crates/heirloom-macppc-engine/tests/gl_triangle.rs:503:9
+    |
+503 |     use heirloom_ui_abi::UiCall;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/heirloom-macppc-engine/tests/gl_triangle.rs:390:9
+    |
+390 |     let mut call = |m: &mut M, name: &str, args: &[u32]| -> u32 {
+    |         ----^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `heirloom-macppc-engine` (test "gl_triangle") generated 2 warnings (run `cargo fix --test "gl_triangle" -p heirloom-macppc-engine` to apply 2 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.01s
+     Running tests/gl_triangle.rs (/build/targets/h86-perf0/c2/release/deps/gl_triangle-af4e901ea684b66d)
+
+running 1 test
+staged Warcraft III Folder of /data/build/corpus-bin/mac/warcraft3/installed as the volume Warcraft III, home ["Warcraft III"] (resource forks kept)
+DRIVE step 0 Hover(544, 114) at swap 100 in native window 4 (slice 8572)
+DRIVE step 1 Click(544, 114) at swap 110 in native window 4 (slice 8806)
+DRIVE step 2 Keys([Stroke { code: 80, text: "P", mods: 1, hold: 6 }, Stroke { code: 101, text: "e", mods: 0, hold: 6 }, Stroke { code: 116, text: "t", mods: 0, hold: 6 }, Stroke { code: 101, text: "e", mods: 0, hold: 6 }, Stroke { code: 114, text: "r", mods: 0, hold: 6 }]) at swap 240 in native window 4 (slice 10777)
+[HEIRLOOM-PERF frames=256 n=256 frame_ms p50=14 p95=19 mean=32.5 fps=30] insns/frame=8600000 mips_step=261 mips_interp=279 mips_wall=264 steps/frame=43 interp=94% native=6% outside_step=0% gl_ring=1% gl=5%/4535 clock=0%/192 thread=0%/59 event=0%/11 file=0%/22 other=1%/2464 clock_reads/frame=192 clock_poll=0% of insns | per frame: gl_ring_us=411 outside_us=0 | per slice: step_us=765 gap_us=0 (slice 11013)
+[HEIRLOOM-PERF-HIST frames=256 n=256 ms p50=14.7 p90=16.8 p95=19.2 p99=74.4 max=4300.6 | <8=1 <16=215 <33=32 <50=3 <100=4 <200=0 >=200=1 | over33ms=8/256 | tail(>=p95,n=13) dur=372.4 interp=362.1 native=5.6 gl=1.0 ring=0.8 outside=3.1 | median(<=p50,n=129) dur=13.3 interp=11.6 native=0.1 gl=1.1 ring=0.3 outside=0.0] (slice 11013)
+DRIVE step 3 Keys([Stroke { code: 13, text: "\r", mods: 0, hold: 6 }]) at swap 260 in native window 4 (slice 11053)
+DRIVE step 4 Hover(546, 150) at swap 330 in native window 4 (slice 11940)
+DRIVE step 5 Click(546, 150) at swap 340 in native window 4 (slice 12063)
+DRIVE step 6 Hover(432, 156) at swap 480 in native window 4 (slice 14539)
+DRIVE step 7 Click(432, 156) at swap 490 in native window 4 (slice 14596)
+[HEIRLOOM-PERF frames=512 n=256 frame_ms p50=9 p95=15 mean=13.4 fps=74] insns/frame=2909375 mips_step=217 mips_interp=244 mips_wall=216 steps/frame=14 interp=88% native=10% outside_step=0% gl_ring=2% gl=10%/3360 clock=0%/73 thread=0%/15 event=0%/1 file=0%/5 other=0%/644 clock_reads/frame=73 clock_poll=1% of insns | per frame: gl_ring_us=309 outside_us=80 | per slice: step_us=917 gap_us=5 (slice 14737)
+[HEIRLOOM-PERF-HIST frames=512 n=256 ms p50=9.9 p90=13.7 p95=15.3 p99=22.5 max=669.4 | <8=117 <16=130 <33=7 <50=0 <100=0 <200=0 >=200=2 | over33ms=2/256 | tail(>=p95,n=13) dur=83.5 interp=80.4 native=0.5 gl=1.3 ring=0.4 outside=0.6 | median(<=p50,n=129) dur=7.1 interp=5.7 native=0.0 gl=1.0 ring=0.3 outside=0.0] (slice 14737)
+DRIVE step 8 Keys([Stroke { code: 32, text: " ", mods: 0, hold: 6 }]) at swap 760 in native window 6 (slice 44360)
+[HEIRLOOM-PERF frames=768 n=256 frame_ms p50=17 p95=214 mean=81.2 fps=12] insns/frame=24579687 mips_step=305 mips_interp=313 mips_wall=302 steps/frame=122 interp=96% native=2% outside_step=0% gl_ring=0% gl=0%/1550 clock=0%/1601 thread=0%/261 event=0%/6 file=0%/122 other=1%/4533 clock_reads/frame=1601 clock_poll=1% of insns | per frame: gl_ring_us=165 outside_us=638 | per slice: step_us=655 gap_us=5 (slice 46199)
+[HEIRLOOM-PERF-HIST frames=768 n=256 ms p50=17.6 p90=112.5 p95=214.3 p99=1862.2 max=2590.6 | <8=114 <16=12 <33=20 <50=26 <100=52 <200=17 >=200=15 | over33ms=110/256 | tail(>=p95,n=13) dur=962.2 interp=930.3 native=22.2 gl=1.2 ring=0.4 outside=7.9 | median(<=p50,n=129) dur=5.3 interp=4.3 native=0.0 gl=0.6 ring=0.1 outside=0.0] (slice 46199)
+[HEIRLOOM-PERF frames=1024 n=256 frame_ms p50=11 p95=19 mean=13.5 fps=73] insns/frame=3122656 mips_step=231 mips_interp=265 mips_wall=229 steps/frame=15 interp=86% native=12% outside_step=0% gl_ring=2% gl=11%/5679 clock=0%/122 thread=0%/26 event=0%/6 file=0%/0 other=0%/767 clock_reads/frame=122 clock_poll=1% of insns | per frame: gl_ring_us=342 outside_us=81 | per slice: step_us=865 gap_us=5 (slice 50196)
+[HEIRLOOM-PERF-HIST frames=1024 n=256 ms p50=11.2 p90=17.2 p95=19.9 p99=50.3 max=176.2 | <8=0 <16=211 <33=41 <50=1 <100=2 <200=1 >=200=0 | over33ms=4/256 | tail(>=p95,n=13) dur=40.4 interp=37.4 native=0.4 gl=1.8 ring=0.4 outside=0.2 | median(<=p50,n=129) dur=10.5 interp=8.9 native=0.0 gl=1.1 ring=0.3 outside=0.0] (slice 50196)
+[HEIRLOOM-PERF frames=1280 n=256 frame_ms p50=10 p95=14 mean=11.1 fps=89] insns/frame=2495312 mips_step=224 mips_interp=259 mips_wall=222 steps/frame=12 interp=85% native=13% outside_step=0% gl_ring=2% gl=12%/5195 clock=0%/81 thread=0%/14 event=0%/1 file=0%/0 other=0%/688 clock_reads/frame=81 clock_poll=1% of insns | per frame: gl_ring_us=305 outside_us=66 | per slice: step_us=892 gap_us=5 (slice 53390)
+[HEIRLOOM-PERF-HIST frames=1280 n=256 ms p50=10.6 p90=12.6 p95=14.4 p99=16.2 max=16.9 | <8=0 <16=250 <33=6 <50=0 <100=0 <200=0 >=200=0 | over33ms=0/256 | tail(>=p95,n=13) dur=15.7 interp=14.1 native=0.0 gl=1.1 ring=0.3 outside=0.0 | median(<=p50,n=129) dur=10.2 interp=8.7 native=0.0 gl=1.1 ring=0.3 outside=0.0] (slice 53390)
+[HEIRLOOM-PERF frames=1536 n=256 frame_ms p50=10 p95=14 mean=11.3 fps=87] insns/frame=2492187 mips_step=220 mips_interp=255 mips_wall=218 steps/frame=12 interp=85% native=13% outside_step=0% gl_ring=2% gl=12%/5195 clock=0%/82 thread=0%/15 event=0%/1 file=0%/0 other=0%/687 clock_reads/frame=82 clock_poll=1% of insns | per frame: gl_ring_us=312 outside_us=67 | per slice: step_us=908 gap_us=5 (slice 56580)
+[HEIRLOOM-PERF-HIST frames=1536 n=256 ms p50=10.6 p90=13.3 p95=14.5 p99=16.4 max=20.4 | <8=0 <16=251 <33=5 <50=0 <100=0 <200=0 >=200=0 | over33ms=0/256 | tail(>=p95,n=13) dur=15.9 interp=14.1 native=0.1 gl=1.3 ring=0.3 outside=0.0 | median(<=p50,n=129) dur=10.2 interp=8.6 native=0.0 gl=1.1 ring=0.3 outside=0.0] (slice 56580)
+[HEIRLOOM-PERF frames=1792 n=256 frame_ms p50=10 p95=13 mean=11.0 fps=90] insns/frame=2494531 mips_step=226 mips_interp=262 mips_wall=224 steps/frame=12 interp=85% native=13% outside_step=0% gl_ring=2% gl=12%/5195 clock=0%/81 thread=0%/14 event=0%/1 file=0%/0 other=0%/689 clock_reads/frame=81 clock_poll=1% of insns | per frame: gl_ring_us=300 outside_us=65 | per slice: step_us=884 gap_us=5 (slice 59773)
+[HEIRLOOM-PERF-HIST frames=1792 n=256 ms p50=10.6 p90=12.4 p95=13.1 p99=15.5 max=16.8 | <8=0 <16=255 <33=1 <50=0 <100=0 <200=0 >=200=0 | over33ms=0/256 | tail(>=p95,n=13) dur=14.3 interp=12.7 native=0.0 gl=1.1 ring=0.3 outside=0.0 | median(<=p50,n=129) dur=10.2 interp=8.7 native=0.0 gl=1.1 ring=0.2 outside=0.0] (slice 59773)
+PPC-TIER Blocks prof=Prof { insns: 11999000177, natives: 11374698, native_time: 0, blocks: 2029696188 } jit=JitStats { compiled: 0, recompiled: 0, arena_full: 0, entries: 0, insns: 0, bails: 0, flushes: 0, code_bytes: 0, refused: false } cache=CacheStats { decodes: 4875486, stale: 131, flushes: 30, volatile_pages: 1, interp_insns: 6575 } lockstep=LockstepStats { blocks: 0, insns: 0, bytes_compared: 0 } divergence=None
+END pc=0x5bca04 lr=0x5bc354 callbacks=[]
+LOG [event] WaitNextEvent -> null event
+LOG [mem] BlockMove 0x108f71a -> 0x28d4bec x6
+LOG [mem] BlockMove 0x261d961 -> 0x44c4164 x4
+LOG [mem] BlockMove 0x28d4bf0 -> 0x1f740ed x2
+LOG [mem] BlockMove 0x10e7b80 -> 0x467e328 x20
+UI PresentPlane(UiObjectRef { id: 6, generation: 1 }, Plane { id: 0, rect: GuestRect { left: 0, top: 0, width: 640, height: 480 }, ops: [Fill { rect: GuestRect { left: 0, top: 0, width: 640, height: 480 }, pen_role: Text }] })
+UI PresentPlane(UiObjectRef { id: 5, generation: 1 }, Plane { id: 0, rect: GuestRect { left: 0, top: 0, width: 640, height: 480 }, ops: [] })
+UI SetMenuStrip(UiObjectRef { id: 6, generation: 1 }, MenuModel { menus: [] })
+UI OpenWindow(WindowModel { title: "", rect: GuestRect { left: 0, top: 0, width: 640, height: 480 }, role: Dialog, closable: false, resizable: false, token: CallbackToken(16082424) })
+UI SetMenuStrip(UiObjectRef { id: 5, generation: 1 }, MenuModel { menus: [] })
+UI OpenWindow(WindowModel { title: "", rect: GuestRect { left: 20, top: 60, width: 640, height: 480 }, role: Document, closable: false, resizable: false, token: CallbackToken(16082176) })
+UI CloseWindow(UiObjectRef { id: 3, generation: 2 })
+UI HideWindow(UiObjectRef { id: 3, generation: 2 })
+UI CloseWindow(UiObjectRef { id: 4, generation: 2 })
+UI PresentPlane(UiObjectRef { id: 4, generation: 2 }, Plane { id: 0, rect: GuestRect { left: 0, top: 0, width: 640, height: 480 }, ops: [Fill { rect: GuestRect { left: 0, top: 0, width: 640, height: 480 }, pen_role: Text }] })
+CLICK-AFTER GL kind counts since the first driven input: {"Call aglChoosePixelFormat": 1, "Call aglDestroyPixelFormat": 1, "Call aglSetDrawable": 2, "Call glActiveTextureARB": 981282, "Call glAlphaFunc": 86029, "Call glBindTexture": 132981, "Call glBlendFunc": 86029, "Call glClear": 1712, "Call glClearColor": 1712, "Call glColorMaterial": 1, "Call glDeleteTextures": 983, "Call glDepthFunc": 3474, "Call glDepthMask": 18223, "Call glDepthRange": 11639, "Call glDisable": 468685, "Call glDrawBuffer": 1, "Call glEnable": 348068, "Call glFinish": 980, "Call glFogf": 9177, "Call glFogfv": 3059, "Call glFogi": 1, "Call glGenTextures": 2027, "Call glGetIntegerv": 1, "Call glGetString": 2, "Call glLightModelfv": 1, "Call glLightf": 16, "Call glLightfv": 59138, "Call glLoadMatrixf": 227387, "Call glMaterialfv": 65400, "Call glMatrixMode": 227387, "Call glNormal3fv": 23458, "Call glPixelStorei": 27375, "Call glScissor": 11639, "Call glTexEnvi": 107155, "Call glTexGeni": 2, "Call glTexParameteri": 103304, "Call glViewport": 11639, "CallData glTexImage2D": 3576, "CallData glTexSubImage2D": 23799, "ContextCreate": 1, "ContextDestroy": 1, "Draw": 348641, "MakeCurrent": 2, "Swap": 1711}
+GL kinds: ["Call aglChoosePixelFormat", "ContextCreate", "Call aglDestroyPixelFormat", "Call aglSetDrawable", "MakeCurrent", "Call glGetString", "Call glGetIntegerv", "Call glMatrixMode", "Call glLoadMatrixf", "Call glLightModelfv", "Call glLightfv", "Call glLightfv", "Call glDisable", "Call glLightfv", "Call glLightfv", "Call glLightf", "Call glLightf", "Call glLightfv", "Call glLightfv", "Call glDisable", "Call glLightfv", "Call glLightfv", "Call glLightf", "Call glLightf", "Call glLightfv", "Call glLightfv", "Call glDisable", "Call glLightfv", "Call glLightfv", "Call glLightf", "Call glLightf", "Call glLightfv", "Call glLightfv", "Call glDisable", "Call glLightfv", "Call glLightfv", "Call glLightf", "Call glLightf", "Call glLightfv", "Call glLightfv", "Call glDisable", "Call glLightfv", "Call glLightfv", "Call glLightf", "Call glLightf", "Call glLightfv", "Call glLightfv", "Call glDisable", "Call glLightfv", "Call glLightfv", "Call glLightf", "Call glLightf", "Call glLightfv", "Call glLightfv", "Call glDisable", "Call glLightfv", "Call glLightfv", "Call glLightf", "Call glLightf", "Call glLightfv"]
+GL kind counts (3624789 calls, 363393 draws): {"Call aglChoosePixelFormat": 3, "Call aglDestroyPixelFormat": 3, "Call aglSetDrawable": 5, "Call glActiveTextureARB": 1042016, "Call glAlphaFunc": 92400, "Call glBindTexture": 141735, "Call glBlendFunc": 92400, "Call glClear": 1813, "Call glClearColor": 1813, "Call glColorMaterial": 3, "Call glDeleteTextures": 983, "Call glDepthFunc": 3672, "Call glDepthMask": 19002, "Call glDepthRange": 12329, "Call glDisable": 497773, "Call glDrawBuffer": 3, "Call glEnable": 375170, "Call glFinish": 980, "Call glFogf": 9767, "Call glFogfv": 3255, "Call glFogi": 3, "Call glGenTextures": 2106, "Call glGetIntegerv": 3, "Call glGetString": 6, "Call glLightModelfv": 3, "Call glLightf": 64, "Call glLightfv": 64797, "Call glLoadMatrixf": 250253, "Call glMaterialfv": 72668, "Call glMatrixMode": 250253, "Call glNormal3fv": 24600, "Call glPixelStorei": 27787, "Call glScissor": 12329, "Call glTexEnvi": 115828, "Call glTexGeni": 6, "Call glTexParameteri": 103628, "Call glViewport": 12329, "CallData glTexImage2D": 3986, "CallData glTexSubImage2D": 23801, "ContextCreate": 3, "ContextDestroy": 2, "Draw": 363393, "MakeCurrent": 5, "Swap": 1811}
+test wc3_host_run_with_a_gl_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 45.26s
+
+EXIT 0 secs 46
