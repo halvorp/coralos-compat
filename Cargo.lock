@@ -61,6 +61,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "heirloom-cpu-abi"
+version = "0.1.0"
+
+[[package]]
 name = "heirloom-cpu-arm"
 version = "0.1.0"
 
