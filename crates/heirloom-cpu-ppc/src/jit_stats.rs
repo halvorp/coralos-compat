@@ -22,6 +22,11 @@ pub struct JitStats {
     pub flushes: u64,
     /// Guest fields (GPRs, CR, XER, LR, CTR) the register cache held in host registers, summed over compiled blocks.
     pub pinned: u64,
+    /// Compiled blocks that are superblocks (go on through a conditional branch's not-taken path into the next block).
+    pub superblocks: u64,
+    /// Native calls made from JIT code (native blocks), and native blocks compiled.
+    pub natives: u64,
+    pub natives_compiled: u64,
     /// Bytes of code in the arena now.
     pub code_bytes: u64,
     /// Big-endian loads and stores use MOVBE (the CPU has it and it was not turned off).
