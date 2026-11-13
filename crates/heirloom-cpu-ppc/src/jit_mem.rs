@@ -57,6 +57,8 @@ impl Arena {
     }
     fn seg_start(&self, s: usize) -> usize { STUB_BYTES + s * self.seg_len }
     /// Copy `code` to the unpublished tail of the current region; None when it does not fit there.
+    /// Bytes of one segment: no block's code may be longer.
+    pub(crate) fn segment_bytes(&self) -> usize { self.seg_len }
     pub(crate) fn put(&mut self, code: &[u8]) -> Option<*const u8> {
         if self.cur + code.len() > self.limit { return None; }
         // SAFETY: [base + cur, base + cur + code.len()) is inside the reservation (limit <= len) and at or above `published`

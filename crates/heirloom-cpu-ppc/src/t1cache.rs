@@ -8,6 +8,7 @@
 //! one) and the decoded instructions live in one arena that is dropped whole when it passes [`ARENA_OPS`]: a cache,
 //! bounded by eviction, never a refusal.
 use crate::cpu::{Cpu, Trap};
+use crate::pc_map::PcMap;
 use crate::t1op::{decode, Op, K};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
@@ -53,6 +54,10 @@ pub(crate) struct Cache {
     pub(crate) ops: Vec<Op>,
     /// The natives set the blocks were cut against, and versions of it known to be equal to it.
     natives: Arc<BTreeSet<u32>>,
+    /// `natives` hashed, for the lookup every native call makes (a dispatcher miss): a BTreeSet probe of the thousands of
+    /// bound imports cost ~200 host instructions per call in WC3 gameplay. None when it could not be built (out of memory):
+    /// the BTreeSet answers then.
+    native_set: Option<PcMap<()>>,
     natives_gens: Vec<u64>,
     pub(crate) stats: CacheStats,
     /// Stale lookups per page, and the pages found volatile.
@@ -64,7 +69,7 @@ pub(crate) struct Cache {
 
 impl Cache {
     pub(crate) fn new() -> Cache {
-        Cache { table: vec![Slot::default(); 1 << TABLE_BITS], ops: Vec::with_capacity(4096), natives: Arc::new(BTreeSet::new()), natives_gens: vec![0], stats: CacheStats::default(), stale_pages: BTreeMap::new(), volatile: BTreeSet::new(), ignore_generations: false }
+        Cache { table: vec![Slot::default(); 1 << TABLE_BITS], ops: Vec::with_capacity(4096), natives: Arc::new(BTreeSet::new()), native_set: Some(PcMap::new(())), natives_gens: vec![0], stats: CacheStats::default(), stale_pages: BTreeMap::new(), volatile: BTreeSet::new(), ignore_generations: false }
     }
 
     fn flush(&mut self) {
@@ -81,10 +86,17 @@ impl Cache {
         if !Arc::ptr_eq(&self.natives, &cpu.natives) && self.natives != cpu.natives {
             self.flush();
             self.natives = cpu.natives.clone();
+            let mut set = PcMap::new(());
+            self.native_set = self.natives.iter().all(|&a| set.insert(a, ())).then_some(set);
             self.natives_gens.clear();
         }
         if self.natives_gens.len() >= 16 { self.natives_gens.remove(0); }
         self.natives_gens.push(cpu.natives_gen);
+    }
+
+    #[inline(always)]
+    fn is_native(&self, pc: u32) -> bool {
+        match &self.native_set { Some(s) => s.contains(pc), None => self.natives.contains(&pc) }
     }
 
     /// The valid block at `pc` if one is cached: (start, len, gen). The hot path.
@@ -113,9 +125,32 @@ impl Cache {
             *c += 1;
             if *c == VOLATILE_AFTER { self.volatile.insert(page); self.stats.volatile_pages += 1; }
         }
-        if self.natives.contains(&pc) { return Ok(Found::Native); }
+        if self.is_native(pc) { return Ok(Found::Native); }
         if !self.volatile.is_empty() && self.volatile.contains(&page) { return Ok(Found::Interp); }
         self.decode(mem, pc, idx)
+    }
+
+    /// Tier 2's superblocks: append to `out` the block `decode` would cut at `pc` (same rules: up to the first terminal
+    /// instruction, the page end, the instruction before a bound native or one that cannot be fetched; never `sc`) if pc
+    /// is on a non-volatile page whose generation is still `gen` and the block has at most `room` instructions. Nothing
+    /// is cached; false (and `out` unchanged) otherwise.
+    pub(crate) fn peek(&self, mem: &GuestMem, pc: u32, gen: u64, room: usize, out: &mut Vec<Op>) -> bool {
+        let page = mem.strip(pc) >> CODE_PAGE_SHIFT;
+        if room == 0 || mem.code_gen(pc) != gen || self.natives.contains(&pc) || self.volatile.contains(&page) { return false; }
+        let page_end = (pc | (PAGE - 1)).wrapping_add(1);
+        let stop = self.natives.range(pc.wrapping_add(4)..).next().copied().filter(|&n| n < page_end || page_end == 0).unwrap_or(page_end);
+        let start = out.len();
+        let mut a = pc;
+        loop {
+            let Ok(word) = mem.read_u32(a) else { break };
+            let op = decode(a, word);
+            if op.k == K::Sc { break; }
+            if out.len() - start == room { out.truncate(start); return false; }
+            out.push(op);
+            a = a.wrapping_add(4);
+            if op.terminal() || a == stop || a == 0 { break; }
+        }
+        out.len() > start
     }
 
     fn decode(&mut self, mem: &mut GuestMem, pc: u32, idx: usize) -> Result<Found, Trap> {
