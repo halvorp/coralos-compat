@@ -4,7 +4,7 @@
 //! of the key; the three selectors Inside Macintosh VI lists with a zero size byte are tabled below. Facts: AMS `ams-snd`
 //! `SoundDispatch.cc` (D0 low word = API, high word = call), systemless `trap/sound.rs` (the routine / frame table, read as facts).
 //!
-//! Implemented: `SndSoundManagerVersion` (reports 3.0, final), `UnsignedFixedMulDiv`, `SndChannelStatus`, `SndGetSysBeepState`,
+//! Implemented: `GetSoundHeaderOffset`, `SndSoundManagerVersion` (reports 3.0, final), `UnsignedFixedMulDiv`, `SndChannelStatus`, `SndGetSysBeepState`,
 //! `SndSetSysBeepState`, `GetSysBeepVolume`, `SetSysBeepVolume`, `GetDefaultOutputVolume`, `SetDefaultOutputVolume`. Any other selector pops
 //! its frame (so the program's stack stays whole) and is refused by name: its OSErr slot is left untouched.
 use super::*;
@@ -17,7 +17,7 @@ fn zero_size_params(d0: u32) -> Option<u32> {
 fn name_of(routine: u32, words: u32) -> &'static str {
     match (routine, words) {
         (0x00, 13) => "SndStartFilePlay", (0x04, 2) => "SndPauseFilePlay", (0x08, 3) => "SndStopFilePlay", (0x10, _) => "SndChannelStatus", (0x14, _) => "SndManagerStatus",
-        (0x20, _) => "SndPlayDoubleBuffer", (0x18, 5) => "SPBOpenDevice", (0x04, 4) => "GetSoundHeaderOffset", (0x08, 1) => "SndGetInfo/SndSetInfo family", _ => "an unnamed routine",
+        (0x20, _) => "SndPlayDoubleBuffer", (0x18, 5) => "SPBOpenDevice", (0x08, 1) => "SndGetInfo/SndSetInfo family", _ => "an unnamed routine",
     }
 }
 
@@ -41,25 +41,16 @@ pub fn sound_dispatch<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, regs: &mut Regs
         }
         (0x10, _, 0x0008) => {
             let (status, len, chan) = (arg32(m, 0)?, m.mem.read_u16(sp + 4).map_err(&e)? as i16, arg32(m, 6)?);
-            let err = match m.snd_key(chan) {
-                None => BAD_CHANNEL,
-                Some(_) if len < 24 => PARAM_ERR,
-                Some(key) => {
-                    let (streams, paused) = m.snd.chans.get(&key).map(|c| (c.streams.iter().map(|s| s.r).collect::<Vec<_>>(), c.paused)).unwrap_or_default();
-                    let busy = streams.iter().any(|s| m.ui.audio_queued_bytes(*s).is_ok_and(|n| n > 0));
-                    // SCStatus, 24 bytes: scStartTime, scEndTime, scCurrentTime, scChannelBusy, scChannelDisposed, scChannelPaused,
-                    // scUnused, scChannelAttributes, scCPULoad. The three times are REFUSED BY NAME below: what clock they count and
-                    // from when is not documented in a source we have, so the engine does not invent one; they read 0.
-                    let mut rec = [0u8; 24];
-                    rec[12] = u8::from(busy);
-                    rec[14] = u8::from(paused);
-                    m.mem.write_bytes(status, &rec).map_err(Refusal::mem("SCStatus"))?;
-                    NO_ERR
-                }
-            };
+            let err = m.snd_channel_status(chan, len, status)?;
             ret_w(m, cpu, err as u16)?;
-            if err == NO_ERR { m.note_refusal("SndChannelStatus", String::from("scStartTime, scEndTime and scCurrentTime are not modelled (they read 0); scChannelBusy and scChannelPaused are real")); }
             format!("SndChannelStatus {chan:#x} -> {err}")
+        }
+        // GetSoundHeaderOffset(sndHandle, VAR offset): selector $04040018 (Universal Interfaces Sound.h); the routine byte $04 is also file-play pause
+        (0x04, 4, 0x0018) => {
+            let (out, h) = (arg32(m, 0)?, arg32(m, 4)?);
+            let err = m.snd_get_header_offset(h, out)?;
+            ret_w(m, cpu, err as u16)?;
+            format!("GetSoundHeaderOffset {h:#x} -> {err}")
         }
         (0x18, 0, 0x0008) | (0x18, _, 0x0008) => {
             let p = arg32(m, 0)?;

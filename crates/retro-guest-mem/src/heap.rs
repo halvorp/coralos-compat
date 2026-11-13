@@ -18,15 +18,18 @@ impl Heap {
         let s = (start + GRAIN - 1) & !(GRAIN - 1);
         Heap { free: BTreeMap::from([(s, end - s)]), live: BTreeMap::new() }
     }
+    /// The bytes a request of `size` takes: rounded up to the grain, at least one grain. None = the sum overflows.
+    fn rounded(size: u32) -> Option<u32> { Some((size.checked_add(GRAIN - 1)? & !(GRAIN - 1)).max(GRAIN)) }
     /// Add a free region `[start, start + len)` (memory that did not exist when the heap was made). It must not overlap anything the heap knows.
     pub fn add_region(&mut self, start: u32, len: u32) {
         let s = (start + GRAIN - 1) & !(GRAIN - 1);
         let len = len.saturating_sub(s - start) & !(GRAIN - 1);
         if len > 0 { self.free.insert(s, len); }
     }
-    /// First fit; None = no block large enough (AllocMem's NULL, a legitimate answer).
+    /// First fit; None = no block large enough (AllocMem's NULL, a legitimate answer). A zero-byte request is one grain: a block with its
+    /// own address that `free(at, 0)` returns, never an address shared with the next block.
     pub fn alloc(&mut self, size: u32) -> Option<u32> {
-        let want = size.checked_add(GRAIN - 1)? & !(GRAIN - 1);
+        let want = Self::rounded(size)?;
         let (&at, &len) = self.free.iter().find(|(_, &l)| l >= want)?;
         self.free.remove(&at);
         if len > want { self.free.insert(at + want, len - want); }
@@ -35,7 +38,7 @@ impl Heap {
     }
     /// Return a block. Refused unless `at` is a live block whose rounded size is `size`'s.
     pub fn free(&mut self, at: u32, size: u32) -> Result<(), String> {
-        let want = size.checked_add(GRAIN - 1).ok_or("size overflows")? & !(GRAIN - 1);
+        let want = Self::rounded(size).ok_or("size overflows")?;
         match self.live.get(&at) {
             None => return Err(format!("{at:#x} is not a block this heap allocated")),
             Some(&l) if l != want => return Err(format!("{at:#x} is a {l}-byte block, freed as {size}")),
@@ -72,5 +75,15 @@ mod tests {
         assert!(h.alloc(0x1001).is_none(), "too large is NULL, not a panic");
         assert_eq!(h.live_blocks(), 0);
     }
-}
 
+    #[test]
+    fn a_zero_byte_request_is_one_distinct_freeable_grain_never_a_shared_address() {
+        let mut h = Heap::new(0x1000, 0x2000);
+        let (a, b) = (h.alloc(0).unwrap(), h.alloc(0).unwrap());
+        assert_ne!(a, b, "two live zero-byte blocks must not share an address");
+        assert_eq!(h.live_blocks(), 2);
+        h.free(a, 0).unwrap();
+        h.free(b, 0).unwrap();
+        assert_eq!((h.live_blocks(), h.available(true)), (0, 0x1000), "both came back and coalesced");
+    }
+}

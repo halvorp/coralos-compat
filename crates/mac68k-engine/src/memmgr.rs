@@ -251,4 +251,22 @@ mod tests {
         assert_eq!(block_move(&mut mem, 0x10, 0xFFFF_0000, 4), Err(MEM_WZ_ERR));
         assert_eq!(block_move(&mut mem, 0xFFFF_0000, 0x10, 4), Err(MEM_WZ_ERR));
     }
+
+    #[test]
+    fn a_zero_byte_pointer_is_valid_distinct_and_disposable_and_a_handle_resizes_to_zero_and_back() {
+        // Inside Macintosh: NewPtr(0) is not an error; the pointer is valid, and DisposePtr returns it.
+        let (mut mm, mut mem, mut heap) = world();
+        let (a, b) = (mm.new_ptr(&mut mem, &mut heap, 0, false).unwrap(), mm.new_ptr(&mut mem, &mut heap, 0, true).unwrap());
+        assert!(a != 0 && b != 0 && a != b, "valid and distinct: {a:#x} {b:#x}");
+        assert_eq!((mm.ptr_size(a), mm.ptr_size(b)), (Ok(0), Ok(0)));
+        mm.dispose_ptr(&mut heap, a).unwrap();
+        mm.dispose_ptr(&mut heap, b).unwrap();
+        assert_eq!(mm.dispose_ptr(&mut heap, b), Err(MEM_WZ_ERR), "NEGATIVE: a second dispose is refused by name, not absorbed");
+        let h = mm.new_handle(&mut mem, &mut heap, 6, false).unwrap();
+        mm.set_handle_size(&mut mem, &mut heap, h, 0).unwrap();
+        assert_eq!(mm.handle_size(h), Ok(0));
+        assert_ne!(mem.read_u32(h).unwrap(), 0, "a zero-length handle still points at a block");
+        mm.set_handle_size(&mut mem, &mut heap, h, 6).unwrap();
+        mm.dispose_handle(&mut mem, &mut heap, h).unwrap();
+    }
 }

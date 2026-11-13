@@ -13,6 +13,7 @@
 //! ```
 use crate::Refusal;
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use guestui_abi::AudioFormat;
 
@@ -111,8 +112,41 @@ pub fn decode_header(h: &[u8], external: impl Fn(u32, u32) -> Option<Vec<u8>>) -
                 other => Err(bad(&format!("{other}-bit samples (8 and 16 are framed)"))),
             }
         }
-        0xFE => Err(bad("a compressed sound header (MACE or IMA): no decompressor is modelled")),
+        0xFE => decode_compressed(h, sample_ptr, len_or_chans, rate_hz, loop_frames, external),
         other => Err(bad(&format!("encode byte {other:#04x} is not standard (0), extended ($FF) or compressed ($FE)"))),
+    }
+}
+
+/// The compressed sound header (`CmpSoundHeader`, 64 bytes: numFrames 22, format 40, compressionID 56, sampleSize 62, samples 64). Its
+/// UNCOMPRESSED formats are PCM with a different byte order and are framed here: `NONE`, `raw ` (offset binary), `twos` (signed big-endian)
+/// and `sowt` (signed little-endian). Every real codec -- MACE 3:1 / 6:1, IMA, u-law, ... -- is refused BY NAME: a codec goes through a
+/// datatype boundary, never through the engine.
+fn decode_compressed(h: &[u8], sample_ptr: u32, channels: u32, rate_hz: u32, loop_frames: Option<(u32, u32)>, external: impl Fn(u32, u32) -> Option<Vec<u8>>) -> Result<Sound, Refusal> {
+    let bad = |why: &str| Refusal(format!("sound header: {why}"));
+    let short = || bad("a compressed sound header shorter than its 64-byte fixed part");
+    let (frames, comp_id, size) = (be32(h, 22).ok_or_else(short)?, be16(h, 56).ok_or_else(short)? as i16, be16(h, 62).ok_or_else(short)?);
+    let fmt: [u8; 4] = h.get(40..44).ok_or_else(short)?.try_into().map_err(|_| short())?;
+    let codec = match (&fmt, comp_id) {
+        (b"MAC3", _) | (_, 3) => Some(String::from("MACE 3:1")),
+        (b"MAC6", _) | (_, 4) => Some(String::from("MACE 6:1")),
+        (b"NONE" | b"raw " | b"twos" | b"sowt", 0 | -1) => None,
+        _ => Some(format!("format {:?} (compressionID {comp_id})", String::from_utf8_lossy(&fmt))),
+    };
+    if let Some(name) = codec { return Err(bad(&format!("a compressed sound header: {name} is a codec and no decompressor is modelled"))); }
+    if !(1..=2).contains(&channels) { return Err(bad(&format!("{channels} channels (the seam plays mono and stereo)"))); }
+    if size != 8 && size != 16 { return Err(bad(&format!("{size}-bit samples (8 and 16 are framed)"))); }
+    let bytes = u64::from(frames) * u64::from(channels) * u64::from(size / 8);
+    let bytes = u32::try_from(bytes).map_err(|_| bad(&format!("{frames} frames of {channels} channels do not fit a 32-bit length")))?;
+    let mut raw = if sample_ptr == 0 { h.get(64..64 + bytes as usize).map(<[u8]>::to_vec).ok_or_else(|| bad("the compressed header's samples run past the end of the resource"))? }
+                  else { external(sample_ptr, bytes).ok_or_else(|| bad(&format!("samplePtr {sample_ptr:#x} is not readable memory")))? };
+    let signed_be = matches!(&fmt, b"NONE" | b"twos");
+    if size == 16 {
+        if signed_be { for s in raw.chunks_exact_mut(2) { s.swap(0, 1); } } // sowt is already little-endian
+        Ok(Sound { rate_hz, channels: channels as u8, format: AudioFormat::S16Le, pcm: raw, loop_frames })
+    } else {
+        // 8-bit: `raw ` and NONE are offset binary (the seam's U8); `twos` / `sowt` are signed, so the sign bit flips
+        if matches!(&fmt, b"twos" | b"sowt") { for b in raw.iter_mut() { *b ^= 0x80; } }
+        Ok(Sound { rate_hz, channels: channels as u8, format: AudioFormat::U8, pcm: raw, loop_frames })
     }
 }
 

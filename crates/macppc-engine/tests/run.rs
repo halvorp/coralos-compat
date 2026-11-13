@@ -93,7 +93,8 @@ fn closing_the_window_ends_the_run_through_findwindow_trackgoaway_sysbeep_exitto
     assert_eq!(step, Step::Exited, "{:#?}\nfault: {:?}", m.mac.log, m.fault());
     let log = m.mac.log.join("\n");
     assert!(log.contains("part 6"), "FindWindow said inGoAway: {log}");
-    assert!(log.contains("SysBeep duration 1 (logged only"), "{log}");
+    assert!(log.contains("SysBeep (duration 1: ignored"), "the beep is played, not logged only: {log}");
+    assert!(m.mac.ui.audio.values().any(|a| !a.queued.is_empty()), "the beep reached the audio seam");
     assert!(log.trim_end().ends_with("ExitToShell"), "{log}");
     assert!(m.mac.refused.is_empty(), "{:?}", m.mac.refused);
     // once exited, stepping again says so

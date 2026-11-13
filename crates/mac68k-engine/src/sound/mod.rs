@@ -11,7 +11,7 @@
 //!   compressed header (MACE / IMA) is refused by name: that is a codec, which will go through a datatype boundary, never the engine. A host with no audio service refuses
 //!   `open_audio_stream`, and then `SndNewChannel` answers `notEnoughHardware` (-201), as a Mac without sound hardware does.
 //! * **Traps**: `SndNewChannel` ($A807), `SndDisposeChannel` ($A801), `SndAddModifier` ($A802, refused: no modifier code is
-//!   modelled), `SndDoCommand` ($A803), `SndDoImmediate` ($A804), `SndPlay` ($A805), `SndControl` ($A806, refused), `SysBeep` ($A9C8)
+//!   modelled), `SndDoCommand` ($A803), `SndDoImmediate` ($A804), `SndPlay` ($A805), `SndControl` ($A806, [`api`]), `SysBeep` ($A9C8)
 //!   and `SoundDispatch` ($A800, [`dispatch`]).
 //! * **Commands**: `nullCmd`, `quietCmd`, `flushCmd`, `pauseCmd`, `resumeCmd`, `rateCmd`, `volumeCmd`, `soundCmd`, `bufferCmd`.
 //!   Every other command is refused BY NAME, none succeeds silently. NAMED LIMITS: `syncCmd` / `waitCmd` (a timed wait) are refused (`callBackCmd` runs the channel's routine: callback.rs); compressed (MACE /
@@ -20,6 +20,7 @@
 //!   played (the engine is not real-time: `SndChannelStatus` says `scChannelBusy` from the host's own queue length).
 //! * **`SndDisposeChannel(.., quietNow = FALSE)`** lets what is queued play out: its streams go on a draining list the next sound call
 //!   reaps once the host reports them idle. `quietNow` TRUE flushes first.
+pub mod api;
 pub mod callback;
 pub mod dispatch;
 pub mod snd;
@@ -33,6 +34,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use guestui_abi::{AudioFormat, AudioStreamModel, AudioStreamRef, GuestUi, UiRefusal, AUDIO_UNITY};
 use retro_m68k::Cpu;
+use retro_common::bytes::{be16, be32};
 use snd::Cmd;
 
 pub const NO_ERR: i16 = 0;
@@ -111,7 +113,7 @@ impl<U: GuestUi> Mac<U> {
         let Some(c) = self.snd.chans.get(&key) else { return Ok(()) };
         let (l, r) = c.volume.unwrap_or((AUDIO_UNITY, AUDIO_UNITY));
         let gain = |own: u16, m: u32| ((u32::from(own) * (m & 0xFFFF).min(u32::from(AUDIO_UNITY))) / u32::from(AUDIO_UNITY)) as u16;
-        let (gl, gr) = (gain(l, master & 0xFFFF), gain(r, master >> 16));
+        let (gl, gr) = (self.snd_legacy_scale(gain(l, master & 0xFFFF)), self.snd_legacy_scale(gain(r, master >> 16)));
         let streams: Vec<AudioStreamRef> = c.streams.iter().map(|s| s.r).collect();
         for s in streams { self.ui.set_audio_volume(s, gl, gr)?; }
         Ok(())
@@ -159,12 +161,12 @@ impl<U: GuestUi> Mac<U> {
     fn snd_read_header(&self, addr: u32) -> Result<snd::Sound, Refusal> {
         let e = Refusal::mem("sound header");
         let head = self.mem.bytes(self.mem.span(addr, 64.min((self.mem.len() as u32).saturating_sub(self.mem.strip(addr)))).map_err(&e)?).map_err(&e)?.to_vec();
+        // every field is read through a bounds-checked reader: a header cut off by the end of RAM is a refusal, never an index panic
+        let (w32, w16) = (|at: usize| be32(&head, at).unwrap_or(0), |at: usize| u32::from(be16(&head, at).unwrap_or(0)));
         let total = match head.get(20) {
-            Some(0xFF) => {
-                let (ch, frames, size) = (u32::from_be_bytes([head[4], head[5], head[6], head[7]]), u32::from_be_bytes([head[22], head[23], head[24], head[25]]), u32::from(u16::from_be_bytes([head[48], head[49]])));
-                64 + ch.saturating_mul(frames).saturating_mul(size / 8) as usize
-            }
-            Some(_) => 22 + u32::from_be_bytes([head[4], head[5], head[6], head[7]]) as usize,
+            Some(0xFF) => 64 + w32(4).saturating_mul(w32(22)).saturating_mul(w16(48) / 8) as usize,
+            Some(0xFE) => 64 + w32(4).saturating_mul(w32(22)).saturating_mul(w16(62) / 8) as usize,
+            Some(_) => 22 + w32(4) as usize,
             None => return Err(Refusal(String::from("sound header: shorter than its encode byte"))),
         };
         let bytes = self.mem.bytes(self.mem.span(addr, total.min((self.mem.len() as u32).saturating_sub(self.mem.strip(addr)) as usize) as u32).map_err(&e)?).map_err(&e)?.to_vec();
@@ -330,22 +332,30 @@ fn snd_unmodelled<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<D
 /// `PROCEDURE SysBeep(duration: INTEGER)`: a short beep through a stream of its own, at the system beep volume; muted when the program
 /// turned the beep off with `SndSetSysBeepState`. A host without audio is logged, not hidden (the call has no result).
 fn sys_beep<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    m.snd_reap();
-    if m.snd.beep_state.unwrap_or(1) == 0 { return Ok(Done { result: 0, log: String::from("[sound] SysBeep (the system beep is off)") }); }
-    let f = Fmt { rate: 22_254, channels: 1, format: AudioFormat::U8 };
-    let stream = match m.snd.beep {
-        Some(s) => s,
-        None => match m.snd_open(f, "System beep") {
-            Ok(s) => { m.snd.beep = Some(s); s }
-            Err(UiRefusal::Unsupported(w)) => return Ok(Done { result: 0, log: format!("[sound] SysBeep: no audio out in this host ({w}); the beep is silent") }),
-            Err(e) => return Err(Refusal(format!("SysBeep: the host refused the audio stream: {e:?}"))),
-        },
-    };
-    let v = m.snd.sys_beep_volume.unwrap_or(FULL_VOLUME);
-    let (l, r) = (((v & 0xFFFF) as u16).min(AUDIO_UNITY), ((v >> 16) as u16).min(AUDIO_UNITY));
-    m.ui.set_audio_volume(stream, l, r).map_err(|e| Refusal(format!("SysBeep: {e:?}")))?;
-    m.ui.queue_audio(stream, &snd::beep(800, 150, 22_254)).map_err(|e| Refusal(format!("SysBeep: {e:?}")))?;
-    Ok(Done { result: 0, log: format!("[sound] SysBeep (duration {}: ignored, as a System 7 Mac does) 800 Hz 150 ms", c.args.get(0) as i16) })
+    let log = m.snd_sys_beep(c.args.get(0) as i16)?;
+    Ok(Done { result: 0, log })
+}
+
+impl<U: GuestUi> Mac<U> {
+    /// `SysBeep(duration)` in value form (the 68k trap and the PowerPC import both call it); the returned text is the log line.
+    pub fn snd_sys_beep(&mut self, duration: i16) -> Result<String, Refusal> {
+        self.snd_reap();
+        if self.snd.beep_state.unwrap_or(1) == 0 { return Ok(String::from("[sound] SysBeep (the system beep is off)")); }
+        let f = Fmt { rate: 22_254, channels: 1, format: AudioFormat::U8 };
+        let stream = match self.snd.beep {
+            Some(s) => s,
+            None => match self.snd_open(f, "System beep") {
+                Ok(s) => { self.snd.beep = Some(s); s }
+                Err(UiRefusal::Unsupported(w)) => return Ok(format!("[sound] SysBeep: no audio out in this host ({w}); the beep is silent")),
+                Err(e) => return Err(Refusal(format!("SysBeep: the host refused the audio stream: {e:?}"))),
+            },
+        };
+        let v = self.snd.sys_beep_volume.unwrap_or(FULL_VOLUME);
+        let (l, r) = (self.snd_legacy_scale(((v & 0xFFFF) as u16).min(AUDIO_UNITY)), self.snd_legacy_scale(((v >> 16) as u16).min(AUDIO_UNITY)));
+        self.ui.set_audio_volume(stream, l, r).map_err(|e| Refusal(format!("SysBeep: {e:?}")))?;
+        self.ui.queue_audio(stream, &snd::beep(800, 150, 22_254)).map_err(|e| Refusal(format!("SysBeep: {e:?}")))?;
+        Ok(format!("[sound] SysBeep (duration {duration}: ignored, as a System 7 Mac does) 800 Hz 150 ms"))
+    }
 }
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
@@ -355,7 +365,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA804, &[Arg::P, Arg::P], Some(Arg::W), snd_do_immediate::<U>)?;
     m.register(0xA805, &[Arg::P, Arg::P, Arg::B], Some(Arg::W), snd_play::<U>)?;
     m.register(0xA802, &[Arg::P, Arg::L, Arg::W, Arg::L], Some(Arg::W), snd_unmodelled::<U>)?;
-    m.register(0xA806, &[Arg::W, Arg::P], Some(Arg::W), snd_unmodelled::<U>)?;
+    m.register(0xA806, &[Arg::W, Arg::P], Some(Arg::W), api::snd_control_trap::<U>)?;
     m.register(0xA9C8, &[Arg::W], None, sys_beep::<U>)?;
     m.register_os(0xA800, dispatch::sound_dispatch::<U>)
 }

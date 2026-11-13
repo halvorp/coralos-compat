@@ -250,6 +250,14 @@ impl<U: GuestUi> Host for MacPpc<U> {
                 Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
             }
         }
+        // ... and so does a Sound Manager completion routine whose sound has played (snd_c)
+        if symbol != crate::callback::CALLBACK_RETURN {
+            match self.snd_safepoint(cpu, addr) {
+                Ok(true) => { self.sync_natives(cpu); return true; }
+                Ok(false) => {}
+                Err(why) => { self.rt.fault = Some(why); cpu.halt(); return true; }
+            }
+        }
         if let Some(Binding::Native(Native::Invoke(f))) = self.bindings.get(&symbol).cloned() {
             if let Err(why) = self.begin_invoke(cpu, f) { self.rt.fault = Some(why); cpu.halt(); }
             self.sync_natives(cpu);

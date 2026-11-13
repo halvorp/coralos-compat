@@ -14,6 +14,10 @@ use crate::guestcall::{Frame, TRAMPOLINE};
 use crate::vbl::VblDone;
 use guestui_abi::UiObjectRef;
 
+/// A completion routine that is due: the channel, the routine (a ProcPtr for the 68k, a routine descriptor for PowerPC) and the `SndCommand` it is called with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DueCallback { pub chan: u32, pub routine: u32, pub cmd: u32 }
+
 #[derive(Debug, Clone)]
 pub struct Pending { chan: u32, routine: u32, p1: i16, p2: u32, waits: Vec<(UiObjectRef, u64)> }
 
@@ -34,28 +38,42 @@ impl<U: GuestUi> Mac<U> {
         }
     }
 
-    /// At a trap boundary: if a completion routine is due, enter it (and run the trap at `retry` afterwards). True = entered.
-    pub(crate) fn enter_sound_callback(&mut self, cpu: &mut retro_m68k::Cpu, retry: u32) -> bool {
-        if self.snd.pending.is_empty() || self.snd.in_callback { return false; }
+    /// If a completion routine is due (what it waited on has played, its channel is alive, none is already running), take it: the command record
+    /// it is called with is allocated and `in_callback` set. The processor-specific adapters ([`enter_sound_callback`](Self::enter_sound_callback)
+    /// for the 68k, the PowerPC engine's safepoint) call the routine; both end in [`finish_snd_callback`](Self::finish_snd_callback). Due routines
+    /// are taken in the order the guest queued them.
+    pub fn snd_take_due(&mut self) -> Option<DueCallback> {
+        if self.snd.pending.is_empty() || self.snd.in_callback { return None; }
         let mut due = None;
         for i in 0..self.snd.pending.len() {
             let waits = self.snd.pending[i].waits.clone();
             if waits.into_iter().all(|(r, t)| self.snd_played(r, t)) { due = Some(i); break; }
         }
-        let Some(i) = due else { return false };
-        let p = self.snd.pending.remove(i);
-        if !self.snd.chans.contains_key(&p.chan) { return false; } // disposed meanwhile: dropped
-        let Ok(cmd) = self.mm.new_ptr(&mut self.mem, &mut self.heap, 8, true) else { return false };
+        let p = self.snd.pending.remove(due?);
+        if !self.snd.chans.contains_key(&p.chan) { return None; } // disposed meanwhile: dropped
+        let cmd = self.mm.new_ptr(&mut self.mem, &mut self.heap, 8, true).ok()?;
         let _ = self.mem.write_u16(cmd, snd::CALL_BACK_CMD).and_then(|_| self.mem.write_u16(cmd + 2, p.p1 as u16)).and_then(|_| self.mem.write_u32(cmd + 4, p.p2));
+        self.snd.in_callback = true;
+        self.log.push(format!("[sound] callBack routine {:#x} runs (channel {:#x}, param1 {}, param2 {:#x})", p.routine, p.chan, p.p1, p.p2));
+        Some(DueCallback { chan: p.chan, routine: p.routine, cmd })
+    }
+
+    /// The routine returned (or could not be entered): free its command record and let the next due routine run.
+    pub fn finish_snd_callback(&mut self, cmd: u32) {
+        let _ = self.mm.dispose_ptr(&mut self.heap, cmd);
+        self.snd.in_callback = false;
+    }
+
+    /// At a trap boundary: if a completion routine is due, enter it (and run the trap at `retry` afterwards). True = entered.
+    pub(crate) fn enter_sound_callback(&mut self, cpu: &mut retro_m68k::Cpu, retry: u32) -> bool {
+        let Some(d) = self.snd_take_due() else { return false };
         let mut regs = [0u32; 15];
         for (k, r) in regs.iter_mut().enumerate() { *r = if k < 8 { cpu.dreg(k as u32) } else { cpu.areg(k as u32 - 8) }; }
         let mut sp = cpu.areg(7);
-        for v in [retry, p.chan, cmd, TRAMPOLINE] { sp = sp.wrapping_sub(4); let _ = self.mem.write_u32(sp, v); }
+        for v in [retry, d.chan, d.cmd, TRAMPOLINE] { sp = sp.wrapping_sub(4); let _ = self.mem.write_u32(sp, v); }
         cpu.set_areg(7, sp);
-        self.snd.in_callback = true;
-        self.call_stack.push(Frame::SndCallBack(VblDone { regs, sr: cpu.sr() }, cmd));
-        self.log.push(format!("[sound] callBack routine {:#x} runs (channel {:#x}, param1 {}, param2 {:#x}) before the trap at {retry:#x}", p.routine, p.chan, p.p1, p.p2));
-        cpu.set_pc(self.mem.strip(p.routine));
+        self.call_stack.push(Frame::SndCallBack(VblDone { regs, sr: cpu.sr() }, d.cmd));
+        cpu.set_pc(self.mem.strip(d.routine));
         true
     }
 
@@ -63,7 +81,6 @@ impl<U: GuestUi> Mac<U> {
     pub(crate) fn finish_sound_callback(&mut self, cpu: &mut retro_m68k::Cpu, done: VblDone, cmd: u32) {
         for (i, v) in done.regs.iter().enumerate() { if i < 8 { cpu.set_dreg(i as u32, *v) } else { cpu.set_areg(i as u32 - 8, *v) } }
         cpu.set_sr(done.sr);
-        let _ = self.mm.dispose_ptr(&mut self.heap, cmd);
-        self.snd.in_callback = false;
+        self.finish_snd_callback(cmd);
     }
 }

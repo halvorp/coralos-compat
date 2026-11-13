@@ -68,6 +68,8 @@ pub enum Native { StandardAlert, GetSharedLibrary, FindSymbol, CloseConnection, 
     Cfx(crate::cf_more::CfxFn),
     /// A Menu Manager Carbon accessor ([`crate::menu_c`]).
     Mn(crate::menu_c::MnFn),
+    /// Sound Manager routines with no trap, and completion routines ([`crate::snd_c`]).
+    Snd(crate::snd_c::SndFn),
     /// DM screen devices, the machine location, DebugStr ([`crate::sysmisc_c`]).
     Sys(crate::sysmisc_c::SysFn),
     /// DrawSprocket, windowed ([`crate::dsp_c`]).
@@ -132,6 +134,7 @@ impl Native {
             n if crate::ae_c::AeFn::by_name(n).is_some() => Native::Ae(crate::ae_c::AeFn::by_name(n).expect("checked")),
             n if crate::pb::PbCall::by_name(n).is_some() => Native::Pb(crate::pb::PbCall::by_name(n).expect("checked")),
             n if crate::menu_c::MnFn::by_name(n).is_some() => Native::Mn(crate::menu_c::MnFn::by_name(n).expect("checked")),
+            n if crate::snd_c::SndFn::by_name(n).is_some() => Native::Snd(crate::snd_c::SndFn::by_name(n).expect("checked")),
             n if crate::sysmisc_c::SysFn::by_name(n).is_some() => Native::Sys(crate::sysmisc_c::SysFn::by_name(n).expect("checked")),
             n if crate::dsp_c::DspFn::by_name(n).is_some() => Native::Dsp(crate::dsp_c::DspFn::by_name(n).expect("checked")),
             n if crate::tm_c::TmFn::by_name(n).is_some() => Native::Tm(crate::tm_c::TmFn::by_name(n).expect("checked")),

@@ -21,6 +21,7 @@ pub const TICKS: u32 = 0x16A; // long: 60 Hz tick count
 pub const MB_STATE: u32 = 0x172; // byte: mouse button state, bit 7 SET = button up
 pub const LO_3_BYTES: u32 = 0x31A; // long: $00FFFFFF, the mask 24-bit code applies to a pointer or block size
 pub const MEM_ERR: u32 = 0x220; // short: the last Memory Manager result
+pub const SD_VOLUME: u32 = 0x260; // byte: the legacy speaker level, bits 0-2 (0-7)
 pub const ROM85: u32 = 0x28E; // short: ROM generation, $7FFF on a Plus, $3FFF on color-era ROMs (profile.rs)
 pub const SYS_ZONE: u32 = 0x2A6; // THz
 pub const APPL_ZONE: u32 = 0x2AA; // THz
@@ -60,7 +61,7 @@ pub type Global = (u32, u32, &'static str);
 /// Every global the engine initialises or maintains, ascending and non-overlapping.
 pub static MAP: &[Global] = &[
     (SCREEN_ROW, 2, "ScreenRow"), (MEM_TOP, 4, "MemTop"), (BUF_PTR, 4, "BufPtr"), (HEAP_END_G, 4, "HeapEnd"),
-    (THE_ZONE, 4, "TheZone"), (APPL_LIMIT, 4, "ApplLimit"), (TICKS, 4, "Ticks"), (MB_STATE, 1, "MBState"), (TIME, 4, "Time"), (MEM_ERR, 2, "MemErr"), (ROM85, 2, "ROM85"),
+    (THE_ZONE, 4, "TheZone"), (APPL_LIMIT, 4, "ApplLimit"), (TICKS, 4, "Ticks"), (MB_STATE, 1, "MBState"), (TIME, 4, "Time"), (MEM_ERR, 2, "MemErr"), (SD_VOLUME, 1, "SdVolume"), (ROM85, 2, "ROM85"),
     (SYS_ZONE, 4, "SysZone"), (APPL_ZONE, 4, "ApplZone"), (LO_3_BYTES, 4, "Lo3Bytes"), (SCRN_BASE, 4, "ScrnBase"), (RAW_MOUSE, 4, "RawMouse"), (MOUSE, 4, "Mouse"), (CRSR_PIN, 8, "CrsrPin"), (MAIN_DEVICE, 4, "MainDevice"), (DEVICE_LIST, 4, "DeviceList"),
     (CUR_AP_REF_NUM, 2, "CurApRefNum"), (CURRENT_A5, 4, "CurrentA5"), (CUR_STACK_BASE, 4, "CurStackBase"),
     (CUR_AP_NAME, 32, "CurApName"), (CUR_JT_OFFSET, 2, "CurJTOffset"), (WINDOW_LIST, 4, "WindowList"), (WMGR_PORT, 4, "WMgrPort"), (DESK_PORT, 4, "DeskPort"), (GRAY_RGN, 4, "GrayRgn"),
@@ -115,6 +116,7 @@ pub fn init(mem: &mut GuestMem) -> Result<(), Refusal> {
     for (i, v) in [0, 0, SCREEN_H, SCREEN_W].into_iter().enumerate() { mem.write_u16(CRSR_PIN + 2 * i as u32, v as u16).map_err(&e)?; }
     mem.write_u8(MB_STATE, 0x80).map_err(&e)?; // button up
     mem.write_u32(TIME, crate::clock::DEFAULT_BOOT_SECS).map_err(&e)?;
+    mem.write_u8(SD_VOLUME, 7).map_err(&e)?; // full speaker volume, as a freshly set-up Mac
     mem.write_u32(LO_3_BYTES, 0x00FF_FFFF).map_err(&e)?;
     mem.write_u16(RES_LOAD, 0x0100).map_err(&e)?; // ResLoad = TRUE (Boolean in the high byte)
     mem.write_u16(MBAR_HEIGHT, MENU_BAR_HEIGHT as u16).map_err(&e)

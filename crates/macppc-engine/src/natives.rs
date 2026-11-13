@@ -58,10 +58,11 @@ impl<U: GuestUi> MacPpc<U> {
         match n {
             Native::Exit => { self.mac.log.push("[toolbox] ExitToShell".into()); GlueOutcome::Exit }
             Native::SysBeep => {
-                // SysBeep(short duration): the GuestUi trait has no beep or sound call, so it is LOGGED, not played; the call
-                // is accepted so programs that beep when they finish keep running. Missing piece: a UI-side beep event.
-                self.mac.log.push(format!("[toolbox] SysBeep duration {} (logged only: GuestUi has no beep)", a(0) as u16 as i16));
-                GlueOutcome::Return
+                // SysBeep(short duration): a beep on the audio seam, at the system beep volume; a host without audio is named in the log, not hidden
+                match self.mac.snd_sys_beep(a(0) as u16 as i16) {
+                    Ok(line) => { self.mac.log.push(line); GlueOutcome::Return }
+                    Err(e) => GlueOutcome::Refused(e.0),
+                }
             }
             Native::InitDone => GlueOutcome::Return,
             Native::NewRoutineDescriptor | Native::NewFatRoutineDescriptor => {
@@ -172,6 +173,11 @@ impl<U: GuestUi> MacPpc<U> {
                 let mut cpu = retro_ppc::Cpu::new(0, regs[1]);
                 cpu.gpr = *regs;
                 match self.mn_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
+            }
+            Native::Snd(f) => {
+                let mut cpu = retro_ppc::Cpu::new(0, regs[1]);
+                cpu.gpr = *regs;
+                match self.snd_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
             Native::Sys(f) => {
                 let mut cpu = retro_ppc::Cpu::new(0, regs[1]);

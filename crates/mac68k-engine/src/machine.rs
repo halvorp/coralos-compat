@@ -263,7 +263,7 @@ impl<U: GuestUi> Mac<U> {
         }
     }
 
-    pub(crate) fn note_refusal(&mut self, name: &str, why: String) {
+    pub fn note_refusal(&mut self, name: &str, why: String) {
         self.log.push(format!("[toolbox] {name} REFUSED: {why}"));
         self.refused.push(format!("{name}: {why}"));
     }

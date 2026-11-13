@@ -63,6 +63,9 @@ impl<U: GuestUi> MacPpc<U> {
     fn cfx_new_str(&mut self, b: Vec<u8>) -> u32 { self.cf_make(b) }
     /// UniChars at `p` as bytes: ASCII only (see the module doc).
     fn cfx_unichars(&self, p: u32, n: u32, who: &str) -> Result<Vec<u8>, String> {
+        // The length is the guest's: it is checked against guest RAM BEFORE it sizes a host buffer (a 4-billion-character string is a refusal, not an allocation).
+        let leave = || format!("{who}: the UniChars at {p:#x} leave guest RAM");
+        self.mac.mem.span(p, n.checked_mul(2).ok_or_else(leave)?).map_err(|_| leave())?;
         let mut out = Vec::with_capacity(n as usize);
         for i in 0..n {
             let c = self.mac.mem.read_u16(p.wrapping_add(2 * i)).map_err(|_| format!("{who}: the UniChars at {p:#x} leave guest RAM"))?;
