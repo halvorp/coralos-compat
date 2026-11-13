@@ -586,6 +586,12 @@ fn wc3_host_run_with_a_gl_worker() {
     eprintln!("PPC-TIERS {:?}", m.exec().tiers);
     #[cfg(not(feature = "cpu-library"))]
     {
+        let v = heirloom_cpu_ppc::jit_emit::reg_census(false);
+        let total: u64 = v.iter().map(|x| x.1).sum();
+        eprintln!("REG-CENSUS total={total} {}", v.iter().take(24).map(|(o, n)| format!("{}={:.1}%", heirloom_cpu_ppc::jit_emit::field_name(*o), 100.0 * *n as f64 / total.max(1) as f64)).collect::<Vec<_>>().join(" "));
+    }
+    #[cfg(not(feature = "cpu-library"))]
+    {
         let e = m.exec();
         if let Some(c) = e.jit_helper_census(false) {
             let mut v: Vec<_> = c.iter().map(|(k, n)| (*n, *k)).collect();

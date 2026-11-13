@@ -53,6 +53,8 @@ impl Regs {
 
     /// After the counting pass: the fields a register saves the most memory accesses for (at least one), each with its host
     /// register and whether the entry loads it.
+    /// SCRATCH: every field's uses in the counting pass.
+    pub(crate) fn uses(&self) -> Vec<(usize, u32)> { self.count.as_ref().map(|c| c.iter().map(|u| (u.off, u.read_first as u32 + u.written as u32)).collect()).unwrap_or_default() }
     pub(crate) fn choose(self) -> Vec<(usize, u8, bool)> {
         let saved = |u: &Use| u.uses as i32 - u.read_first as i32 - u.written as i32;
         let mut c = self.count.unwrap_or_default();

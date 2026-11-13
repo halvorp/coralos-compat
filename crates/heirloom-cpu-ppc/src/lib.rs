@@ -54,7 +54,7 @@ mod jit;
 #[cfg(target_arch = "x86_64")]
 mod jit_asm;
 #[cfg(target_arch = "x86_64")]
-mod jit_emit;
+pub mod jit_emit;
 #[cfg(target_arch = "x86_64")]
 mod jit_mem;
 #[cfg(target_arch = "x86_64")]

@@ -83,6 +83,7 @@ impl Exec {
     /// extended opcode). `None` before the JIT ran or when not enabled.
     #[cfg(target_arch = "x86_64")]
     pub fn jit_helper_census(&mut self, enable: bool) -> Option<&alloc::collections::BTreeMap<u32, u64>> {
+        if enable { crate::jit_emit::reg_census(true); }
         let j = self.jit.as_mut()?;
         let c = j.census();
         if enable && c.is_none() { *c = Some(Default::default()); }

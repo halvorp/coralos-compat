@@ -20,6 +20,36 @@ use crate::t1op::{Op, K};
 use alloc::vec::Vec;
 use core::mem::offset_of;
 
+pub(crate) const RC_N: usize = 1 << 21;
+pub(crate) static mut RC_COUNT: [u64; RC_N] = [0; RC_N];
+pub(crate) static mut RC_USES: Vec<Vec<(usize, u32)>> = Vec::new();
+/// SCRATCH: weighted dynamic uses per Cpu field offset; `reset` zeroes the counters.
+pub fn reg_census(reset: bool) -> Vec<(usize, u64)> {
+    unsafe {
+        let c = &mut *core::ptr::addr_of_mut!(RC_COUNT);
+        if reset { c.fill(0); return Vec::new(); }
+        let mut m = alloc::collections::BTreeMap::<usize, u64>::new();
+        for (k, u) in (*core::ptr::addr_of!(RC_USES)).iter().enumerate() {
+            if k >= RC_N { break; }
+            for &(off, n) in u { *m.entry(off).or_default() += n as u64 * c[k]; }
+        }
+        let mut v: Vec<(usize, u64)> = m.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v
+    }
+}
+pub fn field_name(off: usize) -> alloc::string::String {
+    match off {
+        CR => "cr".into(), XER => "xer".into(), LR => "lr".into(), CTR => "ctr".into(),
+        o if o >= gpr(0) as usize && o < gpr(0) as usize + 128 => alloc::format!("r{}", (o - gpr(0) as usize) / 4),
+        o => alloc::format!("off{o}"),
+    }
+}
+fn _rc_unused() {
+    {
+    }
+}
+
 /// Planted mutants for the negative controls (each must make JitLockstep RED). 0 = none.
 pub(crate) const MUT_SUBFIC_CA: u8 = 1;
 pub(crate) const MUT_NO_SO: u8 = 2;
@@ -123,8 +153,12 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     let pins = {
         let mut e = E::new(ops, pc, env, crate::jit_regs::Regs::counting());
         e.body(ops);
+        let u = e.regs.uses();
+        // SCRATCH register census
+        unsafe { (*core::ptr::addr_of_mut!(RC_USES)).push(u); }
         core::mem::replace(&mut e.regs, crate::jit_regs::Regs::pinned(Vec::new())).choose()
     };
+    let k = unsafe { (*core::ptr::addr_of!(RC_USES)).len() - 1 };
     let pinned = pins.len();
     let mut e = E::new(ops, pc, env, crate::jit_regs::Regs::pinned(pins));
     let a = &mut e.a;
@@ -138,6 +172,7 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
     a.lea64(RAX, m(R15, ops.len() as i32));
     a.alu_rm64(Alu::Cmp, RAX, ctx(offset_of!(Ctx, budget)));
     let b1 = a.jcc(Cc::A);
+    if k < RC_N { a.mov_ri64(RAX, unsafe { core::ptr::addr_of!(RC_COUNT[k]) } as u64); a.alu_mi64(Alu::Add, m(RAX, 0), 1); }
     e.reload(true);
     e.body(ops);
     e.tails();
