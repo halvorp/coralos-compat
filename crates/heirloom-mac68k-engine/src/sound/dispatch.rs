@@ -21,6 +21,31 @@ fn name_of(routine: u32, words: u32) -> &'static str {
     }
 }
 
+/// `SndChannelStatus(chan, theLength, theStatus)` for any caller (the `_SoundDispatch` frame above, a PowerPC program by value): fills the
+/// 24-byte SCStatus. NULL channel -> paramErr (spec macos9-specs/Sound/SoundMisc.md), an unknown one -> badChannel, `theLength` < 24 -> paramErr.
+pub fn channel_status<U: GuestUi>(m: &mut Mac<U>, chan: u32, len: i16, status: u32) -> Result<i16, Refusal> {
+    m.snd_reap();
+    let err = match m.snd_key(chan) {
+        _ if chan == 0 => PARAM_ERR,
+        None => BAD_CHANNEL,
+        Some(_) if len < 24 => PARAM_ERR,
+        Some(key) => {
+            let (streams, paused) = m.snd.chans.get(&key).map(|c| (c.streams.iter().map(|s| s.r).collect::<Vec<_>>(), c.paused)).unwrap_or_default();
+            let busy = streams.iter().any(|s| m.ui.audio_queued_bytes(*s).is_ok_and(|n| n > 0));
+            // SCStatus, 24 bytes: scStartTime, scEndTime, scCurrentTime, scChannelBusy, scChannelDisposed, scChannelPaused,
+            // scUnused, scChannelAttributes, scCPULoad. The three times are REFUSED BY NAME below: what clock they count and
+            // from when is not documented in a source we have, so the engine does not invent one; they read 0.
+            let mut rec = [0u8; 24];
+            rec[12] = u8::from(busy);
+            rec[14] = u8::from(paused);
+            m.mem.write_bytes(status, &rec).map_err(Refusal::mem("SCStatus"))?;
+            NO_ERR
+        }
+    };
+    if err == NO_ERR { m.note_refusal("SndChannelStatus", String::from("scStartTime, scEndTime and scCurrentTime are not modelled (they read 0); scChannelBusy and scChannelPaused are real")); }
+    Ok(err)
+}
+
 pub fn sound_dispatch<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, regs: &mut Regs) -> Result<String, Refusal> {
     m.snd_reap();
     let (d0, sp) = (regs.d0, cpu.areg(7));
@@ -41,24 +66,8 @@ pub fn sound_dispatch<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, regs: &mut Regs
         }
         (0x10, _, 0x0008) => {
             let (status, len, chan) = (arg32(m, 0)?, m.mem.read_u16(sp + 4).map_err(&e)? as i16, arg32(m, 6)?);
-            let err = match m.snd_key(chan) {
-                None => BAD_CHANNEL,
-                Some(_) if len < 24 => PARAM_ERR,
-                Some(key) => {
-                    let (streams, paused) = m.snd.chans.get(&key).map(|c| (c.streams.iter().map(|s| s.r).collect::<Vec<_>>(), c.paused)).unwrap_or_default();
-                    let busy = streams.iter().any(|s| m.ui.audio_queued_bytes(*s).is_ok_and(|n| n > 0));
-                    // SCStatus, 24 bytes: scStartTime, scEndTime, scCurrentTime, scChannelBusy, scChannelDisposed, scChannelPaused,
-                    // scUnused, scChannelAttributes, scCPULoad. The three times are REFUSED BY NAME below: what clock they count and
-                    // from when is not documented in a source we have, so the engine does not invent one; they read 0.
-                    let mut rec = [0u8; 24];
-                    rec[12] = u8::from(busy);
-                    rec[14] = u8::from(paused);
-                    m.mem.write_bytes(status, &rec).map_err(Refusal::mem("SCStatus"))?;
-                    NO_ERR
-                }
-            };
+            let err = channel_status(m, chan, len, status)?;
             ret_w(m, cpu, err as u16)?;
-            if err == NO_ERR { m.note_refusal("SndChannelStatus", String::from("scStartTime, scEndTime and scCurrentTime are not modelled (they read 0); scChannelBusy and scChannelPaused are real")); }
             format!("SndChannelStatus {chan:#x} -> {err}")
         }
         (0x18, 0, 0x0008) | (0x18, _, 0x0008) => {

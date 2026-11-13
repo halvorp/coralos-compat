@@ -41,7 +41,7 @@ impl<U: GuestUi> MacPpc<U> {
     /// The first `n` integer/pointer arguments: r3..r10, then the parameter area of the caller's frame, which starts
     /// 24 bytes above r1 (the linkage area: back chain, CR, LR, two reserved words, saved RTOC) with one word per
     /// argument (Mac OS Runtime Architectures, PowerPC calling conventions).
-    fn arg_values(&self, n: usize, regs: &[u32; 32]) -> Result<alloc::vec::Vec<u32>, String> {
+    pub(crate) fn arg_values(&self, n: usize, regs: &[u32; 32]) -> Result<alloc::vec::Vec<u32>, String> {
         (0..n).map(|i| if i < 8 { Ok(regs[3 + i]) } else {
             let at = regs[1].wrapping_add(24 + 4 * i as u32);
             self.mac.mem.read_u32(at).map_err(|e| format!("argument {i} is in the stack parameter area at {at:#x}: {e}"))
@@ -228,6 +228,9 @@ impl<U: GuestUi> MacPpc<U> {
                 cpu.gpr = *regs;
                 match self.gw_call(f, &mut cpu) { Ok(()) => { *regs = cpu.gpr; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::Scrap(f) => match self.scrap_call(f, regs) { Ok(()) => GlueOutcome::Return, Err(e) => GlueOutcome::Refused(e) },
+            Native::Snd(f) => match self.snd_call(f, regs) { Ok(()) => GlueOutcome::Return, Err(e) => GlueOutcome::Refused(format!("{f:?}: {e}")) },
+            Native::Sel(f) => match self.sel_call(f, regs) { Ok(()) => GlueOutcome::Return, Err(e) => GlueOutcome::Refused(format!("{}: {e}", f.name())) },
             Native::Pb(c) => {
                 let args = match self.arg_values(1, regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("PB call: {e}")) };
                 match self.pb_call(c, args[0]) { Ok(e) => { regs[3] = err(e); GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }

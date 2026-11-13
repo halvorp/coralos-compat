@@ -40,6 +40,13 @@ pub const SEL_FRAMES: [(u16, &str, u32); 15] = [
     (10, "TEContinuousStyle", 12), (11, "TEUseStyleScrap", 18), (12, "TECustomHook", 10), (13, "TENumStyles", 12), (14, "TEFeatureFlag", 8),
 ];
 
+/// Each selector's Pascal arguments in declaration order (the table above): what a by-value caller ([`crate::package::by_value`]) pushes.
+pub const SEL_ARGS: [&[Arg]; 15] = [
+    &[Arg::P], &[Arg::W, Arg::P, Arg::B, Arg::P], &[Arg::W, Arg::P, Arg::P, Arg::B, Arg::P], &[Arg::W, Arg::P, Arg::P, Arg::P, Arg::P], &[Arg::P],
+    &[Arg::P, Arg::P], &[Arg::P], &[Arg::P, Arg::L, Arg::P, Arg::P], &[Arg::W, Arg::P], &[Arg::L, Arg::L, Arg::P],
+    &[Arg::P, Arg::P, Arg::P], &[Arg::L, Arg::L, Arg::P, Arg::B, Arg::P], &[Arg::W, Arg::P, Arg::P], &[Arg::L, Arg::L, Arg::P], &[Arg::W, Arg::W, Arg::P],
+];
+
 fn rd16<U: GuestUi>(m: &Mac<U>, at: u32) -> Result<u16, Refusal> { m.mem.read_u16(at).map_err(Refusal::mem("TextEdit frame")) }
 fn rd32<U: GuestUi>(m: &Mac<U>, at: u32) -> Result<u32, Refusal> { m.mem.read_u32(at).map_err(Refusal::mem("TextEdit frame")) }
 
@@ -208,9 +215,14 @@ fn te_get_offset<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
     Ok(Done { result: at as u32, log: format!("[textedit] TEGetOffset ({},{}) -> {at}", (pt >> 16) as u16 as i16, pt as u16 as i16) })
 }
 
-enum Ret { None, Word(u16), Long(u32), Bool(bool) }
+pub enum Ret { None, Word(u16), Long(u32), Bool(bool) }
 
-fn run_selector<U: GuestUi>(m: &mut Mac<U>, sel: u16, sp: u32) -> Result<(Ret, String), Refusal> {
+impl Ret {
+    /// The result as a by-value caller's register holds it (a BOOLEAN as 0/1, an INTEGER zero-extended: the caller sign-extends).
+    pub fn value(&self) -> u32 { match *self { Ret::None => 0, Ret::Word(v) => u32::from(v), Ret::Long(v) => v, Ret::Bool(b) => u32::from(b) } }
+}
+
+pub fn run_selector<U: GuestUi>(m: &mut Mac<U>, sel: u16, sp: u32) -> Result<(Ret, String), Refusal> {
     let h = rd32(m, sp + 2)?; // hTE is the last argument of every routine but the handle setters' second
     match sel {
         1 => {

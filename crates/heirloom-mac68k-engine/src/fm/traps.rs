@@ -26,6 +26,10 @@ const ASYNC: u16 = 0x0400;
 const HFS: u16 = 0x0200;
 /// The Device Manager is not modelled: `_Open` of a driver name (".Sony", ".Print") finds no such driver.
 pub const NS_DRV_ERR: i16 = -56;
+/// ...so no reference number names a driver, and `_Control` / `_Status` / `_KillIO` on any refnum answer badUnitErr (Inside
+/// Macintosh: Devices, "Device Manager Result Codes": the reference number does not name a unit-table entry). A program that
+/// asks a volume's drive (ioVDrvInfo / ioVDRefNum from GetVolInfo) for its status learns the drive has no driver it can reach.
+pub const BAD_UNIT_ERR: i16 = -21;
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     macro_rules! reg { ($($op:expr => $name:expr, $body:expr;)*) => {$(
@@ -54,6 +58,9 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
         0xA014 => "GetVol", get_vol::<U>;
         0xA015 => "SetVol", set_vol::<U>;
         0xA013 => "FlushVol", flush_vol::<U>;
+        0xA004 => "Control", no_driver::<U>;
+        0xA005 => "Status", no_driver::<U>;
+        0xA006 => "KillIO", no_driver::<U>;
     }
     // HFSDispatch ($A260) and FSDispatch ($A060) share one table key (the flag bits are dropped) and one set of selectors.
     m.register_os(0xA260, dispatch::<U>)
@@ -314,18 +321,44 @@ fn get_vol_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, hfs: bool) -> Result<(), i16
     pb.put_i16(mm, IO_VNM_FLS, i.files_in_root as i16).map_err(&g)?;
     pb.put_i16(mm, IO_VDIR_ST, 3).map_err(&g)?;
     pb.put_i16(mm, IO_VBL_LN, 0).map_err(&g)?;
-    pb.put_i16(mm, IO_VNM_AL_BLKS, i.total_blocks as i16).map_err(&g)?;
-    pb.put_u32(mm, IO_VAL_BLK_SIZ, super::ALLOC_BLOCK).map_err(&g)?;
-    pb.put_u32(mm, IO_VCLP_SIZ, super::ALLOC_BLOCK).map_err(&g)?;
+    // Volumes past 2 GB: the 16-bit block counts are PINNED so that blocks x ioVAlBlkSiz stays within 2 GB - 1, as the Mac OS 7.6+ File
+    // Manager does for the classic calls (a program multiplying them in a signed 32-bit long sees at most 2 GB, never a wrapped negative
+    // size; the Warcraft III Installer did, on a 4 GB disk); PBXGetVolInfo's 64-bit byte counts carry the truth.
+    let pin = (0x7FFF_FFFF / i.block_size).min(u32::from(u16::MAX)) as u16;
+    let (total_blocks, free_blocks) = (i.total_blocks.min(pin), i.free_blocks.min(pin));
+    pb.put_i16(mm, IO_VNM_AL_BLKS, total_blocks as i16).map_err(&g)?;
+    pb.put_u32(mm, IO_VAL_BLK_SIZ, i.block_size).map_err(&g)?;
+    pb.put_u32(mm, IO_VCLP_SIZ, i.block_size).map_err(&g)?;
     pb.put_i16(mm, IO_AL_BL_ST, 8).map_err(&g)?;
     pb.put_u32(mm, IO_VNXT_FNUM, 0x1000).map_err(&g)?;
-    pb.put_i16(mm, IO_VFR_BLK, i.free_blocks as i16).map_err(&g)?;
+    pb.put_i16(mm, IO_VFR_BLK, free_blocks as i16).map_err(&g)?;
     // Only PBHGetVInfo's HParamBlockRec has the fields past ioVFrBlk: a plain PBGetVInfo caller's block ends at 64 bytes, and
     // writing further corrupts whatever follows it on the program's stack (MacWrite 4.5 returned through a cleared word).
     if hfs {
         pb.put_i16(mm, IO_VSIG_WORD, 0x4244).map_err(&g)?; // 'BD': an HFS volume
+        pb.put_i16(mm, IO_VDRV_INFO, i.drive as i16).map_err(&g)?;
         pb.put_u32(mm, IO_VFIL_CNT, i.file_count).map_err(&g)?;
         pb.put_u32(mm, IO_VDIR_CNT, i.dir_count).map_err(&g)?;
+    }
+    Ok(())
+}
+
+/// `_Control` / `_Status` / `_KillIO`: no driver is installed, so none of them reaches one ([`BAD_UNIT_ERR`]).
+fn no_driver<U: GuestUi>(_: &mut Mac<U>, _: Pb, _: bool) -> Result<(), i16> { Err(BAD_UNIT_ERR) }
+
+/// `PBXGetVolInfo` (Files.h XVolumeParam; spec macos9-specs/FileManager/FileManagerPB.md): ioXVersion (long @24) must be 0, else paramErr;
+/// then everything PBHGetVInfo reports, plus ioVTotalBytes @122 and ioVFreeBytes @130 (UnsignedWide, high word first) from the same
+/// volume geometry, so a volume past 4 GB is reported whole.
+fn xget_vol_info<U: GuestUi>(m: &mut Mac<U>, pb: Pb, _: bool) -> Result<(), i16> {
+    let g = mem_err("block");
+    if pb.u32(&m.mem, IO_XVERSION).map_err(&g)? != 0 { return Err(err::PARAM_ERR); }
+    get_vol_info(m, pb, true)?;
+    let vol = m.fm.volume_of_vref(pb.i16(&m.mem, IO_VREF_NUM).map_err(&g)?)?;
+    let i = m.fm.vol_info(vol);
+    let (total, free) = (u64::from(i.total_blocks) * u64::from(i.block_size), u64::from(i.free_blocks) * u64::from(i.block_size));
+    for (at, v) in [(IO_VTOTAL_BYTES, total), (IO_VFREE_BYTES, free)] {
+        pb.put_u32(&mut m.mem, at, (v >> 32) as u32).map_err(&g)?;
+        pb.put_u32(&mut m.mem, at + 4, v as u32).map_err(&g)?;
     }
     Ok(())
 }
@@ -440,6 +473,8 @@ pub mod sel {
     pub const UNLOCK_RNG: u16 = 0x11;
     pub const OPEN_DF: u16 = 0x1A;
     pub const GET_VOL_PARMS: u16 = 0x30;
+    /// `PBXGetVolInfo` (`_FSDispatch` $A060, selector $12): PBHGetVInfo plus 64-bit byte counts.
+    pub const XGET_VOL_INFO: u16 = 0x12;
 }
 
 fn selector_body<U: GuestUi>(selector: u16) -> Option<(&'static str, Body<U>)> {
@@ -456,6 +491,7 @@ fn selector_body<U: GuestUi>(selector: u16) -> Option<(&'static str, Body<U>)> {
         sel::UNLOCK_RNG => Some(("UnlockRng", lock_range::<U>)),
         sel::OPEN_DF => Some(("OpenDF", open_data::<U>)),
         sel::GET_VOL_PARMS => Some(("HGetVolParms", get_vol_parms::<U>)),
+        sel::XGET_VOL_INFO => Some(("XGetVolInfo", xget_vol_info::<U>)),
         _ => None,
     }
 }

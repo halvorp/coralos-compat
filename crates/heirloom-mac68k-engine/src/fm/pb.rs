@@ -50,6 +50,11 @@ pub const IO_AL_BL_ST: u32 = 56;
 pub const IO_VNXT_FNUM: u32 = 58;
 pub const IO_VFR_BLK: u32 = 62;
 pub const IO_VSIG_WORD: u32 = 64;
+pub const IO_VDRV_INFO: u32 = 66;
+/// XVolumeParam (PBXGetVolInfo): ioXVersion replaces HVolumeParam's filler; the 64-bit byte counts follow ioVFndrInfo.
+pub const IO_XVERSION: u32 = 24;
+pub const IO_VTOTAL_BYTES: u32 = 122;
+pub const IO_VFREE_BYTES: u32 = 130;
 pub const IO_VFIL_CNT: u32 = 82;
 pub const IO_VDIR_CNT: u32 = 86;
 // WDPBRec (OpenWD, CloseWD, GetWDInfo)

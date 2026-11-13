@@ -5,7 +5,7 @@
 //! with a completion routine (`ioCompletion` != 0, Warcraft III's MPQ reads) is completed the same way and its routine is QUEUED: it runs, with the parameter block in r3, at the
 //! next glue call (a safepoint, [`MacPpc::io_safepoint`]), never inside the call that issued it - on a real Mac it runs at interrupt time after the call has returned, so a program
 //! that sets up state after `PB...Async` returns still sees its completion afterwards. Not provided, so unbound by name: PBCatSearch,
-//! PBXGetVolInfo, PBUnmountVol, the Desktop Database calls (PBDT*), PBHCopyFile.
+//! PBUnmountVol, the Desktop Database calls (PBDT*), PBHCopyFile.
 use crate::machine::MacPpc;
 use alloc::format;
 use alloc::string::String;
@@ -29,7 +29,8 @@ const TRAPS: &[(&str, &str)] = &[
 ];
 /// The `_HFSDispatch` selectors by C name (all HFS-only, except `OpenDF`'s two forms).
 const SELECTORS: &[(&str, u16)] = &[("OpenWD", sel::OPEN_WD), ("CloseWD", sel::CLOSE_WD), ("CatMove", sel::CAT_MOVE), ("DirCreate", sel::DIR_CREATE), ("GetWDInfo", sel::GET_WD_INFO),
-    ("GetFCBInfo", sel::GET_FCB_INFO), ("GetCatInfo", sel::GET_CAT_INFO), ("GetVolParms", sel::GET_VOL_PARMS), ("SetCatInfo", sel::SET_CAT_INFO), ("OpenDF", sel::OPEN_DF)];
+    ("GetFCBInfo", sel::GET_FCB_INFO), ("GetCatInfo", sel::GET_CAT_INFO), ("GetVolParms", sel::GET_VOL_PARMS), ("SetCatInfo", sel::SET_CAT_INFO), ("OpenDF", sel::OPEN_DF),
+    ("XGetVolInfo", sel::XGET_VOL_INFO)];
 
 impl PbCall {
     pub fn by_name(name: &str) -> Option<PbCall> {

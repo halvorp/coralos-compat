@@ -29,6 +29,22 @@ const CALLBACK_STACK_GAP: u32 = 512;
 #[derive(Debug, Clone)]
 pub(crate) struct Saved { pub(crate) gpr: [u32; 32], fpr: [u64; 32], cr: u32, lr: u32, ctr: u32, xer: u32, fpscr: u32, pc: u32 }
 
+/// Which Dialog Manager call draws a dialog's user items through callbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DrawOf {
+    /// `ModalDialog`'s draw before it waits (the call is entered again afterwards).
+    Modal,
+    /// `DrawDialog(d)` (region 0) / `UpdateDialog(d, rgn)`.
+    Draw(u32, u32),
+    /// `DialogSelect` on an update event for this dialog.
+    SelectUpdate(u32),
+}
+
+impl Frame {
+    /// Where the interrupted glue call returns to.
+    pub(crate) fn saved_lr(&self) -> u32 { self.saved.lr }
+}
+
 impl Saved {
     pub(crate) fn of(cpu: &Cpu, pc: u32) -> Self { Saved { gpr: cpu.gpr, fpr: cpu.fpr, cr: cpu.cr, lr: cpu.lr, ctr: cpu.ctr, xer: cpu.xer, fpscr: cpu.fpscr, pc } }
     pub(crate) fn restore(&self, cpu: &mut Cpu) {
@@ -101,9 +117,15 @@ impl<U: GuestUi> MacPpc<U> {
         Ok(())
     }
 
-    /// `ModalDialog` reached with user items to draw first: save the call, run the first procedure. False = nothing to draw.
-    pub(crate) fn begin_user_items(&mut self, cpu: &mut Cpu, call_pc: u32) -> Result<bool, String> {
-        let Some(draw) = self.mac.begin_modal_user_items().map_err(|e| e.0)? else { return Ok(false) };
+    /// A Dialog Manager call reached with user items to draw ([`DrawOf`]): save the call, run the first procedure. False = nothing to draw (the
+    /// call itself then runs as usual).
+    pub(crate) fn begin_user_items(&mut self, cpu: &mut Cpu, call_pc: u32, draw_of: DrawOf) -> Result<bool, String> {
+        let draw = match draw_of {
+            DrawOf::Modal => self.mac.begin_modal_user_items(),
+            DrawOf::Draw(win, rgn) => self.mac.begin_draw_user_items(win, (rgn != 0).then_some(rgn)),
+            DrawOf::SelectUpdate(win) => self.mac.begin_select_update_user_items(win),
+        }.map_err(|e| e.0)?;
+        let Some(draw) = draw else { return Ok(false) };
         let saved = Saved::of(cpu, call_pc);
         self.next_user_item(cpu, Frame { saved, cont: Continuation::UserItems(draw) })?;
         Ok(true)
@@ -124,7 +146,11 @@ impl<U: GuestUi> MacPpc<U> {
             }
             None => {
                 self.mac.end_user_items(draw);
+                let reenter = draw.reenter;
                 frame.saved.restore(cpu);
+                // DrawDialog / UpdateDialog / DialogSelect's update are over: the caller continues after its call (the glue stub returns through
+                // LR) with r3 = 0 (DialogSelect answers FALSE; the other two have no result)
+                if !reenter { cpu.set_pc(frame.saved_lr()); cpu.gpr[3] = 0; }
                 Ok(())
             }
         }
@@ -214,7 +240,7 @@ mod tests {
         cpu.fpr[14] = 42;
         cpu.cr = 0x2000_0000;
         let saved = Saved::of(&cpu, call_pc);
-        let frame = Frame { saved, cont: Continuation::UserItems(UserItemDraw { win: 0, todo: Default::default(), port: 0 }) };
+        let frame = Frame { saved, cont: Continuation::UserItems(UserItemDraw { win: 0, todo: Default::default(), port: 0, end_update: true, reenter: true }) };
         // the callback clobbered everything it may
         cpu.gpr = [7; 32];
         cpu.fpr = [7; 32];

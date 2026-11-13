@@ -60,6 +60,9 @@ pub mod stdclib;
 pub mod threads;
 pub mod alias_c;
 pub mod carbon_ctl;
+pub mod scrap_c; // the Carbon Scrap Manager over the one desk scrap
+pub mod snd_c; // Sound Manager 3.0 dispatch routines by C name
+pub mod selector_c; // the List Manager and styled TextEdit dispatch by C name, through the 68k selector bodies
 pub mod cf_more;
 pub mod decimal;
 pub mod dsp_c;

@@ -5,7 +5,8 @@ use super::{err, FileMgr, ALLOC_BLOCK};
 use alloc::vec::Vec;
 use heirloom_volume::{Kind, NodeId, ROOT};
 
-/// The capacity every volume reports: 0xFFFF allocation blocks of [`ALLOC_BLOCK`] bytes.
+/// The most allocation blocks an HFS volume has (ioVNmAlBlks is 16 bits): a bigger volume has bigger blocks (Inside Macintosh:
+/// Files, "Data Organization on Volumes"). A writable volume whose host declared no capacity reports this many [`ALLOC_BLOCK`]s.
 pub const TOTAL_BLOCKS: u32 = 0xFFFF;
 /// ioVAtrb: bit 15 = the volume is software locked / read-only here.
 pub const VATRB_LOCKED: u16 = 0x8000;
@@ -19,19 +20,23 @@ pub struct VolInfo {
     pub files_in_root: u16,
     pub total_blocks: u16,
     pub free_blocks: u16,
+    /// ioVAlBlkSiz: a multiple of [`ALLOC_BLOCK`], the smallest that keeps the volume within [`TOTAL_BLOCKS`] blocks.
+    pub block_size: u32,
+    /// ioVDrvInfo: the drive the volume is mounted on (1-based, in mount order); a mounted volume always has one.
+    pub drive: u16,
     pub file_count: u32,
     pub dir_count: u32,
     pub created: u32,
 }
 
 impl FileMgr {
-    /// Bytes used on a volume (both forks, rounded to allocation blocks).
-    fn used(&self, dir: NodeId) -> u64 {
+    /// Bytes used on a volume (both forks, each rounded to `block` bytes).
+    fn used(&self, dir: NodeId, block: u64) -> u64 {
         self.tree.children(dir).iter().map(|&c| match &self.tree.get(c).kind {
-            Kind::Dir(_) => self.used(c),
+            Kind::Dir(_) => self.used(c, block),
             Kind::File(_) | Kind::Stream(_) => {
-                let data = self.tree.file_len(c).unwrap_or(0).div_ceil(u64::from(ALLOC_BLOCK));
-                (data + (self.tree.get(c).rsrc.len() as u64).div_ceil(u64::from(ALLOC_BLOCK))) * u64::from(ALLOC_BLOCK)
+                let data = self.tree.file_len(c).unwrap_or(0).div_ceil(block);
+                (data + (self.tree.get(c).rsrc.len() as u64).div_ceil(block)) * block
             }
         }).sum()
     }
@@ -39,12 +44,20 @@ impl FileMgr {
         self.tree.children(dir).iter().map(|&c| if self.tree.is_dir(c) { u32::from(dirs) + self.count(c, dirs) } else { u32::from(!dirs) }).sum()
     }
 
+    /// What GetVolInfo reports for `vol`. Its size is the capacity its host declared ([`heirloom_volume::Tree::set_capacity`]);
+    /// undeclared, a read-only volume is exactly as big as what it holds (a pressed disc is full) and a writable one is
+    /// [`TOTAL_BLOCKS`] x [`ALLOC_BLOCK`]. The allocation block grows in [`ALLOC_BLOCK`] steps until the size fits in [`TOTAL_BLOCKS`].
     pub fn vol_info(&self, vol: NodeId) -> VolInfo {
-        let used_blocks = (self.used(vol) / u64::from(ALLOC_BLOCK)).min(u64::from(TOTAL_BLOCKS)) as u32;
+        let unit = u64::from(ALLOC_BLOCK);
+        let capacity = self.tree.capacity(vol).unwrap_or_else(|| if self.tree.is_writable(vol) { u64::from(TOTAL_BLOCKS) * unit } else { self.used(vol, unit) });
+        let block = capacity.div_ceil(u64::from(TOTAL_BLOCKS)).div_ceil(unit).max(1) * unit;
+        let total_blocks = capacity.div_ceil(block).min(u64::from(TOTAL_BLOCKS)) as u32;
+        let used_blocks = (self.used(vol, block) / block).min(u64::from(TOTAL_BLOCKS)) as u32;
+        let drive = self.tree.children(ROOT).iter().position(|&v| v == vol).map_or(0, |i| i as u16 + 1);
         VolInfo {
             vref: self.vref_of(vol), name: super::bytes_of(self.tree.name(vol)), attrib: if self.tree.is_writable(vol) { 0 } else { VATRB_LOCKED },
             files_in_root: self.tree.children(vol).iter().filter(|&&c| !self.tree.is_dir(c)).count() as u16,
-            total_blocks: TOTAL_BLOCKS as u16, free_blocks: (TOTAL_BLOCKS - used_blocks) as u16,
+            total_blocks: total_blocks as u16, free_blocks: total_blocks.saturating_sub(used_blocks) as u16, block_size: block as u32, drive,
             file_count: self.count(vol, false), dir_count: self.count(vol, true), created: self.tree.get(vol).created_ms.max(0) as u32,
         }
     }
@@ -104,9 +117,31 @@ mod tests {
         assert_eq!(fm.set_default(&fm.locate(0, 0, Some(b"big")).unwrap()), Err(err::DIR_NF_ERR), "a file cannot be the default directory");
         let cd = fm.add_volume("CD", false);
         assert_eq!(fm.vol_info(cd).attrib, VATRB_LOCKED);
+        assert_eq!((i.drive, fm.vol_info(cd).drive), (1, 2), "every mounted volume is on a drive, in mount order");
         assert_eq!(fm.pick_volume(2, 0, None), Ok(cd));
         assert_eq!(fm.pick_volume(3, 0, None), Err(err::NSV_ERR));
         assert_eq!(fm.pick_volume(-1, 0, Some(b"CD")), Ok(cd));
         assert_eq!(fm.pick_volume(0, -2, None), Ok(cd));
+    }
+
+    /// A 650 MB disc and a 2 GB disk report their real sizes: the Warcraft III Installer (its VolumeIsCD) accepts a disc only when
+    /// ioVNmAlBlks x ioVAlBlkSiz is a CD's size, and copies 450 MB only to a volume that says it has room.
+    #[test]
+    fn a_volume_reports_its_declared_size_with_blocks_big_enough_to_count_it() {
+        let mut fm = FileMgr::new();
+        let cd = fm.add_volume("Warcraft III", false);
+        fm.tree.put_file(cd, "War3.mpq", alloc::vec![0; 1_000_000]).unwrap();
+        let i = fm.vol_info(cd);
+        assert_eq!((i.block_size, i.total_blocks, i.free_blocks), (512, 1954, 0), "undeclared and read-only: exactly as big as its contents");
+        fm.tree.set_capacity(cd, 680_350_720).unwrap();
+        let i = fm.vol_info(cd);
+        assert_eq!(i.block_size, 10_752, "the smallest 512-byte multiple that counts 680 MB in 16 bits");
+        assert_eq!(u64::from(i.total_blocks) * u64::from(i.block_size) / 1_000_000, 680, "{i:?}");
+        assert_eq!(i.total_blocks - i.free_blocks, 94, "1,000,000 bytes in 10,752-byte blocks");
+        let hd = fm.def_vol;
+        assert_eq!((fm.vol_info(hd).block_size, fm.vol_info(hd).total_blocks as u32), (512, TOTAL_BLOCKS), "an undeclared writable volume keeps its default");
+        fm.tree.set_capacity(hd, 2 << 30).unwrap();
+        let i = fm.vol_info(hd);
+        assert!(u64::from(i.free_blocks) * u64::from(i.block_size) > 2_000_000_000, "{i:?}");
     }
 }

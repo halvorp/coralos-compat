@@ -2,20 +2,24 @@
 //! running in another process (docs/heirloom/23-ENGINE-SPLIT.md phase 1: Heirloom.app stages the bundle's files, mac68k.engine
 //! runs the guest on them). ONE format, one home: here, beside the tree it describes.
 //!
-//! Layout (little-endian): `"HVS1"`, `max_name: u32`, `count: u32`, then `count` node records in pre-order (a parent always
+//! Layout (little-endian): `"HVS2"`, `max_name: u32`, `count: u32`, then `count` node records in pre-order (a parent always
 //! before its children): `parent: u32` (the record index of the parent; `u32::MAX` = the pseudo-root, i.e. the record is a
 //! volume), `kind: u8` (0 directory, 1 file, 2 a stream file: its bytes stay in storage the receiver reads itself, so its `data`
 //! run is `len: u64` + the stream's LOCATOR in UTF-8, never the bytes; one without a locator is [`SnapErr::Stream`]), `writable: u8`
-//! (volumes only; 0 elsewhere), `name`, `attrs: u32`, `comment`, `created_ms: i64`, `modified_ms: i64`, FInfo (`type[4] creator[4]
+//! (volumes only; 0 elsewhere), a VOLUME record then `capacity: u64` ([`Tree::set_capacity`]; 0 = undeclared), `name`, `attrs: u32`, `comment`, `created_ms: i64`, `modified_ms: i64`, FInfo (`type[4] creator[4]
 //! flags:u16 v:i16 h:i16`), `data` (files; a stream's length + locator), `rsrc`. A tree holding a stream decodes with streams
-//! enabled; the receiver sets its own [`crate::StreamSource`].
+//! enabled; the receiver sets its own [`crate::StreamSource`]. An `"HVS1"` snapshot (before volume capacities) still decodes: its
+//! volume records have no capacity field and every volume is undeclared
+//! (delete-when: no stored HVS1 snapshot remains; snapshots are made at launch by the host shipped with this crate, so the next compat pin after HVS2 lands).
 //! Strings and byte runs are `len: u32` + bytes. Every length is checked against what remains before anything is allocated;
 //! a malformed snapshot is a named [`SnapErr`], never a panic and never a partial tree.
 use crate::{FInfo, Kind, NodeId, Tree, ROOT};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-const MAGIC: &[u8; 4] = b"HVS1";
+const MAGIC: &[u8; 4] = b"HVS2";
+/// The format before volume records carried a capacity.
+const MAGIC_V1: &[u8; 4] = b"HVS1";
 const VOLUME_PARENT: u32 = u32::MAX;
 
 /// Why a snapshot was refused.
@@ -54,6 +58,7 @@ pub fn encode(tree: &Tree) -> Vec<u8> {
         put_u32(&mut out, parent);
         out.push(match n.kind { Kind::Dir(_) => 0, Kind::File(_) => 1, Kind::Stream(_) => 2 });
         out.push((parent == VOLUME_PARENT && n.writable) as u8);
+        if parent == VOLUME_PARENT { out.extend_from_slice(&n.capacity.to_le_bytes()); }
         put_bytes(&mut out, n.name.as_bytes());
         put_u32(&mut out, n.attrs);
         put_bytes(&mut out, n.comment.as_bytes());
@@ -108,9 +113,7 @@ impl<'a> Rd<'a> {
 /// A tree from [`encode`]'s bytes. Node ids are the new tree's own; names, kinds, contents and metadata are the snapshot's.
 pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
     let mut r = Rd { b: bytes, at: 0 };
-    if r.take(4, "magic")? != MAGIC {
-        return Err(SnapErr::BadMagic);
-    }
+    let v2 = match r.take(4, "magic")? { m if m == MAGIC => true, m if m == MAGIC_V1 => false, _ => return Err(SnapErr::BadMagic) };
     let max_name = r.u32("max_name")? as usize;
     let count = r.u32("count")?;
     // Every record is at least 56 bytes: refuse an impossible count before reserving anything.
@@ -123,6 +126,7 @@ pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
         let parent = r.u32("parent")?;
         let kind = r.take(1, "kind")?[0];
         let writable = r.take(1, "writable")?[0] != 0;
+        let capacity = if v2 && parent == VOLUME_PARENT { u64::from_le_bytes(r.arr("capacity")?) } else { 0 };
         let name = r.string("name")?;
         let attrs = r.u32("attrs")?;
         let comment = r.string("comment")?;
@@ -141,7 +145,9 @@ pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
             if kind != 0 || name.is_empty() || tree.volume(&name).is_some() {
                 return Err(if kind != 0 { SnapErr::BadKind { record, kind } } else { SnapErr::Refused { record } });
             }
-            tree.add_volume(&name, writable)
+            let v = tree.add_volume(&name, writable);
+            tree.get_mut(v).capacity = capacity;
+            v
         } else {
             let dir = *ids.get(parent as usize).ok_or(SnapErr::BadParent { record })?;
             if !tree.is_dir(dir) {
@@ -191,7 +197,9 @@ pub fn merge(dst: &mut Tree, src: &Tree) -> Result<(), crate::VolErr> {
     while let Some((id, parent)) = stack.pop() {
         let n = src.get(id);
         let target = if parent == ROOT {
-            dst.add_volume(&n.name, n.writable)
+            let v = dst.add_volume(&n.name, n.writable);
+            if n.capacity != 0 { dst.get_mut(v).capacity = n.capacity; }
+            v
         } else {
             match (&n.kind, dst.find_child(parent, &n.name)) {
                 (Kind::Dir(_), Some(d)) if dst.is_dir(d) => d,
@@ -226,7 +234,10 @@ pub fn merge_owned(dst: &mut Tree, mut src: Tree) -> Result<(), crate::VolErr> {
         let is_dir = src.is_dir(id);
         let name: String = String::from(src.name(id));
         let target = if parent == ROOT {
-            dst.add_volume(&name, src.get(id).writable)
+            let (w, cap) = (src.get(id).writable, src.get(id).capacity);
+            let v = dst.add_volume(&name, w);
+            if cap != 0 { dst.get_mut(v).capacity = cap; }
+            v
         } else {
             match (is_dir, dst.find_child(parent, &name)) {
                 (true, Some(d)) if dst.is_dir(d) => d,
@@ -267,6 +278,8 @@ mod tests {
         let mut t = Tree::new(31);
         let sys = t.add_volume("System", false);
         let work = t.add_volume("Work", true);
+        t.set_capacity(work, 700 << 20).unwrap();
+        assert_eq!(t.set_capacity(ROOT, 1), Err(crate::VolErr::WrongType), "only a volume has a capacity");
         let dir = t.mkdirs(sys, ["Fonts", "Bitmap"]).unwrap();
         let f = t.put_file(dir, "Geneva", alloc::vec![1, 2, 3]).unwrap();
         let n = t.get_mut(f);
@@ -287,8 +300,8 @@ mod tests {
         while let Some(id) = stack.pop() {
             let n = t.get(id);
             out.push(alloc::format!(
-                "{:?} dir={} w={} attrs={} c={:?} {} {} {:?} data={:?} rsrc={}",
-                t.path_components(id), t.is_dir(id), t.is_volume(id) && t.is_writable(id), n.attrs, n.comment, n.created_ms,
+                "{:?} dir={} w={} cap={:?} attrs={} c={:?} {} {} {:?} data={:?} rsrc={}",
+                t.path_components(id), t.is_dir(id), t.is_volume(id) && t.is_writable(id), t.capacity(id), n.attrs, n.comment, n.created_ms,
                 n.modified_ms, n.finfo, t.file_data(id), n.rsrc.len()
             ));
             stack.extend_from_slice(t.children(id));
@@ -305,6 +318,30 @@ mod tests {
         assert_eq!(back.max_name, 31);
         assert!(back.is_writable(back.volume("Work").unwrap()));
         assert!(!back.is_writable(back.volume("System").unwrap()));
+    }
+
+    #[test]
+    fn a_volume_capacity_crosses_the_snapshot_and_both_merges_and_an_hvs1_snapshot_still_decodes() {
+        let t = sample();
+        let work = t.volume("Work").unwrap();
+        assert_eq!(t.capacity(work), Some(700 << 20), "sample() declares Work's capacity");
+        let back = decode(&encode(&t)).unwrap();
+        assert_eq!(back.capacity(back.volume("Work").unwrap()), Some(700 << 20));
+        assert_eq!(back.capacity(back.volume("System").unwrap()), None, "an undeclared volume stays undeclared");
+        let (mut a, mut b) = (Tree::new(31), Tree::new(31));
+        merge(&mut a, &t).unwrap();
+        merge_owned(&mut b, sample()).unwrap();
+        assert_eq!(a.capacity(a.volume("Work").unwrap()), Some(700 << 20));
+        assert_eq!(b.capacity(b.volume("Work").unwrap()), Some(700 << 20));
+        // the same tree in the format before capacities: no capacity field in volume records
+        let mut plain = Tree::new(31);
+        let v = plain.add_volume("V", true);
+        plain.put_file(v, "f", alloc::vec![1, 2]).unwrap();
+        let mut v1 = encode(&plain);
+        v1[..4].copy_from_slice(b"HVS1");
+        v1.drain(12 + 4 + 1 + 1..12 + 4 + 1 + 1 + 8);
+        let old = decode(&v1).expect("an HVS1 snapshot decodes");
+        assert_eq!(census(&old), census(&plain));
     }
 
     #[test]
@@ -365,7 +402,7 @@ mod tests {
         t.put_file(v, "f", alloc::vec![1]).unwrap();
         let mut bytes = encode(&t);
         // Record 1 (the file) names itself as parent: not an earlier record.
-        let rec1 = 12 + 4 + 1 + 1 + 4 + 1 + 4 + 4 + 8 + 8 + 14 + 4 + 4; // header + record 0 ("V", no data)
+        let rec1 = 12 + 4 + 1 + 1 + 8 + 4 + 1 + 4 + 4 + 8 + 8 + 14 + 4 + 4; // header + record 0 ("V" with its capacity, no data)
         bytes[rec1..rec1 + 4].copy_from_slice(&1u32.to_le_bytes());
         assert_eq!(decode(&bytes).err(), Some(SnapErr::BadParent { record: 1 }));
     }

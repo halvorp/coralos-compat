@@ -214,3 +214,31 @@ fn the_application_file_lives_in_its_home_folder_and_process_app_spec_names_it()
     assert_eq!(m.mac.mem.read_u32(B + 2).unwrap(), 2, "parID = the folder it is in: the volume root (fsRtDirID)");
     assert_eq!(rd_p(&m, B + 6), m.mac.fm.tree.name(node));
 }
+
+/// UpperString (spec Misc/UpperString.md vectors), GetGrayRgn (= the GrayRgn low-memory global after InitWindows), TEFromScrap / TEToScrap
+/// (spec TextEdit/TEFromScrap.md): the Warcraft III Installer's CD-key fields use the scrap calls for Paste, and uppercase what was typed.
+#[test]
+fn upper_string_gray_rgn_and_the_te_scrap_glue_follow_their_specs() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    m.mac.mem.write_bytes(A, &[5, b'a', b'b', b'c', 0x8E, b'1']).unwrap();
+    call(&mut m, "UpperString", &[A, 1]);
+    assert_eq!(m.mac.mem.bytes(m.mac.mem.span(A, 6).unwrap()).unwrap(), &[5, b'A', b'B', b'C', 0x83, b'1'], "diacSensitive: e-acute -> E-acute");
+    m.mac.mem.write_bytes(A, &[2, 0x8E, b'z']).unwrap();
+    call(&mut m, "UpperString", &[A, 0]);
+    assert_eq!(m.mac.mem.bytes(m.mac.mem.span(A, 3).unwrap()).unwrap(), &[2, b'E', b'Z'], "NEGATIVE CONTROL: marks stripped without diacSensitive");
+    call(&mut m, "InitGraf", &[0x1000]);
+    call(&mut m, "InitWindows", &[]);
+    let gray = call(&mut m, "GetGrayRgn", &[]);
+    assert_ne!(gray, 0);
+    assert_eq!(gray, m.mac.mem.read_u32(0x9EE).unwrap());
+    call(&mut m, "TEInit", &[]);
+    call(&mut m, "ZeroScrap", &[]);
+    assert_eq!(call(&mut m, "TEFromScrap", &[]) as i32, -102, "no TEXT on the desk scrap: noTypeErr");
+    m.mac.mem.write_bytes(B, b"xy").unwrap();
+    call(&mut m, "PutScrap", &[2, u32::from_be_bytes(*b"TEXT"), B]);
+    assert_eq!(call(&mut m, "TEFromScrap", &[]), 0);
+    assert_eq!(m.mac.mem.read_u16(0xAB0).unwrap(), 2, "TEScrpLength");
+    call(&mut m, "ZeroScrap", &[]);
+    assert_eq!(call(&mut m, "TEToScrap", &[]), 0);
+    assert_eq!(m.mac.scrap.get(*b"TEXT"), Some(&b"xy"[..]), "the TE scrap went back to the desk scrap");
+}

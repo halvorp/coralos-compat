@@ -41,6 +41,10 @@ const DR_ITEMS: u32 = 156;
 const DR_EDIT_FIELD: u32 = 164;
 const DR_DEF_ITEM: u32 = 168;
 
+/// A Dialog Manager edit command on the edit field ([`Mac::dialog_edit`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogEdit { Cut, Copy, Paste, Delete }
+
 /// What a DITL item type is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Item { Control { proc_id: u16 }, ResControl, StaticText, EditText, /** the program's own drawing: its handle is a draw PROCEDURE ([`super::useritems`]) */ User, NoContract(&'static str) }
@@ -197,6 +201,31 @@ impl<U: GuestUi> Mac<U> {
             }
             (_, i) => Err(none(&format!(": the row's effect does not take {i:?}"))),
         }
+    }
+
+    /// `DialogCut` / `DialogCopy` / `DialogPaste` / `DialogDelete` (spec macos9-specs/DialogsLib/DialogCut.md, the classic dialog path): nothing when the
+    /// dialog has no edit field (editField < 0); otherwise the TextEdit operation on the edit field, Cut and Copy putting the text on the desk scrap
+    /// (ZeroScrap, then 'TEXT'), Paste taking the desk scrap's 'TEXT' (none: nothing changes). NAMED LIMIT: an edit field here is a native text field
+    /// whose text the engine holds without a caret or selection, so the selection is the WHOLE field (what `SelectDialogItemText(d, i, 0, 32767)`
+    /// leaves): Cut empties it, Paste replaces it. A changed field is shown by the host at once; no item hit is reported (the calls report none).
+    pub fn dialog_edit(&mut self, win: u32, op: DialogEdit) -> Result<bool, Refusal> {
+        if !self.tr.dlg.dialogs.contains_key(&win) { return Ok(false); }
+        let field = self.mem.read_i16(win + DR_EDIT_FIELD).map_err(Refusal::mem("editField"))?;
+        let Some(idx) = usize::try_from(field).ok().filter(|&i| self.tr.dlg.dialogs[&win].list.get(i).is_some_and(|s| s.item == Item::EditText)) else { return Ok(false) };
+        let h = self.tr.dlg.dialogs[&win].list[idx].handle;
+        let text = self.handle_text(h)?;
+        if matches!(op, DialogEdit::Cut | DialogEdit::Copy) {
+            self.scrap.zero();
+            self.scrap.put(*b"TEXT", text.chars().map(|c| c as u32 as u8).collect());
+        }
+        let new = match op {
+            DialogEdit::Copy => return Ok(true),
+            DialogEdit::Cut | DialogEdit::Delete => String::new(),
+            DialogEdit::Paste => match self.scrap.get(*b"TEXT") { Some(t) => t.iter().map(|&b| char::from(b)).collect(), None => return Ok(false) },
+        };
+        self.set_handle_text(h, &new)?;
+        self.sync_text(win, idx)?;
+        Ok(true)
     }
 
     /// The frontmost dialog window.
@@ -459,8 +488,9 @@ fn is_dialog_event<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<
     let hit = match what {
         6 | 8 => is_dialog(message),
         1 => { let (part, win) = m.find_window(v, h); part == crate::toolbox::IN_CONTENT && is_dialog(win) }
-        3 | 5 => m.z.first().is_some_and(|&w| is_dialog(w)),
-        _ => false,
+        // any other event (keyDown, autoKey, null, ...) is the FRONT window's when that is a dialog (IM I-416; Executor dialHandle.cpp
+        // C_IsDialogEvent): a modeless dialog's loop hands its null events to DialogSelect, which is how a hit the host reported is collected
+        _ => m.z.first().is_some_and(|&w| is_dialog(w)),
     };
     Ok(Done { result: u32::from(hit), log: format!("[dialog] IsDialogEvent what {what} -> {hit}") })
 }

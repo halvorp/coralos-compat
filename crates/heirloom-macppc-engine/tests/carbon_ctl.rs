@@ -255,3 +255,116 @@ fn control_data_fontstyle_viewsize_and_theme_background() {
     for bad in [0i32, 49, -3] { assert_eq!(calli(&mut m, "SetThemeBackground", &[bad as u32, 8, 1]), -30560, "brush {bad}"); assert_eq!(bk(&mut m), vec![0xFFFF; 3], "no port change on a bad brush"); }
     assert_eq!(call(&mut m, "SetThemeBackground", &[1, 8, 1]), 0, "a theme brush is accepted (the host paints it)");
 }
+
+/// StdFilterProc (spec DialogsLib/StdFilterProc.md vectors): Return/Enter hit the default item, Escape and Command-period the cancel item, anything else is FALSE
+/// with itemHit untouched; SetDialogTracksCursor sets bit 0x08 of the flag byte at +0x71 and NULL is paramErr. The Warcraft III Installer's dialog filters call both.
+#[test]
+fn std_filter_proc_maps_return_escape_and_command_period_and_tracks_cursor_sets_its_bit() {
+    let (mut m, dlg) = dialog_machine();
+    const EV: u32 = 0x3600;
+    let key = |m: &mut M, what: u16, ch: u8, mods: u16| {
+        m.mac.mem.write_u16(EV, what).unwrap();
+        m.mac.mem.write_u32(EV + 2, u32::from(ch)).unwrap();
+        m.mac.mem.write_u16(EV + 14, mods).unwrap();
+        m.mac.mem.write_u16(OUT, 0x7777).unwrap();
+    };
+    key(&mut m, 3, 0x0D, 0);
+    assert_eq!(call(&mut m, "StdFilterProc", &[dlg, EV, OUT]), 1, "Return");
+    assert_eq!(m.mac.mem.read_u16(OUT).unwrap(), 1, "the default item");
+    key(&mut m, 5, 0x03, 0);
+    assert_eq!(call(&mut m, "StdFilterProc", &[dlg, EV, OUT]), 1, "Enter (autoKey)");
+    call(&mut m, "SetDialogCancelItem", &[dlg, 2]);
+    key(&mut m, 3, 0x1B, 0);
+    assert_eq!((call(&mut m, "StdFilterProc", &[dlg, EV, OUT]), m.mac.mem.read_u16(OUT).unwrap()), (1, 2), "Escape: the cancel item");
+    key(&mut m, 3, b'.', 0x0100);
+    assert_eq!((call(&mut m, "StdFilterProc", &[dlg, EV, OUT]), m.mac.mem.read_u16(OUT).unwrap()), (1, 2), "Command-period");
+    // NEGATIVE controls: a plain '.', a letter, a mouseDown are not the filter's
+    for (what, ch, mods) in [(3u16, b'.', 0u16), (3, b'a', 0), (1, 0, 0)] {
+        key(&mut m, what, ch, mods);
+        assert_eq!(call(&mut m, "StdFilterProc", &[dlg, EV, OUT]), 0, "{what} {ch}");
+        assert_eq!(m.mac.mem.read_u16(OUT).unwrap(), 0x7777, "itemHit untouched");
+    }
+    assert_eq!(call(&mut m, "SetDialogTracksCursor", &[dlg, 1]), 0);
+    assert_eq!(m.mac.mem.read_u8(dlg + 0x71).unwrap() & 0x08, 0x08);
+    call(&mut m, "SetDialogTracksCursor", &[dlg, 0]);
+    assert_eq!(m.mac.mem.read_u8(dlg + 0x71).unwrap() & 0x08, 0);
+    assert_eq!(calli(&mut m, "SetDialogTracksCursor", &[0, 1]), -50);
+}
+
+/// HideDialogItem / ShowDialogItem / FindDialogItem (spec vectors, DialogsLib/HideDialogItem.md + ShowDialogItem.md): hiding moves the item's rect right
+/// by 0x4000 (its control follows), a second hide changes nothing, show restores it; FindDialogItem is 0-based and never finds a hidden item.
+#[test]
+fn hide_show_and_find_dialog_items_use_the_classic_offset_encoding() {
+    let (mut m, dlg) = dialog_machine();
+    let before = m.mac.tr.dlg.dialogs[&dlg].list[0].rect;
+    let ctl = m.mac.tr.dlg.dialogs[&dlg].list[0].handle;
+    let inside = ((before.top as u16 as u32) + 1) << 16 | (before.left as u16 as u32 + 1);
+    assert_eq!(calli(&mut m, "FindDialogItem", &[dlg, inside]) as i16, 0, "item 1 is index 0");
+    call(&mut m, "HideDialogItem", &[dlg, 1]);
+    let hidden = m.mac.tr.dlg.dialogs[&dlg].list[0].rect;
+    assert_eq!((hidden.top, hidden.left, hidden.bottom, hidden.right), (before.top, before.left + 0x4000, before.bottom, before.right + 0x4000));
+    call(&mut m, "GetControlBounds", &[ctl, OUT]);
+    assert_eq!(rect_at(&m, OUT)[1], before.left + 0x4000, "the control moved with the item");
+    assert_ne!(calli(&mut m, "FindDialogItem", &[dlg, inside]) as i16, 0, "a hidden item is never found");
+    call(&mut m, "HideDialogItem", &[dlg, 1]);
+    assert_eq!(m.mac.tr.dlg.dialogs[&dlg].list[0].rect, hidden, "NEGATIVE CONTROL: hiding a hidden item changes nothing");
+    call(&mut m, "ShowDialogItem", &[dlg, 1]);
+    assert_eq!(m.mac.tr.dlg.dialogs[&dlg].list[0].rect, before);
+    assert_eq!(calli(&mut m, "FindDialogItem", &[dlg, inside]) as i16, 0);
+    // no effect for item 0, item 99 or a NULL dialog; FindDialogItem outside every item and on NULL is -1
+    call(&mut m, "HideDialogItem", &[dlg, 99]);
+    call(&mut m, "HideDialogItem", &[dlg, 0]);
+    call(&mut m, "HideDialogItem", &[0, 1]);
+    assert_eq!(m.mac.tr.dlg.dialogs[&dlg].list[0].rect, before);
+    assert_eq!(calli(&mut m, "FindDialogItem", &[dlg, 0x7000_7000]) as i16, -1);
+    assert_eq!(calli(&mut m, "FindDialogItem", &[0, inside]) as i16, -1);
+}
+
+/// DialogCut / DialogCopy / DialogPaste / DialogDelete (spec DialogsLib/DialogCut.md, classic dialog): the edit field (item 5, "Hello") through the desk
+/// scrap; with no edit field all four do nothing. The engine's field has no selection: the whole field is the selection (named limit).
+#[test]
+fn dialog_cut_copy_paste_delete_move_the_edit_field_through_the_desk_scrap() {
+    let (mut m, dlg) = dialog_machine();
+    let field = m.mac.tr.dlg.dialogs[&dlg].list[4].handle;
+    let text = |m: &M| { let b = m.mac.mm.block(field).unwrap(); m.mac.mem.bytes(m.mac.mem.span(b.ptr, b.size).unwrap()).unwrap().to_vec() };
+    assert_eq!(m.mac.mem.read_i16(dlg + 164).unwrap(), 4, "the edit text item is the edit field");
+    call(&mut m, "DialogCopy", &[dlg]);
+    assert_eq!(m.mac.scrap.get(*b"TEXT"), Some(&b"Hello"[..]));
+    assert_eq!(text(&m), b"Hello", "Copy leaves the field");
+    call(&mut m, "DialogCut", &[dlg]);
+    assert_eq!(text(&m), b"", "Cut empties it");
+    m.mac.scrap.zero();
+    m.mac.scrap.put(*b"TEXT", b"xy".to_vec());
+    call(&mut m, "DialogPaste", &[dlg]);
+    assert_eq!(text(&m), b"xy");
+    call(&mut m, "DialogDelete", &[dlg]);
+    assert_eq!(text(&m), b"");
+    assert_eq!(m.mac.scrap.get(*b"TEXT"), Some(&b"xy"[..]), "Delete leaves the scrap alone");
+    // DrawThemeListBoxFrame (spec vectors): state 2 or an empty / NULL rect are paramErr; a real rect in state 1 is 0
+    assert_eq!(calli(&mut m, "DrawThemeListBoxFrame", &[RECT, 1]), 0);
+    assert_eq!(calli(&mut m, "DrawThemeListBoxFrame", &[RECT, 2]), -50);
+    assert_eq!(calli(&mut m, "DrawThemeListBoxFrame", &[0, 1]), -50);
+    // NEGATIVE CONTROL: no edit field -> nothing happens
+    m.mac.mem.write_u16(dlg + 164, 0xFFFF).unwrap();
+    m.mac.scrap.zero();
+    call(&mut m, "DialogPaste", &[dlg]);
+    call(&mut m, "DialogCopy", &[dlg]);
+    assert_eq!(m.mac.scrap.get(*b"TEXT"), None);
+}
+
+/// ShortenDITL (spec DialogsLib/ShowDialogItem.md): the last items go, their controls disposed and their native parts retired; CountDITL follows; a
+/// number past the count removes all.
+#[test]
+fn shorten_ditl_removes_the_last_items_and_their_parts() {
+    let (mut m, dlg) = dialog_machine();
+    assert_eq!(call(&mut m, "CountDITL", &[dlg]), 6);
+    let check = m.mac.tr.dlg.dialogs[&dlg].list[2].handle;
+    call(&mut m, "ShortenDITL", &[dlg, 4]);
+    assert_eq!(call(&mut m, "CountDITL", &[dlg]), 2, "items 3..6 are gone");
+    assert!(!m.mac.tr.procs.contains_key(&check), "the check box's control was disposed");
+    assert_eq!(m.mac.mem.read_i16(dlg + 164).unwrap(), -1, "the edit field (item 5) went with them");
+    call(&mut m, "ShortenDITL", &[dlg, 0]);
+    assert_eq!(call(&mut m, "CountDITL", &[dlg]), 2, "NEGATIVE CONTROL: 0 removes nothing");
+    call(&mut m, "ShortenDITL", &[dlg, 99]);
+    assert_eq!(call(&mut m, "CountDITL", &[dlg]), 0);
+}

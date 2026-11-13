@@ -37,7 +37,7 @@ fn load(pef: &[u8], rsrc: Option<&[u8]>) -> (MacPpc<RecordingGuestUi>, heirloom_
 }
 
 #[test]
-fn the_real_application_starts_up_loads_its_menus_and_stops_at_tenew() {
+fn the_real_application_starts_up_loads_its_menus_makes_its_list_and_reaches_its_event_loop() {
     let Some((pef, rsrc)) = showcase() else { return };
     let (mut m, frag) = load(&pef, Some(&rsrc));
     let c = Census::of(&frag);
@@ -45,7 +45,8 @@ fn the_real_application_starts_up_loads_its_menus_and_stops_at_tenew() {
     for lib in ["StdCLib/exit", "StdCLib/__setjmp", "StdCLib/_IntEnv", "StdCLib/__target_for_exit", "InterfaceLib/GetMenu", "InterfaceLib/BeginUpdate"] {
         assert!(!c.next_needed.contains(&lib.to_string()), "{lib} should be bound");
     }
-    assert!(c.next_needed.iter().any(|n| n == "QuickDrawª 3D/Q3Exit") && c.next_needed.iter().any(|n| n == "InterfaceLib/LNew"), "genuinely unserved imports stay named");
+    assert!(c.next_needed.iter().any(|n| n == "QuickDrawª 3D/Q3Exit"), "genuinely unserved imports stay named");
+    assert!(!c.next_needed.iter().any(|n| n == "InterfaceLib/LNew"), "the List Manager is bound since selector_c.rs (by value through the _Pack0 bodies)");
     let (step, insns) = m.run_loop(1_000_000);
     let log = m.mac.log.join("\n");
     // startup ran for real: the Init calls, then the application's own MBAR 128 and the MENU resources it names
@@ -54,9 +55,9 @@ fn the_real_application_starts_up_loads_its_menus_and_stops_at_tenew() {
     assert!(log.contains("GetMenu 142 -> menu 142 \"Renderer\" 3 items") && log.contains("DrawMenuBar: 4 menus"), "{log}");
     // ...and stops at TENew (TextEdit), by name, with the interpreter's instruction count. It used to stop earlier, at SetPalette:
     // the PowerPC import name of NSetPalette (symbols.rs INTERFACELIB_ALIASES); the colour window and its palette now go through.
-    // 2026-10-24: NewGWorld is served now (gworld.rs), so the named unserved import above is LNew. heirloom-mac68k-engine's TextEdit (textedit/) answers TENew, so the run goes on to the next import with no handler: the PowerPC
-    // List Manager's LNew (a PowerPC name of the _Pack0 selector; macppc's concern).
-    assert!(matches!(&step, Step::Fault(f) if f.starts_with("NEXT-NEEDED LNew")), "{step:?}");
+    // TENew (heirloom-mac68k-engine textedit/) and LNew (the List Manager by value, selector_c.rs) are both served: the showcase reaches its event loop
+    assert_eq!(step, Step::Blocked, "{:?}", m.fault());
+    assert!(m.mac.log.iter().any(|l| l.starts_with("[list] LNew")), "LNew ran: {:#?}", m.mac.log);
     assert!(m.mac.log.iter().any(|l| l.starts_with("[textedit] TENew")), "TENew ran: {:#?}", m.mac.log);
     assert!(insns > 400, "{insns} PowerPC instructions executed: past the SetPalette that used to stop it");
     // negative control: without the resource fork the same code asks for MBAR 128, finds none, and the application quits

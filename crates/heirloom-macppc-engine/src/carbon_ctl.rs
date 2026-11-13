@@ -7,6 +7,7 @@
 //! `RegisterAppearanceClient` is a truthful success: the Appearance Manager is part of this system and registering a client has no state to keep.
 //! Not done, left unbound so the program stops BY NAME: `HideWindow` (the host has no hide call, only open/close), `GetControlData`/`SetControlData` (tag-by-tag, as a program needs them),
 //! `StandardAlert`, `DrawThemeFocusRect`/`DrawThemeEditTextFrame`/`UseThemeFont`/`SetThemeBackground` (theme chrome is drawn by the host, never by the guest).
+//! `DrawThemeListBoxFrame` is answered (validated, nothing drawn): the List Manager's lists are native lists the host frames itself.
 use crate::clib::arg;
 use crate::machine::MacPpc;
 use alloc::collections::BTreeMap;
@@ -69,7 +70,7 @@ pub enum CxFn {
     GetDialogPort, GetDialogWindow, SetPortDialogPort, CountDITL, GetDialogKeyboardFocusItem, GetDialogTextEditHandle, SetDialogDefaultItem, SetDialogCancelItem,
     SetMenuItemCommandID, GetMenuItemCommandID,
     GetControlData, SetControlData, SetControlFontStyle, SetControlViewSize, GetControlViewSize, GetDialogItemAsControl, SetThemeBackground,
-    TestControl, KeyTranslate,
+    TestControl, KeyTranslate, StdFilterProc, SetDialogTracksCursor, DialogCut, DialogCopy, DialogPaste, DialogDelete, DrawThemeListBoxFrame, ShortenDITL,
     IsWindowVisible, IsWindowHilited, GetWindowFromPort, GetNextWindow, GetWindowList, GetWindowBounds, InvalWindowRect, GetRegionBounds,
 }
 
@@ -89,7 +90,8 @@ impl CxFn {
             "GetControlData" => GetControlData, "SetControlData" => SetControlData, "SetControlFontStyle" => SetControlFontStyle, "SetControlViewSize" => SetControlViewSize,
             "GetControlViewSize" => GetControlViewSize, "GetDialogItemAsControl" => GetDialogItemAsControl, "SetThemeBackground" => SetThemeBackground,
             "SetMenuItemCommandID" => SetMenuItemCommandID, "GetMenuItemCommandID" => GetMenuItemCommandID,
-            "TestControl" => TestControl, "KeyTranslate" => KeyTranslate,
+            "TestControl" => TestControl, "KeyTranslate" => KeyTranslate, "StdFilterProc" => StdFilterProc, "SetDialogTracksCursor" => SetDialogTracksCursor,
+            "DrawThemeListBoxFrame" => DrawThemeListBoxFrame, "ShortenDITL" => ShortenDITL, "DialogCut" => DialogCut, "DialogCopy" => DialogCopy, "DialogPaste" => DialogPaste, "DialogDelete" => DialogDelete,
             "IsWindowVisible" => IsWindowVisible, "IsWindowHilited" => IsWindowHilited, "GetWindowFromPort" => GetWindowFromPort, "GetNextWindow" => GetNextWindow,
             "GetWindowList" => GetWindowList, "GetWindowBounds" => GetWindowBounds, "InvalWindowRect" => InvalWindowRect, "GetRegionBounds" => GetRegionBounds,
             _ => return None,
@@ -206,6 +208,53 @@ impl<U: GuestUi> MacPpc<U> {
             GetDialogTextEditHandle => self.cx_u32(a0 + DR_TEXT_H, n)?,
             SetDialogDefaultItem => { self.mac.mem.write_u16(a0 + DR_DEF_ITEM, a1 as u16).map_err(|_| format!("{n}: dialog record leaves guest RAM"))?; 0 }
             SetDialogCancelItem => { self.cx.cancel.insert(a0, a1 as u16 as i16); 0 }
+            // StdFilterProc(dialog, &event, &itemHit) -> Boolean (spec macos9-specs/DialogsLib/StdFilterProc.md): the standard filter. A keyDown/autoKey Return or
+            // Enter hits the default item (aDefItem); Escape or Command-period hits the cancel item (SetDialogCancelItem); the hit goes to *itemHit and the answer is
+            // TRUE. Every other event is FALSE with nothing written (the program, then ModalDialog, handle it). The button flash is the host's to show.
+            StdFilterProc => {
+                let what = self.cx_u16(a1, n)?;
+                let (msg, mods) = (self.cx_u32(a1 + 2, n)?, self.cx_u16(a1 + 14, n)?);
+                let ch = (msg & 0xFF) as u8;
+                let hit = match what {
+                    3 | 5 if ch == 0x0D || ch == 0x03 => Some(self.cx_u16(a0 + DR_DEF_ITEM, n)? as i16),
+                    3 | 5 if ch == 0x1B || (ch == b'.' && mods & 0x0100 != 0) => self.cx.cancel.get(&a0).copied(),
+                    _ => None,
+                }.filter(|&i| i > 0);
+                match hit {
+                    Some(i) => { self.mac.mem.write_u16(a2, i as u16).map_err(|_| format!("{n}: itemHit {a2:#x} leaves guest RAM"))?; self.mac.log.push(format!("[dialog] StdFilterProc {a0:#x}: key {ch:#04x} -> item {i}")); 1 }
+                    None => 0,
+                }
+            }
+            // DrawThemeListBoxFrame(&bounds, state) (spec AppearanceLib/ThemeBrushes.md): state 0/1 and a non-empty rect, else paramErr. The frame is theme chrome:
+            // the host draws it around the native list it shows (a list with a program-drawn LDEF gets no frame: named limit, logged).
+            DrawThemeListBoxFrame => {
+                if a1 > 1 || a0 == 0 { (-50i32) as u32 } else {
+                    let r = self.cx_rect(a0, n)?;
+                    if r.bottom <= r.top || r.right <= r.left { (-50i32) as u32 } else {
+                        self.mac.log.push(format!("[appearance] DrawThemeListBoxFrame ({},{},{},{}): theme chrome, drawn by the host around its native list", r.top, r.left, r.bottom, r.right));
+                        0
+                    }
+                }
+            }
+            // ShortenDITL(dialog, numberItems): the last items go (heirloom-mac68k-engine Mac::shorten_ditl)
+            ShortenDITL => { let n = self.mac.shorten_ditl(a0, a1 as u16 as i16).map_err(|e| e.0)?; self.mac.log.push(format!("[dialog] ShortenDITL {a0:#x}: {n} item(s) removed")); 0 }
+            // DialogCut / DialogCopy / DialogPaste / DialogDelete(dialog): the edit field's text through the desk scrap (heirloom-mac68k-engine Mac::dialog_edit)
+            DialogCut | DialogCopy | DialogPaste | DialogDelete => {
+                use heirloom_mac68k_engine::translate::dialogs::DialogEdit;
+                let op = match f { DialogCut => DialogEdit::Cut, DialogCopy => DialogEdit::Copy, DialogPaste => DialogEdit::Paste, _ => DialogEdit::Delete };
+                let done = self.mac.dialog_edit(a0, op).map_err(|e| e.0)?;
+                self.mac.log.push(format!("[dialog] {n} {a0:#x}{}", if done { "" } else { ": no edit field (or nothing to paste)" }));
+                0
+            }
+            // SetDialogTracksCursor(dialog, tracks) -> OSErr (spec DialogsLib/ShowDialogItem.md): bit 0x08 of the window's flag byte at +0x71; NULL is paramErr. The
+            // host draws the pointer over its own fields, so the bit is the record's truth for a program that reads it back.
+            SetDialogTracksCursor => {
+                if a0 == 0 { (-50i32) as u32 } else {
+                    let b = self.mac.mem.read_u8(a0 + 0x71).map_err(|_| format!("{n}: dialog record leaves guest RAM"))?;
+                    self.mac.mem.write_u8(a0 + 0x71, if a1 & 0xFF != 0 { b | 0x08 } else { b & !0x08 }).map_err(|_| format!("{n}: dialog record leaves guest RAM"))?;
+                    0
+                }
+            }
             // ---- menus: the command ID a chosen item carries in kEventCommandProcess; paramErr (-50) for a menu or item that does not exist
             SetMenuItemCommandID | GetMenuItemCommandID => {
                 let item = a1 as u16;
