@@ -56,6 +56,9 @@ pub enum AeFn {
     PutParamPtr, PutParamDesc, GetParamPtr, GetParamDesc, SizeOfParam, DeleteParam,
     PutAttributePtr, PutAttributeDesc, GetAttributePtr, GetAttributeDesc, SizeOfAttribute,
     CoerceDesc, CoercePtr, CreateAppleEvent, Send, GetDescDataSize, GetDescData, ReplaceDescData,
+    ObjectInit, SetObjectCallbacks, InstallObjectAccessor, RemoveObjectAccessor, Resolve,
+    CreateObjSpecifier, CreateRangeDescriptor, CreateOffsetDescriptor,
+    InstallCoercionHandler, RemoveCoercionHandler, GetCoercionHandler, ManagerInfo,
 }
 impl AeFn {
     pub fn by_name(name: &str) -> Option<AeFn> {
@@ -74,6 +77,12 @@ impl AeFn {
             "AEGetAttributeDesc" => GetAttributeDesc, "AESizeOfAttribute" => SizeOfAttribute,
             "AECoerceDesc" => CoerceDesc, "AECoercePtr" => CoercePtr, "AECreateAppleEvent" => CreateAppleEvent, "AESend" => Send,
             "AEGetDescDataSize" => GetDescDataSize, "AEGetDescData" => GetDescData, "AEReplaceDescData" => ReplaceDescData,
+            "AEObjectInit" => ObjectInit, "AESetObjectCallbacks" => SetObjectCallbacks,
+            "AEInstallObjectAccessor" => InstallObjectAccessor, "AERemoveObjectAccessor" => RemoveObjectAccessor,
+            "AEResolve" => Resolve, "CreateObjSpecifier" => CreateObjSpecifier,
+            "CreateRangeDescriptor" => CreateRangeDescriptor, "CreateOffsetDescriptor" => CreateOffsetDescriptor,
+            "AEInstallCoercionHandler" => InstallCoercionHandler, "AERemoveCoercionHandler" => RemoveCoercionHandler,
+            "AEGetCoercionHandler" => GetCoercionHandler, "AEManagerInfo" => ManagerInfo,
             _ => return None,
         })
     }
@@ -163,6 +172,18 @@ impl<U: GuestUi> MacPpc<U> {
             CreateDesc => { let d = self.ae_bytes(a1, a2, "AECreateDesc")?; self.mac.ae_create_desc(a3, a0, &d).map(|_| 0) }
             DisposeDesc => m.ae_dispose_desc(a0).map(|_| 0),
             DuplicateDesc => m.ae_duplicate_desc(a0, a1).map(|_| 0),
+            // ObjectSupportLib (AEObjects.h): accept initialization & accessor registration; object resolution reports errAENoSuchObject (-1728).
+            ObjectInit | SetObjectCallbacks | InstallObjectAccessor | RemoveObjectAccessor
+            | InstallCoercionHandler | RemoveCoercionHandler => Ok(0),
+            GetCoercionHandler => Ok(ERR_AE_HANDLER_NOT_FOUND),
+            ManagerInfo => {
+                if a1 == 0 { Ok(-50) } else {
+                    let v = if a0 == fc(b"vers") { 0x0101 } else { 0 };
+                    self.put32(a1, v, "AEManagerInfo")?;
+                    Ok(0)
+                }
+            }
+            Resolve | CreateObjSpecifier | CreateRangeDescriptor | CreateOffsetDescriptor => Ok(-1728),
             CreateList => m.ae_create_list(a3, a2 & 0xFF != 0).map(|_| 0),
             CountItems => match m.ae_count_items(a0) { Ok(n) => { self.put32(a1, n, "AECountItems")?; Ok(0) } Err(e) => Err(e) },
             PutPtr => { let d = self.ae_bytes(a3, a(self, 4)?, "AEPutPtr")?; self.mac.ae_put_item(a0, a1 as i32, Entry { key: 0, ty: a2, structured: false, read: false, data: d }).map(|_| 0) }

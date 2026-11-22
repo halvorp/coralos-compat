@@ -27,14 +27,14 @@ pub struct SysState { location: [u8; 12], /// the Font Manager's SetOutlinePrefe
     pub(crate) preserve_glyph: bool }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SysFn { ConvertLocalTimeToUTC, ConvertUTCToLocalTime, ConvertUTCToLocalDateTime, ConvertLocalToUTCDateTime, DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr, DMGetDisplayIDByGDevice, UpdateSystemActivity, RegisterComponentResourceFile, OpenADefaultComponent }
+pub enum SysFn { ConvertLocalTimeToUTC, ConvertUTCToLocalTime, ConvertUTCToLocalDateTime, ConvertLocalToUTCDateTime, DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr, DMGetDisplayIDByGDevice, UpdateSystemActivity, RegisterComponentResourceFile, OpenADefaultComponent, HMGetHelpMenuHandle }
 
 impl SysFn {
     pub fn by_name(name: &str) -> Option<SysFn> {
         use SysFn::*;
         Some(match name {
             "DMGetFirstScreenDevice" => DMGetFirstScreenDevice, "DMGetNextScreenDevice" => DMGetNextScreenDevice,
-            "ReadLocation" => ReadLocation, "ConvertLocalTimeToUTC" => ConvertLocalTimeToUTC, "ConvertUTCToLocalTime" => ConvertUTCToLocalTime, "ConvertUTCToLocalDateTime" => ConvertUTCToLocalDateTime, "ConvertLocalToUTCDateTime" => ConvertLocalToUTCDateTime, "WriteLocation" => WriteLocation, "DMGetDisplayIDByGDevice" => DMGetDisplayIDByGDevice, "DebugStr" => DebugStr, "UpdateSystemActivity" => UpdateSystemActivity, "RegisterComponentResourceFile" => RegisterComponentResourceFile, "OpenADefaultComponent" => OpenADefaultComponent,
+            "ReadLocation" => ReadLocation, "ConvertLocalTimeToUTC" => ConvertLocalTimeToUTC, "ConvertUTCToLocalTime" => ConvertUTCToLocalTime, "ConvertUTCToLocalDateTime" => ConvertUTCToLocalDateTime, "ConvertLocalToUTCDateTime" => ConvertLocalToUTCDateTime, "WriteLocation" => WriteLocation, "DMGetDisplayIDByGDevice" => DMGetDisplayIDByGDevice, "DebugStr" => DebugStr, "UpdateSystemActivity" => UpdateSystemActivity, "RegisterComponentResourceFile" => RegisterComponentResourceFile, "OpenADefaultComponent" => OpenADefaultComponent, "HMGetHelpMenuHandle" => HMGetHelpMenuHandle,
             _ => return None,
         })
     }
@@ -78,6 +78,12 @@ impl<U: GuestUi> MacPpc<U> {
             // resources. This engine runs no third-party components (QuickTime's are refused per call, qt_c.rs): it registers none and says so (0), which is
             // the honest count; a program that needs one of them finds it missing at the call that asks for it.
             RegisterComponentResourceFile => { self.mac.log.push(format!("[component] RegisterComponentResourceFile file {} -> 0 components (none are run here)", a0 as i16)); 0 }
+            // HMGetHelpMenuHandle(MenuHandle* mh) -> OSErr (Balloons.h): no Balloon Help menu is installed, so *mh = NIL and
+            // hmHelpManagerNotInited (-850). Apps check `err == noErr && mh != NULL` before appending custom help items.
+            HMGetHelpMenuHandle => {
+                if a0 != 0 { self.mac.mem.write_u32(a0, 0).map_err(|_| format!("{n}: the result pointer leaves guest RAM"))?; }
+                (-850i32) as u32
+            }
             // OpenADefaultComponent(componentType, componentSubType, &ci) -> OSErr: no component is registered here (see above), so there is none to open:
             // *ci = NIL and invalidComponentID (-3000), the Component Manager's "no such component"; named in the log with the type asked for.
             OpenADefaultComponent => {

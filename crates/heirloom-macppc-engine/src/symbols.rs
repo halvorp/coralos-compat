@@ -276,8 +276,8 @@ const NEEDS_68K_RUN_LOOP: &[(&str, &str)] = &[
 /// InvertOval/InvertArc/InvertPoly already match.
 pub const INTERFACELIB_ALIASES: &[(&str, &str)] = &[("GetMenu", "GetRMenu"), ("BeginUpdate", "BeginUpDate"), ("EndUpdate", "EndUpDate"), ("XorRgn", "XOrRgn"), ("SetPalette", "NSetPalette"), ("SetPortBits", "SetPBits"),
     ("DisableMenuItem", "DisableItem"), ("CountMenuItems", "CountMItems"), ("EnableMenuItem", "EnableItem"), ("InvertRect", "InverRect"), ("InvertRoundRect", "InverRoundRect"), ("InvertRgn", "InverRgn"),
-    // Fonts.h / Dialogs.h names of _GetFName and _UpdtDialog (Installer VISE imports both)
-    ("GetFontName", "GetFName"), ("UpdateDialog", "UpdtDialog"),
+    // Fonts.h / Dialogs.h / Controls.h names of _GetFName, _UpdtDialog, _UpdtControl
+    ("GetFontName", "GetFName"), ("UpdateDialog", "UpdtDialog"), ("UpdateControls", "UpdtControl"),
     // Controls.h (Mac OS 8.5 / Carbon): DrawControlInCurrentPort draws the control as Draw1Control does (a native control is drawn by the host in
     // its own window whichever port is current)
     ("DrawControlInCurrentPort", "Draw1Control"),
