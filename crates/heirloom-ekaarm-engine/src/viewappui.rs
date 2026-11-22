@@ -77,6 +77,13 @@ pub(crate) fn start_activation(p: &mut Process, appui: u32, cont: impl FnOnce(u3
     let spec = SlotSpec { class: "CAknView", method: "AknViewActivatedL", slot: SLOT_VIEW_AKN_VIEW_ACTIVATED_L, inherited: INHERITED_AKN_VIEW_ACTIVATED_L };
     let target = anchor(p, view, &spec)?;
     p.appui_state(appui)?.active = Some(view);
+    if let Some(crate::objects::HostObj::View(v)) = p.obj_get(view) {
+        if !v.menu.is_empty() {
+            let titles = v.menu.clone();
+            p.project_menu_bar(&titles)?;
+            p.nat.shell.menu = titles;
+        }
+    }
     p.log.push(format!("[viewappui] activating view {view:#x} (message id {msg_id:#x}, {} bytes)", msg.len()));
     p.call_guest(target, &[view, block, msg_id, desc], cont(block))
 }

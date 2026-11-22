@@ -12,6 +12,7 @@ use crate::loader::Process;
 #[derive(Debug, Clone, Default)]
 pub struct ViewState {
     pub resource_id: u32,
+    pub menu: Vec<crate::shell::MenuTitle>,
 }
 
 /// The host state of a list box: the model the guest filled (`CTextListBoxModel::iItemTextArray`) is in guest memory; this is the
@@ -140,6 +141,8 @@ pub enum HostObj {
     /// A bitmap made for an icon (icons.rs).
     IconBitmap(crate::icons::IconBitmap),
     ColorArray(crate::colorlist::ColorArrayState),
+    /// A `CDir` directory entry list returned by `RFs::GetDir` (fs.rs).
+    Dir(Vec<String>),
 }
 
 #[derive(Default)]

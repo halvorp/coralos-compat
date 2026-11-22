@@ -135,6 +135,45 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             p.nat.cleanup.push(crate::cleanup::CleanupItem::Any(buf));
             NativeOutcome::Return
         }
+        // CDesC16ArrayFlat* CCoeEnv::ReadDesC16ArrayResourceL(TInt aResourceId) (coemain.h):
+        // reads an ARRAY of LTEXT items from the resource into a newly allocated CDesC16ArrayFlat.
+        "_ZN7CCoeEnv24ReadDesC16ArrayResourceLEi" => {
+            let res_id = p.cpu.regs[1];
+            let res = (|| -> Result<u32, String> {
+                let bytes = p.resource(res_id)?;
+                let mut r = heirloom_fmt_rsc::Reader::new(&bytes);
+                let count = r.word().map_err(|e| format!("resource {res_id:#x}: {e:?}"))? as usize;
+                let mut items = alloc::vec::Vec::with_capacity(count);
+                for _ in 0..count {
+                    items.push(r.ltext().map_err(|e| format!("resource {res_id:#x}: {e:?}"))?);
+                }
+                let arr = p.alloc_zeroed(crate::listmodel::DESARR_SIZE)
+                    .ok_or_else(|| String::from("out of heap for CDesC16ArrayFlat"))?;
+                p.desarr_construct(arr, (count as u32).max(4))?;
+                for item in &items {
+                    let units: alloc::vec::Vec<u16> = item.encode_utf16().collect();
+                    p.desarr_append_units(arr, &units)?;
+                }
+                Ok(arr)
+            })();
+            match res {
+                Ok(arr) => { p.cpu.regs[0] = arr; NativeOutcome::Return }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")),
+            }
+        }
+        // static void CEikonEnv::InfoWinL(const TDesC16& aFirstLine, const TDesC16& aSecondLine) (eikenv.h):
+        // non-blocking informational banner; static overload takes (r0, r1), const member overload takes (this, r1, r2).
+        "_ZN9CEikonEnv8InfoWinLERK7TDesC16S2_" | "_ZNK9CEikonEnv8InfoWinLERK7TDesC16S2_" => {
+            let (a1, a2) = if name.starts_with("_ZNK") {
+                (p.cpu.regs[1], p.cpu.regs[2])
+            } else {
+                (p.cpu.regs[0], p.cpu.regs[1])
+            };
+            let l1 = crate::desc::read16(p, a1).map(|u| crate::desc::to_utf8(&u)).unwrap_or_default();
+            let l2 = crate::desc::read16(p, a2).map(|u| crate::desc::to_utf8(&u)).unwrap_or_default();
+            p.log.push(format!("[eikcore] InfoWinL \"{l1}\" / \"{l2}\""));
+            NativeOutcome::Return
+        }
         // CCoeEnv::Static(): the process-wide environment (coemain.h `static inline CCoeEnv* Static()`), the singleton.
         "_ZN7CCoeEnv6StaticEv" => match p.coe_env() {
             Ok(e) => { p.cpu.regs[0] = e; NativeOutcome::Return }

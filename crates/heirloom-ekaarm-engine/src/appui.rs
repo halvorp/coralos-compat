@@ -38,6 +38,19 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let ok = [tl.0, tl.1, br.0, br.1].iter().enumerate().all(|(i, v)| p.mem.vm.write_u32(this.wrapping_add(i as u32 * 4), *v as u32).is_ok());
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED eikcore {name}: result at {this:#x} unwritable")) }
         }
+        // CAknAppUiBase::Exit() (aknappui.h): terminate the application cleanly.
+        "_ZN13CAknAppUiBase4ExitEv" => NativeOutcome::Exit(0),
+        // CAknAppUiBase::SetFullScreenApp(TBool) / IsFullScreenApp() const (aknappui.h).
+        "_ZN13CAknAppUiBase16SetFullScreenAppEi" => {
+            p.nat.shell.full_screen_app = p.cpu.regs[1] != 0;
+            NativeOutcome::Return
+        }
+        "_ZNK13CAknAppUiBase15IsFullScreenAppEv" => {
+            p.cpu.regs[0] = u32::from(p.nat.shell.full_screen_app);
+            NativeOutcome::Return
+        }
+        // CAknAppUi::SetKeyBlockMode(TAknKeyBlockMode) (aknappui.h): hardware keypad guard; no-op on desktop host.
+        "_ZN9CAknAppUi15SetKeyBlockModeE16TAknKeyBlockMode" => NativeOutcome::Return,
         _ => return None,
     })
 }

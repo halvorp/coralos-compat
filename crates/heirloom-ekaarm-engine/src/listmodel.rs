@@ -28,18 +28,31 @@ const BASE_SLOTS: usize = 3;
 
 impl Process {
     /// `CDesC16ArrayFlat::CDesC16ArrayFlat(TInt aGranularity)`.
-    fn desarr_construct(&mut self, this: u32, gran: u32) -> Result<(), String> {
+    pub(crate) fn desarr_construct(&mut self, this: u32, gran: u32) -> Result<(), String> {
         let rep = self.engine_stub(REP_FLAT)?;
         self.array_construct(this, rep, 4, gran)?;
-        let vptr = self.build_vtable("CDesC16ArrayFlat", &slots_with_gaps(BASE_SLOTS, &[(0, "_ZN16CDesC16ArrayFlatD1Ev"), (1, "_ZN16CDesC16ArrayFlatD0Ev"), (2, "_ZN5CBase10Extension_EjRPvS0_")]))?;
+        // CDesC16Array inherits CArrayFixBase (slots 0..2: ~D1, ~D0, Extension_) and MDesC16Array
+        // (slots 3..4 on primary vtable: MdcaCount, MdcaPoint; plus secondary thunk vtable at +24).
+        let vptr = self.build_vtable(
+            "CDesC16ArrayFlat",
+            &slots_with_gaps(
+                BASE_SLOTS + 2,
+                &[
+                    (0, "_ZN16CDesC16ArrayFlatD1Ev"),
+                    (1, "_ZN16CDesC16ArrayFlatD0Ev"),
+                    (2, "_ZN5CBase10Extension_EjRPvS0_"),
+                    (3, "_ZNK12CDesC16Array9MdcaCountEv"),
+                    (4, "_ZNK12CDesC16Array9MdcaPointEi"),
+                ],
+            ),
+        )?;
         let mdesc = self.build_vtable("MDesC16Array", &[Some(MDESC_COUNT), Some(MDESC_POINT)])?;
         self.wr(this, vptr)?;
         self.wr(this + MDESC_BASE, mdesc)
     }
 
-    /// `CDesC16Array::AppendL(const TDesC16&)`: a copy of the descriptor's text goes in as the last item.
-    fn desarr_append(&mut self, this: u32, des: u32) -> Result<(), String> {
-        let text = desc::read16(self, des)?;
+    /// Append a UTF-16 slice directly into a `CDesC16Array` (used by `AppendL` and `ReadDesC16ArrayResourceL`).
+    pub(crate) fn desarr_append_units(&mut self, this: u32, text: &[u16]) -> Result<(), String> {
         let cell = self.alloc_zeroed(4 + text.len() as u32 * 2 + 2).ok_or_else(|| String::from("out of memory for an item (leaves KErrNoMemory: EHABI unwinding is slice 1b)"))?;
         self.wr(cell, text.len() as u32)?; // type 0 = TBufC16: the data follows
         for (i, u) in text.iter().enumerate() {
@@ -47,6 +60,12 @@ impl Process {
         }
         let count = self.rd(this + ARR_I_COUNT)?;
         self.array_insert_record(this, count as i32, cell.to_le_bytes().to_vec())
+    }
+
+    /// `CDesC16Array::AppendL(const TDesC16&)`: a copy of the descriptor's text goes in as the last item.
+    fn desarr_append(&mut self, this: u32, des: u32) -> Result<(), String> {
+        let text = desc::read16(self, des)?;
+        self.desarr_append_units(this, &text)
     }
 
     /// The item cell at `index` of the descriptor array at `this`.

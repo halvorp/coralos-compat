@@ -73,12 +73,14 @@ impl Process {
         self.write_words(this, &[(VIEWINFO_VERSION, version), (VIEWINFO_HOT_KEYS, hot), (VIEWINFO_MENU, menu), (VIEWINFO_CBA, cba), (VIEWINFO_TOOLBAR, toolbar), (VIEWINFO_EXTENSION, ext)])?;
         // ConstructMenuAndCbaL: the menu bar and the CBA the view names, built from their resources and recorded (shell.rs); the guest
         // sees `iMenu` and `iCba` as objects. DELETE WHEN slice 4 projects them as native kit menus and buttons.
+        let mut view_menu = alloc::vec::Vec::new();
         if menu != 0 {
             let titles = self.read_menu_bar(menu)?;
             let bar = self.make_control("CEikMenuBar", 0x80, &[])?;
             let summary: alloc::vec::Vec<String> = titles.iter().map(|t| format!("{}[{}]", t.text, t.items.iter().map(|i| i.text.as_str()).collect::<alloc::vec::Vec<_>>().join(","))).collect();
             self.log.push(format!("[shell] menu bar: {}", summary.join(" ")));
             self.project_menu_bar(&titles)?;
+            view_menu = titles.clone();
             self.nat.shell.menu = titles;
             self.nat.shell.menu_bar = Some(bar);
             self.write_words(this, &[(VIEW_I_MENU, bar)])?;
@@ -92,6 +94,7 @@ impl Process {
         }
         if let Some(HostObj::View(v)) = self.obj_get(this) {
             v.resource_id = res_id;
+            v.menu = view_menu;
         }
         self.log.push(format!("[view] CAknView::BaseConstructL({res_id:#x}) on {this:#x}: menu {menu:#x} cba {cba:#x} toolbar {toolbar:#x} hotkeys {hot:#x} ext {ext:#x}"));
         Ok(())

@@ -54,6 +54,8 @@ pub struct ShellState {
     pub cba_buttons: Vec<CbaButton>,
     /// The decorators pushed on the navigation pane, bottom first (`navi.rs`).
     pub navi_stack: Vec<u32>,
+    /// Whether `CAknAppUiBase::SetFullScreenApp(ETrue)` was set.
+    pub full_screen_app: bool,
 }
 
 // ---- MEikAppUiFactory's primary vtable (eikaufty.h): MObjectProvider's four slots, then the factory's virtuals in declaration order.

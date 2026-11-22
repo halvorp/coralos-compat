@@ -131,6 +131,125 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZNK10TParseBase4NameEv" => match tparse_write_ptrc(p, this, r1, "name") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
         "_ZNK10TParseBase3ExtEv" => match tparse_write_ptrc(p, this, r1, "ext") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
         "_ZNK10TParseBase10NameAndExtEv" => match tparse_write_ptrc(p, this, r1, "name_and_ext") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
+        // TInt RFs::PrivatePath(TDes16& aPath) (f32file.h): writes `\private\<uid3:08x>\` into aPath.
+        "_ZN3RFs11PrivatePathER6TDes16" => {
+            if p.fs_session(this).is_none() {
+                return Some(refuse(format!("the session at {this:#x} is not connected")));
+            }
+            let path = format!("\\private\\{:08x}\\", p.uid3);
+            let units: alloc::vec::Vec<u16> = path.encode_utf16().collect();
+            match crate::desc::write16(p, r1, &units) {
+                Ok(()) => { p.cpu.regs[0] = KERR_NONE as u32; NativeOutcome::Return }
+                Err(m) => refuse(m),
+            }
+        }
+        // TBool BaflUtils::FolderExists(RFs& aFs, const TDesC16& aFolderName) (bautils.h)
+        "_ZN9BaflUtils12FolderExistsER3RFsRK7TDesC16" => {
+            let exists = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).ok().is_some_and(|path| {
+                p.host.drive.as_ref().is_some_and(|d| d.list(&path).is_ok() || d.list_rom(&path).is_some())
+            });
+            p.cpu.regs[0] = u32::from(exists);
+            NativeOutcome::Return
+        }
+        // TBool BaflUtils::FileExists(const RFs& aFs, const TDesC16& aFileName) (bautils.h)
+        "_ZN9BaflUtils10FileExistsERK3RFsRK7TDesC16" => {
+            let exists = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).ok().is_some_and(|path| {
+                p.host.drive.as_ref().is_some_and(|d| d.read_owned(&path).is_ok())
+            });
+            p.cpu.regs[0] = u32::from(exists);
+            NativeOutcome::Return
+        }
+        // void BaflUtils::EnsurePathExistsL(RFs& aFs, const TDesC16& aFileName) (bautils.h)
+        "_ZN9BaflUtils17EnsurePathExistsLER3RFsRK7TDesC16" => {
+            let res = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).and_then(|path| {
+                let dir = match path.rfind(['\\', '/']) {
+                    Some(i) => &path[..i],
+                    None => "",
+                };
+                if !dir.is_empty() {
+                    if let Some(d) = p.host.drive.as_mut() {
+                        d.make_dirs(dir).map_err(|e| format!("make_dirs({dir}): {e:?}"))?;
+                    }
+                }
+                Ok(())
+            });
+            match res { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) }
+        }
+        // TInt RFs::GetDir(const TDesC16& aName, TUint aEntryAttMask, TUint aEntrySortKey, CDir*& anEntryList) const (f32file.h):
+        // 5th arg `anEntryList` (pointer to CDir*) is on the ARM stack at [sp + 0].
+        "_ZNK3RFs6GetDirERK7TDesC16jjRP4CDir" => {
+            if p.fs_session(this).is_none() {
+                return Some(refuse(format!("the session at {this:#x} is not connected")));
+            }
+            let out_ptr_addr = match p.rd(p.cpu.regs[13]) {
+                Ok(a) => a,
+                Err(m) => return Some(refuse(format!("stack arg anEntryList: {m}"))),
+            };
+            let res = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).and_then(|path| {
+                let dir_path = match path.rfind(['\\', '/']) {
+                    Some(i) => &path[..i],
+                    None => path.as_str(),
+                };
+                let entries = p.host.drive.as_ref()
+                    .and_then(|d| d.list(dir_path).ok().or_else(|| d.list_rom(dir_path)))
+                    .unwrap_or_default();
+                let cdir = p.plain_object("CDir", 0x10)?;
+                p.obj_set(cdir, crate::objects::HostObj::Dir(entries))?;
+                p.wr(out_ptr_addr, cdir)?;
+                Ok(())
+            });
+            match res {
+                Ok(()) => { p.cpu.regs[0] = KERR_NONE as u32; NativeOutcome::Return }
+                Err(m) => refuse(m),
+            }
+        }
+        // TInt CDir::Count() const (f32file.h)
+        "_ZNK4CDir5CountEv" => match p.obj_get(this) {
+            Some(crate::objects::HostObj::Dir(entries)) => {
+                p.cpu.regs[0] = entries.len() as u32;
+                NativeOutcome::Return
+            }
+            _ => refuse(format!("{this:#x} is not a CDir this engine made")),
+        },
+        // const TEntry& CDir::operator[](TInt anIndex) const (f32file.h):
+        // TEntry layout (ARM EABI): iAtt(0), iSize(4), iModified(8, 8B), iType(16, 12B), iName(28, TBufC<256> = 516B).
+        "_ZNK4CDirixEi" => {
+            const TENTRY_SIZE: u32 = 28 + 4 + 256 * 2;
+            const TENTRY_NAME_OFF: u32 = 28;
+            let idx = r1 as i32;
+            let entry_name = match p.obj_get(this) {
+                Some(crate::objects::HostObj::Dir(entries)) if idx >= 0 && (idx as usize) < entries.len() => {
+                    entries[idx as usize].clone()
+                }
+                Some(crate::objects::HostObj::Dir(entries)) => {
+                    return Some(refuse(format!("CDir index {idx} out of bounds (count {})", entries.len())));
+                }
+                _ => return Some(refuse(format!("{this:#x} is not a CDir this engine made"))),
+            };
+            let res = (|| -> Result<u32, String> {
+                let cell = p.alloc_zeroed(TENTRY_SIZE).ok_or_else(|| String::from("out of heap for TEntry"))?;
+                let units: alloc::vec::Vec<u16> = entry_name.encode_utf16().take(256).collect();
+                p.wr(cell + TENTRY_NAME_OFF, units.len() as u32)?; // TBufC16 (type 0)
+                for (i, u) in units.iter().enumerate() {
+                    p.mem.vm.write_u16(cell + TENTRY_NAME_OFF + 4 + i as u32 * 2, *u)
+                        .map_err(|_| String::from("TEntry::iName unwritable"))?;
+                }
+                Ok(cell)
+            })();
+            match res {
+                Ok(cell) => { p.cpu.regs[0] = cell; NativeOutcome::Return }
+                Err(m) => refuse(m),
+            }
+        }
+        // CDir::~CDir() (f32file.h)
+        "_ZN4CDirD1Ev" | "_ZN4CDirD0Ev" => {
+            p.obj_remove(this);
+            if name.ends_with("D0Ev") {
+                if let Some(h) = p.heap.as_mut() { let _ = h.free(this); }
+            }
+            p.cpu.regs[0] = this;
+            NativeOutcome::Return
+        }
         // TInt RFs::CreatePrivatePath(TDriveNumber aDrive) (f32file.h): creates `\private\<secure id>\` on the drive. The secure id of an
         // application is its UID3. KErrAlreadyExists when it is there. The directory is made in the in-memory drive only.
         "_ZN3RFs17CreatePrivatePathEi" => {
@@ -170,16 +289,30 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // TVolumeInfo::TVolumeInfo(): zeroed (the name is an empty TBufC).
         "_ZN11TVolumeInfoC1Ev" => match (0..VOL_NAME_END / 4).try_for_each(|i| p.wr(this + i * 4, 0)) { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
         // TInt RFs::Volume(TVolumeInfo& aVol, TInt aDrive = KDefaultDrive) const (f32file.h:1876): the volume of a drive the confined drive answers
-        // to. Its media type is the device profile's (C: flash, Z: ROM); the drive is read-only, so the media is write protected and nothing is free;
-        // the size is the bytes of the files in it; no serial number (0) and no label (empty) are known. A drive it does not answer to has no
-        // media (KErrNotReady). DELETE WHEN the drive carries a volume label and serial from the install it was read from.
+        // to. Z: is read-only ROM (write-protected, 0 free); C: is writable internal flash with an in-memory overlay (writable, 64 MiB free).
+        // A drive it does not answer to has no media (KErrNotReady).
         "_ZNK3RFs6VolumeER11TVolumeInfoi" => {
             let Some(letter) = u8::try_from(r2).ok().filter(|d| *d < 26).map(|d| (b'A' + d) as char).filter(|l| crate::drive::Drive::LETTERS.contains(l)) else {
                 p.cpu.regs[0] = KERR_NOT_READY as u32;
                 return Some(NativeOutcome::Return);
             };
             let used = p.host.drive.as_ref().map_or(0, |d| d.used_bytes());
-            let fields = [(0, if letter == 'Z' { MEDIA_ROM } else { MEDIA_FLASH }), (4, 0), (8, drive_att(letter)), (12, MEDIA_ATT_WRITE_PROTECTED), (VOL_I_SIZE, used as u32), (VOL_I_SIZE + 4, (used >> 32) as u32), (VOL_I_FREE, 0), (VOL_I_FREE + 4, 0)];
+            let (media, media_att, free): (u32, u32, u64) = if letter == 'Z' {
+                (MEDIA_ROM, MEDIA_ATT_WRITE_PROTECTED, 0)
+            } else {
+                (MEDIA_FLASH, 0, 64 * 1024 * 1024)
+            };
+            let size = used.saturating_add(free);
+            let fields = [
+                (0, media),
+                (4, 0),
+                (8, drive_att(letter)),
+                (12, media_att),
+                (VOL_I_SIZE, size as u32),
+                (VOL_I_SIZE + 4, (size >> 32) as u32),
+                (VOL_I_FREE, free as u32),
+                (VOL_I_FREE + 4, (free >> 32) as u32),
+            ];
             match fields.iter().try_for_each(|(o, v)| p.wr(r1 + o, *v)) { Ok(()) => { p.cpu.regs[0] = KERR_NONE as u32; NativeOutcome::Return } Err(m) => refuse(m) }
         }
         // TInt RFs::GetDriveName(TInt aDrive, TDes& aDriveName) const: the user-set name of a drive; none is set (empty).

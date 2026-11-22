@@ -34,6 +34,15 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             });
             match made { Ok(d) => { p.cpu.regs[0] = d; NativeOutcome::Return } Err(m) => refuse(m) }
         }
+        // CAknNavigationDecorator* CAknNavigationControlContainer::ConstructNavigationDecoratorFromResourceL(TResourceReader&) (aknnavi.h):
+        // build an empty/label decorator from the resource reader (layout fields kept on host only).
+        "_ZN30CAknNavigationControlContainer41ConstructNavigationDecoratorFromResourceLER15TResourceReader" => {
+            let made = p.make_control("CAknNavigationDecorator", 0x80, &[]).and_then(|d| {
+                p.obj_set(d, HostObj::NaviDecorator(NaviDecorator { text: String::new(), control_type: NAVI_LABEL }))?;
+                Ok(d)
+            });
+            match made { Ok(d) => { p.cpu.regs[0] = d; NativeOutcome::Return } Err(m) => refuse(m) }
+        }
         // void CAknNavigationControlContainer::PushL(CAknNavigationDecorator&) (aknnavi.h:264): the pane shows its top decorator.
         "_ZN30CAknNavigationControlContainer5PushLER23CAknNavigationDecorator" => {
             let _ = this;

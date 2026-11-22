@@ -181,6 +181,12 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // TInt CEikListBox::CurrentItemIndex() const (eiklbx.h:435): iView->CurrentItemIndex() (EIKLBX.CPP:2324), the view's iCurrentItemIndex
         // (eiklbv.h:888). The list owns no copy: the guest's view is the one truth, and the host list is projected from it (listproject.rs).
         "_ZNK11CEikListBox16CurrentItemIndexEv" => { let r = p.rd(r0 + LB_I_VIEW).and_then(|v| if v == 0 { Err(String::from("CurrentItemIndex before ConstructL: no view (EEikPanicListBoxNoView on a device)")) } else { p.rd(v + VIEW_I_CURRENT) }); ret(p, r) }
+        "_ZNK11CEikListBox19SetCurrentItemIndexEi" | "_ZN11CEikListBox19SetCurrentItemIndexEi" => {
+            let r = p.rd(r0 + LB_I_VIEW)
+                .and_then(|v| if v == 0 { Err(String::from("SetCurrentItemIndex before ConstructL: no view")) } else { p.wr(v + VIEW_I_CURRENT, r1) })
+                .and_then(|_| p.list_sync(r0));
+            ret(p, r.map(|_| 0))
+        }
         "_ZNK11CEikListBox4ViewEv" => { let r = p.rd(r0 + LB_I_VIEW); ret(p, r) }
         "_ZN12CListBoxView17SetListEmptyTextLERK7TDesC16" => {
             let r = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).and_then(|t| { p.log.push(format!("[list] empty text: \"{t}\"")); p.obj_set(r0, HostObj::ListView(t)) });

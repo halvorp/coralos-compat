@@ -159,6 +159,21 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
             let ok = p.mem.vm.write_u32(this, len | DES_PTR_C << KSHIFT_DES_TYPE).is_ok() && p.mem.vm.write_u32(this.wrapping_add(4), ptr).is_ok();
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: descriptor at {this:#x} unwritable")) }
         }
+        // TPtrC16 TDesC16::Left(TInt aLength) const (e32des16.h): ARM EABI sret in r0, this in r1, aLength in r2.
+        "_ZNK7TDesC164LeftEi" => {
+            let sret = p.cpu.regs[0];
+            let src_addr = p.cpu.regs[1];
+            let want = p.cpu.regs[2] as i32;
+            match locate(p, src_addr) {
+                Ok(v) => {
+                    let len = (want.max(0) as u32).min(v.len);
+                    let ok = p.mem.vm.write_u32(sret, len | DES_PTR_C << KSHIFT_DES_TYPE).is_ok()
+                        && p.mem.vm.write_u32(sret.wrapping_add(4), v.data).is_ok();
+                    if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: sret at {sret:#x} unwritable")) }
+                }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
         _ => return None,
     })
 }

@@ -171,6 +171,11 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
                 NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: TVersion at {r0:#x} is unwritable"))
             }
         }
+        // TSecureId RProcess::SecureId() const (e32std.h): returns the process's UID3 as a 32-bit TSecureId.
+        "_ZNK8RProcess8SecureIdEv" => {
+            proc.cpu.regs[0] = proc.uid3;
+            NativeOutcome::Return
+        }
         // TFileName RProcess::FileName() const (e32std.h): ARM EABI returns TBuf<256> via sret pointer in r0.
         "_ZNK8RProcess8FileNameEv" => {
             const KMAX_FILE_NAME: u32 = 256;

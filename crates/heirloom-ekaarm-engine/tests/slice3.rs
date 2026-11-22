@@ -258,3 +258,130 @@ fn a_view_is_registered_by_the_uid_its_own_id_returns_and_activation_needs_a_kno
     ok(&mut p, default_view, &[appui, view + 4]);
     assert!(refused(&mut p, default_view, &[appui, view + 0x40]).contains("not a registered view"));
 }
+
+#[test]
+fn fs_private_path_bafl_utils_get_dir_and_volume_free_space() {
+    let names = [
+        "_ZN3RFs7ConnectEi",
+        "_ZN3RFs11PrivatePathER6TDes16",
+        "_ZN9BaflUtils17EnsurePathExistsLER3RFsRK7TDesC16",
+        "_ZN9BaflUtils12FolderExistsER3RFsRK7TDesC16",
+        "_ZN9BaflUtils10FileExistsERK3RFsRK7TDesC16",
+        "_ZNK3RFs6GetDirERK7TDesC16jjRP4CDir",
+        "_ZNK4CDir5CountEv",
+        "_ZNK4CDirixEi",
+        "_ZN4CDirD0Ev",
+        "_ZN11TVolumeInfoC1Ev",
+        "_ZNK3RFs6VolumeER11TVolumeInfoi",
+    ];
+    let mut p = proc(&names);
+    let mut drive = heirloom_ekaarm_engine::drive::Drive::new();
+    drive.put_file("c:\\data\\notes\\hello.txt", b"hi".to_vec()).unwrap();
+    p.set_drive(drive);
+
+    let rfs = alloc(&mut p, 8);
+    // NEGATIVE CONTROL: disconnected RFs must refuse PrivatePath and GetDir.
+    let buf = alloc(&mut p, 520);
+    wr(&mut p, buf, 3 << 28); // EBuf (TBuf16)
+    wr(&mut p, buf + 4, 256);
+    assert!(refused(&mut p, "_ZN3RFs11PrivatePathER6TDes16", &[rfs, buf]).contains("not connected"));
+
+    assert_eq!(ok(&mut p, "_ZN3RFs7ConnectEi", &[rfs, 0]), 0);
+    assert_eq!(ok(&mut p, "_ZN3RFs11PrivatePathER6TDes16", &[rfs, buf]), 0);
+    let len = rd(&mut p, buf) & 0x0fff_ffff;
+    let units: Vec<u16> = (0..len).map(|i| p.mem.read_u16(buf + 8 + i * 2).unwrap()).collect();
+    assert_eq!(String::from_utf16_lossy(&units), "\\private\\102828d6\\");
+
+    // BaflUtils: FolderExists / EnsurePathExistsL / FileExists
+    let new_file = tptrc16(&mut p, "c:\\data\\fresh\\item.cfg");
+    let new_dir = tptrc16(&mut p, "c:\\data\\fresh");
+    let existing_file = tptrc16(&mut p, "c:\\data\\notes\\hello.txt");
+    assert_eq!(ok(&mut p, "_ZN9BaflUtils12FolderExistsER3RFsRK7TDesC16", &[rfs, new_dir]), 0);
+    ok(&mut p, "_ZN9BaflUtils17EnsurePathExistsLER3RFsRK7TDesC16", &[rfs, new_file]);
+    assert_eq!(ok(&mut p, "_ZN9BaflUtils12FolderExistsER3RFsRK7TDesC16", &[rfs, new_dir]), 1);
+    assert_eq!(ok(&mut p, "_ZN9BaflUtils10FileExistsERK3RFsRK7TDesC16", &[rfs, existing_file]), 1);
+    assert_eq!(ok(&mut p, "_ZN9BaflUtils10FileExistsERK3RFsRK7TDesC16", &[rfs, new_file]), 0);
+
+    // RFs::GetDir + CDir::{Count, operator[], ~CDir}
+    let dir_pat = tptrc16(&mut p, "c:\\data\\notes\\*");
+    let cdir_slot = alloc(&mut p, 4);
+    let sp = p.cpu.regs[13];
+    wr(&mut p, sp, cdir_slot);
+    assert_eq!(ok(&mut p, "_ZNK3RFs6GetDirERK7TDesC16jjRP4CDir", &[rfs, dir_pat, 0, 0]), 0);
+    let cdir = rd(&mut p, cdir_slot);
+    assert_ne!(cdir, 0);
+    assert_eq!(ok(&mut p, "_ZNK4CDir5CountEv", &[cdir]), 1);
+    let entry = ok(&mut p, "_ZNK4CDirixEi", &[cdir, 0]);
+    let name_len = rd(&mut p, entry + 28) & 0x0fff_ffff;
+    let name_units: Vec<u16> = (0..name_len).map(|i| p.mem.read_u16(entry + 32 + i * 2).unwrap()).collect();
+    assert_eq!(String::from_utf16_lossy(&name_units), "hello.txt");
+    // NEGATIVE CONTROL: out-of-bounds CDir index refuses.
+    assert!(refused(&mut p, "_ZNK4CDirixEi", &[cdir, 1]).contains("out of bounds"));
+    ok(&mut p, "_ZN4CDirD0Ev", &[cdir]);
+    assert!(refused(&mut p, "_ZNK4CDir5CountEv", &[cdir]).contains("not a CDir"));
+
+    // RFs::Volume: C: (drive 2) is writable with non-zero free space; Z: (drive 25) is write-protected with 0 free.
+    let vol = alloc(&mut p, 600);
+    ok(&mut p, "_ZN11TVolumeInfoC1Ev", &[vol]);
+    assert_eq!(ok(&mut p, "_ZNK3RFs6VolumeER11TVolumeInfoi", &[rfs, vol, 2]), 0);
+    assert_eq!(rd(&mut p, vol + 12), 0, "C: is writable (media_att == 0)");
+    assert!(rd(&mut p, vol + 32) > 0, "C: reports free space");
+    assert_eq!(ok(&mut p, "_ZNK3RFs6VolumeER11TVolumeInfoi", &[rfs, vol, 25]), 0);
+    assert_ne!(rd(&mut p, vol + 12), 0, "Z: is write-protected ROM");
+    assert_eq!(rd(&mut p, vol + 32), 0, "Z: has 0 free bytes");
+}
+
+#[test]
+fn des_left_secure_id_des_array_primary_vtable_and_fullscreen_exit() {
+    let names = [
+        "_ZNK7TDesC164LeftEi",
+        "_ZNK8RProcess8SecureIdEv",
+        "_ZN16CDesC16ArrayFlatC1Ei",
+        "_ZN12CDesC16Array7AppendLERK7TDesC16",
+        "_ZN9CEikonEnv8InfoWinLERK7TDesC16S2_",
+        "_ZN13CAknAppUiBase16SetFullScreenAppEi",
+        "_ZNK13CAknAppUiBase15IsFullScreenAppEv",
+        "_ZN13CAknAppUiBase4ExitEv",
+    ];
+    let mut p = proc(&names);
+
+    // TDesC16::Left(TInt) with ARM EABI sret in r0
+    let src = tptrc16(&mut p, "SymbianBelle");
+    let sret = alloc(&mut p, 8);
+    ok(&mut p, "_ZNK7TDesC164LeftEi", &[sret, src, 7]);
+    assert_eq!(rd(&mut p, sret) & 0x0fff_ffff, 7);
+    let ptr = rd(&mut p, sret + 4);
+    let got: Vec<u16> = (0..7).map(|i| p.mem.read_u16(ptr + i * 2).unwrap()).collect();
+    assert_eq!(String::from_utf16_lossy(&got), "Symbian");
+    // Clamps to source length and negative length yields 0.
+    ok(&mut p, "_ZNK7TDesC164LeftEi", &[sret, src, 999]);
+    assert_eq!(rd(&mut p, sret) & 0x0fff_ffff, 12);
+    ok(&mut p, "_ZNK7TDesC164LeftEi", &[sret, src, (-5i32) as u32]);
+    assert_eq!(rd(&mut p, sret) & 0x0fff_ffff, 0);
+
+    // RProcess::SecureId returns uid3
+    assert_eq!(ok(&mut p, "_ZNK8RProcess8SecureIdEv", &[0]), p.uid3);
+
+    // CDesC16ArrayFlat primary vtable populates slots 3 (MdcaCount) and 4 (MdcaPoint)
+    let arr = alloc(&mut p, 0x20);
+    ok(&mut p, "_ZN16CDesC16ArrayFlatC1Ei", &[arr, 4]);
+    let item = tptrc16(&mut p, "Task1");
+    ok(&mut p, "_ZN12CDesC16Array7AppendLERK7TDesC16", &[arr, item]);
+    let vptr = rd(&mut p, arr);
+    let count_stub = rd(&mut p, vptr + 3 * 4);
+    let point_stub = rd(&mut p, vptr + 4 * 4);
+    assert_ne!(count_stub, 0, "primary vtable slot 3 (MdcaCount) must be non-null");
+    assert_ne!(point_stub, 0, "primary vtable slot 4 (MdcaPoint) must be non-null");
+
+    // Static CEikonEnv::InfoWinL reads r0 and r1
+    let l1 = tptrc16(&mut p, "Hello");
+    let l2 = tptrc16(&mut p, "World");
+    ok(&mut p, "_ZN9CEikonEnv8InfoWinLERK7TDesC16S2_", &[l1, l2]);
+    assert!(p.log.iter().any(|l| l.contains("InfoWinL \"Hello\" / \"World\"")), "{:?}", p.log);
+
+    // Full-screen toggle + Exit outcome
+    assert_eq!(ok(&mut p, "_ZNK13CAknAppUiBase15IsFullScreenAppEv", &[0]), 0);
+    ok(&mut p, "_ZN13CAknAppUiBase16SetFullScreenAppEi", &[0, 1]);
+    assert_eq!(ok(&mut p, "_ZNK13CAknAppUiBase15IsFullScreenAppEv", &[0]), 1);
+    assert!(matches!(call(&mut p, "_ZN13CAknAppUiBase4ExitEv", &[0]), (NativeOutcome::Exit(0), _)));
+}
