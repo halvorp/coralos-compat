@@ -305,13 +305,21 @@ impl GuestMem {
     #[inline]
     pub fn write_u32(&mut self, addr: u32, v: u32) -> Result<(), MemError> { self.write_n(addr, v.to_be_bytes()) }
 
-    /// Read a NUL-terminated string (lossy UTF-8, at most [`MAX_CSTR`] bytes).
+    /// Decode guest C string bytes: preserve valid UTF-8, otherwise interpret as ISO-8859-1 (AmigaOS native encoding, e.g. `0xA9` = `©`).
+    fn decode_cstr(s: &[u8]) -> String {
+        match core::str::from_utf8(s) {
+            Ok(utf8) => String::from(utf8),
+            Err(_) => s.iter().map(|&b| char::from(b)).collect(),
+        }
+    }
+
+    /// Read a NUL-terminated string (UTF-8 or ISO-8859-1, at most [`MAX_CSTR`] bytes).
     pub fn read_cstr(&self, addr: u32) -> Result<String, MemError> {
         let mut s = Vec::new();
         for i in 0..MAX_CSTR as u32 {
             let a = addr.checked_add(i).ok_or(MemError::OutOfRange { addr, len: 1 })?;
             let b = self.read_u8(a).map_err(|_| MemError::OutOfRange { addr, len: 1 })?;
-            if b == 0 { return Ok(String::from_utf8_lossy(&s).into_owned()); }
+            if b == 0 { return Ok(Self::decode_cstr(&s)); }
             s.push(b);
         }
         Err(MemError::Unterminated { addr, max: MAX_CSTR })
@@ -324,7 +332,7 @@ impl GuestMem {
         let mut a = addr;
         loop {
             let b = self.read_u8(a).map_err(|_| if s.is_empty() { MemError::OutOfRange { addr, len: 1 } } else { MemError::Unterminated { addr, max: s.len() } })?;
-            if b == 0 { return Ok(String::from_utf8_lossy(&s).into_owned()); }
+            if b == 0 { return Ok(Self::decode_cstr(&s)); }
             s.push(b);
             a = a.checked_add(1).ok_or(MemError::Unterminated { addr, max: s.len() })?;
         }
@@ -419,6 +427,8 @@ mod tests {
         let mut m = GuestMem::new(1024);
         m.write_bytes(10, b"Hello\0").unwrap();
         assert_eq!(m.read_cstr(10).unwrap(), "Hello");
+        m.write_bytes(30, b"SnoopDos 3.11 \xA9 Eddy\0").unwrap();
+        assert_eq!(m.read_cstr(30).unwrap(), "SnoopDos 3.11 \u{00A9} Eddy", "ISO-8859-1 copyright decodes cleanly, never U+FFFD");
         m.write_bytes(100, &[b'a'; 300]).unwrap();
         assert_eq!(m.read_cstr(100), Err(MemError::Unterminated { addr: 100, max: MAX_CSTR }));
         // string running off the end of RAM is an out-of-range refusal, not a panic

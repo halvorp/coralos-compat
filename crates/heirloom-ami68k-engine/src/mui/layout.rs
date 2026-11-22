@@ -219,7 +219,9 @@ fn leaf_size(c: &Ctx, o: u32, kind: Kind) -> Size {
     match roles::leaf(c.o, o) {
         Some(ControlKind::Label { text, framed }) => {
             let (pw, ph) = if framed { (FRAME_W, FRAME_H) } else { (0, 0) };
-            Size { w: c.text_w(&text) + pw, h: fy + ph, gw: !roles::is_label(c.o, o), gh: false }
+            let widest = text.split('\n').map(|line| c.text_w(line)).max().unwrap_or(0);
+            let lines = text.split('\n').count().max(1) as i32;
+            Size { w: widest + pw, h: lines * fy + ph, gw: !roles::is_label(c.o, o), gh: false }
         }
         Some(ControlKind::Button) | Some(ControlKind::ToggleButton { .. }) => {
             let text = roles::caption(c.o, o);
