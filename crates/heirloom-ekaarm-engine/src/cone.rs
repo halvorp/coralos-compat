@@ -161,6 +161,44 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")),
             }
         }
+        // void CCoeEnv::ReadResourceAsDes16(TDes16& aDes, TInt aResourceId) const (coemain.h):
+        "_ZNK7CCoeEnv19ReadResourceAsDes16ER6TDes16i" | "_ZN7CCoeEnv19ReadResourceAsDes16ER6TDes16i" => {
+            let (des, res_id) = (p.cpu.regs[1], p.cpu.regs[2]);
+            let r = p.resource(res_id).and_then(|bytes| {
+                let text = heirloom_fmt_rsc::Reader::new(&bytes).rest_utf16().map_err(|e| format!("resource {res_id:#x}: {e:?}"))?;
+                let units: alloc::vec::Vec<u16> = text.encode_utf16().collect();
+                crate::desc::write16(p, des, &units)
+            });
+            match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) }
+        }
+        // static HBufC16* StringLoader::LoadLC(TInt aResourceId, CCoeEnv* aLoaderEnv) / LoadL (StringLoader.h),
+        // and HBufC16* CCoeEnv::AllocReadResourceAsDes16LC(TInt aResourceId) const / AllocReadResourceAsDes16L (coemain.h):
+        // reads a TBUF resource into a freshly allocated HBufC16 (pushing onto CleanupStack for *LC).
+        "_ZN12StringLoader6LoadLCEiP7CCoeEnv" | "_ZN12StringLoader5LoadLEiP7CCoeEnv"
+        | "_ZNK7CCoeEnv26AllocReadResourceAsDes16LCEi" | "_ZNK7CCoeEnv25AllocReadResourceAsDes16LEi"
+        | "_ZNK7CCoeEnv19AllocReadResourceLCEi" | "_ZNK7CCoeEnv18AllocReadResourceLEi" => {
+            let is_member = name.starts_with("_ZNK7CCoeEnv");
+            let res_id = if is_member { p.cpu.regs[1] } else { p.cpu.regs[0] };
+            let push = name.contains("LCE");
+            let res = p.resource(res_id).and_then(|bytes| {
+                let text = heirloom_fmt_rsc::Reader::new(&bytes).rest_utf16().map_err(|e| format!("resource {res_id:#x}: {e:?}"))?;
+                let units: alloc::vec::Vec<u16> = text.encode_utf16().collect();
+                let hbuf = p.alloc_zeroed(4 + units.len() as u32 * 2)
+                    .ok_or_else(|| String::from("out of heap for HBufC16"))?;
+                p.wr(hbuf, units.len() as u32)?; // DES_BUF_C (type 0)
+                for (i, u) in units.iter().enumerate() {
+                    p.mem.vm.write_u16(hbuf + 4 + i as u32 * 2, *u).map_err(|_| String::from("HBufC16 unwritable"))?;
+                }
+                if push {
+                    p.nat.cleanup.push(crate::cleanup::CleanupItem::Any(hbuf));
+                }
+                Ok(hbuf)
+            });
+            match res {
+                Ok(hbuf) => { p.cpu.regs[0] = hbuf; NativeOutcome::Return }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")),
+            }
+        }
         // static void CEikonEnv::InfoWinL(const TDesC16& aFirstLine, const TDesC16& aSecondLine) (eikenv.h):
         // non-blocking informational banner; static overload takes (r0, r1), const member overload takes (this, r1, r2).
         "_ZN9CEikonEnv8InfoWinLERK7TDesC16S2_" | "_ZNK9CEikonEnv8InfoWinLERK7TDesC16S2_" => {

@@ -120,6 +120,20 @@ impl Drive {
         Ok(self.tree.children(id).iter().map(|&c| String::from(self.tree.name(c))).collect())
     }
 
+    /// The entries `(name, is_dir, size)` in the directory at `path`.
+    pub fn list_entries(&self, path: &str) -> Result<Vec<(String, bool, u32)>, DriveError> {
+        let id = self.resolve(path)?;
+        if !self.tree.is_dir(id) {
+            return Err(DriveError::NotFound);
+        }
+        Ok(self.tree.children(id).iter().map(|&c| {
+            let name = String::from(self.tree.name(c));
+            let is_dir = self.tree.is_dir(c);
+            let size = self.tree.file_data(c).map(|b| b.len() as u32).unwrap_or(0);
+            (name, is_dir, size)
+        }).collect())
+    }
+
     /// Does `path` name an existing file or directory?
     pub fn exists(&self, path: &str) -> bool {
         self.resolve(path).is_ok()

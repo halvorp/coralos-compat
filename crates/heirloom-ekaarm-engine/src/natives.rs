@@ -37,6 +37,8 @@ pub struct NativeState {
     pub fonts: BTreeMap<u32, u32>,
     /// The icon library's guest constants (`icons.rs`).
     pub icons: crate::icons::IconState,
+    /// A modal `GuestUi::request` currently blocking `CEikDialog::RunLD` (`dialog.rs`): `(request_ref, dialog_addr)`.
+    pub pending_request: Option<(heirloom_ui_abi::RequestRef, u32)>,
 }
 
 /// A host extension to the natives: asked first with the import's mangled name; `Some` = handled. Used by tests to stand in
@@ -46,6 +48,7 @@ pub type NativeHook = Box<dyn FnMut(&mut Process, &str) -> Option<NativeOutcome>
 #[derive(Debug)]
 pub enum NativeOutcome {
     Return,
+    Blocked,
     Exit(i32),
     Refused(String),
 }
@@ -58,6 +61,7 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::view::native(proc, name) { return Some(o); }
     if let Some(o) = crate::remcon::native(proc, name) { return Some(o); }
     if let Some(o) = crate::viewappui::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::dialog::native(proc, name) { return Some(o); }
     if let Some(o) = crate::trap::native(proc, name) { return Some(o); }
     if let Some(o) = crate::screen::native(proc, name) { return Some(o); }
     if let Some(o) = crate::desc::native(proc, name) { return Some(o); }
@@ -343,6 +347,29 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
                 ),
             }
         }
+        // RVCT Thumb 8-bit jump-table helper (`drtrvct2_2/28`): index in r3, table at (lr & !1) where
+        // table[0] = case count N, table[1..=N] = halfword offsets for cases 0..N-1, table[N+1] = default.
+        // Branches to ((lr & !1) + 2 * offset) | 1 via the import stub's BX LR.
+        "__ARM_switch8" => {
+            let table = proc.cpu.regs[14] & !1;
+            let Ok(count) = proc.mem.vm.read_u8(table) else {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED {dll_base}/{ordinal} __ARM_switch8: table at {table:#x} unreadable"));
+            };
+            let idx = if proc.cpu.regs[3] < u32::from(count) { proc.cpu.regs[3] } else { u32::from(count) };
+            let Ok(off) = proc.mem.vm.read_u8(table.wrapping_add(1).wrapping_add(idx)) else {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED {dll_base}/{ordinal} __ARM_switch8: entry {idx} at {table:#x} unreadable"));
+            };
+            proc.cpu.regs[14] = table.wrapping_add(u32::from(off) * 2) | 1;
+            NativeOutcome::Return
+        }
+        "_ZN4User11LeaveIfNullEPv" => {
+            if r0 == 0 {
+                NativeOutcome::Refused(format!("NEXT-NEEDED leave {name}(NULL): KErrNoMemory (EHABI unwinding is slice 1b)"))
+            } else {
+                proc.cpu.regs[0] = r0;
+                NativeOutcome::Return
+            }
+        }
         "_ZN4User4ExitEi" => NativeOutcome::Exit(r0 as i32),
         "_ZN4User5PanicERK7TDesC16i" => match crate::desc::read16(proc, r0) {
             Ok(units) => NativeOutcome::Refused(format!(
@@ -351,9 +378,46 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             )),
             Err(e) => NativeOutcome::Refused(format!("NEXT-NEEDED {}/{} _ZN4User5PanicE ({e})", dll_base, ordinal)),
         },
-        "" => NativeOutcome::Refused(format!(
-            "NEXT-NEEDED {}/{} <unnamed-ordinal>", dll_base, ordinal
-        )),
+        "" => match (dll_base.as_str(), ordinal) {
+            // S60 imut.dll (imcvcodc.h) TImCodecB64: standard RFC 4648 Base64 codec.
+            // Ordinal 27 = TImCodecB64::TImCodecB64(), 24 = TImCodecB64::Initialise(),
+            // 25 = TInt TImCodecB64::Decode(const TDesC8& aSrcString, TDes8& rDestString).
+            ("imut", 27) => { proc.cpu.regs[0] = r0; NativeOutcome::Return }
+            ("imut", 24) => NativeOutcome::Return,
+            ("imut", 25) => {
+                let dst = proc.cpu.regs[2];
+                let res = crate::desc::read8(proc, r1).and_then(|src| {
+                    let mut out = Vec::with_capacity(src.len() * 3 / 4 + 1);
+                    let mut buf = 0u32;
+                    let mut bits = 0u32;
+                    for &b in &src {
+                        let v = match b {
+                            b'A'..=b'Z' => b - b'A',
+                            b'a'..=b'z' => b - b'a' + 26,
+                            b'0'..=b'9' => b - b'0' + 52,
+                            b'+' => 62,
+                            b'/' => 63,
+                            b'=' | b'\r' | b'\n' | b' ' | b'\t' => continue,
+                            _ => continue,
+                        };
+                        buf = (buf << 6) | u32::from(v);
+                        bits += 6;
+                        if bits >= 8 {
+                            bits -= 8;
+                            out.push(((buf >> bits) & 0xff) as u8);
+                        }
+                    }
+                    crate::desc::write8(proc, dst, &out)
+                });
+                match res {
+                    Ok(()) => { proc.cpu.regs[0] = 0; NativeOutcome::Return }
+                    Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED imut/24 TImCodecB64::Decode: {m}")),
+                }
+            }
+            _ => NativeOutcome::Refused(format!(
+                "NEXT-NEEDED {}/{} <unnamed-ordinal>", dll_base, ordinal
+            )),
+        },
         _ => NativeOutcome::Refused(format!(
             "NEXT-NEEDED {}/{} {}", dll_base, ordinal, name
         )),

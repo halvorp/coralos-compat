@@ -385,3 +385,111 @@ fn des_left_secure_id_des_array_primary_vtable_and_fullscreen_exit() {
     assert_eq!(ok(&mut p, "_ZNK13CAknAppUiBase15IsFullScreenAppEv", &[0]), 1);
     assert!(matches!(call(&mut p, "_ZN13CAknAppUiBase4ExitEv", &[0]), (NativeOutcome::Exit(0), _)));
 }
+
+#[test]
+fn modal_message_query_dialog_projects_request_and_resumes_on_answer() {
+    use heirloom_ui_abi::{RecordingGuestUi, UiCall, UiObjectRef};
+    let names = [
+        "_ZN22CAknMessageQueryDialogC1Ev",
+        "_ZN10CEikDialog9PrepareLCEi",
+        "_ZNK15CAknQueryDialog12QueryHeadingEv",
+        "_ZN20CAknPopupHeadingPane8SetTextLE7TPtrC16",
+        "_ZN22CAknMessageQueryDialog15SetMessageTextLERK7TDesC16",
+        "_ZN10CEikDialog5RunLDEv",
+    ];
+    let mut p = proc(&names);
+    p.host.env = Some(alloc(&mut p, 0x100));
+    p.set_ui(RecordingGuestUi::new());
+    let dlg = alloc(&mut p, 0xe0);
+    assert_eq!(ok(&mut p, "_ZN22CAknMessageQueryDialogC1Ev", &[dlg]), dlg);
+    ok(&mut p, "_ZN10CEikDialog9PrepareLCEi", &[dlg, 0x1001]);
+    let hp = ok(&mut p, "_ZNK15CAknQueryDialog12QueryHeadingEv", &[dlg]);
+    assert_ne!(hp, 0);
+    let title_des = tptrc16(&mut p, "About App");
+    let (tw0, tw1) = (rd(&mut p, title_des), rd(&mut p, title_des + 4));
+    ok(&mut p, "_ZN20CAknPopupHeadingPane8SetTextLE7TPtrC16", &[hp, tw0, tw1]);
+    let body_des = tptrc16(&mut p, "Version 1.0");
+    ok(&mut p, "_ZN22CAknMessageQueryDialog15SetMessageTextLERK7TDesC16", &[dlg, body_des]);
+    let (out, _) = call(&mut p, "_ZN10CEikDialog5RunLDEv", &[dlg]);
+    assert!(matches!(out, NativeOutcome::Blocked), "RunLD must park waiting for host response: {out:?}");
+    let (req_ref, _) = p.nat.pending_request.expect("pending_request set");
+    let ui = p.ui_as::<RecordingGuestUi>().unwrap();
+    assert!(ui.calls.iter().any(|c| matches!(c, UiCall::Request(_, m) if m.title == "About App" && m.text == "Version 1.0")));
+    // NEGATIVE CONTROL: mismatched RequestRef is refused and keeps dialog parked.
+    let wrong = UiObjectRef { id: req_ref.id + 99, generation: 1 };
+    assert!(p.deliver_request_response(wrong, Some(0)).is_err());
+    assert!(p.nat.pending_request.is_some());
+    // Answering OK pops cleanup stack, frees dialog, and sets r0 = EEikBidOk (1).
+    p.deliver_request_response(req_ref, Some(0)).unwrap();
+    assert!(p.nat.pending_request.is_none());
+    assert_eq!(p.cpu.regs[0], 1);
+    assert!(p.nat.cleanup.is_empty());
+}
+
+#[test]
+fn get_dir_splits_files_and_dirs_with_tparse_ptrc_and_descriptors() {
+    let names = [
+        "_ZN3RFs7ConnectEi",
+        "_ZN11RHandleBase5CloseEv",
+        "_ZNK3RFs6GetDirERK7TDesC16jjRP4CDirS5_",
+        "_ZNK4CDir5CountEv",
+        "_ZNK4CDirixEi",
+        "_ZN4CDirD0Ev",
+        "_ZN10TParsePtrCC1ERK7TDesC16",
+        "_ZNK10TParseBase3ExtEv",
+        "_ZNK7TDesC165RightEi",
+        "_ZNK7TDesC163MidEii",
+        "_ZNK7TDesC1613LocateReverseE5TChar",
+        "_ZNK7TDesC165FindFERKS_",
+        "_ZNK7TDesC168CompareCERKS_",
+        "_ZN6TDes166CopyLCERK7TDesC16",
+        "_ZN6TDes164TrimEv",
+    ];
+    let mut p = proc(&names);
+    let mut drive = heirloom_ekaarm_engine::drive::Drive::new();
+    drive.put_file("c:\\root\\sub\\nested.txt", b"x".to_vec()).unwrap();
+    drive.put_file("c:\\root\\demo.SIS", b"abc".to_vec()).unwrap();
+    p.set_drive(drive);
+
+    let rfs = alloc(&mut p, 8);
+    assert_eq!(ok(&mut p, "_ZN3RFs7ConnectEi", &[rfs, 0]), 0);
+    let pat = tptrc16(&mut p, "c:\\root\\*");
+    let fslot = alloc(&mut p, 4);
+    let dslot = alloc(&mut p, 4);
+    let sp = p.cpu.regs[13];
+    wr(&mut p, sp, fslot);
+    wr(&mut p, sp + 4, dslot);
+    assert_eq!(ok(&mut p, "_ZNK3RFs6GetDirERK7TDesC16jjRP4CDirS5_", &[rfs, pat, 0, 0]), 0);
+    let (fdir, ddir) = (rd(&mut p, fslot), rd(&mut p, dslot));
+    assert_eq!(ok(&mut p, "_ZNK4CDir5CountEv", &[fdir]), 1);
+    assert_eq!(ok(&mut p, "_ZNK4CDir5CountEv", &[ddir]), 1);
+    let dent = ok(&mut p, "_ZNK4CDirixEi", &[ddir, 0]);
+    assert_eq!(rd(&mut p, dent) & 0x10, 0x10, "directory entry must carry KEntryAttDir");
+    let fent = ok(&mut p, "_ZNK4CDirixEi", &[fdir, 0]);
+    assert_eq!(rd(&mut p, fent + 4), 3, "file entry size must match");
+    ok(&mut p, "_ZN4CDirD0Ev", &[fdir]);
+    ok(&mut p, "_ZN4CDirD0Ev", &[ddir]);
+    ok(&mut p, "_ZN11RHandleBase5CloseEv", &[rfs]);
+    assert_eq!(rd(&mut p, rfs), 0, "RHandleBase::Close zeroes iHandle");
+
+    // TParsePtrC::Ext on a 28-byte object + TDes16::CopyLC / Trim / Right / Mid / FindF / CompareC
+    let path_des = tptrc16(&mut p, "  C:\\root\\DEMO.SIS  ");
+    let buf = alloc(&mut p, 128);
+    wr(&mut p, buf, 3 << 28);
+    wr(&mut p, buf + 4, 50);
+    ok(&mut p, "_ZN6TDes166CopyLCERK7TDesC16", &[buf, path_des]);
+    ok(&mut p, "_ZN6TDes164TrimEv", &[buf]);
+    let pp = alloc(&mut p, 0x20);
+    ok(&mut p, "_ZN10TParsePtrCC1ERK7TDesC16", &[pp, buf]);
+    let sret = alloc(&mut p, 8);
+    ok(&mut p, "_ZNK10TParseBase3ExtEv", &[sret, pp]);
+    let ext_cmp = tptrc16(&mut p, ".SIS");
+    assert_eq!(ok(&mut p, "_ZNK7TDesC168CompareCERKS_", &[sret, ext_cmp]), 0);
+    assert_eq!(ok(&mut p, "_ZNK7TDesC1613LocateReverseE5TChar", &[buf, b'\\' as u32]), 7);
+    let needle = tptrc16(&mut p, "DEMO");
+    assert_eq!(ok(&mut p, "_ZNK7TDesC165FindFERKS_", &[buf, needle]), 8);
+    ok(&mut p, "_ZNK7TDesC165RightEi", &[sret, buf, 4]);
+    assert_eq!(rd(&mut p, sret) & 0x0fff_ffff, 4);
+    // NEGATIVE CONTROL: Mid past length is refused by name.
+    assert!(refused(&mut p, "_ZNK7TDesC163MidEii", &[sret, buf, 99, 1]).contains("outside length"));
+}

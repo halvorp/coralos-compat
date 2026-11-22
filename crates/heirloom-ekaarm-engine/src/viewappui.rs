@@ -16,9 +16,14 @@ use crate::natives::NativeOutcome;
 use crate::view::VIEW_I_APP_UI;
 
 pub const SLOT_VIEW_ID: u32 = 3;
+pub const SLOT_VIEW_HANDLE_COMMAND_L: u32 = 7;
 pub const SLOT_VIEW_AKN_VIEW_ACTIVATED_L: u32 = 11;
 pub const SLOT_VIEW_DO_ACTIVATE_L: u32 = 14;
+pub const SLOT_VIEW_DO_DEACTIVATE: u32 = 15;
+pub const SLOT_APPUI_HANDLE_COMMAND_L: u32 = 24;
 pub const INHERITED_AKN_VIEW_ACTIVATED_L: &[&str] = &["_ZN8CAknView17AknViewActivatedLERK10TVwsViewId4TUidRK6TDesC8"];
+const INHERITED_VIEW_HANDLE_COMMAND_L: &[&str] = &["_ZN8CAknView14HandleCommandLEi"];
+const INHERITED_APPUI_HANDLE_COMMAND_L: &[&str] = &["_ZN9CEikAppUi14HandleCommandLEi", "_ZN9CAknAppUi14HandleCommandLEi", "_ZN13CAknViewAppUi14HandleCommandLEi"];
 
 /// `TVwsViewId` (vwsdef.h): iAppUid, iViewUid. A `TDesC8` reference to nothing: a `TPtrC8` (type 1) of length 0.
 const VWS_VIEW_ID_BYTES: u32 = 8;
@@ -55,16 +60,31 @@ pub(crate) fn has_pending(p: &mut Process, appui: u32) -> bool {
     }
 }
 
-/// Start the oldest queued activation of `appui`: the view server's delivery, reduced to what it does to the view,
-/// `view->AknViewActivatedL(prevViewId, customMessageId, customMessage)` (aknview.h), which calls `DoActivateL`. `cont` runs on
-/// return. The scratch block holding the previous view id and the message (guest memory, as the callee reads it) is freed by
-/// `finish_activation`.
+/// Start the oldest queued activation of `appui`: when another view is active, first call its `DoDeactivate()` (slot 15),
+/// then `view->AknViewActivatedL(prevViewId, customMessageId, customMessage)` (aknview.h), which calls `DoActivateL`. `cont`
+/// runs on return from the activation. The scratch block holding the previous view id and the message is freed by `finish_activation`.
 pub(crate) fn start_activation(p: &mut Process, appui: u32, cont: impl FnOnce(u32) -> Continuation) -> Result<(), String> {
     let (view, msg_id, msg) = p.appui_state(appui)?.pending.pop_front().ok_or_else(|| String::from("no activation queued"))?;
     if let Some(old) = p.appui_state(appui)?.active {
-        return Err(format!("NEXT-NEEDED avkon CAknViewAppUi view switch from {old:#x} to {view:#x}: DoDeactivate of the active view is not implemented"));
+        if old != view {
+            p.appui_state(appui)?.active = None;
+            let spec = SlotSpec { class: "CAknView", method: "DoDeactivate", slot: SLOT_VIEW_DO_DEACTIVATE, inherited: &[] };
+            let target = anchor(p, old, &spec)?;
+            p.log.push(format!("[viewappui] deactivating view {old:#x} before activating {view:#x}"));
+            return p.call_guest(target, &[old], Continuation::ViewDeactivated { appui, next: (view, msg_id, msg) });
+        }
     }
-    // The previous view id is the empty one: nothing was active (checked above).
+    activate_now(p, appui, view, msg_id, &msg, cont)
+}
+
+pub(crate) fn finish_deactivation(p: &mut Process, appui: u32, next: (u32, u32, Vec<u8>)) -> Result<(), crate::run::Outcome> {
+    let (view, msg_id, msg) = next;
+    activate_now(p, appui, view, msg_id, &msg, |block| Continuation::ViewActivated { block })
+        .map_err(crate::run::Outcome::Fault)
+}
+
+fn activate_now(p: &mut Process, appui: u32, view: u32, msg_id: u32, msg: &[u8], cont: impl FnOnce(u32) -> Continuation) -> Result<(), String> {
+    // The previous view id is the empty one (or deactivated above).
     let block = p.alloc_zeroed(VWS_VIEW_ID_BYTES + 8 + msg.len() as u32).ok_or_else(|| String::from("no guest heap for the activation message"))?;
     let desc = block + VWS_VIEW_ID_BYTES;
     p.mem.vm.write_u32(desc, EMPTY_TPTRC8 | msg.len() as u32).map_err(|_| String::from("activation scratch block unwritable"))?;
@@ -72,7 +92,7 @@ pub(crate) fn start_activation(p: &mut Process, appui: u32, cont: impl FnOnce(u3
         // The message follows the TPtrC8 header; its iPtr (word 1) points at it.
         let data = desc + 8;
         p.mem.vm.write_u32(desc + 4, data).map_err(|_| String::from("activation scratch block unwritable"))?;
-        p.mem.vm.write_bytes(data, &msg).map_err(|_| String::from("activation scratch block unwritable"))?;
+        p.mem.vm.write_bytes(data, msg).map_err(|_| String::from("activation scratch block unwritable"))?;
     }
     let spec = SlotSpec { class: "CAknView", method: "AknViewActivatedL", slot: SLOT_VIEW_AKN_VIEW_ACTIVATED_L, inherited: INHERITED_AKN_VIEW_ACTIVATED_L };
     let target = anchor(p, view, &spec)?;
@@ -86,6 +106,27 @@ pub(crate) fn start_activation(p: &mut Process, appui: u32, cont: impl FnOnce(u3
     }
     p.log.push(format!("[viewappui] activating view {view:#x} (message id {msg_id:#x}, {} bytes)", msg.len()));
     p.call_guest(target, &[view, block, msg_id, desc], cont(block))
+}
+
+/// Dispatch a Symbian menu/CBA command ID (`aCommand`): `EEikCmdExit` / `EAknSoftkeyExit` route to
+/// `CEikAppUi::HandleCommandL(EEikCmdExit)` (matching `CAknView::ProcessCommandL`), while all other
+/// commands route to the active `CAknView::HandleCommandL` (or `CEikAppUi::HandleCommandL` when no view is active).
+pub(crate) fn dispatch_command(p: &mut Process, appui: u32, cmd: u32) -> Result<(), String> {
+    const EAKN_SOFTKEY_EXIT: u32 = 3009;
+    let is_exit = cmd == crate::wsevent::EEIK_CMD_EXIT || cmd == EAKN_SOFTKEY_EXIT;
+    let active_view = p.appui_state(appui).ok().and_then(|s| s.active);
+    if !is_exit {
+        if let Some(view) = active_view {
+            let spec = SlotSpec { class: "CAknView", method: "HandleCommandL", slot: SLOT_VIEW_HANDLE_COMMAND_L, inherited: INHERITED_VIEW_HANDLE_COMMAND_L };
+            let target = anchor(p, view, &spec)?;
+            p.log.push(format!("[viewappui] view {view:#x} HandleCommandL({cmd})"));
+            return p.call_guest(target, &[view, cmd], Continuation::Resume);
+        }
+    }
+    let spec = SlotSpec { class: "CEikAppUi", method: "HandleCommandL", slot: SLOT_APPUI_HANDLE_COMMAND_L, inherited: INHERITED_APPUI_HANDLE_COMMAND_L };
+    let target = anchor(p, appui, &spec)?;
+    p.log.push(format!("[viewappui] appui {appui:#x} HandleCommandL({cmd})"));
+    p.call_guest(target, &[appui, cmd], Continuation::Resume)
 }
 
 /// The activation call returned: release its scratch block.
@@ -113,7 +154,10 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         }
         // CAknViewAppUi::ActivateLocalViewL(TUid) and (TUid, TUid aCustomMessageId, const TDesC8&) (aknviewappui.h): queue the
         // activation for the event loop. An unknown view leaves KErrNotFound, which needs the EHABI unwinder (slice 1b).
-        "_ZN13CAknViewAppUi17ActivateLocalViewLE4TUid" | "_ZN13CAknViewAppUi17ActivateLocalViewLE4TUidS0_RK6TDesC8" => {
+        "_ZN13CAknViewAppUi18ActivateLocalViewLE4TUid"
+        | "_ZN13CAknViewAppUi18ActivateLocalViewLE4TUidS0_RK6TDesC8"
+        | "_ZN13CAknViewAppUi17ActivateLocalViewLE4TUid"
+        | "_ZN13CAknViewAppUi17ActivateLocalViewLE4TUidS0_RK6TDesC8" => {
             let (msg_id, msg) = if name.ends_with("TUid") {
                 (0, Ok(Vec::new()))
             } else {

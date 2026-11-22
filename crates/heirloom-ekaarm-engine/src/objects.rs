@@ -113,6 +113,22 @@ pub struct StackItem {
     pub view: u32,
 }
 
+/// One entry in a `CDir` directory listing (`fs.rs`).
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u32,
+}
+
+/// Host state of a modal Avkon dialog (`CAknMessageQueryDialog` / `CEikDialog`, `dialog.rs`).
+#[derive(Debug, Clone, Default)]
+pub struct DialogState {
+    pub title: String,
+    pub text: String,
+    pub heading_pane: u32,
+}
+
 #[derive(Debug, Clone)]
 pub enum HostObj {
     Control(ControlState),
@@ -142,7 +158,11 @@ pub enum HostObj {
     IconBitmap(crate::icons::IconBitmap),
     ColorArray(crate::colorlist::ColorArrayState),
     /// A `CDir` directory entry list returned by `RFs::GetDir` (fs.rs).
-    Dir(Vec<String>),
+    Dir(Vec<DirEntry>),
+    /// A `CAknMessageQueryDialog` / `CEikDialog` (dialog.rs).
+    Dialog(DialogState),
+    /// A `CAknPopupHeadingPane` owned by the dialog at the given guest address (dialog.rs).
+    HeadingPane(u32),
 }
 
 #[derive(Default)]

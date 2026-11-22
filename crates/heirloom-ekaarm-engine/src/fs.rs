@@ -66,12 +66,24 @@ fn tparse_slice(units: &[u16], part: &str) -> (usize, usize) {
     }
 }
 
+const TPARSE_KIND_OFF: u32 = 4;
+const TPARSE_KIND_PTR: u32 = 0x5054_5243; // 'PTRC' tag distinguishing TParsePtr/TParsePtrC from TParse
+
+fn tparse_desc_addr(p: &Process, parse_this: u32) -> Result<u32, String> {
+    if p.rd(parse_this.wrapping_add(TPARSE_KIND_OFF))? == TPARSE_KIND_PTR {
+        p.rd(parse_this.wrapping_add(TPARSE_NAMEBUF_OFF))
+    } else {
+        Ok(parse_this.wrapping_add(TPARSE_NAMEBUF_OFF))
+    }
+}
+
 fn tparse_write_ptrc(p: &mut Process, sret: u32, parse_this: u32, part: &str) -> Result<(), String> {
-    let buf_addr = parse_this.wrapping_add(TPARSE_NAMEBUF_OFF);
-    let units = crate::desc::read16(p, buf_addr)?;
+    let desc_addr = tparse_desc_addr(p, parse_this)?;
+    let view = crate::desc::locate(p, desc_addr)?;
+    let units = crate::desc::read16(p, desc_addr)?;
     let (start, end) = tparse_slice(&units, part);
     let len = (end - start) as u32;
-    let ptr = buf_addr.wrapping_add(8).wrapping_add(start as u32 * 2);
+    let ptr = view.data.wrapping_add(start as u32 * 2);
     let w0 = (crate::desc::DES_PTR_C << crate::desc::KSHIFT_DES_TYPE) | len;
     p.mem.vm.write_u32(sret, w0).map_err(|_| format!("TPtrC16 at {sret:#x} is unwritable"))?;
     p.mem.vm.write_u32(sret.wrapping_add(4), ptr).map_err(|_| format!("TPtrC16 at {sret:#x}+4 is unwritable"))?;
@@ -98,12 +110,30 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let (this, r1, r2, r3) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2], p.cpu.regs[3]);
     let refuse = |m: String| NativeOutcome::Refused(format!("NEXT-NEEDED efsrv {name}: {m}"));
     Some(match name {
+        // void RHandleBase::Close() (e32std.h): release any tracked session handle and zero iHandle.
+        "_ZN11RHandleBase5CloseEv" => {
+            if let Ok(handle) = p.mem.vm.read_u32(this) {
+                if handle != 0 {
+                    p.nat.objs.fs_sessions.remove(&handle);
+                    let _ = p.mem.vm.write_u32(this, 0);
+                }
+            }
+            NativeOutcome::Return
+        }
         // TParse::TParse(): initialise the embedded TBuf<256> at +TPARSE_NAMEBUF_OFF.
         "_ZN6TParseC1Ev" | "_ZN6TParseC2Ev" => {
             let buf = this.wrapping_add(TPARSE_NAMEBUF_OFF);
-            let ok = p.mem.vm.write_u32(buf, crate::desc::DES_BUF << crate::desc::KSHIFT_DES_TYPE).is_ok()
+            let ok = p.mem.vm.write_u32(this.wrapping_add(TPARSE_KIND_OFF), 0).is_ok()
+                && p.mem.vm.write_u32(buf, crate::desc::DES_BUF << crate::desc::KSHIFT_DES_TYPE).is_ok()
                 && p.mem.vm.write_u32(buf.wrapping_add(4), TPARSE_MAX_LEN).is_ok();
             if ok { NativeOutcome::Return } else { refuse(format!("TParse at {this:#x} is unwritable")) }
+        }
+        // TParsePtrC(const TDesC16& aName) / TParsePtr(TDes16& aName) (f32file.h):
+        "_ZN10TParsePtrCC1ERK7TDesC16" | "_ZN10TParsePtrCC2ERK7TDesC16"
+        | "_ZN9TParsePtrC1ER6TDes16" | "_ZN9TParsePtrC2ER6TDes16" => {
+            let ok = p.mem.vm.write_u32(this.wrapping_add(TPARSE_KIND_OFF), TPARSE_KIND_PTR).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(TPARSE_NAMEBUF_OFF), r1).is_ok();
+            if ok { p.cpu.regs[0] = this; NativeOutcome::Return } else { refuse(format!("TParsePtr at {this:#x} is unwritable")) }
         }
         // TInt TParse::Set(const TDesC16& aName, const TDesC16* aRelated, const TDesC16* aDefault) & SetNoWild
         "_ZN6TParse3SetERK7TDesC16PS1_S3_" | "_ZN6TParse9SetNoWildERK7TDesC16PS1_S3_" => {
@@ -119,11 +149,11 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 Err(m) => refuse(m),
             }
         }
-        // const TDesC16& TParseBase::FullName() const: returns pointer to embedded TBuf<256>.
-        "_ZNK10TParseBase8FullNameEv" => {
-            p.cpu.regs[0] = this.wrapping_add(TPARSE_NAMEBUF_OFF);
-            NativeOutcome::Return
-        }
+        // const TDesC16& TParseBase::FullName() const: returns pointer to embedded TBuf<256> or wrapped descriptor.
+        "_ZNK10TParseBase8FullNameEv" => match tparse_desc_addr(p, this) {
+            Ok(a) => { p.cpu.regs[0] = a; NativeOutcome::Return }
+            Err(m) => refuse(m),
+        },
         // TPtrC16 TParseBase::{Drive,Path,DriveAndPath,Name,Ext,NameAndExt}() const: ARM EABI sret in r0, this in r1.
         "_ZNK10TParseBase5DriveEv" => match tparse_write_ptrc(p, this, r1, "drive") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
         "_ZNK10TParseBase4PathEv" => match tparse_write_ptrc(p, this, r1, "path") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
@@ -176,26 +206,59 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             match res { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) }
         }
         // TInt RFs::GetDir(const TDesC16& aName, TUint aEntryAttMask, TUint aEntrySortKey, CDir*& anEntryList) const (f32file.h):
-        // 5th arg `anEntryList` (pointer to CDir*) is on the ARM stack at [sp + 0].
-        "_ZNK3RFs6GetDirERK7TDesC16jjRP4CDir" => {
+        // TInt RFs::GetDir(const TDesC16& aName, TUint aEntryAttMask, TUint aEntrySortKey, CDir*& anEntryList, CDir*& aDirList) const:
+        // 5th arg `anEntryList` is on the ARM stack at [sp + 0]; 6th arg `aDirList` (when present) is at [sp + 4].
+        "_ZNK3RFs6GetDirERK7TDesC16jjRP4CDir" | "_ZNK3RFs6GetDirERK7TDesC16jjRP4CDirS5_" => {
             if p.fs_session(this).is_none() {
                 return Some(refuse(format!("the session at {this:#x} is not connected")));
             }
-            let out_ptr_addr = match p.rd(p.cpu.regs[13]) {
+            let two_lists = name.ends_with("S5_");
+            let entry_out_addr = match p.rd(p.cpu.regs[13]) {
                 Ok(a) => a,
                 Err(m) => return Some(refuse(format!("stack arg anEntryList: {m}"))),
+            };
+            let dir_out_addr = if two_lists {
+                match p.rd(p.cpu.regs[13] + 4) {
+                    Ok(a) => Some(a),
+                    Err(m) => return Some(refuse(format!("stack arg aDirList: {m}"))),
+                }
+            } else {
+                None
             };
             let res = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).and_then(|path| {
                 let dir_path = match path.rfind(['\\', '/']) {
                     Some(i) => &path[..i],
                     None => path.as_str(),
                 };
-                let entries = p.host.drive.as_ref()
-                    .and_then(|d| d.list(dir_path).ok().or_else(|| d.list_rom(dir_path)))
+                let all: alloc::vec::Vec<crate::objects::DirEntry> = p.host.drive.as_ref()
+                    .and_then(|d| {
+                        d.list_entries(dir_path).ok().map(|v| {
+                            v.into_iter()
+                                .map(|(name, is_dir, size)| crate::objects::DirEntry { name, is_dir, size })
+                                .collect()
+                        }).or_else(|| {
+                            d.list_rom(dir_path).map(|v| {
+                                v.into_iter()
+                                    .map(|name| crate::objects::DirEntry { name, is_dir: false, size: 0 })
+                                    .collect()
+                            })
+                        })
+                    })
                     .unwrap_or_default();
-                let cdir = p.plain_object("CDir", 0x10)?;
-                p.obj_set(cdir, crate::objects::HostObj::Dir(entries))?;
-                p.wr(out_ptr_addr, cdir)?;
+                if let Some(d_out) = dir_out_addr {
+                    let (dirs, files): (alloc::vec::Vec<_>, alloc::vec::Vec<_>) =
+                        all.into_iter().partition(|e| e.is_dir);
+                    let fdir = p.plain_object("CDir", 0x10)?;
+                    p.obj_set(fdir, crate::objects::HostObj::Dir(files))?;
+                    p.wr(entry_out_addr, fdir)?;
+                    let ddir = p.plain_object("CDir", 0x10)?;
+                    p.obj_set(ddir, crate::objects::HostObj::Dir(dirs))?;
+                    p.wr(d_out, ddir)?;
+                } else {
+                    let cdir = p.plain_object("CDir", 0x10)?;
+                    p.obj_set(cdir, crate::objects::HostObj::Dir(all))?;
+                    p.wr(entry_out_addr, cdir)?;
+                }
                 Ok(())
             });
             match res {
@@ -216,8 +279,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZNK4CDirixEi" => {
             const TENTRY_SIZE: u32 = 28 + 4 + 256 * 2;
             const TENTRY_NAME_OFF: u32 = 28;
+            const KENTRY_ATT_DIR: u32 = 0x10;
             let idx = r1 as i32;
-            let entry_name = match p.obj_get(this) {
+            let entry = match p.obj_get(this) {
                 Some(crate::objects::HostObj::Dir(entries)) if idx >= 0 && (idx as usize) < entries.len() => {
                     entries[idx as usize].clone()
                 }
@@ -228,7 +292,11 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             };
             let res = (|| -> Result<u32, String> {
                 let cell = p.alloc_zeroed(TENTRY_SIZE).ok_or_else(|| String::from("out of heap for TEntry"))?;
-                let units: alloc::vec::Vec<u16> = entry_name.encode_utf16().take(256).collect();
+                if entry.is_dir {
+                    p.wr(cell, KENTRY_ATT_DIR)?;
+                }
+                p.wr(cell + 4, entry.size)?;
+                let units: alloc::vec::Vec<u16> = entry.name.encode_utf16().take(256).collect();
                 p.wr(cell + TENTRY_NAME_OFF, units.len() as u32)?; // TBufC16 (type 0)
                 for (i, u) in units.iter().enumerate() {
                     p.mem.vm.write_u16(cell + TENTRY_NAME_OFF + 4 + i as u32 * 2, *u)
@@ -286,6 +354,22 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             Some(c) => match p.wr(r1, u32::from(c.to_ascii_uppercase() - b'A')) { Ok(()) => { p.cpu.regs[0] = KERR_NONE as u32; NativeOutcome::Return } Err(m) => refuse(m) },
             None => { p.cpu.regs[0] = KERR_ARGUMENT as u32; NativeOutcome::Return }
         },
+        // static TInt RFs::DriveToChar(TInt aDrive, TChar& aChar): 0..26 -> 'A'..'Z', else KErrArgument.
+        "_ZN3RFs11DriveToCharEiR5TChar" => match u8::try_from(this).ok().filter(|&d| d < 26) {
+            Some(d) => match p.wr(r1, u32::from(b'A' + d)) { Ok(()) => { p.cpu.regs[0] = KERR_NONE as u32; NativeOutcome::Return } Err(m) => refuse(m) },
+            None => { p.cpu.regs[0] = KERR_ARGUMENT as u32; NativeOutcome::Return }
+        },
+        // TInt RFs::Drive(TDriveInfo& aInfo, TInt aDrive = KDefaultDrive) const (f32file.h): fills the 20-byte TDriveInfo.
+        "_ZNK3RFs5DriveER10TDriveInfoi" => {
+            let letter = u8::try_from(r2).ok().filter(|&d| d < 26).map(|d| (b'A' + d) as char).filter(|l| crate::drive::Drive::LETTERS.contains(l));
+            let (media, d_att, m_att) = match letter {
+                Some('Z') => (MEDIA_ROM, drive_att('Z'), MEDIA_ATT_WRITE_PROTECTED),
+                Some(l) => (MEDIA_FLASH, drive_att(l), 0),
+                None => (0, 0, 0), // EMediaNotPresent
+            };
+            let fields = [(0u32, media), (4, 0), (8, d_att), (12, m_att), (16, 0)];
+            match fields.iter().try_for_each(|(o, v)| p.wr(r1 + o, *v)) { Ok(()) => { p.cpu.regs[0] = KERR_NONE as u32; NativeOutcome::Return } Err(m) => refuse(m) }
+        }
         // TVolumeInfo::TVolumeInfo(): zeroed (the name is an empty TBufC).
         "_ZN11TVolumeInfoC1Ev" => match (0..VOL_NAME_END / 4).try_for_each(|i| p.wr(this + i * 4, 0)) { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
         // TInt RFs::Volume(TVolumeInfo& aVol, TInt aDrive = KDefaultDrive) const (f32file.h:1876): the volume of a drive the confined drive answers

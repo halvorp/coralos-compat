@@ -291,7 +291,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     Some(match name {
         // MEikAppUiFactory* CEikonEnv::AppUiFactory() const
         "_ZNK9CEikonEnv12AppUiFactoryEv" => { let r = p.shell_factory(); ret(p, r) }
-        "CAknAppUiFactory::Cba" => { let r = p.shell_cba(); ret(p, r) }
+        "CAknAppUiFactory::Cba" | "_ZN9CAknAppUi3CbaEv" | "_ZNK9CAknAppUi3CbaEv" => { let r = p.shell_cba(); ret(p, r) }
         // CEikMenuBar* CAknView::MenuBar() const: iMenu.
         "_ZNK8CAknView7MenuBarEv" => ret(p, p.mem.vm.read_u32(r0 + crate::view::VIEW_I_MENU).map_err(|_| format!("the view at {r0:#x} is unreadable"))),
         // MEikAppUiFactory::StatusPane() const, CAknView::StatusPane() const, CAknAppUi::StatusPane()

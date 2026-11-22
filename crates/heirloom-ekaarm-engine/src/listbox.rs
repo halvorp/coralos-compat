@@ -119,6 +119,15 @@ impl Process {
     }
 
     fn list_destroy(&mut self, this: u32) {
+        let control = match self.obj_get(this) {
+            Some(HostObj::List(l)) => l.control,
+            _ => None,
+        };
+        if let (Some(win), Some(c)) = (self.host.window, control) {
+            if let Some(ui) = self.host.ui.as_mut() {
+                let _ = ui.remove_control(win, c);
+            }
+        }
         self.obj_remove(this);
     }
 }
@@ -131,7 +140,12 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZN29CAknDoubleGraphicStyleListBoxC1Ev" | "_ZN29CAknDoubleGraphicStyleListBoxC2Ev"
         | "_ZN29CAknSingleGraphicStyleListBoxC1Ev" | "_ZN29CAknSingleGraphicStyleListBoxC2Ev"
         | "_ZN22CAknSingleStyleListBoxC1Ev" | "_ZN22CAknSingleStyleListBoxC2Ev" => { let r = p.list_construct(r0); ret(p, r.map(|_| r0)) }
-        "_ZN29CAknDoubleGraphicStyleListBoxD1Ev" | "_ZN29CAknDoubleGraphicStyleListBoxD0Ev"
+        "_ZN11CEikListBoxD2Ev" | "_ZN11CEikListBoxD1Ev" | "_ZN11CEikListBoxD0Ev"
+        | "_ZN15CEikTextListBoxD2Ev" | "_ZN15CEikTextListBoxD1Ev" | "_ZN15CEikTextListBoxD0Ev"
+        | "_ZN17CEikColumnListBoxD2Ev" | "_ZN17CEikColumnListBoxD1Ev" | "_ZN17CEikColumnListBoxD0Ev"
+        | "_ZN24CEikFormattedCellListBoxD2Ev" | "_ZN24CEikFormattedCellListBoxD1Ev" | "_ZN24CEikFormattedCellListBoxD0Ev"
+        | "_ZN29CAknDoubleGraphicStyleListBoxD1Ev" | "_ZN29CAknDoubleGraphicStyleListBoxD0Ev"
+        | "_ZN27CAknDoubleLargeStyleListBoxD1Ev" | "_ZN27CAknDoubleLargeStyleListBoxD0Ev"
         | "_ZN29CAknSingleGraphicStyleListBoxD1Ev" | "_ZN29CAknSingleGraphicStyleListBoxD0Ev"
         | "_ZN22CAknSingleStyleListBoxD1Ev" | "_ZN22CAknSingleStyleListBoxD0Ev" => {
             p.list_destroy(r0);

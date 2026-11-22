@@ -40,12 +40,16 @@ const ENV_VTABLE: &[(usize, &str)] = &[
 
 /// One window server event as the host produced it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WsEvent {
-    pub ty: u32,
-    pub code: u32,
-    pub scan: u32,
-    pub modifiers: u32,
+pub enum WsEvent {
+    Key { ty: u32, code: u32, scan: u32, modifiers: u32 },
+    /// A menu or CBA command ID (`CAknView::HandleCommandL` / `CEikAppUi::HandleCommandL`).
+    Command(u32),
+    /// A list box observer event (`MEikListBoxObserver::HandleListBoxEventL(lb, event)`).
+    ListEvent { lb: u32, event: u32 },
 }
+
+/// `EEikCmdExit` (eikcmd.hrh): standard exit command ID.
+pub const EEIK_CMD_EXIT: u32 = 1000;
 
 #[derive(Debug, Default)]
 pub struct WsState {
@@ -77,6 +81,14 @@ impl Process {
         Ok(())
     }
 
+    fn ws_enqueue(&mut self, env: u32, ev: WsEvent) -> Result<(), String> {
+        self.nat.ws.queue.push_back(ev);
+        if self.nat.requests.is_pending(env + ACTIVE_I_STATUS) {
+            self.request_complete(env + ACTIVE_I_STATUS, 0)?;
+        }
+        Ok(())
+    }
+
     /// Deliver a key event. `scan` carries the **host** key code (CoralOS Unicode
     /// scalar or C0 key-wire byte). Internally translated to Symbian TStdScanCode /
     /// TKeyCode via `keymap::host_key`; the translated scan is what reaches the
@@ -86,18 +98,75 @@ impl Process {
         let mods = key_modifiers(modifiers)?;
         let (std_scan, key_code) = crate::keymap::host_key(scan, text)?;
         if down {
-            self.nat.ws.queue.push_back(WsEvent { ty: EEVENT_KEY_DOWN, code: 0, scan: std_scan, modifiers: mods });
+            self.ws_enqueue(env, WsEvent::Key { ty: EEVENT_KEY_DOWN, code: 0, scan: std_scan, modifiers: mods })?;
             if let Some(code) = key_code {
-                self.nat.ws.queue.push_back(WsEvent { ty: EEVENT_KEY, code, scan: std_scan, modifiers: mods });
+                self.ws_enqueue(env, WsEvent::Key { ty: EEVENT_KEY, code, scan: std_scan, modifiers: mods })?;
             }
         } else {
-            self.nat.ws.queue.push_back(WsEvent { ty: EEVENT_KEY_UP, code: 0, scan: std_scan, modifiers: mods });
-        }
-        // The server completes the outstanding notification once; a second queued event completes the next one the moment it is requested.
-        if self.nat.requests.is_pending(env + ACTIVE_I_STATUS) {
-            self.request_complete(env + ACTIVE_I_STATUS, 0)?;
+            self.ws_enqueue(env, WsEvent::Key { ty: EEVENT_KEY_UP, code: 0, scan: std_scan, modifiers: mods })?;
         }
         Ok(())
+    }
+
+    /// Deliver a menu or CBA command ID to the active view (or AppUi).
+    pub fn deliver_command(&mut self, cmd: u32) -> Result<(), String> {
+        let env = self.host.env.ok_or_else(|| String::from("the application has no environment yet: nothing can receive a command"))?;
+        self.ws_enqueue(env, WsEvent::Command(cmd))
+    }
+
+    /// Deliver a native control intent (list row selection, scroll, or activation) to a projected `CEikListBox`.
+    pub fn deliver_intent(
+        &mut self,
+        control: heirloom_ui_abi::UiObjectRef,
+        token: heirloom_ui_abi::CallbackToken,
+        generation: u32,
+        intent: heirloom_ui_abi::Intent,
+    ) -> Result<(), String> {
+        let env = self.host.env.ok_or_else(|| String::from("the application has no environment yet: nothing can receive a control intent"))?;
+        let lb = token.0 as u32;
+        let matches_live = matches!(
+            self.obj_get(lb),
+            Some(crate::objects::HostObj::List(l)) if l.control == Some(control) && control.generation == generation
+        );
+        if !matches_live {
+            return Err(format!("control {control:?} (token {lb:#x}, gen {generation}) is not a live list box"));
+        }
+        let view = self.rd(lb + crate::listbox::LB_I_VIEW)?;
+        if view == 0 {
+            return Err(format!("list box {lb:#x} has no view"));
+        }
+        let count = self.list_rows(lb)?.len() as u32;
+        match intent {
+            heirloom_ui_abi::Intent::SelectRow(row) => {
+                if count > 0 {
+                    let clamped = row.min(count - 1);
+                    self.wr(view + crate::listbox::VIEW_I_CURRENT, clamped)?;
+                    self.list_scroll_to_current(lb, view, clamped as i32)?;
+                    self.list_sync(lb)?;
+                }
+                Ok(())
+            }
+            heirloom_ui_abi::Intent::ScrollTo(top) => {
+                let max_top = count.saturating_sub(1);
+                self.wr(view + crate::listbox::VIEW_I_TOP, top.min(max_top))?;
+                self.list_sync(lb)?;
+                Ok(())
+            }
+            heirloom_ui_abi::Intent::Activate => {
+                if count > 0 {
+                    // Deliver S60 center-select (EKeyOK / EStdKeyDevice3) through the control stack:
+                    // containers handling EKeyOK directly run their handler, and containers that
+                    // delegate to iListBox->OfferKeyEventL notify MEikListBoxObserver::HandleListBoxEventL.
+                    const EKEY_OK: u32 = 0xf845;
+                    const ESTD_KEY_DEVICE3: u32 = 0xa7;
+                    self.ws_enqueue(env, WsEvent::Key { ty: EEVENT_KEY_DOWN, code: 0, scan: ESTD_KEY_DEVICE3, modifiers: 0 })?;
+                    self.ws_enqueue(env, WsEvent::Key { ty: EEVENT_KEY, code: EKEY_OK, scan: ESTD_KEY_DEVICE3, modifiers: 0 })?;
+                    self.ws_enqueue(env, WsEvent::Key { ty: EEVENT_KEY_UP, code: 0, scan: ESTD_KEY_DEVICE3, modifiers: 0 })?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// `CCoeEnv::RunL()` (COEMAIN.CPP:229-250).
@@ -108,28 +177,42 @@ impl Process {
             other => return Err(format!("CCoeEnv::RunL with status {other} (ECoePanicWservBlindCommandFailed on a device)")),
         }
         let ev = self.nat.ws.queue.pop_front().ok_or_else(|| String::from("CCoeEnv::RunL with no window server event (GetEvent would block)"))?;
-        let block = match self.nat.ws.block {
-            Some(b) => b,
-            None => {
-                let b = self.alloc_zeroed(TWS_EVENT_BYTES).ok_or_else(|| String::from("no guest heap for the window server event"))?;
-                self.nat.ws.block = Some(b);
-                b
-            }
-        };
-        self.wr(block, ev.ty)?;
-        self.wr(block + TWS_I_HANDLE, env)?;
-        // iTime stays 0: no guest call reads the event time yet. DELETE WHEN a corpus app reads TWsEvent::Time().
-        for (i, v) in [ev.code, ev.scan, ev.modifiers, 0].into_iter().enumerate() {
-            self.wr(block + TWS_I_EVENT_DATA + 4 * i as u32, v)?;
-        }
         self.ws_request_event(env)?;
         let appui = self.rd(env + COEENV_I_APPUI)?;
         if appui == 0 {
             return Err(String::from("CCoeEnv::RunL: the environment has no AppUi to handle the event"));
         }
-        let spec = SlotSpec { class: "CCoeAppUi", method: "HandleWsEventL", slot: crate::keyroute::SLOT_HANDLE_WS_EVENT_L, inherited: crate::keyroute::INHERITED_HANDLE_WS_EVENT_L };
-        let target = anchor(self, appui, &spec)?;
-        self.call_guest(target, &[appui, block, env], Continuation::Resume)
+        match ev {
+            WsEvent::Key { ty, code, scan, modifiers } => {
+                let block = match self.nat.ws.block {
+                    Some(b) => b,
+                    None => {
+                        let b = self.alloc_zeroed(TWS_EVENT_BYTES).ok_or_else(|| String::from("no guest heap for the window server event"))?;
+                        self.nat.ws.block = Some(b);
+                        b
+                    }
+                };
+                self.wr(block, ty)?;
+                self.wr(block + TWS_I_HANDLE, env)?;
+                for (i, v) in [code, scan, modifiers, 0].into_iter().enumerate() {
+                    self.wr(block + TWS_I_EVENT_DATA + 4 * i as u32, v)?;
+                }
+                let spec = SlotSpec { class: "CCoeAppUi", method: "HandleWsEventL", slot: crate::keyroute::SLOT_HANDLE_WS_EVENT_L, inherited: crate::keyroute::INHERITED_HANDLE_WS_EVENT_L };
+                let target = anchor(self, appui, &spec)?;
+                self.call_guest(target, &[appui, block, env], Continuation::Resume)
+            }
+            WsEvent::Command(cmd) => crate::viewappui::dispatch_command(self, appui, cmd),
+            WsEvent::ListEvent { lb, event } => {
+                let obs = self.rd(lb + crate::listbox::LB_I_OBSERVER)?;
+                if obs == 0 {
+                    return Ok(());
+                }
+                let spec = SlotSpec { class: "MEikListBoxObserver", method: "HandleListBoxEventL", slot: crate::listkey::SLOT_HANDLE_LIST_BOX_EVENT_L, inherited: &[] };
+                let target = anchor(self, obs, &spec)?;
+                self.log.push(format!("[list] {lb:#x} HandleListBoxEventL(obs={obs:#x}, ev={event})"));
+                self.call_guest(target, &[obs, lb, event], Continuation::Resume)
+            }
+        }
     }
 }
 

@@ -105,23 +105,41 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
         Ok(())
     }
 
-    /// A host key press or release reaches the guest through the environment's own path (`wsevent.rs`, `keyroute.rs`): it becomes window
-    /// server events, completes the environment's outstanding event request and the scheduler runs it on the next `step`. The key's
-    /// `code` is its `TStdScanCode` (`keymap.rs`). Every other event kind is accepted and dropped, by name.
-    /// DELETE WHEN pointer, menu-command, close and resize events are routed (the slices after this one).
+    /// Deliver host UI events (keys, menu commands, list box intents, close requests) into the Symbian environment.
     fn deliver(&mut self, ev: GuestUiEvent) -> Result<Delivery, Refusal> {
-        let GuestUiEvent::Key { win, code, text, modifiers, down } = ev else {
-            self.log.push(String::from("ekaarm: deliver: only key events are routed so far; this event was ignored"));
-            return Ok(Delivery::Ignored);
-        };
         let Some(p) = self.process.as_mut() else {
             return Err(Refusal(String::from("ekaarm: deliver: no program started (start_file first)")));
         };
-        if p.host.window != Some(win) {
-            return Ok(Delivery::NotForGuestWindow);
+        match ev {
+            GuestUiEvent::Key { win, code, text, modifiers, down } => {
+                if p.host.window != Some(win) { return Ok(Delivery::NotForGuestWindow); }
+                p.deliver_key(code, &text, modifiers, down).map_err(|m| Refusal(format!("ekaarm: deliver: {m}")))?;
+                Ok(Delivery::Queued)
+            }
+            GuestUiEvent::MenuCommand { win, token } => {
+                if p.host.window != Some(win) { return Ok(Delivery::NotForGuestWindow); }
+                p.deliver_command(token.0 as u32).map_err(|m| Refusal(format!("ekaarm: deliver: {m}")))?;
+                Ok(Delivery::Queued)
+            }
+            GuestUiEvent::CloseRequested { win, .. } => {
+                if p.host.window != Some(win) { return Ok(Delivery::NotForGuestWindow); }
+                p.deliver_command(crate::wsevent::EEIK_CMD_EXIT).map_err(|m| Refusal(format!("ekaarm: deliver: {m}")))?;
+                Ok(Delivery::Queued)
+            }
+            GuestUiEvent::Intent { win, control, token, generation, intent } => {
+                if p.host.window != Some(win) { return Ok(Delivery::NotForGuestWindow); }
+                p.deliver_intent(control, token, generation, intent).map_err(|m| Refusal(format!("ekaarm: deliver: {m}")))?;
+                Ok(Delivery::Queued)
+            }
+            GuestUiEvent::RequestAnswered { req, button } => {
+                p.deliver_request_response(req, Some(button)).map_err(|m| Refusal(format!("ekaarm: deliver: {m}")))?;
+                Ok(Delivery::Queued)
+            }
+            _ => {
+                self.log.push(String::from("ekaarm: deliver: event kind not routed yet; ignored"));
+                Ok(Delivery::Ignored)
+            }
         }
-        p.deliver_key(code, &text, modifiers, down).map_err(|m| Refusal(format!("ekaarm: deliver: {m}")))?;
-        Ok(Delivery::Queued)
     }
 
     fn step(&mut self, budget: u64) -> (Step, RunStats) {

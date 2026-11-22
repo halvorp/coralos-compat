@@ -18,6 +18,9 @@ impl Process {
         // run_counted() keeps the instruction count exact (it says how many retired) and runs the slice up to the next SVC in one
         // call - one CPU-table crossing per exec call, not per instruction, when the CPU is cpu-arm.library.
         loop {
+            if self.nat.pending_request.is_some() {
+                return Outcome::Blocked;
+            }
             // The thread is in `CActiveScheduler::Start` (a parked activation is the top frame): the scheduler runs, not the CPU.
             if matches!(self.frames.last(), Some(crate::callback::Frame { cont: crate::callback::Continuation::SchedWait { .. }, .. })) {
                 match crate::schedrun::pump(self) {
@@ -48,6 +51,7 @@ impl Process {
                         let idx = (n - STUB_SVC_BASE) as usize;
                         match natives::call(self, idx) {
                             NativeOutcome::Return => continue,
+                            NativeOutcome::Blocked => return Outcome::Blocked,
                             NativeOutcome::Exit(code) => return Outcome::Exited(code),
                             NativeOutcome::Refused(msg) => match self.census.as_mut() {
                                 Some(seen) if msg.starts_with("NEXT-NEEDED") => { seen.push(msg); self.cpu.regs[0] = 0; continue }

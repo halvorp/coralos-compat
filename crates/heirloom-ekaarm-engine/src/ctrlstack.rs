@@ -47,8 +47,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         }
         // void AddToStackL(CCoeControl* aControl, TInt aPriority, TInt aStackingFlags)
         "_ZN9CCoeAppUi11AddToStackLEP11CCoeControlii" => { let r = p.stack_add(this, 0, r1, r2 as i32, r3); done(r) }
-        // void RemoveFromStack(CCoeControl* aControl): not on the stack is a no-op (coeaui.h:114).
+        // void RemoveFromStack(CCoeControl* aControl) / RemoveFromViewStack(const MCoeView&, CCoeControl*): not on the stack is a no-op.
         "_ZN9CCoeAppUi15RemoveFromStackEP11CCoeControl" => done(p.appui_state(this).map(|s| s.stack.retain(|i| i.control != r1))),
+        "_ZN9CCoeAppUi19RemoveFromViewStackERK8MCoeViewP11CCoeControl" => done(p.appui_state(this).map(|s| s.stack.retain(|i| i.control != r2))),
         // void UpdateStackedControlFlags(CCoeControl*, TInt aFlags, TInt aMask): the flags under the mask become aFlags'.
         "_ZN9CCoeAppUi25UpdateStackedControlFlagsEP11CCoeControlii" => done(p.appui_state(this).map(|s| {
             if let Some(i) = s.stack.iter_mut().find(|i| i.control == r1) { i.flags = (i.flags & !r3) | (r2 & r3); }

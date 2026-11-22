@@ -74,6 +74,15 @@ pub(crate) fn pump(p: &mut Process) -> Result<Pump, Outcome> {
         return Ok(Pump::Continue);
     }
     if p.nat.requests.signals == 0 {
+        if let Some(env) = p.host.env {
+            if let Ok(appui) = p.rd(env + crate::cone::COEENV_I_APPUI) {
+                if appui != 0 && crate::viewappui::has_pending(p, appui) {
+                    crate::viewappui::start_activation(p, appui, |block| Continuation::ViewActivated { block })
+                        .map_err(Outcome::Fault)?;
+                    return Ok(Pump::Continue);
+                }
+            }
+        }
         return Ok(Pump::Blocked);
     }
     let Some(ao) = p.sched_ready().map_err(Outcome::Fault)? else {

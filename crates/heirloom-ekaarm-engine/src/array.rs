@@ -144,9 +144,132 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             done(p, r, r0)
         }
         "_ZNK10RArrayBase5CountEv" => match p.rd(r0) { Ok(c) => { p.cpu.regs[0] = c; NativeOutcome::Return } Err(m) => refuse(m) },
-        "_ZN10RArrayBase5CloseEv" => {
+        "_ZNK10RArrayBase2AtEi" => {
+            let r = (|| -> Result<u32, String> {
+                let count = p.rd(r0)?;
+                let idx = r1 as i32;
+                if idx < 0 || idx as u32 >= count { return Err(format!("RArrayBase::At({idx}) out of bounds ({count})")); }
+                let entries = p.rd(r0 + 4)?;
+                let esize = p.rd(r0 + 8)?;
+                Ok(entries.wrapping_add((idx as u32).wrapping_mul(esize)))
+            })();
+            match r { Ok(a) => { p.cpu.regs[0] = a; NativeOutcome::Return } Err(m) => refuse(m) }
+        }
+        "_ZN10RArrayBase6AppendEPKv" => {
+            let r = (|| -> Result<(), String> {
+                let count = p.rd(r0)?;
+                let mut entries = p.rd(r0 + 4)?;
+                let esize = p.rd(r0 + 8)?.max(4);
+                let mut alloc = p.rd(r0 + 16)?;
+                let gran = p.rd(r0 + 20)?.max(8);
+                if count >= alloc {
+                    let new_alloc = alloc.saturating_add(gran);
+                    let new_buf = p.alloc_zeroed(new_alloc.saturating_mul(esize)).ok_or_else(|| String::from("RArrayBase out of heap"))?;
+                    if entries != 0 && count > 0 {
+                        let old_bytes = count.saturating_mul(esize);
+                        let mut tmp = alloc::vec![0u8; old_bytes as usize];
+                        for i in 0..old_bytes { tmp[i as usize] = p.mem.vm.read_u8(entries + i).map_err(|_| String::from("RArrayBase read failed"))?; }
+                        p.mem.vm.write_bytes(new_buf, &tmp).map_err(|_| String::from("RArrayBase write failed"))?;
+                        if let Some(h) = p.heap.as_mut() { let _ = h.free(entries); }
+                    }
+                    entries = new_buf;
+                    alloc = new_alloc;
+                    p.wr(r0 + 4, entries)?;
+                    p.wr(r0 + 16, alloc)?;
+                }
+                let dst = entries.wrapping_add(count.wrapping_mul(esize));
+                for i in 0..esize {
+                    let b = p.mem.vm.read_u8(r1 + i).map_err(|_| String::from("RArrayBase::Append src unreadable"))?;
+                    p.mem.vm.write_u8(dst + i, b).map_err(|_| String::from("RArrayBase::Append dst unwritable"))?;
+                }
+                p.wr(r0, count + 1)
+            })();
+            done(p, r, 0)
+        }
+        "_ZN10RArrayBase6RemoveEi" => {
+            let r = (|| -> Result<(), String> {
+                let count = p.rd(r0)?;
+                let idx = r1 as i32;
+                if idx < 0 || idx as u32 >= count { return Err(format!("RArrayBase::Remove({idx}) out of bounds ({count})")); }
+                let entries = p.rd(r0 + 4)?;
+                let esize = p.rd(r0 + 8)?.max(4);
+                for j in (idx as u32)..(count - 1) {
+                    let src = entries.wrapping_add((j + 1).wrapping_mul(esize));
+                    let dst = entries.wrapping_add(j.wrapping_mul(esize));
+                    for i in 0..esize {
+                        let b = p.mem.vm.read_u8(src + i).map_err(|_| String::from("RArrayBase::Remove read failed"))?;
+                        p.mem.vm.write_u8(dst + i, b).map_err(|_| String::from("RArrayBase::Remove write failed"))?;
+                    }
+                }
+                p.wr(r0, count - 1)
+            })();
+            done(p, r, 0)
+        }
+        "_ZN10RArrayBase5CloseEv" | "_ZN10RArrayBase5ResetEv" => {
             if let Ok(ptr) = p.rd(r0 + 4) { if ptr != 0 { if let Some(h) = p.heap.as_mut() { let _ = h.free(ptr); } } }
             let r = p.wr(r0, 0).and_then(|_| p.wr(r0 + 4, 0)).and_then(|_| p.wr(r0 + 16, 0));
+            done(p, r, 0)
+        }
+        // RPointerArrayBase (e32cmn.h): iCount(0), iEntries(4), iAllocated(8), iGranularity(12) of 4-byte TAny* pointers.
+        "_ZN17RPointerArrayBaseC1Ev" | "_ZN17RPointerArrayBaseC2Ev" | "_ZN17RPointerArrayBaseC1Ei" | "_ZN17RPointerArrayBaseC2Ei" => {
+            let gran = if name.ends_with("Ei") { (r1 as i32).max(1) as u32 } else { 8 };
+            let r = p.wr(r0, 0).and_then(|_| p.wr(r0 + 4, 0)).and_then(|_| p.wr(r0 + 8, 0)).and_then(|_| p.wr(r0 + 12, gran));
+            done(p, r, r0)
+        }
+        "_ZNK17RPointerArrayBase5CountEv" => match p.rd(r0) { Ok(c) => { p.cpu.regs[0] = c; NativeOutcome::Return } Err(m) => refuse(m) },
+        "_ZNK17RPointerArrayBase2AtEi" => {
+            let r = (|| -> Result<u32, String> {
+                let count = p.rd(r0)?;
+                let idx = r1 as i32;
+                if idx < 0 || idx as u32 >= count { return Err(format!("RPointerArrayBase::At({idx}) out of bounds ({count})")); }
+                let entries = p.rd(r0 + 4)?;
+                Ok(entries.wrapping_add((idx as u32) * 4))
+            })();
+            match r { Ok(a) => { p.cpu.regs[0] = a; NativeOutcome::Return } Err(m) => refuse(m) }
+        }
+        "_ZN17RPointerArrayBase6AppendEPKv" => {
+            let r = (|| -> Result<(), String> {
+                let count = p.rd(r0)?;
+                let mut entries = p.rd(r0 + 4)?;
+                let mut alloc = p.rd(r0 + 8)?;
+                let gran = p.rd(r0 + 12)?.max(8);
+                if count >= alloc {
+                    let new_alloc = alloc.saturating_add(gran);
+                    let new_buf = p.alloc_zeroed(new_alloc.saturating_mul(4)).ok_or_else(|| String::from("RPointerArrayBase out of heap"))?;
+                    if entries != 0 && count > 0 {
+                        for i in 0..count {
+                            let v = p.rd(entries + i * 4)?;
+                            p.wr(new_buf + i * 4, v)?;
+                        }
+                        if let Some(h) = p.heap.as_mut() { let _ = h.free(entries); }
+                    }
+                    entries = new_buf;
+                    alloc = new_alloc;
+                    p.wr(r0 + 4, entries)?;
+                    p.wr(r0 + 8, alloc)?;
+                }
+                p.wr(entries + count * 4, r1)?;
+                p.wr(r0, count + 1)
+            })();
+            done(p, r, 0)
+        }
+        "_ZN17RPointerArrayBase6RemoveEi" => {
+            let r = (|| -> Result<(), String> {
+                let count = p.rd(r0)?;
+                let idx = r1 as i32;
+                if idx < 0 || idx as u32 >= count { return Err(format!("RPointerArrayBase::Remove({idx}) out of bounds ({count})")); }
+                let entries = p.rd(r0 + 4)?;
+                for j in (idx as u32)..(count - 1) {
+                    let v = p.rd(entries + (j + 1) * 4)?;
+                    p.wr(entries + j * 4, v)?;
+                }
+                p.wr(r0, count - 1)
+            })();
+            done(p, r, 0)
+        }
+        "_ZN17RPointerArrayBase5CloseEv" | "_ZN17RPointerArrayBase5ResetEv" => {
+            if let Ok(ptr) = p.rd(r0 + 4) { if ptr != 0 { if let Some(h) = p.heap.as_mut() { let _ = h.free(ptr); } } }
+            let r = p.wr(r0, 0).and_then(|_| p.wr(r0 + 4, 0)).and_then(|_| p.wr(r0 + 8, 0));
             done(p, r, 0)
         }
         "_ZN8CBufFlat4NewLEi" | "_ZN7CBufSeg4NewLEi" => match p.buf_flat_new(r0) { Ok(b) => { p.cpu.regs[0] = b; NativeOutcome::Return } Err(m) => refuse(m) },

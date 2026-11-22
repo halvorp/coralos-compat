@@ -19,8 +19,16 @@ use crate::loader::Process;
 use crate::natives::NativeOutcome;
 
 pub const LIST_OFFER_KEY_EVENT_L: &str = "_ZN11CEikListBox14OfferKeyEventLERK9TKeyEvent10TEventCode";
+const EKEY_ENTER: u32 = 0x000d;
 const EKEY_UP_ARROW: u32 = 0xf809;
 const EKEY_DOWN_ARROW: u32 = 0xf80a;
+const EKEY_DEVICE3: u32 = 0xf845; // EKeyOK / center D-pad
+/// `MEikListBoxObserver::EEventEnterKeyPressed` (eiklbo.h:37): 0.
+pub const EEVENT_ENTER_KEY_PRESSED: u32 = 0;
+/// `MEikListBoxObserver::EEventItemDoubleClicked` (eiklbo.h:41): 2.
+pub const EEVENT_ITEM_DOUBLE_CLICKED: u32 = 2;
+/// `MEikListBoxObserver::HandleListBoxEventL(CEikListBox*, TListBoxEvent)` (eiklbo.h:65): slot 0.
+pub const SLOT_HANDLE_LIST_BOX_EVENT_L: u32 = 0;
 /// `EStdKeyYes` (e32keys.h:273): the one key the list hands back unconsumed on an empty list.
 const ESTD_KEY_YES: u32 = 0xc4;
 /// `TKeyResponse` (w32std.h).
@@ -45,19 +53,28 @@ impl Process {
             return Ok((if scan == ESTD_KEY_YES { EKEY_WAS_NOT_CONSUMED } else { EKEY_WAS_CONSUMED }, None));
         }
         let flags = self.rd(lb + LB_I_FLAGS)?;
-        if flags & (FLAG_POPOUT | FLAG_LOOP_SCROLLING | FLAG_PAGE_AT_ONCE) != 0 {
-            return Err(format!("list flags {flags:#x}: pop-out, loop and page-at-once scrolling are not implemented"));
+        if flags & (FLAG_POPOUT | FLAG_PAGE_AT_ONCE) != 0 {
+            return Err(format!("list flags {flags:#x}: pop-out and page-at-once scrolling are not implemented"));
         }
         let view = self.rd(lb + LB_I_VIEW)?;
         if view == 0 { return Err(String::from("OfferKeyEventL before ConstructL: no view")); }
         let delta = match code {
             EKEY_DOWN_ARROW => 1,
             EKEY_UP_ARROW => -1,
+            EKEY_ENTER | EKEY_DEVICE3 => {
+                // ReportListBoxEventL(EEventEnterKeyPressed): handled in native() via iListBoxObserver.
+                return Ok((EKEY_WAS_CONSUMED, None));
+            }
             0 => return Ok((EKEY_WAS_CONSUMED, None)), // a key-down / key-up event: the switch's default branch
-            other => return Err(format!("key code {other:#x}: only the up and down arrows are implemented (Enter / OK, marking and matching are not)")),
+            other => return Err(format!("key code {other:#x}: only up/down/Enter/OK are implemented (marking and matching are not)")),
         };
         let old = self.rd(view + VIEW_I_CURRENT)? as i32;
-        let new = (old.max(0) + delta + i32::from(old < 0 && delta < 0)).clamp(0, count - 1);
+        let new = if flags & FLAG_LOOP_SCROLLING != 0 {
+            let cur = old.clamp(0, count - 1);
+            (cur + delta).rem_euclid(count)
+        } else {
+            (old.max(0) + delta + i32::from(old < 0 && delta < 0)).clamp(0, count - 1)
+        };
         if new == old {
             return Ok((EKEY_WAS_CONSUMED, None));
         }
@@ -69,7 +86,7 @@ impl Process {
     }
 
     /// Keep the current item inside the view: the top item moves just far enough.
-    fn list_scroll_to_current(&mut self, lb: u32, view: u32, current: i32) -> Result<(), String> {
+    pub(crate) fn list_scroll_to_current(&mut self, lb: u32, view: u32, current: i32) -> Result<(), String> {
         let item_height = (self.rd(view + crate::listbox::VIEW_I_ITEM_HEIGHT)? as i32).max(self.rd(lb + LB_I_ITEM_HEIGHT)? as i32);
         let height = self.rd(view + VIEW_I_VIEW_RECT + 12)? as i32 - self.rd(view + VIEW_I_VIEW_RECT + 4)? as i32;
         let fit = if item_height > 0 { (height / item_height).max(1) } else { 1 };
@@ -83,7 +100,19 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     if name != LIST_OFFER_KEY_EVENT_L { return None; }
     let (lb, key) = (p.cpu.regs[0], p.cpu.regs[1]);
     let refuse = |m: String| NativeOutcome::Refused(format!("NEXT-NEEDED eikcoctl {name}: {m}"));
+    let key_code = p.rd(key).unwrap_or(0);
     let (response, observer) = match p.list_offer_key(lb, key) { Ok(r) => r, Err(m) => return Some(refuse(m)) };
+    if matches!(key_code, EKEY_ENTER | EKEY_DEVICE3) {
+        let lb_obs = p.rd(lb + crate::listbox::LB_I_OBSERVER).unwrap_or(0);
+        if lb_obs != 0 {
+            let spec = SlotSpec { class: "MEikListBoxObserver", method: "HandleListBoxEventL", slot: SLOT_HANDLE_LIST_BOX_EVENT_L, inherited: &[] };
+            let calls: Vec<(u32, [u32; 4])> = match anchor(p, lb_obs, &spec) {
+                Ok(t) => alloc::vec![(t, [lb_obs, lb, EEVENT_ENTER_KEY_PRESSED, 0])],
+                Err(m) => return Some(refuse(m)),
+            };
+            return Some(match p.call_chain(calls, response) { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) });
+        }
+    }
     let Some(obs) = observer else {
         p.cpu.regs[0] = response;
         return Some(NativeOutcome::Return);

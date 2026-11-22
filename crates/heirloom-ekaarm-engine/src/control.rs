@@ -180,6 +180,18 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             }
         }
         "_ZN11CCoeControl13CreateWindowLEv" | "_ZN11CCoeControl13CreateWindowLEPKS_" => { let r = p.control_create_window(this); done(p, r) }
+        "_ZN11CCoeControl11MakeVisibleEi" => {
+            let r = p.control_state(this).map(|s| s.hidden = r1 == 0);
+            done(p, r)
+        }
+        // void CCoeControl::DrawNow() / DrawDeferred() const: host renders projected controls; sync list boxes if modified.
+        "_ZNK11CCoeControl7DrawNowEv" | "_ZN11CCoeControl7DrawNowEv"
+        | "_ZNK11CCoeControl12DrawDeferredEv" | "_ZN11CCoeControl12DrawDeferredEv" => {
+            if matches!(p.obj_get(this), Some(HostObj::List(_))) {
+                let _ = p.list_sync(this);
+            }
+            NativeOutcome::Return
+        }
         // void CCoeControl::SetContainerWindowL(const CCoeControl& aContainer) (coecntrl.cpp, the Foundation source, consulted for facts):
         // iWin = the container's window, iContext = the container's if none was set, the Mop parent = the container's `MObjectProvider`
         // base (+4). The window-owning and EBackedUpWindow cases and `SetParent` (a virtual whose base only records the parent) are not

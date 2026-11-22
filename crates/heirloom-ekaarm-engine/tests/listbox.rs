@@ -160,12 +160,20 @@ fn arrow_keys_move_the_current_item_clamped_and_other_keys_are_refused_by_name()
     assert_eq!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY), Ok(1));
     assert_eq!(offer(&mut p, lb, 0, 0x11, 3), Ok(1));
     assert_eq!((current(&p, lb), selected_sent(&p).len()), (2, sent + 2));
-    // Enter is the next slice: a named refusal, not a guess.
-    let e = offer(&mut p, lb, 0x0d, 0x03, EEVENT_KEY).unwrap_err();
-    assert!(e.contains("key code 0xd") && e.contains("only the up and down arrows"), "{e}");
-    // A list in a mode the engine does not run refuses by name too.
+    // Enter notifies MEikListBoxObserver (no-op when none is set) and is consumed;
+    // unimplemented keys (e.g. incremental matching 'a' = 0x61) stay refused by name.
+    assert_eq!(offer(&mut p, lb, 0x0d, 0x03, EEVENT_KEY), Ok(1));
+    let e = offer(&mut p, lb, 0x61, 0x41, EEVENT_KEY).unwrap_err();
+    assert!(e.contains("key code 0x61") && e.contains("only up/down/Enter/OK"), "{e}");
+    // Loop scrolling wraps from last -> 0 and 0 -> last.
     p.mem.write_u32(lb + heirloom_ekaarm_engine::listbox::LB_I_FLAGS, 0x1000).unwrap();
-    assert!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY).unwrap_err().contains("loop and page-at-once"));
+    assert_eq!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY), Ok(1));
+    assert_eq!(current(&p, lb), 0);
+    assert_eq!(offer(&mut p, lb, UP, 0x10, EEVENT_KEY), Ok(1));
+    assert_eq!(current(&p, lb), 2);
+    // A list in a mode the engine does not run refuses by name too.
+    p.mem.write_u32(lb + heirloom_ekaarm_engine::listbox::LB_I_FLAGS, 0x8000).unwrap();
+    assert!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY).unwrap_err().contains("pop-out and page-at-once"));
 }
 
 #[test]

@@ -21,7 +21,8 @@ fn main() {
     let mut vtables: Vec<(u32, u32)> = Vec::new();
     let mut rom_dir: Option<String> = None;
     let mut rom_manifest: Option<String> = None;
-    let mut keys: Vec<u32> = Vec::new();
+    enum Action { Key(u32), Menu(u32), SelectRow(u32), ActivateList, AnswerDialog(u32) }
+    let mut actions: Vec<Action> = Vec::new();
     let mut rom_log = None;
     let mut dumps: Vec<(u32, u32)> = Vec::new();
     let mut dump_code: Option<String> = None;
@@ -41,7 +42,11 @@ fn main() {
                 vtables.push((u32::from_str_radix(a.trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()), n.parse().unwrap_or_else(|_| usage())));
             }
             // `--key SCAN`: once the app waits (Blocked), press and release the key with TStdScanCode SCAN (hex), run on, repeat per key.
-            "--key" => keys.push(u32::from_str_radix(args.next().unwrap_or_else(|| usage()).trim_start_matches("0x"), 16).unwrap_or_else(|_| usage())),
+            "--key" => actions.push(Action::Key(u32::from_str_radix(args.next().unwrap_or_else(|| usage()).trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()))),
+            "--menu" => actions.push(Action::Menu(args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage()))),
+            "--select-row" => actions.push(Action::SelectRow(args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage()))),
+            "--activate-list" => actions.push(Action::ActivateList),
+            "--answer-dialog" => actions.push(Action::AnswerDialog(args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage()))),
             "--rom-manifest" => rom_manifest = Some(args.next().unwrap_or_else(|| usage())),
             "--rom" => rom_dir = Some(args.next().unwrap_or_else(|| usage())),
             "--dump" => {
@@ -116,12 +121,60 @@ fn main() {
     if census { proc.census = Some(Vec::new()); }
     if trace { proc.trace = Some(Vec::new()); }
     let mut outcome = proc.run(max_insns);
-    for scan in &keys {
+    let active_list = |proc: &heirloom_ekaarm_engine::loader::Process| -> Option<(heirloom_ui_abi::UiObjectRef, heirloom_ui_abi::CallbackToken)> {
+        let ui = proc.ui_as::<RecordingGuestUi>()?;
+        let mut next_id = 1u32;
+        let mut live: Vec<(heirloom_ui_abi::UiObjectRef, heirloom_ui_abi::CallbackToken)> = Vec::new();
+        for c in &ui.calls {
+            match c {
+                heirloom_ui_abi::UiCall::OpenWindow(_) => { next_id += 1; }
+                heirloom_ui_abi::UiCall::AddControl(_, m) => {
+                    let r = heirloom_ui_abi::UiObjectRef { id: next_id, generation: 1 };
+                    next_id += 1;
+                    if matches!(m.kind, heirloom_ui_abi::ControlKind::List { .. }) {
+                        live.push((r, m.token));
+                    }
+                }
+                heirloom_ui_abi::UiCall::RemoveControl(_, r) => {
+                    live.retain(|(id, _)| id != r);
+                }
+                _ => {}
+            }
+        }
+        live.last().copied()
+    };
+    for act in &actions {
         if !matches!(outcome, Outcome::Blocked) { break; }
-        for down in [true, false] {
-            if let Err(m) = proc.deliver_key(*scan, "", heirloom_ui_abi::Modifiers::default(), down) { println!("OUTCOME KeyRefused {scan:#x}: {m}"); std::process::exit(1) }
-            outcome = proc.run(proc.insns.saturating_add(max_insns));
-            if !matches!(outcome, Outcome::Blocked) { break; }
+        match *act {
+            Action::Key(scan) => {
+                for down in [true, false] {
+                    if let Err(m) = proc.deliver_key(scan, "", heirloom_ui_abi::Modifiers::default(), down) { println!("OUTCOME KeyRefused {scan:#x}: {m}"); std::process::exit(1) }
+                    outcome = proc.run(proc.insns.saturating_add(max_insns));
+                    if !matches!(outcome, Outcome::Blocked) { break; }
+                }
+            }
+            Action::Menu(cmd) => {
+                if let Err(m) = proc.deliver_command(cmd) { println!("OUTCOME MenuRefused {cmd}: {m}"); std::process::exit(1) }
+                outcome = proc.run(proc.insns.saturating_add(max_insns));
+            }
+            Action::SelectRow(row) => {
+                if let Some((ctrl_ref, tok)) = active_list(&proc) {
+                    if let Err(m) = proc.deliver_intent(ctrl_ref, tok, 1, heirloom_ui_abi::Intent::SelectRow(row)) { println!("OUTCOME SelectRefused {row}: {m}"); std::process::exit(1) }
+                    outcome = proc.run(proc.insns.saturating_add(max_insns));
+                }
+            }
+            Action::ActivateList => {
+                if let Some((ctrl_ref, tok)) = active_list(&proc) {
+                    if let Err(m) = proc.deliver_intent(ctrl_ref, tok, 1, heirloom_ui_abi::Intent::Activate) { println!("OUTCOME ActivateRefused: {m}"); std::process::exit(1) }
+                    outcome = proc.run(proc.insns.saturating_add(max_insns));
+                }
+            }
+            Action::AnswerDialog(btn) => {
+                if let Some((req, _)) = proc.nat.pending_request {
+                    if let Err(m) = proc.deliver_request_response(req, Some(btn)) { println!("OUTCOME DialogRefused: {m}"); std::process::exit(1) }
+                    outcome = proc.run(proc.insns.saturating_add(max_insns));
+                }
+            }
         }
     }
     if let Some(seen) = &proc.census {

@@ -51,6 +51,10 @@ pub enum Continuation {
     SchedRun { ao: u32 },
     /// A key event being offered down the AppUi's control stack (`keyroute.rs`).
     KeyOffer(crate::keyroute::Offer),
+    /// A view switch called `old_view->DoDeactivate()`; on return, activate `next` (`viewappui.rs`).
+    ViewDeactivated { appui: u32, next: (u32, u32, Vec<u8>) },
+    /// A runtime view activation (`AknViewActivatedL`) returned; release its scratch block (`viewappui.rs`).
+    ViewActivated { block: u32 },
 }
 
 /// One interrupted call: the CPU as it was (resuming at the instruction after the SVC) and what to do on return.
@@ -114,6 +118,8 @@ impl Process {
             Continuation::SchedRun { .. } => Ok(()),
             Continuation::SchedWait { .. } => Err(Outcome::Fault(String::from("callback return reached a scheduler activation frame"))),
             Continuation::KeyOffer(o) => crate::keyroute::offered(self, o, r0),
+            Continuation::ViewDeactivated { appui, next } => crate::viewappui::finish_deactivation(self, appui, next),
+            Continuation::ViewActivated { block } => { crate::viewappui::finish_activation(self, block); Ok(()) }
         }
     }
 

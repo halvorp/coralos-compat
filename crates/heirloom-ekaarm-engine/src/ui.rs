@@ -4,7 +4,7 @@
 use alloc::boxed::Box;
 use core::any::Any;
 use alloc::string::String;
-use heirloom_ui_abi::{ControlModel, ControlValue, GuestUi, GuestRect, MenuModel, UiObjectRef, UiRefusal, WindowModel};
+use heirloom_ui_abi::{ControlModel, ControlValue, GuestUi, GuestRect, MenuModel, RequestModel, RequestRef, UiObjectRef, UiRefusal, WindowModel};
 
 pub trait EngineUi {
     fn open_window(&mut self, model: WindowModel) -> Result<UiObjectRef, UiRefusal>;
@@ -18,6 +18,7 @@ pub trait EngineUi {
     /// The guest changed a control's state (`GuestUi::set_control`).
     fn set_control(&mut self, win: UiObjectRef, control: UiObjectRef, value: ControlValue) -> Result<(), UiRefusal>;
     fn set_control_rect(&mut self, win: UiObjectRef, control: UiObjectRef, rect: GuestRect) -> Result<(), UiRefusal>;
+    fn request(&mut self, win: Option<UiObjectRef>, model: RequestModel) -> Result<RequestRef, UiRefusal>;
     fn as_any(&self) -> &dyn Any;
     /// Give the concrete box back (`EkaArm` lends its UI to the process for a slice and takes it back).
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
@@ -44,6 +45,9 @@ impl<U: GuestUi> EngineUi for U {
     }
     fn set_control_rect(&mut self, win: UiObjectRef, control: UiObjectRef, rect: GuestRect) -> Result<(), UiRefusal> {
         GuestUi::set_control_rect(self, win, control, rect)
+    }
+    fn request(&mut self, win: Option<UiObjectRef>, model: RequestModel) -> Result<RequestRef, UiRefusal> {
+        GuestUi::request(self, win, model)
     }
     fn as_any(&self) -> &dyn Any {
         self

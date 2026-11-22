@@ -96,15 +96,31 @@ impl Process {
         (0..self.rd(this + ARR_I_COUNT)?).map(|i| desc::read16(self, self.desarr_cell(this, i as i32)?)).collect()
     }
 
-    /// A `CTextListBoxModel` (`CTextListBoxModel::ConstructL(NULL, ELbmOwnsItemArray)`): no item array yet.
+    /// A `CTextListBoxModel` (`CTextListBoxModel::ConstructL(NULL, ELbmOwnsItemArray)`): owns an initial empty `CDesC16ArrayFlat`
+    /// so `ItemTextArray()` is non-NULL until/unless the guest replaces it with `SetItemTextArray`.
     pub(crate) fn make_text_model(&mut self) -> Result<u32, String> {
         let m = self.alloc_zeroed(MODEL_SIZE).ok_or_else(|| String::from("no guest heap for the list box model"))?;
-        // Slot 3 is `NumberOfItems` (eiktxlbm.h:34): the class declares it virtual first among its own virtuals, so it is the primary
-        // table's first slot after CBase's. CONFIRMED by FileBrowser's container, which calls `[model->vptr + 0xc]` and tests the result > 0.
-        let primary = self.build_vtable("CTextListBoxModel", &slots_with_gaps(BASE_SLOTS + 1, &[(0, "_ZN17CTextListBoxModelD1Ev"), (1, "_ZN17CTextListBoxModelD0Ev"), (2, "_ZN5CBase10Extension_EjRPvS0_"), (3, "_ZNK17CTextListBoxModel13NumberOfItemsEv")]))?;
+        // CTextListBoxModel virtuals (eiktxlbm.h): slot 3 `NumberOfItems()`, slot 4 `MatchableTextArray()`, slot 5 `ItemText(TInt)`.
+        let primary = self.build_vtable(
+            "CTextListBoxModel",
+            &slots_with_gaps(
+                BASE_SLOTS + 3,
+                &[
+                    (0, "_ZN17CTextListBoxModelD1Ev"),
+                    (1, "_ZN17CTextListBoxModelD0Ev"),
+                    (2, "_ZN5CBase10Extension_EjRPvS0_"),
+                    (3, "_ZNK17CTextListBoxModel13NumberOfItemsEv"),
+                    (4, "_ZNK17CTextListBoxModel18MatchableTextArrayEv"),
+                    (5, "_ZNK17CTextListBoxModel8ItemTextEi"),
+                ],
+            ),
+        )?;
         let mtext = self.build_vtable("MTextListBoxModel", &[])?;
         self.wr(m, primary)?;
         self.wr(m + 4, mtext)?;
+        let arr = self.alloc_zeroed(DESARR_SIZE).ok_or_else(|| String::from("no guest heap for the default list item array"))?;
+        self.desarr_construct(arr, 4)?;
+        self.wr(m + MODEL_I_ARRAY, arr + MDESC_BASE)?;
         Ok(m)
     }
 
@@ -168,7 +184,23 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let r = p.model_array(r0).and_then(|a| p.mdesc_items(a)).map(|i| i.len() as u32);
             ret(p, r)
         }
-        "_ZNK17CTextListBoxModel13ItemTextArrayEv" => { let r = p.model_array(r0); ret(p, r) }
+        "_ZNK17CTextListBoxModel13ItemTextArrayEv"
+        | "_ZNK17CTextListBoxModel18MatchableTextArrayEv" => { let r = p.model_array(r0); ret(p, r) }
+        // TPtrC16 CTextListBoxModel::ItemText(TInt aItemIndex) const (eiktxlbm.h): ARM EABI sret in r0, this in r1, index in r2.
+        "_ZNK17CTextListBoxModel8ItemTextEi" => {
+            let r = p.model_array(r1).and_then(|iface| {
+                if iface == 0 {
+                    return Err(String::from("CTextListBoxModel::ItemText with NULL item array"));
+                }
+                let arr = iface - MDESC_BASE;
+                let cell = p.desarr_cell(arr, r2 as i32)?;
+                let len = p.rd(cell)?;
+                p.wr(r0, len | DES_PTR_C << KSHIFT_DES_TYPE)?;
+                p.wr(r0 + 4, cell + 4)?;
+                Ok(r0)
+            });
+            ret(p, r)
+        }
         _ => return None,
     })
 }

@@ -46,6 +46,7 @@ pub mod keyroute;
 pub mod listkey;
 pub mod tchar;
 pub mod dictstore;
+pub mod dialog;
 pub mod cleanup;
 pub mod fs;
 pub mod avkon;

@@ -73,9 +73,10 @@ impl Process {
         let win = self.host.window.ok_or_else(|| String::from("no application window yet: the list has nowhere to go"))?;
         let st = self.list_state(lb)?.clone();
         let view = self.rd(lb + LB_I_VIEW)?;
-        let (current, top) = if view == 0 { (0, 0) } else { (self.rd(view + VIEW_I_CURRENT)?, self.rd(view + VIEW_I_TOP)?) };
+        let (current, raw_top) = if view == 0 { (0, 0) } else { (self.rd(view + VIEW_I_CURRENT)?, self.rd(view + VIEW_I_TOP)?) };
         let g = GuestRect { left: rect.0, top: rect.1, width: rect.2, height: rect.3 };
         let selected = if rows.is_empty() { None } else { Some(current.min(rows.len() as u32 - 1)) };
+        let top = if rows.is_empty() { 0 } else { raw_top.min(rows.len() as u32 - 1) };
         let columns = alloc::vec![String::new(); 2];
         let ui = self.host.ui.as_mut().ok_or_else(|| String::from("no GuestUi"))?;
         let refused = |e: heirloom_ui_abi::UiRefusal| format!("the UI refused the list: {e}");
