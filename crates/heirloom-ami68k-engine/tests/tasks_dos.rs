@@ -33,3 +33,43 @@ fn processes_made_from_seglists_own_and_release_what_their_tags_say() {
     assert!(a.refused[0].starts_with("dos.library/CreateNewProc:") && a.refused[0].contains("not a seglist LoadSeg returned"), "{:?}", a.refused);
     assert!(a.refused[1].starts_with("dos.library/CreateNewProc:") && a.refused[1].contains("NP_Synchronous is not modelled"), "{:?}", a.refused);
 }
+
+#[test]
+fn detached_create_new_proc_continues_after_main_returns() {
+    // Main spawns a detached dos.library Process via CreateNewProc(NP_Entry = child) and immediately returns (RTS).
+    // The child must continue running and write 0xCAFE_BABE into RES[0] (0x1F000) before returning.
+    // (Negative control for plain AddTask workers lives in tests/tasks.rs.)
+    let mut code: Vec<u8> = Vec::new();
+    let emit = |c: &mut Vec<u8>, w: u16| c.extend_from_slice(&w.to_be_bytes());
+    emit(&mut code, 0x2C78); emit(&mut code, 0x0004); // 0:  MOVE.L (4).W, A6          (SysBase)
+    let lea_dos_pos = code.len();
+    emit(&mut code, 0x43FA); emit(&mut code, 0x0000); // 4:  LEA dosname(PC), A1       (patched below)
+    emit(&mut code, 0x7000);                          // 8:  MOVEQ #0, D0
+    emit(&mut code, 0x4EAE); emit(&mut code, 0xFDD8); // 10: JSR -552(A6)              (OpenLibrary)
+    emit(&mut code, 0x2C40);                          // 14: MOVE.L D0, A6             (DOSBase)
+    let lea_child_pos = code.len();
+    emit(&mut code, 0x41FA); emit(&mut code, 0x0000); // 16: LEA child(PC), A0         (patched below)
+    emit(&mut code, 0x42A7);                          // 20: CLR.L -(SP)               (TAG_DONE)
+    emit(&mut code, 0x2F08);                          // 22: MOVE.L A0, -(SP)          (child entry)
+    emit(&mut code, 0x2F3C); emit(&mut code, 0x8000); emit(&mut code, 0x03EB); // 24: MOVE.L #NP_ENTRY, -(SP)
+    emit(&mut code, 0x220F);                          // 30: MOVE.L SP, D1
+    emit(&mut code, 0x4EAE); emit(&mut code, 0xFE0E); // 32: JSR -498(A6)              (CreateNewProc)
+    emit(&mut code, 0x4FEF); emit(&mut code, 0x000C); // 36: LEA 12(SP), SP
+    emit(&mut code, 0x7000);                          // 40: MOVEQ #0, D0
+    emit(&mut code, 0x4E75);                          // 42: RTS                       (main exits!)
+    let child_off = code.len();
+    emit(&mut code, 0x23FC); emit(&mut code, 0xCAFE); emit(&mut code, 0xBABE); emit(&mut code, 0x0001); emit(&mut code, 0xF000); // MOVE.L #$CAFEBABE, ($1F000).L
+    emit(&mut code, 0x4E75);                          // RTS                           (detached process exits)
+    let dos_off = code.len();
+    code.extend_from_slice(b"dos.library\0");
+    // Patch PC-relative displacements (PC points to extension word = lea_pos + 2)
+    let d_dos = (dos_off as i16) - (lea_dos_pos as i16 + 2);
+    code[lea_dos_pos + 2..lea_dos_pos + 4].copy_from_slice(&d_dos.to_be_bytes());
+    let d_child = (child_off as i16) - (lea_child_pos as i16 + 2);
+    code[lea_child_pos + 2..lea_child_pos + 4].copy_from_slice(&d_child.to_be_bytes());
+
+    let mut a = machine();
+    let r = run(&mut a, &code);
+    assert_eq!(r[0], 0xCAFE_BABE, "detached CreateNewProc child must run after main exits; log={:#?}", a.log);
+    assert!(a.log.iter().any(|l| l.contains("main exited; detached process continues")), "{:#?}", a.log);
+}

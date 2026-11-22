@@ -238,15 +238,48 @@ impl<U: GuestUi> Amiga<U> {
         }
         let (dead, main, waiting) = (k.dead, k.main, k.waiting.is_some());
         if stats.halted {
-            if main || self.stop_on_unimplemented {
+            if self.stop_on_unimplemented {
                 if !main { let n = self.sched.tasks[&t].name.clone(); self.log.push(format!("[sched] task {t:#x} \"{n}\" halted the run (census: an unimplemented call)")); }
                 tot.halted = true;
                 return Outcome::Exited;
             }
-            return match self.reap(t, "halted by a refusal") { Ok(_) => Outcome::Continue, Err(Refusal(e)) => Outcome::Fault(e) };
+            if main {
+                // Amiga CLI-detaching GUI programs (cback.o, FileX, etc.) spawn a dos.library
+                // Process (`own.is_some()`) via CreateProc/CreateNewProc and return from main().
+                // Keep running while any detached DOS Process is ready to run or owns a live UI
+                // window; otherwise exit and drop idle library daemons / AddTask workers.
+                let has_detached_proc = self.sched.tasks.iter().any(|(&a, k)| {
+                    a != t && k.own.is_some() && !k.dead && (k.state == RunState::Ready || !self.windows.is_empty())
+                });
+                if !has_detached_proc {
+                    tot.halted = true;
+                    return Outcome::Exited;
+                }
+                return match self.reap(t, "main exited; detached process continues") {
+                    Ok(_) => Outcome::Continue,
+                    Err(Refusal(e)) => Outcome::Fault(e),
+                };
+            }
+            if let Err(Refusal(e)) = self.reap(t, "halted by a refusal") {
+                return Outcome::Fault(e);
+            }
+            let any_root = self.sched.tasks.values().any(|k| (k.main || k.own.is_some()) && !k.dead);
+            if !any_root {
+                tot.halted = true;
+                return Outcome::Exited;
+            }
+            return Outcome::Continue;
         }
         if dead {
-            return match self.reap(t, "returned or removed itself") { Ok(_) => Outcome::Continue, Err(Refusal(e)) => Outcome::Fault(e) };
+            if let Err(Refusal(e)) = self.reap(t, "returned or removed itself") {
+                return Outcome::Fault(e);
+            }
+            let any_root = self.sched.tasks.values().any(|k| (k.main || k.own.is_some()) && !k.dead);
+            if !any_root {
+                tot.halted = true;
+                return Outcome::Exited;
+            }
+            return Outcome::Continue;
         }
         let k = self.sched.tasks.get_mut(&t).expect("task");
         if stats.blocked && waiting {
