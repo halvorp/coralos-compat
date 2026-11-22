@@ -18,6 +18,9 @@ pub mod os_face; // os-ami.library: this machine behind heirloom-os-abi's OsVTab
 #[cfg(feature = "os-library")]
 pub use os_face::os_vtable;
 pub mod asl;
+pub mod audio;
+pub mod cybergraphics;
+pub mod gameport;
 pub mod driver;
 pub mod boopsi;
 pub mod boopsi_gadget;

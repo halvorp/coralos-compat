@@ -30,15 +30,18 @@ pub fn open_device<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
         (Some(k), None) => Some(a.open_known_library(k)?),
         (None, None) => None,
     };
-    let err = if base.is_some() { 0 } else { IOERR_OPENFAIL };
-    a.mem.write_u8(io + IO_ERROR, err as u8).map_err(Refusal::mem("io_Error"))?;
+    let mut err = if base.is_some() { 0 } else { IOERR_OPENFAIL };
     if let Some(b) = base {
         a.mem.write_u32(io + IO_DEVICE, b).map_err(Refusal::mem("io_Device"))?;
         a.mem.write_u32(io + IO_UNIT, unit).map_err(Refusal::mem("io_Unit"))?;
+        if name.eq_ignore_ascii_case(crate::audio::NAME) {
+            err = crate::audio::open(a, io)?;
+        }
     }
+    a.mem.write_u8(io + IO_ERROR, err as u8).map_err(Refusal::mem("io_Error"))?;
     cpu.set_d0(err as i32 as u32);
     Ok(match base {
-        Some(b) => format!("[exec] OpenDevice \"{name}\" unit={unit} -> {b:#x}"),
+        Some(b) => format!("[exec] OpenDevice \"{name}\" unit={unit} -> {b:#x} (err={err})"),
         None => format!("[exec] OpenDevice \"{name}\" unit={unit} -> IOERR_OPENFAIL (device not modelled)"),
     })
 }
@@ -47,9 +50,15 @@ pub fn open_device<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
 pub fn close_device<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let io = cpu.areg(1);
     let dev = a.mem.read_u32(io + IO_DEVICE).map_err(Refusal::mem("io_Device"))?;
-    let l = a.libs.iter_mut().find(|l| l.base == dev).ok_or_else(|| Refusal(format!("CloseDevice: io_Device {dev:#x} is not an open device")))?;
-    l.open_count = l.open_count.checked_sub(1).ok_or_else(|| Refusal(format!("CloseDevice: {} closed more than opened", l.name)))?;
-    Ok(format!("[exec] CloseDevice {}", l.name))
+    let name = {
+        let l = a.libs.iter_mut().find(|l| l.base == dev).ok_or_else(|| Refusal(format!("CloseDevice: io_Device {dev:#x} is not an open device")))?;
+        l.open_count = l.open_count.checked_sub(1).ok_or_else(|| Refusal(format!("CloseDevice: {} closed more than opened", l.name)))?;
+        l.name
+    };
+    if name.eq_ignore_ascii_case(crate::audio::NAME) {
+        crate::audio::close(a, io)?;
+    }
+    Ok(format!("[exec] CloseDevice {name}"))
 }
 
 /// OpenResource(a1 = name) -> d0 = the resource, or NULL. The machine models one resource, AROS's `task.resource`

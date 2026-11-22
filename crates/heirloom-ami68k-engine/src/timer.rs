@@ -18,6 +18,7 @@ pub const LVO_CHECK_IO: i32 = -468;
 pub const LVO_WAIT_IO: i32 = -474;
 pub const LVO_ABORT_IO: i32 = -480;
 /// timer.device's own library vectors (devices/timer.h / the AROS timer.device fd): GetSysTime(a0 = timeval), GetUpTime(a0).
+const LVO_READ_ECLOCK: i32 = -60;
 const LVO_GET_SYS_TIME: i32 = -66;
 const LVO_GET_UP_TIME: i32 = -72;
 
@@ -74,10 +75,22 @@ pub(crate) fn io_done<U: GuestUi>(a: &mut Amiga<U>, io: u32, remove: bool) -> Re
     Ok(Some(a.mem.read_u8(io + IO_ERROR).map_err(m("io_Error"))? as i8 as i32 as u32))
 }
 
+pub(crate) fn complete_io<U: GuestUi>(a: &mut Amiga<U>, io: u32, err: i8) -> Result<(), Refusal> {
+    complete(a, io, err)
+}
+
 /// Start `io` on its device. Ok(true) = done already (completed in `start`), Ok(false) = queued.
 fn start<U: GuestUi>(a: &mut Amiga<U>, io: u32) -> Result<bool, Refusal> {
     let dev = a.mem.read_u32(io + IO_DEVICE).map_err(m("io_Device"))?;
     let name = a.libs.iter().find(|l| l.base == dev).map(|l| l.name).ok_or_else(|| Refusal(format!("I/O on {dev:#x}: not an open device")))?;
+    if name == crate::audio::NAME {
+        a.mem.write_u8(io + LN_TYPE, NT_MESSAGE).map_err(m("ln_Type"))?;
+        return crate::audio::start(a, io);
+    }
+    if name == crate::gameport::NAME {
+        a.mem.write_u8(io + LN_TYPE, NT_MESSAGE).map_err(m("ln_Type"))?;
+        return crate::gameport::start(a, io);
+    }
     if name != "timer.device" { return Err(Refusal(format!("I/O on {name}: no command of it is bridged"))); }
     let cmd = a.mem.read_u16(io + IO_COMMAND).map_err(m("io_Command"))?;
     a.mem.write_u8(io + LN_TYPE, NT_MESSAGE).map_err(m("ln_Type"))?;
@@ -150,13 +163,29 @@ pub fn abort_io<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
     let io = cpu.areg(1);
     let pending = a.timers.iter().position(|x| x.1 == io);
     if let Some(i) = pending { a.timers.remove(i); complete(a, io, IOERR_ABORTED)?; }
+    else if let Some(i) = a.gameport_pending.iter().position(|&x| x == io) {
+        a.gameport_pending.remove(i);
+        complete(a, io, IOERR_ABORTED)?;
+    }
     cpu.set_d0(0);
     Ok(format!("[exec] AbortIO {io:#x} ({})", if pending.is_some() { "aborted" } else { "already done" }))
 }
 
 /// The vectors of the `timer.device` base OpenDevice hands out that are implemented; every other one stays a named refusal.
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
-    b.func(LVO_GET_SYS_TIME, "GetSysTime", get_time::<U>).func(LVO_GET_UP_TIME, "GetUpTime", get_time::<U>)
+    b.func(LVO_READ_ECLOCK, "ReadEClock", read_eclock::<U>)
+        .func(LVO_GET_SYS_TIME, "GetSysTime", get_time::<U>)
+        .func(LVO_GET_UP_TIME, "GetUpTime", get_time::<U>)
+}
+
+/// ReadEClock(a0 = struct EClockVal* dest) -> d0 = E-clock ticks per second (1_000_000 Hz = virtual clock microseconds).
+fn read_eclock<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let dst = cpu.areg(0);
+    let ticks = a.clock_us;
+    a.mem.write_u32(dst, (ticks >> 32) as u32).map_err(m("ev_hi"))?;
+    a.mem.write_u32(dst + 4, ticks as u32).map_err(m("ev_lo"))?;
+    cpu.set_d0(1_000_000);
+    Ok(format!("[timer.device] ReadEClock -> {ticks} (1000000 Hz)"))
 }
 
 /// GetSysTime(a0 = timeval) / GetUpTime(a0 = timeval): the virtual clock as seconds and microseconds, the same value

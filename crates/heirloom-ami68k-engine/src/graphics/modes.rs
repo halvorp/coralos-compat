@@ -55,7 +55,7 @@ fn next_display_info<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
 /// mode ID itself (non-zero), which `GetDisplayInfoData` accepts back.
 fn find_display_info<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let id = cpu.dreg(0);
-    let h = if id == WORKBENCH_MODE { id } else { 0 };
+    let h = if id == WORKBENCH_MODE || crate::cybergraphics::is_cyber_mode_id(id) { id } else { 0 };
     cpu.set_d0(h);
     Ok(format!("[graphics] FindDisplayInfo {id:#x} -> {h:#x}"))
 }
@@ -66,10 +66,9 @@ fn find_display_info<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
 /// MinRasterHeight 20, MaxRasterWidth 22, MaxRasterHeight 24, Nominal 26, MaxOScan 34, VideoOScan 42, TxtOScan 50, StdOScan 58 (each a
 /// Rectangle of four WORDs MinX MinY MaxX MaxY), pad 66, reserved 80 = 88 bytes; NameInfo = QueryHeader 16, Name[32] 16, reserved 48
 /// = 56 bytes (sizes and offsets checked with m68k-linux-gnu-gcc -m68020 -mno-align-int).
-pub(crate) fn record(tag: u32, id: u32) -> Option<alloc::vec::Vec<u8>> {
+pub(crate) fn record_for(tag: u32, id: u32, w: u16, h: u16, depth: u16) -> Option<alloc::vec::Vec<u8>> {
     let size = match tag { DTAG_DISP => DISPLAYINFO_SIZE, DTAG_DIMS => DIMENSIONINFO_SIZE, DTAG_NAME => NAMEINFO_SIZE, _ => return None };
     let mut rec = alloc::vec![0u8; size];
-    let (w, h) = (SCREEN_WIDTH as u16, SCREEN_HEIGHT as u16);
     rec[0..4].copy_from_slice(&tag.to_be_bytes()); rec[4..8].copy_from_slice(&id.to_be_bytes());
     rec[8..12].copy_from_slice(&INVALID_ID.to_be_bytes()); rec[12..16].copy_from_slice(&((size / 4) as u32).to_be_bytes());
     let put16 = |rec: &mut [u8], o: usize, v: u16| rec[o..o + 2].copy_from_slice(&v.to_be_bytes());
@@ -80,7 +79,7 @@ pub(crate) fn record(tag: u32, id: u32) -> Option<alloc::vec::Vec<u8>> {
             rec[40] = 8; rec[41] = 8; rec[42] = 8;
         }
         DTAG_DIMS => {
-            for (o, v) in [(16usize, SCREEN_DEPTH as u16), (18, w), (20, h), (22, w), (24, h)] { put16(&mut rec, o, v); }
+            for (o, v) in [(16usize, depth), (18, w), (20, h), (22, w), (24, h)] { put16(&mut rec, o, v); }
             for r in 0..5 { for (k, v) in [0, 0, w - 1, h - 1].into_iter().enumerate() { put16(&mut rec, 26 + 8 * r + 2 * k, v); } }
         }
         _ => {
@@ -91,11 +90,22 @@ pub(crate) fn record(tag: u32, id: u32) -> Option<alloc::vec::Vec<u8>> {
     Some(rec)
 }
 
+pub(crate) fn record(tag: u32, id: u32) -> Option<alloc::vec::Vec<u8>> {
+    record_for(tag, id, SCREEN_WIDTH as u16, SCREEN_HEIGHT as u16, SCREEN_DEPTH as u16)
+}
+
 fn get_display_info_data<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (handle, buf, size, tag) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0) as usize, cpu.dreg(1));
     let id = if handle != 0 { handle } else { cpu.dreg(2) }; // a handle (FindDisplayInfo) names the mode; without one the ID does
-    let Some(rec) = record(tag, id) else { return Err(Refusal(format!("GetDisplayInfoData: record kind {tag:#x} is not modelled (only DTAG_DISP, DTAG_DIMS, DTAG_NAME)"))) };
-    if id != WORKBENCH_MODE { cpu.set_d0(0); return Ok(format!("[graphics] GetDisplayInfoData mode {id:#x}: no such mode -> 0")); }
+    let known = id == WORKBENCH_MODE || crate::cybergraphics::is_cyber_mode_id(id);
+    let (w, h, d) = if crate::cybergraphics::is_cyber_mode_id(id) {
+        let m = a.cyber.mode_info(id);
+        (m.width as u16, m.height as u16, m.depth as u16)
+    } else {
+        (SCREEN_WIDTH as u16, SCREEN_HEIGHT as u16, SCREEN_DEPTH as u16)
+    };
+    let Some(rec) = record_for(tag, id, w, h, d) else { return Err(Refusal(format!("GetDisplayInfoData: record kind {tag:#x} is not modelled (only DTAG_DISP, DTAG_DIMS, DTAG_NAME)"))) };
+    if !known { cpu.set_d0(0); return Ok(format!("[graphics] GetDisplayInfoData mode {id:#x}: no such mode -> 0")); }
     let n = size.min(rec.len());
     a.mem.write_bytes(buf, &rec[..n]).map_err(Refusal::mem("DisplayInfo buffer"))?;
     cpu.set_d0(n as u32);

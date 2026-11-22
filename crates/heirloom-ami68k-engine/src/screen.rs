@@ -65,7 +65,13 @@ pub fn unlock_pub_screen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
 }
 
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
-    b.named("LockPubScreenList", lock_pub_screen_list::<U>)
+    b.named("OpenScreen", open_screen::<U>)
+        .named("OpenScreenTagList", open_screen_tag_list::<U>)
+        .named("CloseScreen", close_screen::<U>)
+        .named("AllocScreenBuffer", alloc_screen_buffer::<U>)
+        .named("FreeScreenBuffer", free_screen_buffer::<U>)
+        .named("ChangeScreenBuffer", change_screen_buffer::<U>)
+        .named("LockPubScreenList", lock_pub_screen_list::<U>)
         .named("UnlockPubScreenList", unlock_pub_screen_list::<U>)
         .named("LockIBase", lock_ibase::<U>)
         .named("UnlockIBase", unlock_ibase::<U>)
@@ -75,6 +81,178 @@ pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::lib
         .named("WBenchToBack", |_, c| { c.set_d0(1); Ok("[intuition] WBenchToBack -> TRUE".into()) })
         .named("CurrentTime", current_time::<U>)
         .named("QueryOverscan", query_overscan::<U>)
+}
+
+const SA_DUMMY: u32 = crate::tags::TAG_USER + 32;
+const SA_WIDTH: u32 = SA_DUMMY + 3;
+const SA_HEIGHT: u32 = SA_DUMMY + 4;
+const SA_DEPTH: u32 = SA_DUMMY + 5;
+const SA_BITMAP: u32 = SA_DUMMY + 15;
+const SA_DISPLAY_ID: u32 = SA_DUMMY + 18;
+const SB_SIZE: u32 = 16;
+
+fn open_screen_common<U: GuestUi>(a: &mut Amiga<U>, w: u16, h: u16, depth: u8, custom_bm: u32) -> Result<u32, Refusal> {
+    use crate::graphics::layout::*;
+    let m = Refusal::mem;
+    let sc = a.heap.alloc(SCREEN_SIZE).ok_or_else(|| Refusal("OpenScreen: out of heap".into()))?;
+    a.mem.zero(sc, SCREEN_SIZE).map_err(m("Screen"))?;
+    a.mem.write_u16(sc + 12, w).map_err(m("Screen.Width"))?;
+    a.mem.write_u16(sc + 14, h).map_err(m("Screen.Height"))?;
+    a.mem.write_u32(sc + 40, TEXT_ATTR).map_err(m("Screen.Font"))?;
+    // ViewPort at +SC_VIEWPORT: ColorMap +4, DWidth +24, DHeight +26
+    a.mem.write_u32(sc + SC_VIEWPORT + VP_COLORMAP, SCREEN_COLORMAP).map_err(m("Screen.ViewPort.ColorMap"))?;
+    a.mem.write_u16(sc + SC_VIEWPORT + VP_DWIDTH, w).map_err(m("Screen.ViewPort.DWidth"))?;
+    a.mem.write_u16(sc + SC_VIEWPORT + VP_DHEIGHT, h).map_err(m("Screen.ViewPort.DHeight"))?;
+    // BitMap at +SC_BITMAP (or custom_bm)
+    let bm_addr = if custom_bm != 0 { custom_bm } else { sc + SC_BITMAP };
+    if custom_bm == 0 {
+        let bpr = ((u32::from(w) + 15) / 16) * 2;
+        a.mem.write_u16(bm_addr + BM_BYTES_PER_ROW, bpr as u16).map_err(m("Screen.BitMap.BytesPerRow"))?;
+        a.mem.write_u16(bm_addr + BM_ROWS, h).map_err(m("Screen.BitMap.Rows"))?;
+        a.mem.write_u8(bm_addr + BM_DEPTH, depth.max(1)).map_err(m("Screen.BitMap.Depth"))?;
+        let bm = heirloom_raster::Bitmap::new(i32::from(w), i32::from(h), depth.max(1))
+            .ok_or_else(|| Refusal(format!("OpenScreen: invalid size {w}x{h}")))?;
+        a.gfx.bitmaps.insert(bm_addr, crate::graphics::state::GBitmap { bm, window: None });
+    }
+    // RastPort at +SC_RASTPORT
+    a.mem.write_u32(sc + SC_RASTPORT + RP_BITMAP, bm_addr).map_err(m("Screen.RastPort.BitMap"))?;
+    a.mem.write_u8(sc + SC_RASTPORT + RP_MASK, 0xFF).map_err(m("Screen.RastPort.Mask"))?;
+    a.mem.write_u8(sc + SC_RASTPORT + RP_FG_PEN, 1).map_err(m("Screen.RastPort.FgPen"))?;
+    a.mem.write_u32(sc + SC_RASTPORT + RP_FONT, GF_FONT).map_err(m("Screen.RastPort.Font"))?;
+    a.custom_screens.insert(sc, (w, h, bm_addr));
+    Ok(sc)
+}
+
+fn open_screen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let ns = cpu.areg(0);
+    let m = Refusal::mem("NewScreen");
+    let w = a.mem.read_u16(ns + 4).map_err(&m)?.max(1);
+    let h = a.mem.read_u16(ns + 6).map_err(&m)?.max(1);
+    let d = a.mem.read_u16(ns + 8).map_err(&m)? as u8;
+    let sc = open_screen_common(a, w, h, d, 0)?;
+    cpu.set_d0(sc);
+    Ok(format!("[intuition] OpenScreen {w}x{h}x{d} -> {sc:#x}"))
+}
+
+fn open_screen_tag_list<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (ns, tag_list) = (cpu.areg(0), cpu.areg(1));
+    let (mut w, mut h, mut d) = (320u16, 200u16, 8u8);
+    if ns != 0 {
+        let m = Refusal::mem("NewScreen");
+        w = a.mem.read_u16(ns + 4).map_err(&m)?.max(1);
+        h = a.mem.read_u16(ns + 6).map_err(&m)?.max(1);
+        d = a.mem.read_u16(ns + 8).map_err(&m)? as u8;
+    }
+    let t = crate::tags::walk(&a.mem, tag_list)?;
+    if let Some(id) = crate::tags::get(&t, SA_DISPLAY_ID) {
+        if crate::cybergraphics::is_cyber_mode_id(id) {
+            let mode = a.cyber.mode_info(id);
+            w = mode.width as u16;
+            h = mode.height as u16;
+            d = mode.depth as u8;
+        }
+    }
+    if let Some(v) = crate::tags::get(&t, SA_WIDTH).filter(|&v| v > 0 && v <= 4096) { w = v as u16; }
+    if let Some(v) = crate::tags::get(&t, SA_HEIGHT).filter(|&v| v > 0 && v <= 4096) { h = v as u16; }
+    if let Some(v) = crate::tags::get(&t, SA_DEPTH).filter(|&v| v > 0 && v <= 32) { d = v as u8; }
+    let custom_bm = crate::tags::get(&t, SA_BITMAP).unwrap_or(0);
+    let sc = open_screen_common(a, w, h, d, custom_bm)?;
+    cpu.set_d0(sc);
+    Ok(format!("[intuition] OpenScreenTagList {w}x{h}x{d} -> {sc:#x}"))
+}
+
+fn close_screen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let sc = cpu.areg(0);
+    if let Some((_, _, bm)) = a.custom_screens.remove(&sc) {
+        if bm == sc + crate::graphics::layout::SC_BITMAP {
+            a.gfx.bitmaps.remove(&bm);
+        }
+        let _ = a.heap.free(sc, SCREEN_SIZE);
+        cpu.set_d0(1);
+        return Ok(format!("[intuition] CloseScreen {sc:#x} -> TRUE"));
+    }
+    cpu.set_d0(0);
+    Ok(format!("[intuition] CloseScreen {sc:#x} -> FALSE"))
+}
+
+fn alloc_screen_buffer<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    use crate::graphics::layout::*;
+    let (sc, bm_in, flags) = (cpu.areg(0), cpu.areg(1), cpu.dreg(0));
+    let (w, h, sc_bm) = a.custom_screens.get(&sc).copied().unwrap_or((640, 256, sc + SC_BITMAP));
+    let sb = a.heap.alloc(SB_SIZE).ok_or_else(|| Refusal("AllocScreenBuffer: out of heap".into()))?;
+    a.mem.zero(sb, SB_SIZE).map_err(Refusal::mem("ScreenBuffer"))?;
+    let bm = if bm_in != 0 {
+        bm_in
+    } else if flags & 1 != 0 {
+        // SB_SCREEN_BITMAP
+        sc_bm
+    } else {
+        let b = a.heap.alloc(BM_SIZE).ok_or_else(|| Refusal("AllocScreenBuffer BitMap: out of heap".into()))?;
+        a.mem.zero(b, BM_SIZE).map_err(Refusal::mem("ScreenBuffer.BitMap"))?;
+        let bpr = ((u32::from(w) + 15) / 16) * 2;
+        a.mem.write_u16(b + BM_BYTES_PER_ROW, bpr as u16).map_err(Refusal::mem("bm_BytesPerRow"))?;
+        a.mem.write_u16(b + BM_ROWS, h).map_err(Refusal::mem("bm_Rows"))?;
+        a.mem.write_u8(b + BM_DEPTH, 8).map_err(Refusal::mem("bm_Depth"))?;
+        let bm_obj = heirloom_raster::Bitmap::new(i32::from(w), i32::from(h), 8)
+            .ok_or_else(|| Refusal(format!("AllocScreenBuffer: invalid size {w}x{h}")))?;
+        a.gfx.bitmaps.insert(b, crate::graphics::state::GBitmap { bm: bm_obj, window: None });
+        b
+    };
+    let dbi = a.heap.alloc(64).ok_or_else(|| Refusal("AllocScreenBuffer DBufInfo: out of heap".into()))?;
+    a.mem.zero(dbi, 64).map_err(Refusal::mem("DBufInfo"))?;
+    a.mem.write_u32(sb, bm).map_err(Refusal::mem("sb_BitMap"))?;
+    a.mem.write_u32(sb + 4, dbi).map_err(Refusal::mem("sb_DBufInfo"))?;
+    cpu.set_d0(sb);
+    Ok(format!("[intuition] AllocScreenBuffer sc={sc:#x} flags={flags:#x} -> {sb:#x} (bm={bm:#x})"))
+}
+
+fn free_screen_buffer<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let sb = cpu.areg(1);
+    if sb != 0 {
+        let dbi = a.mem.read_u32(sb + 4).unwrap_or(0);
+        if dbi != 0 { let _ = a.heap.free(dbi, 64); }
+        let _ = a.heap.free(sb, SB_SIZE);
+    }
+    Ok(format!("[intuition] FreeScreenBuffer {sb:#x}"))
+}
+
+fn change_screen_buffer<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (sc, sb) = (cpu.areg(0), cpu.areg(1));
+    let bm = a.mem.read_u32(sb).map_err(Refusal::mem("sb_BitMap"))?;
+    let dbi = a.mem.read_u32(sb + 4).map_err(Refusal::mem("sb_DBufInfo"))?;
+    // Copy the buffer's pixels into any window belonging to this screen and mark it damaged.
+    let src_pixels = a.gfx.bitmaps.get(&bm).map(|g| (g.bm.width(), g.bm.height(), g.bm.pixels().to_vec()));
+    if let Some((sw, sh, pix)) = src_pixels {
+        let targets: alloc::vec::Vec<(u32, u32)> = a.gfx.layers.values()
+            .filter(|l| a.mem.read_u32(l.window + crate::window::WD_WSCREEN).ok() == Some(sc))
+            .map(|l| (l.window, l.canvas))
+            .collect();
+        for (win, canvas) in targets {
+            if let Some(dst) = a.gfx.bitmaps.get_mut(&canvas) {
+                let w = dst.bm.width().min(sw);
+                let h = dst.bm.height().min(sh);
+                for y in 0..h {
+                    for x in 0..w {
+                        dst.bm.set(x, y, u32::from(pix[(y * sw + x) as usize]));
+                    }
+                }
+                a.gfx.add_damage(win, heirloom_raster::Rect::new(0, 0, w, h));
+            }
+        }
+    }
+    // Reply SafeMessage (offset 20 in DBufInfo -> dbi_SafeMessage) and DispMessage (+40) if reply ports set.
+    if dbi != 0 {
+        for msg_off in [20u32, 40u32] {
+            let msg = dbi + msg_off;
+            if let Ok(rp) = a.mem.read_u32(msg + 14) {
+                if rp != 0 {
+                    let _ = crate::exec_wait::put_msg(a, rp, msg, 7);
+                }
+            }
+        }
+    }
+    cpu.set_d0(1);
+    Ok(format!("[intuition] ChangeScreenBuffer sc={sc:#x} sb={sb:#x} bm={bm:#x} -> TRUE"))
 }
 
 /// CurrentTime(a0 = ULONG* seconds, a1 = ULONG* micros): the engine's virtual clock, matching timer.device/GetSysTime.
@@ -104,10 +282,10 @@ fn query_overscan<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String,
 
 /// ScreenToFront / ScreenToBack(a0 = screen): there is one screen, so its depth order cannot change; the call is accepted for
 /// that screen and a named refusal for any other pointer.
-fn screen_depth<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu, name: &str) -> Result<String, Refusal> {
+fn screen_depth<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, name: &str) -> Result<String, Refusal> {
     let s = cpu.areg(0);
-    if s != SCREEN { return Err(Refusal(format!("{name} {s:#x}: not the screen (there is one screen)"))); }
-    Ok(format!("[intuition] {name} (the only screen: nothing to reorder)"))
+    if s != SCREEN && !a.custom_screens.contains_key(&s) { return Err(Refusal(format!("{name} {s:#x}: not a live screen"))); }
+    Ok(format!("[intuition] {name} {s:#x}"))
 }
 
 /// LockIBase(d0 = dontknow) -> a lock token for UnlockIBase. Tasks switch only after a library call, so the lock never has to

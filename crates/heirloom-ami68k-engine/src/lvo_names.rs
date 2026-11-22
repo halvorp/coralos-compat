@@ -29,6 +29,8 @@ pub static LIBRARIES: &[(&str, &[(i32, &str)])] = &[
     ("cybergraphics.library", &[(-54, "IsCyberModeID"), (-60, "BestCModeIDTagList"), (-72, "AllocCModeListTagList"), (-78, "FreeCModeList"), (-90, "ScalePixelArray"), (-96, "GetCyberMapAttr"), (-102, "GetCyberIDAttr"), (-108, "ReadRGBPixel"), (-114, "WriteRGBPixel"), (-120, "ReadPixelArray"), (-126, "WritePixelArray"), (-132, "MovePixelArray"), (-144, "InvertPixelArray"), (-150, "FillPixelArray"), (-156, "DoCDrawMethodTagList"), (-162, "CVideoCtrlTagList"), (-168, "LockBitMapTagList"), (-174, "UnLockBitMap"), (-180, "UnLockBitMapTagList"), (-186, "ExtractColor"), (-198, "WriteLUTPixelArray"), (-216, "WritePixelArrayAlpha"), (-222, "BltTemplateAlpha"), (-228, "ProcessPixelArray")]),
     ("aros.library", &[(-30, "ArosInquireA")]),
     ("timer.device", &[(-30, "BeginIO"), (-36, "AbortIO"), (-42, "AddTime"), (-48, "SubTime"), (-54, "CmpTime"), (-60, "ReadEClock"), (-66, "GetSysTime"), (-72, "GetUpTime")]),
+    ("audio.device", &[(-30, "BeginIO"), (-36, "AbortIO")]),
+    ("gameport.device", &[(-30, "BeginIO"), (-36, "AbortIO")]),
     ("input.device", &[(-30, "BeginIO"), (-36, "AbortIO"), (-42, "PeekQualifier")]),
     ("console.device", &[(-30, "BeginIO"), (-36, "AbortIO"), (-42, "CDInputHandler"), (-48, "RawKeyConvert"), (-54, "GetConSnip"), (-60, "SetConSnip"), (-66, "AddConSnipHook"), (-72, "RemConSnipHook")]),
 ];

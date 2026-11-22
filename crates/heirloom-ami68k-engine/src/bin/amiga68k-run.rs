@@ -19,6 +19,9 @@ fn main() {
     let mut a = Amiga::new(RecordingGuestUi::new()).expect("machine");
     let die = |m: String| -> ! { eprintln!("{m}"); std::process::exit(2) };
     let mut max_insns: u64 = 1_000_000;
+    let mut ticks: u32 = 0;
+    let mut keys: Vec<u32> = Vec::new();
+    let mut save_ppm: Option<String> = None;
     while args.first().map_or(false, |x| x.starts_with("--") && x != "--fixture") {
         let opt = args.remove(0);
         let val = if args.is_empty() { die(format!("{opt} needs a value")) } else { args.remove(0) };
@@ -29,6 +32,9 @@ fn main() {
             "--assign" => { let (n, p) = pair(&val); a.fs.vol.assign(&n, &p); }
             "--assign-add" => { let (n, p) = pair(&val); a.fs.vol.assign_add(&n, &p); }
             "--max-insns" => max_insns = val.replace('_', "").parse().unwrap_or_else(|_| die(format!("--max-insns wants a number, got {val}"))),
+            "--ticks" => ticks = val.parse().unwrap_or_else(|_| die(format!("--ticks wants a number, got {val}"))),
+            "--key" => keys.push(val.parse().unwrap_or_else(|_| die(format!("--key wants decimal code, got {val}")))),
+            "--save-ppm" => save_ppm = Some(val),
             "--progdir" => a.fs.vol.assign("PROGDIR", &val),
             "--stub" => { let (l, f) = val.split_once('/').unwrap_or_else(|| die(format!("--stub wants library/Function, got {val}"))); a.census_stubs.push((l.to_string(), f.to_string())); }
             _ => die(format!("unknown option {opt}")),
@@ -40,9 +46,52 @@ fn main() {
     };
     a.stop_on_unimplemented = census;
     a.ui.auto_cancel_requests = true; // nobody to answer a requester here: it is dismissed with its Escape button
-    match a.run_hunk(&file, max_insns) {
-        Ok(r) => println!("ran {} instructions, halted={}, bus_faults={}", r.stats.insns, r.stats.halted, r.stats.bus_faults),
-        Err(e) => { eprintln!("load failed: {e}"); std::process::exit(1) }
+    if ticks > 0 {
+        use heirloom_common::{driver::GuestMachine, Step};
+        a.start_file(&file, &arg).unwrap_or_else(|e| { eprintln!("start failed: {e:?}"); std::process::exit(1) });
+        let mut total_insns = 0u64;
+        for t in 0..ticks {
+            let (st, stats) = a.step(max_insns);
+            total_insns += stats.insns;
+            if let Some(&k) = keys.get(t as usize) {
+                if let Some(&win) = a.windows.values().next() {
+                    let _ = a.deliver(heirloom_ui_abi::GuestUiEvent::Key { win, code: k, text: String::new(), modifiers: Default::default(), down: true });
+                    let _ = a.step(500_000);
+                    let _ = a.deliver(heirloom_ui_abi::GuestUiEvent::Key { win, code: k, text: String::new(), modifiers: Default::default(), down: false });
+                }
+            }
+            if !matches!(st, Step::BudgetSpent | Step::Blocked) {
+                println!("stopped at tick {t} ({total_insns} insns): {st:?}");
+                break;
+            }
+            let next = a.clock_us + 33_333;
+            let _ = a.advance_clock_to(next);
+        }
+        println!("ran {ticks} ticks, {total_insns} total instructions");
+    } else {
+        match a.run_hunk(&file, max_insns) {
+            Ok(r) => println!("ran {} instructions, halted={}, bus_faults={}", r.stats.insns, r.stats.halted, r.stats.bus_faults),
+            Err(e) => { eprintln!("load failed: {e}"); std::process::exit(1) }
+        }
+    }
+    if let Some(ppm_path) = save_ppm {
+        let pal = a.gfx.palette().rgb;
+        if let Some(gb) = a.gfx.bitmaps.values().find(|g| g.window.is_some() && g.bm.width() > 0 && g.bm.height() > 0) {
+            let (w, h) = (gb.bm.width() as usize, gb.bm.height() as usize);
+            let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+            let mut non_zero = 0usize;
+            for &pen in gb.bm.pixels() {
+                if pen != 0 { non_zero += 1; }
+                let px = pal[pen as usize];
+                out.push(((px >> 16) & 0xff) as u8);
+                out.push(((px >> 8) & 0xff) as u8);
+                out.push((px & 0xff) as u8);
+            }
+            std::fs::write(&ppm_path, out).expect("write ppm");
+            println!("saved {w}x{h} frame to {ppm_path} ({non_zero} non-zero pixels)");
+        } else {
+            println!("no window canvas bitmap yet");
+        }
     }
     for l in &a.log { println!("{l}"); }
     for c in &a.ui.calls { println!("ui: {c:?}"); }

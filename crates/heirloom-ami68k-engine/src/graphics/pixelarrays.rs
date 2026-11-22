@@ -16,6 +16,7 @@ use heirloom_raster::Rect;
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
     b.named("ReadPixelLine8", |a, c| line(a, c, false)).named("WritePixelLine8", |a, c| line(a, c, true))
         .named("ReadPixelArray8", |a, c| array(a, c, false)).named("WritePixelArray8", |a, c| array(a, c, true))
+        .named("WriteChunkyPixels", write_chunky_pixels::<U>)
 }
 
 fn transfer<U: GuestUi>(a: &mut Amiga<U>, rp: u32, (x0, y0): (i32, i32), (w, h): (i32, i32), buf: u32, write: bool, what: &str) -> Result<u32, Refusal> {
@@ -53,4 +54,41 @@ fn array<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, write: bool) -> Result<Str
     let n = transfer(a, rp, (x0, y0), (x1 - x0 + 1, y1 - y0 + 1), buf, write, if write { "WritePixelArray8" } else { "ReadPixelArray8" })?;
     cpu.set_d0(n);
     Ok(format!("[graphics] {}PixelArray8 {rp:#x} ({x0},{y0})-({x1},{y1}) -> {n}", if write { "Write" } else { "Read" }))
+}
+
+/// WriteChunkyPixels(a0 = rp, d0 = xstart, d1 = ystart, d2 = xstop, d3 = ystop, a2 = array, d4 = bytesperrow).
+fn write_chunky_pixels<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (rp, buf) = (cpu.areg(0), cpu.areg(2));
+    let (x0, y0, x1, y1) = (
+        cpu.dreg(0) as i16 as i32,
+        cpu.dreg(1) as i16 as i32,
+        cpu.dreg(2) as i16 as i32,
+        cpu.dreg(3) as i16 as i32,
+    );
+    let bpr = cpu.dreg(4) as i32;
+    let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+    if w <= 0 || h <= 0 {
+        return Ok(format!("[graphics] WriteChunkyPixels {rp:#x} empty"));
+    }
+    let mut rows = alloc::vec::Vec::with_capacity((w * h) as usize);
+    for j in 0..h {
+        let base = buf.wrapping_add((j * bpr) as u32);
+        for i in 0..w {
+            rows.push(a.mem.read_u8(base + i as u32).map_err(Refusal::mem("WriteChunkyPixels"))?);
+        }
+    }
+    target::paint(a, rp, "WriteChunkyPixels", |bm, clip, (ox, oy)| {
+        let mut touched = Rect::default();
+        for j in 0..h {
+            let py = y0 + j - oy;
+            for i in 0..w {
+                let px = x0 + i - ox;
+                if !clip.allows(px, py) || bm.get(px, py).is_none() { continue; }
+                bm.set(px, py, u32::from(rows[(j * w + i) as usize]));
+                touched = touched.union(&Rect::new(px, py, px + 1, py + 1));
+            }
+        }
+        touched
+    })?;
+    Ok(format!("[graphics] WriteChunkyPixels {rp:#x} ({x0},{y0})-({x1},{y1}) bpr={bpr}"))
 }
