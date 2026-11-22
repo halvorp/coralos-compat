@@ -87,7 +87,8 @@ pub(super) fn item_of(ty: u8) -> Option<Item> { ITEM_TABLE.iter().find(|(t, _)| 
 
 /// A dialog item as the engine keeps it. Item `n` (1-based) is `list[n - 1]`.
 #[derive(Debug, Clone)]
-pub struct Slot { pub raw_type: u8, pub rect: Rect, pub handle: u32, pub item: Item }
+pub struct Slot { pub raw_type: u8, pub rect: Rect, pub handle: u32, pub item: Item, /// Raw `DITL` static text template before `ParamText` substitution, so a `ParamText` called after `GetNewDialog` re-renders it.
+    pub template: Option<String> }
 
 pub struct Dialog { pub items: u32, pub list: Vec<Slot>, /** the engine allocated the DialogRecord */ pub storage: Option<u32> }
 
@@ -349,6 +350,7 @@ impl<U: GuestUi> Mac<U> {
         let item = item_of(r.ty).ok_or_else(|| Refusal(format!("GetNewDialog: item {n} has type {}, which is not in the Dialog Manager table", r.ty)))?;
         // A DITL item's data IS the text (the item's length byte counts it); there is no Pascal length inside (Inside Macintosh: Dialog Manager).
         let pstr = |d: &[u8]| -> String { d.iter().map(|&c| crate::macroman::to_char(c)).collect() };
+        let mut template = None;
         let handle = match item {
             Item::Control { proc_id } => self.create_control(win, r.rect, &pstr(&r.data), true, 0, 0, 1, proc_id, 0)?,
             Item::ResControl => {
@@ -362,14 +364,18 @@ impl<U: GuestUi> Mac<U> {
             }
             Item::StaticText | Item::EditText => {
                 let h = self.mm.new_handle(&mut self.mem, &mut self.heap, 0, false).map_err(|e| Refusal(format!("GetNewDialog: no memory for item {n} (memFullErr {e})")))?;
-                let text = if item == Item::StaticText { self.substitute_params(&pstr(&r.data)) } else { pstr(&r.data) };
+                let raw = pstr(&r.data);
+                let text = if item == Item::StaticText {
+                    if raw.contains('^') { template = Some(raw.clone()); }
+                    self.substitute_params(&raw)
+                } else { raw };
                 self.set_handle_text(h, &text)?;
                 h
             }
             Item::User => { self.log.push(format!("[dialog] item {n} of {win:#x}: userItem (the program sets its draw procedure with SetDialogItem)")); 0 }
             Item::NoContract(why) => { self.log.push(format!("[dialog] item {n} of {win:#x}: {why}; not shown")); 0 }
         };
-        Ok(Slot { raw_type: r.ty, rect: r.rect, handle, item })
+        Ok(Slot { raw_type: r.ty, rect: r.rect, handle, item, template })
     }
 
     /// The Dialog Manager's part of a window going away: its text handles and item list. Returns the DialogRecord the
@@ -541,10 +547,21 @@ fn dialog_select<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, c: &Call) -> Result<
 }
 
 /// `ParamText(param0, param1, param2, param3)`: four Str255 pointers; a NIL pointer leaves that string unchanged.
+/// Re-substitutes and syncs any open dialog static-text items whose raw `DITL` text carried `^0`..`^3` placeholders.
 fn param_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     for i in 0..4 {
         let p = c.args.get(i);
         if p != 0 { m.tr.dlg.params[i] = crate::pascal::read_pstring_bytes(&m.mem, p)?; }
+    }
+    let targets: Vec<(u32, usize, u32, String)> = m.tr.dlg.dialogs.iter()
+        .flat_map(|(&win, d)| d.list.iter().enumerate().filter_map(move |(idx, s)| {
+            s.template.as_ref().map(|t| (win, idx, s.handle, t.clone()))
+        }))
+        .collect();
+    for (win, idx, handle, tmpl) in targets {
+        let text = m.substitute_params(&tmpl);
+        m.set_handle_text(handle, &text)?;
+        m.sync_text(win, idx)?;
     }
     let shown: Vec<String> = m.tr.dlg.params.iter().map(|p| p.iter().map(|&b| crate::macroman::to_char(b)).collect()).collect();
     Ok(Done { result: 0, log: format!("[dialog] ParamText {shown:?}") })

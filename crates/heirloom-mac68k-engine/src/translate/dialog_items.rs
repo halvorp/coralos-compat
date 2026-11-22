@@ -45,7 +45,7 @@ impl<U: GuestUi> Mac<U> {
         for (i, v) in [rect.top, rect.left, rect.bottom, rect.right].into_iter().enumerate() { self.mem.write_u16(ip + at + DITL_RECT + 2 * i as u32, v as u16).map_err(&e)?; }
         self.mem.write_u8(ip + at + DITL_TYPE, ty).map_err(&e)?;
         let idx = n as usize - 1;
-        if let Some(d) = self.tr.dlg.dialogs.get_mut(&win) { d.list[idx] = super::dialogs::Slot { raw_type: ty, rect, handle, item }; }
+        if let Some(d) = self.tr.dlg.dialogs.get_mut(&win) { d.list[idx] = super::dialogs::Slot { raw_type: ty, rect, handle, item, template: None }; }
         // the native part of a text item follows its slot: the old part goes unless the same handle is still a text item
         if is_text(old.item) && !(is_text(item) && old.handle == handle) { self.sync_projection(win, Obj::Text(old.handle), None)?; }
         if is_text(item) && handle != 0 { self.sync_text(win, idx)?; }

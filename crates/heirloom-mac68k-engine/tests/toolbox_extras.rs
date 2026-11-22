@@ -440,3 +440,43 @@ fn get_script_variable_answers_only_what_the_specs_ground_and_names_the_rest() {
     assert_eq!(m.mem.read_u16(0x3010).unwrap(), 0x7777, "every frame was popped exactly");
     assert!(m.refused.len() == 2 && m.refused[0].contains("selector 94") && m.refused[1].contains("only the Roman script"), "named: {:?}", m.refused);
 }
+
+#[test]
+fn param_text_after_get_new_dialog_updates_live_static_text_labels() {
+    use heirloom_ui_abi::{ControlValue, UiCall};
+    let mut m = machine();
+    // Build a DLOG 200 referencing DITL 200 with a `^0` static text AND a plain static text (negative control).
+    // DLOG header: boundsRect (8), procID (2), visible (1) + filler (1), goAway (1) + filler (1), refCon (4), itemsID (2), title (pstr).
+    let mut dlog = Vec::new();
+    for v in [40i16, 40, 180, 320, 0] { dlog.extend(v.to_be_bytes()); }
+    dlog.extend([1u8, 0, 1, 0]); // visible=true, goAway=true
+    dlog.extend(0u32.to_be_bytes()); // refCon
+    dlog.extend(200i16.to_be_bytes()); // itemsID
+    dlog.push(0); // empty title
+    let mut ditl = Vec::new();
+    ditl.extend(1u16.to_be_bytes()); // 2 items - 1
+    for (top, text) in [(10i16, "^0!"), (40i16, "Static")] {
+        ditl.extend(0u32.to_be_bytes());
+        for v in [top, 10i16, top + 20, 200] { ditl.extend(v.to_be_bytes()); }
+        ditl.push(8); // statText
+        ditl.push(text.len() as u8);
+        ditl.extend(text.as_bytes());
+        if text.len() & 1 == 1 { ditl.push(0); }
+    }
+    let fork = ForkBuilder::new().add(b"DLOG", 200, None, &dlog).add(b"DITL", 200, None, &ditl).build();
+    m.rm.open_fork(heirloom_mac68k_engine::resmgr::APP_REF_NUM, heirloom_fmt_resfork::ResFork::parse(fork).unwrap());
+    // Write Pascal string "Hello" at 0x3100.
+    m.mem.write_bytes(0x3100, b"\x05Hello").unwrap();
+    let mut p = Prog::new();
+    // GetNewDialog(200, NIL, -1) -> drop result, then ParamText(0x3100, NIL, NIL, NIL)
+    p.clr_l().w(200).l(0).l(0xFFFF_FFFF).trap(0xA97C).pop_l(0x3000);
+    p.l(0x3100).l(0).l(0).l(0).trap(0xA98B);
+    p.exit();
+    m.start(&p.0, 0).unwrap();
+    assert_eq!(m.step(100_000).0, Step::Exited);
+    let updates: Vec<String> = m.ui.calls.iter().filter_map(|c| match c {
+        UiCall::SetControl(_, _, ControlValue::Text(t)) => Some(t.clone()),
+        _ => None,
+    }).collect();
+    assert_eq!(updates, vec!["Hello!"], "ParamText updated the ^0 label and left the plain static label untouched");
+}
