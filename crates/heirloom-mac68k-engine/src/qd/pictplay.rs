@@ -53,8 +53,11 @@ pub(crate) fn play<U: GuestUi>(m: &mut Mac<U>, h: u32, dst_at: u32) -> Result<St
 
 /// `map`: a picture-frame point to the destination (local coordinates), the same linear map the bitmap's rectangles take.
 fn draw_bits<U: GuestUi>(m: &mut Mac<U>, h: u32, b: &Bits, dst: Rect, db: u32, map: &dyn Fn(i32, i32) -> (i32, i32)) -> Result<(), Refusal> {
-    let mode = b.mode & !64;
-    if mode > 7 && !(32..=39).contains(&mode) { return Err(Refusal(format!("DrawPicture {h:#x}: bitmap opcode {:#04x} with transfer mode {} (pattern and hilite modes) is not drawn", b.op, b.mode))); }
+    // In PICT bitmap opcodes (BitsRect/PackBitsRect), classic QuickDraw ignores bit 3 (the pattern bit:
+    // patCopy..notPatBic 8..=15 map onto srcCopy..notSrcBic 0..=7, Inside Macintosh: Imaging with QuickDraw).
+    let raw = b.mode & !64;
+    let mode = if (8..=15).contains(&raw) { raw & 7 } else { raw };
+    if mode > 7 && !(32..=39).contains(&mode) { return Err(Refusal(format!("DrawPicture {h:#x}: bitmap opcode {:#04x} with transfer mode {} (hilite or unsupported mode) is not drawn", b.op, b.mode))); }
     let mask = match &b.rgn {
         None => None,
         Some(r) => {

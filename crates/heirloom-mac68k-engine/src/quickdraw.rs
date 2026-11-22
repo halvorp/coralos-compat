@@ -63,6 +63,11 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA874, &[Arg::L], None, get_port::<U>)?; // GetPort(VAR gp)
     // PROCEDURE InitFonts; InitCursor; SystemTask: nothing to keep yet (TEInit and TEIdle are the TextEdit module's)
     for t in [0xA8FE, 0xA850, 0xA9B4] { m.register(t, &[], None, accept::<U>)?; }
+    // Desk Manager (no Desk Accessories exist under Heirloom: SystemClick/CloseDeskAcc are no-ops, OpenDeskAcc returns 0, SysEdit returns FALSE)
+    m.register(0xA9B3, &[Arg::L, Arg::L], None, accept::<U>)?; // SystemClick(theEvent, theWindow)
+    m.register(0xA9B6, &[Arg::L], Some(Arg::W), accept::<U>)?; // OpenDeskAcc(deskAccName) -> 0
+    m.register(0xA9B7, &[Arg::W], None, accept::<U>)?; // CloseDeskAcc(refNum)
+    m.register(0xA9C2, &[Arg::W], Some(Arg::B), accept::<U>)?; // SysEdit / SystemEdit(editCmd) -> FALSE
     m.register(0xA97B, &[Arg::L], None, accept::<U>) // InitDialogs(resumeProc)
 }
 

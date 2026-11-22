@@ -64,7 +64,8 @@ impl<U: GuestUi> Mac<U> {
     /// shown one change nothing. Hiding the current edit field clears the edit field (editField -1); showing an edit text item in a dialog with no
     /// edit field makes it the edit field. A control item's control is moved with the rect (MoveControl), so its hit area follows.
     pub fn show_dialog_item(&mut self, win: u32, n: i16, hide: bool) -> Result<bool, Refusal> {
-        let Some(slot) = self.tr.dlg.dialogs.get(&win).and_then(|d| d.list.get(n as usize - 1).filter(|_| n >= 1)).cloned() else { return Ok(false) };
+        let Some(idx) = usize::try_from(n).ok().and_then(|i| i.checked_sub(1)) else { return Ok(false) };
+        let Some(slot) = self.tr.dlg.dialogs.get(&win).and_then(|d| d.list.get(idx)).cloned() else { return Ok(false) };
         if (slot.rect.left >= HIDDEN_AT) == hide { return Ok(false); }
         let dx = if hide { HIDE_OFFSET } else { -HIDE_OFFSET };
         let rect = Rect { left: slot.rect.left.wrapping_add(dx), right: slot.rect.right.wrapping_add(dx), ..slot.rect };

@@ -40,7 +40,7 @@ fn kind_of(trap: u16) -> RequestKind {
 impl<U: GuestUi> Mac<U> {
     /// The request an `ALRT`'s `DITL` stands for, or None when it holds an item a request cannot carry. The buttons come in on-screen
     /// order (left to right; item number breaks a tie), each with its DITL item number.
-    fn alert_request(&mut self, ditl: i16, kind: RequestKind) -> Option<(RequestModel, Vec<i16>)> {
+    pub fn alert_request(&mut self, ditl: i16, kind: RequestKind) -> Option<(RequestModel, Vec<i16>)> {
         let h = self.get_resource(*b"DITL", ditl, false).ok()?;
         let items = parse_ditl(&self.handle_bytes(h)?).ok()?;
         let (mut text, mut buttons) = (Vec::new(), Vec::new());

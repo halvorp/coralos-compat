@@ -108,7 +108,7 @@ fn a_mask_region_limits_an_unscaled_bitmap_and_is_refused_scaled() {
 }
 
 #[test]
-fn a_version_1_bitsrect_of_a_one_bit_bitmap_is_drawn_and_a_pattern_mode_is_refused() {
+fn a_version_1_bitsrect_of_a_one_bit_bitmap_is_drawn_with_source_and_pattern_modes_while_hilite_is_refused() {
     let mk = |mode: u16| {
         let mut b = vec![0, 0, 0, 5, 0, 5, 0, 7, 0, 13, 0x11, 0x01, 0x90]; // frame (5,5)-(7,13), version 1, BitsRect
         w(&mut b, &[2, 0, 0, 1, 8, 0, 0, 1, 8, 5, 5, 6, 13, mode]); // rowBytes 2 (unpacked), bounds 0,0,1,8, src, dst 5,5,6,13, mode
@@ -118,13 +118,20 @@ fn a_version_1_bitsrect_of_a_one_bit_bitmap_is_drawn_and_a_pattern_mode_is_refus
     let mut g = Rig::new();
     draw(&mut g, &mk(0), (5, 5, 7, 13));
     g.no_refusals();
-    assert_eq!((5..13).map(|x| g.black(x, 5)).collect::<Vec<_>>(), [true, false, true, false, false, true, false, true], "0xA5 = 10100101, black bits set");
+    let expected = [true, false, true, false, false, true, false, true];
+    assert_eq!((5..13).map(|x| g.black(x, 5)).collect::<Vec<_>>(), expected, "0xA5 = 10100101, black bits set");
+    // Pattern transfer modes 8..=15 (patCopy = 8) ignore bit 3 in PICT bitmap opcodes and draw like srcCopy (0).
     let mut g = Rig::new();
-    let h = handle_of(&mut g, &mk(8));
+    draw(&mut g, &mk(8), (5, 5, 7, 13));
+    g.no_refusals();
+    assert_eq!((5..13).map(|x| g.black(x, 5)).collect::<Vec<_>>(), expected, "patCopy (8) draws identically to srcCopy (0)");
+    // NEGATIVE CONTROL: hilite mode (50) is still refused by name.
+    let mut g = Rig::new();
+    let h = handle_of(&mut g, &mk(50));
     set_rect(&mut g.m, 0x3100, 5, 5, 7, 13);
     let mut p = Prog::new();
     p.set_port(g.win).l(h).l(0x3100).trap(0xA8F6).exit();
     g.m.start(&p.0, 0).unwrap();
     let _ = g.m.run_loop(1_000_000);
-    assert!(g.m.refused.iter().any(|r| r.contains("transfer mode 8")), "{:?}", g.m.refused);
+    assert!(g.m.refused.iter().any(|r| r.contains("transfer mode 50")), "{:?}", g.m.refused);
 }
