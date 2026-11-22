@@ -35,6 +35,17 @@ pub fn rows_of(items: &[Vec<u16>], width: usize) -> Result<Vec<Vec<String>>, Str
     }).collect()
 }
 
+/// Display cells of `CAknDoubleGraphicStyleListBox` (`"icon\tPrimary\tSecondary\ticon2"`): drop the numeric icon-array index
+/// cells (0 and 3) so the host renders clean `[Primary, Secondary]` Sandstone list rows (`PART_LIST_ROW`) instead of literal `"2"`.
+pub fn display_rows(items: &[Vec<u16>]) -> Result<Vec<Vec<String>>, String> {
+    let raw = rows_of(items, ITEM_CELLS)?;
+    Ok(raw.into_iter().map(|mut c| {
+        let secondary = core::mem::take(&mut c[2]);
+        let primary = core::mem::take(&mut c[1]);
+        alloc::vec![primary, secondary]
+    }).collect())
+}
+
 impl Process {
     pub(crate) fn list_state(&mut self, lb: u32) -> Result<&mut ListState, String> {
         if !matches!(self.obj_get(lb), Some(HostObj::List(_))) {
@@ -45,13 +56,12 @@ impl Process {
         match self.obj_get(lb) { Some(HostObj::List(l)) => Ok(l), _ => Err(format!("{lb:#x}: host state is not a list box's")) }
     }
 
-    /// The rows the list box at `lb` holds now: its model's item texts. `iModel` is the `MListBoxModel` base of the
-    /// `CTextListBoxModel` (offset 4), eiklbx.h `MListBoxModel* iModel`.
+    /// The rows the list box at `lb` holds now: its model's item texts, projected as `[primary, secondary]` display cells.
     pub(crate) fn list_rows(&self, lb: u32) -> Result<Vec<Vec<String>>, String> {
         let iface = self.rd(lb + LB_I_MODEL)?;
         if iface == 0 { return Ok(Vec::new()); }
         let array = self.model_array(iface - 4)?;
-        rows_of(&self.mdesc_items(array)?, ITEM_CELLS)
+        display_rows(&self.mdesc_items(array)?)
     }
 
     /// Tell the host what the list box shows now: add its control the first time, then only what changed.
@@ -66,7 +76,7 @@ impl Process {
         let (current, top) = if view == 0 { (0, 0) } else { (self.rd(view + VIEW_I_CURRENT)?, self.rd(view + VIEW_I_TOP)?) };
         let g = GuestRect { left: rect.0, top: rect.1, width: rect.2, height: rect.3 };
         let selected = if rows.is_empty() { None } else { Some(current.min(rows.len() as u32 - 1)) };
-        let columns = alloc::vec![String::new(); ITEM_CELLS];
+        let columns = alloc::vec![String::new(); 2];
         let ui = self.host.ui.as_mut().ok_or_else(|| String::from("no GuestUi"))?;
         let refused = |e: heirloom_ui_abi::UiRefusal| format!("the UI refused the list: {e}");
         let control = match st.control {
@@ -131,5 +141,11 @@ mod tests {
     fn an_item_wider_than_the_style_is_refused_not_cut() {
         let e = rows_of(&[u("a\tb"), u("1\t2\t3\t4\t5")], 4).unwrap_err();
         assert!(e.contains("item 1 has 5 cells"), "{e}");
+    }
+
+    #[test]
+    fn display_rows_strip_icon_array_indices_and_keep_primary_and_secondary() {
+        let rows = display_rows(&[u("2\tC: <Flash>\t0 / 141 kB\t0"), u("0\tOnlyPrimary")]).unwrap();
+        assert_eq!(rows, vec![vec!["C: <Flash>", "0 / 141 kB"], vec!["OnlyPrimary", ""]]);
     }
 }

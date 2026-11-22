@@ -48,6 +48,17 @@ fn the_environment_holds_the_colour_list_the_rom_resource_names() {
 }
 
 #[test]
+fn a_rom_with_only_localised_r01_resolves_its_offset_without_an_rsc_sibling() {
+    let mut p = loader::bare(&[STATIC, COLOR, "_ZN4User6AllocZEi", "_ZN4User4FreeEPv"]).unwrap();
+    p.set_drive(support::drive_with_localised_rom());
+    p.set_ui(RecordingGuestUi::new());
+    let env = ok(&mut p, STATIC, &[]);
+    let list = p.mem.read_u32(env + 0xE4).unwrap();
+    assert_ne!(list, 0, "CEikonEnv::iColorList is loaded from eikpriv.r01 alone");
+    assert_eq!(ok(&mut p, COLOR, &[list, 3]), 0xff03_0303);
+}
+
+#[test]
 fn a_run_without_the_rom_resource_refuses_by_name_and_makes_no_colours() {
     let mut p = loader::bare(&[STATIC, "_ZN4User6AllocZEi", "_ZN4User4FreeEPv"]).unwrap();
     p.set_drive(heirloom_ekaarm_engine::drive::Drive::new());

@@ -109,6 +109,80 @@ fn parse_menu_pane(bytes: &[u8]) -> Result<Vec<MenuItem>, String> {
 }
 
 impl Process {
+    /// Project the Avkon `MENU_BAR` onto the host's global menu bar (`GuestUi::set_menu_strip`).
+    /// On S60 a single `MENU_TITLE` (e.g. `View`) holds the whole Options menu whose entries are top-level sections with cascade
+    /// panes (`File`, `Edit`, `View`, `Disk admin`, `Tools`) plus leaf items (`Settings`, `About`, `Exit`); promoting each cascade
+    /// entry to a desktop menu bar title and placing remaining leaves under an `Options` menu gives S60 apps a native CoralOS
+    /// global menu bar while keeping every command id intact as its `CallbackToken`.
+    pub(crate) fn project_menu_bar(&mut self, titles: &[MenuTitle]) -> Result<(), String> {
+        let Some(win) = self.host.window else { return Ok(()) };
+        const EEIK_MENU_ITEM_DIMMED: u32 = 0x01;
+        const EEIK_MENU_ITEM_SEPARATOR_AFTER: u32 = 0x800;
+        fn resolve_pane(p: &mut Process, pane: u32, depth: u8) -> Vec<heirloom_ui_abi::MenuItem> {
+            let Ok(bytes) = p.resource(pane) else { return Vec::new() };
+            let Ok(raw) = parse_menu_pane(&bytes) else { return Vec::new() };
+            let mut out = Vec::new();
+            for it in raw {
+                let subs = if it.cascade != 0 && depth < 2 { resolve_pane(p, it.cascade, depth + 1) } else { Vec::new() };
+                if !it.text.trim().is_empty() {
+                    out.push(heirloom_ui_abi::MenuItem {
+                        label: it.text.clone(),
+                        enabled: it.flags & EEIK_MENU_ITEM_DIMMED == 0,
+                        shortcut: None,
+                        check: None,
+                        sub_items: subs,
+                        token: heirloom_ui_abi::CallbackToken(u64::from(it.command)),
+                    });
+                    if it.flags & EEIK_MENU_ITEM_SEPARATOR_AFTER != 0 {
+                        out.push(heirloom_ui_abi::MenuItem {
+                            label: String::from("-"),
+                            enabled: true,
+                            shortcut: None,
+                            check: None,
+                            sub_items: Vec::new(),
+                            token: heirloom_ui_abi::CallbackToken(0),
+                        });
+                    }
+                }
+            }
+            out
+        }
+        let mut menus: Vec<heirloom_ui_abi::Menu> = Vec::new();
+        let mut loose: Vec<heirloom_ui_abi::MenuItem> = Vec::new();
+        for t in titles {
+            for it in &t.items {
+                if it.text.trim().is_empty() { continue; }
+                if it.cascade != 0 {
+                    let sub = resolve_pane(self, it.cascade, 1);
+                    if !sub.is_empty() {
+                        menus.push(heirloom_ui_abi::Menu {
+                            title: it.text.clone(),
+                            enabled: it.flags & EEIK_MENU_ITEM_DIMMED == 0,
+                            items: sub,
+                        });
+                        continue;
+                    }
+                }
+                loose.push(heirloom_ui_abi::MenuItem {
+                    label: it.text.clone(),
+                    enabled: it.flags & EEIK_MENU_ITEM_DIMMED == 0,
+                    shortcut: None,
+                    check: None,
+                    sub_items: Vec::new(),
+                    token: heirloom_ui_abi::CallbackToken(u64::from(it.command)),
+                });
+            }
+        }
+        if !loose.is_empty() {
+            menus.push(heirloom_ui_abi::Menu { title: String::from("Options"), enabled: true, items: loose });
+        }
+        if menus.is_empty() {
+            return Ok(());
+        }
+        let Some(ui) = self.host.ui.as_mut() else { return Ok(()) };
+        ui.set_menu_strip(win, heirloom_ui_abi::MenuModel { menus }).map_err(|e| format!("the UI refused the Avkon menu bar: {e}"))
+    }
+
     /// `MENU_BAR` (eikon.rh:116): `titles[]` (a WORD count, then `MENU_TITLE`s: menu_pane, txt, flags, bmpfile, bmpid, bmpmask,
     /// extension), then `extension`; each title's pane is read.
     pub(crate) fn read_menu_bar(&mut self, id: u32) -> Result<Vec<MenuTitle>, String> {

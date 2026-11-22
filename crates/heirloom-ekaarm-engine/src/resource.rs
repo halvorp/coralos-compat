@@ -103,9 +103,12 @@ impl Process {
     }
 }
 
-/// Index every `.rsc` under the ROM directory `dir` and its subdirectories (`\resource\uiklaf\eikpriv.rsc` owns the Eikon private
-/// resources, offset 0x19bd6000): id offset -> the file a device in [`ROM_LANGUAGE_EXT`] loads. The first file seen keeps an offset.
+/// Index every `.rsc` and localised `.r01` under the ROM directory `dir` and its subdirectories
+/// (`\resource\uiklaf\eikpriv.r01` owns the Eikon private resources, offset 0x19bd6000): id offset -> the file a device in
+/// [`ROM_LANGUAGE_EXT`] loads. When a ROM ships only the localised `.r01` without its `.rsc` sibling (as staged manifests do),
+/// indexing `.r01` directly still discovers the offset. The first file seen keeps an offset, with `.r01` preferred over `.rsc`.
 fn index_rom_dir(drive: &Drive, dir: &str, index: &mut alloc::collections::BTreeMap<u32, String>) {
+    let lang_ext = format!(".{ROM_LANGUAGE_EXT}");
     for name in drive.list_rom(dir).unwrap_or_default() {
         let full = format!("{dir}\\{name}");
         if drive.list_rom(&full).is_some() {
@@ -113,9 +116,14 @@ fn index_rom_dir(drive: &Drive, dir: &str, index: &mut alloc::collections::BTree
             continue;
         }
         let lower = name.to_ascii_lowercase();
-        let Some(stem) = lower.strip_suffix(".rsc") else { continue };
-        let twin = format!("{dir}\\{stem}.{ROM_LANGUAGE_EXT}");
-        let path = if drive.exists_anywhere(&twin) { twin } else { full };
+        let path = if let Some(stem) = lower.strip_suffix(".rsc") {
+            let twin = format!("{dir}\\{stem}.{ROM_LANGUAGE_EXT}");
+            if drive.exists_anywhere(&twin) { twin } else { full }
+        } else if lower.ends_with(&lang_ext) {
+            full
+        } else {
+            continue;
+        };
         if let Ok(bytes) = drive.read_owned(&path) {
             if let Ok(f) = RscFile::parse(&bytes) {
                 index.entry(f.id_offset).or_insert(path);

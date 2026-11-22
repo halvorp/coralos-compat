@@ -4,12 +4,14 @@
 use alloc::boxed::Box;
 use core::any::Any;
 use alloc::string::String;
-use heirloom_ui_abi::{ControlModel, ControlValue, GuestUi, GuestRect, UiObjectRef, UiRefusal, WindowModel};
+use heirloom_ui_abi::{ControlModel, ControlValue, GuestUi, GuestRect, MenuModel, UiObjectRef, UiRefusal, WindowModel};
 
 pub trait EngineUi {
     fn open_window(&mut self, model: WindowModel) -> Result<UiObjectRef, UiRefusal>;
     /// The guest retitled the window (`GuestUi::set_window_title`).
     fn set_window_title(&mut self, win: UiObjectRef, title: String) -> Result<(), UiRefusal>;
+    /// The guest installed its Avkon menu bar (`GuestUi::set_menu_strip`).
+    fn set_menu_strip(&mut self, win: UiObjectRef, menu: MenuModel) -> Result<(), UiRefusal>;
     /// Add a control to `win` (`GuestUi::add_control`); the host's handle for it comes back.
     fn add_control(&mut self, win: UiObjectRef, control: ControlModel) -> Result<UiObjectRef, UiRefusal>;
     fn remove_control(&mut self, win: UiObjectRef, control: UiObjectRef) -> Result<(), UiRefusal>;
@@ -27,6 +29,9 @@ impl<U: GuestUi> EngineUi for U {
     }
     fn set_window_title(&mut self, win: UiObjectRef, title: String) -> Result<(), UiRefusal> {
         GuestUi::set_window_title(self, win, title)
+    }
+    fn set_menu_strip(&mut self, win: UiObjectRef, menu: MenuModel) -> Result<(), UiRefusal> {
+        GuestUi::set_menu_strip(self, win, menu)
     }
     fn add_control(&mut self, win: UiObjectRef, control: ControlModel) -> Result<UiObjectRef, UiRefusal> {
         GuestUi::add_control(self, win, control)

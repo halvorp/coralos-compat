@@ -49,11 +49,15 @@ fn eikpriv() -> Vec<u8> {
     rsc(&[vec![0; 8], list, vec![0; 2], vec![0; 2], color_array(59), color_array(0)])
 }
 
-struct Rom(Vec<u8>);
+struct Rom {
+    file_name: &'static str,
+    bytes: Vec<u8>,
+}
 
 impl RomSource for Rom {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
-        path.eq_ignore_ascii_case("\\resource\\uiklaf\\eikpriv.rsc").then(|| self.0.clone())
+        let want = format!("\\resource\\uiklaf\\{}", self.file_name);
+        path.eq_ignore_ascii_case(&want).then(|| self.bytes.clone())
     }
     fn exists(&self, path: &str) -> bool {
         self.read(path).is_some()
@@ -61,7 +65,7 @@ impl RomSource for Rom {
     fn list(&self, path: &str) -> Option<Vec<String>> {
         match path.to_ascii_lowercase().as_str() {
             "\\resource" => Some(vec!["uiklaf".into()]),
-            "\\resource\\uiklaf" => Some(vec!["eikpriv.rsc".into()]),
+            "\\resource\\uiklaf" => Some(vec![self.file_name.into()]),
             _ => None,
         }
     }
@@ -70,6 +74,14 @@ impl RomSource for Rom {
 /// A drive with only the synthetic ROM behind it.
 pub fn drive_with_rom() -> Drive {
     let mut d = Drive::new();
-    d.set_rom(Box::new(Rom(eikpriv())));
+    d.set_rom(Box::new(Rom { file_name: "eikpriv.rsc", bytes: eikpriv() }));
+    d
+}
+
+/// A drive whose synthetic ROM ships only the localised `eikpriv.r01` (no `.rsc` sibling, matching staged ROM manifests).
+#[allow(dead_code)]
+pub fn drive_with_localised_rom() -> Drive {
+    let mut d = Drive::new();
+    d.set_rom(Box::new(Rom { file_name: "eikpriv.r01", bytes: eikpriv() }));
     d
 }

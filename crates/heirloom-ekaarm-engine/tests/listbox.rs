@@ -85,7 +85,7 @@ fn the_guests_item_texts_reach_the_host_as_one_list_control_and_follow_the_model
         ok(&mut p, APPEND, &[arr, d]);
     }
     ok(&mut p, ITEM_ADDED, &[lb]);
-    let want = rows(&[&["0", "C:", "Local disk", "0"], &["0", "Z:", "ROM", "0"], &["1", "K\u{f6}ln \u{1f600}", "", ""]]);
+    let want = rows(&[&["C:", "Local disk"], &["Z:", "ROM"], &["K\u{f6}ln \u{1f600}", ""]]);
     let c = calls(&p);
     assert_eq!(c.len(), 3, "{c:?}");
     let UiCall::SetControl(_, _, ControlValue::Rows { rows: got, selected, top }) = &c[2] else { panic!("{c:?}") };
@@ -99,7 +99,7 @@ fn the_guests_item_texts_reach_the_host_as_one_list_control_and_follow_the_model
     let c = calls(&p);
     let UiCall::SetControl(_, _, ControlValue::Rows { rows: got, .. }) = &c[3] else { panic!("{c:?}") };
     assert_eq!(got.len(), 4);
-    assert_eq!(got[3], ["0", "D:", "RAM", "0"]);
+    assert_eq!(got[3], ["D:", "RAM"]);
     // The host got exactly what the guest's model holds.
     let items = p.test_list_items(lb).unwrap();
     assert_eq!(items.len(), 4);
@@ -250,10 +250,14 @@ fn file_browser_list_shows_the_host_what_its_model_holds() {
     // What the host last held for the control: the add, then each SetControl(Rows).
     let mut held = match &model.kind { ControlKind::List { rows, .. } => rows.clone(), _ => unreachable!() };
     for call in &c { if let UiCall::SetControl(_, _, ControlValue::Rows { rows, .. }) = call { held = rows.clone(); } }
-    let guest: Vec<Vec<String>> = p.test_list_items(lb).unwrap().iter().map(|i| i.split(|u| *u == 9).map(|c| String::from_utf16_lossy(c)).collect()).collect();
-    let guest: Vec<Vec<String>> = guest.into_iter().map(|mut r| { r.resize(4, String::new()); r }).collect();
-    assert_eq!(held, guest, "the host holds what the guest's model holds");
+    let guest = heirloom_ekaarm_engine::listproject::display_rows(&p.test_list_items(lb).unwrap()).unwrap();
+    assert_eq!(held, guest, "the host holds the display projection of the guest's model");
     assert!(!held.is_empty(), "the model holds FileBrowser's drive entries, so the host shows rows");
-    let drives: Vec<&str> = held.iter().map(|r| r[1].as_str()).collect();
+    let drives: Vec<&str> = held.iter().map(|r| r[0].as_str()).collect();
     assert!(drives.iter().any(|d| d.starts_with("C:")) && drives.iter().any(|d| d.starts_with("Z:")), "one row per drive the engine answers to: {drives:?}");
+    let menu_titles: Vec<String> = c.iter().find_map(|c| match c {
+        UiCall::SetMenuStrip(_, m) => Some(m.menus.iter().map(|menu| menu.title.clone()).collect()),
+        _ => None,
+    }).expect("Avkon MENU_BAR is projected to the host global menu bar");
+    assert!(menu_titles.iter().any(|t| t == "File") && menu_titles.iter().any(|t| t == "Options"), "expected desktop menu bar from Avkon MENU_BAR: {menu_titles:?}");
 }

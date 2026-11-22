@@ -78,6 +78,7 @@ impl Process {
             let bar = self.make_control("CEikMenuBar", 0x80, &[])?;
             let summary: alloc::vec::Vec<String> = titles.iter().map(|t| format!("{}[{}]", t.text, t.items.iter().map(|i| i.text.as_str()).collect::<alloc::vec::Vec<_>>().join(","))).collect();
             self.log.push(format!("[shell] menu bar: {}", summary.join(" ")));
+            self.project_menu_bar(&titles)?;
             self.nat.shell.menu = titles;
             self.nat.shell.menu_bar = Some(bar);
             self.write_words(this, &[(VIEW_I_MENU, bar)])?;
