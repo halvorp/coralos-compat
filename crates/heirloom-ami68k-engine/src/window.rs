@@ -76,12 +76,10 @@ fn borders(flags: u32, has_title: bool) -> (i32, i32, i32, i32) {
     (4, top, 4, 4)
 }
 
-/// The native window role for an Intuition window's flags and title presence: borderless / backdrop windows and untitled
-/// chrome-less tool palettes map to `WindowRole::Utility` so the host frames them as bare panels or utility palettes instead
-/// of full Document windows.
-pub(crate) fn role_of(flags: u32, has_title: bool) -> WindowRole {
-    let chrome = WFLG_DRAGBAR | WFLG_CLOSEGADGET | WFLG_DEPTHGADGET | WFLG_SIZEGADGET;
-    if flags & (WFLG_BORDERLESS | WFLG_BACKDROP) != 0 || (!has_title && flags & chrome == 0) {
+/// The native window role for an Intuition window's flags: borderless / backdrop windows map to `WindowRole::Utility` so
+/// the host frames them as bare panels or utility palettes instead of full Document windows.
+pub(crate) fn role_of(flags: u32) -> WindowRole {
+    if flags & (WFLG_BORDERLESS | WFLG_BACKDROP) != 0 {
         WindowRole::Utility
     } else {
         WindowRole::Document
@@ -91,7 +89,7 @@ pub(crate) fn role_of(flags: u32, has_title: bool) -> WindowRole {
 /// The one open path: a real struct Window, its UserPort, the native window, its gadgets as native controls.
 pub fn open<U: GuestUi>(a: &mut Amiga<U>, s: WindowSpec) -> Result<u32, Refusal> {
     let m = Refusal::mem;
-    let role = role_of(s.flags, s.title != 0);
+    let role = role_of(s.flags);
     let title = if s.title == 0 {
         if role == WindowRole::Utility { String::new() } else { a.gfx.program_name.clone() }
     } else {
@@ -216,13 +214,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn borderless_backdrop_and_chromeless_windows_map_to_utility_and_framed_windows_stay_document() {
-        assert_eq!(role_of(WFLG_BORDERLESS | WFLG_BACKDROP | WFLG_ACTIVATE, false), WindowRole::Utility);
-        assert_eq!(role_of(WFLG_BORDERLESS | WFLG_SIMPLE_REFRESH, false), WindowRole::Utility);
-        assert_eq!(role_of(WFLG_SIMPLE_REFRESH, false), WindowRole::Utility);
-        // NEGATIVE CONTROLS: standard framed document windows keep Document
-        assert_eq!(role_of(WFLG_DRAGBAR | WFLG_CLOSEGADGET | WFLG_DEPTHGADGET | WFLG_SIZEGADGET, false), WindowRole::Document);
-        assert_eq!(role_of(WFLG_DRAGBAR | WFLG_CLOSEGADGET, true), WindowRole::Document);
-        assert_eq!(role_of(0, true), WindowRole::Document);
+    fn borderless_and_backdrop_windows_map_to_utility_and_bordered_windows_stay_document() {
+        assert_eq!(role_of(WFLG_BORDERLESS | WFLG_BACKDROP | WFLG_ACTIVATE), WindowRole::Utility);
+        assert_eq!(role_of(WFLG_BORDERLESS | WFLG_SIMPLE_REFRESH), WindowRole::Utility);
+        // NEGATIVE CONTROLS: ordinary bordered Intuition windows keep Document even with flags == 0
+        assert_eq!(role_of(WFLG_DRAGBAR | WFLG_CLOSEGADGET | WFLG_DEPTHGADGET | WFLG_SIZEGADGET), WindowRole::Document);
+        assert_eq!(role_of(WFLG_DRAGBAR | WFLG_CLOSEGADGET), WindowRole::Document);
+        assert_eq!(role_of(0), WindowRole::Document);
     }
 }

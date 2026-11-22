@@ -62,6 +62,14 @@ impl OsFamily for AmiFamily {
         m.objects.mui_metrics = metrics_of(p);
         Ok(())
     }
+    fn input(m: &mut Amiga<LibUi>, name: &str, bytes: alloc::vec::Vec<u8>) -> Result<(), String> {
+        if name == heirloom_bind::wire::BINDING_INPUT {
+            let spec = heirloom_bind::wire::decode_spec(&bytes)?;
+            m.binds.add_spec(spec);
+            return Ok(());
+        }
+        Err(format!("input {name:?}: the Amiga machine takes {:?}", heirloom_bind::wire::BINDING_INPUT))
+    }
 }
 
 static TABLE: OsVTable = vtable::<AmiFamily>();

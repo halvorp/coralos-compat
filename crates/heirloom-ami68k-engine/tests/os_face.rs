@@ -186,3 +186,66 @@ fn an_unknown_profile_is_refused_by_name_and_makes_no_machine() {
     let err = Remote::new("a4000").err().expect("refused");
     assert!(err.contains("a4000"), "{err}");
 }
+
+#[test]
+fn a_binding_input_reaches_the_machines_bind_table_and_bad_bytes_are_refused() {
+    use heirloom_bind::{
+        AnchorRule, BindingSpec, BoxField, CStrField, CountRule, FileForm, FlagTest, GroupLayout,
+        IntWidth, ItemLayout, PlacementLayout, StrListPick,
+    };
+    let spec = BindingSpec {
+        id: "sample-1.0".into(),
+        file: FileForm { form_type: *b"EPUS", legacy_form_types: vec![] },
+        group: GroupLayout {
+            chunk: *b"BTNW",
+            size: 132,
+            title: Some(CStrField { at: 0, max: 32 }),
+            window_box: Some(BoxField { at: 32 }),
+            inset: 1,
+            no_inset_if: Some(FlagTest { at: 128, width: IntWidth::U32, mask: 16 }),
+        },
+        item: ItemLayout {
+            chunk: *b"BUTN",
+            min_size: 14,
+            skip_if: Some(FlagTest { at: 2, width: IntWidth::U32, mask: 4 }),
+            label: StrListPick {
+                strings_at: 14,
+                count: CountRule::Field {
+                    at: 6,
+                    width: IntWidth::I16,
+                    unless_flag: Some((FlagTest { at: 2, width: IntWidth::U32, mask: 16 }, 3)),
+                },
+                per_record: 2,
+                pick: 0,
+            },
+        },
+        placement: Some(PlacementLayout {
+            chunk: *b"BANK",
+            min_size: 29,
+            window_box: BoxField { at: 20 },
+            path: CStrField { at: 28, max: 256 },
+        }),
+        anchor: AnchorRule::LabelInFill {
+            prefix_cut: true,
+            strip_lines_inside: true,
+            accent_from_swatch: true,
+        },
+    };
+    let wire = heirloom_bind::wire::encode_spec(&spec).unwrap();
+    let mut s = session();
+    s.apply(&control(Control::Input { name: heirloom_bind::wire::BINDING_INPUT.into(), offset: 0, total: wire.len() as u32, chunk: wire })).unwrap();
+    // NEGATIVE CONTROL: malformed binding wire bytes end the guest by name
+    bind();
+    let mut remote = Remote::new("").unwrap();
+    let junk = b"JUNK!".to_vec();
+    let bad = [
+        control(Control::Input { name: heirloom_bind::wire::BINDING_INPUT.into(), offset: 0, total: junk.len() as u32, chunk: junk }),
+        control(Control::Step { budget: 1 }),
+    ]
+    .concat();
+    assert_eq!(remote.send(&[bad]), APPLY_OK);
+    match &remote.reports[..] {
+        [Report::Stepped { step: WireStep::Fault(why), insns: 0, .. }] => assert!(why.contains("bad magic"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}

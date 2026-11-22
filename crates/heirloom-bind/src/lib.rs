@@ -29,6 +29,7 @@ pub mod parse;
 pub mod spec;
 pub mod state;
 pub mod wdef;
+pub mod wire;
 
 pub use parse::{parse, recognise, Group, Label, Parsed, Placement, Recognised, Refusal};
 pub use spec::{

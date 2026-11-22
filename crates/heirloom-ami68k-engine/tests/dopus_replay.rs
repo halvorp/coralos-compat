@@ -95,8 +95,17 @@ fn dopus_text_is_text_ink_and_untitled_windows_are_named_after_the_program() {
     // NEGATIVE CONTROL: no replayed run is in an AREA role (the accent fill, the background, an edge): ink roles only.
     let every: Vec<&DrawOp> = last_planes(&a).values().flat_map(|ps| texts(ps)).collect();
     assert!(every.iter().all(|o| matches!(o, DrawOp::Text { pen_role: PenRole::Text | PenRole::FillText | PenRole::Shine | PenRole::Highlight, .. })), "{every:?}");
-    let titles: Vec<String> = a.ui.calls.iter().filter_map(|c| if let UiCall::OpenWindow(m) = c { Some(m.title.clone()) } else { None }).collect();
-    assert_eq!(titles, ["Directory Opus", "DirectoryOpus", "DirectoryOpus", "DirectoryOpus"], "NULL titles are the program's name, the guest's own title is kept");
+    let windows: Vec<(heirloom_ui_abi::WindowRole, String)> = a.ui.calls.iter().filter_map(|c| if let UiCall::OpenWindow(m) = c { Some((m.role, m.title.clone())) } else { None }).collect();
+    assert_eq!(
+        windows,
+        [
+            (heirloom_ui_abi::WindowRole::Document, "Directory Opus".into()),
+            (heirloom_ui_abi::WindowRole::Utility, "".into()),
+            (heirloom_ui_abi::WindowRole::Utility, "".into()),
+            (heirloom_ui_abi::WindowRole::Document, "DirectoryOpus".into()),
+        ],
+        "borderless/backdrop windows are untitled Utility; framed NULL titles use the program name; explicit titles are kept"
+    );
 }
 
 /// Replay fix 1: every text run carries the guest's own advance (TextLength) so the host can fit it; the lister's mono rows are 8 px cells.
@@ -121,4 +130,81 @@ fn the_backdrop_and_the_button_bank_are_presented_as_drawn_planes() {
     assert!(bk.iter().any(|o| matches!(o, DrawOp::Text { string, .. } if string == "Makedir")) && bank.iter().map(|p| p.ops.len()).max().unwrap() > 50, "the button bank draws its buttons");
     // NEGATIVE CONTROL: the loading window that closed before idle is not asked to be shown again, and window ids that never opened have no plane.
     assert!(!planes.contains_key(&9));
+}
+
+/// With the DOpus 5.82 binding spec loaded, the Vertical button bank's drawn buttons are translated to named `DrawOp::Face` ops.
+#[test]
+fn dopus_button_bank_emits_native_faces_when_binding_is_loaded() {
+    use heirloom_bind::{
+        AnchorRule, BindingSpec, BoxField, CStrField, CountRule, FileForm, FlagTest, GroupLayout,
+        IntWidth, ItemLayout, PlacementLayout, StrListPick,
+    };
+    let file = match std::fs::read(format!("{DOPUS}/DirectoryOpus")) {
+        Ok(f) => f,
+        Err(_) => { eprintln!("skipped: corpus not present"); return; }
+    };
+    let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    a.gfx.present.set_plane_route(true);
+    a.binds.add_spec(BindingSpec {
+        id: "dopus5-5.82".into(),
+        file: FileForm { form_type: *b"EPUS", legacy_form_types: vec![] },
+        group: GroupLayout {
+            chunk: *b"BTNW",
+            size: 132,
+            title: Some(CStrField { at: 0, max: 32 }),
+            window_box: Some(BoxField { at: 32 }),
+            inset: 1,
+            no_inset_if: Some(FlagTest { at: 128, width: IntWidth::U32, mask: 16 }),
+        },
+        item: ItemLayout {
+            chunk: *b"BUTN",
+            min_size: 14,
+            skip_if: Some(FlagTest { at: 2, width: IntWidth::U32, mask: 4 }),
+            label: StrListPick {
+                strings_at: 14,
+                count: CountRule::Field {
+                    at: 6,
+                    width: IntWidth::I16,
+                    unless_flag: Some((FlagTest { at: 2, width: IntWidth::U32, mask: 16 }, 3)),
+                },
+                per_record: 2,
+                pick: 0,
+            },
+        },
+        placement: Some(PlacementLayout {
+            chunk: *b"BANK",
+            min_size: 29,
+            window_box: BoxField { at: 20 },
+            path: CStrField { at: 28, max: 256 },
+        }),
+        anchor: AnchorRule::LabelInFill {
+            prefix_cut: true,
+            strip_lines_inside: true,
+            accent_from_swatch: true,
+        },
+    });
+    a.fs.vol.add_device("DOpus5", false);
+    load(&mut a, "DOpus5:", std::path::Path::new(DOPUS));
+    a.fs.vol.assign_add("LIBS", "DOpus5:Libs");
+    a.fs.vol.assign("PROGDIR", "DOpus5:");
+    a.start_hunk_as(&file, "DirectoryOpus").unwrap();
+    use_topaz(&mut a);
+    let mut insns = 0u64;
+    while a.clock_us < 5 * 1_000_000 && insns < 200_000_000 {
+        let (step, st) = a.step(2_000_000);
+        insns += st.insns;
+        match step {
+            heirloom_ami68k_engine::Step::Blocked => match a.next_timer_deadline() { Some(t) => a.advance_clock_to(t).unwrap(), None => break },
+            heirloom_ami68k_engine::Step::BudgetSpent => {}
+            other => panic!("DirectoryOpus stopped: {other:?}\nrefused: {:?}", a.refused),
+        }
+    }
+    let planes = last_planes(&a);
+    let bank = &planes[&3];
+    let faces: Vec<&str> = bank.iter().flat_map(|p| p.ops.iter()).filter_map(|o| match o {
+        DrawOp::Face { label, .. } => Some(label.as_str()),
+        _ => None,
+    }).collect();
+    assert!(faces.len() >= 20, "expected Vertical bank buttons as DrawOp::Face, got {}: {faces:?}", faces.len());
+    assert!(faces.contains(&"All") && faces.contains(&"Copy") && faces.contains(&"Makedir"), "got faces: {faces:?}");
 }
