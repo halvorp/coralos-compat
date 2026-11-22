@@ -84,7 +84,8 @@ pub const LOWMEM: &[(&str, u32, u32)] = &[("ResLoad", 0x0A5E, 1), ("MBarHeight",
     ("ROMMapInsert", 0x0B9E, 1), ("TmpResLoad", 0x0B9F, 1), ("SysFontSize", 0x0BA8, 2), ("KeyThresh", 0x018E, 2), ("CurApRefNum", 0x0900, 2),
     ("CurActivate", 0x0A64, 4), ("CurDeactive", 0x0A68, 4), ("CrsrBusy", 0x08CD, 1), ("SysEvtMask", 0x0144, 2), ("WindowList", 0x09D6, 4),
     ("CurStackBase", 0x0908, 4), ("GhostWindow", 0x0A84, 4), ("TheZone", 0x0118, 4), ("GZRootHnd", 0x0328, 4), ("GZMoveHnd", 0x0330, 4),
-    ("CurJTOffset", 0x0934, 2), ("LastSPExtra", 0x0B4C, 4), ("GrayRgn", 0x09EE, 4), ("TEScrpLength", 0x0AB0, 2)];
+    ("CurJTOffset", 0x0934, 2), ("LastSPExtra", 0x0B4C, 4), ("GrayRgn", 0x09EE, 4), ("TEScrpLength", 0x0AB0, 2),
+    ("KbdType", 0x021E, 1), ("FSFCBLen", 0x03F6, 2), ("HWCfgFlags", 0x0B22, 2), ("PrintErr", 0x0944, 2), ("Time", 0x020C, 4), ("CurrentA5", 0x0904, 4)];
 
 impl TbFn {
     pub fn by_name(name: &str) -> Option<TbFn> {

@@ -71,6 +71,8 @@ impl<U: GuestUi> MacPpc<U> {
                 // intelligent cut and paste (smsfIntellCP, bit 0); no contextual forms, ligatures or two-byte text (named: not checked against a
                 // 9.2.1 Roman 'itlb')
                 (0, 22) => 0x3,
+                // smScriptKeys 32 (Script.h): resource ID of the script's default 'KCHR' keyboard layout (0 = Roman US default).
+                (0, 32) => 0,
                 (0, 84) => (u32::from(self.mac.mem.read_u16(0x0BA6).unwrap_or(0)) << 16) | u32::from(self.mac.mem.read_u16(0x0BA8).ok().filter(|&s| s != 0).unwrap_or(12)),
                 (0, 86) => (1 << 16) | 12,
                 (s, sel) => return Err(format!("GetScriptVariable(script {s}, selector {sel}) has no verified Roman-only answer yet")),

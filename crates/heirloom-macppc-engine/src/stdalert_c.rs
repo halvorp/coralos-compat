@@ -74,4 +74,50 @@ impl<U: GuestUi> MacPpc<U> {
             Err(e) => Err(format!("StandardAlert: {e:?}")),
         }
     }
+
+    /// Classic Dialog Manager alerts (`Alert`, `StopAlert`, `NoteAlert`, `CautionAlert`): reads the `ALRT` resource `id`,
+    /// builds the host request from its `DITL` via the shared 68k [`Mac::alert_request`], and parks until the host answers.
+    /// Returns `Ok(None)` while parked, or `Ok(Some(itemHit))` (`-1` if the `ALRT` resource is missing).
+    pub(crate) fn classic_alert(&mut self, kind: RequestKind, id: i16, filter: u32) -> Result<Option<u32>, String> {
+        let label = match kind {
+            RequestKind::Stop => "StopAlert",
+            RequestKind::Note => "NoteAlert",
+            RequestKind::Caution => "CautionAlert",
+            _ => "Alert",
+        };
+        if self.rt.std_alert {
+            let Some(asked) = self.mac.tr.dlg.asked.as_ref() else { return Err(format!("{label}: the parked alert's request is gone")) };
+            let Some(item) = asked.answer else { return Ok(None) };
+            self.mac.tr.dlg.asked = None;
+            self.rt.std_alert = false;
+            return Ok(Some(item as i32 as u32));
+        }
+        if filter != 0 {
+            self.mac.log.push(format!("[alert] {label} {id}: filterProc {filter:#x} is a guest callback and is not called"));
+        }
+        let Ok(h) = self.mac.get_resource(*b"ALRT", id, false) else {
+            self.mac.log.push(format!("[alert] {label} {id}: no ALRT resource -> -1"));
+            return Ok(Some((-1i32) as u32));
+        };
+        let b = self.mac.handle_bytes(h).unwrap_or_default();
+        if b.len() < 12 {
+            return Err(format!("{label} {id}: ALRT resource is {} bytes, too short for its fields", b.len()));
+        }
+        let ditl = i16::from_be_bytes([b[8], b[9]]);
+        let Some((model, items)) = self.mac.alert_request(ditl, kind) else {
+            return Err(format!("{label} {id}: DITL {ditl} cannot be shown as a native request"));
+        };
+        let shown = model.text.replace('\n', " / ");
+        match self.mac.ui.request(None, model) {
+            Ok(req) => {
+                self.mac.tr.dlg.asked = Some(Asked { req, items, slot: 0, answer: None });
+                self.rt.std_alert = true;
+                self.rt.wait_dialog = true;
+                self.mac.log.push(format!("[alert] {label} {id} asked of the host ({kind:?}, \"{shown}\"); the caller waits for its answer"));
+                Ok(None)
+            }
+            Err(UiRefusal::Unsupported(why)) => Err(format!("{label} {id}: the host cannot ask ({why})")),
+            Err(e) => Err(format!("{label} {id}: {e:?}")),
+        }
+    }
 }

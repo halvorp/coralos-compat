@@ -171,11 +171,25 @@ impl<U: GuestUi> MacPpc<U> {
                 let args = match self.arg_values(5, regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("StandardAlert: {e}")) };
                 match self.standard_alert(&args) { Ok(None) => GlueOutcome::Idle, Ok(Some(e)) => { regs[3] = e; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }
             }
+            Native::Alert(kind) => {
+                let (id, filter) = (a(0) as u16 as i16, a(1));
+                match self.classic_alert(kind, id, filter) {
+                    Ok(None) => GlueOutcome::Idle,
+                    Ok(Some(item)) => { regs[3] = item; GlueOutcome::Return }
+                    Err(e) => GlueOutcome::Refused(e),
+                }
+            }
             Native::ModalDialog => {
                 // filterProc, VAR itemHit. The shared handler returns a queued hit or asks to block; a blocked call parks the CPU
                 // ON the call and the run loop retries it once the front dialog has a hit (`Mac::modal_ready`).
+                // A non-NIL filterProc is a guest UPP callback that the 68k trap bridge cannot invoke on a detached CPU; log it
+                // and run standard modal filtering (same rule as StandardAlert).
+                let filter = a(0);
+                if filter != 0 {
+                    self.mac.log.push(format!("[dialog] ModalDialog: filterProc {filter:#x} is a guest callback and is not called"));
+                }
                 let Some(op) = heirloom_mac68k_engine::mixed::trap_opcode("ModalDialog") else { return GlueOutcome::Refused("ModalDialog has no trap word".into()) };
-                let r = self.mac.pascal_call(op, &[a(0), a(1)]);
+                let r = self.mac.pascal_call(op, &[0, a(1)]);
                 if matches!(r, Ok(rr) if rr.blocked) {
                     self.rt.wait_dialog = true;
                     self.mac.log.push("[cfm] ModalDialog: no item hit yet, the caller waits".into());
