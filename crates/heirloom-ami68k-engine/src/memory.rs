@@ -17,6 +17,8 @@ pub const LVO_PERMIT: i32 = -138;
 pub const LVO_ALLOC_MEM: i32 = -198;
 pub const LVO_FREE_MEM: i32 = -210;
 pub const LVO_AVAIL_MEM: i32 = -216;
+pub const LVO_ALLOC_ENTRY: i32 = -222;
+pub const LVO_FREE_ENTRY: i32 = -228;
 pub const LVO_SET_SIGNAL: i32 = -306;
 pub const LVO_COPY_MEM: i32 = -624;
 pub const LVO_ALLOC_VEC: i32 = -684;
@@ -44,6 +46,65 @@ pub fn free_mem<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
     let (at, size) = (cpu.areg(1), cpu.dreg(0));
     if at != 0 { a.heap.free(at, size).map_err(|e| Refusal(format!("FreeMem: {e}")))?; }
     Ok(format!("[exec] FreeMem {at:#x} size={size}"))
+}
+
+/// AllocEntry(a0 = struct MemList *entry) -> d0 = new MemList*, or (0x80000000 | failed_reqs) on failure (exec/memory.h).
+pub fn alloc_entry<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let src = cpu.areg(0);
+    let (res, count) = alloc_entry_list(a, src)?;
+    cpu.set_d0(res);
+    Ok(format!("[exec] AllocEntry count={count} -> {res:#x}"))
+}
+
+fn alloc_entry_list<U: GuestUi>(a: &mut Amiga<U>, src: u32) -> Result<(u32, u32), Refusal> {
+    let count = a.mem.read_u16(src + 14).map_err(Refusal::mem("AllocEntry.ml_NumEntries"))? as u32;
+    let list_size = 16 + count * 8;
+    let Some(dst) = a.heap.alloc(list_size) else {
+        return Ok((0x8000_0000, count));
+    };
+    zero(a, dst, list_size)?;
+    a.mem.write_u16(dst + 14, count as u16).map_err(Refusal::mem("AllocEntry.dst.ml_NumEntries"))?;
+    let mut allocated: alloc::vec::Vec<(u32, u32)> = alloc::vec::Vec::new();
+    for i in 0..count {
+        let reqs = a.mem.read_u32(src + 16 + i * 8).map_err(Refusal::mem("AllocEntry.meu_Reqs"))?;
+        let len = a.mem.read_u32(src + 16 + i * 8 + 4).map_err(Refusal::mem("AllocEntry.me_Length"))?;
+        let blk = if len == 0 {
+            0
+        } else {
+            let Some(p) = a.heap.alloc(len) else {
+                for (p2, l2) in allocated { let _ = a.heap.free(p2, l2); }
+                let _ = a.heap.free(dst, list_size);
+                return Ok((0x8000_0000 | reqs, count));
+            };
+            if reqs & MEMF_CLEAR != 0 { zero(a, p, len)?; }
+            allocated.push((p, len));
+            p
+        };
+        a.mem.write_u32(dst + 16 + i * 8, blk).map_err(Refusal::mem("AllocEntry.dst.meu_Addr"))?;
+        a.mem.write_u32(dst + 16 + i * 8 + 4, len).map_err(Refusal::mem("AllocEntry.dst.me_Length"))?;
+    }
+    Ok((dst, count))
+}
+
+/// FreeEntry(a0 = struct MemList *entry): frees each entry block then the MemList itself.
+pub fn free_entry<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let ml = cpu.areg(0);
+    let count = free_entry_list(a, ml)?;
+    Ok(format!("[exec] FreeEntry {ml:#x} count={count}"))
+}
+
+fn free_entry_list<U: GuestUi>(a: &mut Amiga<U>, ml: u32) -> Result<u32, Refusal> {
+    if ml == 0 { return Ok(0); }
+    let count = a.mem.read_u16(ml + 14).map_err(Refusal::mem("FreeEntry.ml_NumEntries"))? as u32;
+    for i in 0..count {
+        let blk = a.mem.read_u32(ml + 16 + i * 8).map_err(Refusal::mem("FreeEntry.meu_Addr"))?;
+        let len = a.mem.read_u32(ml + 16 + i * 8 + 4).map_err(Refusal::mem("FreeEntry.me_Length"))?;
+        if blk != 0 && len != 0 {
+            a.heap.free(blk, len).map_err(|e| Refusal(format!("FreeEntry entry {i}: {e}")))?;
+        }
+    }
+    a.heap.free(ml, 16 + count * 8).map_err(|e| Refusal(format!("FreeEntry header: {e}")))?;
+    Ok(count)
 }
 
 /// A zeroed-or-not AllocVec block (size word in front) for host code that makes what the guest later FreeVec()s; 0 when out of memory.
@@ -240,4 +301,35 @@ pub fn delete_pool<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String
     for (at, size) in blocks { a.heap.free(at, size).map_err(|e| Refusal(format!("DeletePool: {e}")))?; }
     a.heap.free(pool, POOL_HANDLE_SIZE).map_err(|e| Refusal(format!("DeletePool: {e}")))?;
     Ok(format!("[exec] DeletePool {pool:#x} ({n} blocks returned)"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heirloom_ui_abi::RecordingGuestUi;
+
+    #[test]
+    fn alloc_entry_and_free_entry_allocate_clear_and_reclaim_all_blocks() {
+        let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+        let req_list = a.heap.alloc(16 + 2 * 8).unwrap();
+        a.mem.write_u16(req_list + 14, 2).unwrap();
+        a.mem.write_u32(req_list + 16, MEMF_CLEAR).unwrap();
+        a.mem.write_u32(req_list + 20, 64).unwrap();
+        a.mem.write_u32(req_list + 24, 0).unwrap();
+        a.mem.write_u32(req_list + 28, 32).unwrap();
+        let free_before = a.heap.available(false);
+        let (res, count) = alloc_entry_list(&mut a, req_list).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(res & 0x8000_0000, 0, "AllocEntry succeeded");
+        let p0 = a.mem.read_u32(res + 16).unwrap();
+        let p1 = a.mem.read_u32(res + 24).unwrap();
+        assert!(p0 != 0 && p1 != 0 && p0 != p1);
+        assert_eq!(free_entry_list(&mut a, res).unwrap(), 2);
+        assert_eq!(a.heap.available(false), free_before, "FreeEntry reclaimed every byte");
+        // NEGATIVE CONTROL: absurd size returns failure bit 31 set with reqs, leaving heap intact.
+        a.mem.write_u32(req_list + 20, 0x7FFF_0000).unwrap();
+        let (oom, _) = alloc_entry_list(&mut a, req_list).unwrap();
+        assert_eq!(oom, 0x8000_0000 | MEMF_CLEAR);
+        assert_eq!(a.heap.available(false), free_before);
+    }
 }

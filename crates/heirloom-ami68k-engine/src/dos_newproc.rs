@@ -159,7 +159,12 @@ fn build<U: GuestUi>(a: &mut Amiga<U>, own: &mut ProcOwn, s: &Spec) -> Result<u3
     let m = Refusal::mem;
     if s.seglist == 0 && s.entry == 0 { return Err(Fail::Dos(ERROR_REQUIRED_ARG_MISSING)); }
     if s.seglist != 0 && !a.fs.segs.contains_key(&s.seglist) {
-        return Err(Fail::Refused(Refusal(format!("CreateNewProc: NP_Seglist {:#x} is not a seglist LoadSeg returned", s.seglist << 2))));
+        // Guest-built synthetic seglists (e.g. SAS/C cback.o detaching into CreateProc) are valid when the caller
+        // retains ownership (`NP_FreeSeglist = FALSE`) and the BPTR points into readable guest memory.
+        let synthetic_ok = !s.free_seglist && a.mem.read_u32(s.seglist << 2).is_ok() && a.mem.read_u16((s.seglist << 2) + 4).is_ok();
+        if !synthetic_ok {
+            return Err(Fail::Refused(Refusal(format!("CreateNewProc: NP_Seglist {:#x} is not a seglist LoadSeg returned", s.seglist << 2))));
+        }
     }
     let parent = a.sched.cur;
     let entry = if s.entry != 0 { s.entry } else { (s.seglist << 2) + 4 };

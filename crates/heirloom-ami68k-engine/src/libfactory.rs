@@ -20,6 +20,7 @@ pub fn library<U: GuestUi>(name: &'static str, base: u32) -> LibraryBuilder<U> {
         "commodities.library" => crate::commodities::register(b),
         "timer.device" => crate::timer::register(b),
         "aros.library" => crate::aros::register(b), // version 41: posixc.library asks for it
+        "cybergraphics.library" => b.named("IsCyberModeID", |_, c| { c.set_d0(0); Ok("[cybergraphics] IsCyberModeID -> FALSE".into()) }),
         _ => b,
     }
 }

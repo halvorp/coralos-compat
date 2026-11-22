@@ -65,7 +65,25 @@ pub fn unlock_pub_screen<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<
 }
 
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
-    b.named("LockPubScreenList", lock_pub_screen_list::<U>).named("UnlockPubScreenList", unlock_pub_screen_list::<U>).named("LockIBase", lock_ibase::<U>).named("UnlockIBase", unlock_ibase::<U>).named("ScreenToFront", |a, c| screen_depth(a, c, "ScreenToFront")).named("ScreenToBack", |a, c| screen_depth(a, c, "ScreenToBack")).named("QueryOverscan", query_overscan::<U>)
+    b.named("LockPubScreenList", lock_pub_screen_list::<U>)
+        .named("UnlockPubScreenList", unlock_pub_screen_list::<U>)
+        .named("LockIBase", lock_ibase::<U>)
+        .named("UnlockIBase", unlock_ibase::<U>)
+        .named("ScreenToFront", |a, c| screen_depth(a, c, "ScreenToFront"))
+        .named("ScreenToBack", |a, c| screen_depth(a, c, "ScreenToBack"))
+        .named("WBenchToFront", |_, c| { c.set_d0(1); Ok("[intuition] WBenchToFront -> TRUE".into()) })
+        .named("WBenchToBack", |_, c| { c.set_d0(1); Ok("[intuition] WBenchToBack -> TRUE".into()) })
+        .named("CurrentTime", current_time::<U>)
+        .named("QueryOverscan", query_overscan::<U>)
+}
+
+/// CurrentTime(a0 = ULONG* seconds, a1 = ULONG* micros): the engine's virtual clock, matching timer.device/GetSysTime.
+fn current_time<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (secs_ptr, micros_ptr) = (cpu.areg(0), cpu.areg(1));
+    let (s, us) = ((a.clock_us / 1_000_000) as u32, (a.clock_us % 1_000_000) as u32);
+    if secs_ptr != 0 { a.mem.write_u32(secs_ptr, s).map_err(Refusal::mem("CurrentTime.seconds"))?; }
+    if micros_ptr != 0 { a.mem.write_u32(micros_ptr, us).map_err(Refusal::mem("CurrentTime.micros"))?; }
+    Ok(format!("[intuition] CurrentTime -> {s}.{us:06}"))
 }
 
 /// QueryOverscan(a0 = displayid, a1 = Rectangle*, d0.w = oscantype) -> TRUE when the mode exists and the type is known

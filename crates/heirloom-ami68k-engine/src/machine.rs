@@ -153,6 +153,8 @@ impl<U: GuestUi> Amiga<U> {
             .func(exec::LVO_ALERT, "Alert", exec::alert::<U>)
             .func(memory::LVO_ALLOC_MEM, "AllocMem", memory::alloc_mem::<U>)
             .func(memory::LVO_FREE_MEM, "FreeMem", memory::free_mem::<U>)
+            .func(memory::LVO_ALLOC_ENTRY, "AllocEntry", memory::alloc_entry::<U>)
+            .func(memory::LVO_FREE_ENTRY, "FreeEntry", memory::free_entry::<U>)
             .func(memory::LVO_ALLOC_VEC, "AllocVec", memory::alloc_vec::<U>)
             .func(memory::LVO_FREE_VEC, "FreeVec", memory::free_vec::<U>)
             .func(memory::LVO_AVAIL_MEM, "AvailMem", memory::avail_mem::<U>)
