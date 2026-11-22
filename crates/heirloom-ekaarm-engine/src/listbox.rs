@@ -128,8 +128,12 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let refuse = |m: String| NativeOutcome::Refused(format!("NEXT-NEEDED avkon {name}: {m}"));
     let ret = |p: &mut Process, r: Result<u32, String>| match r { Ok(v) => { p.cpu.regs[0] = v; NativeOutcome::Return } Err(m) => refuse(m) };
     Some(match name {
-        "_ZN29CAknDoubleGraphicStyleListBoxC1Ev" | "_ZN29CAknDoubleGraphicStyleListBoxC2Ev" => { let r = p.list_construct(r0); ret(p, r.map(|_| r0)) }
-        "_ZN29CAknDoubleGraphicStyleListBoxD1Ev" | "_ZN29CAknDoubleGraphicStyleListBoxD0Ev" => {
+        "_ZN29CAknDoubleGraphicStyleListBoxC1Ev" | "_ZN29CAknDoubleGraphicStyleListBoxC2Ev"
+        | "_ZN29CAknSingleGraphicStyleListBoxC1Ev" | "_ZN29CAknSingleGraphicStyleListBoxC2Ev"
+        | "_ZN22CAknSingleStyleListBoxC1Ev" | "_ZN22CAknSingleStyleListBoxC2Ev" => { let r = p.list_construct(r0); ret(p, r.map(|_| r0)) }
+        "_ZN29CAknDoubleGraphicStyleListBoxD1Ev" | "_ZN29CAknDoubleGraphicStyleListBoxD0Ev"
+        | "_ZN29CAknSingleGraphicStyleListBoxD1Ev" | "_ZN29CAknSingleGraphicStyleListBoxD0Ev"
+        | "_ZN22CAknSingleStyleListBoxD1Ev" | "_ZN22CAknSingleStyleListBoxD0Ev" => {
             p.list_destroy(r0);
             if name.ends_with("D0Ev") { if let Some(h) = p.heap.as_mut() { let _ = h.free(r0); } }
             NativeOutcome::Return
@@ -137,17 +141,29 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // The base class's: CCoeControl's own (the list box adds nothing to it yet).
         "_ZN11CEikListBox19SetContainerWindowLERK11CCoeControl" => return crate::control::native(p, "_ZN11CCoeControl19SetContainerWindowLERKS_"),
         "_ZN24CEikFormattedCellListBox10ConstructLEPK11CCoeControli" => { let r = p.list_construct_l(r0, r2); ret(p, r.map(|_| 0)) }
+        "_ZN24CEikFormattedCellListBox22ConstructFromResourceLER15TResourceReader"
+        | "_ZN17CEikColumnListBox22ConstructFromResourceLER15TResourceReader" => {
+            let r = crate::cone::read_resource_reader(p, r1)
+                .and_then(|bytes| {
+                    // LISTBOX resource (eikon.rh): BYTE version, WORD flags (or flags in first word).
+                    let flags = if bytes.len() >= 3 { u16::from_le_bytes([bytes[1], bytes[2]]) as u32 } else { 0 };
+                    p.list_construct_l(r0, flags)
+                });
+            ret(p, r.map(|_| 0))
+        }
         "_ZN11CEikListBox9ActivateLEv" => {
             let r = match crate::control::native(p, "_ZN11CCoeControl9ActivateLEv") { Some(NativeOutcome::Return) => Ok(()), Some(NativeOutcome::Refused(m)) => Err(m), _ => Err(String::from("CCoeControl::ActivateL is not implemented")) };
             let r = r.and_then(|_| { p.list_state(r0)?.activated = true; p.list_sync(r0) });
             match r { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) }
         }
         // CEikTextListBox::Model() const returns the CTextListBoxModel: iModel is its MListBoxModel base at +4.
-        "_ZNK15CEikTextListBox5ModelEv" | "_ZNK24CEikFormattedCellListBox5ModelEv" => { let r = p.rd(r0 + LB_I_MODEL).map(|m| m - 4); ret(p, r) }
+        "_ZNK15CEikTextListBox5ModelEv" | "_ZNK24CEikFormattedCellListBox5ModelEv" | "_ZNK17CEikColumnListBox5ModelEv" => { let r = p.rd(r0 + LB_I_MODEL).map(|m| m - 4); ret(p, r) }
         // CAknDoubleGraphicStyleListBox::SizeChanged(): the real one lays the cells out from the CDL `list_double_graphic_pane` data (item
         // height, sub-cell sizes and positions). Here the control's new rectangle reaches the host and nothing else: the host list has its
         // own row height and no sub-cell geometry. DELETE WHEN the list is drawn from the guest's cell layout (listdata.rs).
-        "_ZN29CAknDoubleGraphicStyleListBox11SizeChangedEv" => { let r = p.list_size_changed(r0); ret(p, r.map(|_| 0)) }
+        "_ZN29CAknDoubleGraphicStyleListBox11SizeChangedEv"
+        | "_ZN29CAknSingleGraphicStyleListBox11SizeChangedEv"
+        | "_ZN22CAknSingleStyleListBox11SizeChangedEv" => { let r = p.list_size_changed(r0); ret(p, r.map(|_| 0)) }
         "_ZN11CEikListBox14SetItemHeightLEi" => { let r = p.list_set_item_height(r0, r1); ret(p, r.map(|_| 0)) }
         // CListItemDrawer::ItemCellSize() const: a TSize returned through r0 (r1 = the drawer): iItemCellSize.
         "_ZNK15CListItemDrawer12ItemCellSizeEv" => {
@@ -170,7 +186,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let r = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).and_then(|t| { p.log.push(format!("[list] empty text: \"{t}\"")); p.obj_set(r0, HostObj::ListView(t)) });
             ret(p, r.map(|_| 0))
         }
-        "_ZNK24CEikFormattedCellListBox10ItemDrawerEv" => { let r = p.rd(r0 + LB_I_DRAWER); ret(p, r) }
+        "_ZNK24CEikFormattedCellListBox10ItemDrawerEv" | "_ZNK17CEikColumnListBox10ItemDrawerEv" => { let r = p.rd(r0 + LB_I_DRAWER); ret(p, r) }
         "_ZN11CEikListBox21CreateScrollBarFrameLEi" => { let r = p.list_create_scroll_frame(r0); ret(p, r.map(|_| 0)) }
         "_ZN11CEikListBox14ScrollBarFrameEv" => { let r = p.rd(r0 + LB_I_SB_FRAME); ret(p, r) }
         "_ZN11CEikListBox18SetListBoxObserverEP19MEikListBoxObserver" => { let r = p.wr(r0 + LB_I_OBSERVER, r1); ret(p, r.map(|_| 0)) }
@@ -179,6 +195,31 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // CEikListBox::UpdateScrollBarsL(): sizes the guest's scroll bar thumbs. The host keeps its own scroll bar over the List control, so this
         // is a recorded no-op. DELETE WHEN the host's List control takes its scroll extent from the guest's scroll bar frame.
         "_ZN11CEikListBox17UpdateScrollBarsLEv" => ret(p, Ok(0)),
+        // TSize MinimumSize(): sret TSize in r0, this in r1. Return iSize when set, else the current client area
+        // (Avkon list boxes fill their container's client pane when queried before SetRect).
+        "_ZN29CAknDoubleGraphicStyleListBox11MinimumSizeEv"
+        | "_ZN29CAknSingleGraphicStyleListBox11MinimumSizeEv"
+        | "_ZN22CAknSingleStyleListBox11MinimumSizeEv" => {
+            let r = p.rd(r1 + CTRL_I_SIZE)
+                .and_then(|w| p.rd(r1 + CTRL_I_SIZE + 4).map(|h| (w, h)))
+                .and_then(|(mut w, mut h)| {
+                    if w == 0 || h == 0 {
+                        let (cw, ch) = match crate::avkonlayout::client_rect(p, false) {
+                            Some(Ok(rc)) => ((rc.x1 - rc.x0).max(0) as u32, (rc.y1 - rc.y0).max(0) as u32),
+                            _ => (crate::cone::S60_5TH_APP_RECT.width as u32, crate::cone::S60_5TH_APP_RECT.height as u32),
+                        };
+                        if w == 0 { w = cw; }
+                        if h == 0 { h = ch; }
+                    }
+                    p.wr(r0, w)?;
+                    p.wr(r0 + 4, h)
+                });
+            ret(p, r.map(|_| r0))
+        }
+        // FocusChanged(TDrawNow): host tracks focus on the projected List control.
+        "_ZN24CEikFormattedCellListBox12FocusChangedE8TDrawNow"
+        | "_ZN11CEikListBox12FocusChangedE8TDrawNow"
+        | "_ZN11CCoeControl12FocusChangedE8TDrawNow" => NativeOutcome::Return,
         _ => return None,
     })
 }

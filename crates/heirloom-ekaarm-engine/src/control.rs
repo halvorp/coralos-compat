@@ -30,7 +30,12 @@ const INH_HANDLE_RESOURCE_CHANGE: &[&str] = &["_ZN11CCoeControl20HandleResourceC
 pub const SLOT_FOCUS_CHANGED: u32 = 26;
 const INH_FOCUS_CHANGED: &[&str] = &["_ZN11CCoeControl12FocusChangedE8TDrawNow", "_ZN24CEikFormattedCellListBox12FocusChangedE8TDrawNow"];
 const INH_ACTIVATE: &[&str] = &["_ZN11CCoeControl9ActivateLEv", "_ZN11CEikListBox9ActivateLEv"];
-const INH_SIZE_CHANGED: &[&str] = &["_ZN11CCoeControl11SizeChangedEv", "_ZN29CAknDoubleGraphicStyleListBox11SizeChangedEv"];
+const INH_SIZE_CHANGED: &[&str] = &[
+    "_ZN11CCoeControl11SizeChangedEv",
+    "_ZN29CAknDoubleGraphicStyleListBox11SizeChangedEv",
+    "_ZN29CAknSingleGraphicStyleListBox11SizeChangedEv",
+    "_ZN22CAknSingleStyleListBox11SizeChangedEv",
+];
 const INH_POSITION_CHANGED: &[&str] = &["_ZN11CCoeControl15PositionChangedEv"];
 const INH_COUNT: &[&str] = &["_ZNK11CCoeControl21CountComponentControlsEv", "_ZNK23AknListBoxLinesTemplateI24CEikFormattedCellListBoxE22CountComponentControlsEv"];
 const INH_COMPONENT: &[&str] = &["_ZNK11CCoeControl16ComponentControlEi", "_ZNK23AknListBoxLinesTemplateI24CEikFormattedCellListBoxE16ComponentControlEi"];
@@ -225,6 +230,17 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             }
             match p.call_chain(calls, 0) { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) }
         }
+        // void CCoeControl::SetExtent(const TPoint& aPosition, const TSize& aSize)
+        "_ZN11CCoeControl9SetExtentERK6TPointRK5TSize" => {
+            let r = (|| -> Result<(), String> {
+                let x = p.rd(r1)? as i32;
+                let y = p.rd(r1.wrapping_add(4))? as i32;
+                let w = p.rd(r2)? as i32;
+                let h = p.rd(r2.wrapping_add(4))? as i32;
+                p.control_set_extent(this, x, y, w, h)
+            })();
+            match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) }
+        }
         // TRect Rect() const: (position, position + size), through the hidden pointer in r0 (this in r1).
         "_ZNK11CCoeControl4RectEv" => {
             let rd = |p: &Process, o: u32| p.mem.vm.read_u32(r1.wrapping_add(o)).map(|v| v as i32);
@@ -244,6 +260,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // The base implementations of SizeChanged() and PositionChanged() are empty (coecntrl.cpp): a control that does not override them
         // has nothing to update. (Deliberate no-op: it is the library's own behaviour, not a stand-in.)
         "_ZN11CCoeControl11SizeChangedEv" | "_ZN11CCoeControl15PositionChangedEv" => NativeOutcome::Return,
+        // ~CCoeControl(): drop any host state associated with this control.
+        "_ZN11CCoeControlD1Ev" | "_ZN11CCoeControlD2Ev" => { p.obj_remove(this); NativeOutcome::Return }
         // A control with no components (the base implementations of the two virtuals).
         "_ZNK11CCoeControl21CountComponentControlsEv" => { p.cpu.regs[0] = 0; NativeOutcome::Return }
         _ => return None,

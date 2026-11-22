@@ -125,8 +125,10 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let r = p.rd(r1).and_then(|w| p.rd(r1 + 4).map(|h| (w, h))).and_then(|(w, h)| { p.wr(r0 + crate::listbox::DRAWER_I_CELL_SIZE, w)?; p.wr(r0 + crate::listbox::DRAWER_I_CELL_SIZE + 4, h) });
             ret(p, r.map(|_| 0))
         }
-        // CFormattedCellListBoxItemDrawer::ColumnData() const / FormattedCellData() const: iData.
-        "_ZNK31CFormattedCellListBoxItemDrawer10ColumnDataEv" | "_ZNK31CFormattedCellListBoxItemDrawer17FormattedCellDataEv" => { let r = p.rd(r0 + DRAWER_I_DATA); ret(p, r) }
+        // CFormattedCellListBoxItemDrawer::ColumnData() const / FormattedCellData() const / CColumnListBoxItemDrawer::ColumnData(): iData.
+        "_ZNK31CFormattedCellListBoxItemDrawer10ColumnDataEv"
+        | "_ZNK31CFormattedCellListBoxItemDrawer17FormattedCellDataEv"
+        | "_ZNK24CColumnListBoxItemDrawer10ColumnDataEv" => { let r = p.rd(r0 + DRAWER_I_DATA); ret(p, r) }
         // SetSubCellSizeL(TInt aSubCell, TSize), SetSubCellPositionL(TInt, TPoint), SetSubCellIconSize(TInt, TSize): a 2-word value in r2, r3.
         "_ZN25CFormattedCellListBoxData15SetSubCellSizeLEi5TSize" => { let r = sub(p, &|s| s.size = Some((r2, r3))); ret(p, r) }
         "_ZN25CFormattedCellListBoxData19SetSubCellPositionLEi6TPoint" => { let r = sub(p, &|s| s.position = Some((r2, r3))); ret(p, r) }
@@ -139,7 +141,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         }
         "_ZN25CFormattedCellListBoxData15SetSubCellFontLEiPK5CFont" => { let f = p.cpu.regs[2]; let r = sub(p, &|s| s.font = Some(f)); ret(p, r) }
         "_ZN25CFormattedCellListBoxData22SetSubCellBaselinePosLEii" => { let r = sub(p, &|s| s.baseline = Some((r2, r3))); ret(p, r) }
-        "_ZN25CFormattedCellListBoxData12SetIconArrayEP9CArrayPtrI8CGulIconE" => { let r = p.cell_data(r0).map(|c| c.icon_array = r1).map(|_| 0); ret(p, r) }
+        "_ZN25CFormattedCellListBoxData12SetIconArrayEP9CArrayPtrI8CGulIconE"
+        | "_ZN18CColumnListBoxData12SetIconArrayEP9CArrayPtrI8CGulIconE" => { let r = p.cell_data(r0).map(|c| c.icon_array = r1).map(|_| 0); ret(p, r) }
         // MAknsControlContext* CFormattedCellListBoxData::SkinBackgroundContext() const: the list's background context (the guest calls
         // `SetRect` on it unconditionally). This engine has no skin server and the host draws the list, so the context only records the
         // rectangle the guest gives it. DELETE WHEN AknsUtils::SkinInstance serves a skin (then the context paints the list's background).
@@ -151,8 +154,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             });
             ret(p, r)
         }
-        "_ZNK25CFormattedCellListBoxData9IconArrayEv" => { let r = p.cell_data(r0).map(|c| c.icon_array); ret(p, r) }
-        "_ZN25CFormattedCellListBoxData14EnableMarqueeLEi" => { let r = p.cell_data(r0).map(|c| c.marquee = Some(r1 != 0)).map(|_| 0); ret(p, r) }
+        "_ZNK25CFormattedCellListBoxData9IconArrayEv" | "_ZNK18CColumnListBoxData9IconArrayEv" => { let r = p.cell_data(r0).map(|c| c.icon_array); ret(p, r) }
+        "_ZN25CFormattedCellListBoxData14EnableMarqueeLEi" | "_ZN18CColumnListBoxData14EnableMarqueeLEi" => { let r = p.cell_data(r0).map(|c| c.marquee = Some(r1 != 0)).map(|_| 0); ret(p, r) }
+        "_ZN18CColumnListBoxData16SetMarqueeParamsEiiii" | "_ZN25CFormattedCellListBoxData16SetMarqueeParamsEiiii" => NativeOutcome::Return,
         "_ZN25CFormattedCellListBoxData24SetSeparatorLinePositionE25TAknSeparatorLinePosition" => { let r = p.cell_data(r0).map(|c| c.separator_line = Some(r1)).map(|_| 0); ret(p, r) }
         // CEikScrollBarFrame (eikscrlb.h): recorded.
         "_ZN18CEikScrollBarFrame19SetTypeOfVScrollBarENS_14TScrollBarTypeE" => { let r = p.scroll_frame(r0).map(|c| c.vertical_type = Some(r1)).map(|_| 0); ret(p, r) }

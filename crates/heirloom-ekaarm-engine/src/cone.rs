@@ -37,7 +37,7 @@ pub fn app_caption(drive: &Drive, uid3: u32) -> Result<String, String> {
         return Err(format!("{}: the registration names no localisable resource file, so there is no caption to read", reg.path));
     }
     let id = reg.localisable_id;
-    let loc_path = format!("{}.rsc", reg.localisable_file);
+    let loc_path = crate::resource::resolve_rsc_path(drive, &reg.localisable_file);
     let loc_bytes = drive.read(&loc_path).map_err(|e| format!("localisable resource file {loc_path} (from {}): {e:?}", reg.path))?;
     let loc = RscFile::parse(loc_bytes).map_err(|e| format!("{loc_path}: {e:?}"))?;
     let info = loc.resource(id).map_err(|e| format!("{loc_path}: resource {id:#x}: {e:?}"))?;
@@ -97,9 +97,44 @@ impl Process {
     }
 }
 
+/// Read the raw resource bytes held by a `TResourceReader` built by `CCoeEnv::CreateResourceReaderLC` (`+0 = ptr, +4 = end`).
+pub(crate) fn read_resource_reader(p: &Process, reader_addr: u32) -> Result<alloc::vec::Vec<u8>, String> {
+    let start = p.mem.vm.read_u32(reader_addr).map_err(|_| format!("TResourceReader at {reader_addr:#x} is unreadable"))?;
+    let end = p.mem.vm.read_u32(reader_addr.wrapping_add(4)).map_err(|_| format!("TResourceReader at {reader_addr:#x}+4 is unreadable"))?;
+    if end < start || end - start > 0x10_0000 {
+        return Err(format!("TResourceReader at {reader_addr:#x} has invalid span {start:#x}..{end:#x}"));
+    }
+    let mut buf = alloc::vec![0u8; (end - start) as usize];
+    if !buf.is_empty() {
+        p.mem.vm.read_bytes(start, &mut buf).map_err(|_| format!("TResourceReader buffer at {start:#x} is unreadable"))?;
+    }
+    Ok(buf)
+}
+
 /// The natives of this module; `None` = not ours.
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     Some(match name {
+        // void CCoeEnv::CreateResourceReaderLC(TResourceReader& aReader, TInt aResourceId) const (coemain.h):
+        // allocates a guest buffer with the resource bytes, pushes it on the cleanup stack, and points aReader at it.
+        "_ZNK7CCoeEnv22CreateResourceReaderLCER15TResourceReaderi" => {
+            let (reader, res_id) = (p.cpu.regs[1], p.cpu.regs[2]);
+            let bytes = match p.resource(res_id) {
+                Ok(b) => b,
+                Err(m) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}"))),
+            };
+            let len = bytes.len() as u32;
+            let Some(buf) = p.alloc_zeroed(len.max(1)) else {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: out of heap for resource {res_id:#x}")));
+            };
+            if !bytes.is_empty() && p.mem.vm.write_bytes(buf, &bytes).is_err() {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: buffer at {buf:#x} is unwritable")));
+            }
+            if p.mem.vm.write_u32(reader, buf).is_err() || p.mem.vm.write_u32(reader.wrapping_add(4), buf.wrapping_add(len)).is_err() {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: TResourceReader at {reader:#x} is unwritable")));
+            }
+            p.nat.cleanup.push(crate::cleanup::CleanupItem::Any(buf));
+            NativeOutcome::Return
+        }
         // CCoeEnv::Static(): the process-wide environment (coemain.h `static inline CCoeEnv* Static()`), the singleton.
         "_ZN7CCoeEnv6StaticEv" => match p.coe_env() {
             Ok(e) => { p.cpu.regs[0] = e; NativeOutcome::Return }
@@ -117,6 +152,24 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let this = p.cpu.regs[0];
             if p.mem.vm.write_u32(this, APA_SESSION_PLACEHOLDER_HANDLE).is_err() {
                 return Some(NativeOutcome::Refused(format!("NEXT-NEEDED apgrfx/25 {name}: session object at {this:#x} is unwritable")));
+            }
+            p.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        // RApaLsSession::Close() (apgcli.h): release the session handle.
+        "_ZN13RApaLsSession5CloseEv" => {
+            let this = p.cpu.regs[0];
+            if p.mem.vm.write_u32(this, 0).is_err() {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED apgrfx {name}: session object at {this:#x} is unwritable")));
+            }
+            NativeOutcome::Return
+        }
+        // TInt RApaLsSession::ApplicationLanguage(TUid aAppUid, TLanguage& aLanguage) const (apgcli.h):
+        // report the engine's default locale (ELangEnglish = 1, e32lang.h).
+        "_ZNK13RApaLsSession19ApplicationLanguageE4TUidR9TLanguage" => {
+            let out_lang = p.cpu.regs[2];
+            if p.mem.vm.write_u32(out_lang, 1).is_err() {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED apgrfx {name}: language out-param at {out_lang:#x} is unwritable")));
             }
             p.cpu.regs[0] = 0;
             NativeOutcome::Return

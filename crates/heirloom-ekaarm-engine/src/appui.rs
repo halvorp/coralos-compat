@@ -1,6 +1,6 @@
 //! `CEikAppUi` / `CAknAppUi` natives that read or write the AppUi object's own fields (layout in `appstart`).
 use alloc::format;
-use crate::appstart::EIKAPPUI_I_DOCUMENT;
+use crate::appstart::{DOC_I_APPLICATION, EIKAPPUI_I_DOCUMENT};
 use crate::loader::Process;
 use crate::natives::NativeOutcome;
 
@@ -12,6 +12,13 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZNK9CEikAppUi8DocumentEv" => match p.mem.vm.read_u32(this.wrapping_add(EIKAPPUI_I_DOCUMENT)) {
             Ok(d) => { p.cpu.regs[0] = d; NativeOutcome::Return }
             Err(_) => NativeOutcome::Refused(format!("NEXT-NEEDED eikcore {name}: the AppUi at {this:#x} is unreadable")),
+        },
+        // CEikAppUi::Application() const (eikappui.h): returns iDocument->Application().
+        "_ZNK9CEikAppUi11ApplicationEv" => match p.mem.vm.read_u32(this.wrapping_add(EIKAPPUI_I_DOCUMENT))
+            .and_then(|doc| p.mem.vm.read_u32(doc.wrapping_add(DOC_I_APPLICATION)))
+        {
+            Ok(app) => { p.cpu.regs[0] = app; NativeOutcome::Return }
+            Err(_) => NativeOutcome::Refused(format!("NEXT-NEEDED eikcore {name}: AppUi/Document at {this:#x} is unreadable")),
         },
         // TRect CEikAppUi::ClientRect() const (eikappui.h): the application rect less the status pane and the CBA, returned through the
         // hidden pointer in r0 (this in r1). Once the layout data is loaded and the app switched its status pane layout this is the

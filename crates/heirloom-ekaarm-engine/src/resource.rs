@@ -21,7 +21,11 @@ pub struct Registration {
 /// The registration resource of the application whose UID3 is `uid3`.
 pub fn registration(drive: &Drive, uid3: u32) -> Result<Registration, String> {
     let names = drive.list(REG_DIR).map_err(|e| format!("no registration directory {REG_DIR} on the drive ({e:?})"))?;
-    for name in names.iter().filter(|n| n.to_ascii_lowercase().ends_with("_reg.rsc")) {
+    let lang_reg = format!("_reg.{ROM_LANGUAGE_EXT}");
+    for name in names.iter().filter(|n| {
+        let l = n.to_ascii_lowercase();
+        l.ends_with("_reg.rsc") || l.ends_with(&lang_reg)
+    }) {
         let path = format!("{REG_DIR}\\{name}");
         let bytes = drive.read(&path).map_err(|e| format!("{path}: {e:?}"))?;
         let reg = RscFile::parse(bytes).map_err(|e| format!("{path}: {e:?}"))?;
@@ -39,12 +43,22 @@ pub fn registration(drive: &Drive, uid3: u32) -> Result<Registration, String> {
         let localisable_id = r.long().map_err(field)?;
         return Ok(Registration { path, app_file, localisable_file, localisable_id });
     }
-    Err(format!("no *_reg.rsc under {REG_DIR} has UID3 {uid3:#010x}"))
+    Err(format!("no *_reg.rsc or *{lang_reg} under {REG_DIR} has UID3 {uid3:#010x}"))
+}
+
+/// Resolve a resource stem path (without extension) to its localised `.r01` file when present, else `.rsc`.
+pub(crate) fn resolve_rsc_path(drive: &Drive, stem_path: &str) -> String {
+    let loc = format!("{stem_path}.{ROM_LANGUAGE_EXT}");
+    if drive.exists_anywhere(&loc) {
+        return loc;
+    }
+    format!("{stem_path}.rsc")
 }
 
 /// Where the application's own resource file is: `CEikApplication::ResourceFileName()` (eikapp.h:51) defaults to
-/// `\resource\apps\<application file name>.rsc`. DELETE WHEN a corpus application overrides `ResourceFileName` (then call the
-/// virtual through the callback machine instead of deriving the default).
+/// `\resource\apps\<application file name>.rsc` (or its localised `.r01` twin when shipped without `.rsc`).
+/// DELETE WHEN a corpus application overrides `ResourceFileName` (then call the virtual through the callback machine instead of
+/// deriving the default).
 pub fn app_resource_path(drive: &Drive, uid3: u32) -> Result<String, String> {
     let reg = registration(drive, uid3)?;
     let file = reg.app_file.rsplit(['\\', '/']).next().unwrap_or("");
@@ -52,7 +66,7 @@ pub fn app_resource_path(drive: &Drive, uid3: u32) -> Result<String, String> {
     if stem.is_empty() {
         return Err(format!("{}: the registration names no application file", reg.path));
     }
-    Ok(format!("\\resource\\apps\\{stem}.rsc"))
+    Ok(resolve_rsc_path(drive, &format!("\\resource\\apps\\{stem}")))
 }
 
 impl Process {
@@ -129,5 +143,20 @@ fn index_rom_dir(drive: &Drive, dir: &str, index: &mut alloc::collections::BTree
                 index.entry(f.id_offset).or_insert(path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_rsc_path_prefers_r01_and_falls_back_to_rsc() {
+        let mut d = Drive::new();
+        d.put_file("\\resource\\apps\\app_a.r01", alloc::vec![1]).unwrap();
+        d.put_file("\\resource\\apps\\app_b.rsc", alloc::vec![2]).unwrap();
+        assert_eq!(resolve_rsc_path(&d, "\\resource\\apps\\app_a"), "\\resource\\apps\\app_a.r01");
+        // NEGATIVE CONTROL: when no .r01 exists, .rsc is chosen.
+        assert_eq!(resolve_rsc_path(&d, "\\resource\\apps\\app_b"), "\\resource\\apps\\app_b.rsc");
     }
 }

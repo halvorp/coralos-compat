@@ -21,6 +21,14 @@ fn resolve(session_path: &str, name: &str) -> String {
 }
 
 impl Process {
+    fn dict_open_empty(&mut self, path: String) -> Result<u32, String> {
+        let obj = self.alloc_zeroed(DICT_STORE_BYTES).ok_or_else(|| String::from("no guest heap"))?;
+        let vptr = self.build_vtable("CDictionaryFileStore", &slots_with_gaps(3, VTABLE))?;
+        self.mem.vm.write_u32(obj, vptr).map_err(|_| String::from("the store object is unwritable"))?;
+        self.obj_set(obj, HostObj::Dict(DictState { path, entries: Default::default() }))?;
+        Ok(obj)
+    }
+
     fn dict_open(&mut self, fs: u32, name_desc: u32, uid3: u32) -> Result<u32, String> {
         let name = desc::to_utf8(&desc::read16(self, name_desc)?);
         let session = self.fs_session(fs).map(|s| s.session_path.clone()).ok_or_else(|| format!("the RFs at {fs:#x} is not connected"))?;
@@ -37,12 +45,8 @@ impl Process {
         } else {
             drive.put_file(&path, alloc::vec::Vec::new()).map_err(|e| format!("{path}: {e:?}"))?;
         }
-        let obj = self.alloc_zeroed(DICT_STORE_BYTES).ok_or_else(|| String::from("no guest heap"))?;
-        let vptr = self.build_vtable("CDictionaryFileStore", &slots_with_gaps(3, VTABLE))?;
-        self.mem.vm.write_u32(obj, vptr).map_err(|_| String::from("the store object is unwritable"))?;
-        self.obj_set(obj, HostObj::Dict(DictState { path, entries: Default::default() }))?;
         let _ = uid3; // the store's identifying UID3 (a file-header check on reopen): nothing to check on an empty store
-        Ok(obj)
+        self.dict_open_empty(path)
     }
 }
 
@@ -51,6 +55,18 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let (r0, r1, r2) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2]);
     let refuse = |m: String| NativeOutcome::Refused(format!("NEXT-NEEDED estor {name}: {m}"));
     Some(match name {
+        // CDictionaryStore* CEikApplication::OpenIniFileLC(RFs& aFs) const (eikapp.h): opens the application's private .ini
+        // dictionary store and leaves it on the cleanup stack. Empty host dictionary when no binary store reader is present.
+        "_ZNK15CEikApplication13OpenIniFileLCER3RFs" => {
+            if p.fs_session(r1).is_none() {
+                return Some(refuse(format!("the RFs at {r1:#x} is not connected")));
+            }
+            let path = format!("c:\\private\\{:08x}\\app.ini", p.uid3);
+            match p.dict_open_empty(path) {
+                Ok(obj) => { p.nat.cleanup.push(crate::cleanup::CleanupItem::Base(obj)); p.cpu.regs[0] = obj; NativeOutcome::Return }
+                Err(m) => refuse(m),
+            }
+        }
         // static CDictionaryFileStore* OpenLC(RFs&, const TDesC& aName, TUid aUid3): the store, left on the cleanup stack.
         "_ZN20CDictionaryFileStore6OpenLCER3RFsRK7TDesC164TUid" => match p.dict_open(r0, r1, r2) {
             Ok(obj) => { p.nat.cleanup.push(crate::cleanup::CleanupItem::Base(obj)); p.cpu.regs[0] = obj; NativeOutcome::Return }

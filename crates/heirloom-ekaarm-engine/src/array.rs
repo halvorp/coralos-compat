@@ -137,6 +137,18 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let refuse = |m: String| NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}"));
     let done = |p: &mut Process, r: Result<(), String>, ret: u32| match r { Ok(()) => { p.cpu.regs[0] = ret; NativeOutcome::Return } Err(m) => refuse(m) };
     Some(match name {
+        // RArrayBase (e32cmn.h): iCount(0), iEntries(4), iEntrySize(8), iKeyOffset(12), iAllocated(16), iGranularity(20).
+        "_ZN10RArrayBaseC1Ei" | "_ZN10RArrayBaseC2Ei" => {
+            let r = p.wr(r0, 0).and_then(|_| p.wr(r0 + 4, 0)).and_then(|_| p.wr(r0 + 8, r1))
+                .and_then(|_| p.wr(r0 + 12, 0)).and_then(|_| p.wr(r0 + 16, 0)).and_then(|_| p.wr(r0 + 20, 8));
+            done(p, r, r0)
+        }
+        "_ZNK10RArrayBase5CountEv" => match p.rd(r0) { Ok(c) => { p.cpu.regs[0] = c; NativeOutcome::Return } Err(m) => refuse(m) },
+        "_ZN10RArrayBase5CloseEv" => {
+            if let Ok(ptr) = p.rd(r0 + 4) { if ptr != 0 { if let Some(h) = p.heap.as_mut() { let _ = h.free(ptr); } } }
+            let r = p.wr(r0, 0).and_then(|_| p.wr(r0 + 4, 0)).and_then(|_| p.wr(r0 + 16, 0));
+            done(p, r, 0)
+        }
         "_ZN8CBufFlat4NewLEi" | "_ZN7CBufSeg4NewLEi" => match p.buf_flat_new(r0) { Ok(b) => { p.cpu.regs[0] = b; NativeOutcome::Return } Err(m) => refuse(m) },
         "_ZN13CArrayFixBaseC1EPFP8CBufBaseiEii" | "_ZN13CArrayFixBaseC2EPFP8CBufBaseiEii" => { let r = p.array_construct(r0, r1, r2, r3); done(p, r, r0) }
         "_ZNK13CArrayFixBase2AtEi" => match p.array_at(r0, r1 as i32) { Ok(a) => { p.cpu.regs[0] = a; NativeOutcome::Return } Err(m) => refuse(m) },

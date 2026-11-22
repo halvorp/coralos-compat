@@ -98,6 +98,21 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
     use crate::natives::NativeOutcome;
     let (this, r1) = (p.cpu.regs[0], p.cpu.regs[1]);
     Some(match name {
+        // TPtr8(TUint8* aBuf, TInt aLength, TInt aMaxLength) / TPtr16(TUint16*, TInt, TInt) (e32des8.h / e32des16.h).
+        "_ZN5TPtr8C1EPhii" | "_ZN5TPtr8C2EPhii" | "_ZN6TPtr16C1EPtii" | "_ZN6TPtr16C2EPtii" => {
+            let (buf, len, max) = (r1, p.cpu.regs[2], p.cpu.regs[3]);
+            let ok = p.mem.vm.write_u32(this, (DES_PTR << KSHIFT_DES_TYPE) | (len & LENGTH_MASK)).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), max).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(8), buf).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: descriptor at {this:#x} is unwritable")) }
+        }
+        // void TDes16::Zero() / void TDes8::Zero(): set length to 0 while preserving descriptor type bits.
+        "_ZN6TDes164ZeroEv" | "_ZN5TDes84ZeroEv" => {
+            let r = word(p, this, "its length word").and_then(|w0| {
+                p.mem.vm.write_u32(this, w0 & !LENGTH_MASK).map_err(|_| format!("descriptor at {this:#x}: length word is unwritable"))
+            });
+            match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
+        }
         // TDes16::Copy(const TDesC16& aDes) (e32des16.h): replace the contents; longer than the maximum length panics USER 11.
         "_ZN6TDes164CopyERK7TDesC16" => {
             let r = read16(p, r1).and_then(|text| write16(p, this, &text));

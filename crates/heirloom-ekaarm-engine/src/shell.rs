@@ -292,8 +292,15 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "CAknAppUiFactory::Cba" => { let r = p.shell_cba(); ret(p, r) }
         // CEikMenuBar* CAknView::MenuBar() const: iMenu.
         "_ZNK8CAknView7MenuBarEv" => ret(p, p.mem.vm.read_u32(r0 + crate::view::VIEW_I_MENU).map_err(|_| format!("the view at {r0:#x} is unreadable"))),
-        // MEikAppUiFactory::StatusPane() const
-        "CAknAppUiFactory::StatusPane" => { let r = p.shell_status_pane(); ret(p, r) }
+        // MEikAppUiFactory::StatusPane() const, CAknView::StatusPane() const, CAknAppUi::StatusPane()
+        "CAknAppUiFactory::StatusPane" | "_ZNK8CAknView10StatusPaneEv" | "_ZN9CAknAppUi10StatusPaneEv" => { let r = p.shell_status_pane(); ret(p, r) }
+        // TPaneCapabilities CEikStatusPaneBase::PaneCapabilities(TPaneId) const (eikspane.h):
+        // TPaneCapabilities holds one TInt bitmask: EIsPresent(1) | EIsInCurrentLayout(2) | EIsAppOwned(4).
+        "_ZNK18CEikStatusPaneBase16PaneCapabilitiesE4TUid" => {
+            let flags = if matches!(r1, PANE_TITLE | PANE_NAVI) { 0x7 } else { 0x0 };
+            p.cpu.regs[0] = flags;
+            NativeOutcome::Return
+        }
         // CCoeControl* CEikStatusPaneBase::ControlL(TPaneId) const: the TUid is one word.
         "_ZNK18CEikStatusPaneBase8ControlLE4TUid" => { let r = p.shell_pane_control(r1); ret(p, r) }
         // TInt CEikStatusPaneBase::CurrentLayoutResId() const
@@ -307,6 +314,14 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // CAknTitlePane::SetTextL(const TDesC&) and (const TDesC&, TBool aScroll)
         "_ZN13CAknTitlePane8SetTextLERK7TDesC16" | "_ZN13CAknTitlePane8SetTextLERK7TDesC16i" => {
             let r = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).and_then(|t| p.shell_set_title(t)).map(|_| r0);
+            ret(p, r)
+        }
+        // void CAknTitlePane::SetFromResourceL(TResourceReader& aReader) (akntitle.h): TITLE_PANE starts with LTEXT txt.
+        "_ZN13CAknTitlePane16SetFromResourceLER15TResourceReader" => {
+            let r = crate::cone::read_resource_reader(p, r1)
+                .and_then(|bytes| heirloom_fmt_rsc::Reader::new(&bytes).ltext().map_err(|e| format!("TITLE_PANE: {e:?}")))
+                .and_then(|t| if t.is_empty() { Ok(()) } else { p.shell_set_title(t) })
+                .map(|_| r0);
             ret(p, r)
         }
         _ => return None,

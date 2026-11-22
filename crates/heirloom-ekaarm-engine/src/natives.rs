@@ -159,6 +159,42 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             let ok = proc.mem.vm.write_u32(r0, r1 | DES_TYPE_EBUF << KSHIFT_DES_TYPE).is_ok() && proc.mem.vm.write_u32(r0.wrapping_add(4), r2).is_ok();
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: descriptor at {r0:#x} is unwritable")) }
         }
+        // TVersion(TInt aMajor, TInt aMinor, TInt aBuild): e32cmn.h layout is { TInt8 iMajor; TInt8 iMinor; TInt16 iBuild; }.
+        "_ZN8TVersionC1Eiii" | "_ZN8TVersionC2Eiii" => {
+            let major = proc.cpu.regs[1] as u8;
+            let minor = proc.cpu.regs[2] as u8;
+            let build = proc.cpu.regs[3] as u16;
+            let word = (major as u32) | ((minor as u32) << 8) | ((build as u32) << 16);
+            if proc.mem.vm.write_u32(r0, word).is_ok() {
+                NativeOutcome::Return
+            } else {
+                NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: TVersion at {r0:#x} is unwritable"))
+            }
+        }
+        // TFileName RProcess::FileName() const (e32std.h): ARM EABI returns TBuf<256> via sret pointer in r0.
+        "_ZNK8RProcess8FileNameEv" => {
+            const KMAX_FILE_NAME: u32 = 256;
+            let app_stem = proc.host.drive.as_ref()
+                .and_then(|d| crate::resource::registration(d, proc.uid3).ok())
+                .map(|r| r.app_file)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| String::from("app"));
+            let full = if app_stem.to_ascii_lowercase().ends_with(".exe") {
+                format!("c:\\sys\\bin\\{app_stem}")
+            } else {
+                format!("c:\\sys\\bin\\{app_stem}.exe")
+            };
+            let units: Vec<u16> = full.encode_utf16().collect();
+            let header_ok = proc.mem.vm.write_u32(r0, crate::desc::DES_BUF << crate::desc::KSHIFT_DES_TYPE).is_ok()
+                && proc.mem.vm.write_u32(r0.wrapping_add(4), KMAX_FILE_NAME).is_ok();
+            if !header_ok {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: sret TFileName at {r0:#x} is unwritable"));
+            }
+            match crate::desc::write16(proc, r0, &units) {
+                Ok(()) => NativeOutcome::Return,
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name}: {m}")),
+            }
+        }
         // RApaLsSession(): RSessionBase -> RHandleBase { iHandle } = 0 (e32std.h:3153, :4100), then apgcli.h:224 iExtension = 0: two zero words.
         "_ZN13RApaLsSessionC1Ev" => {
             let ok = proc.mem.vm.write_u32(r0, 0).is_ok() && proc.mem.vm.write_u32(r0.wrapping_add(4), 0).is_ok();
@@ -251,7 +287,7 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             proc.cpu.regs[0] = proc.alloc_zeroed(len).unwrap_or(0);
             NativeOutcome::Return
         }
-        "_ZN4User4FreeEPv" => {
+        "_ZN4User4FreeEPv" | "_ZdlPv" => {
             let addr = proc.cpu.regs[0];
             if addr == 0 {
                 proc.cpu.regs[0] = 0;

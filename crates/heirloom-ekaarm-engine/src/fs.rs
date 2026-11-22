@@ -44,11 +44,93 @@ impl Process {
     }
 }
 
+/// Offset of `iNameBuf` (`TBuf<256>`, 520 bytes) inside `TParse` (544 = 0x220 bytes total in `f32file.h`).
+const TPARSE_NAMEBUF_OFF: u32 = 0x18;
+const TPARSE_MAX_LEN: u32 = 256;
+
+fn tparse_slice(units: &[u16], part: &str) -> (usize, usize) {
+    let n = units.len();
+    let drive_end = if n >= 2 && units[1] == b':' as u16 { 2 } else { 0 };
+    let last_slash = units[drive_end..].iter().rposition(|&c| c == b'\\' as u16).map(|i| drive_end + i + 1);
+    let path_end = last_slash.unwrap_or(drive_end);
+    let dot = units[path_end..].iter().rposition(|&c| c == b'.' as u16).map(|i| path_end + i);
+    let name_end = dot.unwrap_or(n);
+    match part {
+        "drive" => (0, drive_end),
+        "path" => (drive_end, path_end),
+        "drive_and_path" => (0, path_end),
+        "name" => (path_end, name_end),
+        "ext" => (name_end, n),
+        "name_and_ext" => (path_end, n),
+        _ => (0, n),
+    }
+}
+
+fn tparse_write_ptrc(p: &mut Process, sret: u32, parse_this: u32, part: &str) -> Result<(), String> {
+    let buf_addr = parse_this.wrapping_add(TPARSE_NAMEBUF_OFF);
+    let units = crate::desc::read16(p, buf_addr)?;
+    let (start, end) = tparse_slice(&units, part);
+    let len = (end - start) as u32;
+    let ptr = buf_addr.wrapping_add(8).wrapping_add(start as u32 * 2);
+    let w0 = (crate::desc::DES_PTR_C << crate::desc::KSHIFT_DES_TYPE) | len;
+    p.mem.vm.write_u32(sret, w0).map_err(|_| format!("TPtrC16 at {sret:#x} is unwritable"))?;
+    p.mem.vm.write_u32(sret.wrapping_add(4), ptr).map_err(|_| format!("TPtrC16 at {sret:#x}+4 is unwritable"))?;
+    Ok(())
+}
+
+fn tparse_combine(name: &[u16], related: Option<&[u16]>, default: Option<&[u16]>) -> alloc::vec::Vec<u16> {
+    let pick = |part: &str| -> alloc::vec::Vec<u16> {
+        for src in [Some(name), related, default].into_iter().flatten() {
+            let (s, e) = tparse_slice(src, part);
+            if e > s { return src[s..e].to_vec(); }
+        }
+        alloc::vec::Vec::new()
+    };
+    let mut out = pick("drive");
+    out.extend(pick("path"));
+    out.extend(pick("name"));
+    out.extend(pick("ext"));
+    out
+}
+
 /// The natives of this module; `None` = not ours.
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
-    let (this, r1, r2) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2]);
+    let (this, r1, r2, r3) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2], p.cpu.regs[3]);
     let refuse = |m: String| NativeOutcome::Refused(format!("NEXT-NEEDED efsrv {name}: {m}"));
     Some(match name {
+        // TParse::TParse(): initialise the embedded TBuf<256> at +TPARSE_NAMEBUF_OFF.
+        "_ZN6TParseC1Ev" | "_ZN6TParseC2Ev" => {
+            let buf = this.wrapping_add(TPARSE_NAMEBUF_OFF);
+            let ok = p.mem.vm.write_u32(buf, crate::desc::DES_BUF << crate::desc::KSHIFT_DES_TYPE).is_ok()
+                && p.mem.vm.write_u32(buf.wrapping_add(4), TPARSE_MAX_LEN).is_ok();
+            if ok { NativeOutcome::Return } else { refuse(format!("TParse at {this:#x} is unwritable")) }
+        }
+        // TInt TParse::Set(const TDesC16& aName, const TDesC16* aRelated, const TDesC16* aDefault) & SetNoWild
+        "_ZN6TParse3SetERK7TDesC16PS1_S3_" | "_ZN6TParse9SetNoWildERK7TDesC16PS1_S3_" => {
+            let r = (|| -> Result<(), String> {
+                let n = crate::desc::read16(p, r1)?;
+                let rel = if r2 != 0 { Some(crate::desc::read16(p, r2)?) } else { None };
+                let def = if r3 != 0 { Some(crate::desc::read16(p, r3)?) } else { None };
+                let combined = tparse_combine(&n, rel.as_deref(), def.as_deref());
+                crate::desc::write16(p, this.wrapping_add(TPARSE_NAMEBUF_OFF), &combined)
+            })();
+            match r {
+                Ok(()) => { p.cpu.regs[0] = KERR_NONE as u32; NativeOutcome::Return }
+                Err(m) => refuse(m),
+            }
+        }
+        // const TDesC16& TParseBase::FullName() const: returns pointer to embedded TBuf<256>.
+        "_ZNK10TParseBase8FullNameEv" => {
+            p.cpu.regs[0] = this.wrapping_add(TPARSE_NAMEBUF_OFF);
+            NativeOutcome::Return
+        }
+        // TPtrC16 TParseBase::{Drive,Path,DriveAndPath,Name,Ext,NameAndExt}() const: ARM EABI sret in r0, this in r1.
+        "_ZNK10TParseBase5DriveEv" => match tparse_write_ptrc(p, this, r1, "drive") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
+        "_ZNK10TParseBase4PathEv" => match tparse_write_ptrc(p, this, r1, "path") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
+        "_ZNK10TParseBase12DriveAndPathEv" => match tparse_write_ptrc(p, this, r1, "drive_and_path") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
+        "_ZNK10TParseBase4NameEv" => match tparse_write_ptrc(p, this, r1, "name") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
+        "_ZNK10TParseBase3ExtEv" => match tparse_write_ptrc(p, this, r1, "ext") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
+        "_ZNK10TParseBase10NameAndExtEv" => match tparse_write_ptrc(p, this, r1, "name_and_ext") { Ok(()) => NativeOutcome::Return, Err(m) => refuse(m) },
         // TInt RFs::CreatePrivatePath(TDriveNumber aDrive) (f32file.h): creates `\private\<secure id>\` on the drive. The secure id of an
         // application is its UID3. KErrAlreadyExists when it is there. The directory is made in the in-memory drive only.
         "_ZN3RFs17CreatePrivatePathEi" => {
@@ -117,4 +199,31 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         }
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn u16s(s: &str) -> alloc::vec::Vec<u16> { s.encode_utf16().collect() }
+    fn s16(u: &[u16]) -> String { String::from_utf16_lossy(u) }
+
+    #[test]
+    fn tparse_splits_and_combines_symbian_paths() {
+        let p = u16s("c:\\sys\\bin\\putty.exe");
+        let part = |k| { let (a, b) = tparse_slice(&p, k); s16(&p[a..b]) };
+        assert_eq!(part("drive"), "c:");
+        assert_eq!(part("path"), "\\sys\\bin\\");
+        assert_eq!(part("drive_and_path"), "c:\\sys\\bin\\");
+        assert_eq!(part("name"), "putty");
+        assert_eq!(part("ext"), ".exe");
+        assert_eq!(part("name_and_ext"), "putty.exe");
+        // Combine name with related + default fallback
+        let comb = tparse_combine(&u16s("notes"), Some(&u16s("\\docs\\")), Some(&u16s("d:\\fallback\\x.txt")));
+        assert_eq!(s16(&comb), "d:\\docs\\notes.txt");
+        // NEGATIVE CONTROL: path with no drive and no extension returns empty drive/ext slices.
+        let bare = u16s("readme");
+        assert_eq!(tparse_slice(&bare, "drive"), (0, 0));
+        assert_eq!(tparse_slice(&bare, "ext"), (6, 6));
+    }
 }

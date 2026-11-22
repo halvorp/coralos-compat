@@ -16,6 +16,7 @@ fn main() {
                     println!("  {:>8} {}{}", f.bytes.len(), f.target, if f.is_conditional { " (conditional)" } else { "" });
                     if let Some(dir) = &out {
                         let rel = f.target.split_once(":\\").map_or(f.target.as_str(), |(_, r)| r).replace('\\', "/");
+                        if rel.is_empty() { continue; }
                         if rel.split('/').any(|c| c == "..") { println!("    refused: path climbs out of {}", dir.display()); continue; }
                         let dst = dir.join(rel.to_lowercase());
                         std::fs::create_dir_all(dst.parent().unwrap()).unwrap();

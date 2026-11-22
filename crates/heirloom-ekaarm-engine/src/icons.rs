@@ -101,6 +101,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let refuse = |m: String| Some(NativeOutcome::Refused(format!("NEXT-NEEDED AknIcon {name}: {m}")));
     match name {
         // const TDesC& AknIconUtils::AvkonIconFileName()
+        // void CAknIconArray::ConstructFromResourceL(TInt aResId): icons are recorded-only in this engine.
+        "_ZN13CAknIconArray22ConstructFromResourceLEi" => Some(NativeOutcome::Return),
         "_ZN12AknIconUtils17AvkonIconFileNameEv" => {
             let a = match p.nat.icons.avkon_name {
                 Some(a) => Ok(a),
