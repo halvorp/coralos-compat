@@ -137,6 +137,16 @@ pub struct State {
     pub native_decodes: u64,
 }
 
+impl State {
+    /// Truecolor decoded image owned by `bitmap_addr` (from `PDTA_BitMap` / `PDTA_DestBitMap`), if any.
+    pub fn image_for_bitmap(&self, bm: u32) -> Option<&DecodedImage> {
+        if bm == 0 {
+            return None;
+        }
+        self.objects.values().find_map(|o| if o.bitmap_addr == bm { o.image.as_ref() } else { None })
+    }
+}
+
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
     b.named("ObtainDataTypeA", obtain_data_type::<U>)
         .named("ReleaseDataType", release_data_type::<U>)

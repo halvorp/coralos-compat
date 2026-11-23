@@ -255,6 +255,11 @@ fn heavy_amiga_apps_multiview_picshow_annotate_work_end_to_end() {
         }
         assert!(matches!(st, Step::Blocked | Step::BudgetSpent), "PicShow running: {st:?}");
         assert!(calls.load(Ordering::Relaxed) >= 1, "PicShow must decode JPEG via NativeDatatype");
+        let picshow_pixels = a.ui.calls.iter().any(|c| match c {
+            UiCall::PresentPlane(_, p) => p.ops.iter().any(|op| matches!(op, DrawOp::Pixels { rect, rgb } if rect.width >= 320 && rect.height >= 200 && rgb.iter().any(|&px| px != 0))),
+            _ => false,
+        });
+        assert!(picshow_pixels, "PicShow must blit decoded JPEG truecolor pixels to its window plane");
         let (win, quit_tok) = a.ui.calls.iter().find_map(|c| match c {
             UiCall::SetMenuStrip(w, mm) => mm.menus.iter().flat_map(|m| &m.items).find(|i| i.label == "Quit").map(|i| (*w, i.token)),
             _ => None,

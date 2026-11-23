@@ -13,10 +13,19 @@ use crate::boopsi_ids::*;
 use crate::{machine::Amiga, Refusal};
 use heirloom_ui_abi::GuestUi;
 
+pub const DEPTHIMAGE: u32 = 0x00;
+pub const ZOOMIMAGE: u32 = 0x01;
+pub const SIZEIMAGE: u32 = 0x02;
+pub const CLOSEIMAGE: u32 = 0x03;
+pub const SDEPTHIMAGE: u32 = 0x05;
+pub const MENUCHECK: u32 = 0x08;
+pub const AMIGAKEY: u32 = 0x09;
 pub const LEFTIMAGE: u32 = 0x0A;
 pub const UPIMAGE: u32 = 0x0B;
 pub const RIGHTIMAGE: u32 = 0x0C;
 pub const DOWNIMAGE: u32 = 0x0D;
+pub const CHECKIMAGE: u32 = 0x0E;
+pub const MXIMAGE: u32 = 0x0F;
 const SYSIA_WHICH: u32 = IA + 0x0D;
 const DEFAULT_ARROW: i32 = 14;
 
@@ -28,10 +37,19 @@ pub fn sysi_new<U: GuestUi>(a: &mut Amiga<U>, im: u32, tag_list: u32) -> Result<
     let t = crate::tags::walk(&a.mem, tag_list)?;
     let which = crate::tags::get(&t, SYSIA_WHICH).unwrap_or(0);
     a.classes.sysi_type.insert(im, which);
-    if matches!(which, LEFTIMAGE | UPIMAGE | RIGHTIMAGE | DOWNIMAGE) {
+    // Standard Intuition sysiclass dimensions (AmigaOS 3.1 / AROS HiRes): without this, imageclass's 80x40
+    // fallback leaks into SIZEIMAGE and blows up border scrollbars that size themselves from SIZEIMAGE.
+    let dims: Option<(u16, u16)> = match which {
+        LEFTIMAGE | UPIMAGE | RIGHTIMAGE | DOWNIMAGE => Some((DEFAULT_ARROW as u16, DEFAULT_ARROW as u16)),
+        SIZEIMAGE => Some((18, 14)),
+        DEPTHIMAGE | ZOOMIMAGE | CLOSEIMAGE | SDEPTHIMAGE => Some((20, 14)),
+        CHECKIMAGE | MXIMAGE | MENUCHECK | AMIGAKEY => Some((16, 11)),
+        _ => None,
+    };
+    if let Some((dw, dh)) = dims {
         let m = Refusal::mem("Image");
-        if crate::tags::get(&t, IA_WIDTH).is_none() { a.mem.write_u16(im + IMG_WIDTH, DEFAULT_ARROW as u16).map_err(&m)?; }
-        if crate::tags::get(&t, IA_HEIGHT).is_none() { a.mem.write_u16(im + IMG_HEIGHT, DEFAULT_ARROW as u16).map_err(&m)?; }
+        if crate::tags::get(&t, IA_WIDTH).is_none() { a.mem.write_u16(im + IMG_WIDTH, dw).map_err(&m)?; }
+        if crate::tags::get(&t, IA_HEIGHT).is_none() { a.mem.write_u16(im + IMG_HEIGHT, dh).map_err(&m)?; }
     }
     Ok(())
 }

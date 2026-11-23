@@ -57,6 +57,26 @@ fn do_blit<U: GuestUi>(a: &mut Amiga<U>, src: u32, (sxx, syy): (i32, i32), dst: 
     if let Some(role) = icon_image(a, src, (sxx, syy), (w, h), mt, mask.is_some())? {
         // The source's planes ARE a recognised icon's image data, copied whole: the program drew that icon itself.
         record::note(a, sink, "copy blit of an icon image", Ok(record::Prim::Icon { rect: Rect::from_size(dx, dy, w, h), role }), region.as_ref(), dst_rect, origin);
+    } else if let Some(rgb_prim) = a.datatypes.image_for_bitmap(src).and_then(|img| {
+        if sxx < 0 || syy < 0 || sxx >= img.width as i32 || syy >= img.height as i32 {
+            return None;
+        }
+        let cw = w.min(img.width as i32 - sxx).max(0) as usize;
+        let ch = h.min(img.height as i32 - syy).max(0) as usize;
+        if cw == 0 || ch == 0 {
+            return None;
+        }
+        let mut rgb = Vec::with_capacity(cw * ch);
+        for row in 0..ch {
+            let base = ((syy as usize) + row) * (img.width as usize) + (sxx as usize);
+            for col in 0..cw {
+                rgb.push(img.pixels[base + col] & 0x00FF_FFFF);
+            }
+        }
+        Some(record::Prim::Pixels { rect: Rect::from_size(dx, dy, cw as i32, ch as i32), rgb })
+    }) {
+        // The source BitMap belongs to a decoded datatypes.library picture: present its truecolor pixels directly.
+        record::note(a, sink, "copy blit of a datatypes.library picture", Ok(rgb_prim), region.as_ref(), dst_rect, origin);
     } else if refused.is_none() {
         // The source's own list stands in for the copied pixels: its ops move to the destination, its holes stay holes, and a
         // pixel no rec covers is background exactly as in a window list. A rec straddling the source rect becomes a hole over
