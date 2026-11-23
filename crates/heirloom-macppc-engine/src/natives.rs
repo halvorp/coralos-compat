@@ -167,6 +167,12 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 self.finish(name, r, Some(Arg::B), regs)
             }
+            Native::EventAvail => {
+                let Some(op) = heirloom_mac68k_engine::mixed::trap_opcode("EventAvail") else { return GlueOutcome::Refused("EventAvail has no trap word".into()) };
+                if self.hle_deliver(a(0) as u16, a(1), true) { regs[3] = 1; return GlueOutcome::Return; }
+                let r = self.mac.pascal_call(op, &[a(0), a(1)]);
+                self.finish("OSEventAvail", r, Some(Arg::B), regs)
+            }
             Native::StandardAlert => {
                 let args = match self.arg_values(5, regs) { Ok(v) => v, Err(e) => return GlueOutcome::Refused(format!("StandardAlert: {e}")) };
                 match self.standard_alert(&args) { Ok(None) => GlueOutcome::Idle, Ok(Some(e)) => { regs[3] = e; GlueOutcome::Return } Err(e) => GlueOutcome::Refused(e) }

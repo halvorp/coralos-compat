@@ -103,20 +103,58 @@ impl<U: GuestUi> Mac<U> {
         }
     }
 
-    /// `GetGWorldPixMap(gw)`.
+    /// `GetGWorldPixMap(gw)`: offscreen GWorlds and live colour windows (`CWindowPtr` is a `CGrafPtr`).
     pub fn gw_pixmap(&self, port: u32) -> Result<u32, Refusal> {
-        self.cqd.gworlds.get(&port).map(|g| g.pixmap).ok_or_else(|| Refusal(format!("GetGWorldPixMap: {port:#x} is not a graphics world this engine made")))
+        if let Some(g) = self.cqd.gworlds.get(&port) {
+            return Ok(g.pixmap);
+        }
+        if self.windows.contains_key(&port) && is_cport(&self.mem, port) {
+            return self.mem.read_u32(port + crate::qd::port::CP_PIXMAP).map_err(Refusal::mem("CGrafPort"));
+        }
+        Err(Refusal(format!("GetGWorldPixMap: {port:#x} is not a graphics world this engine made")))
     }
     /// `GetGWorldDevice(gw)`.
     pub fn gw_device(&self, port: u32) -> Result<u32, Refusal> {
-        self.cqd.gworlds.get(&port).map(|g| g.device).ok_or_else(|| Refusal(format!("GetGWorldDevice: {port:#x} is not a graphics world this engine made")))
+        if let Some(g) = self.cqd.gworlds.get(&port) {
+            return Ok(g.device);
+        }
+        if self.windows.contains_key(&port) && is_cport(&self.mem, port) && self.cqd.main_device != 0 {
+            return Ok(self.cqd.main_device);
+        }
+        Err(Refusal(format!("GetGWorldDevice: {port:#x} is not a graphics world this engine made")))
+    }
+    fn is_live_window_pixmap(&self, pm: u32) -> bool {
+        if pm == 0 {
+            return false;
+        }
+        self.windows.keys().any(|&w| {
+            is_cport(&self.mem, w) && self.mem.read_u32(w + crate::qd::port::CP_PIXMAP).ok() == Some(pm)
+        })
     }
     fn gw_of_pixmap(&mut self, pm: u32, who: &str) -> Result<&mut Gw, Refusal> {
         self.cqd.gworlds.values_mut().find(|g| g.pixmap == pm).ok_or_else(|| Refusal(format!("{who}: PixMap {pm:#x} belongs to no graphics world this engine made")))
     }
     /// `LockPixels(pm)`: always TRUE (the pixels are never purged); records the locked state.
-    pub fn gw_lock(&mut self, pm: u32) -> Result<bool, Refusal> { self.gw_of_pixmap(pm, "LockPixels")?.state |= PIXELS_LOCKED; Ok(true) }
-    pub fn gw_unlock(&mut self, pm: u32) -> Result<(), Refusal> { self.gw_of_pixmap(pm, "UnlockPixels")?.state &= !PIXELS_LOCKED; Ok(()) }
+    pub fn gw_lock(&mut self, pm: u32) -> Result<bool, Refusal> {
+        if let Ok(g) = self.gw_of_pixmap(pm, "LockPixels") {
+            g.state |= PIXELS_LOCKED;
+            return Ok(true);
+        }
+        if self.is_live_window_pixmap(pm) {
+            return Ok(true);
+        }
+        Err(Refusal(format!("LockPixels: PixMap {pm:#x} belongs to no graphics world this engine made")))
+    }
+    pub fn gw_unlock(&mut self, pm: u32) -> Result<(), Refusal> {
+        if let Ok(g) = self.gw_of_pixmap(pm, "UnlockPixels") {
+            g.state &= !PIXELS_LOCKED;
+            return Ok(());
+        }
+        if self.is_live_window_pixmap(pm) {
+            return Ok(());
+        }
+        Err(Refusal(format!("UnlockPixels: PixMap {pm:#x} belongs to no graphics world this engine made")))
+    }
     pub fn gw_state(&mut self, pm: u32) -> Result<u32, Refusal> { Ok(self.gw_of_pixmap(pm, "GetPixelsState")?.state) }
     pub fn gw_set_state(&mut self, pm: u32, state: u32) -> Result<(), Refusal> { self.gw_of_pixmap(pm, "SetPixelsState")?.state = state & (PIXELS_LOCKED | PIXELS_PURGEABLE); Ok(()) }
     pub fn gw_purge(&mut self, pm: u32, purgeable: bool) -> Result<(), Refusal> {

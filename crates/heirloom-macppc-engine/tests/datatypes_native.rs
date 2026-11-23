@@ -175,3 +175,69 @@ fn heavy_texedit_plus_and_jpegview_ppc_end_to_end() {
         "JPEGView 3.3.1 PPC must build its 6-menu menu bar"
     );
 }
+
+#[test]
+fn cwindow_gworld_pixmap_open_driver_control_and_os_event_avail() {
+    let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+    // InitGraf + InitFonts + InitWindows
+    let qd_base = 0x0001_8000u32;
+    glue_call(&mut m, "InterfaceLib", "InitGraf", &[qd_base + 202]);
+    glue_call(&mut m, "InterfaceLib", "InitFonts", &[]);
+    glue_call(&mut m, "InterfaceLib", "InitWindows", &[]);
+
+    // Open a 640x480 colour window and verify GetGWorldPixMap / LockPixels / UnlockPixels work on CWindowPtr.
+    let rect = 0x0001_8200u32;
+    for (i, v) in [0u16, 0, 480, 640].iter().enumerate() {
+        m.mac.mem.write_u16(rect + (i * 2) as u32, *v).unwrap();
+    }
+    let title = 0x0001_8210u32;
+    m.mac.mem.write_u8(title, 0).unwrap();
+    let win = glue_call(&mut m, "InterfaceLib", "NewCWindow", &[0, rect, title, 1, 2, 0xFFFF_FFFF, 0, 0]);
+    assert_ne!(win, 0, "NewCWindow must return a live CWindowPtr");
+    let pm = glue_call(&mut m, "InterfaceLib", "GetGWorldPixMap", &[win]);
+    assert_ne!(pm, 0, "GetGWorldPixMap(CWindowPtr) must return the window's portPixMap");
+    assert_eq!(glue_call(&mut m, "InterfaceLib", "LockPixels", &[pm]), 1);
+    glue_call(&mut m, "InterfaceLib", "UnlockPixels", &[pm]);
+
+    // OpenDriver: ".AppleCD" succeeds with refNum -49; unknown driver returns fnfErr (-43).
+    let drv_name = 0x0001_8220u32;
+    let applecd = b"\x08.AppleCD";
+    for (i, &b) in applecd.iter().enumerate() {
+        m.mac.mem.write_u8(drv_name + i as u32, b).unwrap();
+    }
+    let ref_out = 0x0001_8240u32;
+    assert_eq!(glue_call(&mut m, "InterfaceLib", "OpenDriver", &[drv_name, ref_out]), 0);
+    assert_eq!(m.mac.mem.read_u16(ref_out).unwrap() as i16, -49);
+    assert_eq!(glue_call(&mut m, "InterfaceLib", "Control", &[(-49i16) as u16 as u32, 100, 0]), 0);
+
+    let bogus = b"\x06.Bogus";
+    for (i, &b) in bogus.iter().enumerate() {
+        m.mac.mem.write_u8(drv_name + i as u32, b).unwrap();
+    }
+    assert_eq!(glue_call(&mut m, "InterfaceLib", "OpenDriver", &[drv_name, ref_out]) as i32, -43);
+
+    // OSEventAvail peeks the newly-opened window's activate/update event without dequeuing; GetOSEvent dequeues it.
+    let ev = 0x0001_8250u32;
+    assert_eq!(glue_call(&mut m, "InterfaceLib", "OSEventAvail", &[0xFFFF, ev]), 1);
+    assert_eq!(glue_call(&mut m, "InterfaceLib", "GetOSEvent", &[0xFFFF, ev]), 1);
+    assert_eq!(glue_call(&mut m, "InterfaceLib", "MakeITable", &[0, 0, 4]), 0);
+    assert_eq!(glue_call(&mut m, "InterfaceLib", "SndStopFilePlay", &[0, 0]), 0);
+    // QuickTime movie helpers bind cleanly from QuickTimeLib via a PEF fragment.
+    let qt_syms: &[(&str, SymbolClass, bool)] = &[
+        ("OpenMovieFile", SymbolClass::TVector, false),
+        ("CloseMovieFile", SymbolClass::TVector, false),
+        ("PrerollMovie", SymbolClass::TVector, false),
+        ("SetMovieRate", SymbolClass::TVector, false),
+        ("GetMovieTime", SymbolClass::TVector, false),
+    ];
+    let qt_pef = fixture::app(&[("QuickTimeLib", false, qt_syms)]);
+    let qfrag = m.instantiate("qt_mov_test", &Pef::parse(&qt_pef).unwrap()).unwrap();
+    let data = qfrag.section_bases[1].unwrap();
+    for i in 0..qt_syms.len() {
+        let tv = m.mac.mem.read_u32(data + TOC_FIRST + 4 * i as u32).unwrap();
+        let stub = m.mac.mem.read_u32(tv).unwrap();
+        let sym = m.glue_symbol_at(stub).unwrap();
+        let mut regs = [0u32; 32];
+        assert_eq!(m.glue_call(&sym, &mut regs), GlueOutcome::Return, "{sym}");
+    }
+}

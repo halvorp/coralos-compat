@@ -19,7 +19,7 @@ use heirloom_mac68k_engine::Mac;
 /// used as it is: the 68k event calls suspend a 68k guest through its run loop, so the PowerPC adapter ([`crate::natives`]) polls
 /// the handler with `sleep = 0` and parks the CPU itself (`WaitNextEvent` with a sleep); `GetNextEvent` never waits; `ModalDialog` is parked the same way, on the front dialog's item hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Native { StandardAlert, Alert(heirloom_ui_abi::RequestKind), GetSharedLibrary, GetDiskFragment, GetMemFragment, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent, ModalDialog, SysBeep,
+pub enum Native { StandardAlert, Alert(heirloom_ui_abi::RequestKind), GetSharedLibrary, GetDiskFragment, GetMemFragment, FindSymbol, CloseConnection, MemError, BlockZero, Exit, WaitNextEvent, GetNextEvent, EventAvail, ModalDialog, SysBeep,
     /// `HasDepth` / `SetDepth`: selectors of the 68k `PaletteDispatch` trap, so they have no trap name of their own; the shared routines in `cqd::depth`.
     HasDepth, SetDepth,
     /// StdCLib `__setjmp`, `exit`, `_BreakPoint`: they need the CPU's registers, so [`crate::run`] serves them, not `glue_call`.
@@ -154,7 +154,7 @@ impl Native {
     pub fn by_name(name: &str) -> Option<Native> {
         Some(match name {
             "GetSharedLibrary" => Native::GetSharedLibrary, "GetDiskFragment" => Native::GetDiskFragment, "GetMemFragment" => Native::GetMemFragment, "FindSymbol" => Native::FindSymbol, "CloseConnection" => Native::CloseConnection,
-            "MemError" => Native::MemError, "WaitNextEvent" => Native::WaitNextEvent, "GetNextEvent" => Native::GetNextEvent, "ModalDialog" => Native::ModalDialog, "StandardAlert" => Native::StandardAlert,
+            "MemError" => Native::MemError, "WaitNextEvent" => Native::WaitNextEvent, "GetNextEvent" | "GetOSEvent" => Native::GetNextEvent, "OSEventAvail" => Native::EventAvail, "ModalDialog" => Native::ModalDialog, "StandardAlert" => Native::StandardAlert,
             "Alert" => Native::Alert(heirloom_ui_abi::RequestKind::Unspecified), "StopAlert" => Native::Alert(heirloom_ui_abi::RequestKind::Stop), "NoteAlert" => Native::Alert(heirloom_ui_abi::RequestKind::Note), "CautionAlert" => Native::Alert(heirloom_ui_abi::RequestKind::Caution),
             "BlockZero" => Native::BlockZero, "SysBeep" => Native::SysBeep, "ExitToShell" => Native::Exit, "HasDepth" => Native::HasDepth, "SetDepth" => Native::SetDepth,
             "NGetTrapAddress" => Native::TrapAddress(TrapQuery::ByType), "GetOSTrapAddress" => Native::TrapAddress(TrapQuery::Os),

@@ -28,7 +28,23 @@ impl<U: GuestUi> Mac<U> {
     pub fn open_res_file(&mut self, loc: &Located, perm: u8) -> Result<i16, i16> {
         let node = loc.node.ok_or(err::FNF_ERR)?;
         let r = self.fm.open(loc, true, perm)?;
-        let bytes = self.fm.tree.get(node).rsrc.clone();
+        let mut bytes = self.fm.tree.get(node).rsrc.clone();
+        if bytes.is_empty() {
+            // Flat data-only volumes (such as CoralOS app bundles) carry resource forks as `<name>.rsrc` sidecars.
+            let sidecar_name = format!("{}.rsrc", self.fm.tree.get(node).name);
+            if let Some(side) = self.fm.tree.children(loc.parent).iter().copied().find(|&c| self.fm.tree.get(c).name.eq_ignore_ascii_case(&sidecar_name)) {
+                if let Some(len) = self.fm.tree.file_len(side) {
+                    let mut raw = alloc::vec![0u8; (len as usize).min(64 * 1024 * 1024)];
+                    if let Some(n) = self.fm.tree.read_at(side, 0, &mut raw) {
+                        raw.truncate(n);
+                        bytes = match heirloom_fmt_resfork::container::open(&raw) {
+                            Ok(opened) if !opened.rsrc.is_empty() => raw[opened.rsrc].to_vec(),
+                            _ => raw,
+                        };
+                    }
+                }
+            }
+        }
         match ResFork::parse(bytes) {
             Ok(fork) => { self.rm.open_fork(r, fork); Ok(r) }
             Err(_) => { let _ = self.fm.close(r); Err(err::EOF_ERR) } // no (or a damaged) resource fork

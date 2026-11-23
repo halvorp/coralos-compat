@@ -51,6 +51,7 @@ pub struct QtState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QtFn {
     EnterMovies, ExitMovies, GetMoviesError, ClearMoviesStickyError, NewMovie, NewMovieFromFile, MovieImportFile, DisposeMovie,
+    OpenMovieFile, CloseMovieFile, PrerollMovie, SetMovieRate, GetMovieTime,
     GetMovieBox, SetMovieBox, SetMovieGWorld, StartMovie, StopMovie, MoviesTask, IsMovieDone, GoToBeginningOfMovie, SetMovieVolume,
     GetGraphicsImporterForFile, GraphicsImportGetNaturalBounds, GraphicsImportGetBoundsRect, GraphicsImportSetBoundsRect,
     GraphicsImportSetGWorld, GraphicsImportGetGWorld, GraphicsImportDraw, GraphicsImportGetAsPicture, CloseComponent,
@@ -62,7 +63,9 @@ impl QtFn {
         Some(match name {
             "EnterMovies" => EnterMovies, "ExitMovies" => ExitMovies, "GetMoviesError" => GetMoviesError,
             "ClearMoviesStickyError" => ClearMoviesStickyError, "NewMovie" => NewMovie, "NewMovieFromFile" => NewMovieFromFile,
-            "MovieImportFile" => MovieImportFile, "DisposeMovie" => DisposeMovie, "GetMovieBox" => GetMovieBox, "SetMovieBox" => SetMovieBox,
+            "MovieImportFile" => MovieImportFile, "DisposeMovie" => DisposeMovie, "OpenMovieFile" => OpenMovieFile,
+            "CloseMovieFile" => CloseMovieFile, "PrerollMovie" => PrerollMovie, "SetMovieRate" => SetMovieRate,
+            "GetMovieTime" => GetMovieTime, "GetMovieBox" => GetMovieBox, "SetMovieBox" => SetMovieBox,
             "SetMovieGWorld" => SetMovieGWorld, "StartMovie" => StartMovie, "StopMovie" => StopMovie, "MoviesTask" => MoviesTask,
             "IsMovieDone" => IsMovieDone, "GoToBeginningOfMovie" => GoToBeginningOfMovie, "SetMovieVolume" => SetMovieVolume,
             "GetGraphicsImporterForFile" => GetGraphicsImporterForFile,
@@ -110,16 +113,20 @@ impl<U: GuestUi> MacPpc<U> {
             ExitMovies => (0, 0, None),
             GetMoviesError => (self.qt.last_err as u32, self.qt.last_err, None),
             ClearMoviesStickyError => (0, self.qt.last_err, None),
-            NewMovie | NewMovieFromFile | MovieImportFile => {
+            NewMovie | NewMovieFromFile | MovieImportFile | OpenMovieFile => {
                 self.qt.refusals += 1;
-                if f == NewMovieFromFile && a0 != 0 {
-                    let _ = self.mac.mem.write_u32(a0, 0);
+                if matches!(f, NewMovieFromFile | OpenMovieFile) && a0 != 0 {
+                    if f == NewMovieFromFile {
+                        let _ = self.mac.mem.write_u32(a0, 0);
+                    } else if a1 != 0 {
+                        let _ = self.mac.mem.write_u16(a1, 0);
+                    }
                 }
                 let ret = if f == NewMovie { 0 } else { INVALID_MOVIE as u32 };
                 (ret, INVALID_MOVIE, Some(format!("[qt] {f:?}: refused - this engine has no movie decoder (invalidMovie); the program goes on without the movie [QT-MOVIE REFUSED n={}]", self.qt.refusals)))
             }
             IsMovieDone => (1, INVALID_MOVIE, None),
-            DisposeMovie | GetMovieBox | SetMovieBox | SetMovieGWorld | StartMovie | StopMovie | MoviesTask | GoToBeginningOfMovie | SetMovieVolume => {
+            DisposeMovie | CloseMovieFile | PrerollMovie | SetMovieRate | GetMovieTime | GetMovieBox | SetMovieBox | SetMovieGWorld | StartMovie | StopMovie | MoviesTask | GoToBeginningOfMovie | SetMovieVolume => {
                 (0, INVALID_MOVIE, None)
             }
 

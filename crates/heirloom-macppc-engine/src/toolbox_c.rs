@@ -76,8 +76,8 @@ pub enum TbFn {
     StandardGetFile, StandardPutFile,
     /// Help Manager (`Balloons.h`): `HMGetBalloons` (always `false` — Balloon Help is off).
     HMGetBalloons,
-    /// Device Manager / VM helpers (`Devices.h` / `Memory.h`): `GetDCtlEntry` (NULL: no driver), `OpenDriver` (`fnfErr`), `LockMemory`/`UnlockMemory` (`noErr`).
-    GetDCtlEntry, OpenDriver, LockMemory,
+    /// Device Manager / VM helpers (`Devices.h` / `Memory.h`): `GetDCtlEntry`, `OpenDriver`, `Control`/`PBControlSync`/`Status`/`PBStatusSync`, `LockMemory`/`UnlockMemory`, `MakeITable`, `SndStopFilePlay`.
+    GetDCtlEntry, OpenDriver, Control, PBControlSync, LockMemory, MakeITable, SndStopFilePlay,
     /// `LMGet<Name>` / `LMSet<Name>` over the table [`LOWMEM`]; the index is the row.
     LmGet(u8), LmSet(u8),
 }
@@ -110,7 +110,9 @@ impl TbFn {
             "GetIconSuite" => GetIconSuite, "PlotIconSuite" => PlotIconSuite,
             "StandardGetFile" | "CustomGetFile" => StandardGetFile, "StandardPutFile" | "CustomPutFile" => StandardPutFile,
             "HMGetBalloons" => HMGetBalloons,
-            "GetDCtlEntry" => GetDCtlEntry, "OpenDriver" => OpenDriver, "LockMemory" | "UnlockMemory" => LockMemory,
+            "GetDCtlEntry" => GetDCtlEntry, "OpenDriver" => OpenDriver, "Control" | "Status" => Control,
+            "PBControlSync" | "PBStatusSync" => PBControlSync, "LockMemory" | "UnlockMemory" => LockMemory,
+            "MakeITable" => MakeITable, "SndStopFilePlay" => SndStopFilePlay,
             // GetMBarHeight() / GetSysFont() are the Universal Interfaces' readers of MBarHeight and SysFontFam (Menus.h, Fonts.h)
             "GetMBarHeight" => return TbFn::by_name("LMGetMBarHeight"),
             "GetSysFont" => return TbFn::by_name("LMGetSysFontFam"),
@@ -353,8 +355,37 @@ impl<U: GuestUi> MacPpc<U> {
             }
             HMGetBalloons => 0,
             GetDCtlEntry => 0,
-            OpenDriver => (-43i32) as u32, // fnfErr: no hardware device drivers (e.g. .AppleCD)
-            LockMemory => 0, // flat guest RAM is always resident
+            OpenDriver => {
+                // Standard Mac OS system drivers (Inside Macintosh: Devices): `.Sound` (-4) and `.AppleCD` (-49)
+                // are present in every PowerMac Unit Table even when no disc is inserted; unknown drivers return fnfErr (-43).
+                let len = self.mac.mem.read_u8(a0).unwrap_or(0) as usize;
+                let mut name_buf = [0u8; 32];
+                let n = len.min(name_buf.len());
+                for (i, b) in name_buf[..n].iter_mut().enumerate() {
+                    *b = self.mac.mem.read_u8(a0.wrapping_add(1 + i as u32)).unwrap_or(0);
+                }
+                let drv_ref: Option<i16> = match &name_buf[..n] {
+                    b".Sound" => Some(-4),
+                    b".AppleCD" => Some(-49),
+                    _ => None,
+                };
+                if let Some(refnum) = drv_ref {
+                    if a1 != 0 {
+                        let _ = self.mac.mem.write_u16(a1, refnum as u16);
+                    }
+                    0
+                } else {
+                    (-43i32) as u32
+                }
+            }
+            Control => 0,
+            PBControlSync => {
+                if a0 != 0 {
+                    let _ = self.mac.mem.write_u16(a0.wrapping_add(16), 0); // ioResult = noErr
+                }
+                0
+            }
+            LockMemory | MakeITable | SndStopFilePlay => 0, // flat guest RAM is resident; MakeITable / SndStopFilePlay succeed cleanly
             LmGet(i) => {
                 let (_, at, n) = LOWMEM[i as usize];
                 match n { 1 => u32::from(self.mac.mem.read_u8(at).unwrap_or(0)), 2 => u32::from(self.mac.mem.read_u16(at).unwrap_or(0)), _ => self.mac.mem.read_u32(at).unwrap_or(0) }
