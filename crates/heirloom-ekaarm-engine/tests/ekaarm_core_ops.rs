@@ -349,3 +349,70 @@ fn enter_aliases_to_s60_device3_only_when_unconsumed_and_user_request_complete_s
     assert!(matches!(p.run(10_000), Outcome::Exited(0)));
     assert_eq!(p.mem.read_u32(log_buf).unwrap(), 1, "consumed EKeyEnter must NOT trigger EKeyDevice3 retry");
 }
+
+#[test]
+fn trect_ops_f32_eabi_and_rfile_set_size_with_negative_control() {
+    let mut p = loader::bare(&[
+        "_ZN5TRect6ShrinkEii",                // stub 0
+        "_ZN5TRect12IntersectionERKS_",       // stub 1
+        "_ZN5TRect12BoundingRectERKS_",       // stub 2
+        "_ZNK5TRect7IsEmptyEv",               // stub 3
+        "__aeabi_i2f",                        // stub 4
+        "__aeabi_fadd",                       // stub 5
+        "__aeabi_fmul",                       // stub 6
+        "__aeabi_f2iz",                       // stub 7
+        "__aeabi_fcmplt",                     // stub 8
+        "_ZN3RFs7ConnectEi",                  // stub 9
+        "_ZN5RFile7ReplaceER3RFsRK7TDesC16j", // stub 10
+        "_ZN5RFile7SetSizeEi",                // stub 11
+        "_ZNK5RFile4SizeERi",                 // stub 12
+        "_ZN10CTelephony4NewLEv",             // stub 13
+    ]).unwrap();
+
+    let r_a = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let r_b = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let rfs = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let rfile = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let fname = p.heap.as_mut().unwrap().alloc(32, &mut p.mem).unwrap();
+    let sz_out = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    // r_a = [10, 10, 30, 30], r_b = [20, 20, 40, 40]
+    for (i, v) in [10u32, 10, 30, 30].iter().enumerate() { p.mem.write_u32(r_a + i as u32 * 4, *v).unwrap(); }
+    for (i, v) in [20u32, 20, 40, 40].iter().enumerate() { p.mem.write_u32(r_b + i as u32 * 4, *v).unwrap(); }
+    p.mem.write_u32(fname, 5).unwrap();
+    for (i, ch) in "a.dat".encode_utf16().enumerate() { p.mem.write_u16(fname + 4 + i as u32 * 2, ch).unwrap(); }
+
+    p.map_code(CODE_BASE, &arm_words(&[
+        // r_a.Shrink(2, 2) -> [12, 12, 28, 28]; r_a.Intersection(r_b) -> [20, 20, 28, 28]
+        0xE1A0_0004, 0xE3A0_1002, 0xE3A0_2002, 0xEF00_0000 | STUB_SVC_BASE,
+        0xE1A0_0004, 0xE1A0_1005, 0xEF00_0000 | (STUB_SVC_BASE + 1),
+        // f32: (3 + 4) * 2 = 14
+        0xE3A0_0003, 0xEF00_0000 | (STUB_SVC_BASE + 4), 0xE1A0_A000, // r10 = 3.0f
+        0xE3A0_0004, 0xEF00_0000 | (STUB_SVC_BASE + 4), 0xE1A0_B000, // r11 = 4.0f
+        0xE1A0_000A, 0xE1A0_100B, 0xEF00_0000 | (STUB_SVC_BASE + 5), 0xE1A0_A000, // 7.0f
+        0xE3A0_0002, 0xEF00_0000 | (STUB_SVC_BASE + 4), 0xE1A0_1000,
+        0xE1A0_000A, 0xEF00_0000 | (STUB_SVC_BASE + 6), // 14.0f
+        0xEF00_0000 | (STUB_SVC_BASE + 7), 0xE1A0_A000, // r10 = 14
+        // RFs::Connect + RFile::Replace + SetSize(128) + Size(&sz_out) + negative SetSize(-1) -> r11
+        0xE1A0_0006, 0xE3A0_1000, 0xEF00_0000 | (STUB_SVC_BASE + 9),
+        0xE1A0_0007, 0xE1A0_1006, 0xE1A0_2008, 0xE3A0_3000, 0xEF00_0000 | (STUB_SVC_BASE + 10),
+        0xE1A0_0007, 0xE3A0_1080, 0xEF00_0000 | (STUB_SVC_BASE + 11),
+        0xE1A0_0007, 0xE1A0_1009, 0xEF00_0000 | (STUB_SVC_BASE + 12),
+        0xE1A0_0007, 0xE3E0_1000, 0xEF00_0000 | (STUB_SVC_BASE + 11), // SetSize(-1) -> KErrArgument (-6)
+        0xE1A0_B000,
+        0xEF00_0000 | (STUB_SVC_BASE + 13), // CTelephony::NewL -> r0 (non-zero)
+        0xEF00_0000 | EXIT_SVC,
+    ])).unwrap();
+    p.cpu.regs[4] = r_a;
+    p.cpu.regs[5] = r_b;
+    p.cpu.regs[6] = rfs;
+    p.cpu.regs[7] = rfile;
+    p.cpu.regs[8] = fname;
+    p.cpu.regs[9] = sz_out;
+    p.cpu.set_pc_interworking(CODE_BASE);
+    let out = p.run(10_000);
+    assert!(matches!(out, Outcome::Exited(ptr) if ptr != 0), "CTelephony::NewL must return non-null, got {out:?}");
+    assert_eq!([0, 4, 8, 12].map(|o| p.mem.read_u32(r_a + o).unwrap()), [20, 20, 28, 28]);
+    assert_eq!(p.cpu.regs[10], 14, "(3.0f + 4.0f) * 2.0f must equal 14");
+    assert_eq!(p.mem.read_u32(sz_out).unwrap(), 128, "RFile::SetSize(128) must resize open file");
+    assert_eq!(p.cpu.regs[11] as i32, -6, "RFile::SetSize(-1) negative control must return KErrArgument (-6)");
+}

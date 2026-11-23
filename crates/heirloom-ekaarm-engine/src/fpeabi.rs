@@ -10,7 +10,9 @@ fn pair(lo: u32, hi: u32) -> f64 { f64::from_bits(u64::from(hi) << 32 | u64::fro
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let [r0, r1, r2, r3] = [p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2], p.cpu.regs[3]];
     let (a, b) = (pair(r0, r1), pair(r2, r3));
+    let (fa, fb) = (f32::from_bits(r0), f32::from_bits(r1));
     let double = |p: &mut Process, v: f64| { let bits = v.to_bits(); p.cpu.regs[0] = bits as u32; p.cpu.regs[1] = (bits >> 32) as u32; NativeOutcome::Return };
+    let single = |p: &mut Process, v: f32| { p.cpu.regs[0] = v.to_bits(); NativeOutcome::Return };
     let word = |p: &mut Process, v: u32| { p.cpu.regs[0] = v; NativeOutcome::Return };
     Some(match name {
         "__aeabi_i2d" => double(p, f64::from(r0 as i32)),
@@ -28,7 +30,24 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "__aeabi_dcmple" => word(p, (a <= b) as u32),
         "__aeabi_dcmpgt" => word(p, (a > b) as u32),
         "__aeabi_dcmpge" => word(p, (a >= b) as u32),
-        _ if name.starts_with("__aeabi_d") || name.starts_with("__aeabi_i2") || name.starts_with("__aeabi_ui2") => NativeOutcome::Refused(format!("NEXT-NEEDED dfpaeabi {name}")),
+        // Single-precision IEEE-754 ARM EABI helpers (`dfpaeabi.dll`)
+        "__aeabi_i2f" => single(p, (r0 as i32) as f32),
+        "__aeabi_ui2f" => single(p, r0 as f32),
+        "__aeabi_fadd" => single(p, fa + fb),
+        "__aeabi_fsub" => single(p, fa - fb),
+        "__aeabi_frsub" => single(p, fb - fa),
+        "__aeabi_fmul" => single(p, fa * fb),
+        "__aeabi_fdiv" => single(p, fa / fb),
+        "__aeabi_f2iz" => word(p, fa as i32 as u32),
+        "__aeabi_f2uiz" => word(p, fa as u32),
+        "__aeabi_f2d" => double(p, f64::from(fa)),
+        "__aeabi_d2f" => single(p, a as f32),
+        "__aeabi_fcmpeq" => word(p, (fa == fb) as u32),
+        "__aeabi_fcmplt" => word(p, (fa < fb) as u32),
+        "__aeabi_fcmple" => word(p, (fa <= fb) as u32),
+        "__aeabi_fcmpgt" => word(p, (fa > fb) as u32),
+        "__aeabi_fcmpge" => word(p, (fa >= fb) as u32),
+        _ if name.starts_with("__aeabi_d") || name.starts_with("__aeabi_f") || name.starts_with("__aeabi_i2") || name.starts_with("__aeabi_ui2") => NativeOutcome::Refused(format!("NEXT-NEEDED dfpaeabi {name}")),
         _ => return None,
     })
 }

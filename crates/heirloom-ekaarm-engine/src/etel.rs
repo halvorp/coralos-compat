@@ -22,6 +22,42 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 _ => NativeOutcome::Refused(alloc::format!("NEXT-NEEDED etel {name}: closing an open handle (no etel handle is ever opened)")),
             });
         }
+        // CTelephony (etel3rdparty.h): device has no cellular modem; NewL returns an object whose async queries complete with KErrNotSupported.
+        "_ZN10CTelephony4NewLEv" | "_ZN10CTelephony5NewLCEv" => {
+            match p.plain_object("CTelephony", 16) {
+                Ok(obj) => {
+                    if name.contains("NewLC") {
+                        p.nat.cleanup.push(crate::cleanup::CleanupItem::Base(obj));
+                    }
+                    p.cpu.regs[0] = obj;
+                    return Some(NativeOutcome::Return);
+                }
+                Err(m) => return Some(NativeOutcome::Refused(alloc::format!("NEXT-NEEDED etel3rdparty {name}: {m}"))),
+            }
+        }
+        "_ZN10CTelephony10TPhoneIdV1C1Ev" | "_ZN10CTelephony10TPhoneIdV1C2Ev" => {
+            // TPhoneIdV1 inherits TTelephonyInfoV1 (iExtensionId=0) + 3 TBuf16<50> fields.
+            let _ = p.wr(this, 0);
+            p.cpu.regs[0] = this;
+            return Some(NativeOutcome::Return);
+        }
+        "_ZNK10CTelephony10GetPhoneIdER14TRequestStatusR5TDes8" => {
+            let status_addr = p.cpu.regs[1];
+            let _ = p.wr(status_addr, KERR_NOT_SUPPORTED);
+            p.nat.requests.signals += 1;
+            return Some(NativeOutcome::Return);
+        }
+        "_ZNK10CTelephony11CancelAsyncENS_19TCancellationRequestE" => {
+            p.cpu.regs[0] = 0;
+            return Some(NativeOutcome::Return);
+        }
+        "_ZN10CTelephonyD1Ev" | "_ZN10CTelephonyD2Ev" | "_ZN10CTelephonyD0Ev" => {
+            if name.ends_with("D0Ev") {
+                if let Some(heap) = p.heap.as_mut() { let _ = heap.free(this); }
+            }
+            p.cpu.regs[0] = this;
+            return Some(NativeOutcome::Return);
+        }
         _ => return None,
     };
     for w in 0..words {

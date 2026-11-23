@@ -473,6 +473,21 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             }
             NativeOutcome::Return
         }
+        // TInt RFile::SetSize(TInt aSize)
+        "_ZN5RFile7SetSizeEi" => {
+            let h = p.mem.vm.read_u32(this).unwrap_or(0);
+            let new_size = r1 as i32;
+            if new_size < 0 {
+                p.cpu.regs[0] = (-6i32) as u32; // KErrArgument
+            } else if let Some(f) = p.nat.objs.open_files.get_mut(&h) {
+                f.data.resize(new_size as usize, 0);
+                if f.pos > f.data.len() { f.pos = f.data.len(); }
+                p.cpu.regs[0] = KERR_NONE as u32;
+            } else {
+                p.cpu.regs[0] = (-8i32) as u32; // KErrBadHandle
+            }
+            NativeOutcome::Return
+        }
         // TInt RFile::Read(TDes8& aDes) const / Read(TDes8& aDes, TInt aLength) const
         "_ZNK5RFile4ReadER5TDes8" | "_ZNK5RFile4ReadER5TDes8i" => {
             let h = p.mem.vm.read_u32(this).unwrap_or(0);
@@ -558,6 +573,22 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZN5RFile5CloseEv" => {
             if let Ok(h) = p.mem.vm.read_u32(this) { p.nat.objs.open_files.remove(&h); }
             let _ = p.mem.vm.write_u32(this, 0);
+            NativeOutcome::Return
+        }
+        // TFindFile (f32file.h): search across drives; returns KErrNotFound when no matching file exists.
+        "_ZN9TFindFileC1ER3RFs" | "_ZN9TFindFileC2ER3RFs" => {
+            let _ = p.wr(this, r1);
+            p.cpu.regs[0] = this;
+            NativeOutcome::Return
+        }
+        "_ZN9TFindFile13FindWildByDirERK7TDesC16S2_RP4CDir" => {
+            let _ = p.wr(r3, 0);
+            p.cpu.regs[0] = (-1i32) as u32; // KErrNotFound
+            NativeOutcome::Return
+        }
+        "_ZN9TFindFile8FindWildERP4CDir" => {
+            let _ = p.wr(r1, 0);
+            p.cpu.regs[0] = (-1i32) as u32; // KErrNotFound
             NativeOutcome::Return
         }
         _ => return None,

@@ -11,6 +11,83 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         return Some(if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {this:#x} is unwritable")) });
     }
     let rd = |p: &Process, a: u32| p.mem.vm.read_u32(a).map(|v| v as i32);
+    if name == "_ZNK5TSizeneERKS_" || name == "_ZNK5TSizeeqERKS_" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(w0), Ok(h0), Ok(w1), Ok(h1)) = (rd(p, this), rd(p, this + 4), rd(p, r1), rd(p, r1 + 4)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TSize unreadable")));
+        };
+        let eq = w0 == w1 && h0 == h1;
+        p.cpu.regs[0] = u32::from(if name.contains("neERKS_") { !eq } else { eq });
+        return Some(NativeOutcome::Return);
+    }
+    if name == "_ZN5TRect7SetSizeERK5TSize" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(x), Ok(y), Ok(w), Ok(h)) = (rd(p, this), rd(p, this + 4), rd(p, r1), rd(p, r1 + 4)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect/TSize unreadable")));
+        };
+        let ok = p.mem.vm.write_u32(this + 8, x.wrapping_add(w) as u32).is_ok()
+            && p.mem.vm.write_u32(this + 12, y.wrapping_add(h) as u32).is_ok();
+        return Some(if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect unwritable")) });
+    }
+    if name == "_ZNK5TRect7IsEmptyEv" {
+        let (Ok(x0), Ok(y0), Ok(x1), Ok(y1)) = (rd(p, this), rd(p, this + 4), rd(p, this + 8), rd(p, this + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect unreadable")));
+        };
+        p.cpu.regs[0] = u32::from(x0 >= x1 || y0 >= y1);
+        return Some(NativeOutcome::Return);
+    }
+    if name == "_ZN5TRect6ShrinkEii" || name == "_ZN5TRect4GrowEii" || name == "_ZN5TRect4MoveEii" {
+        let (dx, dy) = (p.cpu.regs[1] as i32, p.cpu.regs[2] as i32);
+        let (Ok(x0), Ok(y0), Ok(x1), Ok(y1)) = (rd(p, this), rd(p, this + 4), rd(p, this + 8), rd(p, this + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect unreadable")));
+        };
+        let out = if name.contains("Shrink") {
+            [x0 + dx, y0 + dy, x1 - dx, y1 - dy]
+        } else if name.contains("Grow") {
+            [x0 - dx, y0 - dy, x1 + dx, y1 + dy]
+        } else {
+            [x0 + dx, y0 + dy, x1 + dx, y1 + dy]
+        };
+        for (i, v) in out.iter().enumerate() {
+            let _ = p.mem.vm.write_u32(this + i as u32 * 4, *v as u32);
+        }
+        return Some(NativeOutcome::Return);
+    }
+    if name == "_ZN5TRect12IntersectionERKS_" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(ax0), Ok(ay0), Ok(ax1), Ok(ay1)) = (rd(p, this), rd(p, this + 4), rd(p, this + 8), rd(p, this + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect unreadable")));
+        };
+        let (Ok(bx0), Ok(by0), Ok(bx1), Ok(by1)) = (rd(p, r1), rd(p, r1 + 4), rd(p, r1 + 8), rd(p, r1 + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect arg unreadable")));
+        };
+        let (ix0, iy0, ix1, iy1) = (ax0.max(bx0), ay0.max(by0), ax1.min(bx1), ay1.min(by1));
+        let out = if ix0 < ix1 && iy0 < iy1 { [ix0, iy0, ix1, iy1] } else { [0, 0, 0, 0] };
+        for (i, v) in out.iter().enumerate() {
+            let _ = p.mem.vm.write_u32(this + i as u32 * 4, *v as u32);
+        }
+        return Some(NativeOutcome::Return);
+    }
+    if name == "_ZN5TRect12BoundingRectERKS_" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(ax0), Ok(ay0), Ok(ax1), Ok(ay1)) = (rd(p, this), rd(p, this + 4), rd(p, this + 8), rd(p, this + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect unreadable")));
+        };
+        let (Ok(bx0), Ok(by0), Ok(bx1), Ok(by1)) = (rd(p, r1), rd(p, r1 + 4), rd(p, r1 + 8), rd(p, r1 + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect arg unreadable")));
+        };
+        let out = if ax0 >= ax1 || ay0 >= ay1 {
+            [bx0, by0, bx1, by1]
+        } else if bx0 >= bx1 || by0 >= by1 {
+            [ax0, ay0, ax1, ay1]
+        } else {
+            [ax0.min(bx0), ay0.min(by0), ax1.max(bx1), ay1.max(by1)]
+        };
+        for (i, v) in out.iter().enumerate() {
+            let _ = p.mem.vm.write_u32(this + i as u32 * 4, *v as u32);
+        }
+        return Some(NativeOutcome::Return);
+    }
     // TInt TRect::Width() const / Height() const (e32std.h): iBr - iTl along the axis.
     if name == "_ZNK5TRect5WidthEv" || name == "_ZNK5TRect6HeightEv" {
         let axis = if name.ends_with("HeightEv") { 1 } else { 0 };
@@ -28,8 +105,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let words: [i32; 4] = match name {
         // TRect::TRect(): zeroed.
         "_ZN5TRectC1Ev" => [0; 4],
-        // TRect::TRect(TInt aAx, TInt aAy, TInt aBx, TInt aBy): r1, r2, r3, [sp]
-        "_ZN5TRectC1Eiiii" | "_ZN5TRectC2Eiiii" => {
+        // TRect::TRect(TInt aAx, TInt aAy, TInt aBx, TInt aBy) / TRect::SetRect(TInt, TInt, TInt, TInt): r1, r2, r3, [sp]
+        "_ZN5TRectC1Eiiii" | "_ZN5TRectC2Eiiii" | "_ZN5TRect7SetRectEiiii" => {
             let sp = p.cpu.regs[13];
             let Ok(d) = rd(p, sp) else { return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: stack arg unreadable"))) };
             [p.cpu.regs[1] as i32, p.cpu.regs[2] as i32, p.cpu.regs[3] as i32, d]
