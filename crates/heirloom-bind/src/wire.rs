@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_ui_abi::WindowRole;
 
+use crate::cdef::{ControlDefBinding, ControlDefIdentity, ControlDefKind};
 use crate::spec::{
     AnchorRule, BindingSpec, BoxField, CStrField, CountRule, FileForm, FlagTest, GroupLayout,
     IntWidth, ItemLayout, PlacementLayout, StrListPick,
@@ -15,9 +16,12 @@ use crate::wdef::{WindowDefBinding, WindowDefIdentity, WindowMeaning};
 pub const BINDING_INPUT: &str = "binding";
 /// `Control::Input` name for a [`WindowDefBinding`].
 pub const WDEF_BINDING_INPUT: &str = "wdef-binding";
+/// `Control::Input` name for a [`ControlDefBinding`].
+pub const CDEF_BINDING_INPUT: &str = "cdef-binding";
 
 const SPEC_MAGIC: [u8; 5] = *b"HBND\x01";
 const WDEF_MAGIC: [u8; 5] = *b"HWDF\x01";
+const CDEF_MAGIC: [u8; 5] = *b"HCDF\x01";
 
 /// Encode a [`BindingSpec`] into its deterministic little-endian wire representation.
 pub fn encode_spec(spec: &BindingSpec) -> Result<Vec<u8>, String> {
@@ -259,6 +263,54 @@ pub fn decode_wdef(bytes: &[u8]) -> Result<WindowDefBinding, String> {
     })
 }
 
+/// Encode a [`ControlDefBinding`] into its deterministic little-endian wire representation.
+pub fn encode_cdef(cdef: &ControlDefBinding) -> Result<Vec<u8>, String> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&CDEF_MAGIC);
+    put_str(&mut b, &cdef.id)?;
+    match cdef.identity {
+        ControlDefIdentity::Resource { res_id, length, fnv1a64 } => {
+            b.push(0);
+            b.extend_from_slice(&res_id.to_le_bytes());
+            b.extend_from_slice(&length.to_le_bytes());
+            b.extend_from_slice(&fnv1a64.to_le_bytes());
+        }
+    }
+    b.push(match cdef.kind {
+        ControlDefKind::PushButton => 0,
+        ControlDefKind::CheckBox => 1,
+        ControlDefKind::RadioButton => 2,
+        ControlDefKind::ScrollBar => 3,
+    });
+    Ok(b)
+}
+
+/// Decode a [`ControlDefBinding`] from its wire representation; malformed or truncated bytes are refused by name.
+pub fn decode_cdef(bytes: &[u8]) -> Result<ControlDefBinding, String> {
+    let mut r = Reader::new(bytes);
+    if r.take(5)? != CDEF_MAGIC {
+        return Err(String::from("cdef-binding wire: bad magic or version"));
+    }
+    let id = r.str()?;
+    let identity = match r.u8()? {
+        0 => {
+            let id_bytes = r.take(2)?;
+            let res_id = i16::from_le_bytes([id_bytes[0], id_bytes[1]]);
+            ControlDefIdentity::Resource { res_id, length: r.u32()?, fnv1a64: r.u64()? }
+        }
+        t => return Err(format!("cdef-binding wire: bad identity tag {t}")),
+    };
+    let kind = match r.u8()? {
+        0 => ControlDefKind::PushButton,
+        1 => ControlDefKind::CheckBox,
+        2 => ControlDefKind::RadioButton,
+        3 => ControlDefKind::ScrollBar,
+        t => return Err(format!("cdef-binding wire: bad control kind {t}")),
+    };
+    r.finish("cdef-binding wire")?;
+    Ok(ControlDefBinding { id, identity, kind })
+}
+
 fn put_str(b: &mut Vec<u8>, s: &str) -> Result<(), String> {
     let n: u16 = s.len().try_into().map_err(|_| String::from("binding wire: id too long"))?;
     b.extend_from_slice(&n.to_le_bytes());
@@ -434,5 +486,25 @@ mod tests {
         bad_flags[n - 1] = 0x80;
         assert!(decode_wdef(&bad_flags).unwrap_err().contains("flag bits"));
         assert!(decode_wdef(&bytes[..4]).unwrap_err().contains("truncated"));
+    }
+
+    #[test]
+    fn cdef_binding_roundtrips_and_rejects_malformed_wire_bytes() {
+        let c = ControlDefBinding {
+            id: String::from("test-cdef2"),
+            identity: ControlDefIdentity::Resource {
+                res_id: 2,
+                length: 1824,
+                fnv1a64: 0x6cc07d31998bde0d,
+            },
+            kind: ControlDefKind::ScrollBar,
+        };
+        let bytes = encode_cdef(&c).unwrap();
+        assert_eq!(decode_cdef(&bytes).unwrap(), c);
+        let mut bad_kind = bytes.clone();
+        let n = bad_kind.len();
+        bad_kind[n - 1] = 9;
+        assert!(decode_cdef(&bad_kind).unwrap_err().contains("control kind"));
+        assert!(decode_cdef(&bytes[..4]).unwrap_err().contains("truncated"));
     }
 }

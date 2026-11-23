@@ -225,6 +225,7 @@ version = "0.1.0"
 name = "heirloom-mac68k-engine"
 version = "0.1.0"
 dependencies = [
+ "heirloom-bind",
  "heirloom-common",
  "heirloom-cpu-68k",
  "heirloom-cpu-68k-client",

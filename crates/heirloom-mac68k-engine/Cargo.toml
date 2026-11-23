@@ -17,6 +17,7 @@ heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-present = { path = "../heirloom-present" }
 heirloom-raster = { path = "../heirloom-raster" }
 heirloom-translate = { path = "../heirloom-translate" }
+heirloom-bind = { path = "../heirloom-bind" }
 # `os-library`: the os-mac.library table (src/os_face.rs) - heirloom-os-abi's machine session over this machine.
 heirloom-os-abi = { path = "../heirloom-os-abi", features = ["serve"], optional = true }
 

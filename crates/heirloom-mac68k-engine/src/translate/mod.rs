@@ -75,6 +75,8 @@ pub struct Translate {
     pub lists: BTreeMap<u32, lists::ListState>,
     pub dlg: dialogs::State,
     pub input: input::State,
+    /// Loaded declarative `CDEF` bindings (`HEIRLOOM-APP-CHROME-NEEDS-A-BINDING`, keyed strictly by resource id/len/hash).
+    pub cdef_bindings: alloc::vec::Vec<heirloom_bind::ControlDefBinding>,
 }
 
 impl Translate {

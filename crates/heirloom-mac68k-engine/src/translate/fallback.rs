@@ -4,7 +4,6 @@
 //! (a frame and the title) into the owner window's port, through the SAME QuickDraw path the program's own drawing
 //! takes, so it lands in the window's content plane, the route census counts it as replayed, and the program can read the
 //! pixels back. It is the role's default look, not a guess at an application's art: a custom CDEF's own drawing is not run.
-use super::controls::has_kit_part;
 use crate::machine::Mac;
 use crate::qd::draw::paint;
 use crate::qd::port::{raster, set_pen_loc, PAT_COPY};
@@ -23,7 +22,7 @@ impl<U: GuestUi> Mac<U> {
     /// Draw (or, when hidden, erase) control `ctl` in its window's port IF the kit has no part for it.
     pub(crate) fn draw_fallback(&mut self, ctl: u32) -> Result<(), Refusal> {
         let f = self.control_facts(ctl)?;
-        if has_kit_part(&f) || !self.qd.canvases.contains_key(&f.owner) { return Ok(()); }
+        if self.has_kit_part(&f) || !self.qd.canvases.contains_key(&f.owner) { return Ok(()); }
         let port = f.owner;
         let r = raster(f.rect);
         paint(self, port, &rect(r), PAT_COPY, &WHITE)?;

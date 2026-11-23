@@ -179,8 +179,37 @@ fn model(row: &Proc, f: &Facts, token: u32) -> Option<ControlModel> {
     Some(ControlModel { kind, label, rect: guest_rect(f.rect), enabled: f.hilite < INACTIVE, token: CallbackToken(u64::from(token)) })
 }
 
-/// Does the kit have a part for this control (a row with a role the closed vocabulary can express)?
-pub(super) fn has_kit_part(f: &Facts) -> bool { row_of(f.proc_id).and_then(|r| model(r, f, 0)).is_some() }
+impl<U: GuestUi> Mac<U> {
+    /// Register a declarative, version-bound custom `CDEF` binding (`HEIRLOOM-APP-CHROME-NEEDS-A-BINDING`).
+    pub fn add_control_def_binding(&mut self, b: heirloom_bind::ControlDefBinding) {
+        self.tr.cdef_bindings.push(b);
+    }
+
+    /// Resolve `proc_id` to its Control Manager table row: standard Toolbox procID first, then any matching declarative
+    /// `CDEF` resource binding (keyed strictly by the guest's `CDEF` resource id, byte length, and FNV-1a 64 digest).
+    pub(super) fn proc_of(&self, proc_id: u16) -> Option<&'static Proc> {
+        if let Some(p) = row_of(proc_id) { return Some(p); }
+        if self.tr.cdef_bindings.is_empty() { return None; }
+        let res_id = (proc_id >> 4) as i16;
+        let data = self.rm.files.iter().rev().find_map(|f| f.fork.find(*b"CDEF", res_id).and_then(|e| f.fork.data(e)))?;
+        let identity = heirloom_bind::ControlDefIdentity::Resource {
+            res_id,
+            length: data.len() as u32,
+            fnv1a64: heirloom_bind::wdef::fnv1a64(data),
+        };
+        let b = heirloom_bind::cdef::find(&self.tr.cdef_bindings, &identity)?;
+        let std_proc = match b.kind {
+            heirloom_bind::ControlDefKind::PushButton => 0,
+            heirloom_bind::ControlDefKind::CheckBox => 1,
+            heirloom_bind::ControlDefKind::RadioButton => 2,
+            heirloom_bind::ControlDefKind::ScrollBar => 16,
+        };
+        row_of(std_proc)
+    }
+
+    /// Does the kit have a part for this control (a standard row or bound CDEF with a role the closed vocabulary can express)?
+    pub(super) fn has_kit_part(&self, f: &Facts) -> bool { self.proc_of(f.proc_id).and_then(|r| model(r, f, 0)).is_some() }
+}
 
 fn arrow_len(len: i32) -> i32 { len.clamp(1, 16) }
 
@@ -272,7 +301,7 @@ impl<U: GuestUi> Mac<U> {
     /// Re-derive the control's native model from its record and push the difference.
     pub(crate) fn sync_control(&mut self, ctl: u32) -> Result<(), Refusal> {
         let f = self.control_facts(ctl)?;
-        let want = if f.vis { row_of(f.proc_id).and_then(|r| model(r, &f, ctl)) } else { None };
+        let want = if f.vis { self.proc_of(f.proc_id).and_then(|r| model(r, &f, ctl)) } else { None };
         self.sync_projection(f.owner, Obj::Control(ctl), want)?;
         self.draw_fallback(ctl)
     }
@@ -312,7 +341,7 @@ impl<U: GuestUi> Mac<U> {
         self.mem.write_bytes(p + C_TITLE + 1, &t).map_err(&e)?;
         self.mem.write_u32(win + WR_CONTROL_LIST, ctl).map_err(&e)?;
         self.tr.procs.insert(ctl, proc_id);
-        match row_of(proc_id) {
+        match self.proc_of(proc_id) {
             None => self.log.push(format!("[control] procID {proc_id} has no row in the Control Manager table: drawn into the content plane as the default look")),
             Some(r) if r.cdef == Cdef::PopupMenu => self.make_popup(ctl, proc_id, min)?,
             Some(_) => {}
@@ -396,7 +425,7 @@ impl<U: GuestUi> Mac<U> {
     /// A native intent on a control: write the state the gesture leaves, then the input the original OS would have seen.
     pub(crate) fn control_intent(&mut self, ctl: u32, intent: Intent) -> Result<(), Refusal> {
         let f = self.control_facts(ctl)?;
-        let row = row_of(f.proc_id).ok_or_else(|| Refusal(format!("Intent: procID {} has no row in the Control Manager table", f.proc_id)))?;
+        let row = self.proc_of(f.proc_id).ok_or_else(|| Refusal(format!("Intent: procID {} has no row in the Control Manager table", f.proc_id)))?;
         if f.hilite >= INACTIVE { return Err(Refusal(format!("Intent: {} {ctl:#x} is inactive (contrlHilite {})", row.name, f.hilite))); }
         let g = gesture(row, &f, &intent)?;
         let (v, h) = click_point(row, &f);
@@ -428,7 +457,7 @@ impl<U: GuestUi> Mac<U> {
         let slot = usize::try_from(i32::from(item) - 1).ok().and_then(|i| self.tr.dlg.dialogs.get(&win).and_then(|d| d.list.get(i))).cloned();
         let Some(slot) = slot.filter(|s| matches!(s.item, super::dialogs::Item::Control { .. } | super::dialogs::Item::ResControl) && self.tr.procs.contains_key(&s.handle)) else { return Ok(false) };
         let f = self.control_facts(slot.handle)?;
-        let Some(row) = row_of(f.proc_id) else { return Ok(false) };
+        let Some(row) = self.proc_of(f.proc_id) else { return Ok(false) };
         let (v, h) = click_point(row, &f);
         let Some(w) = self.windows.get(&win).map(|w| w.rect) else { return Ok(false) };
         self.tr.dlg.hits.pop_front();
@@ -601,7 +630,7 @@ fn find_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
     let (mut part, mut hit) = (0u16, 0u32);
     for ctl in m.window_controls(win)? {
         let f = m.control_facts(ctl)?;
-        let Some(row) = row_of(f.proc_id) else { continue };
+        let Some(row) = m.proc_of(f.proc_id) else { continue };
         if !f.vis || f.hilite >= INACTIVE { continue; }
         let p = part_at(row, &f, v, h);
         if p != 0 { (part, hit) = (p, ctl); break; }
@@ -614,7 +643,7 @@ fn find_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
 fn track_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (ctl, (v, h), action) = (c.args.get(0), point(c.args.get(1)), c.args.get(2));
     let f = m.control_facts(ctl)?;
-    let row = row_of(f.proc_id).ok_or_else(|| Refusal(format!("TrackControl: procID {} has no row in the Control Manager table", f.proc_id)))?;
+    let row = m.proc_of(f.proc_id).ok_or_else(|| Refusal(format!("TrackControl: procID {} has no row in the Control Manager table", f.proc_id)))?;
     let under = if f.vis && f.hilite < INACTIVE { part_at(row, &f, v, h) } else { 0 };
     let pending = m.tr.tracks.remove(&ctl);
     let part = match pending { Some((p, _)) if under != 0 => p, _ => under };

@@ -93,10 +93,16 @@ impl OsFamily for MacPpcFamily {
             m.add_window_def_binding(b);
             return Ok(());
         }
+        if name == heirloom_bind::wire::CDEF_BINDING_INPUT {
+            let b = heirloom_bind::wire::decode_cdef(&bytes)?;
+            m.mac.add_control_def_binding(b);
+            return Ok(());
+        }
         if name != CPU_TIER {
             return Err(format!(
-                "input {name:?}: the PowerPC Mac takes {CPU_TIER:?}, {HOME:?} and {:?}",
-                heirloom_bind::wire::WDEF_BINDING_INPUT
+                "input {name:?}: the PowerPC Mac takes {CPU_TIER:?}, {HOME:?}, {:?} and {:?}",
+                heirloom_bind::wire::WDEF_BINDING_INPUT,
+                heirloom_bind::wire::CDEF_BINDING_INPUT
             ));
         }
         // "jitablate": tier 2 with its guards rotated off per perf window (perf.rs ABLATIONS) - the Z83's one-deployment A/B

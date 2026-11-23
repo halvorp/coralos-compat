@@ -25,12 +25,14 @@
 extern crate alloc;
 
 pub mod anchor;
+pub mod cdef;
 pub mod parse;
 pub mod spec;
 pub mod state;
 pub mod wdef;
 pub mod wire;
 
+pub use cdef::{ControlDefBinding, ControlDefIdentity, ControlDefKind};
 pub use parse::{parse, recognise, Group, Label, Parsed, Placement, Recognised, Refusal};
 pub use spec::{
     AnchorRule, BindingSpec, BoxField, CStrField, CountRule, FileForm, FlagTest, GroupLayout,

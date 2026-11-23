@@ -26,6 +26,14 @@ impl OsFamily for MacFamily {
     fn create(profile: &str, ui: LibUi) -> Result<Mac<LibUi>, Refusal> {
         if profile.is_empty() { Mac::new(ui) } else { Mac::with_profile(ui, profile) }
     }
+    fn input(m: &mut Mac<LibUi>, name: &str, bytes: alloc::vec::Vec<u8>) -> Result<(), alloc::string::String> {
+        if name == heirloom_bind::wire::CDEF_BINDING_INPUT {
+            let b = heirloom_bind::wire::decode_cdef(&bytes)?;
+            m.add_control_def_binding(b);
+            return Ok(());
+        }
+        Err(alloc::format!("input {name:?}: the 68k Mac takes {:?}", heirloom_bind::wire::CDEF_BINDING_INPUT))
+    }
     fn attach_datatype(m: &mut Mac<LibUi>, host: heirloom_os_abi::datatype::DatatypeHost) -> Result<(), alloc::string::String> {
         m.datatype_host = Some(alloc::boxed::Box::new(host));
         Ok(())
