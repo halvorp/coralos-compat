@@ -68,7 +68,12 @@ impl OsFamily for AmiFamily {
             m.binds.add_spec(spec);
             return Ok(());
         }
-        Err(format!("input {name:?}: the Amiga machine takes {:?}", heirloom_bind::wire::BINDING_INPUT))
+        if name == "cli-args" {
+            let s = String::from_utf8(bytes).map_err(|_| String::from("input \"cli-args\": not valid UTF-8"))?;
+            m.cli_args = Some(s);
+            return Ok(());
+        }
+        Err(format!("input {name:?}: the Amiga machine takes {:?} or \"cli-args\"", heirloom_bind::wire::BINDING_INPUT))
     }
     fn attach_datatype(m: &mut Amiga<LibUi>, host: heirloom_os_abi::datatype::DatatypeHost) -> Result<(), String> {
         m.datatype_host = Some(alloc::boxed::Box::new(host));

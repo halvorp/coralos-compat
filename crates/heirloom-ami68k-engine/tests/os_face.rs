@@ -249,3 +249,32 @@ fn a_binding_input_reaches_the_machines_bind_table_and_bad_bytes_are_refused() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn cli_args_input_sets_machine_cli_args_and_refuses_bad_utf8() {
+    let mut s = session();
+    let arg = b"PicShow:PicShow.jpg".to_vec();
+    s.apply(&control(Control::Input {
+        name: "cli-args".into(),
+        offset: 0,
+        total: arg.len() as u32,
+        chunk: arg,
+    }))
+    .unwrap();
+    assert_eq!(s.machine().cli_args.as_deref(), Some("PicShow:PicShow.jpg"));
+
+    // NEGATIVE CONTROL: invalid UTF-8 is refused by name.
+    bind();
+    let mut remote = Remote::new("").unwrap();
+    let bad_utf8 = vec![0xFF, 0xFE];
+    let bad = [
+        control(Control::Input { name: "cli-args".into(), offset: 0, total: 2, chunk: bad_utf8 }),
+        control(Control::Step { budget: 1 }),
+    ]
+    .concat();
+    assert_eq!(remote.send(&[bad]), APPLY_OK);
+    match &remote.reports[..] {
+        [Report::Stepped { step: WireStep::Fault(why), insns: 0, .. }] => assert!(why.contains("UTF-8"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}
