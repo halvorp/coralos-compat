@@ -6,10 +6,12 @@ use crate::natives::NativeOutcome;
 
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     match name {
-        // void TTime::HomeTime(): microseconds since 00:00:00 1 Jan 0 AD (2026-11-22 base + monotonic virtual progress).
+        // void TTime::HomeTime(): microseconds since 00:00:00 1 Jan 0 AD (2026-11-22 base + virtual clock).
         "_ZN5TTime8HomeTimeEv" | "_ZN5TTime13UniversalTimeEv" => {
             let this = p.cpu.regs[0];
-            let us: u64 = 63_936_000_000_000_000u64.wrapping_add(p.insns.wrapping_mul(10));
+            let us: u64 = 63_936_000_000_000_000u64
+                .wrapping_add(p.nat.clock_us)
+                .wrapping_add(p.insns / 10);
             let ok = p.mem.vm.write_u32(this, us as u32).is_ok()
                 && p.mem.vm.write_u32(this.wrapping_add(4), (us >> 32) as u32).is_ok();
             if ok { Some(NativeOutcome::Return) } else { Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TTime at {this:#x} unwritable"))) }
@@ -49,6 +51,64 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let micro = (((days * 24 + h) * 60 + mi) * 60 + s) * 1_000_000 + us;
             let ok = p.mem.vm.write_u32(this, micro as u64 as u32).is_ok() && p.mem.vm.write_u32(this + 4, ((micro as u64) >> 32) as u32).is_ok();
             if ok { p.cpu.regs[0] = this; Some(NativeOutcome::Return) } else { Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: the TTime at {this:#x} is unwritable"))) }
+        }
+        // void TTime::FormatL(TDes16& aDes, const TDesC16& aFormat) const
+        "_ZNK5TTime7FormatLER6TDes16RK7TDesC16" => {
+            let (this, dst, fmt_addr) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2]);
+            let res = (|| -> Result<(), alloc::string::String> {
+                let lo = p.rd(this)? as u64;
+                let hi = p.rd(this.wrapping_add(4))? as u64;
+                let us = lo | (hi << 32);
+                let total_secs = (us / 1_000_000) as i64;
+                let sec = total_secs.rem_euclid(60);
+                let total_mins = total_secs.div_euclid(60);
+                let min = total_mins.rem_euclid(60);
+                let total_hrs = total_mins.div_euclid(60);
+                let hr = total_hrs.rem_euclid(24);
+                let mut days = total_hrs.div_euclid(24);
+                let leap = |y: i64| (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+                let mut year = 0i64;
+                while days >= if leap(year) { 366 } else { 365 } {
+                    days -= if leap(year) { 366 } else { 365 };
+                    year += 1;
+                }
+                const DAYS: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+                let mut month = 0usize;
+                while month < 11 {
+                    let md = DAYS[month] + if month == 1 && leap(year) { 1 } else { 0 };
+                    if days < md { break; }
+                    days -= md;
+                    month += 1;
+                }
+                let fmt_u = crate::desc::read16(p, fmt_addr)?;
+                let fmt_s = crate::desc::to_utf8(&fmt_u);
+                let mut out = alloc::string::String::new();
+                let mut chars = fmt_s.chars().peekable();
+                while let Some(c) = chars.next() {
+                    if c == '%' {
+                        match chars.next() {
+                            Some('F') | Some('*') | Some('-') | Some('+') => {}
+                            Some('D') => out.push_str(&format!("{:02}", days + 1)),
+                            Some('M') => out.push_str(&format!("{:02}", month + 1)),
+                            Some('Y') => out.push_str(&format!("{:04}", year)),
+                            Some('H') | Some('J') => out.push_str(&format!("{:02}", hr)),
+                            Some('T') => out.push_str(&format!("{:02}", min)),
+                            Some('S') => out.push_str(&format!("{:02}", sec)),
+                            Some('%') => out.push('%'),
+                            Some(other) => out.push(other),
+                            None => break,
+                        }
+                    } else {
+                        out.push(c);
+                    }
+                }
+                let units: alloc::vec::Vec<u16> = out.encode_utf16().collect();
+                crate::desc::write16(p, dst, &units)
+            })();
+            match res {
+                Ok(()) => Some(NativeOutcome::Return),
+                Err(m) => Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}"))),
+            }
         }
         _ => None,
     }

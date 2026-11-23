@@ -61,6 +61,20 @@ pub fn read8(p: &Process, addr: u32) -> Result<Vec<u8>, String> {
 }
 
 /// `TDes16::Copy`-style write: the elements and the new length. A source longer than `iMaxLength` is an error (a USER 11 panic on a device).
+fn set_des_len(p: &mut Process, addr: u32, new_len: u32) -> Result<(), String> {
+    let w0 = word(p, addr, "its length word")?;
+    p.mem.vm.write_u32(addr, (w0 & !LENGTH_MASK) | (new_len & LENGTH_MASK))
+        .map_err(|_| format!("descriptor at {addr:#x}: length word is unwritable"))?;
+    if (w0 >> KSHIFT_DES_TYPE) == DES_BUF_C_PTR {
+        let hbuf = word(p, addr.wrapping_add(8), "HBufC pointer")?;
+        let hw0 = word(p, hbuf, "HBufC length word")?;
+        p.mem.vm.write_u32(hbuf, (hw0 & !LENGTH_MASK) | (new_len & LENGTH_MASK))
+            .map_err(|_| format!("HBufC at {hbuf:#x}: length word is unwritable"))?;
+    }
+    Ok(())
+}
+
+/// `TDes16::Copy`-style write of UTF-16 code units.
 pub fn write16(p: &mut Process, addr: u32, text: &[u16]) -> Result<(), String> {
     let v = locate(p, addr)?;
     let max = v.max.ok_or_else(|| format!("descriptor at {addr:#x} is not modifiable"))?;
@@ -70,8 +84,7 @@ pub fn write16(p: &mut Process, addr: u32, text: &[u16]) -> Result<(), String> {
     for (i, u) in text.iter().enumerate() {
         p.mem.vm.write_u16(v.data.wrapping_add(i as u32 * 2), *u).map_err(|_| format!("descriptor at {addr:#x}: element {i} is unwritable"))?;
     }
-    let w0 = word(p, addr, "its length word")?;
-    p.mem.vm.write_u32(addr, (w0 & !LENGTH_MASK) | text.len() as u32).map_err(|_| format!("descriptor at {addr:#x}: length word is unwritable"))
+    set_des_len(p, addr, text.len() as u32)
 }
 
 /// `TDes8::Copy`-style write of bytes (the 8-bit counterpart of [`write16`]).
@@ -84,8 +97,7 @@ pub fn write8(p: &mut Process, addr: u32, bytes: &[u8]) -> Result<(), String> {
     for (i, b) in bytes.iter().enumerate() {
         p.mem.vm.write_u8(v.data.wrapping_add(i as u32), *b).map_err(|_| format!("descriptor at {addr:#x}: byte {i} is unwritable"))?;
     }
-    let w0 = word(p, addr, "its length word")?;
-    p.mem.vm.write_u32(addr, (w0 & !LENGTH_MASK) | bytes.len() as u32).map_err(|_| format!("descriptor at {addr:#x}: length word is unwritable"))
+    set_des_len(p, addr, bytes.len() as u32)
 }
 
 /// Convert UTF-16 elements to UTF-8 (lossy on unpaired surrogates): the GuestUi boundary.
@@ -108,10 +120,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
         }
         // void TDes16::Zero() / void TDes8::Zero(): set length to 0 while preserving descriptor type bits.
         "_ZN6TDes164ZeroEv" | "_ZN5TDes84ZeroEv" => {
-            let r = word(p, this, "its length word").and_then(|w0| {
-                p.mem.vm.write_u32(this, w0 & !LENGTH_MASK).map_err(|_| format!("descriptor at {this:#x}: length word is unwritable"))
-            });
-            match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
+            match set_des_len(p, this, 0) { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
         }
         // TDes16::Copy(const TDesC16& aDes) (e32des16.h): replace the contents; longer than the maximum length panics USER 11.
         "_ZN6TDes164CopyERK7TDesC16" => {
@@ -237,8 +246,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
                 if new_len < 0 || (new_len as u32) > max {
                     return Err(format!("SetLength({new_len}) exceeds max {max}"));
                 }
-                let ty = (p.rd(this)? >> KSHIFT_DES_TYPE) & 0xf;
-                p.wr(this, (new_len as u32) | (ty << KSHIFT_DES_TYPE))
+                set_des_len(p, this, new_len as u32)
             });
             match res { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
         }
@@ -553,6 +561,100 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
                 }
                 Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
             }
+        }
+        // HBufC16::New/NewL/NewLC(TInt aMaxLength) / HBufC8::New/NewL/NewLC(TInt aMaxLength)
+        "_ZN7HBufC163NewEi" | "_ZN7HBufC164NewLEi" | "_ZN7HBufC165NewLCEi"
+        | "_ZN6HBufC83NewEi" | "_ZN6HBufC84NewLEi" | "_ZN6HBufC85NewLCEi" => {
+            let max_len = p.cpu.regs[0] as i32;
+            if max_len < 0 {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: negative max length {max_len}")));
+            }
+            let unit_bytes: u32 = if name.contains("HBufC16") { 2 } else { 1 };
+            let total = 4u32.saturating_add((max_len as u32).saturating_mul(unit_bytes));
+            let Some(h) = p.alloc_zeroed(total) else {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: out of heap")));
+            };
+            let ok = p.mem.vm.write_u32(h, DES_BUF_C << KSHIFT_DES_TYPE).is_ok();
+            if name.contains("NewLC") {
+                p.nat.cleanup.push(crate::cleanup::CleanupItem::Any(h));
+            }
+            p.cpu.regs[0] = h;
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {h:#x} unwritable")) }
+        }
+        // void TDes8::Copy(const TUint8* aBuf, TInt aLength)
+        "_ZN5TDes84CopyEPKhi" => {
+            let (src, len) = (p.cpu.regs[1], p.cpu.regs[2] as i32);
+            if len < 0 {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: negative length {len}")));
+            }
+            let mut bytes = Vec::with_capacity(len as usize);
+            for i in 0..len as u32 {
+                match p.mem.vm.read_u8(src.wrapping_add(i)) {
+                    Ok(b) => bytes.push(b),
+                    Err(_) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: src {src:#x} unreadable"))),
+                }
+            }
+            match write8(p, this, &bytes) {
+                Ok(()) => NativeOutcome::Return,
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // TInt TDesC16::Locate(TChar) / TDesC8::Locate(TChar) / LocateReverse(TChar)
+        "_ZNK7TDesC166LocateE5TChar" => {
+            let needle = (p.cpu.regs[1] & 0xFFFF) as u16;
+            match read16(p, this) {
+                Ok(units) => {
+                    let pos = units.iter().position(|&c| c == needle);
+                    p.cpu.regs[0] = pos.map(|i| i as u32).unwrap_or((-1i32) as u32);
+                    NativeOutcome::Return
+                }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // void TDes16::Replace(TInt aPos, TInt aLength, const TDesC16& aDes)
+        "_ZN6TDes167ReplaceEiiRK7TDesC16" => {
+            let (pos, len, src_addr) = (p.cpu.regs[1] as i32, p.cpu.regs[2] as i32, p.cpu.regs[3]);
+            let res = (|| -> Result<(), String> {
+                let mut cur = read16(p, this)?;
+                let rep = read16(p, src_addr)?;
+                if pos < 0 || len < 0 || (pos as usize).saturating_add(len as usize) > cur.len() {
+                    return Err(format!("Replace range ({pos}, {len}) out of bounds (len {})", cur.len()));
+                }
+                cur.splice(pos as usize..(pos as usize + len as usize), rep);
+                write16(p, this, &cur)
+            })();
+            match res {
+                Ok(()) => NativeOutcome::Return,
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        "_ZNK6TDesC86LocateE5TChar" | "_ZNK6TDesC813LocateReverseE5TChar" => {
+            let needle = (p.cpu.regs[1] & 0xFF) as u8;
+            match read8(p, this) {
+                Ok(bytes) => {
+                    let pos = if name.contains("Reverse") {
+                        bytes.iter().rposition(|&b| b == needle)
+                    } else {
+                        bytes.iter().position(|&b| b == needle)
+                    };
+                    p.cpu.regs[0] = pos.map(|i| i as u32).unwrap_or((-1i32) as u32);
+                    NativeOutcome::Return
+                }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // TShortDateFormatSpec / TTimeFormatSpec (e32std.h): TBuf<40> filled with default format spec.
+        "_ZN20TShortDateFormatSpecC1Ev" | "_ZN20TShortDateFormatSpecC2Ev"
+        | "_ZN15TTimeFormatSpecC1Ev" | "_ZN15TTimeFormatSpecC2Ev" => {
+            let fmt = if name.contains("TimeFormat") { "%H:%T:%S" } else { "%F%D/%M/%Y" };
+            let spec: Vec<u16> = fmt.encode_utf16().collect();
+            let mut ok = p.mem.vm.write_u32(this, (DES_BUF << KSHIFT_DES_TYPE) | (spec.len() as u32)).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), 40).is_ok();
+            for (i, &u) in spec.iter().enumerate() {
+                ok = ok && p.mem.vm.write_u16(this.wrapping_add(8 + 2 * i as u32), u).is_ok();
+            }
+            p.cpu.regs[0] = this;
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {this:#x} unwritable")) }
         }
         _ => return None,
     })
