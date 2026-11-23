@@ -77,6 +77,8 @@ pub struct Translate {
     pub input: input::State,
     /// Loaded declarative `CDEF` bindings (`HEIRLOOM-APP-CHROME-NEEDS-A-BINDING`, keyed strictly by resource id/len/hash).
     pub cdef_bindings: alloc::vec::Vec<heirloom_bind::ControlDefBinding>,
+    /// Loaded declarative in-plane chrome bindings (`HEIRLOOM-APP-CHROME-NEEDS-A-BINDING`, keyed strictly by resource type/id/len/hash).
+    pub plane_chrome_bindings: alloc::vec::Vec<heirloom_bind::PlaneChromeBinding>,
 }
 
 impl Translate {

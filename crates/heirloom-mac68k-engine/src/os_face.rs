@@ -32,7 +32,16 @@ impl OsFamily for MacFamily {
             m.add_control_def_binding(b);
             return Ok(());
         }
-        Err(alloc::format!("input {name:?}: the 68k Mac takes {:?}", heirloom_bind::wire::CDEF_BINDING_INPUT))
+        if name == heirloom_bind::wire::PLANE_CHROME_BINDING_INPUT {
+            let b = heirloom_bind::wire::decode_plane_chrome(&bytes)?;
+            m.add_plane_chrome_binding(b);
+            return Ok(());
+        }
+        Err(alloc::format!(
+            "input {name:?}: the 68k Mac takes {:?} and {:?}",
+            heirloom_bind::wire::CDEF_BINDING_INPUT,
+            heirloom_bind::wire::PLANE_CHROME_BINDING_INPUT
+        ))
     }
     fn attach_datatype(m: &mut Mac<LibUi>, host: heirloom_os_abi::datatype::DatatypeHost) -> Result<(), alloc::string::String> {
         m.datatype_host = Some(alloc::boxed::Box::new(host));

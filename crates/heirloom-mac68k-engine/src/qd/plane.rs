@@ -199,7 +199,20 @@ pub fn flush<U: GuestUi>(m: &mut Mac<U>) {
         let dirty = m.qd.plane.dirty.remove(&win);
         if !first && dirty.is_none() { m.qd.present.forget(win); continue; }
         let rect = if first { m.qd.canvases[&win].rect() } else { dirty.unwrap_or_default() };
-        match m.ui.present_plane(native, Plane { id: PLANE_ID, rect: grect(&rect), ops: m.qd.plane.ops(win) }) {
+        let mut ops = m.qd.plane.ops(win);
+        if !m.tr.plane_chrome_bindings.is_empty() {
+            let canvas_r = m.qd.canvases[&win].rect();
+            let win_size = (canvas_r.x1 - canvas_r.x0, canvas_r.y1 - canvas_r.y0);
+            for b in &m.tr.plane_chrome_bindings {
+                let heirloom_bind::PlaneChromeIdentity::Resource { res_type, res_id, length, fnv1a64 } = b.identity;
+                let matched = m.rm.files.iter().rev().find_map(|f| f.fork.find(res_type, res_id).and_then(|e| f.fork.data(e)))
+                    .is_some_and(|data| data.len() as u32 == length && heirloom_bind::wdef::fnv1a64(data) == fnv1a64);
+                if matched {
+                    ops = b.apply(ops, win_size);
+                }
+            }
+        }
+        match m.ui.present_plane(native, Plane { id: PLANE_ID, rect: grect(&rect), ops }) {
             Ok(()) => {
                 m.qd.plane.presented.insert(win);
                 m.qd.present.forget(win);

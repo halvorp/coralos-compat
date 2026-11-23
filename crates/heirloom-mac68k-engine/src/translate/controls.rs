@@ -185,6 +185,11 @@ impl<U: GuestUi> Mac<U> {
         self.tr.cdef_bindings.push(b);
     }
 
+    /// Register a declarative, version-bound in-plane chrome binding (`HEIRLOOM-APP-CHROME-NEEDS-A-BINDING`).
+    pub fn add_plane_chrome_binding(&mut self, b: heirloom_bind::PlaneChromeBinding) {
+        self.tr.plane_chrome_bindings.push(b);
+    }
+
     /// Resolve `proc_id` to its Control Manager table row: standard Toolbox procID first, then any matching declarative
     /// `CDEF` resource binding (keyed strictly by the guest's `CDEF` resource id, byte length, and FNV-1a 64 digest).
     pub(super) fn proc_of(&self, proc_id: u16) -> Option<&'static Proc> {

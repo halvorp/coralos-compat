@@ -500,6 +500,12 @@ pub(super) fn put_icon_role(out: &mut Vec<u8>, value: &IconRole) {
         IconRole::Trash => 5,
         IconRole::Device => 6,
         IconRole::Kick => 7,
+        IconRole::AlignLeft => 8,
+        IconRole::AlignCenter => 9,
+        IconRole::AlignRight => 10,
+        IconRole::AlignJustify => 11,
+        IconRole::TabStop => 12,
+        IconRole::TabDecimal => 13,
     });
 }
 
@@ -514,6 +520,12 @@ pub(super) fn get_icon_role(reader: &mut Reader<'_>) -> Result<IconRole, WireErr
         5 => IconRole::Trash,
         6 => IconRole::Device,
         7 => IconRole::Kick,
+        8 => IconRole::AlignLeft,
+        9 => IconRole::AlignCenter,
+        10 => IconRole::AlignRight,
+        11 => IconRole::AlignJustify,
+        12 => IconRole::TabStop,
+        13 => IconRole::TabDecimal,
         _ => return Err(WireError::UnknownTag { what: "IconRole", tag }),
     })
 }

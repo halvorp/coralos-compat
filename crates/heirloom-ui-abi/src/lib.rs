@@ -49,6 +49,18 @@ pub enum IconRole {
     Device,
     /// A boot/Kickstart disk (WBKICK).
     Kick,
+    /// Paragraph / text alignment: flush left.
+    AlignLeft,
+    /// Paragraph / text alignment: centered.
+    AlignCenter,
+    /// Paragraph / text alignment: flush right.
+    AlignRight,
+    /// Paragraph / text alignment: justified.
+    AlignJustify,
+    /// Ruler / formatting toolbar: standard left tab stop.
+    TabStop,
+    /// Ruler / formatting toolbar: decimal tab stop / indent.
+    TabDecimal,
 }
 
 /// What the engines call. One implementation per host (real CoralOS, recording, headless).

@@ -3,9 +3,10 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use heirloom_ui_abi::WindowRole;
+use heirloom_ui_abi::{GuestRect, IconRole, WindowRole};
 
 use crate::cdef::{ControlDefBinding, ControlDefIdentity, ControlDefKind};
+use crate::plane_chrome::{BandRule, ButtonRule, PlaneChromeBinding, PlaneChromeIdentity};
 use crate::spec::{
     AnchorRule, BindingSpec, BoxField, CStrField, CountRule, FileForm, FlagTest, GroupLayout,
     IntWidth, ItemLayout, PlacementLayout, StrListPick,
@@ -18,10 +19,13 @@ pub const BINDING_INPUT: &str = "binding";
 pub const WDEF_BINDING_INPUT: &str = "wdef-binding";
 /// `Control::Input` name for a [`ControlDefBinding`].
 pub const CDEF_BINDING_INPUT: &str = "cdef-binding";
+/// `Control::Input` name for a [`PlaneChromeBinding`].
+pub const PLANE_CHROME_BINDING_INPUT: &str = "plane-chrome-binding";
 
 const SPEC_MAGIC: [u8; 5] = *b"HBND\x01";
 const WDEF_MAGIC: [u8; 5] = *b"HWDF\x01";
 const CDEF_MAGIC: [u8; 5] = *b"HCDF\x01";
+const PCHR_MAGIC: [u8; 5] = *b"HPCM\x01";
 
 /// Encode a [`BindingSpec`] into its deterministic little-endian wire representation.
 pub fn encode_spec(spec: &BindingSpec) -> Result<Vec<u8>, String> {
@@ -311,6 +315,170 @@ pub fn decode_cdef(bytes: &[u8]) -> Result<ControlDefBinding, String> {
     Ok(ControlDefBinding { id, identity, kind })
 }
 
+fn put_rect(b: &mut Vec<u8>, r: GuestRect) {
+    b.extend_from_slice(&r.left.to_le_bytes());
+    b.extend_from_slice(&r.top.to_le_bytes());
+    b.extend_from_slice(&r.width.to_le_bytes());
+    b.extend_from_slice(&r.height.to_le_bytes());
+}
+
+fn encode_icon_role(r: IconRole) -> u8 {
+    match r {
+        IconRole::Disk => 0,
+        IconRole::Volume => 1,
+        IconRole::Drawer => 2,
+        IconRole::Tool => 3,
+        IconRole::Project => 4,
+        IconRole::Trash => 5,
+        IconRole::Device => 6,
+        IconRole::Kick => 7,
+        IconRole::AlignLeft => 8,
+        IconRole::AlignCenter => 9,
+        IconRole::AlignRight => 10,
+        IconRole::AlignJustify => 11,
+        IconRole::TabStop => 12,
+        IconRole::TabDecimal => 13,
+    }
+}
+
+fn decode_icon_role(t: u8) -> Result<IconRole, String> {
+    match t {
+        0 => Ok(IconRole::Disk),
+        1 => Ok(IconRole::Volume),
+        2 => Ok(IconRole::Drawer),
+        3 => Ok(IconRole::Tool),
+        4 => Ok(IconRole::Project),
+        5 => Ok(IconRole::Trash),
+        6 => Ok(IconRole::Device),
+        7 => Ok(IconRole::Kick),
+        8 => Ok(IconRole::AlignLeft),
+        9 => Ok(IconRole::AlignCenter),
+        10 => Ok(IconRole::AlignRight),
+        11 => Ok(IconRole::AlignJustify),
+        12 => Ok(IconRole::TabStop),
+        13 => Ok(IconRole::TabDecimal),
+        _ => Err(format!("plane-chrome wire: bad icon role {t}")),
+    }
+}
+
+/// Encode a [`PlaneChromeBinding`] into its deterministic little-endian wire representation.
+pub fn encode_plane_chrome(pc: &PlaneChromeBinding) -> Result<Vec<u8>, String> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&PCHR_MAGIC);
+    put_str(&mut b, &pc.id)?;
+    match pc.identity {
+        PlaneChromeIdentity::Resource { res_type, res_id, length, fnv1a64 } => {
+            b.push(0);
+            b.extend_from_slice(&res_type);
+            b.extend_from_slice(&res_id.to_le_bytes());
+            b.extend_from_slice(&length.to_le_bytes());
+            b.extend_from_slice(&fnv1a64.to_le_bytes());
+        }
+    }
+    match &pc.present_if_text {
+        None => b.push(0),
+        Some(s) => {
+            b.push(1);
+            put_str(&mut b, s)?;
+        }
+    }
+    let bn: u8 = pc.bands.len().try_into().map_err(|_| String::from("plane-chrome wire: too many bands"))?;
+    b.push(bn);
+    for band in &pc.bands {
+        put_rect(&mut b, band.rect);
+        b.push(u8::from(band.remap_1bit_pixels));
+    }
+    let btn_n: u8 = pc.buttons.len().try_into().map_err(|_| String::from("plane-chrome wire: too many buttons"))?;
+    b.push(btn_n);
+    for btn in &pc.buttons {
+        put_rect(&mut b, btn.rect);
+        put_rect(&mut b, btn.clear_rect);
+        match btn.active_rect {
+            None => b.push(0),
+            Some(ar) => {
+                b.push(1);
+                put_rect(&mut b, ar);
+            }
+        }
+        put_str(&mut b, &btn.label)?;
+        match btn.icon {
+            None => b.push(0),
+            Some(role) => {
+                b.push(1);
+                b.push(encode_icon_role(role));
+            }
+        }
+    }
+    match pc.suppress_bottom_right {
+        None => b.push(0),
+        Some((cw, ch)) => {
+            b.push(1);
+            b.extend_from_slice(&cw.to_le_bytes());
+            b.extend_from_slice(&ch.to_le_bytes());
+        }
+    }
+    Ok(b)
+}
+
+/// Decode a [`PlaneChromeBinding`] from its wire representation; malformed or truncated bytes are refused by name.
+pub fn decode_plane_chrome(bytes: &[u8]) -> Result<PlaneChromeBinding, String> {
+    let mut r = Reader::new(bytes);
+    if r.take(5)? != PCHR_MAGIC {
+        return Err(String::from("plane-chrome wire: bad magic or version"));
+    }
+    let id = r.str()?;
+    let identity = match r.u8()? {
+        0 => {
+            let res_type = r.four()?;
+            let id_b = r.take(2)?;
+            let res_id = i16::from_le_bytes([id_b[0], id_b[1]]);
+            PlaneChromeIdentity::Resource { res_type, res_id, length: r.u32()?, fnv1a64: r.u64()? }
+        }
+        t => return Err(format!("plane-chrome wire: bad identity tag {t}")),
+    };
+    let present_if_text = match r.u8()? {
+        0 => None,
+        1 => Some(r.str()?),
+        t => return Err(format!("plane-chrome wire: bad present_if_text tag {t}")),
+    };
+    let bn = r.u8()? as usize;
+    let mut bands = Vec::with_capacity(bn);
+    for _ in 0..bn {
+        let rect = r.rect()?;
+        let remap_1bit_pixels = match r.u8()? {
+            0 => false,
+            1 => true,
+            t => return Err(format!("plane-chrome wire: bad remap bool {t}")),
+        };
+        bands.push(BandRule { rect, remap_1bit_pixels });
+    }
+    let btn_n = r.u8()? as usize;
+    let mut buttons = Vec::with_capacity(btn_n);
+    for _ in 0..btn_n {
+        let rect = r.rect()?;
+        let clear_rect = r.rect()?;
+        let active_rect = match r.u8()? {
+            0 => None,
+            1 => Some(r.rect()?),
+            t => return Err(format!("plane-chrome wire: bad active_rect tag {t}")),
+        };
+        let label = r.str()?;
+        let icon = match r.u8()? {
+            0 => None,
+            1 => Some(decode_icon_role(r.u8()?)?),
+            t => return Err(format!("plane-chrome wire: bad icon tag {t}")),
+        };
+        buttons.push(ButtonRule { rect, clear_rect, active_rect, label, icon });
+    }
+    let suppress_bottom_right = match r.u8()? {
+        0 => None,
+        1 => Some((r.i32()?, r.i32()?)),
+        t => return Err(format!("plane-chrome wire: bad suppress tag {t}")),
+    };
+    r.finish("plane-chrome wire")?;
+    Ok(PlaneChromeBinding { id, identity, present_if_text, bands, buttons, suppress_bottom_right })
+}
+
 fn put_str(b: &mut Vec<u8>, s: &str) -> Result<(), String> {
     let n: u16 = s.len().try_into().map_err(|_| String::from("binding wire: id too long"))?;
     b.extend_from_slice(&n.to_le_bytes());
@@ -372,7 +540,11 @@ impl<'a> Reader<'a> {
     fn u8(&mut self) -> Result<u8, String> { Ok(self.take(1)?[0]) }
     fn u16(&mut self) -> Result<u16, String> { Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap())) }
     fn u32(&mut self) -> Result<u32, String> { Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap())) }
+    fn i32(&mut self) -> Result<i32, String> { Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap())) }
     fn u64(&mut self) -> Result<u64, String> { Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap())) }
+    fn rect(&mut self) -> Result<GuestRect, String> {
+        Ok(GuestRect { left: self.i32()?, top: self.i32()?, width: self.i32()?, height: self.i32()? })
+    }
     fn four(&mut self) -> Result<[u8; 4], String> { Ok(self.take(4)?.try_into().unwrap()) }
     fn str(&mut self) -> Result<String, String> {
         let n = self.u16()? as usize;
@@ -506,5 +678,35 @@ mod tests {
         bad_kind[n - 1] = 9;
         assert!(decode_cdef(&bad_kind).unwrap_err().contains("control kind"));
         assert!(decode_cdef(&bytes[..4]).unwrap_err().contains("truncated"));
+    }
+
+    #[test]
+    fn plane_chrome_binding_roundtrips_and_rejects_malformed_wire_bytes() {
+        let gr = |left, top, width, height| GuestRect { left, top, width, height };
+        let pc = PlaneChromeBinding {
+            id: String::from("test-ruler"),
+            identity: PlaneChromeIdentity::Resource {
+                res_type: *b"CODE",
+                res_id: 1,
+                length: 2530,
+                fnv1a64: 0x73421e483f3e48ef,
+            },
+            present_if_text: Some(String::from("6 lines/inch")),
+            bands: vec![BandRule { rect: gr(0, 0, 487, 46), remap_1bit_pixels: true }],
+            buttons: vec![ButtonRule {
+                rect: gr(327, 26, 33, 18),
+                clear_rect: gr(326, 25, 35, 20),
+                active_rect: Some(gr(329, 29, 28, 12)),
+                label: String::from(" "),
+                icon: Some(IconRole::AlignLeft),
+            }],
+            suppress_bottom_right: Some((22, 22)),
+        };
+        let bytes = encode_plane_chrome(&pc).unwrap();
+        assert_eq!(decode_plane_chrome(&bytes).unwrap(), pc);
+        let mut bad_magic = bytes.clone();
+        bad_magic[0] = b'Z';
+        assert!(decode_plane_chrome(&bad_magic).unwrap_err().contains("bad magic"));
+        assert!(decode_plane_chrome(&bytes[..bytes.len() - 1]).unwrap_err().contains("truncated"));
     }
 }
