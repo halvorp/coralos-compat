@@ -48,6 +48,7 @@ pub mod mouse;
 pub mod menu_items;
 pub mod mixed;
 pub mod osconv;
+pub mod pack4;
 pub mod pack7;
 pub mod palette;
 pub mod package;

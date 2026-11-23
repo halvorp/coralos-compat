@@ -193,6 +193,7 @@ impl<U: GuestUi> Mac<U> {
         crate::sysenv::register(&mut m)?;
         crate::gestalt::register(&mut m)?;
         crate::pack2::register(&mut m)?;
+        crate::pack4::register(&mut m)?;
         crate::pack7::register(&mut m)?;
         crate::vbl::register(&mut m)?;
         crate::palette::register(&mut m)?;
