@@ -38,7 +38,12 @@ impl<U: GuestUi> Amiga<U> {
     fn start(&mut self, file: &[u8], name: &str) -> Result<Loaded, String> {
         let loaded = heirloom_fmt_hunk::load(&mut self.mem, file, LOAD_BASE).map_err(|e| e.to_string())?;
         self.mem.write_u32(STACK_TOP - 4, EXIT_SLOT).map_err(|e| e.to_string())?; // return address for the final rts
-        process::setup(&mut self.mem, EXEC_BASE, STACK_TOP - STACK_SIZE, STACK_TOP, name, EMPTY_ARGS).map_err(|r| r.0)?;
+        let arg_line = match &self.cli_args {
+            Some(s) if s.ends_with('\n') => s.clone(),
+            Some(s) => format!("{s}\n"),
+            None => String::from(EMPTY_ARGS),
+        };
+        process::setup(&mut self.mem, EXEC_BASE, STACK_TOP - STACK_SIZE, STACK_TOP, name, &arg_line).map_err(|r| r.0)?;
         dos::setup(&mut self.mem).map_err(|r| r.0)?;
         screen::setup(&mut self.mem).map_err(|r| r.0)?;
         crate::graphics::setup(self).map_err(|r| r.0)?;
@@ -47,7 +52,7 @@ impl<U: GuestUi> Amiga<U> {
         // `CurrentDir(0)` + `DupLock(old)` at startup (SAS/C's startup code does) treat a NULL old lock as failure and quit.
         let root = crate::fs::new_lock_in(self, self.fs.vol.boot_device(), false, true).map_err(|r| r.0)?.ok_or("no memory for the current-directory lock")?;
         self.mem.write_u32(process::PROCESS + 152, root >> 2).map_err(|e| e.to_string())?; // pr_CurrentDir
-        let regs = [(crate::cpu::REG_A0, process::ARGS), (crate::cpu::REG_D0, EMPTY_ARGS.len() as u32)];
+        let regs = [(crate::cpu::REG_A0, process::ARGS), (crate::cpu::REG_D0, arg_line.len() as u32)];
         // The main program is the first task; its registers are created at its first dispatch (sched.rs).
         self.sched = Default::default();
         self.add_sched_task(process::PROCESS, name.into(), true, crate::sched::Start { pc: loaded.entry, sp: STACK_TOP - 4, regs: regs.to_vec() }, None);

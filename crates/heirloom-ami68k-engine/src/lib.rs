@@ -20,6 +20,7 @@ pub use os_face::os_vtable;
 pub mod asl;
 pub mod audio;
 pub mod cybergraphics;
+pub mod datatypes;
 pub mod gameport;
 pub mod driver;
 pub mod boopsi;

@@ -70,6 +70,10 @@ impl OsFamily for AmiFamily {
         }
         Err(format!("input {name:?}: the Amiga machine takes {:?}", heirloom_bind::wire::BINDING_INPUT))
     }
+    fn attach_datatype(m: &mut Amiga<LibUi>, host: heirloom_os_abi::datatype::DatatypeHost) -> Result<(), String> {
+        m.datatype_host = Some(alloc::boxed::Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<AmiFamily>();

@@ -8,15 +8,53 @@
 //! `--progdir PATH` points PROGDIR: at a guest path. `--stub lib/Func` (census only) makes an unimplemented function return a
 //! zeroed block so the run continues past another lane's missing library (census.rs).
 use heirloom_ami68k_engine::{fixture, Amiga};
+use heirloom_common::datatype::{DecodedImage, NativeDatatype};
 #[path = "../volume_host.rs"]
 mod volume_host;
 use heirloom_ui_abi::RecordingGuestUi;
+
+/// Host-runner `NativeDatatype` using Pillow (mirrors CoralOS's native `datatype.library` workers on target).
+struct HostDatatype;
+impl NativeDatatype for HostDatatype {
+    fn decode_image(&self, data: &[u8], fit_w: u32, fit_h: u32) -> Option<DecodedImage> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("python3")
+            .args([
+                "-c",
+                "import sys,io,struct; from PIL import Image; im=Image.open(io.BytesIO(sys.stdin.buffer.read())).convert('RGBA'); w,h=im.size; sys.stdout.buffer.write(struct.pack('<II',w,h)+im.tobytes())",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        child.stdin.take()?.write_all(data).ok()?;
+        let out = child.wait_with_output().ok()?;
+        if !out.status.success() || out.stdout.len() < 8 {
+            return None;
+        }
+        let w = u32::from_le_bytes(out.stdout[0..4].try_into().ok()?);
+        let h = u32::from_le_bytes(out.stdout[4..8].try_into().ok()?);
+        let _ = (fit_w, fit_h);
+        let raw = &out.stdout[8..];
+        if raw.len() != (w as usize) * (h as usize) * 4 {
+            return None;
+        }
+        let pixels = raw
+            .chunks_exact(4)
+            .map(|c| ((c[3] as u32) << 24) | ((c[0] as u32) << 16) | ((c[1] as u32) << 8) | (c[2] as u32))
+            .collect();
+        Some(DecodedImage { width: w, height: h, pixels })
+    }
+}
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let census = args.first().map(|a| a == "--census").unwrap_or(false);
     if census { args.remove(0); }
     let mut a = Amiga::new(RecordingGuestUi::new()).expect("machine");
+    a.datatype_host = Some(Box::new(HostDatatype));
     let die = |m: String| -> ! { eprintln!("{m}"); std::process::exit(2) };
     let mut max_insns: u64 = 1_000_000;
     let mut ticks: u32 = 0;
@@ -35,6 +73,7 @@ fn main() {
             "--ticks" => ticks = val.parse().unwrap_or_else(|_| die(format!("--ticks wants a number, got {val}"))),
             "--key" => keys.push(val.parse().unwrap_or_else(|_| die(format!("--key wants decimal code, got {val}")))),
             "--save-ppm" => save_ppm = Some(val),
+            "--args" => a.cli_args = Some(val),
             "--progdir" => a.fs.vol.assign("PROGDIR", &val),
             "--stub" => { let (l, f) = val.split_once('/').unwrap_or_else(|| die(format!("--stub wants library/Function, got {val}"))); a.census_stubs.push((l.to_string(), f.to_string())); }
             _ => die(format!("unknown option {opt}")),

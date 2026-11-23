@@ -20,10 +20,10 @@ use crate::cpu::Cpu;
 
 /// The host implementation behind a native class.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Native { Root, Image, Gadget, Button, Strg, Prop, Sysi, Frame, Mui(Kind) }
+pub enum Native { Root, Image, Gadget, Button, Strg, Prop, Sysi, Frame, Ic, Model, Datatype, Mui(Kind) }
 
 /// (public name, superclass name, implementation, instance size). Supers come first. The MUI classes follow, from `mui::classes`.
-pub const NATIVE: [(&str, &str, Native, u16); 8] = [
+pub const NATIVE: [(&str, &str, Native, u16); 11] = [
     ("rootclass", "", Native::Root, 0),
     ("imageclass", "rootclass", Native::Image, IMG_SIZE as u16),
     ("gadgetclass", "rootclass", Native::Gadget, GDATA_SIZE as u16),
@@ -32,6 +32,9 @@ pub const NATIVE: [(&str, &str, Native, u16); 8] = [
     ("propgclass", "gadgetclass", Native::Prop, PROP_DATA as u16),
     ("sysiclass", "imageclass", Native::Sysi, 0),
     ("frameiclass", "imageclass", Native::Frame, FRAME_DATA as u16),
+    ("icclass", "rootclass", Native::Ic, 0),
+    ("modelclass", "icclass", Native::Model, 0),
+    ("datatypeclass", "gadgetclass", Native::Datatype, 0),
 ];
 /// Every native class in table order: the system classes, then the MUI tree. A MUI root class sits on `rootclass`.
 fn all_native() -> impl Iterator<Item = (&'static str, &'static str, Native, u16)> {

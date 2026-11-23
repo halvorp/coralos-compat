@@ -202,6 +202,14 @@ impl Volume {
     }
 
     /// `Dev:dir/file` for a node (`Dev:` for a device).
+    pub fn read_node_all(&self, id: NodeId, max_bytes: usize) -> Option<Vec<u8>> {
+        let len = (self.tree.file_len(id)? as usize).min(max_bytes);
+        let mut buf = alloc::vec![0u8; len];
+        let n = self.tree.read_at(id, 0, &mut buf)?;
+        buf.truncate(n);
+        Some(buf)
+    }
+
     pub fn full_path(&self, id: NodeId) -> String {
         let parts = self.tree.path_components(id);
         let mut s = String::new();

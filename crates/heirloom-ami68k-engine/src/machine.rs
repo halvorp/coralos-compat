@@ -108,6 +108,9 @@ pub struct Amiga<U: GuestUi> {
     pub timers: Vec<(u64, u32)>,
     pub audio: crate::audio::AudioState,
     pub cyber: crate::cybergraphics::State,
+    pub datatypes: crate::datatypes::State,
+    pub datatype_host: Option<alloc::boxed::Box<dyn heirloom_common::datatype::NativeDatatype>>,
+    pub cli_args: Option<String>,
     pub custom_screens: BTreeMap<u32, (u16, u16, u32)>,
     pub gameport_pending: Vec<u32>,
     /// Messages the ENGINE sent (IntuiMessages): address -> delivered to the guest (GetMsg) yet?
@@ -146,7 +149,7 @@ impl<U: GuestUi> Amiga<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), workbench: Default::default(), notify: Default::default(), task_res: Default::default(), asl: Default::default(), cx: Default::default(), requests: Default::default(), iff: Default::default(), keymap: Default::default(), locale: Default::default(), binds: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, screen_notifies: Default::default(), req: Default::default(), ibase_locks: 0, pub_list: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
-            clock_us: 0, timers: vec![], audio: Default::default(), cyber: Default::default(), custom_screens: BTreeMap::new(), gameport_pending: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), native_gads: Default::default(), gt_ctls: Default::default(), gfx: graphics::state::State::new(),
+            clock_us: 0, timers: vec![], audio: Default::default(), cyber: Default::default(), datatypes: Default::default(), datatype_host: None, cli_args: None, custom_screens: BTreeMap::new(), gameport_pending: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), native_gads: Default::default(), gt_ctls: Default::default(), gfx: graphics::state::State::new(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)

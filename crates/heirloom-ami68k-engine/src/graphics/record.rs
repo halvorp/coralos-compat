@@ -95,6 +95,8 @@ pub enum Prim {
     Bevel { rect: Rect, raised: bool },
     /// Solid rectangles of one pen (the runs of a mask), in RASTPORT coordinates: each is a fill, clipped to what the call touched.
     Fills { rects: Vec<Rect>, pen: u8 },
+    /// Truecolor `0x00RRGGBB` pixel rectangle (from `datatypes.library` / `cybergraphics.library`), in RASTPORT coordinates.
+    Pixels { rect: Rect, rgb: Vec<u32> },
 }
 
 impl Prim {
@@ -134,6 +136,7 @@ impl Prim {
             }
             Prim::Icon { rect, role } => alloc::vec![(DrawOp::Icon { rect: g(rect), role: *role }, rect.translate(-ox, -oy))],
             Prim::Bevel { rect, raised } => alloc::vec![(DrawOp::Bevel { rect: g(rect), raised: *raised }, rect.translate(-ox, -oy))],
+            Prim::Pixels { rect, rgb } => alloc::vec![(DrawOp::Pixels { rect: g(rect), rgb: rgb.clone() }, rect.translate(-ox, -oy))],
         })
     }
 }

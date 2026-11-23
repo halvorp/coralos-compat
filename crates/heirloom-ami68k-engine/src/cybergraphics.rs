@@ -51,6 +51,9 @@ const LBMI_BYTESPERROW: u32 = 0x8400_1006;
 const LBMI_BASEADDRESS: u32 = 0x8400_1007;
 
 const PIXFMT_LUT8: u32 = 0;
+const RECTFMT_RGB: u32 = 0;
+const RECTFMT_RGBA: u32 = 1;
+const RECTFMT_ARGB: u32 = 2;
 const RECTFMT_LUT8: u32 = 3;
 const RECTFMT_GREY8: u32 = 4;
 
@@ -227,12 +230,65 @@ fn write_pixel_array<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
         cpu.dreg(6) as u16 as i32,
         cpu.dreg(7),
     );
-    if fmt != RECTFMT_LUT8 && fmt != RECTFMT_GREY8 {
-        return Err(Refusal(format!("WritePixelArray: unsupported srcFormat {fmt} (only LUT8/GREY8 implemented)")));
+    match fmt {
+        RECTFMT_LUT8 | RECTFMT_GREY8 => {
+            let n = blit_lut8(a, src, sx, sy, smod, rp, dx, dy, w, h, "WritePixelArray")?;
+            cpu.set_d0(n);
+            Ok(format!("[cybergraphics] WritePixelArray {w}x{h} -> {rp:#x} ({dx},{dy}) fmt={fmt}"))
+        }
+        RECTFMT_RGB | RECTFMT_RGBA | RECTFMT_ARGB => {
+            if w <= 0 || h <= 0 {
+                cpu.set_d0(0);
+                return Ok(format!("[cybergraphics] WritePixelArray {w}x{h} -> {rp:#x} (empty)"));
+            }
+            let bpp = if fmt == RECTFMT_RGB { 3i32 } else { 4i32 };
+            let mut rgb = Vec::with_capacity((w * h) as usize);
+            let row_len = (w * bpp) as u32;
+            for j in 0..h {
+                let base = src.wrapping_add(((sy + j) * smod + sx * bpp) as u32);
+                let line = a.mem.bytes(heirloom_mem_flat32::Span { addr: base, len: row_len }).map_err(Refusal::mem("WritePixelArray truecolor"))?;
+                for i in 0..w as usize {
+                    let o = i * bpp as usize;
+                    let (r, g, b) = match fmt {
+                        RECTFMT_RGB | RECTFMT_RGBA => (line[o], line[o + 1], line[o + 2]),
+                        _ => (line[o + 1], line[o + 2], line[o + 3]),
+                    };
+                    rgb.push(((r as u32) << 16) | ((g as u32) << 8) | (b as u32));
+                }
+            }
+            let draw_rect = Rect::from_size(dx, dy, w, h);
+            let prim = crate::graphics::record::Prim::Pixels { rect: draw_rect, rgb: rgb.clone() };
+            let pal = a.gfx.palette().rgb;
+            let _ = target::paint_as(a, rp, "WritePixelArray(RGB)", Some(prim), |bm, clip, (ox, oy)| {
+                let mut touched = Rect::default();
+                for j in 0..h {
+                    let py = dy + j - oy;
+                    for i in 0..w {
+                        let px = dx + i - ox;
+                        if clip.allows(px, py) && bm.get(px, py).is_some() {
+                            let c = rgb[(j * w + i) as usize];
+                            // Approximate pen for 8-bit canvas fallback
+                            let mut best = 0u32;
+                            let mut best_d = i32::MAX;
+                            let (r, g, b) = (((c >> 16) & 0xFF) as i32, ((c >> 8) & 0xFF) as i32, (c & 0xFF) as i32);
+                            for (pi, &pc) in pal.iter().enumerate() {
+                                let d = (r - ((pc >> 16) & 0xFF) as i32).abs()
+                                    + (g - ((pc >> 8) & 0xFF) as i32).abs()
+                                    + (b - (pc & 0xFF) as i32).abs();
+                                if d < best_d { best_d = d; best = pi as u32; if d == 0 { break; } }
+                            }
+                            bm.set(px, py, best);
+                            touched = touched.union(&Rect::new(px, py, px + 1, py + 1));
+                        }
+                    }
+                }
+                touched
+            })?;
+            cpu.set_d0((w * h) as u32);
+            Ok(format!("[cybergraphics] WritePixelArray(RGB) {w}x{h} -> {rp:#x} ({dx},{dy}) fmt={fmt}"))
+        }
+        _ => Err(Refusal(format!("WritePixelArray: unsupported srcFormat {fmt}"))),
     }
-    let n = blit_lut8(a, src, sx, sy, smod, rp, dx, dy, w, h, "WritePixelArray")?;
-    cpu.set_d0(n);
-    Ok(format!("[cybergraphics] WritePixelArray {w}x{h} -> {rp:#x} ({dx},{dy}) fmt={fmt}"))
 }
 
 /// WriteLUTPixelArray(a0=srcRect, d0=srcX, d1=srcY, d2=srcMod, a1=rp, a2=colorTab, d3=destX, d4=destY, d5=sizeX, d6=sizeY, d7=ctFormat)

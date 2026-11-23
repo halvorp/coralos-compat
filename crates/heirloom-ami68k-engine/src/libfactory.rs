@@ -22,6 +22,7 @@ pub fn library<U: GuestUi>(name: &'static str, base: u32) -> LibraryBuilder<U> {
         "audio.device" => crate::audio::register(b),
         "aros.library" => crate::aros::register(b), // version 41: posixc.library asks for it
         "cybergraphics.library" => crate::cybergraphics::register(b),
+        "datatypes.library" => crate::datatypes::register(b),
         _ => b,
     }
 }
