@@ -93,11 +93,15 @@ impl<U: GuestUi> Mac<U> {
     pub(crate) fn open_native(&mut self, win: u32) -> Result<(), Refusal> {
         let w = self.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?;
         let (r, proc_id, def_role) = (w.rect, w.proc_id, w.def_role);
+        let (width, height) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
+        if width <= 0 || height <= 0 {
+            return Err(Refusal(format!("ShowWindow: empty boundsRect ({},{},{},{})", r.top, r.left, r.bottom, r.right)));
+        }
         let role = match def_role { Some(r) => r, None => self.window_role(proc_id)? };
         let w = self.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?;
         let model = WindowModel {
             title: w.title.clone(),
-            rect: GuestRect { left: i32::from(r.left), top: i32::from(r.top), width: i32::from(r.right - r.left), height: i32::from(r.bottom - r.top) },
+            rect: GuestRect { left: i32::from(r.left), top: i32::from(r.top), width, height },
             role: role.0, closable: w.go_away, resizable: role.1, token: CallbackToken(u64::from(win)),
         };
         let native = self.ui.open_window(model).map_err(Refusal::ui)?;
@@ -134,7 +138,8 @@ impl<U: GuestUi> Mac<U> {
         let color = color && self.profile.color_qd;
         let r = s.rect;
         let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
-        if w <= 0 || h <= 0 { return Err(Refusal(format!("NewWindow: empty boundsRect ({},{},{},{})", r.top, r.left, r.bottom, r.right))); }
+        // Visible windows must have a positive extent; invisible scratch/container windows may start at (0,0,0,0) and be sized before ShowWindow.
+        if s.visible && (w <= 0 || h <= 0) { return Err(Refusal(format!("NewWindow: empty boundsRect ({},{},{},{})", r.top, r.left, r.bottom, r.right))); }
         let owned = s.storage == 0;
         let win = if owned {
             self.mm.new_ptr(&mut self.mem, &mut self.heap, WINDOW_RECORD_SIZE, true).map_err(|e| Refusal(format!("NewWindow: no memory for a WindowRecord (memFullErr {e})")))?

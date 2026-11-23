@@ -64,8 +64,8 @@ fn window_depth<U: GuestUi>(m: &Mac<U>, win: u32) -> u8 {
 pub(crate) fn window_created<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(), Refusal> {
     let r = m.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?.rect;
     let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
-    let canvas = Bitmap::new(w, h, window_depth(m, win)).ok_or_else(|| Refusal(format!("window {w}x{h}: no canvas of that size")))?;
-    let vis = m.new_region(&Region::from_rect(Rect::new(0, 0, w, h)))?;
+    let canvas = Bitmap::new(w.max(1), h.max(1), window_depth(m, win)).ok_or_else(|| Refusal(format!("window {w}x{h}: no canvas of that size")))?;
+    let vis = m.new_region(&Region::from_rect(Rect::new(0, 0, w.max(0), h.max(0))))?;
     let clip = m.new_region(&Region::from_rect(WIDE_OPEN))?;
     init_fields(m, win, vis, clip)?;
     m.qd.canvases.insert(win, canvas);
@@ -82,12 +82,12 @@ pub(crate) fn window_shown<U: GuestUi>(m: &mut Mac<U>, win: u32) {
 pub(crate) fn window_resized<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(), Refusal> {
     let r = m.windows.get(&win).ok_or_else(|| Refusal(format!("{win:#x} is not an open window")))?.rect;
     let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
-    let canvas = Bitmap::new(w, h, window_depth(m, win)).ok_or_else(|| Refusal(format!("window {w}x{h}: no canvas of that size")))?;
+    let canvas = Bitmap::new(w.max(1), h.max(1), window_depth(m, win)).ok_or_else(|| Refusal(format!("window {w}x{h}: no canvas of that size")))?;
     m.qd.canvases.insert(win, canvas);
     m.qd.present.forget(win);
     m.qd.plane.reset(win);
     let vis = m.mem.read_u32(win.wrapping_add(P_VIS)).map_err(Refusal::mem("visRgn"))?;
-    m.write_region(vis, &Region::from_rect(Rect::new(0, 0, w, h)))?;
+    m.write_region(vis, &Region::from_rect(Rect::new(0, 0, w.max(0), h.max(0))))?;
     invalidate_all(m, win)
 }
 

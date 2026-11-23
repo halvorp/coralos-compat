@@ -79,6 +79,10 @@ pub struct Translate {
     pub cdef_bindings: alloc::vec::Vec<heirloom_bind::ControlDefBinding>,
     /// Loaded declarative in-plane chrome bindings (`HEIRLOOM-APP-CHROME-NEEDS-A-BINDING`, keyed strictly by resource type/id/len/hash).
     pub plane_chrome_bindings: alloc::vec::Vec<heirloom_bind::PlaneChromeBinding>,
+    /// Shared Handle to a minimal 68k Pascal CDEF stub (`long CDEF(short varCode, ControlHandle ctl, short msg, long param)`
+    /// returning 0) stored in `ControlRecord.contrlDefProc` (+24) so programs invoking `(*ctl)->contrlDefProc` directly
+    /// (e.g. offscreen drawing via `CallUniversalProc`) never call NIL.
+    pub std_cdef: u32,
 }
 
 impl Translate {

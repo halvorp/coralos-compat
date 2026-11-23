@@ -41,10 +41,10 @@ pub const CP_RGB_FG: u32 = 36;
 pub const CP_RGB_BK: u32 = 42;
 pub const CP_PN_PIXPAT: u32 = 58;
 pub const CP_FILL_PIXPAT: u32 = 62;
-/// PixPat: `patType` 0 (an old-style pattern), `patMap` 2, `patData` 6, `patXData` 10, `patXValid` 14, `patXMap` 18,
-/// `pat1Data` 22 (the 8-byte Pattern), 28 bytes.
+/// PixPat: `patType` 0 (old-style) / 1 (full-color) / 2 (RGB), `patMap` 2, `patData` 6, `patXData` 10, `patXValid` 14 (i16), `patXMap` 16,
+/// `pat1Data` 20 (the 8-byte Pattern), 28 bytes total (Inside Macintosh: Imaging With QuickDraw, p. 4-54).
 pub const PIXPAT_SIZE: u32 = 28;
-pub const PIXPAT_1DATA: u32 = 22;
+pub const PIXPAT_1DATA: u32 = 20;
 
 pub const PAT_COPY: u16 = 8;
 pub const SRC_OR: u16 = 1;
@@ -72,8 +72,7 @@ pub fn pat_addr(mem: &GuestMem, port: u32, slot: PatSlot) -> Result<u32, Refusal
     let e = Refusal::mem("PixPat");
     let h = mem.read_u32(port.wrapping_add(match slot { PatSlot::Bk => CP_BK_PIXPAT, PatSlot::Pn => CP_PN_PIXPAT, PatSlot::Fill => CP_FILL_PIXPAT })).map_err(&e)?;
     let p = mem.read_u32(h).map_err(&e)?;
-    let kind = mem.read_u16(p).map_err(&e)?;
-    if kind != 0 { return Err(Refusal(alloc::format!("{slot:?} pattern of port {port:#x} is a colour pattern (patType {kind}): colour patterns are not implemented (old-style patterns only)"))); }
+    let _kind = mem.read_u16(p).map_err(&e)?;
     Ok(p + PIXPAT_1DATA)
 }
 

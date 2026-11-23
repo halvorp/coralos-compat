@@ -128,4 +128,9 @@ fn a_degenerate_window_is_refused_and_leaks_nothing() {
     let e = m.make_window(s).unwrap_err();
     assert!(e.0.contains("empty boundsRect"), "{e:?}");
     assert_eq!((m.mm.live_ptrs(), m.windows.len(), m.z.len()), (0, 0, 0));
+    // Invisible empty-rect scratch window is allowed (no native window opened until sized + shown)
+    let mut hidden = spec(false, false);
+    hidden.rect = Rect { top: 0, left: 0, bottom: 0, right: 0 };
+    let w = m.make_window(hidden).unwrap();
+    assert!(m.windows.get(&w).unwrap().native.is_none());
 }

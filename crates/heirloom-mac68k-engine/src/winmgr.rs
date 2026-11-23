@@ -171,7 +171,7 @@ fn move_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
 fn size_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (win, w, h, update) = (c.args.get(0), c.args.get(1) as i16, c.args.get(2) as i16, c.args.get(3) as u8 != 0);
     m.open_win("SizeWindow", win)?;
-    if w <= 0 || h <= 0 { return Err(Refusal(format!("SizeWindow {win:#x}: {w}x{h} is an empty window"))); }
+    if (w <= 0 || h <= 0) && m.windows[&win].visible { return Err(Refusal(format!("SizeWindow {win:#x}: {w}x{h} is an empty window"))); }
     let old = m.windows[&win].rect;
     m.set_window_rect(win, Rect { top: old.top, left: old.left, bottom: old.top + h, right: old.left + w })?;
     crate::qd::lifecycle::window_resized(m, win)?;

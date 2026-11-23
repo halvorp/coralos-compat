@@ -55,6 +55,8 @@ const C_HILITE: u32 = 17;
 const C_VALUE: u32 = 18;
 const C_MIN: u32 = 20;
 const C_MAX: u32 = 22;
+/// `contrlDefProc`: Handle to the control definition function (Inside Macintosh: Toolbox Essentials 5-14).
+const C_DEF_PROC: u32 = 24;
 /// `contrlData`: the CDEF's private data (a pop-up's `PopupPrivateData` handle).
 const C_DATA: u32 = 28;
 const C_ACTION: u32 = 32;
@@ -328,6 +330,22 @@ impl<U: GuestUi> Mac<U> {
         Ok(())
     }
 
+    /// Allocate (once per engine) the shared Handle to a 10-byte 68k Pascal CDEF stub returning 0:
+    /// `movea.l (sp)+,a0; adda.w #12,sp; clr.l (sp); jmp (a0)`.
+    fn std_cdef_handle(&mut self) -> Result<u32, Refusal> {
+        if self.tr.std_cdef != 0 && self.mm.block(self.tr.std_cdef).is_some() {
+            return Ok(self.tr.std_cdef);
+        }
+        const STUB: [u8; 10] = [0x20, 0x5F, 0xDE, 0xFC, 0x00, 0x0C, 0x42, 0x97, 0x4E, 0xD0];
+        let h = self.mm.new_handle(&mut self.mem, &mut self.heap, STUB.len() as u32, false)
+            .map_err(|e| Refusal(format!("NewControl: no memory for contrlDefProc stub (memFullErr {e})")))?;
+        let ptr = self.mm.block(h).map(|b| b.ptr).unwrap_or(0);
+        self.mem.write_bytes(ptr, &STUB).map_err(Refusal::mem("contrlDefProc"))?;
+        let _ = self.mm.set_lock(&mut self.mem, h, true);
+        self.tr.std_cdef = h;
+        Ok(h)
+    }
+
     /// `NewControl`: build the record, link it at the head of the window's list, show it.
     pub fn create_control(&mut self, win: u32, rect: Rect, title: &str, visible: bool, value: i16, min: i16, max: i16, proc_id: u16, ref_con: u32) -> Result<u32, Refusal> {
         if !self.windows.contains_key(&win) { return Err(Refusal(format!("NewControl: {win:#x} is not an open window"))); }
@@ -341,6 +359,8 @@ impl<U: GuestUi> Mac<U> {
         for (i, v) in [rect.top, rect.left, rect.bottom, rect.right].into_iter().enumerate() { self.mem.write_u16(p + C_RECT + 2 * i as u32, v as u16).map_err(&e)?; }
         self.mem.write_u8(p + C_VIS, if visible { VISIBLE } else { 0 }).map_err(&e)?;
         for (off, v) in [(C_VALUE, value), (C_MIN, min), (C_MAX, max)] { self.mem.write_u16(p + off, v as u16).map_err(&e)?; }
+        let def_proc = self.std_cdef_handle()?;
+        self.mem.write_u32(p + C_DEF_PROC, def_proc).map_err(&e)?;
         self.mem.write_u32(p + C_REF_CON, ref_con).map_err(&e)?;
         self.mem.write_u8(p + C_TITLE, t.len() as u8).map_err(&e)?;
         self.mem.write_bytes(p + C_TITLE + 1, &t).map_err(&e)?;
@@ -359,26 +379,34 @@ impl<U: GuestUi> Mac<U> {
     /// the menu in its private data: `contrlData` is a handle to `PopupPrivateData { MenuHandle mHandle; SInt16 mID; }` (Controls.h), what a
     /// classic program reads and Carbon's `GetControlPopupMenuHandle` returns.
     fn make_popup(&mut self, ctl: u32, proc_id: u16, menu_id: i16) -> Result<(), Refusal> {
+        let mut attached_h = 0u32;
         let why = if proc_id & POPUP_USE_ADD_RES_MENU != 0 { Some("popupUseAddResMenu builds its menu from a resource TYPE at run time".to_string()) } else {
-            match self.get_resource(*b"MENU", menu_id, false) {
+            let found = self.get_resource(*b"MENU", menu_id, false).or_else(|e| {
+                self.menus.by_id.get(&menu_id).copied().ok_or(e)
+            });
+            match found {
                 Err(e) => Some(format!("no MENU resource {menu_id} (ResErr {e})")),
                 Ok(h) => match self.menu_view(h) {
                     Err(e) => Some(e.0),
                     Ok(menu) => {
                         self.set_control_field(ctl, C_MIN, 1)?;
                         self.set_control_field(ctl, C_MAX, menu.items.len().min(i16::MAX as usize) as i16)?;
-                        self.tr.popups.insert(ctl, (menu_id, h));
                         self.menus.by_id.insert(menu_id, h);
-                        let data = self.mm.new_handle(&mut self.mem, &mut self.heap, POPUP_DATA_SIZE, true).map_err(|e| Refusal(format!("NewControl: no memory for the pop-up's private data (memFullErr {e})")))?;
-                        let (p, e) = (self.mm.block(data).map(|b| b.ptr).unwrap_or(0), Refusal::mem("PopupPrivateData"));
-                        self.mem.write_u32(p, h).and_then(|_| self.mem.write_u16(p + 4, menu_id as u16)).map_err(&e)?;
-                        let rec = self.control_rec(ctl, "NewControl")?;
-                        self.mem.write_u32(rec + C_DATA, data).map_err(&e)?;
+                        attached_h = h;
                         None
                     }
                 },
             }
         };
+        // Always allocate PopupPrivateData { MenuHandle mHandle; SInt16 mID; } in contrlData (Controls.h): programs
+        // creating dynamic pop-ups (e.g. menuID -12345 / popupUseAddResMenu) verify contrlData != NIL and attach their
+        // MenuHandle afterwards (via SetControlPopupMenuHandle or directly through contrlData).
+        self.tr.popups.insert(ctl, (menu_id, attached_h));
+        let data = self.mm.new_handle(&mut self.mem, &mut self.heap, POPUP_DATA_SIZE, true).map_err(|e| Refusal(format!("NewControl: no memory for the pop-up's private data (memFullErr {e})")))?;
+        let (p, e) = (self.mm.block(data).map(|b| b.ptr).unwrap_or(0), Refusal::mem("PopupPrivateData"));
+        self.mem.write_u32(p, attached_h).and_then(|_| self.mem.write_u16(p + 4, menu_id as u16)).map_err(&e)?;
+        let rec = self.control_rec(ctl, "NewControl")?;
+        self.mem.write_u32(rec + C_DATA, data).map_err(&e)?;
         if let Some(why) = why { self.log.push(format!("[control] popupMenuProc {ctl:#x}: {why}; drawn into the content plane as the default look")); }
         Ok(())
     }

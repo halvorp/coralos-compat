@@ -162,6 +162,12 @@ fn a_popup_refuses_an_item_it_does_not_have_and_one_without_a_readable_menu_stay
     assert!(w.rig.m.tr.projected(Obj::Control(w.ctl)).is_none());
     assert!(w.rig.m.log.iter().any(|l| l.contains("popupMenuProc") && l.contains("no MENU resource 200")), "{:#?}", w.rig.m.log);
     assert_eq!((field(&w, 20), field(&w, 22)), (MENU_ID, 40));
+    // PopupPrivateData is still allocated in contrlData (+28) so dynamic pop-ups can attach a MenuHandle afterwards
+    let rec_p = w.rig.m.mm.block(w.ctl).unwrap().ptr;
+    let data_h = w.rig.m.mem.read_u32(rec_p + 28).unwrap();
+    assert_ne!(data_h, 0, "popup contrlData must be allocated even without a MENU resource");
+    let data_p = w.rig.m.mm.block(data_h).unwrap().ptr;
+    assert_eq!((w.rig.m.mem.read_u32(data_p).unwrap(), w.rig.m.mem.read_i16(data_p + 4).unwrap()), (0, MENU_ID));
 }
 
 #[test]

@@ -34,6 +34,7 @@ pub mod gdevice;
 pub mod gworld;
 pub mod pens;
 pub mod pixmap;
+pub mod pixpat;
 
 use crate::machine::Mac;
 use crate::Refusal;
@@ -68,6 +69,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     pixmap::register(m)?;
     cport::register(m)?;
     cicon::register(m)?;
+    pixpat::register(m)?;
     pens::register(m)
 }
 
