@@ -44,6 +44,36 @@ impl<U: GuestUi> MacPpc<U> {
         Ok(())
     }
 
+    pub(crate) fn begin_device_loop(&mut self, cpu: &mut Cpu) -> Result<(), String> {
+        let upp = cpu.gpr[4];
+        let user_data = cpu.gpr[5];
+        if upp == 0 {
+            cpu.set_pc(cpu.lr & !3);
+            return Ok(());
+        }
+        let gd = self.mac.mem.read_u32(heirloom_mac68k_engine::lowmem::MAIN_DEVICE).unwrap_or(0);
+        if gd == 0 {
+            cpu.set_pc(cpu.lr & !3);
+            return Ok(());
+        }
+        let depth = self.mac.device_pixmap(gd).map(|(d, _)| d).unwrap_or(32);
+        let dev_flags = self.mac.mem.read_u32(gd).ok()
+            .and_then(|p| self.mac.mem.read_u16(p + 12).ok())
+            .map(u32::from)
+            .unwrap_or(0x8801);
+        let args = [depth, dev_flags, gd, user_data];
+        let frame = Frame { saved: Saved::of(cpu, cpu.lr & !3), cont: Continuation::Invoke(Result_::None) };
+        let sp = cpu.gpr[1];
+        let r = if heirloom_mac68k_engine::mixed_mode::parse(&self.mac.mem, upp).is_ok() {
+            self.enter_upp(cpu, upp, &args, sp)
+        } else {
+            self.enter_tvector(cpu, upp, &args, sp)
+        };
+        r.map_err(|e| format!("DeviceLoop: {e}"))?;
+        self.rt.callbacks.push(frame);
+        Ok(())
+    }
+
     pub(crate) fn invoke_returned(&mut self, cpu: &mut Cpu, frame: Frame, res: Result_) {
         let r = cpu.gpr[3];
         frame.saved.restore(cpu);

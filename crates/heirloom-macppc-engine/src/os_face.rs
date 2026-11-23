@@ -62,6 +62,10 @@ impl OsFamily for MacPpcFamily {
         m.perf_attach(tsc, host);
         Ok(())
     }
+    fn attach_datatype(m: &mut MacPpc<LibUi>, host: heirloom_os_abi::datatype::DatatypeHost) -> Result<(), String> {
+        m.mac.datatype_host = Some(Box::new(host));
+        Ok(())
+    }
     /// cpu-ppc.library's counters for the engine's perf line (OsVTable::cpu_prof): where the instructions ran.
     fn cpu_prof(m: &mut MacPpc<LibUi>) -> Option<heirloom_os_abi::ppc::PpcProf> {
         Some(m.exec().tiers)

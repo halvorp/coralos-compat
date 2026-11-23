@@ -16,7 +16,7 @@ use heirloom_ui_abi::GuestUi;
 pub enum VblFn { VInstall, VRemove }
 
 impl VblFn {
-    pub fn by_name(name: &str) -> Option<VblFn> { Some(match name { "VInstall" => VblFn::VInstall, "VRemove" => VblFn::VRemove, _ => return None }) }
+    pub fn by_name(name: &str) -> Option<VblFn> { Some(match name { "VInstall" | "SlotVInstall" => VblFn::VInstall, "VRemove" | "SlotVRemove" => VblFn::VRemove, _ => return None }) }
 }
 
 impl<U: GuestUi> MacPpc<U> {

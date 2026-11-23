@@ -74,6 +74,10 @@ pub enum TbFn {
     GetIconSuite, PlotIconSuite,
     /// Standard File Package (`StandardFile.h`): `StandardGetFile` and `StandardPutFile` (returns `sfGood = false` when no host file picker is presented).
     StandardGetFile, StandardPutFile,
+    /// Help Manager (`Balloons.h`): `HMGetBalloons` (always `false` — Balloon Help is off).
+    HMGetBalloons,
+    /// Device Manager / VM helpers (`Devices.h` / `Memory.h`): `GetDCtlEntry` (NULL: no driver), `OpenDriver` (`fnfErr`), `LockMemory`/`UnlockMemory` (`noErr`).
+    GetDCtlEntry, OpenDriver, LockMemory,
     /// `LMGet<Name>` / `LMSet<Name>` over the table [`LOWMEM`]; the index is the row.
     LmGet(u8), LmSet(u8),
 }
@@ -89,7 +93,7 @@ pub const LOWMEM: &[(&str, u32, u32)] = &[("ResLoad", 0x0A5E, 1), ("MBarHeight",
     ("CurActivate", 0x0A64, 4), ("CurDeactive", 0x0A68, 4), ("CrsrBusy", 0x08CD, 1), ("SysEvtMask", 0x0144, 2), ("WindowList", 0x09D6, 4),
     ("CurStackBase", 0x0908, 4), ("GhostWindow", 0x0A84, 4), ("TheZone", 0x0118, 4), ("GZRootHnd", 0x0328, 4), ("GZMoveHnd", 0x0330, 4),
     ("CurJTOffset", 0x0934, 2), ("LastSPExtra", 0x0B4C, 4), ("GrayRgn", 0x09EE, 4), ("TEScrpLength", 0x0AB0, 2),
-    ("KbdType", 0x021E, 1), ("FSFCBLen", 0x03F6, 2), ("HWCfgFlags", 0x0B22, 2), ("PrintErr", 0x0944, 2), ("Time", 0x020C, 4), ("CurrentA5", 0x0904, 4)];
+    ("KbdType", 0x021E, 1), ("FSFCBLen", 0x03F6, 2), ("HWCfgFlags", 0x0B22, 2), ("PrintErr", 0x0944, 2), ("Time", 0x020C, 4), ("CurrentA5", 0x0904, 4), ("TheMenu", 0x0A26, 2), ("PaintWhite", 0x09DC, 2)];
 
 impl TbFn {
     pub fn by_name(name: &str) -> Option<TbFn> {
@@ -104,7 +108,9 @@ impl TbFn {
             "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString,
             "NavLibraryVersion" => NavLibraryVersion, "NavServicesCanRun" | "NavServicesAvailable" => NavServicesCanRun, "NavLoad" | "NavUnload" => NavLoad,
             "GetIconSuite" => GetIconSuite, "PlotIconSuite" => PlotIconSuite,
-            "StandardGetFile" => StandardGetFile, "StandardPutFile" => StandardPutFile,
+            "StandardGetFile" | "CustomGetFile" => StandardGetFile, "StandardPutFile" | "CustomPutFile" => StandardPutFile,
+            "HMGetBalloons" => HMGetBalloons,
+            "GetDCtlEntry" => GetDCtlEntry, "OpenDriver" => OpenDriver, "LockMemory" | "UnlockMemory" => LockMemory,
             // GetMBarHeight() / GetSysFont() are the Universal Interfaces' readers of MBarHeight and SysFontFam (Menus.h, Fonts.h)
             "GetMBarHeight" => return TbFn::by_name("LMGetMBarHeight"),
             "GetSysFont" => return TbFn::by_name("LMGetSysFontFam"),
@@ -345,6 +351,10 @@ impl<U: GuestUi> MacPpc<U> {
                 self.mac.log.push(format!("[stdfile] StandardPutFile reply={reply:#x} -> sfGood=false"));
                 0
             }
+            HMGetBalloons => 0,
+            GetDCtlEntry => 0,
+            OpenDriver => (-43i32) as u32, // fnfErr: no hardware device drivers (e.g. .AppleCD)
+            LockMemory => 0, // flat guest RAM is always resident
             LmGet(i) => {
                 let (_, at, n) = LOWMEM[i as usize];
                 match n { 1 => u32::from(self.mac.mem.read_u8(at).unwrap_or(0)), 2 => u32::from(self.mac.mem.read_u16(at).unwrap_or(0)), _ => self.mac.mem.read_u32(at).unwrap_or(0) }

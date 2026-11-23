@@ -28,6 +28,7 @@ fn main() {
     let mut dump: Vec<(u32, u32)> = Vec::new();
     let mut find: Vec<u32> = Vec::new();
     let mut put_bins: Vec<(String, String)> = Vec::new();
+    let mut stage_dirs: Vec<String> = Vec::new();
     let mut events: Vec<String> = Vec::new();
     let mut save_ppm: Option<String> = None;
     let mut frames = 0u32;
@@ -47,6 +48,7 @@ fn main() {
             "--idle" => { args.remove(0); if args.is_empty() { usage() } idle = args.remove(0).parse().unwrap_or_else(|_| usage()); }
             "--frames" => { args.remove(0); if args.is_empty() { usage() } frames = args.remove(0).parse().unwrap_or_else(|_| usage()); }
             "--put-bin" => { args.remove(0); if args.is_empty() { usage() } let v = args.remove(0); let (d, p) = v.split_once('=').unwrap_or_else(|| usage()); put_bins.push((d.to_string(), p.to_string())); }
+            "--dir" => { args.remove(0); if args.is_empty() { usage() } stage_dirs.push(args.remove(0)); }
             "--event" => { args.remove(0); if args.is_empty() { usage() } events.push(args.remove(0)); }
             "--save-ppm" => { args.remove(0); if args.is_empty() { usage() } save_ppm = Some(args.remove(0)); }
             "--bind-list" => {
@@ -111,6 +113,39 @@ fn main() {
         if let Some(ft) = opened.file_type { n.finfo.file_type = ft; }
         if let Some(cr) = opened.creator { n.finfo.creator = cr; }
     }
+    for host_dir in &stage_dirs {
+        let root = m.mac.fm.tree.children(heirloom_volume::ROOT)[0];
+        let mut stack = vec![(root, PathBuf::from(host_dir))];
+        while let Some((dir_id, dir_path)) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir_path) else { continue };
+            let mut entries: Vec<_> = rd.flatten().collect();
+            entries.sort_by_key(|e| (e.file_name().to_string_lossy().ends_with(".rsrc"), e.file_name()));
+            for entry in entries {
+                let p = entry.path();
+                let fname = entry.file_name().to_string_lossy().into_owned();
+                if fname.starts_with('.') { continue; }
+                if p.is_dir() {
+                    let sub = m.mac.fm.tree.mkdirs(dir_id, [fname.as_str()]).expect("mkdirs");
+                    stack.push((sub, p));
+                } else if let Some(stem) = fname.strip_suffix(".rsrc") {
+                    let Ok(raw) = std::fs::read(&p) else { continue };
+                    let Ok(opened) = heirloom_fmt_resfork::container::open(&raw) else { continue };
+                    let id = match m.mac.fm.tree.find_child(dir_id, stem) {
+                        Some(existing) => existing,
+                        None => m.mac.fm.tree.put_file(dir_id, stem, Vec::new()).expect("put_file"),
+                    };
+                    let n = m.mac.fm.tree.get_mut(id);
+                    n.rsrc = raw[opened.rsrc].to_vec();
+                    if let Some(ft) = opened.file_type { n.finfo.file_type = ft; }
+                    if let Some(cr) = opened.creator { n.finfo.creator = cr; }
+                } else if p.is_file() && m.mac.fm.tree.find_child(dir_id, &fname).is_none() {
+                    let fdata = std::fs::read(&p).unwrap_or_default();
+                    let _ = m.mac.fm.tree.put_file(dir_id, &fname, fdata);
+                }
+            }
+        }
+    }
+    let _ = m.install_app_file(fork_file.as_deref().unwrap_or(&file), &name);
     // private libraries the application carries in its own data fork (its cfrg import-library members), then every PEF file in --libdir (named by file name)
     for (lname, bytes) in heirloom_macppc_engine::source::library_fragments(&file, data_bytes.as_deref()) { println!("library {lname:?}: {} bytes inside the application file", bytes.len()); m.provide_library(&lname, &bytes); }
     if let Some(dir) = &libdir {

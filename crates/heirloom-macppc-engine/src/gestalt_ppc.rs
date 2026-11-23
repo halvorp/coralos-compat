@@ -19,6 +19,8 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
         b"cput" => EMULATED_CPU,
         // gestaltNativeCPUfamily: PowerPC 750 (same as 'cput')
         b"cpuf" => EMULATED_CPU,
+        // gestaltProcessorType: on PowerPC Mac OS, 'proc' reports the emulated 68k processor (68020 here, matching SysEnvirons and heirloom-cpu-68k), so >= 68020 checks pass.
+        b"proc" => 3,
         // gestaltProcClkSpeed: 400 MHz PowerPC 750 (emulated model constant, not host clock)
         b"pclk" => EMULATED_CPU_HZ,
         b"cfrg" => 1,
@@ -55,7 +57,6 @@ pub const UNANSWERED: &[(&[u8; 4], &str)] = &[
     (b"nav ", "Navigation Services is not provided"),
     (b"mpsv", "Multiprocessing Services runs cooperatively (no preemption, one processor, see mp.rs); the selector's value carries the MP Services version and attribute bits, which are not claimed"),
     (b"mach", "no PowerPC machine model is claimed (the shared value names a 68k Macintosh II)"),
-    (b"proc", "'proc' is the 68k processor family; the PowerPC question is 'cput'"),
     (b"fpu ", "'fpu ' describes a 68k coprocessor; the PowerPC FPU is part of the processor"),
 ];
 

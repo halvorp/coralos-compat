@@ -97,6 +97,8 @@ pub enum Native { StandardAlert, Alert(heirloom_ui_abi::RequestKind), GetSharedL
     Invoke(crate::invoke_c::InvokeFn),
     /// `CallUniversalProc` ([`crate::upp_c`]): served by the run loop through the callback machine.
     CallUniversalProc,
+    /// `DeviceLoop(drawingRgn, drawingProc, userData, flags)`: invokes `drawingProc(depth, flags, mainDevice, userData)`.
+    DeviceLoop,
     /// A Carbon Event Loop call ([`crate::evloop_c`]): served by the run loop (FPR arguments, timer procedures through the callback machine).
     El(crate::evloop_c::ElFn),
     /// A Text Services Manager document call, no input method ([`crate::tsm_c`]).
@@ -172,6 +174,7 @@ impl Native {
             n if crate::vbl_c::VblFn::by_name(n).is_some() => Native::Vbl(crate::vbl_c::VblFn::by_name(n).expect("checked")),
             n if crate::qdacc_c::QaFn::by_name(n).is_some() => Native::Qa(crate::qdacc_c::QaFn::by_name(n).expect("checked")),
             "CallUniversalProc" => Native::CallUniversalProc,
+            "DeviceLoop" => Native::DeviceLoop,
             n if crate::evloop_c::ElFn::by_name(n).is_some() => Native::El(crate::evloop_c::ElFn::by_name(n).expect("checked")),
             n if crate::invoke_c::InvokeFn::by_name(n).is_some() => Native::Invoke(crate::invoke_c::InvokeFn::by_name(n).expect("checked")),
             n if crate::tsm_c::TsmFn::by_name(n).is_some() => Native::Tsm(crate::tsm_c::TsmFn::by_name(n).expect("checked")),

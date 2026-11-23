@@ -11,7 +11,7 @@ use heirloom_mac68k_engine::fm::alias::sel;
 /// (export name, selector, C argument count; the selector takes the first `n_sel` of them)
 pub const CALLS: &[(&str, u16, usize, usize)] = &[
     ("NewAlias", sel::NEW_ALIAS, 3, 3), ("NewAliasMinimal", sel::NEW_ALIAS_MINIMAL, 2, 2), ("NewAliasMinimalFromFullPath", sel::NEW_ALIAS_MINIMAL_FROM_FULL_PATH, 5, 5),
-    ("ResolveAlias", sel::RESOLVE_ALIAS, 4, 4), ("ResolveAliasWithMountFlags", sel::RESOLVE_ALIAS, 5, 4), ("UpdateAlias", sel::UPDATE_ALIAS, 4, 4),
+    ("ResolveAlias", sel::RESOLVE_ALIAS, 4, 4), ("ResolveAliasWithMountFlags", sel::RESOLVE_ALIAS, 5, 4), ("MatchAlias", sel::MATCH_ALIAS, 8, 8), ("UpdateAlias", sel::UPDATE_ALIAS, 4, 4),
     ("GetAliasInfo", sel::GET_ALIAS_INFO, 3, 3), ("ResolveAliasFile", sel::RESOLVE_ALIAS_FILE, 4, 4), ("ResolveAliasFileWithMountFlags", sel::RESOLVE_ALIAS_FILE, 5, 4),
 ];
 

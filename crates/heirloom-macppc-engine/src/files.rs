@@ -25,7 +25,7 @@ static PB_SIG: OsSig = OsSig { name: "ParamBlock", args: &[Reg::A0], result: Som
 /// A Files.h routine this engine serves, named by its InterfaceLib export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileCall {
-    FSOpen, OpenRF, FSClose, FSRead, FSWrite, GetEOF, SetEOF, GetFPos, SetFPos, FlushVol, GetVol, SetVol, Create, FSDelete,
+    FSOpen, OpenRF, FSClose, FSRead, FSWrite, GetEOF, SetEOF, Allocate, GetFPos, SetFPos, FlushVol, GetVol, SetVol, Create, FSDelete,
     HOpen, HOpenDF, HOpenRF, HCreate, HDelete, GetVRefNum, HGetVol, HSetVol,
     HGetFInfo, HSetFInfo, HSetFLock, HRstFLock, DirCreate, HRename,
 }
@@ -35,7 +35,7 @@ impl FileCall {
         use FileCall::*;
         Some(match name {
             "FSOpen" => FSOpen, "OpenRF" => OpenRF, "FSClose" => FSClose, "FSRead" => FSRead, "FSWrite" => FSWrite, "GetEOF" => GetEOF,
-            "SetEOF" => SetEOF, "GetFPos" => GetFPos, "SetFPos" => SetFPos, "FlushVol" => FlushVol, "GetVol" => GetVol, "SetVol" => SetVol,
+            "SetEOF" => SetEOF, "Allocate" | "AllocContig" => Allocate, "GetFPos" => GetFPos, "SetFPos" => SetFPos, "FlushVol" => FlushVol, "GetVol" => GetVol, "SetVol" => SetVol,
             "Create" => Create, "FSDelete" => FSDelete, "HOpen" => HOpen, "HOpenDF" => HOpenDF, "HOpenRF" => HOpenRF, "HCreate" => HCreate,
             "HDelete" => HDelete, "GetVRefNum" => GetVRefNum, "HGetVol" => HGetVol, "HSetVol" => HSetVol,
             "HGetFInfo" => HGetFInfo, "HSetFInfo" => HSetFInfo, "HSetFLock" => HSetFLock, "HRstFLock" => HRstFLock, "DirCreate" => DirCreate, "HRename" => HRename,
@@ -111,7 +111,7 @@ impl<U: GuestUi> MacPpc<U> {
         let (n_in, hfs, trap) = match c {
             FSOpen => (3, false, "Open"), OpenRF => (3, false, "OpenRF"), HOpen | HOpenDF => (5, true, "Open"), HOpenRF => (5, true, "OpenRF"),
             FSClose => (1, false, "Close"), FSRead => (3, false, "Read"), FSWrite => (3, false, "Write"),
-            GetEOF => (2, false, "GetEOF"), SetEOF => (2, false, "SetEOF"), GetFPos => (2, false, "GetFPos"), SetFPos => (3, false, "SetFPos"),
+            GetEOF => (2, false, "GetEOF"), SetEOF => (2, false, "SetEOF"), Allocate => (2, false, "Allocate"), GetFPos => (2, false, "GetFPos"), SetFPos => (3, false, "SetFPos"),
             FlushVol => (2, false, "FlushVol"), GetVol => (2, false, "GetVol"), SetVol => (2, false, "SetVol"),
             Create => (4, false, "Create"), HCreate => (5, true, "Create"), FSDelete => (2, false, "Delete"), HDelete => (3, true, "Delete"),
             GetVRefNum => (2, false, ""),
@@ -131,6 +131,7 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 FSClose | GetEOF | GetFPos => p.put_i16(&mut m.mem, IO_REF_NUM, a[0] as i16)?,
                 SetEOF => { p.put_i16(&mut m.mem, IO_REF_NUM, a[0] as i16)?; p.put_u32(&mut m.mem, IO_MISC, a[1])?; }
+                Allocate => { p.put_i16(&mut m.mem, IO_REF_NUM, a[0] as i16)?; let want = m.mem.read_u32(a[1])?; p.put_u32(&mut m.mem, IO_REQ_COUNT, want)?; }
                 FSRead | FSWrite => {
                     p.put_i16(&mut m.mem, IO_REF_NUM, a[0] as i16)?; let want = m.mem.read_u32(a[1])?; p.put_u32(&mut m.mem, IO_REQ_COUNT, want)?;
                     p.put_u32(&mut m.mem, IO_BUFFER, a[2])?; p.put_i16(&mut m.mem, IO_POS_MODE, FS_AT_MARK)?;
@@ -174,7 +175,7 @@ impl<U: GuestUi> MacPpc<U> {
         let out = (|| -> Result<(), heirloom_mem_flat32::MemError> {
             let m = &mut self.mac;
             match c {
-                FSRead | FSWrite => { let n = p.u32(&m.mem, IO_ACT_COUNT)?; m.mem.write_u32(a[1], n)?; }
+                FSRead | FSWrite | Allocate => { let n = p.u32(&m.mem, IO_ACT_COUNT)?; m.mem.write_u32(a[1], n)?; }
                 FSOpen | OpenRF | HOpen | HOpenDF | HOpenRF if res == 0 => { let r = p.i16(&m.mem, IO_REF_NUM)?; m.mem.write_u16(a[if hfs { 4 } else { 2 }], r as u16)?; }
                 GetEOF if res == 0 => { let v = p.u32(&m.mem, IO_MISC)?; m.mem.write_u32(a[1], v)?; }
                 GetFPos if res == 0 => { let v = p.u32(&m.mem, IO_POS_OFFSET)?; m.mem.write_u32(a[1], v)?; }

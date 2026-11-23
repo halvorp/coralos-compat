@@ -435,6 +435,11 @@ impl<U: GuestUi> MacPpc<U> {
             self.sync_natives(cpu);
             return true;
         }
+        if let Some(Binding::Native(Native::DeviceLoop)) = binding {
+            if let Err(why) = self.begin_device_loop(cpu) { self.rt.fault = Some(why); cpu.halt(); }
+            self.sync_natives(cpu);
+            return true;
+        }
         if let Some(Binding::Native(n @ (Native::SetJmp | Native::CExit | Native::BreakPoint))) = binding { self.cpu_native(n, cpu); return true; }
         match binding {
             Some(Binding::Native(Native::C(f))) => {
