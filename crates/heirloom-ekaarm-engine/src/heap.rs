@@ -29,8 +29,8 @@ impl Heap {
 
     pub fn new(heap_id: ChunkId, base: u32, max: u32, already_committed: u32) -> Self {
         let mut free_list = Vec::new();
-        if already_committed > 0 {
-            free_list.push((base, already_committed));
+        if max > 0 {
+            free_list.push((base, max));
         }
         Self {
             heap_id,

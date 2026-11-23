@@ -79,20 +79,28 @@ impl Process {
     /// AppUi to the environment (`iCoeEnv`) and open the application window titled with the caption its resources give.
     fn base_construct_l(&mut self, name: &str) -> Result<(), String> {
         let appui = self.cpu.regs[0];
+        let flags = self.cpu.regs[1];
         let env = self.coe_env()?;
         if self.host.window.is_some() {
             return Err(String::from("a second BaseConstructL in one process: one application window is all this engine models"));
         }
+        // S60 5th Ed compatibility mode (aknappui.h:95-103): legacy S60 3rd Ed apps calling
+        // `CAknAppUi::BaseConstructL(0)` (without EAknTouchCompatible or EAknEnableSkin) expect an S60 3rd Ed screen.
+        if name == "_ZN9CAknAppUi14BaseConstructLEi" && flags == 0 {
+            self.nat.screen_size = Some((352, 416));
+        }
+        let (sw, sh) = self.screen_size();
+        let rect = GuestRect { left: 0, top: 0, width: sw, height: sh };
         let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive: the application's resource files cannot be read, so there is no caption (run with --drive)"))?;
         let caption = app_caption(drive, self.uid3)?;
         let ui = self.host.ui.as_mut().ok_or_else(|| String::from("no GuestUi: there is nowhere to open the application window"))?;
         self.mem.vm.write_u32(appui.wrapping_add(APPUI_I_COE_ENV), env).map_err(|_| format!("the AppUi at {appui:#x} is unwritable"))?;
         // CCoeEnv::SetAppUi (coemain.h:45): the environment's current AppUi, which the app's inline `CCoeEnv::AppUi()` reads.
         self.mem.vm.write_u32(env.wrapping_add(COEENV_I_APPUI), appui).map_err(|_| format!("the CEikonEnv at {env:#x} is unwritable"))?;
-        let model = WindowModel { title: caption.clone(), rect: S60_5TH_APP_RECT, role: WindowRole::Document, closable: true, resizable: false, token: CallbackToken(appui as u64) };
+        let model = WindowModel { title: caption.clone(), rect, role: WindowRole::Document, closable: true, resizable: false, token: CallbackToken(appui as u64) };
         let win = ui.open_window(model).map_err(|e| format!("the UI refused the window: {e}"))?;
         self.host.window = Some(win);
-        self.log.push(format!("[cone] {name}: window \"{caption}\" {}x{}", S60_5TH_APP_RECT.width, S60_5TH_APP_RECT.height));
+        self.log.push(format!("[cone] {name}: window \"{caption}\" {sw}x{sh}"));
         Ok(())
     }
 }

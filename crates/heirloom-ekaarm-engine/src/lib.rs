@@ -71,6 +71,7 @@ pub mod listdata;
 pub mod listproject;
 pub mod colorlist;
 pub mod icons;
+pub mod fbs;
 pub mod aeabimem;
 pub mod format;
 pub mod machine;

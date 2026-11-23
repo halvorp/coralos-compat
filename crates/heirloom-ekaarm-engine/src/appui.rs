@@ -31,8 +31,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 Some(Ok(r)) => ((r.x0, r.y0), (r.x1, r.y1)),
                 Some(Err(m)) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED avkon {name}: {m}"))),
                 None => {
-                    let r = crate::cone::S60_5TH_APP_RECT;
-                    ((r.left, r.top), (r.left + r.width, r.top + r.height))
+                    let (sw, sh) = p.screen_size();
+                    ((0, 0), (sw, sh))
                 }
             };
             let ok = [tl.0, tl.1, br.0, br.1].iter().enumerate().all(|(i, v)| p.mem.vm.write_u32(this.wrapping_add(i as u32 * 4), *v as u32).is_ok());

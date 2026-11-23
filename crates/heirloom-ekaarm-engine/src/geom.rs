@@ -5,6 +5,11 @@ use crate::natives::NativeOutcome;
 
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let this = p.cpu.regs[0];
+    if name == "_ZN6TPoint5SetXYEii" || name == "_ZN5TSize7SetSizeEii" {
+        let (a, b) = (p.cpu.regs[1], p.cpu.regs[2]);
+        let ok = p.mem.vm.write_u32(this, a).is_ok() && p.mem.vm.write_u32(this.wrapping_add(4), b).is_ok();
+        return Some(if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {this:#x} is unwritable")) });
+    }
     let rd = |p: &Process, a: u32| p.mem.vm.read_u32(a).map(|v| v as i32);
     // TInt TRect::Width() const / Height() const (e32std.h): iBr - iTl along the axis.
     if name == "_ZNK5TRect5WidthEv" || name == "_ZNK5TRect6HeightEv" {
@@ -23,6 +28,12 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let words: [i32; 4] = match name {
         // TRect::TRect(): zeroed.
         "_ZN5TRectC1Ev" => [0; 4],
+        // TRect::TRect(TInt aAx, TInt aAy, TInt aBx, TInt aBy): r1, r2, r3, [sp]
+        "_ZN5TRectC1Eiiii" | "_ZN5TRectC2Eiiii" => {
+            let sp = p.cpu.regs[13];
+            let Ok(d) = rd(p, sp) else { return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: stack arg unreadable"))) };
+            [p.cpu.regs[1] as i32, p.cpu.regs[2] as i32, p.cpu.regs[3] as i32, d]
+        }
         // TRect::TRect(const TSize& aSize): (0, 0) to the size (e32std.h).
         "_ZN5TRectC1ERK5TSize" => {
             let r1 = p.cpu.regs[1];
@@ -30,7 +41,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             [0, 0, w, h]
         }
         // TRect::TRect(const TPoint& aTl, const TPoint& aBr) / (const TPoint&, const TSize&): corners, or corner and extent.
-        "_ZN5TRectC1ERK6TPointS2_" | "_ZN5TRectC1ERK6TPointRK5TSize" => {
+        "_ZN5TRectC1ERK6TPointS2_" | "_ZN5TRectC1ERK6TPointRK5TSize" | "_ZN5TRect7SetRectERK6TPointRK5TSize" | "_ZN5TRect7SetRectERK6TPointS2_" => {
             let (r1, r2) = (p.cpu.regs[1], p.cpu.regs[2]);
             let (Ok(x), Ok(y), Ok(a), Ok(b)) = (rd(p, r1), rd(p, r1 + 4), rd(p, r2), rd(p, r2 + 4)) else { return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: arguments unreadable"))) };
             if name.ends_with("TSize") { [x, y, x + a, y + b] } else { [x, y, a, b] }

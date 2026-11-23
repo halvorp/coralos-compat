@@ -6,6 +6,14 @@ use crate::natives::NativeOutcome;
 
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     match name {
+        // void TTime::HomeTime(): microseconds since 00:00:00 1 Jan 0 AD (2026-11-22 base + monotonic virtual progress).
+        "_ZN5TTime8HomeTimeEv" | "_ZN5TTime13UniversalTimeEv" => {
+            let this = p.cpu.regs[0];
+            let us: u64 = 63_936_000_000_000_000u64.wrapping_add(p.insns.wrapping_mul(10));
+            let ok = p.mem.vm.write_u32(this, us as u32).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), (us >> 32) as u32).is_ok();
+            if ok { Some(NativeOutcome::Return) } else { Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TTime at {this:#x} unwritable"))) }
+        }
         // TDateTime::TDateTime(aYear, aMonth, aDay, aHour, aMinute, aSecond, aMicroSecond): r1-r3 then the stack (AAPCS).
         "_ZN9TDateTimeC1Ei6TMonthiiiii" => {
             let this = p.cpu.regs[0];

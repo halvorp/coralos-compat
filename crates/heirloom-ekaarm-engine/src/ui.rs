@@ -4,7 +4,10 @@
 use alloc::boxed::Box;
 use core::any::Any;
 use alloc::string::String;
-use heirloom_ui_abi::{ControlModel, ControlValue, GuestUi, GuestRect, MenuModel, RequestModel, RequestRef, UiObjectRef, UiRefusal, WindowModel};
+use heirloom_ui_abi::{
+    AudioStreamModel, ControlModel, ControlValue, GuestRect, GuestUi, MenuModel, Plane,
+    RequestModel, RequestRef, UiObjectRef, UiRefusal, WindowModel,
+};
 
 pub trait EngineUi {
     fn open_window(&mut self, model: WindowModel) -> Result<UiObjectRef, UiRefusal>;
@@ -19,6 +22,11 @@ pub trait EngineUi {
     fn set_control(&mut self, win: UiObjectRef, control: UiObjectRef, value: ControlValue) -> Result<(), UiRefusal>;
     fn set_control_rect(&mut self, win: UiObjectRef, control: UiObjectRef, rect: GuestRect) -> Result<(), UiRefusal>;
     fn request(&mut self, win: Option<UiObjectRef>, model: RequestModel) -> Result<RequestRef, UiRefusal>;
+    fn present_plane(&mut self, win: UiObjectRef, plane: Plane) -> Result<(), UiRefusal>;
+    fn open_audio_stream(&mut self, model: AudioStreamModel) -> Result<UiObjectRef, UiRefusal>;
+    fn queue_audio(&mut self, stream: UiObjectRef, pcm: &[u8]) -> Result<(), UiRefusal>;
+    fn flush_audio(&mut self, stream: UiObjectRef) -> Result<(), UiRefusal>;
+    fn close_audio_stream(&mut self, stream: UiObjectRef) -> Result<(), UiRefusal>;
     fn as_any(&self) -> &dyn Any;
     /// Give the concrete box back (`EkaArm` lends its UI to the process for a slice and takes it back).
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
@@ -48,6 +56,21 @@ impl<U: GuestUi> EngineUi for U {
     }
     fn request(&mut self, win: Option<UiObjectRef>, model: RequestModel) -> Result<RequestRef, UiRefusal> {
         GuestUi::request(self, win, model)
+    }
+    fn present_plane(&mut self, win: UiObjectRef, plane: Plane) -> Result<(), UiRefusal> {
+        GuestUi::present_plane(self, win, plane)
+    }
+    fn open_audio_stream(&mut self, model: AudioStreamModel) -> Result<UiObjectRef, UiRefusal> {
+        GuestUi::open_audio_stream(self, model)
+    }
+    fn queue_audio(&mut self, stream: UiObjectRef, pcm: &[u8]) -> Result<(), UiRefusal> {
+        GuestUi::queue_audio(self, stream, pcm)
+    }
+    fn flush_audio(&mut self, stream: UiObjectRef) -> Result<(), UiRefusal> {
+        GuestUi::flush_audio(self, stream)
+    }
+    fn close_audio_stream(&mut self, stream: UiObjectRef) -> Result<(), UiRefusal> {
+        GuestUi::close_audio_stream(self, stream)
     }
     fn as_any(&self) -> &dyn Any {
         self

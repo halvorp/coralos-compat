@@ -163,6 +163,31 @@ pub enum HostObj {
     Dialog(DialogState),
     /// A `CAknPopupHeadingPane` owned by the dialog at the given guest address (dialog.rs).
     HeadingPane(u32),
+    /// A `CFbsBitmap` handle id into `NativeState::fbs.bitmaps` (`fbs.rs`).
+    FbsBitmap(u32),
+    /// A `CFbsBitmapDevice` or `CFbsScreenDevice` (`fbs.rs`).
+    FbsDevice(crate::fbs::FbsDeviceState),
+    /// A `CFbsBitGc` graphics context (`fbs.rs`).
+    FbsGc(crate::fbs::FbsGcState),
+    /// A `CDirectScreenAccess` session (`fbs.rs`).
+    Dsa(crate::fbs::DsaState),
+    /// A `CMdaAudioOutputStream` audio stream (`fbs.rs`).
+    AudioOut(crate::fbs::AudioOutState),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OpenFile {
+    pub path: String,
+    pub data: Vec<u8>,
+    pub pos: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ThreadEntry {
+    pub entry: u32,
+    pub arg: u32,
+    pub stack_size: u32,
+    pub resumed: bool,
 }
 
 #[derive(Default)]
@@ -171,6 +196,12 @@ pub struct Objects {
     /// File server sessions by handle, and the next handle to hand out.
     pub fs_sessions: BTreeMap<u32, FsSessionState>,
     pub next_fs_handle: u32,
+    /// Open `RFile` handles (`fs.rs`).
+    pub open_files: BTreeMap<u32, OpenFile>,
+    pub next_file_handle: u32,
+    /// Cooperative worker `RThread` handles (`natives.rs` / `schedrun.rs`).
+    pub threads: BTreeMap<u32, ThreadEntry>,
+    pub next_thread_handle: u32,
 }
 
 impl Process {

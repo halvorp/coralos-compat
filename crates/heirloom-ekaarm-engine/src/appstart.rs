@@ -290,9 +290,24 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         }
         "_ZN8EikStart14RunApplicationE22TApaApplicationFactory" => run_application(p),
         "_ZN15CEikApplication15CreateDocumentLEP11CApaProcess" => eik_create_document(p),
-        "_ZN12CAknDocumentC2ER15CEikApplication" => {
+        "_ZN12CAknDocumentC2ER15CEikApplication" | "_ZN12CEikDocumentC2ER15CEikApplication" => {
             let app = p.cpu.regs[1];
             let r = zero(p, this, DOC_I_CONTAINER, CAPA_DOCUMENT_SIZE).and_then(|_| p.mem.vm.write_u32(this.wrapping_add(DOC_I_APPLICATION), app).map_err(|_| format!("document at {this:#x} is unwritable")));
+            ctor(p, r)
+        }
+        // TFileName CApaApplication::AppFullName() const: ARM EABI sret TBuf<256> in r0, this in r1.
+        "_ZNK15CApaApplication11AppFullNameEv" => {
+            let sret = this;
+            let name = "C:\\sys\\bin\\app.exe";
+            let units: alloc::vec::Vec<u16> = name.encode_utf16().collect();
+            let r = (|| -> Result<(), String> {
+                p.wr(sret, (units.len() as u32) | (crate::desc::DES_BUF << crate::desc::KSHIFT_DES_TYPE))?;
+                p.wr(sret.wrapping_add(4), 256)?;
+                for (i, &u) in units.iter().enumerate() {
+                    p.mem.vm.write_u16(sret.wrapping_add(8 + 2 * i as u32), u).map_err(|_| format!("AppFullName sret at {sret:#x} unwritable"))?;
+                }
+                Ok(())
+            })();
             ctor(p, r)
         }
         // Nothing the derived code may read is set by these (iCoeEnv stays 0: there is no CCoeEnv yet, a read through it is a named null fault).

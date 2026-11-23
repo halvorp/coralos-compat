@@ -20,7 +20,7 @@ use crate::sched::{ACTIVE_I_FLAGS, ACTIVE_I_NEXT, ACTIVE_I_STATUS, FLAG_ACTIVE};
 /// pure, :1640+), `RunError` 5. The window-server event object (`CCoeEnv`) is engine-built and holds our stub; every other
 /// active object is the guest's own and holds its code.
 pub const SLOT_ACTIVE_RUN_L: u32 = 4;
-const INHERITED_RUN_L: &[&str] = &[crate::wsevent::ENV_RUN_L];
+const INHERITED_RUN_L: &[&str] = &[crate::wsevent::ENV_RUN_L, crate::sched::IDLE_RUN_L, crate::sched::PERIODIC_RUN_L];
 
 pub(crate) enum Pump {
     /// Something ran or ended: look again.
@@ -31,7 +31,16 @@ pub(crate) enum Pump {
 
 impl Process {
     /// `CActiveScheduler::Start()`: park the caller (its CPU is the one in `self.cpu` now) and let the pump run the scheduler.
+    /// If called inside a cooperative child `RThread` (`ThreadStart` on the callback stack), return control to `RThread::Resume()`
+    /// while leaving the worker thread's active objects live in the shared scheduler queue.
     pub(crate) fn sched_start(&mut self) -> Result<(), String> {
+        if let Some(pos) = self.frames.iter().rposition(|f| matches!(f.cont, Continuation::ThreadStart)) {
+            let f = self.frames.remove(pos);
+            self.frames.truncate(pos);
+            self.cpu = f.saved;
+            self.log.push(String::from("[sched] child RThread entered CActiveScheduler::Start; yielding to parent"));
+            return Ok(());
+        }
         if self.frames.len() >= MAX_CALLBACK_DEPTH {
             return Err(format!("scheduler activation nested deeper than {MAX_CALLBACK_DEPTH}"));
         }
@@ -73,6 +82,7 @@ pub(crate) fn pump(p: &mut Process) -> Result<Pump, Outcome> {
         }
         return Ok(Pump::Continue);
     }
+    p.complete_due_timers().map_err(Outcome::Fault)?;
     if p.nat.requests.signals == 0 {
         if let Some(env) = p.host.env {
             if let Ok(appui) = p.rd(env + crate::cone::COEENV_I_APPUI) {

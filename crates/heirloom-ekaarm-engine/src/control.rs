@@ -37,7 +37,11 @@ const INH_SIZE_CHANGED: &[&str] = &[
     "_ZN22CAknSingleStyleListBox11SizeChangedEv",
 ];
 const INH_POSITION_CHANGED: &[&str] = &["_ZN11CCoeControl15PositionChangedEv"];
-const INH_COUNT: &[&str] = &["_ZNK11CCoeControl21CountComponentControlsEv", "_ZNK23AknListBoxLinesTemplateI24CEikFormattedCellListBoxE22CountComponentControlsEv"];
+const INH_COUNT: &[&str] = &[
+    "_ZNK11CCoeControl22CountComponentControlsEv",
+    "_ZNK11CCoeControl21CountComponentControlsEv",
+    "_ZNK23AknListBoxLinesTemplateI24CEikFormattedCellListBoxE22CountComponentControlsEv",
+];
 const INH_COMPONENT: &[&str] = &["_ZNK11CCoeControl16ComponentControlEi", "_ZNK23AknListBoxLinesTemplateI24CEikFormattedCellListBoxE16ComponentControlEi"];
 /// Bytes of the guest block standing for an `RWindow` (`iWin`): the guest passes it back to `RWindow` members and reads no field.
 const RWINDOW_BYTES: u32 = 32;
@@ -219,6 +223,12 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let r = p.control_set_extent(this, v[0], v[1], v[2] - v[0], v[3] - v[1]);
             match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) }
         }
+        // void CCoeControl::SetExtentToWholeScreen(): sets position=(0,0) and size=screen_size().
+        "_ZN11CCoeControl22SetExtentToWholeScreenEv" => {
+            let (sw, sh) = p.screen_size();
+            let r = p.control_set_extent(this, 0, 0, sw, sh);
+            match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) }
+        }
         // void CCoeControl::HandleResourceChange(TInt aType): tell every component control (CCoeControl's own work for a layout or skin change).
         "_ZN11CCoeControl20HandleResourceChangeEi" => match p.walk_components(this, CompKind::ResourceChange(r1)) { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) },
         "_ZN11CCoeControl9ActivateLEv" => match p.control_activate(this) { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) },
@@ -275,7 +285,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // ~CCoeControl(): drop any host state associated with this control.
         "_ZN11CCoeControlD1Ev" | "_ZN11CCoeControlD2Ev" => { p.obj_remove(this); NativeOutcome::Return }
         // A control with no components (the base implementations of the two virtuals).
-        "_ZNK11CCoeControl21CountComponentControlsEv" => { p.cpu.regs[0] = 0; NativeOutcome::Return }
+        "_ZNK11CCoeControl22CountComponentControlsEv" | "_ZNK11CCoeControl21CountComponentControlsEv" => { p.cpu.regs[0] = 0; NativeOutcome::Return }
         _ => return None,
     })
 }

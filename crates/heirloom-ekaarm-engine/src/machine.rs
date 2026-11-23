@@ -100,6 +100,7 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
             p.set_cdl_data(&data).map_err(|e| Refusal(format!("ekaarm: {name}: the layout data is refused: {e}")))?;
         }
         self.log.push(format!("ekaarm: started {name} (UID3 {:#010x})", p.uid3));
+        p.nat.clock_us = self.clock_us;
         self.process = Some(p);
         self.apply_census();
         Ok(())
@@ -175,6 +176,9 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
             return Err(Refusal(format!("ekaarm: the clock does not run backwards ({virtual_us} us < {} us)", self.clock_us)));
         }
         self.clock_us = virtual_us;
+        if let Some(p) = self.process.as_mut() {
+            let _ = p.advance_clock_to(virtual_us);
+        }
         Ok(())
     }
 
@@ -189,10 +193,9 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
         Ok(())
     }
 
-    /// Nothing in the engine waits on time: no Symbian timer (RTimer, CPeriodic) is implemented, so a `Blocked` step has no deadline.
-    /// DELETE WHEN the first timer is (`RTimer::After` issuing a request on `request.rs`): then the nearest deadline is returned here.
+    /// Nearest armed Symbian timer (`CPeriodic`) deadline in virtual microseconds, or `None` when no timer is pending.
     fn next_timer_deadline(&self) -> Option<u64> {
-        None
+        self.process.as_ref().and_then(|p| p.next_timer_deadline())
     }
 
     fn ui(&self) -> &U {

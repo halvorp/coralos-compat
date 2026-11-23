@@ -55,6 +55,12 @@ pub enum Continuation {
     ViewDeactivated { appui: u32, next: (u32, u32, Vec<u8>) },
     /// A runtime view activation (`AknViewActivatedL`) returned; release its scratch block (`viewappui.rs`).
     ViewActivated { block: u32 },
+    /// A `CIdle` callback returned r0 (`sched.rs`): if r0 != 0, re-arm the idle active object.
+    IdleCallback { ao: u32 },
+    /// A `CPeriodic` callback returned (`sched.rs`): re-arm for the next interval regardless of r0, unless cancelled.
+    PeriodicCallback { ao: u32 },
+    /// A cooperative child `RThread` started via `RThread::Resume()`; returns to the caller of `Resume()` once it exits or enters `CActiveScheduler::Start()`.
+    ThreadStart,
 }
 
 /// One interrupted call: the CPU as it was (resuming at the instruction after the SVC) and what to do on return.
@@ -120,6 +126,9 @@ impl Process {
             Continuation::KeyOffer(o) => crate::keyroute::offered(self, o, r0),
             Continuation::ViewDeactivated { appui, next } => crate::viewappui::finish_deactivation(self, appui, next),
             Continuation::ViewActivated { block } => { crate::viewappui::finish_activation(self, block); Ok(()) }
+            Continuation::IdleCallback { ao } => crate::sched::idle_returned(self, ao, r0),
+            Continuation::PeriodicCallback { ao } => crate::sched::periodic_returned(self, ao),
+            Continuation::ThreadStart => Ok(()),
         }
     }
 

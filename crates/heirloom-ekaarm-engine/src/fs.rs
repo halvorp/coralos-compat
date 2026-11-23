@@ -30,10 +30,16 @@ fn drive_att(letter: char) -> u32 { if letter == 'Z' { ATT_ROM | ATT_INTERNAL } 
 
 impl Process {
     /// Open a new file server session and return its handle (`RHandleBase::iHandle`, e32std.h:4100, word 0): non-zero, never reused.
+    /// On Symbian OS 9.x (data caging), a process's initial session path is `C:\private\<uid3>\`.
     pub(crate) fn fs_connect(&mut self) -> u32 {
+        let session_path = if self.uid3 != 0 {
+            format!("C:\\private\\{:08x}\\", self.uid3)
+        } else {
+            String::from("C:\\")
+        };
         let objs = &mut self.nat.objs;
         objs.next_fs_handle += 1;
-        objs.fs_sessions.insert(objs.next_fs_handle, FsSessionState::default());
+        objs.fs_sessions.insert(objs.next_fs_handle, FsSessionState { session_path });
         objs.next_fs_handle
     }
 
@@ -414,8 +420,168 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             if let Ok(h) = p.mem.vm.read_u32(this) { p.nat.objs.fs_sessions.remove(&h); }
             match p.mem.vm.write_u32(this, 0) { Ok(()) => NativeOutcome::Return, Err(_) => refuse(format!("the RFs at {this:#x} is unwritable")) }
         }
+        // TInt RFile::Open(RFs& aFs, const TDesC16& aName, TUint aFileMode)
+        "_ZN5RFile4OpenER3RFsRK7TDesC16j" => {
+            let Ok(units) = crate::desc::read16(p, r2) else { return Some(refuse(format!("bad filename at {r2:#x}"))) };
+            let raw = crate::desc::to_utf8(&units);
+            let session_prefix = p.fs_session(r1).map(|s| s.session_path.clone()).unwrap_or_default();
+            let full = resolve_drive_path(&raw, &session_prefix);
+            let priv_dir = format!("C:\\private\\{:08x}\\", p.uid3);
+            let data = p.host.drive.as_ref().and_then(|d| {
+                d.read(&full).ok()
+                    .or_else(|| {
+                        let tail = raw.rsplit(['\\', '/']).next().unwrap_or(&raw);
+                        d.read(&format!("{priv_dir}{tail}")).ok()
+                    })
+            }).map(|b| b.to_vec());
+            match data {
+                Some(bytes) => {
+                    p.nat.objs.next_file_handle += 1;
+                    let h = p.nat.objs.next_file_handle;
+                    p.nat.objs.open_files.insert(h, crate::objects::OpenFile { path: full, data: bytes, pos: 0 });
+                    let _ = p.mem.vm.write_u32(this, h);
+                    p.cpu.regs[0] = KERR_NONE as u32;
+                }
+                None => {
+                    let _ = p.mem.vm.write_u32(this, 0);
+                    p.cpu.regs[0] = (-1i32) as u32; // KErrNotFound
+                }
+            }
+            NativeOutcome::Return
+        }
+        // TInt RFile::Create / Replace (in-memory writable file handle)
+        "_ZN5RFile6CreateER3RFsRK7TDesC16j" | "_ZN5RFile7ReplaceER3RFsRK7TDesC16j" => {
+            let Ok(units) = crate::desc::read16(p, r2) else { return Some(refuse(format!("bad filename at {r2:#x}"))) };
+            let raw = crate::desc::to_utf8(&units);
+            let session_prefix = p.fs_session(r1).map(|s| s.session_path.clone()).unwrap_or_default();
+            let full = resolve_drive_path(&raw, &session_prefix);
+            p.nat.objs.next_file_handle += 1;
+            let h = p.nat.objs.next_file_handle;
+            p.nat.objs.open_files.insert(h, crate::objects::OpenFile { path: full, data: alloc::vec::Vec::new(), pos: 0 });
+            let _ = p.mem.vm.write_u32(this, h);
+            p.cpu.regs[0] = KERR_NONE as u32;
+            NativeOutcome::Return
+        }
+        // TInt RFile::Size(TInt& aSize) const
+        "_ZNK5RFile4SizeERi" => {
+            let h = p.mem.vm.read_u32(this).unwrap_or(0);
+            if let Some(f) = p.nat.objs.open_files.get(&h) {
+                let _ = p.wr(r1, f.data.len() as u32);
+                p.cpu.regs[0] = KERR_NONE as u32;
+            } else {
+                p.cpu.regs[0] = (-8i32) as u32; // KErrBadHandle
+            }
+            NativeOutcome::Return
+        }
+        // TInt RFile::Read(TDes8& aDes) const / Read(TDes8& aDes, TInt aLength) const
+        "_ZNK5RFile4ReadER5TDes8" | "_ZNK5RFile4ReadER5TDes8i" => {
+            let h = p.mem.vm.read_u32(this).unwrap_or(0);
+            let max_len = crate::desc::locate(p, r1).ok().and_then(|v| v.max).unwrap_or(0) as usize;
+            let want = if name.ends_with("8i") { (r2 as i32).max(0) as usize } else { max_len }.min(max_len);
+            let chunk = if let Some(f) = p.nat.objs.open_files.get_mut(&h) {
+                let avail = f.data.len().saturating_sub(f.pos);
+                let n = want.min(avail);
+                let c = f.data[f.pos..f.pos + n].to_vec();
+                f.pos += n;
+                Some(c)
+            } else {
+                None
+            };
+            match chunk {
+                Some(bytes) => {
+                    let _ = crate::desc::write8(p, r1, &bytes);
+                    p.cpu.regs[0] = KERR_NONE as u32;
+                }
+                None => { p.cpu.regs[0] = (-8i32) as u32; }
+            }
+            NativeOutcome::Return
+        }
+        // TInt RFile::Read(TInt aPos, TDes8& aDes) const / Read(TInt aPos, TDes8& aDes, TInt aLength) const
+        "_ZNK5RFile4ReadEiR5TDes8" | "_ZNK5RFile4ReadEiR5TDes8i" => {
+            let h = p.mem.vm.read_u32(this).unwrap_or(0);
+            let pos = (r1 as i32).max(0) as usize;
+            let max_len = crate::desc::locate(p, r2).ok().and_then(|v| v.max).unwrap_or(0) as usize;
+            let want = if name.ends_with("8i") { (p.cpu.regs[3] as i32).max(0) as usize } else { max_len }.min(max_len);
+            let chunk = if let Some(f) = p.nat.objs.open_files.get_mut(&h) {
+                let p0 = pos.min(f.data.len());
+                let n = want.min(f.data.len().saturating_sub(p0));
+                f.pos = p0 + n;
+                Some(f.data[p0..p0 + n].to_vec())
+            } else {
+                None
+            };
+            match chunk {
+                Some(bytes) => {
+                    let _ = crate::desc::write8(p, r2, &bytes);
+                    p.cpu.regs[0] = KERR_NONE as u32;
+                }
+                None => { p.cpu.regs[0] = (-8i32) as u32; }
+            }
+            NativeOutcome::Return
+        }
+        // TInt RFile::Seek(TSeek aMode, TInt& aPos) const
+        "_ZNK5RFile4SeekE5TSeekRi" => {
+            let h = p.mem.vm.read_u32(this).unwrap_or(0);
+            let off = p.rd(r2).unwrap_or(0) as i32;
+            if let Some(f) = p.nat.objs.open_files.get_mut(&h) {
+                let new_pos = match r1 {
+                    0 => off.max(0) as usize, // ESeekStart
+                    1 => (f.pos as i64 + off as i64).max(0) as usize, // ESeekCurrent
+                    2 => (f.data.len() as i64 + off as i64).max(0) as usize, // ESeekEnd
+                    _ => f.pos,
+                }.min(f.data.len());
+                f.pos = new_pos;
+                let _ = p.wr(r2, new_pos as u32);
+                p.cpu.regs[0] = KERR_NONE as u32;
+            } else {
+                p.cpu.regs[0] = (-8i32) as u32;
+            }
+            NativeOutcome::Return
+        }
+        // TInt RFile::Write(const TDesC8& aDes)
+        "_ZN5RFile5WriteERK6TDesC8" => {
+            let h = p.mem.vm.read_u32(this).unwrap_or(0);
+            let bytes = crate::desc::read8(p, r1).unwrap_or_default();
+            if let Some(f) = p.nat.objs.open_files.get_mut(&h) {
+                if f.pos + bytes.len() > f.data.len() {
+                    f.data.resize(f.pos + bytes.len(), 0);
+                }
+                f.data[f.pos..f.pos + bytes.len()].copy_from_slice(&bytes);
+                f.pos += bytes.len();
+                p.cpu.regs[0] = KERR_NONE as u32;
+            } else {
+                p.cpu.regs[0] = (-8i32) as u32;
+            }
+            NativeOutcome::Return
+        }
+        // void RFile::Close()
+        "_ZN5RFile5CloseEv" => {
+            if let Ok(h) = p.mem.vm.read_u32(this) { p.nat.objs.open_files.remove(&h); }
+            let _ = p.mem.vm.write_u32(this, 0);
+            NativeOutcome::Return
+        }
         _ => return None,
     })
+}
+
+pub(crate) fn resolve_drive_path(raw: &str, session_path: &str) -> String {
+    let b = raw.as_bytes();
+    if b.len() >= 2 && b[1] == b':' {
+        return String::from(raw);
+    }
+    if raw.starts_with('\\') || raw.starts_with('/') {
+        let drive = if session_path.len() >= 2 && session_path.as_bytes()[1] == b':' {
+            &session_path[..2]
+        } else {
+            "C:"
+        };
+        return format!("{drive}{raw}");
+    }
+    if !session_path.is_empty() {
+        let sep = if session_path.ends_with('\\') { "" } else { "\\" };
+        return format!("{session_path}{sep}{raw}");
+    }
+    format!("C:\\{raw}")
 }
 
 #[cfg(test)]

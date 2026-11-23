@@ -21,7 +21,7 @@ fn main() {
     let mut vtables: Vec<(u32, u32)> = Vec::new();
     let mut rom_dir: Option<String> = None;
     let mut rom_manifest: Option<String> = None;
-    enum Action { Key(u32), Menu(u32), SelectRow(u32), ActivateList, AnswerDialog(u32) }
+    enum Action { Key(u32), Menu(u32), SelectRow(u32), ActivateList, AnswerDialog(u32), Ticks(u32) }
     let mut actions: Vec<Action> = Vec::new();
     let mut rom_log = None;
     let mut dumps: Vec<(u32, u32)> = Vec::new();
@@ -29,6 +29,7 @@ fn main() {
     let mut file = None;
     let mut drive_dir: Option<String> = None;
     let mut cdl_data: Option<String> = None;
+    let mut save_ppm: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -47,6 +48,8 @@ fn main() {
             "--select-row" => actions.push(Action::SelectRow(args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage()))),
             "--activate-list" => actions.push(Action::ActivateList),
             "--answer-dialog" => actions.push(Action::AnswerDialog(args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage()))),
+            "--ticks" => actions.push(Action::Ticks(args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage()))),
+            "--save-ppm" => save_ppm = Some(args.next().unwrap_or_else(|| usage())),
             "--rom-manifest" => rom_manifest = Some(args.next().unwrap_or_else(|| usage())),
             "--rom" => rom_dir = Some(args.next().unwrap_or_else(|| usage())),
             "--dump" => {
@@ -175,6 +178,16 @@ fn main() {
                     outcome = proc.run(proc.insns.saturating_add(max_insns));
                 }
             }
+            Action::Ticks(n) => {
+                for _ in 0..n {
+                    let target = proc.next_timer_deadline()
+                        .unwrap_or_else(|| proc.nat.clock_us.saturating_add(20_000));
+                    let target = target.max(proc.nat.clock_us.saturating_add(1));
+                    if let Err(m) = proc.advance_clock_to(target) { println!("OUTCOME TickRefused: {m}"); std::process::exit(1) }
+                    outcome = proc.run(proc.insns.saturating_add(max_insns));
+                    if !matches!(outcome, Outcome::Blocked) { break; }
+                }
+            }
         }
     }
     if let Some(seen) = &proc.census {
@@ -188,8 +201,33 @@ fn main() {
     for line in &proc.log { println!("{line}"); }
     if let Some(t) = &proc.trace { for line in t { println!("trace {line}"); } }
     if let Some(ui) = proc.ui_as::<RecordingGuestUi>() {
+        if let Some(ppm_path) = &save_ppm {
+            if let Some((w, h, rgb)) = ui.calls.iter().rev().find_map(|c| match c {
+                heirloom_ui_abi::UiCall::PresentPlane(_, p) => p.ops.iter().rev().find_map(|op| match op {
+                    heirloom_ui_abi::DrawOp::Pixels { rect, rgb } if rect.width > 0 && rect.height > 0 => {
+                        Some((rect.width as usize, rect.height as usize, rgb))
+                    }
+                    _ => None,
+                }),
+                _ => None,
+            }) {
+                let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+                for &px in rgb {
+                    out.push(((px >> 16) & 0xff) as u8);
+                    out.push(((px >> 8) & 0xff) as u8);
+                    out.push((px & 0xff) as u8);
+                }
+                std::fs::write(ppm_path, out).expect("write ppm");
+                println!("saved {w}x{h} frame to {ppm_path}");
+            }
+        }
         println!("ui: {} recorded call(s)", ui.calls.len());
-        for c in &ui.calls { println!("  {c:?}"); }
+        for c in &ui.calls {
+            match c {
+                heirloom_ui_abi::UiCall::PresentPlane(w, p) => println!("  PresentPlane({w:?}, {}x{}, {} ops)", p.rect.width, p.rect.height, p.ops.len()),
+                other => println!("  {other:?}"),
+            }
+        }
     }
     for id in &res_ids {
         match proc.resource(*id) {

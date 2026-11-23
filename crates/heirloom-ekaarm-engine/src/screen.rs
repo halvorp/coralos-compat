@@ -54,6 +54,12 @@ const MAP_VTABLE: &[(usize, &str)] = &[(6, "_ZThn4_N15CWsScreenDevice20GetNeares
 const MAP_SLOTS: usize = 10;
 
 impl Process {
+    /// Active display dimensions in pixels (`360x640` for S60 5th Ed touch/skinned apps;
+    /// `352x416` for legacy S60 3rd Ed apps running in compatibility mode).
+    pub(crate) fn screen_size(&self) -> (i32, i32) {
+        self.nat.screen_size.unwrap_or((SCREEN_WIDTH, SCREEN_HEIGHT))
+    }
+
     /// A font for a spec: this engine has no glyphs (the host draws the text), so it is a guest object that remembers the height the
     /// guest asked for (`TFontSpec::iHeight`, twips, gdi.h; offset 56 as the app's own frame lays it out) and answers
     /// `HeightInPixels` from it at the device's twips-per-pixel (`twips_to_pixels`). `aFont = font; return KErrNone`.
@@ -82,7 +88,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     Some(match name {
         // TSize CGraphicsDevice::SizeInPixels() const: the TSize (iWidth, iHeight) is returned through the hidden pointer in r0.
         "_ZNK15CWsScreenDevice12SizeInPixelsEv" => {
-            let ok = p.mem.vm.write_u32(ret, SCREEN_WIDTH as u32).is_ok() && p.mem.vm.write_u32(ret.wrapping_add(4), SCREEN_HEIGHT as u32).is_ok();
+            let (sw, sh) = p.screen_size();
+            let ok = p.mem.vm.write_u32(ret, sw as u32).is_ok() && p.mem.vm.write_u32(ret.wrapping_add(4), sh as u32).is_ok();
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED ws32 {name}: the result at {ret:#x} is unwritable")) }
         }
         // TInt GetNearestFontInTwips(CFont*& aFont, const TFontSpec&): the thunk's `this` is the MGraphicsDeviceMap base.

@@ -8,6 +8,20 @@ use crate::natives::NativeOutcome;
 /// `__aeabi_ldivmod` / `__aeabi_uldivmod` (Run-time ABI 4.3.1): (r1:r0) / (r3:r2), quotient in r1:r0 and remainder in r3:r2. Division by zero
 /// is a named refusal (the helper calls `__aeabi_ldiv0`, which on a device raises an exception the guest has not asked for).
 fn long_divmod(p: &mut Process, name: &str) -> Option<NativeOutcome> {
+    if matches!(name, "__aeabi_idivmod" | "__aeabi_idiv" | "__aeabi_uidivmod" | "__aeabi_uidiv") {
+        let (n, d) = (p.cpu.regs[0], p.cpu.regs[1]);
+        if d == 0 {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED drtaeabi {name}: division by zero")));
+        }
+        let (q, m) = if name.starts_with("__aeabi_i") {
+            ((n as i32).wrapping_div(d as i32) as u32, (n as i32).wrapping_rem(d as i32) as u32)
+        } else {
+            (n / d, n % d)
+        };
+        p.cpu.regs[0] = q;
+        p.cpu.regs[1] = m;
+        return Some(NativeOutcome::Return);
+    }
     let signed = match name {
         "__aeabi_ldivmod" => true,
         "__aeabi_uldivmod" => false,
@@ -29,6 +43,33 @@ fn long_divmod(p: &mut Process, name: &str) -> Option<NativeOutcome> {
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = long_divmod(p, name) {
         return Some(o);
+    }
+    if matches!(name, "memcpy" | "memmove" | "memset" | "memclr") {
+        let (dst, a, b) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2]);
+        let bad = |what: &str| Some(NativeOutcome::Refused(format!("NEXT-NEEDED {name}: {what} is unmapped")));
+        match name {
+            "memcpy" | "memmove" => {
+                let src: Result<Vec<u8>, _> = (0..b).map(|i| p.mem.vm.read_u8(a.wrapping_add(i))).collect();
+                let Ok(src) = src else { return bad("the source") };
+                for (i, v) in src.iter().enumerate() {
+                    if p.mem.vm.write_u8(dst.wrapping_add(i as u32), *v).is_err() { return bad("the destination"); }
+                }
+            }
+            "memclr" => {
+                for i in 0..a {
+                    if p.mem.vm.write_u8(dst.wrapping_add(i), 0).is_err() { return bad("the destination"); }
+                }
+            }
+            _ => {
+                // C memset(dst, value, n) -> returns dst
+                let v = a as u8;
+                for i in 0..b {
+                    if p.mem.vm.write_u8(dst.wrapping_add(i), v).is_err() { return bad("the destination"); }
+                }
+            }
+        }
+        p.cpu.regs[0] = dst;
+        return Some(NativeOutcome::Return);
     }
     let rest = name.strip_prefix("__aeabi_mem")?;
     let kind = rest.trim_end_matches(|c: char| c.is_ascii_digit());

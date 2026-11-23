@@ -37,6 +37,15 @@ pub struct NativeState {
     pub fonts: BTreeMap<u32, u32>,
     /// The icon library's guest constants (`icons.rs`).
     pub icons: crate::icons::IconState,
+    /// Font & Bitmap Server (`fbscli`) bitmaps (`fbs.rs`).
+    pub fbs: crate::fbs::FbsState,
+    /// Virtual monotonic clock in microseconds, driven by `GuestMachine::advance_clock_to`.
+    pub clock_us: u64,
+    /// Active `CPeriodic` timers keyed by guest object address (`sched.rs`).
+    pub periodic_timers: BTreeMap<u32, crate::sched::PeriodicTimer>,
+    /// Active screen dimensions `(width, height)` in pixels (`None` = S60 5th Ed default `360x640`;
+    /// set to `352x416` when a legacy non-touch S60 3rd Ed app calls `CAknAppUi::BaseConstructL(0)`).
+    pub screen_size: Option<(i32, i32)>,
     /// A modal `GuestUi::request` currently blocking `CEikDialog::RunLD` (`dialog.rs`): `(request_ref, dialog_addr)`.
     pub pending_request: Option<(heirloom_ui_abi::RequestRef, u32)>,
 }
@@ -99,6 +108,7 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::listdata::native(proc, name) { return Some(o); }
     if let Some(o) = crate::colorlist::native(proc, name) { return Some(o); }
     if let Some(o) = crate::icons::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::fbs::native(proc, name) { return Some(o); }
     if let Some(o) = crate::aeabimem::native(proc, name) { return Some(o); }
     if let Some(o) = crate::format::native(proc, name) { return Some(o); }
     None
@@ -238,7 +248,7 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
         "__cxa_throw" => NativeOutcome::Refused(String::from("NEXT-NEEDED leave __cxa_throw: EHABI unwinding is slice 1b")),
         "__cxa_allocate_exception" => NativeOutcome::Refused(String::from("NEXT-NEEDED leave __cxa_allocate_exception: EHABI unwinding is slice 1b")),
         // CBase::operator new (inline in e32base.inl) is User::AllocZ / AllocZL: zero-filled. The L forms leave on failure.
-        "_ZN4User7AllocZLEi" | "_ZN4User6AllocLEi" => {
+        "_ZN4User7AllocZLEi" | "_ZN4User6AllocLEi" | "_Znwj" | "_Znaj" => {
             let len = proc.cpu.regs[0] as i32 as u32;
             if proc.heap.is_none() {
                 return NativeOutcome::Refused(format!("NEXT-NEEDED euser/{name} before heap setup"));
@@ -296,7 +306,109 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             proc.cpu.regs[0] = proc.alloc_zeroed(len).unwrap_or(0);
             NativeOutcome::Return
         }
-        "_ZN4User4FreeEPv" | "_ZdlPv" => {
+        "_ZN6RDebug5PrintE11TRefByValueIK7TDesC16Ez" | "_ZN6RDebug6PrintfEPKcz" => NativeOutcome::Return,
+        // Local synchronization primitives (single-threaded cooperative engine: CreateLocal/Wait/Signal succeed cleanly).
+        "_ZN10RSemaphore11CreateLocalEi10TOwnerType"
+        | "_ZN6RMutex11CreateLocalE10TOwnerType" => {
+            let _ = proc.mem.vm.write_u32(proc.cpu.regs[0], 1);
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZN10RSemaphore4WaitEv"
+        | "_ZN10RSemaphore6SignalEv"
+        | "_ZN10RSemaphore6SignalEi"
+        | "_ZN6RMutex4WaitEv"
+        | "_ZN6RMutex6SignalEv" => NativeOutcome::Return,
+        // Cooperative worker RThread (runs entry(arg) on Resume() until it enters CActiveScheduler::Start() or exits).
+        // TInt RThread::Create(const TDesC16& aName, TThreadFunction aFunction, TInt aStackSize, TInt aMinHeapSize, TInt aMaxHeapSize, TAny* aPtr, TOwnerType aType)
+        "_ZN7RThread6CreateERK7TDesC16PFiPvEiiiS3_10TOwnerType" => {
+            let sp = proc.cpu.regs[13];
+            let entry = proc.cpu.regs[2];
+            let stack_size = proc.cpu.regs[3].clamp(0x2000, 0x10000);
+            let arg = proc.mem.vm.read_u32(sp + 8).unwrap_or(0);
+            proc.nat.objs.next_thread_handle += 1;
+            let h = proc.nat.objs.next_thread_handle;
+            proc.nat.objs.threads.insert(h, crate::objects::ThreadEntry { entry, arg, stack_size, resumed: false });
+            let _ = proc.mem.vm.write_u32(proc.cpu.regs[0], h);
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZNK7RThread6ResumeEv" => {
+            let h = proc.mem.vm.read_u32(proc.cpu.regs[0]).unwrap_or(0);
+            let launch = proc.nat.objs.threads.get_mut(&h).and_then(|t| {
+                if !t.resumed && t.entry != 0 {
+                    t.resumed = true;
+                    Some((t.entry, t.arg, t.stack_size))
+                } else {
+                    None
+                }
+            });
+            if let Some((entry, arg, stack_size)) = launch {
+                if let Some(stack_base) = proc.alloc_zeroed(stack_size) {
+                    let top = (stack_base + stack_size) & !7;
+                    if proc.call_guest(entry, &[arg], crate::callback::Continuation::ThreadStart).is_ok() {
+                        proc.cpu.regs[13] = top;
+                    }
+                }
+            }
+            NativeOutcome::Return
+        }
+        // void RThread::RequestComplete(TRequestStatus*& aStatus, TInt aReason) const
+        "_ZNK7RThread15RequestCompleteERP14TRequestStatusi" => {
+            let status_ptr_addr = proc.cpu.regs[1];
+            let reason = proc.cpu.regs[2];
+            if let Ok(status_addr) = proc.mem.vm.read_u32(status_ptr_addr) {
+                if status_addr != 0 {
+                    let _ = proc.mem.vm.write_u32(status_addr, reason);
+                    let _ = proc.mem.vm.write_u32(status_ptr_addr, 0);
+                    proc.nat.requests.signals += 1;
+                }
+            }
+            NativeOutcome::Return
+        }
+        "_ZNK7RThread11SetPriorityE15TThreadPriority"
+        | "_ZN7RThread4KillEi"
+        | "_ZN7RThread9TerminateEi" => NativeOutcome::Return,
+        // CTrapCleanup::New() / CActiveScheduler::CActiveScheduler() / CActiveScheduler::Install(CActiveScheduler*)
+        "_ZN12CTrapCleanup3NewEv" | "_ZN16CActiveSchedulerC1Ev" => {
+            if name == "_ZN12CTrapCleanup3NewEv" {
+                let obj = proc.plain_object("CTrapCleanup", 16).unwrap_or(0);
+                proc.cpu.regs[0] = obj;
+            }
+            NativeOutcome::Return
+        }
+        "_ZN12CTrapCleanupD1Ev" | "_ZN12CTrapCleanupD0Ev" => {
+            if name.ends_with("D0Ev") {
+                if let Some(heap) = proc.heap.as_mut() { let _ = heap.free(proc.cpu.regs[0]); }
+            }
+            NativeOutcome::Return
+        }
+        "_ZN16CActiveScheduler7InstallEPS_" => NativeOutcome::Return,
+        "tolower" => {
+            let c = proc.cpu.regs[0] & 0xFF;
+            proc.cpu.regs[0] = if (b'A'..=b'Z').contains(&(c as u8)) { c + 32 } else { c };
+            NativeOutcome::Return
+        }
+        "toupper" => {
+            let c = proc.cpu.regs[0] & 0xFF;
+            proc.cpu.regs[0] = if (b'a'..=b'z').contains(&(c as u8)) { c - 32 } else { c };
+            NativeOutcome::Return
+        }
+        "_ZN4User9TickCountEv" => {
+            proc.cpu.regs[0] = (proc.nat.clock_us / 15_625).saturating_add(proc.insns / 50_000) as u32;
+            NativeOutcome::Return
+        }
+        "_ZN4User19ResetInactivityTimeEv" => NativeOutcome::Return,
+        // CAknAppUiBase::KeySounds() / CAknKeySoundSystem::{PushContextL,PopContext,PlaySound}: key click feedback (no-op on host).
+        "_ZNK13CAknAppUiBase9KeySoundsEv" => {
+            let p = proc.alloc_zeroed(16).unwrap_or(0);
+            proc.cpu.regs[0] = p;
+            NativeOutcome::Return
+        }
+        "_ZN18CAknKeySoundSystem12PushContextLEi"
+        | "_ZN18CAknKeySoundSystem10PopContextEv"
+        | "_ZN18CAknKeySoundSystem9PlaySoundEi" => NativeOutcome::Return,
+        "_ZN4User4FreeEPv" | "_ZdlPv" | "_ZdaPv" => {
             let addr = proc.cpu.regs[0];
             if addr == 0 {
                 proc.cpu.regs[0] = 0;

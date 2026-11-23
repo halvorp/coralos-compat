@@ -77,6 +77,33 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             Some(HostObj::Dict(d)) => { let present = d.entries.contains_key(&r1); p.cpu.regs[0] = present as u32; NativeOutcome::Return }
             _ => refuse(format!("{r0:#x} is not a live dictionary store")),
         },
+        // void RDictionaryWriteStream::AssignLC(CDictionaryStore& aStore, TUid aUid)
+        "_ZN22RDictionaryWriteStream8AssignLCER16CDictionaryStore4TUid"
+        | "_ZN22RDictionaryWriteStream7AssignLER16CDictionaryStore4TUid" => {
+            let _ = p.wr(r0, r1); // store ptr
+            let _ = p.wr(r0.wrapping_add(4), r2); // uid
+            if name.contains("AssignLC") {
+                p.nat.cleanup.push(crate::cleanup::CleanupItem::Any(0));
+            }
+            NativeOutcome::Return
+        }
+        // void RWriteStream::WriteL(const TDesC8& aDes)
+        "_ZN12RWriteStream6WriteLERK6TDesC8" => {
+            let store = p.rd(r0).unwrap_or(0);
+            let uid = p.rd(r0.wrapping_add(4)).unwrap_or(0);
+            let bytes = desc::read8(p, r1).unwrap_or_default();
+            if let Some(HostObj::Dict(d)) = p.obj_get(store) {
+                d.entries.entry(uid).or_default().extend_from_slice(&bytes);
+            }
+            NativeOutcome::Return
+        }
+        "_ZN12RWriteStream7CommitLEv"
+        | "_ZN12RWriteStream5CloseEv"
+        | "_ZN16CDictionaryStore7CommitLEv"
+        | "_ZN16CDictionaryStore6CommitEv" => {
+            if name.ends_with("CommitEv") { p.cpu.regs[0] = 0; }
+            NativeOutcome::Return
+        }
         // The destructors: the deleting one (D0) also frees the block.
         "_ZN20CDictionaryFileStoreD1Ev" | "_ZN20CDictionaryFileStoreD0Ev" => {
             p.obj_remove(r0);

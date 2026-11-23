@@ -390,6 +390,33 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
                 Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED charconv {name}: {m}")),
             }
         }
+        // void TDes16::NumUC(TUint64 aVal, TRadix aRadix) (e32des16.h): AAPCS aligns u64 to (r2, r3), aRadix at [sp].
+        "_ZN6TDes165NumUCEy6TRadix" | "_ZN6TDes163NumEy6TRadix" => {
+            let val = (u64::from(p.cpu.regs[3]) << 32) | u64::from(p.cpu.regs[2]);
+            let radix = p.rd(p.cpu.regs[13]).unwrap_or(10);
+            let upper = name.contains("NumUC");
+            let s = match radix {
+                2 => format!("{val:b}"),
+                8 => format!("{val:o}"),
+                16 if upper => format!("{val:X}"),
+                16 => format!("{val:x}"),
+                _ => format!("{val}"),
+            };
+            let units: Vec<u16> = s.encode_utf16().collect();
+            match write16(p, this, &units) {
+                Ok(()) => NativeOutcome::Return,
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // void TDes16::Num(TInt64 aVal)
+        "_ZN6TDes163NumEx" => {
+            let val = ((u64::from(p.cpu.regs[3]) << 32) | u64::from(p.cpu.regs[2])) as i64;
+            let units: Vec<u16> = format!("{val}").encode_utf16().collect();
+            match write16(p, this, &units) {
+                Ok(()) => NativeOutcome::Return,
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
         // TPtrC16 TDesC16::Left(TInt aLength) const (e32des16.h): ARM EABI sret in r0, this in r1, aLength in r2.
         "_ZNK7TDesC164LeftEi" => {
             let sret = p.cpu.regs[0];
@@ -446,6 +473,84 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
                     if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: sret at {sret:#x} unwritable")) }
                 }
                 Ok(v) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: Mid({pos}) outside length {}", v.len)),
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // void TDes16::Insert(TInt aPos, const TDesC16& aDes)
+        "_ZN6TDes166InsertEiRK7TDesC16" => {
+            let (dst_addr, pos, src_addr) = (p.cpu.regs[0], p.cpu.regs[1] as i32, p.cpu.regs[2]);
+            match (read16(p, dst_addr), read16(p, src_addr)) {
+                (Ok(mut cur), Ok(ins)) => {
+                    let at = (pos.max(0) as usize).min(cur.len());
+                    cur.splice(at..at, ins);
+                    match write16(p, dst_addr, &cur) {
+                        Ok(()) => NativeOutcome::Return,
+                        Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+                    }
+                }
+                (Err(m), _) | (_, Err(m)) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // TPtrC8::TPtrC8() / TPtrC8(const TUint8* aBuf, TInt aLength)
+        "_ZN6TPtrC8C1Ev" | "_ZN6TPtrC8C2Ev" => {
+            let this = p.cpu.regs[0];
+            let ok = p.mem.vm.write_u32(this, DES_PTR_C << KSHIFT_DES_TYPE).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), 0).is_ok();
+            p.cpu.regs[0] = this;
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {this:#x} unwritable")) }
+        }
+        "_ZN6TPtrC8C1EPKhi" | "_ZN6TPtrC8C2EPKhi" => {
+            let (this, buf, len) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2]);
+            let ok = p.mem.vm.write_u32(this, (len & 0x0FFF_FFFF) | (DES_PTR_C << KSHIFT_DES_TYPE)).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), buf).is_ok();
+            p.cpu.regs[0] = this;
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {this:#x} unwritable")) }
+        }
+        // TPtr8::TPtr8(TUint8* aBuf, TInt aMaxLength) / TPtr8(TUint8* aBuf, TInt aLength, TInt aMaxLength)
+        "_ZN5TPtr8C1EPhi" | "_ZN5TPtr8C2EPhi" => {
+            let (this, buf, max_len) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2]);
+            let ok = p.mem.vm.write_u32(this, 0 | (DES_PTR << KSHIFT_DES_TYPE)).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), max_len).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(8), buf).is_ok();
+            p.cpu.regs[0] = this;
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {this:#x} unwritable")) }
+        }
+        // TBufBase16::TBufBase16(const TDesC16& aDes, TInt aMaxLength) (e32des16.h): EBuf descriptor header + copied UTF-16 units.
+        "_ZN10TBufBase16C1ERK7TDesC16i" | "_ZN10TBufBase16C2ERK7TDesC16i" => {
+            let (this, src_addr, max_len) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2]);
+            match read16(p, src_addr) {
+                Ok(units) => {
+                    let n = (units.len() as u32).min(max_len);
+                    let mut ok = p.mem.vm.write_u32(this, n | (DES_BUF << KSHIFT_DES_TYPE)).is_ok()
+                        && p.mem.vm.write_u32(this.wrapping_add(4), max_len).is_ok();
+                    for (i, &u) in units.iter().take(n as usize).enumerate() {
+                        ok = ok && p.mem.vm.write_u16(this.wrapping_add(8 + 2 * i as u32), u).is_ok();
+                    }
+                    p.cpu.regs[0] = this;
+                    if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {this:#x} unwritable")) }
+                }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // HBufC16* TDesC16::AllocL() const / AllocLC() const / Alloc() const
+        "_ZNK7TDesC166AllocLEv" | "_ZNK7TDesC167AllocLCEv" | "_ZNK7TDesC165AllocEv" => {
+            let push = name.contains("AllocLC");
+            match read16(p, p.cpu.regs[0]) {
+                Ok(units) => {
+                    let bytes = 4 + 2 * units.len() as u32;
+                    let Some(h) = p.alloc_zeroed(bytes) else {
+                        return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: out of heap")));
+                    };
+                    let mut ok = p.mem.vm.write_u32(h, units.len() as u32 | (DES_BUF_C << KSHIFT_DES_TYPE)).is_ok();
+                    for (i, &u) in units.iter().enumerate() {
+                        ok = ok && p.mem.vm.write_u16(h.wrapping_add(4 + 2 * i as u32), u).is_ok();
+                    }
+                    if push {
+                        p.nat.cleanup.push(crate::cleanup::CleanupItem::Any(h));
+                    }
+                    p.cpu.regs[0] = h;
+                    if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {h:#x} unwritable")) }
+                }
                 Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
             }
         }

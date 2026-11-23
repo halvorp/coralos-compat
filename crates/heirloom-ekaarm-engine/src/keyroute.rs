@@ -33,6 +33,10 @@ const TWS_I_EVENT_DATA: u32 = 16;
 const EKEY_WAS_CONSUMED: u32 = 1;
 
 const HANDLE_WS_EVENT_NAMES: &[&str] = &[
+    "_ZN9CCoeAppUi14HandleWsEventLERK8TWsEventP11CCoeControl",
+    "_ZN9CEikAppUi14HandleWsEventLERK8TWsEventP11CCoeControl",
+    "_ZN13CAknAppUiBase14HandleWsEventLERK8TWsEventP11CCoeControl",
+    "_ZN9CAknAppUi14HandleWsEventLERK8TWsEventP11CCoeControl",
     "_ZN9CCoeAppUi13HandleWsEventLERK8TWsEventP11CCoeControl",
     "_ZN9CEikAppUi13HandleWsEventLERK8TWsEventP11CCoeControl",
     "_ZN13CAknAppUiBase13HandleWsEventLERK8TWsEventP11CCoeControl",
