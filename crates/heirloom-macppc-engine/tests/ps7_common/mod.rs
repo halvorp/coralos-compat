@@ -117,6 +117,67 @@ pub fn act(m: &mut MacPpc<RecordingGuestUi>, t: &mut u64, actions: &str) -> bool
         match verb {
             "run" => if !run(m, t, arg.parse().unwrap()) { return false },
             "shot" => shot(m, arg),
+            "shotall" => {
+                let ui = GuestMachine::ui(m);
+                let mut wins: Vec<u32> = ui.plane_frames.keys().map(|&(w, _)| w).collect();
+                wins.sort_unstable(); wins.dedup();
+                for win in wins {
+                    let (mut w, mut h) = (1i32, 1i32);
+                    let (mut n_pix, mut n_other, mut n_frames) = (0usize, 0usize, 0usize);
+                    for ((wid, _), frames) in &ui.plane_frames { if *wid == win { n_frames += frames.len(); for f in frames { w = w.max(f.rect.left + f.rect.width); h = h.max(f.rect.top + f.rect.height); for op in &f.ops { if matches!(op, heirloom_ui_abi::DrawOp::Pixels { .. }) { n_pix += 1; } else { n_other += 1; } } } } }
+                    let mut img = vec![0x00C0_C0C0u32; (w * h) as usize];
+                    for ((wid, _), frames) in &ui.plane_frames {
+                        if *wid != win { continue }
+                        for f in frames { for op in &f.ops { match op {
+                            heirloom_ui_abi::DrawOp::Pixels { rect, rgb } => {
+                                for y in 0..rect.height { for x in 0..rect.width {
+                                    let (gx, gy) = (rect.left + x + f.rect.left, rect.top + y + f.rect.top);
+                                    if gx >= 0 && gy >= 0 && gx < w && gy < h { img[(gy * w + gx) as usize] = rgb[(y * rect.width + x) as usize]; }
+                                } }
+                            }
+                            heirloom_ui_abi::DrawOp::Swatch { rect, rgb } => {
+                                for y in 0..rect.height { for x in 0..rect.width {
+                                    let (gx, gy) = (rect.left + x + f.rect.left, rect.top + y + f.rect.top);
+                                    if gx >= 0 && gy >= 0 && gx < w && gy < h { img[(gy * w + gx) as usize] = *rgb; }
+                                } }
+                            }
+                            heirloom_ui_abi::DrawOp::Fill { rect, pen_role } => {
+                                let rgb = match pen_role {
+                                    heirloom_ui_abi::PenRole::Background => 0x00DD_DDDD,
+                                    heirloom_ui_abi::PenRole::Text => 0x0011_1111,
+                                    heirloom_ui_abi::PenRole::Shadow => 0x0066_6666,
+                                    heirloom_ui_abi::PenRole::Shine => 0x00FF_FFFF,
+                                    _ => 0x0088_88CC,
+                                };
+                                for y in 0..rect.height { for x in 0..rect.width {
+                                    let (gx, gy) = (rect.left + x + f.rect.left, rect.top + y + f.rect.top);
+                                    if gx >= 0 && gy >= 0 && gx < w && gy < h { img[(gy * w + gx) as usize] = rgb; }
+                                } }
+                            }
+                            heirloom_ui_abi::DrawOp::Line { a, b, .. } => {
+                                let (x0, y0, x1, y1) = (a.x + f.rect.left, a.y + f.rect.top, b.x + f.rect.left, b.y + f.rect.top);
+                                let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+                                for s in 0..=steps {
+                                    let gx = x0 + (x1 - x0) * s / steps;
+                                    let gy = y0 + (y1 - y0) * s / steps;
+                                    if gx >= 0 && gy >= 0 && gx < w && gy < h { img[(gy * w + gx) as usize] = 0x0022_2222; }
+                                }
+                            }
+                            _ => {}
+                        } } }
+                    }
+                    let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+                    for p in img { out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]); }
+                    let p = format!("{arg}_w{win}.ppm");
+                    std::fs::write(&p, out).unwrap();
+                    eprintln!("shotall: window {win} {w}x{h} frames={n_frames} pix={n_pix} other={n_other} -> {p}");
+                }
+                eprintln!("CONTROLS: {} total", ui.controls.len());
+                if let Ok(strip) = m.mac.menu_strip() {
+                    let summary: Vec<String> = strip.menus.iter().map(|mm| format!("{}({})", mm.title, mm.items.len())).collect();
+                    eprintln!("MENUBAR ({}): {:?}", strip.menus.len(), summary);
+                }
+            }
             "click" => {
                 let (x, y) = arg.split_once(',').unwrap();
                 let (x, y): (i32, i32) = (x.parse().unwrap(), y.parse().unwrap());

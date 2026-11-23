@@ -191,6 +191,12 @@ fn ps7_launch_host_run() {
         }
         // PS7_SLOTAT=<hex>,..: the import relocated into this guest word
         if let Ok(v) = std::env::var("PS7_SLOTAT") { for x in v.split(',') { let x = u32::from_str_radix(x, 16).unwrap(); eprintln!("SLOTAT {x:#x} {:?} value {:#x}", m.import_slots.get(&x), m.mac.mem.read_u32(x).unwrap_or(0)); } }
+        if std::env::var("PS7_UNBOUND").is_ok() {
+            let mut z: Vec<_> = m.import_slots.iter().filter(|(&a, _)| m.mac.mem.read_u32(a).unwrap_or(1) == 0).map(|(&a, (l, s, _))| (l.clone(), s.clone(), a)).collect();
+            z.sort();
+            eprintln!("UNBOUND_WEAK_COUNT={}", z.len());
+            for (l, s, a) in z { eprintln!("  UNBOUND_WEAK {l}/{s} @{a:#x}"); }
+        }
         // PS7_WHERE=<hex>,..: which fragment section / heap block holds an address
         if let Ok(v) = std::env::var("PS7_WHERE") { for x in v.split(',') { let x = u32::from_str_radix(x, 16).unwrap(); let h = m.mac.mm.recover_handle(x & !3); eprintln!("WHERE {x:#x} section {:?} handle-of-ptr {h:?} resinfo {:?}", m.code_map.locate_any(x), h.and_then(|h| m.mac.res_info(h))); } }
         // PS7_FIND=<hex>,<hex>..: the import slots that hold these values (which import a copied TOC word is)
