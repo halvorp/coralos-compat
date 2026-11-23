@@ -215,10 +215,10 @@ fn find_folder_makes_the_system_folders_and_an_alias_resolves_to_its_target_unti
     // a selector the manager lacks halts the guest by name
     let mut g = Rig::new();
     let mut p = Prog::new();
-    dispatch(&mut p, 0x0005, 0xA823);
+    dispatch(&mut p, 0x000F, 0xA823);
     g.m.start(&p.exit().0, 0).unwrap();
     assert!(g.m.run_loop(10_000).unwrap().stats.halted);
-    assert!(g.m.refused.iter().any(|r| r.contains("AliasDispatch selector 5 is not modelled")), "{:?}", g.m.refused);
+    assert!(g.m.refused.iter().any(|r| r.contains("AliasDispatch selector 15 is not modelled")), "{:?}", g.m.refused);
 }
 
 // ---- the Palette Manager --------------------------------------------------------------------------------------------------

@@ -26,6 +26,10 @@ impl OsFamily for MacFamily {
     fn create(profile: &str, ui: LibUi) -> Result<Mac<LibUi>, Refusal> {
         if profile.is_empty() { Mac::new(ui) } else { Mac::with_profile(ui, profile) }
     }
+    fn attach_datatype(m: &mut Mac<LibUi>, host: heirloom_os_abi::datatype::DatatypeHost) -> Result<(), alloc::string::String> {
+        m.datatype_host = Some(alloc::boxed::Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<MacFamily>();

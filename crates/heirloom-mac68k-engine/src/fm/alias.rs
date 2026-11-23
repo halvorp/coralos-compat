@@ -33,6 +33,7 @@ pub mod sel {
     pub const FIND_FOLDER: u16 = 0;
     pub const NEW_ALIAS: u16 = 2;
     pub const RESOLVE_ALIAS: u16 = 3;
+    pub const MATCH_ALIAS: u16 = 5;
     pub const UPDATE_ALIAS: u16 = 6;
     pub const GET_ALIAS_INFO: u16 = 7;
     pub const NEW_ALIAS_MINIMAL: u16 = 8;
@@ -50,6 +51,7 @@ fn layout(selector: u16) -> Option<&'static [Arg]> {
         sel::NEW_ALIAS => &[L, L, L],
         sel::GET_ALIAS_INFO => &[L, W, L],
         sel::RESOLVE_ALIAS | sel::UPDATE_ALIAS => &[L, L, L, L],
+        sel::MATCH_ALIAS => &[L, L, L, L, L, L, L, L],
         sel::NEW_ALIAS_MINIMAL => &[L, L],
         sel::NEW_ALIAS_MINIMAL_FROM_FULL_PATH => &[W, L, L, L, L],
         sel::RESOLVE_ALIAS_FILE => &[L, B, L, L],
@@ -276,6 +278,30 @@ fn alias_call<U: GuestUi>(m: &mut Mac<U>, selector: u16, a: &dyn Fn(usize) -> u3
             write_spec(m, spec, &l).map_err(bad)?;
             put_b(m, changed, moved).map_err(bad)?;
             Ok(format!("ResolveAlias -> {}{}", name_of(&m.fm.full_path(l.node.expect("found"))), if moved { " (moved)" } else { "" }))
+        }
+        sel::MATCH_ALIAS => {
+            // MatchAlias(fromFile, rulesMask, alias, *aliasCount, aliasList, *needsUpdate, aliasFilter, yourDataPtr)
+            let (alias, count_ptr, list_ptr, changed) = (a(2), a(3), a(4), a(5));
+            let max_count = if count_ptr != 0 { m.mem.read_u16(count_ptr).map_err(|_| bad(err::PARAM_ERR))? as i16 } else { 0 };
+            let rec = m.alias_bytes(alias).map_err(bad)?;
+            match m.resolve_record(&rec) {
+                Ok((l, moved)) if max_count > 0 => {
+                    if list_ptr != 0 { write_spec(m, list_ptr, &l).map_err(bad)?; }
+                    if count_ptr != 0 { m.mem.write_u16(count_ptr, 1).map_err(|_| bad(err::PARAM_ERR))?; }
+                    if changed != 0 { put_b(m, changed, moved).map_err(bad)?; }
+                    Ok(format!("MatchAlias -> {}{}", name_of(&m.fm.full_path(l.node.expect("found"))), if moved { " (moved)" } else { "" }))
+                }
+                Ok(_) => {
+                    if count_ptr != 0 { let _ = m.mem.write_u16(count_ptr, 0); }
+                    if changed != 0 { let _ = put_b(m, changed, false); }
+                    Ok("MatchAlias -> 0 (max_count=0)".into())
+                }
+                Err(e) => {
+                    if count_ptr != 0 { let _ = m.mem.write_u16(count_ptr, 0); }
+                    if changed != 0 { let _ = put_b(m, changed, false); }
+                    Err((e, "MatchAlias: the target is gone".into()))
+                }
+            }
         }
         sel::GET_ALIAS_INFO => {
             let (alias, index, out) = (a(0), a(1) as u16 as i16, a(2));

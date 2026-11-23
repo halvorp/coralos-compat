@@ -93,7 +93,14 @@ fn get_ctable<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
         m.cqd.qd_error = 0;
         return Ok(Done { result: h, log: format!("[quickdraw] GetCTable {id}: the application's 'clut' -> {h:#x}") });
     }
-    let table = match id { 1 => Some(color::clut1()), 4 => Some(color::clut4()), 8 => Some(color::clut8()), 33 | 34 | 36 | 40 => Some(color::gray((id - 32) as u8)), _ => None };
+    let table = match id {
+        1 | 65 => Some(color::clut1()),
+        2 | 66 => Some(color::gray(2)),
+        4 | 68 => Some(color::clut4()),
+        8 | 72 | 127 => Some(color::clut8()),
+        33 | 34 | 36 | 40 => Some(color::gray((id - 32) as u8)),
+        _ => None,
+    };
     let Some(t) = table else {
         m.cqd.qd_error = -192;
         return Ok(Done { result: 0, log: format!("[quickdraw] GetCTable {id}: no such 'clut' (NIL, QDError -192)") });

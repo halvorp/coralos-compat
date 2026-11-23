@@ -44,6 +44,43 @@ pub(crate) fn play<U: GuestUi>(m: &mut Mac<U>, h: u32, dst_at: u32) -> Result<St
                 draw_bits(m, h, &b, d, db, &map)?;
                 drawn += 1;
             }
+            Op::CompressedQuickTime { dst: qt_dst, mode, codec, data, .. } => {
+                let img = match m.datatype_host.as_deref() {
+                    Some(host) => match host.decode_image(&data, 0, 0) {
+                        Some(img) => { m.native_datatype_decodes += 1; Some(img) }
+                        None => heirloom_common::datatype::decode_with_fallback(None, &data, 0, 0),
+                    },
+                    None => heirloom_common::datatype::decode_with_fallback(None, &data, 0, 0),
+                };
+                if let Some(img) = img {
+                    let (w, ht) = (img.width as i16, img.height as i16);
+                    let mut raw = alloc::vec::Vec::with_capacity(img.pixels.len() * 4);
+                    for px in &img.pixels {
+                        // QuickDraw 32-bit direct PixMap is big-endian ARGB (pad/A, R, G, B)
+                        raw.extend_from_slice(&px.to_be_bytes());
+                    }
+                    let bits = Bits {
+                        op: 0x8200,
+                        pixmap: true,
+                        row_bytes: (img.width * 4) as u16,
+                        bounds: [0, 0, ht, w],
+                        pixel_size: 32,
+                        clut: alloc::vec::Vec::new(),
+                        src: [0, 0, ht, w],
+                        dst: qt_dst,
+                        mode,
+                        rgn: None,
+                        pixels: raw,
+                    };
+                    let d = Rect::new(map_x(qt_dst[1]), map_y(qt_dst[0]), map_x(qt_dst[3]), map_y(qt_dst[2]));
+                    let map = |x: i32, y: i32| (map_x(x as i16), map_y(y as i16));
+                    draw_bits(m, h, &bits, d, db, &map)?;
+                    drawn += 1;
+                } else {
+                    let tag = core::str::from_utf8(&codec).unwrap_or("????");
+                    return Err(Refusal(format!("DrawPicture {h:#x}: CompressedQuickTime codec '{tag}' ({} bytes) could not be decoded by native datatype host", data.len())));
+                }
+            }
         }
     }
     let r = dst;
@@ -88,6 +125,40 @@ fn draw_bits<U: GuestUi>(m: &mut Mac<U>, h: u32, b: &Bits, dst: Rect, db: u32, m
     if let Some(c) = ct { let _ = m.dispose_handle(c); }
     let _ = m.mm.dispose_ptr(&mut m.heap, block);
     result
+}
+
+/// Blit an ARGB32 (`0xAARRGGBB`) image decoded by `datatype.library` into QuickDraw port `port` at
+/// `dst_tlbr = [top, left, bottom, right]` (reusing `draw_bits` -> `CopyBits`).
+pub fn draw_argb32_to_port<U: GuestUi>(
+    m: &mut Mac<U>,
+    port: u32,
+    w: u32,
+    h: u32,
+    pixels: &[u32],
+    dst_tlbr: [i16; 4],
+) -> Result<(), Refusal> {
+    let db = bits_addr(&m.mem, port)?;
+    let (wi, hi) = (w.min(i16::MAX as u32) as i16, h.min(i16::MAX as u32) as i16);
+    let mut raw = alloc::vec::Vec::with_capacity(pixels.len() * 4);
+    for px in pixels {
+        raw.extend_from_slice(&px.to_be_bytes());
+    }
+    let dst = Rect::new(i32::from(dst_tlbr[1]), i32::from(dst_tlbr[0]), i32::from(dst_tlbr[3]), i32::from(dst_tlbr[2]));
+    let bits = Bits {
+        op: 0x8200,
+        pixmap: true,
+        row_bytes: (w * 4) as u16,
+        bounds: [0, 0, hi, wi],
+        pixel_size: 32,
+        clut: alloc::vec::Vec::new(),
+        src: [0, 0, hi, wi],
+        dst: dst_tlbr,
+        mode: 0,
+        rgn: None,
+        pixels: raw,
+    };
+    let id = |x: i32, y: i32| (x, y);
+    draw_bits(m, 0, &bits, dst, db, &id)
 }
 
 /// The opcode's colour table as a real `CTabHandle`: entry `value` holds that pixel value's colour.

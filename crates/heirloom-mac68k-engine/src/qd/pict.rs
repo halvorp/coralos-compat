@@ -50,6 +50,14 @@ pub enum Op {
     Skip,
     End,
     Bits(Bits),
+    /// QuickTime `CompressedQuickTime` (`$8200`) embedded image payload (JPEG/PNG/GIF/etc.) decoded via CoralOS `datatype.library`.
+    CompressedQuickTime {
+        src: [i16; 4],
+        dst: [i16; 4],
+        mode: u16,
+        codec: [u8; 4],
+        data: Vec<u8>,
+    },
     /// An opcode this parser cannot step over or playback does not draw: its number and name.
     Unsupported(u16, &'static str),
 }
@@ -214,6 +222,70 @@ pub fn next(b: &[u8], at: &mut usize, v2: bool) -> Result<Op, String> {
             Ok(Op::Bits(Bits { op, pixmap: true, row_bytes, bounds, pixel_size, clut: Vec::new(), src, dst, mode, rgn, pixels }))
         }
         0x1A | 0x1B | 0x1D | 0x1F => skip(at, 6), // RGBFgCol, RGBBkCol, OpColor, HiliteColor: one RGBColor (playback keeps the port's pens; named in pictplay)
+        0x8200 => {
+            // CompressedQuickTime (Inside Macintosh: QuickTime, Appendix A):
+            // size (4), version (2), matrix (36), matteSize (4), matteRect (8), mode (2), srcRect (8), accuracy (4), maskSize (4)
+            let total_size = heirloom_common::bytes::be32(b, *at).ok_or("CompressedQuickTime missing size")? as usize;
+            let body_start = *at + 4;
+            let body_end = body_start.checked_add(total_size).ok_or("CompressedQuickTime size overflow")?;
+            if body_end > b.len() {
+                return Err(String::from("CompressedQuickTime runs past the end of the picture"));
+            }
+            let next_at = body_end + (total_size & 1);
+            if total_size < 68 {
+                *at = next_at;
+                return Ok(Op::Skip);
+            }
+            let mut i = body_start;
+            let _version = heirloom_common::bytes::be16(b, i).ok_or("CompressedQuickTime version")?;
+            let tx = (heirloom_common::bytes::be32(b, i + 2 + 24).unwrap_or(0) as i32 >> 16) as i16;
+            let ty = (heirloom_common::bytes::be32(b, i + 2 + 28).unwrap_or(0) as i32 >> 16) as i16;
+            i += 2 + 36;
+            let matte_size = heirloom_common::bytes::be32(b, i).unwrap_or(0) as usize;
+            i += 4 + 8; // matteSize + matteRect
+            let mode = heirloom_common::bytes::be16(b, i).unwrap_or(0);
+            i += 2;
+            let mut src = [0i16; 4];
+            for (k, v) in src.iter_mut().enumerate() {
+                *v = heirloom_common::bytes::be16(b, i + 2 * k).unwrap_or(0) as i16;
+            }
+            i += 8 + 4; // srcRect + accuracy
+            let mask_size = heirloom_common::bytes::be32(b, i).unwrap_or(0) as usize;
+            i += 4;
+            // Skip optional matte ImageDescription + matte data + mask region
+            if matte_size > 0 {
+                let matte_id_size = heirloom_common::bytes::be32(b, i).unwrap_or(0) as usize;
+                i = i.saturating_add(matte_id_size).saturating_add(matte_size);
+            }
+            i = i.saturating_add(mask_size);
+            if i + 86 > body_end {
+                *at = next_at;
+                return Ok(Op::Skip);
+            }
+            // ImageDescription: idSize (0..4), cType (4..8), ..., width (32..34), height (34..36), ..., dataSize (44..48)
+            let id_size = (heirloom_common::bytes::be32(b, i).unwrap_or(86) as usize).max(86);
+            let mut codec = [0u8; 4];
+            codec.copy_from_slice(&b[i + 4..i + 8]);
+            let id_w = heirloom_common::bytes::be16(b, i + 32).unwrap_or(0) as i16;
+            let id_h = heirloom_common::bytes::be16(b, i + 34).unwrap_or(0) as i16;
+            let data_size = heirloom_common::bytes::be32(b, i + 44).unwrap_or(0) as usize;
+            let data_start = i.saturating_add(id_size);
+            let data_end = if data_size > 0 && data_start.saturating_add(data_size) <= body_end {
+                data_start + data_size
+            } else {
+                body_end
+            };
+            let data = if data_start < data_end { b[data_start..data_end].to_vec() } else { Vec::new() };
+            let effective_src = if src == [0, 0, 0, 0] { [0, 0, id_h, id_w] } else { src };
+            let dst = [
+                effective_src[0].saturating_add(ty),
+                effective_src[1].saturating_add(tx),
+                effective_src[2].saturating_add(ty),
+                effective_src[3].saturating_add(tx),
+            ];
+            *at = next_at;
+            Ok(Op::CompressedQuickTime { src: effective_src, dst, mode, codec, data })
+        }
         other => Ok(Op::Unsupported(other, op_name(other))),
     }
 }

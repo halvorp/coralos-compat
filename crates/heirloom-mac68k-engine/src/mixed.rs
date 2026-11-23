@@ -103,6 +103,9 @@ pub const OS_SIGS: &[OsSig] = &[
     OsSig { name: "StripAddress", args: &[D0], result: Some(D0) },
     OsSig { name: "RecoverHandle", args: &[A0], result: Some(A0) },
     OsSig { name: "MaxApplZone", args: &[], result: None },
+    OsSig { name: "GetZone", args: &[], result: Some(A0) },
+    OsSig { name: "SetZone", args: &[A0], result: None },
+    OsSig { name: "SetGrowZone", args: &[A0], result: None },
 ];
 
 /// The trap word named `name` (`"NewWindow"` -> `0xA913`); aliases carry their flag bits, so `NewHandleClear` keeps its

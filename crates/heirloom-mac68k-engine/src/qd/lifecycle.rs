@@ -116,7 +116,9 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     reg(m, 0xA87D, "ClosePort", &[Arg::P], None, close_port::<U>)?;
     reg(m, 0xA875, "SetPBits", &[Arg::P], None, set_port_bits::<U>)?;
     reg(m, 0xA871, "GlobalToLocal", &[Arg::L], None, global_to_local::<U>)?;
-    reg(m, 0xA870, "LocalToGlobal", &[Arg::L], None, local_to_global::<U>)
+    reg(m, 0xA870, "LocalToGlobal", &[Arg::L], None, local_to_global::<U>)?;
+    reg(m, 0xA8EA, "SetStdProcs", &[Arg::P], None, set_std_procs::<U>)?;
+    reg(m, 0xAA4E, "SetStdCProcs", &[Arg::P], None, set_std_cprocs::<U>)
 }
 
 fn screen_bits_into<U: GuestUi>(m: &mut Mac<U>, port: u32) -> Result<(), Refusal> {
@@ -192,4 +194,46 @@ fn convert<U: GuestUi>(m: &mut Mac<U>, pt: u32, sign: i16, name: &str) -> Result
 }
 fn global_to_local<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { convert(m, c.args.get(0), 1, "GlobalToLocal") }
 fn local_to_global<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { convert(m, c.args.get(0), -1, "LocalToGlobal") }
+
+const STD_QD_PROCS: [u16; 13] = [
+    0xA882, // StdText
+    0xA890, // StdLine
+    0xA8A0, // StdRect
+    0xA8AF, // StdRRect
+    0xA8B6, // StdOval
+    0xA8BD, // StdArc
+    0xA8C5, // StdPoly
+    0xA8D1, // StdRgn
+    0xA8EB, // StdBits
+    0xA8F1, // StdComment
+    0xA8ED, // StdTxMeas
+    0xA8EE, // StdGetPic
+    0xA8F0, // StdPutPic
+];
+
+fn set_std_procs<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let p = c.args.get(0);
+    if p == 0 { return Err(Refusal("SetStdProcs: NULL QDProcs pointer".into())); }
+    for (i, &op) in STD_QD_PROCS.iter().enumerate() {
+        let (addr, _) = crate::traptable::trap_address(m, 0xA746, u32::from(op))?;
+        m.mem.write_u32(p.wrapping_add((i as u32) * 4), addr).map_err(Refusal::mem("QDProcs"))?;
+    }
+    Ok(Done { result: 0, log: format!("[quickdraw] SetStdProcs {p:#x}") })
+}
+
+fn set_std_cprocs<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let p = c.args.get(0);
+    if p == 0 { return Err(Refusal("SetStdCProcs: NULL CQDProcs pointer".into())); }
+    for (i, &op) in STD_QD_PROCS.iter().enumerate() {
+        let (addr, _) = crate::traptable::trap_address(m, 0xA746, u32::from(op))?;
+        m.mem.write_u32(p.wrapping_add((i as u32) * 4), addr).map_err(Refusal::mem("CQDProcs"))?;
+    }
+    // opcodeProc + 6 reserved fields (CQDProcs = 20 u32s = 80 bytes, Inside Macintosh: Imaging with QuickDraw 4-57).
+    let (op_addr, _) = crate::traptable::trap_address(m, 0xA746, 0xABF8)?;
+    m.mem.write_u32(p.wrapping_add(13 * 4), op_addr).map_err(Refusal::mem("CQDProcs"))?;
+    for i in 14..20u32 {
+        m.mem.write_u32(p.wrapping_add(i * 4), 0).map_err(Refusal::mem("CQDProcs"))?;
+    }
+    Ok(Done { result: 0, log: format!("[quickdraw] SetStdCProcs {p:#x}") })
+}
 

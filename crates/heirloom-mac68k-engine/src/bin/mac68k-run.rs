@@ -14,6 +14,7 @@ fn main() {
     let mut machine = None::<String>;
     let mut idle = 0u32;
     let mut put_bins: Vec<(String, String)> = Vec::new();
+    let mut stage_dirs: Vec<String> = Vec::new();
     let mut save_ppm: Option<String> = None;
     let (mut census, mut events, mut bit32, mut pcs, mut insns, mut dump) = (false, Vec::new(), false, 0usize, 5_000_000u64, None::<(u32, u32)>);
     while let Some(a) = args.first().cloned() {
@@ -27,6 +28,7 @@ fn main() {
             "--pcs" => { args.remove(0); if args.is_empty() { usage() } pcs = args.remove(0).parse().unwrap_or_else(|_| usage()); } // print the last N instruction addresses
             "--machine" => { args.remove(0); if args.is_empty() { usage() } machine = Some(args.remove(0)); } // profile name: mac-ii (default), mac-plus, mac-se
             "--put-bin" => { args.remove(0); if args.is_empty() { usage() } let v = args.remove(0); let (dir, path) = v.split_once('=').unwrap_or_else(|| usage()); put_bins.push((dir.to_string(), path.to_string())); }
+            "--dir" => { args.remove(0); if args.is_empty() { usage() } stage_dirs.push(args.remove(0)); }
             "--save-ppm" => { args.remove(0); if args.is_empty() { usage() } save_ppm = Some(args.remove(0)); }
             "--event" => { args.remove(0); if args.is_empty() { usage() } events.push(args.remove(0)); }
             _ => break,
@@ -54,6 +56,10 @@ fn main() {
         n.rsrc = raw[opened.rsrc].to_vec();
         if let Some(ft) = opened.file_type { n.finfo.file_type = ft; }
         if let Some(cr) = opened.creator { n.finfo.creator = cr; }
+    }
+    for host_dir in &stage_dirs {
+        let root = m.fm.tree.children(heirloom_volume::ROOT)[0];
+        stage_host_dir(&mut m.fm.tree, root, std::path::Path::new(host_dir));
     }
     let mut staged_events: std::collections::VecDeque<Option<GuestUiEvent>> = std::collections::VecDeque::new();
     let win = UiObjectRef { id: 1, generation: 1 };
@@ -210,4 +216,33 @@ fn main() {
     if !m.refused.is_empty() { std::process::exit(3) }
 }
 
-fn usage() -> ! { eprintln!("usage: mac68k-run [--census] [--32bit] [--machine NAME] [--idle TICKS] [--pcs N] [--insns N] [--dump ADDR N] [--event close|menu:ID:ITEM]... --fixture | <application file>"); std::process::exit(2) }
+fn usage() -> ! { eprintln!("usage: mac68k-run [--census] [--32bit] [--machine NAME] [--idle TICKS] [--pcs N] [--insns N] [--dir DIR] [--dump ADDR N] [--event close|menu:ID:ITEM]... --fixture | <application file>"); std::process::exit(2) }
+
+fn stage_host_dir(tree: &mut heirloom_volume::Tree, dst_dir: heirloom_volume::NodeId, host_dir: &std::path::Path) {
+    let Ok(rd) = std::fs::read_dir(host_dir) else { return };
+    let mut entries: Vec<_> = rd.flatten().collect();
+    entries.sort_by_key(|e| (e.file_name().to_string_lossy().ends_with(".rsrc"), e.file_name()));
+    for entry in entries {
+        let p = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') { continue; }
+        if p.is_dir() {
+            let sub = tree.mkdirs(dst_dir, [name.as_str()]).expect("mkdirs");
+            stage_host_dir(tree, sub, &p);
+        } else if let Some(stem) = name.strip_suffix(".rsrc") {
+            let Ok(raw) = std::fs::read(&p) else { continue };
+            let Ok(opened) = heirloom_fmt_resfork::container::open(&raw) else { continue };
+            let id = match tree.find_child(dst_dir, stem) {
+                Some(existing) => existing,
+                None => tree.put_file(dst_dir, stem, Vec::new()).expect("put_file"),
+            };
+            let n = tree.get_mut(id);
+            n.rsrc = raw[opened.rsrc].to_vec();
+            if let Some(ft) = opened.file_type { n.finfo.file_type = ft; }
+            if let Some(cr) = opened.creator { n.finfo.creator = cr; }
+        } else if p.is_file() && tree.find_child(dst_dir, &name).is_none() {
+            let data = std::fs::read(&p).unwrap_or_default();
+            let _ = tree.put_file(dst_dir, &name, data);
+        }
+    }
+}
