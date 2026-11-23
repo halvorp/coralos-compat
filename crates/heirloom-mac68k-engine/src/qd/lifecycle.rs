@@ -98,6 +98,7 @@ pub(crate) fn window_disposed<U: GuestUi>(m: &mut Mac<U>, win: u32) {
     m.qd.update.remove(&win);
     m.qd.saved_vis.remove(&win);
     m.qd.rgn_open.remove(&win);
+    m.qd.rgn_open_edges.remove(&win);
     m.qd.present.forget(win);
     m.qd.plane.forget(win);
     m.qd.palettes.remove(&win);

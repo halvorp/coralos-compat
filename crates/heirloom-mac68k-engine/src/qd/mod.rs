@@ -59,6 +59,8 @@ pub struct Qd {
     pub width_table: u32,
     /// Ports between `OpenRgn` and `CloseRgn`: the region collected so far (local coordinates).
     pub rgn_open: BTreeMap<u32, Region>,
+    /// Ports between `OpenRgn` and `CloseRgn`: non-horizontal polygon edges recorded by `Line` / `LineTo`.
+    pub rgn_open_edges: BTreeMap<u32, alloc::vec::Vec<((i32, i32), (i32, i32))>>,
     /// Per window: the update region (local coordinates).
     pub update: BTreeMap<u32, Region>,
     /// Per window between BeginUpdate and EndUpdate: the visRgn to restore.
@@ -75,7 +77,7 @@ pub struct Qd {
 
 impl Default for Qd {
     fn default() -> Self {
-        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new(), palettes: BTreeMap::new(), screen: Default::default() }
+        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), rgn_open_edges: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new(), palettes: BTreeMap::new(), screen: Default::default() }
     }
 }
 

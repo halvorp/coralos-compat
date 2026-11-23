@@ -160,11 +160,53 @@ fn open_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, R
     let vis = m.mem.read_i16(port.wrapping_add(P_PN_VIS)).map_err(Refusal::mem("pnVis"))?; // OpenRgn hides the pen
     m.mem.write_u16(port.wrapping_add(P_PN_VIS), vis.wrapping_sub(1) as u16).map_err(Refusal::mem("pnVis"))?;
     m.qd.rgn_open.insert(port, Region::new());
+    m.qd.rgn_open_edges.insert(port, alloc::vec::Vec::new());
     done(&format!("OpenRgn on {port:#x}: rgnSave {h:#x}"))
 }
+
+/// Rasterize QuickDraw polygon outline edges recorded between `OpenRgn` and `CloseRgn`
+/// using the even-odd scanline inversion rule.
+pub(crate) fn edges_to_region(edges: &[((i32, i32), (i32, i32))]) -> Region {
+    if edges.is_empty() { return Region::new(); }
+    let mut min_y = i32::MAX;
+    let mut max_y = i32::MIN;
+    for &((_, y0), (_, y1)) in edges {
+        min_y = min_y.min(y0.min(y1));
+        max_y = max_y.max(y0.max(y1));
+    }
+    if min_y >= max_y { return Region::new(); }
+    let mut rows: alloc::vec::Vec<(i32, alloc::vec::Vec<(i32, i32)>)> = alloc::vec::Vec::new();
+    let mut xs: alloc::vec::Vec<i32> = alloc::vec::Vec::new();
+    for y in min_y..max_y {
+        xs.clear();
+        for &((x0, y0), (x1, y1)) in edges {
+            let (lo, hi) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
+            if y < lo || y >= hi { continue; }
+            let x = x0 + ((i64::from(x1 - x0) * i64::from(y - y0)) / i64::from(y1 - y0)) as i32;
+            xs.push(x);
+        }
+        xs.sort_unstable();
+        let mut spans = alloc::vec::Vec::new();
+        for pair in xs.chunks_exact(2) {
+            if pair[1] > pair[0] {
+                spans.push((pair[0], pair[1]));
+            }
+        }
+        if !spans.is_empty() {
+            rows.push((y, spans));
+        }
+    }
+    Region::from_rows(rows)
+}
+
 fn close_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let port = current_port(m)?;
-    let g = m.qd.rgn_open.remove(&port).ok_or_else(|| Refusal("CloseRgn: no region is open on the current port".into()))?;
+    let mut g = m.qd.rgn_open.remove(&port).ok_or_else(|| Refusal("CloseRgn: no region is open on the current port".into()))?;
+    if let Some(edges) = m.qd.rgn_open_edges.remove(&port) {
+        if !edges.is_empty() {
+            g.xor_region(&edges_to_region(&edges));
+        }
+    }
     let (dst, save) = (c.args.get(0), m.mem.read_u32(port.wrapping_add(P_RGN_SAVE)).map_err(Refusal::mem("rgnSave"))?);
     m.write_region(dst, &g)?;
     if save != 0 && save != dst { m.dispose_handle(save).map_err(|e| Refusal(format!("CloseRgn: freeing the scratch region failed ({e})")))?; }
@@ -257,5 +299,31 @@ fn get_clip<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, R
     let g = m.read_region(h)?;
     m.write_region(c.args.get(0), &g)?;
     done("GetClip")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polygon_edges_rasterize_triangle_and_even_odd_hole() {
+        // Right triangle: (0,0) -> (10,10) -> (0,10) -> (0,0)
+        let tri = edges_to_region(&[((0, 0), (10, 10)), ((0, 10), (0, 0))]);
+        assert!(tri.contains(1, 5), "interior point (1,5) must be inside triangle");
+        assert!(!tri.contains(8, 2), "exterior point (8,2) must be outside triangle");
+        assert!(!tri.contains(0, 10), "bottom boundary is exclusive");
+
+        // Outer 10x10 square with inner 4x4 hole [3..7, 3..7] (even-odd rule)
+        let donut = edges_to_region(&[
+            ((0, 0), (0, 10)), ((10, 10), (10, 0)),
+            ((3, 3), (3, 7)), ((7, 7), (7, 3)),
+        ]);
+        assert!(donut.contains(1, 5), "outer rim must be inside");
+        assert!(!donut.contains(5, 5), "hole center must be outside");
+
+        // Negative control: empty or horizontal-only edges yield empty region
+        assert!(edges_to_region(&[]).is_empty());
+        assert!(edges_to_region(&[((0, 5), (10, 5))]).is_empty());
+    }
 }
 

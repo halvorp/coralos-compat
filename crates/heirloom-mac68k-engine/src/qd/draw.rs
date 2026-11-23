@@ -275,8 +275,15 @@ fn line_region(from: (i32, i32), to: (i32, i32), pw: i32, ph: i32) -> Region {
 /// Draw the pen's line from pnLoc to (h, v) and move there.
 fn line_to<U: GuestUi>(m: &mut Mac<U>, h: i16, v: i16, name: &str) -> Result<Done, Refusal> {
     let port = current_port(m)?;
-    if m.qd.rgn_open.contains_key(&port) { return Err(Refusal(format!("{name} while a region is open: recording polygon outlines into a region is not implemented"))); }
     let pen = read_pen(&m.mem, port)?;
+    if let Some(edges) = m.qd.rgn_open_edges.get_mut(&port) {
+        let (x0, y0, x1, y1) = (i32::from(pen.h), i32::from(pen.v), i32::from(h), i32::from(v));
+        if y0 != y1 {
+            edges.push(((x0, y0), (x1, y1)));
+        }
+        set_pen_loc(&mut m.mem, port, v, h)?;
+        return done(&format!("{name} ({y0},{x0}) -> ({y1},{x1}) (recorded into open region)"));
+    }
     if pen.width > 0 && pen.height > 0 {
         let g = line_region((i32::from(pen.h), i32::from(pen.v)), (i32::from(h), i32::from(v)), i32::from(pen.width), i32::from(pen.height));
         let line = (pen.width == 1 && pen.height == 1).then_some(((i32::from(pen.h), i32::from(pen.v)), (i32::from(h), i32::from(v))));
