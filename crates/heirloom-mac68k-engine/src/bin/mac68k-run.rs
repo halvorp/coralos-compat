@@ -55,30 +55,44 @@ fn main() {
         if let Some(ft) = opened.file_type { n.finfo.file_type = ft; }
         if let Some(cr) = opened.creator { n.finfo.creator = cr; }
     }
-    let mut staged_events: std::collections::VecDeque<GuestUiEvent> = std::collections::VecDeque::new();
+    let mut staged_events: std::collections::VecDeque<Option<GuestUiEvent>> = std::collections::VecDeque::new();
     let win = UiObjectRef { id: 1, generation: 1 };
     for e in &events {
         let parts: Vec<&str> = e.split(':').collect();
         match parts.as_slice() {
-            ["close"] => staged_events.push_back(GuestUiEvent::CloseRequested { win, token: CallbackToken(0) }),
-            ["menu", id, item] => staged_events.push_back(GuestUiEvent::MenuCommand { win, token: CallbackToken(id.parse::<u64>().unwrap() << 16 | item.parse::<u64>().unwrap()) }),
+            ["close"] => staged_events.push_back(Some(GuestUiEvent::CloseRequested { win, token: CallbackToken(0) })),
+            ["menu", id, item] => staged_events.push_back(Some(GuestUiEvent::MenuCommand { win, token: CallbackToken(id.parse::<u64>().unwrap() << 16 | item.parse::<u64>().unwrap()) })),
             ["key", wid, code, ch] => {
                 let w = UiObjectRef { id: wid.parse().unwrap(), generation: 1 };
                 let c: u32 = code.parse().unwrap();
-                staged_events.push_back(GuestUiEvent::Key { win: w, code: c, text: (*ch).to_string(), modifiers: Default::default(), down: true });
-                staged_events.push_back(GuestUiEvent::Key { win: w, code: c, text: (*ch).to_string(), modifiers: Default::default(), down: false });
+                staged_events.push_back(Some(GuestUiEvent::Key { win: w, code: c, text: (*ch).to_string(), modifiers: Default::default(), down: true }));
+                staged_events.push_back(Some(GuestUiEvent::Key { win: w, code: c, text: (*ch).to_string(), modifiers: Default::default(), down: false }));
             }
             ["click", wid, x, y] => {
                 let w = UiObjectRef { id: wid.parse().unwrap(), generation: 1 };
                 let (px, py): (i32, i32) = (x.parse().unwrap(), y.parse().unwrap());
-                staged_events.push_back(GuestUiEvent::primary(w, px, py, heirloom_ui_abi::PointerPhase::Down));
-                staged_events.push_back(GuestUiEvent::primary(w, px, py, heirloom_ui_abi::PointerPhase::Up));
+                staged_events.push_back(Some(GuestUiEvent::primary(w, px, py, heirloom_ui_abi::PointerPhase::Down)));
+                staged_events.push_back(Some(GuestUiEvent::primary(w, px, py, heirloom_ui_abi::PointerPhase::Up)));
+            }
+            ["wait", n] => {
+                for _ in 0..n.parse::<usize>().unwrap() { staged_events.push_back(None); }
+            }
+            ["drag", wid, x0, y0, x1, y1] => {
+                let w = UiObjectRef { id: wid.parse().unwrap(), generation: 1 };
+                let (ax, ay, bx, by): (i32, i32, i32, i32) = (x0.parse().unwrap(), y0.parse().unwrap(), x1.parse().unwrap(), y1.parse().unwrap());
+                staged_events.push_back(Some(GuestUiEvent::primary(w, ax, ay, heirloom_ui_abi::PointerPhase::Down)));
+                for s in 1..=8 {
+                    let mx = ax + (bx - ax) * s / 8;
+                    let my = ay + (by - ay) * s / 8;
+                    staged_events.push_back(Some(GuestUiEvent::primary(w, mx, my, heirloom_ui_abi::PointerPhase::Move)));
+                }
+                staged_events.push_back(Some(GuestUiEvent::primary(w, bx, by, heirloom_ui_abi::PointerPhase::Up)));
             }
             _ => { eprintln!("unknown event {e}"); std::process::exit(2) }
         }
     }
     if idle == 0 {
-        m.ui.events.extend(staged_events.drain(..));
+        m.ui.events.extend(staged_events.drain(..).flatten());
     }
     let ran = (|| {
         if idle == 0 {
@@ -90,7 +104,7 @@ fn main() {
         for t in 0..idle {
             if r.stats.halted || r.stats.insns >= insns { break; }
             if t % 8 == 3 {
-                if let Some(ev) = staged_events.pop_front() {
+                if let Some(Some(ev)) = staged_events.pop_front() {
                     m.ui.events.push_back(ev);
                 }
             }
@@ -117,7 +131,10 @@ fn main() {
                     next_id += 1;
                     sizes.insert(next_id, (w.rect.width.max(1) as usize, w.rect.height.max(1) as usize));
                 }
-                heirloom_ui_abi::UiCall::PresentPlane(w, p) if !p.ops.is_empty() => {
+                heirloom_ui_abi::UiCall::AddControl(..) | heirloom_ui_abi::UiCall::OpenAudio(..) => {
+                    next_id += 1;
+                }
+                heirloom_ui_abi::UiCall::PresentPlane(w, p) if p.ops.iter().any(|o| matches!(o, heirloom_ui_abi::DrawOp::Pixels { .. })) => {
                     if let Some(&(ww, hh)) = sizes.get(&w.id) {
                         if ww >= 320 && hh >= 200 { target_win = Some(w.id); }
                     }
@@ -157,6 +174,20 @@ fn main() {
             }
             std::fs::write(&ppm_path, out).expect("write ppm");
             println!("saved {w}x{h} composited frame (win {wid}) to {ppm_path}");
+        } else if let Some((&wptr, bm)) = m.qd.canvases.iter().max_by_key(|(_, b)| (b.width() as usize) * (b.height() as usize)) {
+            let (w, h) = (bm.width() as usize, bm.height() as usize);
+            let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+            for y in 0..h as i32 {
+                for x in 0..w as i32 {
+                    let v = bm.get(x, y).unwrap_or(0);
+                    let rgb = if bm.depth() == 1 { if v != 0 { 0x000000 } else { 0xFFFFFF } } else { v };
+                    out.push(((rgb >> 16) & 0xff) as u8);
+                    out.push(((rgb >> 8) & 0xff) as u8);
+                    out.push((rgb & 0xff) as u8);
+                }
+            }
+            std::fs::write(&ppm_path, out).expect("write ppm");
+            println!("saved {w}x{h} 1-bit/direct canvas (port {wptr:#x}) to {ppm_path}");
         } else {
             println!("no large pixel frame presented");
         }
