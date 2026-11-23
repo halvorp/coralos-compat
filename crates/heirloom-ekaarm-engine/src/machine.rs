@@ -41,6 +41,8 @@ pub struct EkaArm<U: GuestUi> {
     wall_us_since_0ad: Option<i64>,
     log: Vec<String>,
     refused: Vec<String>,
+    /// Native CoralOS `datatype.library` host bridge handed in before or after `start_file`.
+    datatype_host: Option<Box<dyn heirloom_common::datatype::NativeDatatype>>,
 }
 
 impl<U: GuestUi> EkaArm<U> {
@@ -54,7 +56,15 @@ impl<U: GuestUi> EkaArm<U> {
     pub fn without_ordinals(ui: U) -> Self {
         let mut tree = Tree::new(255);
         tree.add_volume("Z", false);
-        EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new() }
+        EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new(), datatype_host: None }
+    }
+    /// Attach the host's native datatype decoder (CoralOS `datatype.library` on target).
+    pub fn set_datatype_host(&mut self, host: Box<dyn heirloom_common::datatype::NativeDatatype>) {
+        if let Some(p) = self.process.as_mut() {
+            p.datatype_host = Some(host);
+        } else {
+            self.datatype_host = Some(host);
+        }
     }
     /// The S60 export names the imports are bound by (heirloom-fmt-e32's eka-ordinals.tsv), before `start_file`.
     pub fn set_ordinals(&mut self, ordinals: OrdinalTable) {
@@ -101,6 +111,7 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
         }
         self.log.push(format!("ekaarm: started {name} (UID3 {:#010x})", p.uid3));
         p.nat.clock_us = self.clock_us;
+        p.datatype_host = self.datatype_host.take();
         self.process = Some(p);
         self.apply_census();
         Ok(())

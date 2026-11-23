@@ -71,6 +71,7 @@ pub mod listdata;
 pub mod listproject;
 pub mod colorlist;
 pub mod icons;
+pub mod imageconv;
 pub mod audio;
 pub mod fbs;
 mod fbs_draw;

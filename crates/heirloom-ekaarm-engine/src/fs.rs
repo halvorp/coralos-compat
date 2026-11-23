@@ -112,7 +112,7 @@ fn tparse_combine(name: &[u16], related: Option<&[u16]>, default: Option<&[u16]>
 }
 
 /// The natives of this module; `None` = not ours.
-pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
+pub fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let (this, r1, r2, r3) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2], p.cpu.regs[3]);
     let refuse = |m: String| NativeOutcome::Refused(format!("NEXT-NEEDED efsrv {name}: {m}"));
     Some(match name {
@@ -317,6 +317,45 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             match res {
                 Ok(cell) => { p.cpu.regs[0] = cell; NativeOutcome::Return }
                 Err(m) => refuse(m),
+            }
+        }
+        // TEntry::TEntry() / copy / assign / attribute queries (f32file.h)
+        "_ZN6TEntryC1Ev" | "_ZN6TEntryC2Ev" => {
+            const TENTRY_SIZE: u32 = 28 + 4 + 256 * 2;
+            for off in (0..TENTRY_SIZE).step_by(4) {
+                if let Err(e) = p.wr(this.wrapping_add(off), 0) {
+                    return Some(refuse(e));
+                }
+            }
+            p.cpu.regs[0] = this;
+            NativeOutcome::Return
+        }
+        "_ZN6TEntryC1ERKS_" | "_ZN6TEntryC2ERKS_" | "_ZN6TEntryaSERKS_" => {
+            const TENTRY_SIZE: u32 = 28 + 4 + 256 * 2;
+            for off in (0..TENTRY_SIZE).step_by(4) {
+                let w = match p.rd(r1.wrapping_add(off)) {
+                    Ok(v) => v,
+                    Err(e) => return Some(refuse(e)),
+                };
+                if let Err(e) = p.wr(this.wrapping_add(off), w) {
+                    return Some(refuse(e));
+                }
+            }
+            p.cpu.regs[0] = this;
+            NativeOutcome::Return
+        }
+        "_ZNK6TEntry5IsDirEv" | "_ZNK6TEntry8IsHiddenEv" | "_ZNK6TEntry8IsSystemEv"
+        | "_ZNK6TEntry10IsReadOnlyEv" | "_ZNK6TEntry9IsArchiveEv" => {
+            let mask: u32 = match name {
+                "_ZNK6TEntry10IsReadOnlyEv" => 0x01,
+                "_ZNK6TEntry8IsHiddenEv" => 0x02,
+                "_ZNK6TEntry8IsSystemEv" => 0x04,
+                "_ZNK6TEntry5IsDirEv" => 0x10,
+                _ => 0x20, // IsArchive
+            };
+            match p.rd(this) {
+                Ok(att) => { p.cpu.regs[0] = u32::from((att & mask) != 0); NativeOutcome::Return }
+                Err(e) => refuse(e),
             }
         }
         // CDir::~CDir() (f32file.h)

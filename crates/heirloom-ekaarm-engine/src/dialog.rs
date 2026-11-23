@@ -22,6 +22,7 @@ const CLASS: &str = "CAknMessageQueryDialog";
 /// Slots past `CCoeControl`'s 44: up to slot 77 (`QueryHeading`) plus headroom.
 const TAIL: usize = 40;
 const OVERRIDES: &[(usize, &str)] = &[
+    (45, "_ZN10CEikDialog9ExecuteLDEi"),
     (46, "_ZN10CEikDialog9PrepareLCEi"),
     (47, "_ZN10CEikDialog5RunLDEv"),
     (77, "_ZNK15CAknQueryDialog12QueryHeadingEv"),
@@ -173,8 +174,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 refuse(format!("{r0:#x} is not a dialog this engine made"))
             }
         }
-        // TInt CEikDialog::RunLD(): present native GuestUi::request and block until RequestResponded.
-        "_ZN10CEikDialog5RunLDEv" => {
+        // TInt CEikDialog::RunLD() / ExecuteLD(TInt aResourceId): present native GuestUi::request and block until RequestResponded.
+        "_ZN10CEikDialog5RunLDEv" | "_ZN10CEikDialog9ExecuteLDEi" => {
             let (title, text) = match p.obj_get(r0) {
                 Some(HostObj::Dialog(d)) => (d.title.clone(), d.text.clone()),
                 _ => return Some(refuse(format!("{r0:#x} is not a dialog this engine made"))),

@@ -150,11 +150,16 @@ fn a_key_for_another_window_is_not_the_guests_and_an_unimplemented_path_is_a_nam
     assert_eq!(app.eka.deliver(ev).unwrap(), Delivery::NotForGuestWindow);
     assert_eq!(app.eka.step(1_000_000).0, Step::Blocked, "nothing was queued");
     assert_eq!(app.current(), 0);
-    // Enter opens a drive: FileBrowser's own code goes on from here, into calls this engine has not implemented yet (named, terminal).
+    // Enter opens drive C: cleanly now that TEntry is implemented, updating the native List control with C:'s subdirectories.
     app.key(HOST_KEY_ENTER, true);
+    assert_eq!(app.eka.step(1_000_000).0, Step::Blocked, "Enter on C: opens C: and settles in the event loop");
+    assert!(app.eka.drain_refused().is_empty(), "opening C: must not refuse");
+    // Negative control: an unimplemented FileBrowser command (e.g. Tools -> Memory info, cmd 98) is still a named terminal fault.
+    let ev_unimpl = GuestUiEvent::MenuCommand { win: app.win, token: heirloom_ui_abi::CallbackToken(98) };
+    assert_eq!(app.eka.deliver(ev_unimpl).unwrap(), Delivery::Queued);
     match app.eka.step(1_000_000).0 {
         Step::Fault(m) => assert!(m.starts_with("NEXT-NEEDED"), "{m}"),
-        other => panic!("{other:?}"),
+        other => panic!("expected NEXT-NEEDED fault for unimplemented cmd 98, got {other:?}"),
     }
     assert!(!app.eka.drain_refused().is_empty());
 }

@@ -39,6 +39,8 @@ pub struct NativeState {
     pub icons: crate::icons::IconState,
     /// Font & Bitmap Server (`fbscli`) bitmaps (`fbs.rs`).
     pub fbs: crate::fbs::FbsState,
+    /// Image Conversion Library (`imageconversion.dll` `CImageDecoder`, `imageconv.rs`).
+    pub imageconv: crate::imageconv::ImageConvState,
     /// Virtual monotonic clock in microseconds, driven by `GuestMachine::advance_clock_to`.
     pub clock_us: u64,
     /// Active `CPeriodic` timers keyed by guest object address (`sched.rs`).
@@ -93,6 +95,7 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::window::native(proc, name) { return Some(o); }
     if let Some(o) = crate::toolbar::native(proc, name) { return Some(o); }
     if let Some(o) = crate::time::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::imageconv::native(proc, name) { return Some(o); }
     if let Some(o) = crate::array::native(proc, name) { return Some(o); }
     if let Some(o) = crate::fileman::native(proc, name) { return Some(o); }
     if let Some(o) = crate::cenrep::native(proc, name) { return Some(o); }

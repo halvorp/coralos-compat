@@ -36,6 +36,8 @@ pub struct Process {
     pub host: crate::ui::Host,
     /// Trace mode (`Some`): every import call is recorded (name, r0-r3, caller) in call order; `None` (the default) records nothing.
     pub trace: Option<Vec<alloc::string::String>>,
+    /// Native CoralOS `datatype.library` host bridge (`imageconv.rs` `CImageDecoder` + `AknIconUtils`).
+    pub datatype_host: Option<alloc::boxed::Box<dyn heirloom_common::datatype::NativeDatatype>>,
 }
 
 #[derive(Debug)]
@@ -167,6 +169,7 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         log: Vec::new(),
         host: Default::default(),
         trace: None,
+        datatype_host: None,
     };
 
     // EKA2 entry state: kernel places SStdEpocThreadCreateInfo (0x40 bytes)
@@ -257,6 +260,7 @@ pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
         heap: Some(crate::heap::Heap::new(heap_id, HEAP_BASE, heap_sz, heap_sz)),
         heap_chunk_id: heap_id, stub_chunk_id: stub_id, census: None, uid3: 0, code_len: 0,
         frames: Vec::new(), slots: crate::appstart::Slots::default(), nat: Default::default(), native_hook: None, log: Vec::new(), host: Default::default(), trace: None,
+        datatype_host: None,
     })
 }
 

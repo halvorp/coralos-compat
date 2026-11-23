@@ -56,6 +56,10 @@ impl OsFamily for EkaFamily {
             other => Err(format!("input {other:?}: the Symbian machine takes {EKA_ORDINALS:?}, {EKA_LAYOUT:?} and {EKA_ROM:?} only")),
         }
     }
+    fn attach_datatype(m: &mut EkaArm<LibUi>, host: heirloom_os_abi::datatype::DatatypeHost) -> Result<(), String> {
+        m.set_datatype_host(Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<EkaFamily>();
