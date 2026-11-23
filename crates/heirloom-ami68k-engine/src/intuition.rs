@@ -17,6 +17,7 @@ pub const LVO_WINDOW_TO_BACK: i32 = -306;
 pub const LVO_WINDOW_TO_FRONT: i32 = -312;
 pub const LVO_REFRESH_GLIST: i32 = -432;
 pub const LVO_ACTIVATE_WINDOW: i32 = -450;
+const WD_MENU_STRIP: u32 = 28;
 const WD_TITLE: u32 = 32;
 
 
@@ -27,6 +28,7 @@ pub fn set_menu_strip<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Str
     let model = menu::decode_menu_strip(&a.mem, first)?;
     let n = model.menus.len();
     a.ui.set_menu_strip(win, model).map_err(Refusal::ui)?;
+    a.mem.write_u32(h + WD_MENU_STRIP, first).map_err(Refusal::mem("Window.MenuStrip"))?;
     a.menu_strips.insert(h, first);
     cpu.set_d0(1);
     Ok(format!("[intuition] SetMenuStrip handle={h:#x} menus={n}"))
@@ -37,6 +39,7 @@ pub fn clear_menu_strip<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<S
     let h = cpu.areg(0);
     let win = *a.windows.get(&h).ok_or_else(|| Refusal(format!("ClearMenuStrip: {h:#x} is not an open window")))?;
     a.ui.clear_menu_strip(win).map_err(Refusal::ui)?;
+    a.mem.write_u32(h + WD_MENU_STRIP, 0).map_err(Refusal::mem("Window.MenuStrip"))?;
     a.menu_strips.remove(&h);
     Ok(format!("[intuition] ClearMenuStrip handle={h:#x}"))
 }
