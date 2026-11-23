@@ -133,11 +133,17 @@ impl<U: GuestUi> MacPpc<U> {
             // OSErr GetGraphicsImporterForFile(const FSSpec *theFile, ComponentInstance *ci)
             GetGraphicsImporterForFile => {
                 let raw = spec_loc(&self.mac, a0).ok().and_then(|l| l.node).and_then(|node| {
-                    let len = self.mac.fm.tree.file_len(node)? as usize;
-                    let mut buf = vec![0u8; len.min(32 * 1024 * 1024)];
-                    let n = self.mac.fm.tree.read_at(node, 0, &mut buf)?;
-                    buf.truncate(n);
-                    Some(buf)
+                    let want = (self.mac.fm.tree.file_len(node)? as usize).min(32 * 1024 * 1024);
+                    let mut buf = vec![0u8; want];
+                    let mut pos = 0usize;
+                    while pos < want {
+                        match self.mac.fm.tree.read_at(node, pos as u64, &mut buf[pos..]) {
+                            Some(0) | None => break,
+                            Some(n) => pos += n,
+                        }
+                    }
+                    buf.truncate(pos);
+                    (!buf.is_empty()).then_some(buf)
                 });
                 let decoded = raw.as_deref().and_then(|bytes| {
                     if let Some(h) = self.mac.datatype_host.as_deref() {

@@ -34,9 +34,17 @@ impl<U: GuestUi> Mac<U> {
             let sidecar_name = format!("{}.rsrc", self.fm.tree.get(node).name);
             if let Some(side) = self.fm.tree.children(loc.parent).iter().copied().find(|&c| self.fm.tree.get(c).name.eq_ignore_ascii_case(&sidecar_name)) {
                 if let Some(len) = self.fm.tree.file_len(side) {
-                    let mut raw = alloc::vec![0u8; (len as usize).min(64 * 1024 * 1024)];
-                    if let Some(n) = self.fm.tree.read_at(side, 0, &mut raw) {
-                        raw.truncate(n);
+                    let want = (len as usize).min(64 * 1024 * 1024);
+                    let mut raw = alloc::vec![0u8; want];
+                    let mut pos = 0usize;
+                    while pos < want {
+                        match self.fm.tree.read_at(side, pos as u64, &mut raw[pos..]) {
+                            Some(0) | None => break,
+                            Some(n) => pos += n,
+                        }
+                    }
+                    if pos > 0 {
+                        raw.truncate(pos);
                         bytes = match heirloom_fmt_resfork::container::open(&raw) {
                             Ok(opened) if !opened.rsrc.is_empty() => raw[opened.rsrc].to_vec(),
                             _ => raw,
