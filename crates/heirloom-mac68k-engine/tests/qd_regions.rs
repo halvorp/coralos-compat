@@ -169,13 +169,16 @@ fn open_rgn_close_rgn_records_framed_shapes_and_draws_nothing() {
     assert_eq!(words(&bytes(&g, A)), vec![10, 10, 20, 30, 60], "a framed rect makes a rect region");
     assert_eq!(g.m.mem.read_u16(g.win + 66).unwrap(), 0, "CloseRgn showed the pen again (pnVis back to 0)");
     assert_eq!(g.m.mem.read_u32(g.win + 96).unwrap(), 0, "rgnSave cleared");
-    // a line inside OpenRgn is refused by name (polygon outlines are not recorded), not silently dropped
+    // LineTo inside OpenRgn records a closed polygon outline via even-odd scanline inversion (862c7b2).
     let mut g = Rig::new();
     let mut p = Prog::new();
-    p.new_rgn(A).trap(0xA8DA).move_to(0, 0).line_to(5, 5).rgn_arg(A).trap(0xA8DB).exit();
-    g.m.start(&p.0, 0).unwrap();
-    g.m.run_loop(100_000).unwrap();
-    assert!(g.m.refused.iter().any(|r| r.contains("LineTo while a region is open")), "{:?}", g.m.refused);
+    p.new_rgn(A).trap(0xA8DA).move_to(0, 0).line_to(10, 10).line_to(0, 10).line_to(0, 0).rgn_arg(A).trap(0xA8DB);
+    g.run(p.exit());
+    g.no_refusals();
+    assert_eq!(g.count_black(), 0, "LineTo while a region is open draws nothing");
+    let rgn = g.m.read_region(g.m.mem.read_u32(A).unwrap()).unwrap();
+    assert!(rgn.contains(1, 5), "interior point (1,5) must be inside recorded triangle");
+    assert!(!rgn.contains(8, 2), "exterior point (8,2) must be outside recorded triangle");
 }
 
 #[test]
