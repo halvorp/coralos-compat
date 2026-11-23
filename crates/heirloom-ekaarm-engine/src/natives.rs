@@ -354,9 +354,14 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             NativeOutcome::Return
         }
         // void RThread::RequestComplete(TRequestStatus*& aStatus, TInt aReason) const
-        "_ZNK7RThread15RequestCompleteERP14TRequestStatusi" => {
-            let status_ptr_addr = proc.cpu.regs[1];
-            let reason = proc.cpu.regs[2];
+        // void User::RequestComplete(TRequestStatus*& aStatus, TInt aReason)
+        "_ZNK7RThread15RequestCompleteERP14TRequestStatusi"
+        | "_ZN4User15RequestCompleteERP14TRequestStatusi" => {
+            let (status_ptr_addr, reason) = if name.starts_with("_ZN4User") {
+                (proc.cpu.regs[0], proc.cpu.regs[1])
+            } else {
+                (proc.cpu.regs[1], proc.cpu.regs[2])
+            };
             if let Ok(status_addr) = proc.mem.vm.read_u32(status_ptr_addr) {
                 if status_addr != 0 {
                     let _ = proc.mem.vm.write_u32(status_addr, reason);
@@ -394,11 +399,45 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             proc.cpu.regs[0] = if (b'a'..=b'z').contains(&(c as u8)) { c - 32 } else { c };
             NativeOutcome::Return
         }
+        "_ZN4User12StringLengthEPKh" => {
+            let mut ptr = proc.cpu.regs[0];
+            let mut n = 0u32;
+            while n < 0x10000 && proc.mem.vm.read_u8(ptr).unwrap_or(0) != 0 {
+                ptr = ptr.wrapping_add(1);
+                n += 1;
+            }
+            proc.cpu.regs[0] = n;
+            NativeOutcome::Return
+        }
+        "_ZN4User12StringLengthEPKt" => {
+            let mut ptr = proc.cpu.regs[0];
+            let mut n = 0u32;
+            while n < 0x10000 && proc.mem.vm.read_u16(ptr).unwrap_or(0) != 0 {
+                ptr = ptr.wrapping_add(2);
+                n += 1;
+            }
+            proc.cpu.regs[0] = n;
+            NativeOutcome::Return
+        }
         "_ZN4User9TickCountEv" => {
             proc.cpu.regs[0] = (proc.nat.clock_us / 15_625).saturating_add(proc.insns / 50_000) as u32;
             NativeOutcome::Return
         }
         "_ZN4User19ResetInactivityTimeEv" => NativeOutcome::Return,
+        // RLibrary (e32std.h): dynamic optional plugin loading; absent DLLs return KErrNotFound (-1).
+        "_ZN8RLibrary4LoadERK7TDesC16S2_" | "_ZN8RLibrary4LoadERK7TDesC16" => {
+            let _ = proc.mem.vm.write_u32(proc.cpu.regs[0], 0);
+            proc.cpu.regs[0] = (-1i32) as u32; // KErrNotFound
+            NativeOutcome::Return
+        }
+        "_ZNK8RLibrary6LookupEi" => {
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZN8RLibrary5CloseEv" => {
+            let _ = proc.mem.vm.write_u32(proc.cpu.regs[0], 0);
+            NativeOutcome::Return
+        }
         // CAknAppUiBase::KeySounds() / CAknKeySoundSystem::{PushContextL,PopContext,PlaySound}: key click feedback (no-op on host).
         "_ZNK13CAknAppUiBase9KeySoundsEv" => {
             let p = proc.alloc_zeroed(16).unwrap_or(0);

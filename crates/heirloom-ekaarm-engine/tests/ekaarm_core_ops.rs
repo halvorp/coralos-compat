@@ -242,3 +242,110 @@ fn listbox_construct_from_resource_populates_array_id_and_tbuf_reads_raw_utf16()
     });
     assert_eq!(req_text.as_deref(), Some("Play"), "TBUF read + MessageQueryDialog::NewL must project \"Play\"");
 }
+
+#[test]
+fn enter_aliases_to_s60_device3_only_when_unconsumed_and_user_request_complete_signals() {
+    let mut p = loader::bare(&[
+        "_ZN4User15RequestCompleteERP14TRequestStatusi",               // stub 0
+        "_ZN11CCoeControl14OfferKeyEventLERK9TKeyEvent10TEventCode",  // stub 1
+        "_ZN9CCoeAppUi14HandleKeyEventLERK9TKeyEvent10TEventCode",    // stub 2
+        "_ZN9CAknAppUi14HandleWsEventLERK8TWsEventP11CCoeControl",    // stub 3
+        "_ZN20CActiveSchedulerWaitC1Ev",                              // stub 4
+        "_ZNK20CActiveSchedulerWait9IsStartedEv",                     // stub 5
+    ]).unwrap();
+
+    // Test 1: User::RequestComplete clears pointer to NULL, writes reason, and signals once.
+    let status = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let status_ptr = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let waiter = p.heap.as_mut().unwrap().alloc(32, &mut p.mem).unwrap();
+    p.mem.write_u32(status, 0x8000_0001).unwrap(); // KRequestPending
+    p.mem.write_u32(status_ptr, status).unwrap();
+
+    // Test 2: Guest AppUi whose HandleKeyEventL rejects EKeyEnter (0x0d) -> expects retry as EKeyDevice3 (0xf845).
+    let appui_vt = CODE_BASE + 0x4000;
+    let appui = p.heap.as_mut().unwrap().alloc(64, &mut p.mem).unwrap();
+    let ws_ev = p.heap.as_mut().unwrap().alloc(64, &mut p.mem).unwrap();
+    let log_buf = p.heap.as_mut().unwrap().alloc(32, &mut p.mem).unwrap(); // [count, code0, code1]
+    // TWsEvent: type=1 (EEventKey), iEventData at +16: iCode=0x0d, iScanCode=0x03
+    p.mem.write_u32(ws_ev, 1).unwrap();
+    p.mem.write_u32(ws_ev + 16, 0x000d).unwrap();
+    p.mem.write_u32(ws_ev + 20, 0x0003).unwrap();
+
+    // Guest HandleKeyEventL(r0=appui, r1=TKeyEvent*, r2=TEventCode) at CODE_BASE + 0x1000:
+    // logs iCode to log_buf[1 + count], increments count, returns 1 iff iCode == 0xf845 else 0.
+    let handler_addr = CODE_BASE + 0x1000;
+    p.map_code(handler_addr, &arm_words(&[
+        0xE591_3000, // word 0: ldr r3, [r1]        ; iCode
+        0xE59F_C020, // word 1: ldr r12, [pc, #32]  ; word 11 = log_buf
+        0xE59C_2000, // word 2: ldr r2, [r12]       ; count
+        0xE282_0001, // word 3: add r0, r2, #1
+        0xE58C_0000, // word 4: str r0, [r12]       ; count++
+        0xE78C_3100, // word 5: str r3, [r12, r0, lsl #2] ; log_buf[count] = iCode
+        0xE59F_0010, // word 6: ldr r0, [pc, #16]   ; word 12 = 0xf845 (EKeyDevice3)
+        0xE153_0000, // word 7: cmp r3, r0
+        0x03A0_0001, // word 8: moveq r0, #1        ; EKeyWasConsumed
+        0x13A0_0000, // word 9: movne r0, #0        ; EKeyWasNotConsumed
+        0xE12F_FF1E, // word 10: bx lr
+        log_buf,     // word 11
+        0x0000_F845, // word 12
+    ])).unwrap();
+    let mut vt_words = vec![0u32; 16];
+    vt_words[7] = handler_addr;
+    p.map_code(appui_vt, &arm_words(&vt_words)).unwrap();
+    p.mem.write_u32(appui, appui_vt).unwrap();
+
+    p.map_code(CODE_BASE, &arm_words(&[
+        0xE1A0_0004, 0xE3A0_1000, 0xEF00_0000 | STUB_SVC_BASE,       // User::RequestComplete(&status, 0)
+        0xE1A0_0005, 0xEF00_0000 | (STUB_SVC_BASE + 4),              // CActiveSchedulerWait()
+        0xE1A0_0005, 0xEF00_0000 | (STUB_SVC_BASE + 5),              // IsStarted() -> r8
+        0xE1A0_8000,
+        0xE3A0_0000, 0xE3A0_1000, 0xE3A0_2001, 0xEF00_0000 | (STUB_SVC_BASE + 1), // base OfferKeyEventL -> r9
+        0xE1A0_9000,
+        0xE1A0_0006, 0xE1A0_1007, 0xE3A0_2000, 0xEF00_0000 | (STUB_SVC_BASE + 3), // HandleWsEventL
+        0xE3A0_0000, 0xEF00_0000 | EXIT_SVC,
+    ])).unwrap();
+    p.cpu.regs[4] = status_ptr;
+    p.cpu.regs[5] = waiter;
+    p.cpu.regs[6] = appui;
+    p.cpu.regs[7] = ws_ev;
+    p.cpu.set_pc_interworking(CODE_BASE);
+    assert!(matches!(p.run(10_000), Outcome::Exited(0)));
+
+    assert_eq!(p.mem.read_u32(status).unwrap(), 0, "RequestComplete must write reason 0");
+    assert_eq!(p.mem.read_u32(status_ptr).unwrap(), 0, "RequestComplete must NULL caller pointer");
+    assert_eq!(p.nat.requests.signals, 1, "RequestComplete must signal scheduler once");
+    assert_eq!(p.cpu.regs[8], 0, "fresh CActiveSchedulerWait must not be started");
+    assert_eq!(p.cpu.regs[9], 0, "base CCoeControl::OfferKeyEventL must return EKeyWasNotConsumed");
+    // Verify HandleKeyEventL saw 0x0d first, rejected it, and then received S60 EKeyDevice3 (0xf845)!
+    assert_eq!(p.mem.read_u32(log_buf).unwrap(), 2, "unconsumed EKeyEnter must retry once as EKeyDevice3");
+    assert_eq!(p.mem.read_u32(log_buf + 4).unwrap(), 0x000d);
+    assert_eq!(p.mem.read_u32(log_buf + 8).unwrap(), 0xf845);
+
+    // Negative control: when HandleKeyEventL consumes 0x0d directly (returns 1), it must NOT retry!
+    p.mem.write_u32(log_buf, 0).unwrap();
+    p.mem.write_u32(ws_ev + 16, 0x000d).unwrap();
+    let consume_addr = CODE_BASE + 0x2000;
+    p.map_code(consume_addr, &arm_words(&[
+        0xE59F_C010, // ldr r12, [pc, #16] (log_buf)
+        0xE59C_2000,
+        0xE282_2001,
+        0xE58C_2000,
+        0xE3A0_0001, // return EKeyWasConsumed (1)
+        0xE12F_FF1E,
+        log_buf,
+    ])).unwrap();
+    let consume_vt = CODE_BASE + 0x5000;
+    let mut vt2 = vec![0u32; 16];
+    vt2[7] = consume_addr;
+    p.map_code(consume_vt, &arm_words(&vt2)).unwrap();
+    p.mem.write_u32(appui, consume_vt).unwrap();
+    p.map_code(CODE_BASE + 0x3000, &arm_words(&[
+        0xE1A0_0006, 0xE1A0_1007, 0xE3A0_2000, 0xEF00_0000 | (STUB_SVC_BASE + 3),
+        0xE3A0_0000, 0xEF00_0000 | EXIT_SVC,
+    ])).unwrap();
+    p.cpu.regs[6] = appui;
+    p.cpu.regs[7] = ws_ev;
+    p.cpu.set_pc_interworking(CODE_BASE + 0x3000);
+    assert!(matches!(p.run(10_000), Outcome::Exited(0)));
+    assert_eq!(p.mem.read_u32(log_buf).unwrap(), 1, "consumed EKeyEnter must NOT trigger EKeyDevice3 retry");
+}

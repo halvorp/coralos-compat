@@ -31,6 +31,10 @@ const INHERITED_OFFER_KEY_EVENT_L: &[&str] = &["_ZN11CCoeControl14OfferKeyEventL
 const TWS_I_EVENT_DATA: u32 = 16;
 /// `TKeyResponse` (w32std.h): EKeyWasNotConsumed 0, EKeyWasConsumed 1.
 const EKEY_WAS_CONSUMED: u32 = 1;
+/// S60 Avkon `EKeyEnter` -> `EKeyOK` (`EKeyDevice3`) alias constants (e32keys.h).
+const EKEY_ENTER: u32 = 0x000d;
+const EKEY_DEVICE3: u32 = 0xf845;
+const ESTD_KEY_DEVICE3: u32 = 0xa7;
 
 const HANDLE_WS_EVENT_NAMES: &[&str] = &[
     "_ZN9CCoeAppUi14HandleWsEventLERK8TWsEventP11CCoeControl",
@@ -52,6 +56,8 @@ pub struct Offer {
     key: u32,
     ty: u32,
     rest: Vec<u32>,
+    /// If true and the AppUi does not consume `EKeyEnter`, retry once as S60 `EKeyDevice3` (`EKeyOK`).
+    alias_enter_to_ok: bool,
 }
 
 /// Ask the next control, or, when none is left, the AppUi's `HandleKeyEventL`.
@@ -59,7 +65,8 @@ fn offer_next(p: &mut Process, mut o: Offer) -> Result<(), Outcome> {
     if o.rest.is_empty() {
         let spec = SlotSpec { class: "CCoeAppUi", method: "HandleKeyEventL", slot: SLOT_HANDLE_KEY_EVENT_L, inherited: INHERITED_HANDLE_KEY_EVENT_L };
         let target = anchor(p, o.appui, &spec).map_err(Outcome::Fault)?;
-        return p.call_guest(target, &[o.appui, o.key, o.ty], Continuation::Resume).map_err(Outcome::Fault);
+        let cont = if o.alias_enter_to_ok { Continuation::KeyAppUi(o.clone()) } else { Continuation::Resume };
+        return p.call_guest(target, &[o.appui, o.key, o.ty], cont).map_err(Outcome::Fault);
     }
     let control = o.rest.remove(0);
     let spec = SlotSpec { class: "CCoeControl", method: "OfferKeyEventL", slot: SLOT_OFFER_KEY_EVENT_L, inherited: INHERITED_OFFER_KEY_EVENT_L };
@@ -76,6 +83,19 @@ pub(crate) fn offered(p: &mut Process, o: Offer, r0: u32) -> Result<(), Outcome>
     offer_next(p, o)
 }
 
+/// `CCoeAppUi::HandleKeyEventL` returned `r0`; if `EKeyEnter` was not consumed, retry once as S60 `EKeyDevice3` (`EKeyOK`).
+pub(crate) fn appui_handled(p: &mut Process, mut o: Offer, r0: u32) -> Result<(), Outcome> {
+    if r0 == EKEY_WAS_CONSUMED || !o.alias_enter_to_ok {
+        return Ok(());
+    }
+    // Rewrite `TKeyEvent.iCode` and `iScanCode` to S60 center-select (`EKeyOK` / `EStdKeyDevice3`) and re-offer.
+    p.wr(o.key, EKEY_DEVICE3).map_err(Outcome::Fault)?;
+    p.wr(o.key + 4, ESTD_KEY_DEVICE3).map_err(Outcome::Fault)?;
+    o.rest = p.stack_key_targets(o.appui).map_err(Outcome::Fault)?;
+    o.alias_enter_to_ok = false;
+    offer_next(p, o)
+}
+
 /// `HandleWsEventL(const TWsEvent& aEvent, CCoeControl* aDestination)` of the AppUi's base classes: this = r0, the event = r1.
 fn handle_ws_event(p: &mut Process) -> Result<(), String> {
     let (appui, event) = (p.cpu.regs[0], p.cpu.regs[1]);
@@ -83,13 +103,25 @@ fn handle_ws_event(p: &mut Process) -> Result<(), String> {
     if !matches!(ty, EEVENT_KEY | EEVENT_KEY_UP | EEVENT_KEY_DOWN) {
         return Err(format!("window server event type {ty}: only key events are routed"));
     }
+    let key = event + TWS_I_EVENT_DATA;
+    let alias_enter_to_ok = ty == EEVENT_KEY && p.rd(key).unwrap_or(0) == EKEY_ENTER;
     let rest = p.stack_key_targets(appui)?;
     p.log.push(format!("[key] event type {ty} offered to {} stacked control(s)", rest.len()));
-    offer_next(p, Offer { appui, key: event + TWS_I_EVENT_DATA, ty, rest }).map_err(|o| match o { Outcome::Fault(m) | Outcome::Refused(m) => m, other => format!("{other:?}") })
+    offer_next(p, Offer { appui, key, ty, rest, alias_enter_to_ok }).map_err(|o| match o { Outcome::Fault(m) | Outcome::Refused(m) => m, other => format!("{other:?}") })
 }
 
 /// The natives of this module; `None` = not ours.
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
+    if matches!(
+        name,
+        "_ZN11CCoeControl14OfferKeyEventLERK9TKeyEvent10TEventCode"
+            | "_ZN9CCoeAppUi14HandleKeyEventLERK9TKeyEvent10TEventCode"
+    ) {
+        // Base `CCoeControl::OfferKeyEventL` (coecntrl.cpp) and `CCoeAppUi::HandleKeyEventL`
+        // (coeaui.cpp) both do nothing and return `EKeyWasNotConsumed` (0).
+        p.cpu.regs[0] = 0;
+        return Some(NativeOutcome::Return);
+    }
     if !HANDLE_WS_EVENT_NAMES.contains(&name) { return None; }
     Some(match handle_ws_event(p) {
         Ok(()) => NativeOutcome::Return,

@@ -51,6 +51,8 @@ pub enum Continuation {
     SchedRun { ao: u32 },
     /// A key event being offered down the AppUi's control stack (`keyroute.rs`).
     KeyOffer(crate::keyroute::Offer),
+    /// `CCoeAppUi::HandleKeyEventL` returned for an `EKeyEnter` event; retry as `EKeyDevice3` if unconsumed (`keyroute.rs`).
+    KeyAppUi(crate::keyroute::Offer),
     /// A view switch called `old_view->DoDeactivate()`; on return, activate `next` (`viewappui.rs`).
     ViewDeactivated { appui: u32, next: (u32, u32, Vec<u8>) },
     /// A runtime view activation (`AknViewActivatedL`) returned; release its scratch block (`viewappui.rs`).
@@ -126,6 +128,7 @@ impl Process {
             Continuation::SchedRun { .. } => Ok(()),
             Continuation::SchedWait { .. } => Err(Outcome::Fault(String::from("callback return reached a scheduler activation frame"))),
             Continuation::KeyOffer(o) => crate::keyroute::offered(self, o, r0),
+            Continuation::KeyAppUi(o) => crate::keyroute::appui_handled(self, o, r0),
             Continuation::ViewDeactivated { appui, next } => crate::viewappui::finish_deactivation(self, appui, next),
             Continuation::ViewActivated { block } => { crate::viewappui::finish_activation(self, block); Ok(()) }
             Continuation::IdleCallback { ao } => crate::sched::idle_returned(self, ao, r0),

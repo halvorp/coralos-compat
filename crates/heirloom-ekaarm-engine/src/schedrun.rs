@@ -111,8 +111,19 @@ pub(crate) fn pump(p: &mut Process) -> Result<Pump, Outcome> {
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let r = match name {
         // static void CActiveScheduler::Start() / Stop() (e32base.h:2867-2868)
-        "_ZN16CActiveScheduler5StartEv" => p.sched_start(),
-        "_ZN16CActiveScheduler4StopEv" => p.sched_stop(),
+        "_ZN16CActiveScheduler5StartEv" | "_ZN20CActiveSchedulerWait5StartEv" => p.sched_start(),
+        "_ZN16CActiveScheduler4StopEv" | "_ZN20CActiveSchedulerWait9AsyncStopEv" => p.sched_stop(),
+        "_ZN20CActiveSchedulerWaitC1Ev" | "_ZN20CActiveSchedulerWaitC2Ev" => {
+            let this = p.cpu.regs[0];
+            let _ = p.wr(this, 0);
+            Ok(())
+        }
+        "_ZN20CActiveSchedulerWaitD1Ev" | "_ZN20CActiveSchedulerWaitD2Ev" => Ok(()),
+        "_ZNK20CActiveSchedulerWait9IsStartedEv" => {
+            let depth = p.frames.iter().filter(|f| matches!(f.cont, Continuation::SchedWait { .. })).count();
+            p.cpu.regs[0] = u32::from(depth > 1);
+            Ok(())
+        }
         _ => return None,
     };
     Some(match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) })

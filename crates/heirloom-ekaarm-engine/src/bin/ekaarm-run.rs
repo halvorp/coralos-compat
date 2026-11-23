@@ -147,13 +147,13 @@ fn main() {
         live.last().copied()
     };
     for act in &actions {
-        if !matches!(outcome, Outcome::Blocked) { break; }
+        if !matches!(outcome, Outcome::Blocked | Outcome::BudgetSpent) { break; }
         match *act {
             Action::Key(scan) => {
                 for down in [true, false] {
                     if let Err(m) = proc.deliver_key(scan, "", heirloom_ui_abi::Modifiers::default(), down) { println!("OUTCOME KeyRefused {scan:#x}: {m}"); std::process::exit(1) }
                     outcome = proc.run(proc.insns.saturating_add(max_insns));
-                    if !matches!(outcome, Outcome::Blocked) { break; }
+                    if !matches!(outcome, Outcome::Blocked | Outcome::BudgetSpent) { break; }
                 }
             }
             Action::Menu(cmd) => {
@@ -185,7 +185,7 @@ fn main() {
                     let target = target.max(proc.nat.clock_us.saturating_add(1));
                     if let Err(m) = proc.advance_clock_to(target) { println!("OUTCOME TickRefused: {m}"); std::process::exit(1) }
                     outcome = proc.run(proc.insns.saturating_add(max_insns));
-                    if !matches!(outcome, Outcome::Blocked) { break; }
+                    if !matches!(outcome, Outcome::Blocked | Outcome::BudgetSpent) { break; }
                 }
             }
         }
