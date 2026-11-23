@@ -109,6 +109,7 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::colorlist::native(proc, name) { return Some(o); }
     if let Some(o) = crate::icons::native(proc, name) { return Some(o); }
     if let Some(o) = crate::fbs::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::audio::native(proc, name) { return Some(o); }
     if let Some(o) = crate::aeabimem::native(proc, name) { return Some(o); }
     if let Some(o) = crate::format::native(proc, name) { return Some(o); }
     None
