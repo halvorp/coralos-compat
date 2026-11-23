@@ -76,8 +76,18 @@ pub enum TbFn {
     StandardGetFile, StandardPutFile,
     /// Help Manager (`Balloons.h`): `HMGetBalloons` (always `false` — Balloon Help is off).
     HMGetBalloons,
-    /// Device Manager / VM helpers (`Devices.h` / `Memory.h`): `GetDCtlEntry`, `OpenDriver`, `Control`/`PBControlSync`/`Status`/`PBStatusSync`, `LockMemory`/`UnlockMemory`, `MakeITable`, `SndStopFilePlay`.
+    /// Device Manager / VM helpers (`Devices.h` / `Memory.h`): `GetDCtlEntry`, `OpenDriver`, `Control`/`PBControlSync`/`Status`/`PBStatusSync`, `LockMemory`/`UnlockMemory`/`HoldMemory`/`UnholdMemory`, `MakeITable`, `SndStopFilePlay`, `StackSpace`, `QDDone`, `ResetAlertStage`, `LMGetHiliteRGB`, `GetResourceSizeOnDisk`.
     GetDCtlEntry, OpenDriver, Control, PBControlSync, LockMemory, MakeITable, SndStopFilePlay,
+    StackSpace, QDDone, ResetAlertStage, LMGetHiliteRGB, GetResourceSizeOnDisk, CTabChanged,
+    /// `TruncString(width, Str255, truncWhere)` (TextUtils.h): truncates a Pascal string to fit `width` pixels with Mac Roman ellipsis (0xC9).
+    TruncString,
+    /// `EmptyHandle(h)` (Memory.h), `PlotIconID(rect, align, transform, resID)` (Icons.h), `GetGray`, TextEdit/String/ColorPicker/Alias glue (`TESetClickLoop`, `TESetWordBreak`, `TEScrapHandle`, `TESetScrapLength`, `NewString`, `SetString`, `SystemEvent`, `IsAliasFile`, `RGB2HSV`, `HSV2RGB`, `RGB2HSL`, `HSL2RGB`), and native-styled no-ops (`ClipAbove`, `SetControlColor`, `SetMCEntries`).
+    EmptyHandle, ReallocateHandle, PlotIconID, GetGray,
+    TESetClickLoop, TESetWordBreak, TEScrapHandle, TESetScrapLength,
+    NewString, SetString, SystemEvent, IsAliasFile,
+    RGB2HSV, HSV2RGB, RGB2HSL, HSL2RGB,
+    /// Resource Manager / Font Manager / Script Utilities helpers (`GetNextFOND`, `ReadPartialResource`, `IUStringOrder`, `OutlineMetrics`, `Enqueue`, `Dequeue`).
+    GetNextFOND, ReadPartialResource, IUStringOrder, OutlineMetrics, Enqueue, Dequeue,
     /// `LMGet<Name>` / `LMSet<Name>` over the table [`LOWMEM`]; the index is the row.
     LmGet(u8), LmSet(u8),
 }
@@ -100,19 +110,33 @@ impl TbFn {
         use TbFn::*;
         Some(match name {
             "GetIndString" => GetIndString, "CopyPascalStringToC" => CopyPascalStringToC, "CopyCStringToPascal" => CopyCStringToPascal,
-            "C2PStr" | "c2pstr" => C2PStr, "P2CStr" | "p2cstr" => P2CStr, "EqualString" => EqualString, "NumToString" => NumToString, "StringToNum" => StringToNum,
+            "C2PStr" | "c2pstr" => C2PStr, "P2CStr" | "p2cstr" => P2CStr, "EqualString" => EqualString, "NumToString" | "numtostring" => NumToString, "StringToNum" => StringToNum,
             "FindFolder" => FindFolder, "SetEventMask" => SetEventMask, "GetDateTime" => GetDateTime, "GetDblTime" => GetDblTime, "GetCaretTime" => GetCaretTime, "Microseconds" => Microseconds, "UpTime" => UpTime,
             "AbsoluteToNanoseconds" => AbsoluteToNanoseconds,
             "TEToScrap" => TEToScrap, "TEFromScrap" => TEFromScrap, "UpperString" => UpperString, "GetGrayRgn" => GetGrayRgn,
             "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "LMGetTopMapHndl" => TopMapGet, "LMSetTopMapHndl" => TopMapSet, "LMGetCurMap" => CurMapGet, "LMSetCurMap" => CurMapSet, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "SetPreserveGlyph" => SetPreserveGlyph, "GetPreserveGlyph" => GetPreserveGlyph, "IsMetric" => IsMetric, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
             "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString,
             "NavLibraryVersion" => NavLibraryVersion, "NavServicesCanRun" | "NavServicesAvailable" => NavServicesCanRun, "NavLoad" | "NavUnload" => NavLoad,
-            "GetIconSuite" => GetIconSuite, "PlotIconSuite" => PlotIconSuite,
+            "GetIconSuite" => GetIconSuite, "PlotIconSuite" => PlotIconSuite, "PlotIconID" => PlotIconID,
+            "TruncString" => TruncString, "EmptyHandle" => EmptyHandle, "ReallocateHandle" | "ReallocHandle" => ReallocateHandle, "GetGray" => GetGray,
+            "TESetClickLoop" => TESetClickLoop, "TESetWordBreak" => TESetWordBreak,
+            "TEScrapHandle" => TEScrapHandle, "TESetScrapLength" => TESetScrapLength,
+            "NewString" => NewString, "SetString" => SetString,
+            "SystemEvent" => SystemEvent, "IsAliasFile" => IsAliasFile,
+            "RGB2HSV" => RGB2HSV, "HSV2RGB" => HSV2RGB, "RGB2HSL" => RGB2HSL, "HSL2RGB" => HSL2RGB,
+            "GetNextFOND" => GetNextFOND, "ReadPartialResource" => ReadPartialResource,
+            "IUStringOrder" | "StringOrder" => IUStringOrder, "OutlineMetrics" => OutlineMetrics,
+            "Enqueue" => Enqueue, "Dequeue" => Dequeue,
+            "IUDatePString" => DateString, "IUTimePString" => TimeString, "IUEqualPString" => EqualString,
+            "ClipAbove" | "SetControlColor" | "SetMCEntries" => CTabChanged,
             "StandardGetFile" | "CustomGetFile" => StandardGetFile, "StandardPutFile" | "CustomPutFile" => StandardPutFile,
             "HMGetBalloons" => HMGetBalloons,
             "GetDCtlEntry" => GetDCtlEntry, "OpenDriver" => OpenDriver, "Control" | "Status" => Control,
-            "PBControlSync" | "PBStatusSync" => PBControlSync, "LockMemory" | "UnlockMemory" => LockMemory,
+            "PBControlSync" | "PBStatusSync" => PBControlSync, "LockMemory" | "UnlockMemory" | "HoldMemory" | "UnholdMemory" => LockMemory,
             "MakeITable" => MakeITable, "SndStopFilePlay" => SndStopFilePlay,
+            "StackSpace" => StackSpace, "QDDone" => QDDone, "ResetAlertStage" => ResetAlertStage,
+            "LMGetHiliteRGB" => LMGetHiliteRGB, "GetResourceSizeOnDisk" => GetResourceSizeOnDisk,
+            "CTabChanged" | "GDeviceChanged" | "PixPatChanged" => CTabChanged,
             // GetMBarHeight() / GetSysFont() are the Universal Interfaces' readers of MBarHeight and SysFontFam (Menus.h, Fonts.h)
             "GetMBarHeight" => return TbFn::by_name("LMGetMBarHeight"),
             "GetSysFont" => return TbFn::by_name("LMGetSysFontFam"),
@@ -385,7 +409,290 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 0
             }
-            LockMemory | MakeITable | SndStopFilePlay => 0, // flat guest RAM is resident; MakeITable / SndStopFilePlay succeed cleanly
+            LockMemory | MakeITable | SndStopFilePlay | ResetAlertStage | CTabChanged => 0, // flat guest RAM is resident; synchronous QD / alert stage / seed notifications succeed cleanly
+            StackSpace => 0x0002_0000, // 128 KiB available stack on PowerPC
+            QDDone => 1, // QuickDraw drawing is synchronous, always complete
+            LMGetHiliteRGB => {
+                if a0 != 0 {
+                    let mut rgb = [0u8; 6];
+                    for (i, b) in rgb.iter_mut().enumerate() {
+                        *b = self.mac.mem.read_u8(0x09DA + i as u32).unwrap_or(0);
+                    }
+                    self.put_bytes(a0, &rgb, &name)?;
+                }
+                0
+            }
+            GetResourceSizeOnDisk => {
+                match self.mac.mm.block(a0) {
+                    Some(b) => b.size,
+                    None => (-1i32) as u32,
+                }
+            }
+            TruncString => {
+                // short TruncString(short width, Str255 theString, TruncCode truncWhere): 0 = notTruncated, 1 = truncated, -1 = error.
+                // Width is measured against the 8px stand-in font (matching StringWidth / TextWidth).
+                let width = a0 as u16 as i16;
+                let str_ptr = a1;
+                let trunc_where = a2 as u16 as i16;
+                if str_ptr == 0 {
+                    (-1i32) as u32
+                } else {
+                    let bytes = self.pstr_bytes(str_ptr, &name)?;
+                    let max_chars = (i32::from(width) / 8).max(0) as usize;
+                    if bytes.len() <= max_chars {
+                        0
+                    } else {
+                        let out: Vec<u8> = if max_chars == 0 {
+                            Vec::new()
+                        } else if max_chars == 1 {
+                            alloc::vec![0xC9] // Mac Roman ellipsis '…'
+                        } else if trunc_where == 0x4000 {
+                            // truncMiddle: keep head + '…' + tail
+                            let keep = max_chars - 1;
+                            let head = keep.div_ceil(2);
+                            let tail = keep - head;
+                            let mut v = Vec::with_capacity(max_chars);
+                            v.extend_from_slice(&bytes[..head]);
+                            v.push(0xC9);
+                            v.extend_from_slice(&bytes[bytes.len() - tail..]);
+                            v
+                        } else {
+                            // truncEnd (0) and default: keep head + '…'
+                            let mut v = Vec::with_capacity(max_chars);
+                            v.extend_from_slice(&bytes[..max_chars - 1]);
+                            v.push(0xC9);
+                            v
+                        };
+                        self.put_pstr(str_ptr, &out, &name)?;
+                        1
+                    }
+                }
+            }
+            EmptyHandle => {
+                if a0 != 0 {
+                    let e = self.mac.mm.set_handle_size(&mut self.mac.mem, &mut self.mac.heap, a0, 0).err().unwrap_or(0);
+                    let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::MEM_ERR, e as u16);
+                }
+                0
+            }
+            ReallocateHandle => {
+                let e = if a0 == 0 { -109i16 } else {
+                    self.mac.mm.set_handle_size(&mut self.mac.mem, &mut self.mac.heap, a0, a1).err().unwrap_or(0)
+                };
+                let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::MEM_ERR, e as u16);
+                0
+            }
+            PlotIconID => {
+                // OSErr PlotIconID(const Rect *theRect, IconAlignmentType align, IconTransformType transform, SInt16 theResID)
+                let (rect_ptr, res_id) = (a0, a3 as u16);
+                if rect_ptr == 0 { (-50i32) as u32 } else {
+                    if let Some(op_get) = heirloom_mac68k_engine::mixed::trap_opcode("GetResource") {
+                        if let Ok(ret) = self.mac.pascal_call(op_get, &[u32::from_be_bytes(*b"ICN#"), u32::from(res_id)]) {
+                            let h = ret.value;
+                            if h != 0 {
+                                if let Some(op_plot) = heirloom_mac68k_engine::mixed::trap_opcode("PlotIcon") {
+                                    let _ = self.mac.pascal_call(op_plot, &[rect_ptr, h]);
+                                }
+                            }
+                        }
+                    }
+                    0
+                }
+            }
+            GetGray => {
+                // Boolean GetGray(GDHandle device, const RGBColor *backGround, RGBColor *foreGround)
+                if a1 == 0 || a2 == 0 { 0 } else {
+                    for i in 0..3u32 {
+                        let bg = u32::from(self.mac.mem.read_u16(a1 + 2 * i).unwrap_or(0xFFFF));
+                        let fg = u32::from(self.mac.mem.read_u16(a2 + 2 * i).unwrap_or(0));
+                        let _ = self.mac.mem.write_u16(a2 + 2 * i, ((bg + fg) / 2) as u16);
+                    }
+                    1
+                }
+            }
+            // TextEdit glue (`TextEdit.h`): `TERec.wordBreak` is at +38, `TERec.clickLoop` is at +42.
+            TESetClickLoop => {
+                if let Some(b) = self.mac.mm.block(a1) { let _ = self.mac.mem.write_u32(b.ptr + 42, a0); }
+                0
+            }
+            TESetWordBreak => {
+                if let Some(b) = self.mac.mm.block(a1) { let _ = self.mac.mem.write_u32(b.ptr + 38, a0); }
+                0
+            }
+            TEScrapHandle => self.mac.mem.read_u32(heirloom_mac68k_engine::lowmem::TE_SCRP_HANDLE).unwrap_or(0),
+            TESetScrapLength => {
+                let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::TE_SCRP_LENGTH, a0 as u16);
+                0
+            }
+            NewString => {
+                let bytes = if a0 != 0 { self.pstr_bytes(a0, &name)? } else { Vec::new() };
+                let h = self.mac.mm.new_handle(&mut self.mac.mem, &mut self.mac.heap, (bytes.len() + 1) as u32, true).unwrap_or(0);
+                if h != 0 {
+                    if let Some(b) = self.mac.mm.block(h) {
+                        let _ = self.put_pstr(b.ptr, &bytes, &name);
+                    }
+                }
+                h
+            }
+            SetString => {
+                if a0 != 0 && a1 != 0 {
+                    let bytes = self.pstr_bytes(a1, &name)?;
+                    if self.mac.mm.set_handle_size(&mut self.mac.mem, &mut self.mac.heap, a0, (bytes.len() + 1) as u32).is_ok() {
+                        if let Some(b) = self.mac.mm.block(a0) {
+                            let _ = self.put_pstr(b.ptr, &bytes, &name);
+                        }
+                    }
+                }
+                0
+            }
+            SystemEvent => 0, // no desk accessory consumes events
+            IsAliasFile => {
+                // OSErr IsAliasFile(const FSSpec *fileFSSpec, Boolean *aliasFileFlag, Boolean *folderFlag)
+                match heirloom_mac68k_engine::fm::fsspec::spec_loc(&self.mac, a0).and_then(|l| l.node.ok_or(-43i16)) {
+                    Ok(node) => {
+                        let info = self.mac.fm.cat_info(node);
+                        let is_alias = !info.is_dir && (info.finfo.flags & 0x8000) != 0;
+                        if a1 != 0 { let _ = self.mac.mem.write_u8(a1, u8::from(is_alias)); }
+                        if a2 != 0 { let _ = self.mac.mem.write_u8(a2, u8::from(info.is_dir)); }
+                        0
+                    }
+                    Err(e) => (i32::from(e)) as u32,
+                }
+            }
+            RGB2HSV | HSV2RGB | RGB2HSL | HSL2RGB => {
+                if a0 != 0 && a1 != 0 {
+                    let rd = |o: u32| f64::from(self.mac.mem.read_u16(a0 + o).unwrap_or(0)) / 65535.0;
+                    let wr = |m: &mut Self, c0: f64, c1: f64, c2: f64| {
+                        for (i, v) in [c0, c1, c2].into_iter().enumerate() {
+                            let q = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
+                            let _ = m.mac.mem.write_u16(a1 + 2 * i as u32, q);
+                        }
+                    };
+                    let rem6 = |v: f64| { let r = v % 6.0; if r < 0.0 { r + 6.0 } else { r } };
+                    let (x, y, z) = (rd(0), rd(2), rd(4));
+                    match f {
+                        RGB2HSV => {
+                            let max = x.max(y).max(z);
+                            let min = x.min(y).min(z);
+                            let d = max - min;
+                            let h = if d == 0.0 { 0.0 } else if max == x { rem6((y - z) / d) / 6.0 } else if max == y { ((z - x) / d + 2.0) / 6.0 } else { ((x - y) / d + 4.0) / 6.0 };
+                            let s = if max == 0.0 { 0.0 } else { d / max };
+                            wr(self, h, s, max);
+                        }
+                        HSV2RGB => {
+                            let h6 = rem6(x * 6.0);
+                            let c = z * y;
+                            let m_v = z - c;
+                            let k = c * (1.0 - (h6 % 2.0 - 1.0).abs());
+                            let (r, g, b) = match h6 as u32 { 0 => (c, k, 0.0), 1 => (k, c, 0.0), 2 => (0.0, c, k), 3 => (0.0, k, c), 4 => (k, 0.0, c), _ => (c, 0.0, k) };
+                            wr(self, r + m_v, g + m_v, b + m_v);
+                        }
+                        RGB2HSL => {
+                            let max = x.max(y).max(z);
+                            let min = x.min(y).min(z);
+                            let l = (max + min) * 0.5;
+                            let d = max - min;
+                            let (h, s) = if d == 0.0 { (0.0, 0.0) } else {
+                                let s = d / (1.0 - (2.0 * l - 1.0).abs()).max(1e-9);
+                                let h = if max == x { rem6((y - z) / d) / 6.0 } else if max == y { ((z - x) / d + 2.0) / 6.0 } else { ((x - y) / d + 4.0) / 6.0 };
+                                (h, s)
+                            };
+                            wr(self, h, s, l);
+                        }
+                        HSL2RGB => {
+                            let c = (1.0 - (2.0 * z - 1.0).abs()) * y;
+                            let h6 = rem6(x * 6.0);
+                            let k = c * (1.0 - (h6 % 2.0 - 1.0).abs());
+                            let m_v = z - c * 0.5;
+                            let (r, g, b) = match h6 as u32 { 0 => (c, k, 0.0), 1 => (k, c, 0.0), 2 => (0.0, c, k), 3 => (0.0, k, c), 4 => (k, 0.0, c), _ => (c, 0.0, k) };
+                            wr(self, r + m_v, g + m_v, b + m_v);
+                        }
+                        _ => {}
+                    }
+                }
+                0
+            }
+            GetNextFOND => {
+                let h = self.mac.next_fond(a0).unwrap_or(0);
+                self.mac.log.push(format!("[res] GetNextFOND {a0:#x} -> {h:#x}"));
+                h
+            }
+            ReadPartialResource => {
+                let r = self.mac.read_partial_resource(a0, a1 as i32, a2, a3 as i32);
+                self.mac.log.push(format!("[res] ReadPartialResource {a0:#x} off={} count={} -> {r:?}", a1 as i32, a3 as i32));
+                0
+            }
+            IUStringOrder => {
+                let (sa, sb) = (self.pstr_bytes(a0, &name)?, self.pstr_bytes(a1, &name)?);
+                let cmp = heirloom_mac68k_engine::intl::compare_with(&sa, &sb, false, false);
+                (cmp as i32) as u32
+            }
+            OutlineMetrics => {
+                // OSErr OutlineMetrics(SInt16 byteCount, const void *textPtr, Point numer, Point denom, SInt16 *yMax, SInt16 *yMin, Fixed *awArray, Fixed *lsbArray, Rect *boundsArray)
+                let count = (a0 as u16 as i16).max(0) as usize;
+                let (numer_v, numer_h) = ((a2 >> 16) as u16 as i16, a2 as u16 as i16);
+                let (denom_v, denom_h) = ((a3 >> 16) as u16 as i16, a3 as u16 as i16);
+                let scale_v = if denom_v != 0 { f64::from(numer_v) / f64::from(denom_v) } else { 1.0 };
+                let scale_h = if denom_h != 0 { f64::from(numer_h) / f64::from(denom_h) } else { 1.0 };
+                let (y_max_p, y_min_p, aw_p, lsb_p, bounds_p) = (arg(self, cpu, 4)?, arg(self, cpu, 5)?, arg(self, cpu, 6)?, arg(self, cpu, 7)?, arg(self, cpu, 8)?);
+                let port = if self.mac.qd_globals != 0 { self.mac.mem.read_u32(self.mac.qd_globals).unwrap_or(0) } else { 0 };
+                let sz = if port != 0 { let s = self.mac.mem.read_u16(port + 74).unwrap_or(12) as i16; if s > 0 { s } else { 12 } } else { 12 };
+                let asc = ((f64::from(sz) * 0.75 * scale_v) as i16).max(1);
+                let desc = ((f64::from(sz) * 0.25 * scale_v) as i16).max(1);
+                let adv_px = ((f64::from(sz) * 0.6 * scale_h) as i16).max(1);
+                let adv_fixed = ((f64::from(sz) * 0.6 * scale_h * 65536.0) as i32) as u32;
+                if y_max_p != 0 { let _ = self.mac.mem.write_u16(y_max_p, asc as u16); }
+                if y_min_p != 0 { let _ = self.mac.mem.write_u16(y_min_p, (-desc) as u16); }
+                for i in 0..count {
+                    if aw_p != 0 { let _ = self.mac.mem.write_u32(aw_p + 4 * i as u32, adv_fixed); }
+                    if lsb_p != 0 { let _ = self.mac.mem.write_u32(lsb_p + 4 * i as u32, 0); }
+                    if bounds_p != 0 {
+                        let r = bounds_p + 8 * i as u32;
+                        let _ = self.mac.mem.write_u16(r, (-asc) as u16);
+                        let _ = self.mac.mem.write_u16(r + 2, 0);
+                        let _ = self.mac.mem.write_u16(r + 4, desc as u16);
+                        let _ = self.mac.mem.write_u16(r + 6, adv_px as u16);
+                    }
+                }
+                0
+            }
+            Enqueue => {
+                // void Enqueue(QElemPtr qElement, QHdrPtr qHeader) (OSUtils.h, Inside Macintosh: OS Utilities 6-11)
+                // QHdr: qFlags (0..2), qHead (2..6), qTail (6..10); QElem: qLink (0..4)
+                if a0 != 0 && a1 != 0 {
+                    let _ = self.mac.mem.write_u32(a0, 0);
+                    let tail = self.mac.mem.read_u32(a1 + 6).unwrap_or(0);
+                    if tail == 0 {
+                        let _ = self.mac.mem.write_u32(a1 + 2, a0);
+                    } else {
+                        let _ = self.mac.mem.write_u32(tail, a0);
+                    }
+                    let _ = self.mac.mem.write_u32(a1 + 6, a0);
+                }
+                0
+            }
+            Dequeue => {
+                // OSErr Dequeue(QElemPtr qElement, QHdrPtr qHeader): 0 = noErr, -1 = qErr
+                let mut res = -1i32;
+                if a0 != 0 && a1 != 0 {
+                    let mut prev = 0u32;
+                    let mut cur = self.mac.mem.read_u32(a1 + 2).unwrap_or(0);
+                    for _ in 0..4096 {
+                        if cur == 0 { break; }
+                        let next = self.mac.mem.read_u32(cur).unwrap_or(0);
+                        if cur == a0 {
+                            if prev == 0 { let _ = self.mac.mem.write_u32(a1 + 2, next); } else { let _ = self.mac.mem.write_u32(prev, next); }
+                            if self.mac.mem.read_u32(a1 + 6).unwrap_or(0) == a0 { let _ = self.mac.mem.write_u32(a1 + 6, prev); }
+                            let _ = self.mac.mem.write_u32(a0, 0);
+                            res = 0;
+                            break;
+                        }
+                        prev = cur;
+                        cur = next;
+                    }
+                }
+                res as u32
+            }
             LmGet(i) => {
                 let (_, at, n) = LOWMEM[i as usize];
                 match n { 1 => u32::from(self.mac.mem.read_u8(at).unwrap_or(0)), 2 => u32::from(self.mac.mem.read_u16(at).unwrap_or(0)), _ => self.mac.mem.read_u32(at).unwrap_or(0) }
@@ -399,5 +706,77 @@ impl<U: GuestUi> MacPpc<U> {
         };
         cpu.gpr[3] = r;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heirloom_ui_abi::RecordingGuestUi;
+
+    fn call(m: &mut MacPpc<RecordingGuestUi>, name: &str, args: &[u32]) -> u32 {
+        let f = TbFn::by_name(name).unwrap_or_else(|| panic!("missing TbFn {name}"));
+        let mut cpu = Cpu::new(0, 0);
+        for (i, &v) in args.iter().enumerate() { cpu.gpr[3 + i] = v; }
+        m.tb_call(f, &mut cpu).unwrap();
+        cpu.gpr[3]
+    }
+
+    #[test]
+    fn enqueue_dequeue_and_color_space_round_trip() {
+        let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+        let hdr = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 16, true).unwrap();
+        let e1 = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 16, true).unwrap();
+        let e2 = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 16, true).unwrap();
+        call(&mut m, "Enqueue", &[e1, hdr]);
+        call(&mut m, "Enqueue", &[e2, hdr]);
+        assert_eq!(m.mac.mem.read_u32(hdr + 2).unwrap(), e1);
+        assert_eq!(m.mac.mem.read_u32(hdr + 6).unwrap(), e2);
+        assert_eq!(call(&mut m, "Dequeue", &[e1, hdr]) as i32, 0);
+        assert_eq!(m.mac.mem.read_u32(hdr + 2).unwrap(), e2);
+        // NEGATIVE CONTROL: dequeuing an absent element returns qErr (-1).
+        assert_eq!(call(&mut m, "Dequeue", &[e1, hdr]) as i32, -1);
+        assert_eq!(call(&mut m, "Dequeue", &[e2, hdr]) as i32, 0);
+        assert_eq!(m.mac.mem.read_u32(hdr + 2).unwrap(), 0);
+        assert_eq!(m.mac.mem.read_u32(hdr + 6).unwrap(), 0);
+
+        // RGB <-> HSV and RGB <-> HSL round-trip.
+        let a = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 8, true).unwrap();
+        let b = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 8, true).unwrap();
+        let c = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 8, true).unwrap();
+        for (i, v) in [65535u16, 32768, 16384].into_iter().enumerate() { m.mac.mem.write_u16(a + 2 * i as u32, v).unwrap(); }
+        call(&mut m, "RGB2HSV", &[a, b]);
+        call(&mut m, "HSV2RGB", &[b, c]);
+        for (i, want) in [65535i32, 32768, 16384].into_iter().enumerate() {
+            let got = i32::from(m.mac.mem.read_u16(c + 2 * i as u32).unwrap());
+            assert!((got - want).abs() <= 4, "HSV round-trip channel {i}: got {got} want {want}");
+        }
+        call(&mut m, "RGB2HSL", &[a, b]);
+        call(&mut m, "HSL2RGB", &[b, c]);
+        for (i, want) in [65535i32, 32768, 16384].into_iter().enumerate() {
+            let got = i32::from(m.mac.mem.read_u16(c + 2 * i as u32).unwrap());
+            assert!((got - want).abs() <= 4, "HSL round-trip channel {i}: got {got} want {want}");
+        }
+    }
+
+    #[test]
+    fn iu_string_order_and_trunc_string() {
+        let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+        let p1 = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 64, true).unwrap();
+        let p2 = m.mac.mm.new_ptr(&mut m.mac.mem, &mut m.mac.heap, 64, true).unwrap();
+        m.put_pstr(p1, b"alpha", "test").unwrap();
+        m.put_pstr(p2, b"BETA", "test").unwrap();
+        assert_eq!(call(&mut m, "IUStringOrder", &[p1, p2]) as i32, -1);
+        assert_eq!(call(&mut m, "IUStringOrder", &[p2, p1]) as i32, 1);
+        m.put_pstr(p2, b"ALPHA", "test").unwrap();
+        assert_eq!(call(&mut m, "IUStringOrder", &[p1, p2]) as i32, 0);
+
+        m.put_pstr(p1, b"A very long string that must truncate", "test").unwrap();
+        assert_eq!(call(&mut m, "TruncString", &[40, p1, 0]) as i32, 1, "truncated");
+        let len = m.mac.mem.read_u8(p1).unwrap() as usize;
+        assert!(len <= 5);
+        assert_eq!(m.mac.mem.read_u8(p1 + len as u32).unwrap(), 0xC9, "Mac Roman ellipsis");
+        // NEGATIVE CONTROL: wide enough -> unchanged (returns 0).
+        assert_eq!(call(&mut m, "TruncString", &[200, p1, 0]) as i32, 0);
     }
 }

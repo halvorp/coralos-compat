@@ -9,7 +9,7 @@ use heirloom_ui_abi::GuestUi;
 use crate::cpu::Cpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MathFn { Acos, Asin, Atan, Atan2, Ceil, Cos, Cosh, Exp, Fabs, Floor, Fmin, Fmax, Fmod, Frexp, Hypot, Ldexp, Log, Log2, Log10, Modf, Pow, Rint, Round, Sin, Sinh, Sqrt, Tan, Tanh, Dec2num, Num2dec, Nan, X80tod, Dtox80 }
+pub enum MathFn { Acos, Asin, Atan, Atan2, Ceil, Cos, Cosh, Exp, Fabs, Floor, Fmin, Fmax, Fmod, Frexp, Hypot, Ldexp, Log, Log2, Log10, Modf, Pow, Rint, Round, Sin, Sinh, Sqrt, Tan, Tanh, Dec2num, Num2dec, Nan, X80tod, Dtox80, Fix2X, X2Fix, Frac2X, X2Frac }
 
 impl MathFn {
     pub fn by_name(name: &str) -> Option<MathFn> {
@@ -19,6 +19,7 @@ impl MathFn {
             "floor" => Floor, "fmod" => Fmod, "frexp" => Frexp, "hypot" => Hypot, "ldexp" => Ldexp, "log" => Log, "log2" => Log2, "log10" => Log10, "fmin" => Fmin, "fmax" => Fmax, "modf" => Modf, "pow" => Pow,
             "rint" => Rint, "round" => Round, "sin" => Sin, "sinh" => Sinh, "sqrt" => Sqrt, "tan" => Tan, "tanh" => Tanh, "dec2num" => Dec2num, "num2dec" => Num2dec, "nan" => Nan,
             "x80tod" => X80tod, "dtox80" => Dtox80,
+            "Fix2X" => Fix2X, "X2Fix" => X2Fix, "Frac2X" => Frac2X, "X2Frac" => X2Frac,
             _ => return None,
         })
     }
@@ -119,6 +120,19 @@ impl<U: GuestUi> MacPpc<U> {
             Log => libm::log(x), Log2 => libm::log2(x), Log10 => libm::log10(x), Fmin => libm::fmin(x, y), Fmax => libm::fmax(x, y), Pow => libm::pow(x, y), Rint => libm::rint(x), Round => libm::round(x), Sin => libm::sin(x),
             Sinh => libm::sinh(x), Sqrt => libm::sqrt(x), Tan => libm::tan(x), Tanh => libm::tanh(x),
             Dec2num | Num2dec | Nan | X80tod | Dtox80 => unreachable!("handled above"),
+            // FixMath.h (InterfaceLib on PowerPC): double_t is IEEE-754 double in f1.
+            Fix2X => f64::from(cpu.gpr[3] as i32) / 65536.0,
+            Frac2X => f64::from(cpu.gpr[3] as i32) / 1_073_741_824.0,
+            X2Fix => {
+                let v = libm::round(x * 65536.0).clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+                cpu.gpr[3] = v as u32;
+                return Ok(());
+            }
+            X2Frac => {
+                let v = libm::round(x * 1_073_741_824.0).clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+                cpu.gpr[3] = v as u32;
+                return Ok(());
+            }
             Ldexp => libm::ldexp(x, arg(self, cpu, 2)? as i32),
             Frexp => { let (m, e) = libm::frexp(x); let p = arg(self, cpu, 2)?; store(self, p, e as u32, "frexp")?; m }
             Modf => {
@@ -147,5 +161,25 @@ mod tests {
         // NEGATIVE CONTROL: NaN stays NaN (never collapses to 0 or finite).
         let nan_x80 = f64_bits_to_x80(f64::NAN.to_bits());
         assert!(f64::from_bits(x80_to_f64_bits(&nan_x80)).is_nan());
+    }
+
+    #[test]
+    fn fix_and_frac_conversions_round_trip_in_f1_and_r3() {
+        let mut m = MacPpc::new(heirloom_ui_abi::RecordingGuestUi::new()).unwrap();
+        let mut cpu = Cpu::new(0x50000, 0x70000);
+        cpu.gpr[3] = 0x0001_8000; // Fixed 1.5
+        m.math_call(MathFn::Fix2X, &mut cpu).unwrap();
+        assert_eq!(f64::from_bits(cpu.fpr[1]), 1.5);
+        m.math_call(MathFn::X2Fix, &mut cpu).unwrap();
+        assert_eq!(cpu.gpr[3], 0x0001_8000);
+        cpu.gpr[3] = 0x2000_0000; // Fract 0.5
+        m.math_call(MathFn::Frac2X, &mut cpu).unwrap();
+        assert_eq!(f64::from_bits(cpu.fpr[1]), 0.5);
+        m.math_call(MathFn::X2Frac, &mut cpu).unwrap();
+        assert_eq!(cpu.gpr[3], 0x2000_0000);
+        // NEGATIVE CONTROL: overflow saturates to i32::MAX instead of wrapping
+        cpu.fpr[1] = 1e12f64.to_bits();
+        m.math_call(MathFn::X2Fix, &mut cpu).unwrap();
+        assert_eq!(cpu.gpr[3] as i32, i32::MAX);
     }
 }

@@ -32,8 +32,12 @@ use heirloom_ui_abi::GuestUi;
 pub const TEXT_COMMON: &str = "TextCommon";
 pub const TEC: &str = "TextEncodingConverter";
 pub const UNICODE_CONVERTER: &str = "UnicodeConverter";
+pub const UNICODE_UTILITIES: &str = "UnicodeUtilitiesCoreLib";
+pub const UNICODE_UTILITIES_LIB: &str = "UnicodeUtilitiesLib";
 /// The libraries this module provides.
-pub fn provided(l: &str) -> bool { l == TEXT_COMMON || l == TEC || l == UNICODE_CONVERTER }
+pub fn provided(l: &str) -> bool {
+    l == TEXT_COMMON || l == TEC || l == UNICODE_CONVERTER || l == UNICODE_UTILITIES || l == UNICODE_UTILITIES_LIB
+}
 
 const PARAM_ERR: i32 = -50;
 const SCRIPT_DONT_CARE: i16 = -128;
@@ -49,10 +53,11 @@ pub enum TecFn {
     TECCountAvailableSniffers, TECGetAvailableSniffers, TECCreateSniffer, TECDisposeSniffer, TECClearSnifferContextInfo, TECSniffTextEncoding,
     CreateTextToUnicodeInfo, CreateTextToUnicodeInfoByEncoding, CreateUnicodeToTextInfo, CreateUnicodeToTextInfoByEncoding, DisposeTextToUnicodeInfo,
     DisposeUnicodeToTextInfo, ConvertFromTextToUnicode, ConvertFromUnicodeToText, ConvertFromUnicodeToPString,
+    UCCompareTextNoLocale, UCCompareTextDefault,
 }
 
 impl TecFn {
-    /// `name` as library `lib` exports it (each call belongs to exactly one of the three libraries).
+    /// `name` as library `lib` exports it (each call belongs to exactly one of the four libraries).
     pub fn by_name(lib: &str, name: &str) -> Option<TecFn> {
         use TecFn::*;
         let f = match name {
@@ -69,15 +74,17 @@ impl TecFn {
             "DisposeTextToUnicodeInfo" => DisposeTextToUnicodeInfo, "DisposeUnicodeToTextInfo" => DisposeUnicodeToTextInfo,
             "ConvertFromTextToUnicode" => ConvertFromTextToUnicode, "ConvertFromUnicodeToText" => ConvertFromUnicodeToText,
             "ConvertFromUnicodeToPString" => ConvertFromUnicodeToPString,
+            "UCCompareTextNoLocale" => UCCompareTextNoLocale, "UCCompareTextDefault" => UCCompareTextDefault,
             _ => return None,
         };
-        let home = match f {
-            CreateTextEncoding | GetTextEncodingBase | GetTextEncodingVariant | GetTextEncodingFormat | ResolveDefaultTextEncoding | UpgradeScriptInfoToTextEncoding => TEXT_COMMON,
+        let ok = match f {
+            CreateTextEncoding | GetTextEncodingBase | GetTextEncodingVariant | GetTextEncodingFormat | ResolveDefaultTextEncoding | UpgradeScriptInfoToTextEncoding => lib == TEXT_COMMON,
             CreateTextToUnicodeInfo | CreateTextToUnicodeInfoByEncoding | CreateUnicodeToTextInfo | CreateUnicodeToTextInfoByEncoding | DisposeTextToUnicodeInfo
-            | DisposeUnicodeToTextInfo | ConvertFromTextToUnicode | ConvertFromUnicodeToText | ConvertFromUnicodeToPString => UNICODE_CONVERTER,
-            _ => TEC,
+            | DisposeUnicodeToTextInfo | ConvertFromTextToUnicode | ConvertFromUnicodeToText | ConvertFromUnicodeToPString => lib == UNICODE_CONVERTER,
+            UCCompareTextNoLocale | UCCompareTextDefault => lib == UNICODE_UTILITIES || lib == UNICODE_UTILITIES_LIB,
+            _ => lib == TEC,
         };
-        (home == lib).then_some(f)
+        ok.then_some(f)
     }
 }
 
@@ -259,12 +266,47 @@ impl<U: GuestUi> MacPpc<U> {
                 if c.status == 0 { let mut p = alloc::vec![c.out.len() as u8]; p.extend(c.out); self.put_bytes(a[3], &p, &who)?; }
                 i32::from(c.status)
             }
+            // UCCompareTextNoLocale / UCCompareTextDefault(options, text1Ptr, text1Len, text2Ptr, text2Len, *equivalent, *order)
+            UCCompareTextNoLocale | UCCompareTextDefault => {
+                let (opts, p1, n1, p2, n2, eq_out, ord_out) = (a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+                if (p1 == 0 && n1 > 0) || (p2 == 0 && n2 > 0) { return self.tec_ret(cpu, PARAM_ERR); }
+                let (b1, b2) = (self.get_bytes(p1, n1.saturating_mul(2), &who)?, self.get_bytes(p2, n2.saturating_mul(2), &who)?);
+                let (eq, ord) = uc_compare_utf16be(opts, &b1, &b2);
+                if eq_out != 0 { self.mac.mem.write_u8(eq_out, u8::from(eq)).map_err(|_| format!("{who}: equivalent pointer {eq_out:#x} leaves guest RAM"))?; }
+                if ord_out != 0 { self.tec_put(ord_out, ord as u32, &who)?; }
+                0
+            }
         };
         cpu.gpr[3] = r as u32;
         Ok(())
     }
 
     fn tec_ret(&mut self, cpu: &mut Cpu, r: i32) -> Result<(), String> { cpu.gpr[3] = r as u32; Ok(()) }
+}
+
+/// Compare two big-endian UTF-16 code-unit slices for `UCCompareTextNoLocale` / `UCCompareTextDefault`.
+/// Honours `kUCCollateCaseInsensitiveMask` (bit 0) over ASCII and Latin-1 letters.
+pub fn uc_compare_utf16be(options: u32, a: &[u8], b: &[u8]) -> (bool, i32) {
+    let ci = options & 1 != 0;
+    let fold = |u: u16| -> u16 {
+        if !ci { return u; }
+        match u {
+            0x0041..=0x005A | 0x00C0..=0x00D6 | 0x00D8..=0x00DE => u + 0x20,
+            _ => u,
+        }
+    };
+    let mut ia = a.chunks_exact(2).map(|c| fold(u16::from_be_bytes([c[0], c[1]])));
+    let mut ib = b.chunks_exact(2).map(|c| fold(u16::from_be_bytes([c[0], c[1]])));
+    loop {
+        match (ia.next(), ib.next()) {
+            (None, None) => return (true, 0),
+            (None, Some(_)) => return (false, -1),
+            (Some(_), None) => return (false, 1),
+            (Some(x), Some(y)) if x < y => return (false, -1),
+            (Some(x), Some(y)) if x > y => return (false, 1),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -309,6 +351,13 @@ mod tests {
         assert_eq!(TecFn::by_name(TEC, "ConvertFromTextToUnicode"), None);
         assert_eq!(TecFn::by_name(UNICODE_CONVERTER, "TECConvertText"), None);
         assert_eq!(TecFn::by_name(TEXT_COMMON, "TECGetInfo"), None);
+        assert_eq!(TecFn::by_name(UNICODE_UTILITIES, "UCCompareTextNoLocale"), Some(TecFn::UCCompareTextNoLocale));
+        assert_eq!(TecFn::by_name(UNICODE_UTILITIES_LIB, "UCCompareTextDefault"), Some(TecFn::UCCompareTextDefault));
+        assert_eq!(TecFn::by_name(TEC, "UCCompareTextNoLocale"), None);
+        let u = |s: &str| s.encode_utf16().flat_map(|c| c.to_be_bytes()).collect::<Vec<u8>>();
+        assert_eq!(uc_compare_utf16be(1, &u("Adobe"), &u("adobe")), (true, 0));
+        assert_eq!(uc_compare_utf16be(0, &u("Adobe"), &u("adobe")), (false, -1));
+        assert_eq!(uc_compare_utf16be(1, &u("Beta"), &u("Alpha")), (false, 1));
     }
 
     #[test]

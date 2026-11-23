@@ -15,7 +15,11 @@ use heirloom_ui_abi::GuestUi;
 use crate::cpu::Cpu;
 
 #[derive(Default)]
-pub struct MenuState { props: BTreeMap<(u32, u16, u32, u32), Vec<u8>> }
+pub struct MenuState {
+    props: BTreeMap<(u32, u16, u32, u32), Vec<u8>>,
+    hier_ids: BTreeMap<(u32, u16), i16>,
+    modifiers: BTreeMap<(u32, u16), u8>,
+}
 
 const PROPERTY_NOT_FOUND: i32 = -5604;
 const PROPERTY_INVALID: i32 = -5603;
@@ -23,7 +27,11 @@ const MENU_ITEM_NOT_FOUND: i32 = -50; // paramErr: the Menu Manager reports a ba
 const KEY_HIERARCHICAL: u8 = 0x1B;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MnFn { GetMenuTitle, SetMenuTitle, GetMenuID, IsMenuItemEnabled, GetMenuItemProperty, SetMenuItemProperty, MenuKey, IsMenuBarVisible, HideMenuBar, ShowMenuBar }
+pub enum MnFn {
+    GetMenuTitle, SetMenuTitle, GetMenuID, IsMenuItemEnabled, GetMenuItemProperty, SetMenuItemProperty, MenuKey,
+    IsMenuBarVisible, HideMenuBar, ShowMenuBar,
+    SetMenuItemHierarchicalID, GetMenuItemHierarchicalID, SetMenuItemModifiers, SetMenuItemIconHandle, CalcMenuSize,
+}
 
 impl MnFn {
     pub fn by_name(name: &str) -> Option<MnFn> {
@@ -32,6 +40,8 @@ impl MnFn {
             "GetMenuTitle" => GetMenuTitle, "SetMenuTitle" => SetMenuTitle, "GetMenuID" => GetMenuID, "IsMenuItemEnabled" => IsMenuItemEnabled,
             "GetMenuItemProperty" => GetMenuItemProperty, "SetMenuItemProperty" => SetMenuItemProperty, "MenuKey" => MenuKey,
             "IsMenuBarVisible" => IsMenuBarVisible, "HideMenuBar" => HideMenuBar, "ShowMenuBar" => ShowMenuBar,
+            "SetMenuItemHierarchicalID" => SetMenuItemHierarchicalID, "GetMenuItemHierarchicalID" => GetMenuItemHierarchicalID,
+            "SetMenuItemModifiers" => SetMenuItemModifiers, "SetMenuItemIconHandle" => SetMenuItemIconHandle, "CalcMenuSize" => CalcMenuSize,
             _ => return None,
         })
     }
@@ -133,6 +143,55 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 0
             }
+            SetMenuItemHierarchicalID => {
+                // OSErr SetMenuItemHierarchicalID(MenuRef, SInt16 item, MenuID inID)
+                let (item, hid) = (a1 as u16, a2 as u16 as i16);
+                if let Err(c) = self.mn_check(a0, u32::from(item)) { c }
+                else if item == 0 { MENU_ITEM_NOT_FOUND }
+                else {
+                    let mut p = self.mac.menu_view(a0).map_err(|e| format!("{n}: {}", e.0))?;
+                    let idx = usize::from(item - 1);
+                    if hid == 0 {
+                        self.rt_mn.hier_ids.remove(&(a0, item));
+                        p.items[idx].key = 0;
+                        p.items[idx].mark = 0;
+                    } else {
+                        self.rt_mn.hier_ids.insert((a0, item), hid);
+                        p.items[idx].key = KEY_HIERARCHICAL;
+                        p.items[idx].mark = hid as u8;
+                    }
+                    self.mac.menu_store(a0, &p).map_err(|e| format!("{n}: {}", e.0))?;
+                    if self.mac.menus.drawn { let _ = self.mac.sync_menus(); }
+                    0
+                }
+            }
+            GetMenuItemHierarchicalID => {
+                // OSErr GetMenuItemHierarchicalID(MenuRef, SInt16 item, MenuID *outID)
+                let item = a1 as u16;
+                if a2 == 0 { MENU_ITEM_NOT_FOUND }
+                else if let Err(c) = self.mn_check(a0, u32::from(item)) { c }
+                else if item == 0 { MENU_ITEM_NOT_FOUND }
+                else {
+                    let hid = if let Some(&id) = self.rt_mn.hier_ids.get(&(a0, item)) {
+                        id
+                    } else {
+                        let p = self.mac.menu_view(a0).map_err(|e| format!("{n}: {}", e.0))?;
+                        let it = &p.items[usize::from(item - 1)];
+                        if it.key == KEY_HIERARCHICAL { i16::from(it.mark) } else { 0 }
+                    };
+                    self.mac.mem.write_u16(a2, hid as u16).map_err(|_| format!("{n}: outID leaves guest RAM"))?;
+                    0
+                }
+            }
+            SetMenuItemModifiers => {
+                let item = a1 as u16;
+                if let Err(c) = self.mn_check(a0, u32::from(item)) { c }
+                else { self.rt_mn.modifiers.insert((a0, item), a2 as u8); 0 }
+            }
+            SetMenuItemIconHandle => {
+                if let Err(c) = self.mn_check(a0, a1) { c } else { 0 }
+            }
+            CalcMenuSize => 0, // host lays out native menus
         };
         cpu.gpr[3] = r as u32;
         Ok(())

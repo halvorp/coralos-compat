@@ -42,10 +42,19 @@ pub struct WcState {
     modality: BTreeMap<u32, (u32, u32)>,
     /// window -> (content paint procedure, options, refCon) as InstallWindowContentPaintProc recorded it (never called: see the module doc).
     pub(crate) paint_proc: BTreeMap<u32, (u32, u32, u32)>,
+    /// window -> modified flag (`SetWindowModified` / `IsWindowModified`).
+    modified: BTreeMap<u32, bool>,
+    /// window -> 70-byte FSSpec proxy (`SetWindowProxyFSSpec` / `GetWindowProxyFSSpec`).
+    proxy_spec: BTreeMap<u32, [u8; 70]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WcFn { GetWindowClass, GetFrontWindowOfClass, GetNextWindowOfClass, FrontNonFloatingWindow, GetWindowModality, SetWindowModality, RepositionWindow, IsValidWindowPtr, SetWindowKind, InstallWindowContentPaintProc }
+pub enum WcFn {
+    GetWindowClass, GetFrontWindowOfClass, GetNextWindowOfClass, FrontNonFloatingWindow,
+    GetWindowModality, SetWindowModality, RepositionWindow, IsValidWindowPtr, SetWindowKind, InstallWindowContentPaintProc,
+    SetWindowModified, IsWindowModified, SetWindowProxyFSSpec, GetWindowProxyFSSpec, SetWindowProxyCreatorAndType,
+    IsWindowPathSelectClick, TrackWindowProxyDrag, WindowPathSelect,
+}
 
 impl WcFn {
     pub fn by_name(name: &str) -> Option<WcFn> {
@@ -54,6 +63,10 @@ impl WcFn {
             "GetWindowClass" => GetWindowClass, "GetFrontWindowOfClass" => GetFrontWindowOfClass, "GetNextWindowOfClass" => GetNextWindowOfClass,
             "FrontNonFloatingWindow" => FrontNonFloatingWindow, "GetWindowModality" => GetWindowModality, "SetWindowModality" => SetWindowModality,
             "RepositionWindow" => RepositionWindow, "IsValidWindowPtr" => IsValidWindowPtr, "SetWindowKind" => SetWindowKind, "InstallWindowContentPaintProc" => InstallWindowContentPaintProc,
+            "SetWindowModified" => SetWindowModified, "IsWindowModified" => IsWindowModified,
+            "SetWindowProxyFSSpec" => SetWindowProxyFSSpec, "GetWindowProxyFSSpec" => GetWindowProxyFSSpec,
+            "SetWindowProxyCreatorAndType" => SetWindowProxyCreatorAndType,
+            "IsWindowPathSelectClick" => IsWindowPathSelectClick, "TrackWindowProxyDrag" => TrackWindowProxyDrag, "WindowPathSelect" => WindowPathSelect,
             _ => return None,
         })
     }
@@ -127,6 +140,25 @@ impl<U: GuestUi> MacPpc<U> {
                     0
                 }
             }
+            SetWindowModified => if !valid(self, a0) { ERR_INVALID_WINDOW_REF as u32 } else { self.wc.modified.insert(a0, a1 & 0xFF != 0); 0 }
+            IsWindowModified => u32::from(valid(self, a0) && self.wc.modified.get(&a0).copied().unwrap_or(false)),
+            SetWindowProxyFSSpec => if !valid(self, a0) { ERR_INVALID_WINDOW_REF as u32 } else if a1 == 0 { PARAM_ERR as u32 } else {
+                let bytes = self.get_bytes(a1, 70, "SetWindowProxyFSSpec")?;
+                let mut spec = [0u8; 70];
+                spec.copy_from_slice(&bytes);
+                self.wc.proxy_spec.insert(a0, spec);
+                0
+            }
+            GetWindowProxyFSSpec => if !valid(self, a0) { ERR_INVALID_WINDOW_REF as u32 } else if a1 == 0 { PARAM_ERR as u32 } else {
+                match self.wc.proxy_spec.get(&a0).copied() {
+                    Some(spec) => { self.put_bytes(a1, &spec, "GetWindowProxyFSSpec")?; 0 }
+                    None => (-5609i32) as u32, // errWindowDoesNotHaveProxy
+                }
+            }
+            SetWindowProxyCreatorAndType => if !valid(self, a0) { ERR_INVALID_WINDOW_REF as u32 } else { 0 }
+            IsWindowPathSelectClick => 0,
+            TrackWindowProxyDrag => (-5610i32) as u32, // errUserWantsToDragWindow: caller proceeds with DragWindow
+            WindowPathSelect => if !valid(self, a0) { ERR_INVALID_WINDOW_REF as u32 } else { (-5609i32) as u32 }
         };
         cpu.gpr[3] = r;
         Ok(())

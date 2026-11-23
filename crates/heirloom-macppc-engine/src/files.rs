@@ -28,6 +28,7 @@ pub enum FileCall {
     FSOpen, OpenRF, FSClose, FSRead, FSWrite, GetEOF, SetEOF, Allocate, GetFPos, SetFPos, FlushVol, GetVol, SetVol, Create, FSDelete,
     HOpen, HOpenDF, HOpenRF, HCreate, HDelete, GetVRefNum, HGetVol, HSetVol,
     HGetFInfo, HSetFInfo, HSetFLock, HRstFLock, DirCreate, HRename,
+    OpenWD, CloseWD, GetWDInfo,
 }
 
 impl FileCall {
@@ -39,6 +40,7 @@ impl FileCall {
             "Create" => Create, "FSDelete" => FSDelete, "HOpen" => HOpen, "HOpenDF" => HOpenDF, "HOpenRF" => HOpenRF, "HCreate" => HCreate,
             "HDelete" => HDelete, "GetVRefNum" => GetVRefNum, "HGetVol" => HGetVol, "HSetVol" => HSetVol,
             "HGetFInfo" => HGetFInfo, "HSetFInfo" => HSetFInfo, "HSetFLock" => HSetFLock, "HRstFLock" => HRstFLock, "DirCreate" => DirCreate, "HRename" => HRename,
+            "OpenWD" => OpenWD, "CloseWD" => CloseWD, "GetWDInfo" => GetWDInfo,
             _ => return None,
         })
     }
@@ -100,10 +102,59 @@ impl<U: GuestUi> MacPpc<U> {
         Ok(res)
     }
 
+    /// Working directory glue (`OpenWD`, `CloseWD`, `GetWDInfo`): fills a `WDPBRec` and dispatches the same `PB...Sync`
+    /// `_HFSDispatch` selector a program can call directly.
+    fn wd_call(&mut self, c: FileCall, a: &[u32]) -> Result<i16, String> {
+        use FileCall::*;
+        let name = alloc::format!("{c:?}");
+        let n_in = if c == CloseWD { 1 } else { 4 };
+        if a.len() < n_in { return Err(format!("{name}: {n_in} arguments needed, {} given", a.len())); }
+        let pb = self.scratch_pb()?;
+        let g = |what: &str| pb_failed(&name, what);
+        let p = Pb(pb);
+        let m = &mut self.mac.mem;
+        match c {
+            OpenWD => {
+                p.put_i16(m, IO_VREF_NUM, a[0] as i16)
+                    .and_then(|_| p.put_u32(m, IO_WD_DIR_ID, a[1]))
+                    .and_then(|_| p.put_u32(m, IO_WD_PROC_ID, a[2]))
+                    .map_err(|_| g("input"))?;
+            }
+            CloseWD | GetWDInfo => {
+                p.put_i16(m, IO_VREF_NUM, a[0] as i16).map_err(|_| g("input"))?;
+            }
+            _ => unreachable!("wd_call"),
+        }
+        let pb_name = match c { OpenWD => "PBOpenWDSync", CloseWD => "PBCloseWDSync", GetWDInfo => "PBGetWDInfoSync", _ => unreachable!("wd_call") };
+        let res = self.pb_call(crate::pb::PbCall::by_name(pb_name).ok_or_else(|| format!("{pb_name} is not a parameter-block call"))?, pb)?;
+        if res != 0 { return Ok(res); }
+        let m = &mut self.mac.mem;
+        match c {
+            OpenWD => {
+                let wd = p.i16(m, IO_VREF_NUM).map_err(|_| g("wdRefNum"))?;
+                if a[3] != 0 { m.write_u16(a[3], wd as u16).map_err(|_| g("wdRefNum"))?; }
+            }
+            GetWDInfo => {
+                let (vref, dir_id, proc_id) = (
+                    p.i16(m, IO_WD_VREF_NUM).map_err(|_| g("vRefNum"))?,
+                    p.u32(m, IO_WD_DIR_ID).map_err(|_| g("dirID"))?,
+                    p.u32(m, IO_WD_PROC_ID).map_err(|_| g("procID"))?,
+                );
+                if a[1] != 0 { m.write_u16(a[1], vref as u16).map_err(|_| g("vRefNum"))?; }
+                if a[2] != 0 { m.write_u32(a[2], dir_id).map_err(|_| g("dirID"))?; }
+                if a[3] != 0 { m.write_u32(a[3], proc_id).map_err(|_| g("procID"))?; }
+            }
+            CloseWD => {}
+            _ => unreachable!("wd_call"),
+        }
+        Ok(res)
+    }
+
     /// One File Manager routine: `a` = the PowerPC arguments (r3..), the result is the OSErr to put in r3.
     pub(crate) fn file_call(&mut self, c: FileCall, a: &[u32]) -> Result<i16, String> {
         use FileCall::*;
         if matches!(c, HGetFInfo | HSetFInfo | HSetFLock | HRstFLock | DirCreate | HRename) { return self.hfs_file_call(c, a); }
+        if matches!(c, OpenWD | CloseWD | GetWDInfo) { return self.wd_call(c, a); }
         let name = alloc::format!("{c:?}");
         let pb = self.scratch_pb()?;
         let g = |what: &str| pb_failed(&name, what);
@@ -117,7 +168,7 @@ impl<U: GuestUi> MacPpc<U> {
             GetVRefNum => (2, false, ""),
             // HGetVol(volName, &vRefNum, &dirID) / HSetVol(volName, vRefNum, dirID): PBHGetVol / PBHSetVol (_GetVol / _SetVol, HFS form)
             HGetVol => (3, true, "GetVol"), HSetVol => (3, true, "SetVol"),
-            HGetFInfo | HSetFInfo | HSetFLock | HRstFLock | DirCreate | HRename => unreachable!("hfs_file_call"),
+            HGetFInfo | HSetFInfo | HSetFLock | HRstFLock | DirCreate | HRename | OpenWD | CloseWD | GetWDInfo => unreachable!("dispatched above"),
         };
         if a.len() < n_in { return Err(format!("{name}: {n_in} arguments needed, {} given", a.len())); }
         let m = &mut self.mac;

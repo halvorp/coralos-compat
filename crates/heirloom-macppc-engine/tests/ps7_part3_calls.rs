@@ -120,8 +120,8 @@ fn stuff_hex_get_w_variant_and_the_script_variables() {
     assert_eq!(call(&mut m, "GetScriptVariable", &[0, 4]), 0xFF);
     assert_eq!(call(&mut m, "GetScriptVariable", &[0, 6]), 0, "Roman is left to right");
     assert_eq!(call(&mut m, "GetScriptVariable", &[0, 22]), 3);
-    // the trap-era aliases bind to the same handlers (including CalcVisBehind since 172d57f)
-    for n in ["RemoveResource", "Get1IndResource", "SetItemMark", "CalcVisBehind"] { assert!(!matches!(m.bind(n), Binding::Unbound(_)), "{n}: {:?}", m.bind(n)); }
-    // ... and an alias whose trap has no handler stays unbound BY THE TRAP'S NAME (never a silent 0)
-    assert!(matches!(m.bind("ReallocateHandle"), Binding::Unbound(w) if w.contains("_ReallocHandle")));
+    // the trap-era aliases bind to the same handlers (including CalcVisBehind and ReallocateHandle)
+    for n in ["RemoveResource", "Get1IndResource", "SetItemMark", "CalcVisBehind", "ReallocateHandle"] { assert!(!matches!(m.bind(n), Binding::Unbound(_)), "{n}: {:?}", m.bind(n)); }
+    // ... and a trap that still has no handler stays unbound BY THE TRAP'S NAME (never a silent 0)
+    assert!(matches!(m.bind("OpenCPicture"), Binding::Unbound(w) if w.contains("_OpenCPicture")));
 }

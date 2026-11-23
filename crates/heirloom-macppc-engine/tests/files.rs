@@ -223,3 +223,25 @@ fn dir_access_is_not_supported_on_a_local_volume() {
     m.mac.mem.write_u16(PB + 22, (-9i16) as u16).unwrap();
     assert_eq!(call(&mut m, "PBHGetDirAccessSync", &[PB]), -35, "NEGATIVE CONTROL: no such volume");
 }
+
+/// High-level working directory glue (`OpenWD`, `GetWDInfo`, `CloseWD`): resolves a directory by `(vRefNum, dirID)` into a
+/// working directory refnum, queries back the volume and dirID, and closes it; refuses missing folders and volumes.
+#[test]
+fn openwd_get_info_and_closewd_round_trip() {
+    let mut m = machine();
+    let root = m.mac.fm.def_vol;
+    let folder = m.mac.fm.tree.mkdirs(root, ["Plug-Ins", "Extensions"].iter().copied()).unwrap();
+    let folder_id = m.mac.fm.dir_id(folder);
+    assert_eq!(call(&mut m, "OpenWD", &[(-1i16) as u16 as u32, folder_id, u32::from_be_bytes(*b"ERIK"), OUT]), 0);
+    let wd = m.mac.mem.read_u16(OUT).unwrap() as i16;
+    assert!(wd < -0x3000, "a subdirectory working directory gets a WD refnum, got {wd}");
+    assert_eq!(call(&mut m, "GetWDInfo", &[wd as u16 as u32, OUT + 4, OUT + 8, OUT + 12]), 0);
+    assert_eq!(m.mac.mem.read_u16(OUT + 4).unwrap() as i16, -1, "vRefNum");
+    assert_eq!(m.mac.mem.read_u32(OUT + 8).unwrap(), folder_id, "dirID");
+    assert_eq!(call(&mut m, "CloseWD", &[wd as u16 as u32]), 0);
+    // NEGATIVE CONTROLS: missing directory and bogus volume refnum
+    m.mac.mem.write_u16(OUT, 0x1234).unwrap();
+    assert_eq!(call(&mut m, "OpenWD", &[(-1i16) as u16 as u32, 0x7777, 0, OUT]), -120, "dirNFErr");
+    assert_eq!(m.mac.mem.read_u16(OUT).unwrap(), 0x1234, "error leaves wdRefNum untouched");
+    assert_eq!(call(&mut m, "GetWDInfo", &[(-99i16) as u16 as u32, OUT + 4, OUT + 8, OUT + 12]), -35, "nsvErr");
+}

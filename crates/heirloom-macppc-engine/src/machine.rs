@@ -385,8 +385,8 @@ impl<U: GuestUi> MacPpc<U> {
                     b
                 }
             },
-            // CarbonLib exports the Toolbox AND the Carbon-only calls (CoreFoundation strings, the Carbon Event Manager, CreateNewWindow ...)
-            "CarbonLib" if crate::stdclib::carbon_lookup(name).is_some() => {
+            // CarbonLib (and Mac OS 8.5+ WindowsLib for CreateNewWindow) exports the Toolbox AND the Carbon calls
+            "CarbonLib" | "WindowsLib" if crate::stdclib::carbon_lookup(name).is_some() => {
                 let b = crate::stdclib::carbon_lookup(name).expect("checked");
                 self.bindings.insert(crate::glue::binding_key(lib, name), b.clone());
                 b

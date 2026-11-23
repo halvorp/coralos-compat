@@ -25,6 +25,12 @@ pub fn answer(selector: [u8; 4]) -> Option<u32> {
         b"pclk" => EMULATED_CPU_HZ,
         b"cfrg" => 1,
         b"altv" => 0,
+        // gestaltPowerPCProcessorFeatures: bit 0 graphics (fres/frsqrte/fsel/stfiwx), bit 1 stfiwx, bit 2 fsqrt/fsqrts; no dcba or AltiVec (heirloom-cpu-ppc).
+        b"ppcf" => 0b0111,
+        // gestaltQuickdrawVersion: gestalt32BitQD13 (0x0230) — 16/32-bit direct PixMaps (cqd/direct.rs) and deep GWorlds (gworld.rs).
+        b"qd  " => 0x0230,
+        // gestaltQuickdrawFeatures: bit 0 hasColor, bit 1 hasDeepGWorlds, bit 2 hasDirectPixMaps (no grayishTextOr).
+        b"qdrw" => 0b0111,
         // gestaltTimeMgrVersion: 4 = the native (PowerPC) Time Manager with extended tasks and Microseconds (spec: macos9-specs/TimeManager/InsTime)
         b"tmgr" => 4,
         // RULING (coordinator, 2026-10-24): the engine IS a Mac OS 9.2.1 personality with CarbonLib 1.4 (Peter's own system, confirmed by the oracle). A version selector names the

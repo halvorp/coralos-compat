@@ -95,8 +95,8 @@ fn the_powerpc_gestalt_profile_answers_only_what_is_true_and_names_what_it_will_
     use heirloom_macppc_engine::gestalt_ppc::{answer, unanswered, UNANSWERED};
     let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
     let sel = |s: &[u8; 4]| u32::from_be_bytes(*s);
-    // true of this engine: PowerPC, a G3-class (750) processor, CFM present, no AltiVec
-    for (s, v) in [(b"sysa", 2u32), (b"cput", 0x108), (b"cfrg", 1), (b"altv", 0), (b"thds", 5), (b"appr", 1)] {
+    // true of this engine: PowerPC, a G3-class (750) processor, CFM present, no AltiVec, 32-bit QD + direct PixMaps + deep GWorlds
+    for (s, v) in [(b"sysa", 2u32), (b"cput", 0x108), (b"cfrg", 1), (b"altv", 0), (b"ppcf", 0b0111), (b"qd  ", 0x0230), (b"qdrw", 0b0111), (b"thds", 5), (b"appr", 1)] {
         m.mac.mem.write_u32(OUT, 0xFFFF).unwrap();
         assert_eq!(call(&mut m, "Gestalt", &[sel(s), OUT]), 0);
         assert_eq!(m.mac.mem.read_u32(OUT).unwrap(), v, "{}", String::from_utf8_lossy(s));

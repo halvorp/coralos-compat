@@ -27,7 +27,16 @@ pub struct SysState { location: [u8; 12], /// the Font Manager's SetOutlinePrefe
     pub(crate) preserve_glyph: bool }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SysFn { ConvertLocalTimeToUTC, ConvertUTCToLocalTime, ConvertUTCToLocalDateTime, ConvertLocalToUTCDateTime, DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr, DMGetDisplayIDByGDevice, UpdateSystemActivity, RegisterComponentResourceFile, OpenADefaultComponent, HMGetHelpMenuHandle }
+pub enum SysFn {
+    ConvertLocalTimeToUTC, ConvertUTCToLocalTime, ConvertUTCToLocalDateTime, ConvertLocalToUTCDateTime,
+    DMGetFirstScreenDevice, DMGetNextScreenDevice, ReadLocation, WriteLocation, DebugStr,
+    DMGetDisplayIDByGDevice, UpdateSystemActivity, RegisterComponentResourceFile, OpenADefaultComponent,
+    HMGetHelpMenuHandle,
+    /// ADB Manager (`DeskBus.h`): no guest ADB bus (host owns keyboard/mouse).
+    CountADBs, GetIndADB, GetADBInfo, SetADBInfo,
+    /// Component Manager (`Components.h`): no third-party components registered (matches `RegisterComponentResourceFile` / `OpenADefaultComponent`).
+    CountComponents, FindNextComponent, OpenComponent, OpenDefaultComponent, CloseComponent, GetComponentInfo, GetComponentVersion, CallComponentCanDo,
+}
 
 impl SysFn {
     pub fn by_name(name: &str) -> Option<SysFn> {
@@ -35,6 +44,8 @@ impl SysFn {
         Some(match name {
             "DMGetFirstScreenDevice" => DMGetFirstScreenDevice, "DMGetNextScreenDevice" => DMGetNextScreenDevice,
             "ReadLocation" => ReadLocation, "ConvertLocalTimeToUTC" => ConvertLocalTimeToUTC, "ConvertUTCToLocalTime" => ConvertUTCToLocalTime, "ConvertUTCToLocalDateTime" => ConvertUTCToLocalDateTime, "ConvertLocalToUTCDateTime" => ConvertLocalToUTCDateTime, "WriteLocation" => WriteLocation, "DMGetDisplayIDByGDevice" => DMGetDisplayIDByGDevice, "DebugStr" => DebugStr, "UpdateSystemActivity" => UpdateSystemActivity, "RegisterComponentResourceFile" => RegisterComponentResourceFile, "OpenADefaultComponent" => OpenADefaultComponent, "HMGetHelpMenuHandle" => HMGetHelpMenuHandle,
+            "CountADBs" => CountADBs, "GetIndADB" => GetIndADB, "GetADBInfo" => GetADBInfo, "SetADBInfo" => SetADBInfo,
+            "CountComponents" => CountComponents, "FindNextComponent" => FindNextComponent, "OpenComponent" => OpenComponent, "OpenDefaultComponent" => OpenDefaultComponent, "CloseComponent" => CloseComponent, "GetComponentInfo" => GetComponentInfo, "GetComponentVersion" => GetComponentVersion, "CallComponentCanDo" => CallComponentCanDo,
             _ => return None,
         })
     }
@@ -116,6 +127,12 @@ impl<U: GuestUi> MacPpc<U> {
                 self.mac.log.push(format!("[debugstr] {}", String::from_utf8_lossy(&text)));
                 0
             }
+            // ADB Manager (`DeskBus.h`): no guest ADB devices (the host owns keyboard/mouse).
+            CountADBs | GetIndADB => 0,
+            GetADBInfo | SetADBInfo => (-50i32) as u32, // paramErr: no device at adbAddr
+            // Component Manager (`Components.h`): no third-party components registered.
+            CountComponents | FindNextComponent | OpenComponent | OpenDefaultComponent | GetComponentVersion | CallComponentCanDo => 0,
+            CloseComponent | GetComponentInfo => (-3000i32) as u32, // invalidComponentID
         };
         cpu.gpr[3] = r;
         Ok(())
@@ -125,4 +142,33 @@ impl<U: GuestUi> MacPpc<U> {
 impl<U: GuestUi> MacPpc<U> {
     /// The machine location's gmtDelta: seconds east of UTC, the signed low 24 bits of its third long (0 until WriteLocation).
     fn gmt_delta(&self) -> i64 { let l = &self.sys.location; i64::from((i32::from_be_bytes([l[8], l[9], l[10], l[11]]) << 8) >> 8) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SysFn;
+    use crate::cpu::Cpu;
+    use crate::MacPpc;
+    use heirloom_ui_abi::RecordingGuestUi;
+
+    fn call(m: &mut MacPpc<RecordingGuestUi>, f: SysFn, args: &[u32]) -> u32 {
+        let mut cpu = Cpu::new(0x0005_0000, 0x0007_0000);
+        for (i, &a) in args.iter().enumerate() { cpu.gpr[3 + i] = a; }
+        m.sys_call(f, &mut cpu).unwrap();
+        cpu.gpr[3]
+    }
+
+    #[test]
+    fn adb_and_component_manager_report_no_guest_devices_or_components() {
+        let mut m = MacPpc::new(RecordingGuestUi::new()).unwrap();
+        assert_eq!(call(&mut m, SysFn::CountADBs, &[]), 0);
+        assert_eq!(call(&mut m, SysFn::GetIndADB, &[0x4000, 1]), 0);
+        assert_eq!(call(&mut m, SysFn::GetADBInfo, &[0x4000, 4]) as i32, -50);
+        assert_eq!(call(&mut m, SysFn::SetADBInfo, &[0x4000, 4]) as i32, -50);
+        assert_eq!(call(&mut m, SysFn::CountComponents, &[0]), 0);
+        assert_eq!(call(&mut m, SysFn::FindNextComponent, &[0, 0]), 0);
+        assert_eq!(call(&mut m, SysFn::OpenDefaultComponent, &[u32::from_be_bytes(*b"imco"), 0]), 0);
+        assert_eq!(call(&mut m, SysFn::CloseComponent, &[0x1234]) as i32, -3000);
+        assert_eq!(call(&mut m, SysFn::GetComponentInfo, &[0x1234, 0, 0, 0, 0]) as i32, -3000);
+    }
 }

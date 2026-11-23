@@ -50,6 +50,8 @@ pub struct CxState {
     cdata: BTreeMap<(u32, i16, u32), Vec<u8>>,
     /// control -> its view size (`SetControlViewSize`).
     view: BTreeMap<u32, i32>,
+    /// control -> 32-bit (value, min, max) for `ControlsLib` 32-bit accessors.
+    val32: BTreeMap<u32, (Option<i32>, Option<i32>, Option<i32>)>,
     /// (menu handle, item) -> command ID (`SetMenuItemCommandID`). Keyed by item NUMBER: a program that inserts or deletes items before setting IDs sets them again, as on Mac OS.
     cmds: BTreeMap<(u32, u16), u32>,
 }
@@ -121,6 +123,9 @@ pub enum CxFn {
     GetThemeDrawingState, SetThemeDrawingState, DisposeThemeDrawingState, NormalizeThemeDrawingState,
     /// `GetWindowRegion(window, regionCode, ioWinRgn)`: GetWindowBounds' rectangle as a region (RectRgn), for the codes it answers.
     GetWindowRegion,
+    /// `ControlsLib` 32-bit value/min/max accessors, `GetControlVariant`, `GetIndexedSubControl`, `MoveDialogItem`, `SizeDialogItem`.
+    GetControl32BitValue, SetControl32BitValue, GetControl32BitMinimum, SetControl32BitMinimum, GetControl32BitMaximum, SetControl32BitMaximum,
+    GetControlVariant, GetIndexedSubControl, MoveDialogItem, SizeDialogItem,
 }
 
 impl CxFn {
@@ -152,6 +157,11 @@ impl CxFn {
             "IsControlActive" => IsControlActive, "IsControlHilited" => IsControlHilited, "CreateCustomList" => CreateCustomList,
             "GetThemeDrawingState" => GetThemeDrawingState, "SetThemeDrawingState" => SetThemeDrawingState, "DisposeThemeDrawingState" => DisposeThemeDrawingState,
             "NormalizeThemeDrawingState" => NormalizeThemeDrawingState, "GetWindowRegion" => GetWindowRegion,
+            "GetControl32BitValue" => GetControl32BitValue, "SetControl32BitValue" => SetControl32BitValue,
+            "GetControl32BitMinimum" => GetControl32BitMinimum, "SetControl32BitMinimum" => SetControl32BitMinimum,
+            "GetControl32BitMaximum" => GetControl32BitMaximum, "SetControl32BitMaximum" => SetControl32BitMaximum,
+            "GetControlVariant" => GetControlVariant, "GetIndexedSubControl" => GetIndexedSubControl,
+            "MoveDialogItem" => MoveDialogItem, "SizeDialogItem" => SizeDialogItem,
             _ => return None,
         })
     }
@@ -523,6 +533,79 @@ impl<U: GuestUi> MacPpc<U> {
             }
             // GetRegionBounds(RgnHandle, Rect*): rgnBBox is at offset 2 of the region record
             GetRegionBounds => { let p = self.cx_rec(a0, n)?; let r = self.cx_rect(p + 2, n)?; self.cx_put_rect(a1, r, n)?; a1 }
+            // ControlsLib 32-bit accessors: keep full 32-bit values in CxState while mirroring clamped 16-bit values to the ControlRecord / native control.
+            GetControl32BitValue => {
+                if let Some(v) = self.cx.val32.get(&a0).and_then(|t| t.0) { v as u32 }
+                else { let p = self.cx_rec(a0, n)?; i32::from(self.mac.mem.read_i16(p + 24).unwrap_or(0)) as u32 }
+            }
+            SetControl32BitValue => {
+                let v = a1 as i32;
+                self.cx.val32.entry(a0).or_default().0 = Some(v);
+                let clamped = v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16 as u16;
+                let _ = self.cx_trap("SetControlValue", &[a0, u32::from(clamped)]);
+                0
+            }
+            GetControl32BitMinimum => {
+                if let Some(v) = self.cx.val32.get(&a0).and_then(|t| t.1) { v as u32 }
+                else { let p = self.cx_rec(a0, n)?; i32::from(self.mac.mem.read_i16(p + 26).unwrap_or(0)) as u32 }
+            }
+            SetControl32BitMinimum => {
+                let v = a1 as i32;
+                self.cx.val32.entry(a0).or_default().1 = Some(v);
+                let clamped = v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16 as u16;
+                let _ = self.cx_trap("SetControlMinimum", &[a0, u32::from(clamped)]);
+                0
+            }
+            GetControl32BitMaximum => {
+                if let Some(v) = self.cx.val32.get(&a0).and_then(|t| t.2) { v as u32 }
+                else { let p = self.cx_rec(a0, n)?; i32::from(self.mac.mem.read_i16(p + 28).unwrap_or(0)) as u32 }
+            }
+            SetControl32BitMaximum => {
+                let v = a1 as i32;
+                self.cx.val32.entry(a0).or_default().2 = Some(v);
+                let clamped = v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16 as u16;
+                let _ = self.cx_trap("SetControlMaximum", &[a0, u32::from(clamped)]);
+                0
+            }
+            GetControlVariant => self.mac.tr.procs.get(&a0).map_or(0, |&p| u32::from(p & 0xF)),
+            GetIndexedSubControl => {
+                // OSErr GetIndexedSubControl(ControlRef inControl, UInt16 inIndex, ControlRef *outSubControl) (1-based)
+                let idx = a1 as u16;
+                if a2 == 0 || idx == 0 { (-50i32) as u32 } else {
+                    match self.cx.parent.iter().filter(|&(_, &p)| p == a0).nth(usize::from(idx - 1)).map(|(&c, _)| c) {
+                        Some(c) => { self.cx_put32(a2, c, n)?; 0 }
+                        None => (-30586i32) as u32, // errItemOutOfRange
+                    }
+                }
+            }
+            MoveDialogItem | SizeDialogItem => {
+                // OSErr MoveDialogItem(DialogRef, DialogItemIndex, SInt16 horiz, SInt16 vert)
+                // OSErr SizeDialogItem(DialogRef, DialogItemIndex, SInt16 width, SInt16 height)
+                let (dlg, item_no, x, y) = (a0, a1 as u16, a2 as u16 as i16, a3 as u16 as i16);
+                let scratch = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, 16, true).map_err(|_| format!("{n}: out of memory"))?;
+                let (t_p, h_p, r_p) = (scratch, scratch + 4, scratch + 8);
+                let _ = self.cx_trap("GetDialogItem", &[dlg, u32::from(item_no), t_p, h_p, r_p]);
+                let item_type = self.mac.mem.read_u16(t_p).unwrap_or(0);
+                let item_h = self.mac.mem.read_u32(h_p).unwrap_or(0);
+                let mut rect = self.cx_rect(r_p, n)?;
+                if f == MoveDialogItem {
+                    let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+                    rect.left = x; rect.top = y; rect.right = x.wrapping_add(w); rect.bottom = y.wrapping_add(h);
+                } else {
+                    rect.right = rect.left.wrapping_add(x); rect.bottom = rect.top.wrapping_add(y);
+                }
+                self.cx_put_rect(r_p, rect, n)?;
+                let _ = self.cx_trap("SetDialogItem", &[dlg, u32::from(item_no), u32::from(item_type), item_h, r_p]);
+                if item_h != 0 && self.mac.tr.procs.contains_key(&item_h) {
+                    if f == MoveDialogItem {
+                        let _ = self.cx_trap("MoveControl", &[item_h, u32::from(x as u16), u32::from(y as u16)]);
+                    } else {
+                        let _ = self.cx_trap("SizeControl", &[item_h, u32::from(x as u16), u32::from(y as u16)]);
+                    }
+                }
+                let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, scratch);
+                0
+            }
         };
         cpu.gpr[3] = r;
         Ok(())
