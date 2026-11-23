@@ -165,11 +165,15 @@ pub fn next(b: &[u8], at: &mut usize, v2: bool) -> Result<Op, String> {
                 // planeBytes 4, pmTable 4, pmReserved 4 = 36 bytes (baseAddr, rowBytes and bounds are the 14 the PICT form shortens to 10)
                 pixel_size = heirloom_common::bytes::be16(b, i + 18).ok_or("PixMap past the end")?;
                 i += 36;
-                // colour table: ctSeed 4, ctFlags 2, ctSize 2, (ctSize + 1) ColorSpecs of 8 bytes
+                // colour table: ctSeed 4, ctFlags 2, ctSize 2, (ctSize + 1) ColorSpecs of 8 bytes.
+                // In a device colour table (ctFlags bit 15 set), ColorSpec.value is ignored and the entry's position is its pixel index.
+                let ct_flags = heirloom_common::bytes::be16(b, i + 4).ok_or("colour table past the end")?;
                 let ct_size = heirloom_common::bytes::be16(b, i + 6).ok_or("colour table past the end")? as usize;
                 i += 8;
-                for _ in 0..=ct_size {
-                    let v = heirloom_common::bytes::be16(b, i).ok_or("colour table past the end")?;
+                let device_table = ct_flags & 0x8000 != 0;
+                for idx in 0..=ct_size {
+                    let raw_v = heirloom_common::bytes::be16(b, i).ok_or("colour table past the end")?;
+                    let v = if device_table { idx as u16 } else { raw_v };
                     clut.push((v, [heirloom_common::bytes::be16(b, i + 2).ok_or("colour table past the end")?, heirloom_common::bytes::be16(b, i + 4).ok_or("colour table past the end")?, heirloom_common::bytes::be16(b, i + 6).ok_or("colour table past the end")?]));
                     i += 8;
                 }
@@ -337,5 +341,36 @@ pub(crate) mod tests {
         // NEGATIVE: 24-bit pixels are no DirectBits depth; a too-small rowBytes is refused
         assert!(direct_bits(&direct_op(4, 1, 24, 16, 4, 3, &[])).unwrap_err().contains("24-bit pixels"));
         assert!(direct_bits(&direct_op(4, 1, 32, 8, 1, 3, &[0; 8])).unwrap_err().contains("too small"));
+    }
+
+    #[test]
+    fn device_color_table_in_pict_uses_entry_index_not_zero_value() {
+        let mut b = Vec::new();
+        w(&mut b, &[0x0098, 0x8008, 0, 0, 1, 8]); // PackBitsRect, 8x1 8-bit PixMap
+        w(&mut b, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0]);
+        w(&mut b, &[0, 0, 0x8000, 2]); // ctSeed 0, ctFlags = 0x8000 (device table), ctSize = 2 (3 entries)
+        // All ColorSpec.value fields are 0, as Color QuickDraw writes in device color tables
+        w(&mut b, &[0, 0xFFFF, 0xFFFF, 0xFFFF, 0, 0xAAAA, 0x0000, 0x0000, 0, 0x0000, 0xBBBB, 0x0000]);
+        w(&mut b, &[0, 0, 1, 8, 0, 0, 1, 8, 0]);
+        b.extend([2, 0xF9, 1, 0, 0x00, 0xFF]);
+        let mut at = 0;
+        let Op::Bits(bits) = next(&b, &mut at, true).unwrap() else { panic!("expected Bits") };
+        assert_eq!(bits.clut.len(), 3);
+        assert_eq!(bits.clut[0], (0, [0xFFFF, 0xFFFF, 0xFFFF]));
+        assert_eq!(bits.clut[1], (1, [0xAAAA, 0x0000, 0x0000]));
+        assert_eq!(bits.clut[2], (2, [0x0000, 0xBBBB, 0x0000]));
+
+        // NEGATIVE / contrast: non-device table (ctFlags = 0) preserves explicit ColorSpec.value
+        let mut b2 = Vec::new();
+        w(&mut b2, &[0x0098, 0x8008, 0, 0, 1, 8]);
+        w(&mut b2, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0]);
+        w(&mut b2, &[0, 0, 0x0000, 1]); // ctFlags = 0, 2 entries with explicit indices 5 and 9
+        w(&mut b2, &[5, 0x1111, 0x2222, 0x3333, 9, 0x4444, 0x5555, 0x6666]);
+        w(&mut b2, &[0, 0, 1, 8, 0, 0, 1, 8, 0]);
+        b2.extend([2, 0xF9, 5, 0, 0x00, 0xFF]);
+        let mut at2 = 0;
+        let Op::Bits(bits2) = next(&b2, &mut at2, true).unwrap() else { panic!("expected Bits") };
+        assert_eq!(bits2.clut[0].0, 5);
+        assert_eq!(bits2.clut[1].0, 9);
     }
 }

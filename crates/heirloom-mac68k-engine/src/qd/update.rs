@@ -35,6 +35,10 @@ pub(crate) fn invalidate_all<U: GuestUi>(m: &mut Mac<U>, win: u32) -> Result<(),
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     use super::reg;
+    reg(m, 0xA909, "CalcVis", &[Arg::P], None, calc_vis::<U>)?;
+    reg(m, 0xA90A, "CalcVBehind", &[Arg::P, Arg::L], None, calc_vis_behind::<U>)?;
+    reg(m, 0xA90C, "PaintOne", &[Arg::P, Arg::L], None, paint_one::<U>)?;
+    reg(m, 0xA90D, "PaintBehind", &[Arg::P, Arg::L], None, paint_behind::<U>)?;
     reg(m, 0xA922, "BeginUpDate", &[Arg::P], None, begin_update::<U>)?;
     reg(m, 0xA923, "EndUpDate", &[Arg::P], None, end_update::<U>)?;
     reg(m, 0xA928, "InvalRect", &[Arg::L], None, inval_rect::<U>)?;
@@ -94,3 +98,37 @@ fn inval_rect<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
 fn valid_rect<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { let g = rect_region(m, c.args.get(0))?; valid(m, g, "ValidRect") }
 fn inval_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { let g = m.read_region(c.args.get(0))?; inval(m, g, "InvalRgn") }
 fn valid_rgn<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { let g = m.read_region(c.args.get(0))?; valid(m, g, "ValidRgn") }
+
+fn calc_vis<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = c.args.get(0);
+    if win != 0 && m.windows.contains_key(&win) { let _ = m.sync_window_regions(win); }
+    Ok(Done { result: 0, log: format!("[quickdraw] CalcVis {win:#x}") })
+}
+
+fn calc_vis_behind<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let start = c.args.get(0);
+    let wins: alloc::vec::Vec<u32> = m.windows.keys().copied().collect();
+    for w in wins { let _ = m.sync_window_regions(w); }
+    Ok(Done { result: 0, log: format!("[quickdraw] CalcVisBehind {start:#x}") })
+}
+
+fn paint_one<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (win, rgn) = (c.args.get(0), c.args.get(1));
+    if win != 0 && m.windows.contains_key(&win) {
+        let g = if rgn != 0 { m.read_region(rgn)? } else { Region::from_rect(raster(read_rect(&m.mem, win.wrapping_add(P_RECT))?)) };
+        m.add_invalid(win, &g);
+    }
+    Ok(Done { result: 0, log: format!("[quickdraw] PaintOne {win:#x} rgn {rgn:#x}") })
+}
+
+fn paint_behind<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (start, rgn) = (c.args.get(0), c.args.get(1));
+    let g = if rgn != 0 { Some(m.read_region(rgn)?) } else { None };
+    let wins: alloc::vec::Vec<u32> = m.windows.keys().copied().collect();
+    for w in wins {
+        if start == 0 || w == start {
+            if let Some(ref rg) = g { m.add_invalid(w, rg); } else { let _ = invalidate_all(m, w); }
+        }
+    }
+    Ok(Done { result: 0, log: format!("[quickdraw] PaintBehind {start:#x} rgn {rgn:#x}") })
+}

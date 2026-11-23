@@ -20,6 +20,7 @@ use alloc::string::String;
 use heirloom_ui_abi::GuestUi;
 use crate::cpu::Cpu;
 
+const RESTORE_DEVICE_CLUT: u16 = 0x0002;
 const SET_DEPTH: u16 = 0x0A13;
 const HAS_DEPTH: u16 = 0x0A14;
 
@@ -30,6 +31,26 @@ fn palette_dispatch<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> Re
     let sp = c.areg(7);
     let e = Refusal::mem("PaletteDispatch frame");
     match sel {
+        RESTORE_DEVICE_CLUT => {
+            // PROCEDURE RestoreDeviceClut(gd: GDHandle): 4-byte handle on stack; NULL means all devices (main_device).
+            let gd_arg = m.mem.read_u32(sp).map_err(&e)?;
+            c.set_areg(7, sp + 4);
+            let gd = if gd_arg == 0 { m.cqd.main_device } else { gd_arg };
+            if gd != 0 {
+                let pm = m.deref_handle(m.mem.read_u32(m.deref_handle(gd, "GDHandle")? + super::gdevice::GD_PMAP).map_err(&e)?, "gdPMap")?;
+                let ct = m.mem.read_u32(pm + super::pixmap::PM_TABLE).map_err(&e)?;
+                let tp = m.deref_handle(ct, "device ColorTable")?;
+                let entries = (u32::from(m.mem.read_u16(tp + super::ctab::CT_SIZE).map_err(&e)?) + 1) as usize;
+                let std_clut = super::color::clut8();
+                for (i, &rgb) in std_clut.iter().take(entries).enumerate() {
+                    super::color::write_rgb(&mut m.mem, tp + super::ctab::CT_TABLE + super::ctab::SPEC * i as u32 + 2, rgb)?;
+                }
+                let seed = m.unique_seed();
+                m.mem.write_u32(tp + super::ctab::CT_SEED, seed).map_err(&e)?;
+            }
+            r.d0 = 0;
+            Ok(format!("[palette] RestoreDeviceClut {gd_arg:#x}"))
+        }
         HAS_DEPTH | SET_DEPTH => {
             // gd (sp+6), depth (sp+4), whichFlags (sp+2), flags (sp+0); the INTEGER result lies above, at sp+10
             let (gd, depth) = (m.mem.read_u32(sp + 6).map_err(&e)?, m.mem.read_u16(sp + 4).map_err(&e)?);
