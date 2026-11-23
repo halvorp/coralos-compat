@@ -21,10 +21,10 @@ pub struct Registration {
 /// The registration resource of the application whose UID3 is `uid3`.
 pub fn registration(drive: &Drive, uid3: u32) -> Result<Registration, String> {
     let names = drive.list(REG_DIR).map_err(|e| format!("no registration directory {REG_DIR} on the drive ({e:?})"))?;
-    let lang_reg = format!("_reg.{ROM_LANGUAGE_EXT}");
+    let lang_ext = format!(".{ROM_LANGUAGE_EXT}");
     for name in names.iter().filter(|n| {
         let l = n.to_ascii_lowercase();
-        l.ends_with("_reg.rsc") || l.ends_with(&lang_reg)
+        l.ends_with(".rsc") || l.ends_with(&lang_ext)
     }) {
         let path = format!("{REG_DIR}\\{name}");
         let bytes = drive.read(&path).map_err(|e| format!("{path}: {e:?}"))?;
@@ -43,7 +43,7 @@ pub fn registration(drive: &Drive, uid3: u32) -> Result<Registration, String> {
         let localisable_id = r.long().map_err(field)?;
         return Ok(Registration { path, app_file, localisable_file, localisable_id });
     }
-    Err(format!("no *_reg.rsc or *{lang_reg} under {REG_DIR} has UID3 {uid3:#010x}"))
+    Err(format!("no *_reg.rsc or *_reg{lang_ext} under {REG_DIR} has UID3 {uid3:#010x}"))
 }
 
 /// Resolve a resource stem path (without extension) to its localised `.r01` file when present, else `.rsc`.
