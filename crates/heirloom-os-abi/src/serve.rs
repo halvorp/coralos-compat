@@ -124,6 +124,11 @@ pub trait OsFamily: 'static {
     fn perf_attach(_m: &mut Self::Machine, _host: crate::perf::PerfHost) -> Result<(), String> {
         Err(String::from("perf_attach: this guest machine keeps no frame ledger"))
     }
+    /// The host's native datatype bridge ([`OsVTable::attach_datatype`]) for image/media decoding through CoralOS
+    /// `datatype.library`. A family that does not consume it refuses by name.
+    fn attach_datatype(_m: &mut Self::Machine, _host: crate::datatype::DatatypeHost) -> Result<(), String> {
+        Err(String::from("attach_datatype: this guest machine does not consume host datatypes"))
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -186,12 +191,13 @@ pub struct FamilyHooks<M> {
     pub set_code_mem: fn(&mut M, ppc::PpcCodeMem) -> Result<(), String>,
     pub cpu_prof: fn(&mut M) -> Option<ppc::PpcProf>,
     pub perf_attach: fn(&mut M, crate::perf::PerfHost) -> Result<(), String>,
+    pub attach_datatype: fn(&mut M, crate::datatype::DatatypeHost) -> Result<(), String>,
 }
 
 impl<M> FamilyHooks<M> {
     /// The hooks of family `F`.
     pub fn of<F: OsFamily<Machine = M>>() -> Self {
-        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach }
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach, attach_datatype: F::attach_datatype }
     }
 }
 
@@ -354,6 +360,7 @@ trait AnySession {
     fn set_code_mem(&mut self, mem: ppc::PpcCodeMem) -> Result<(), String>;
     fn cpu_prof(&mut self) -> Option<ppc::PpcProf>;
     fn perf_attach(&mut self, host: crate::perf::PerfHost) -> Result<(), String>;
+    fn attach_datatype(&mut self, host: crate::datatype::DatatypeHost) -> Result<(), String>;
 }
 
 impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
@@ -374,6 +381,9 @@ impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
     }
     fn perf_attach(&mut self, host: crate::perf::PerfHost) -> Result<(), String> {
         (self.hooks.perf_attach)(&mut self.machine, host)
+    }
+    fn attach_datatype(&mut self, host: crate::datatype::DatatypeHost) -> Result<(), String> {
+        (self.hooks.attach_datatype)(&mut self.machine, host)
     }
 }
 
@@ -597,6 +607,18 @@ extern "C" fn perf_attach_impl(inst: *mut OsInstance, host: *const crate::perf::
     }
 }
 
+extern "C" fn attach_datatype_impl(inst: *mut OsInstance, host: *const crate::datatype::DatatypeHost) -> i32 {
+    if inst.is_null() || host.is_null() {
+        return crate::datatype::DT_ATTACH_REFUSED;
+    }
+    // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed; `host` points to a record the engine filled (copied).
+    let (session, host) = unsafe { (&mut **(inst as *mut Instance), *host) };
+    match session.attach_datatype(host) {
+        Ok(()) => crate::datatype::DT_ATTACH_OK,
+        Err(_) => crate::datatype::DT_ATTACH_REFUSED,
+    }
+}
+
 /// The table for family `F`: `static TABLE: OsVTable = heirloom_os_abi::serve::vtable::<MyFamily>();`.
 pub const fn vtable<F: OsFamily>() -> OsVTable {
     vtable2::<F, F>()
@@ -621,5 +643,6 @@ pub const fn vtable2<F: OsFamily, G: OsFamily>() -> OsVTable {
         set_code_mem: set_code_mem_impl,
         cpu_prof: cpu_prof_impl,
         perf_attach: perf_attach_impl,
+        attach_datatype: attach_datatype_impl,
     }
 }
