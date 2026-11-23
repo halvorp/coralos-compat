@@ -154,6 +154,21 @@ impl DatatypeHost {
     }
 }
 
+#[cfg(feature = "serve")]
+impl heirloom_common::datatype::NativeDatatype for DatatypeHost {
+    fn identify(&self, data: &[u8]) -> u32 {
+        self.identify_bytes(data)
+    }
+    fn decode_image(&self, data: &[u8], fit_w: u32, fit_h: u32) -> Option<heirloom_common::datatype::DecodedImage> {
+        let img = self.decode_image_bytes(data, fit_w, fit_h)?;
+        Some(heirloom_common::datatype::DecodedImage {
+            width: img.width,
+            height: img.height,
+            pixels: img.pixels,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,6 +3,7 @@
 //! them, and the [`GuestMachine`] surface a host drives any of them through.
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+pub mod datatype;
 pub mod driver;
 pub use driver::{Delivery, GuestMachine, RunStats};
 use alloc::format;
