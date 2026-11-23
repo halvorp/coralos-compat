@@ -118,6 +118,59 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
                 && p.mem.vm.write_u32(this.wrapping_add(8), buf).is_ok();
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: descriptor at {this:#x} is unwritable")) }
         }
+        // TPtr8(TUint8* aBuf, TInt aMaxLength) / TPtr16(TUint16* aBuf, TInt aMaxLength): zero-length modifiable pointer descriptor.
+        "_ZN6TPtr16C1EPti" | "_ZN6TPtr16C2EPti" => {
+            let (buf, max) = (r1, p.cpu.regs[2]);
+            let ok = p.mem.vm.write_u32(this, DES_PTR << KSHIFT_DES_TYPE).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), max).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(8), buf).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: descriptor at {this:#x} is unwritable")) }
+        }
+        // TPtrC16(): empty non-modifiable pointer descriptor.
+        "_ZN7TPtrC16C1Ev" | "_ZN7TPtrC16C2Ev" => {
+            let ok = p.mem.vm.write_u32(this, DES_PTR_C << KSHIFT_DES_TYPE).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), 0).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: descriptor at {this:#x} is unwritable")) }
+        }
+        // HBufC16& HBufC16::operator=(const TDesC16& aDes): copy UTF-16 contents into this HBufC16 (type 0, data at +4).
+        "_ZN7HBufC16aSERK7TDesC16" => {
+            match read16(p, r1) {
+                Ok(units) => {
+                    let mut ok = p.mem.vm.write_u32(this, (units.len() as u32) & LENGTH_MASK).is_ok();
+                    for (i, &u) in units.iter().enumerate() {
+                        ok = ok && p.mem.vm.write_u16(this.wrapping_add(4 + 2 * i as u32), u).is_ok();
+                    }
+                    p.cpu.regs[0] = this;
+                    if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: HBufC16 at {this:#x} unwritable")) }
+                }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // const TUint8* TDes8::ZeroTerminate() / PtrZ(): append NUL byte past iLength without increasing iLength.
+        "_ZN5TDes813ZeroTerminateEv" | "_ZN5TDes84PtrZEv" => {
+            match locate(p, this) {
+                Ok(v) => {
+                    let _ = p.mem.vm.write_u8(v.data.wrapping_add(v.len), 0);
+                    p.cpu.regs[0] = v.data;
+                    NativeOutcome::Return
+                }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // TPtrC8(const TUint8* aString): NUL-terminated 8-bit C string.
+        "_ZN6TPtrC8C1EPKh" | "_ZN6TPtrC8C2EPKh" => {
+            let mut len = 0u32;
+            while len < 0x10_0000 {
+                match p.mem.vm.read_u8(r1.wrapping_add(len)) {
+                    Ok(0) => break,
+                    Ok(_) => len += 1,
+                    Err(_) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: string at {r1:#x}+{len} unreadable"))),
+                }
+            }
+            let ok = p.mem.vm.write_u32(this, (DES_PTR_C << KSHIFT_DES_TYPE) | (len & LENGTH_MASK)).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), r1).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: descriptor at {this:#x} is unwritable")) }
+        }
         // void TDes16::Zero() / void TDes8::Zero(): set length to 0 while preserving descriptor type bits.
         "_ZN6TDes164ZeroEv" | "_ZN5TDes84ZeroEv" => {
             match set_des_len(p, this, 0) { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
@@ -153,16 +206,18 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
             Ok(v) => { p.cpu.regs[0] = v.data; NativeOutcome::Return }
             Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
         },
-        // TPtr16 HBufC16::Des() (e32des16.h): ARM EABI sret TPtr16 in r0, this in r1.
-        "_ZN7HBufC163DesEv" => {
+        // TPtr16 HBufC16::Des() / TPtr8 HBufC8::Des() (e32des16.h / e32des8.h): ARM EABI sret TPtr in r0, this in r1.
+        "_ZN7HBufC163DesEv" | "_ZN6HBufC83DesEv" => {
             let sret = this;
             let hbuf = r1;
+            let wide = name.contains("HBufC16");
             let r = locate(p, hbuf).and_then(|v| {
-                let max = p.heap.as_ref().and_then(|h| h.len_of(hbuf)).map(|b| b.saturating_sub(4) / 2).unwrap_or(v.len).max(v.len);
+                let shift = if wide { 1 } else { 0 };
+                let max = p.heap.as_ref().and_then(|h| h.len_of(hbuf)).map(|b| b.saturating_sub(4) >> shift).unwrap_or(v.len).max(v.len);
                 p.mem.vm.write_u32(sret, (DES_BUF_C_PTR << KSHIFT_DES_TYPE) | (v.len & LENGTH_MASK))
                     .and_then(|_| p.mem.vm.write_u32(sret.wrapping_add(4), max))
                     .and_then(|_| p.mem.vm.write_u32(sret.wrapping_add(8), hbuf))
-                    .map_err(|_| format!("TPtr16 sret at {sret:#x} unwritable"))
+                    .map_err(|_| format!("TPtr sret at {sret:#x} unwritable"))
             });
             match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
         }
@@ -238,8 +293,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
             });
             match res { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
         }
-        // void TDes16::SetLength(TInt aLength) (e32des16.h).
-        "_ZN6TDes169SetLengthEi" => {
+        // void TDes16::SetLength(TInt aLength) / TDes8::SetLength(TInt aLength).
+        "_ZN6TDes169SetLengthEi" | "_ZN5TDes89SetLengthEi" => {
             let new_len = r1 as i32;
             let res = locate(p, this).and_then(|v| {
                 let Some(max) = v.max else { return Err(format!("descriptor at {this:#x} is non-modifiable")); };

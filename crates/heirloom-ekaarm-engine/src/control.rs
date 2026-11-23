@@ -20,6 +20,7 @@ use crate::run::Outcome;
 // ComponentControl 30, HandleControlArrayEventL 31, Reserved_10..13 32-35, GetTextDrawer 36, Reserved_8/9 37-38, MopSupplyObject 39,
 // MopNext 40, Draw 41, WriteInternalStateL 42, Reserved_2 43.
 pub const SLOT_ACTIVATE_L: u32 = 8;
+pub const SLOT_HANDLE_POINTER_EVENT_L: u32 = 24;
 pub const SLOT_SIZE_CHANGED: u32 = 27;
 pub const SLOT_POSITION_CHANGED: u32 = 28;
 pub const SLOT_COUNT_COMPONENTS: u32 = 29;
@@ -128,9 +129,43 @@ impl Process {
     }
 
     /// `CCoeControl::ActivateL()`: the control is activated, then each component control is (the virtual `ActivateL` of each).
+    /// For window-owning guest controls with a custom `Draw(const TRect&)` override, also queue an initial Window Server
+    /// redraw (`EEventRedraw`) so the control paints / starts its loop once the active scheduler runs.
     fn control_activate(&mut self, this: u32) -> Result<(), String> {
         self.control_state(this)?.activated = true;
+        if self.rd(this + CTRL_I_WIN).unwrap_or(0) != 0 && self.guest_draw_fn(this).is_some() {
+            let _ = self.enqueue_redraw(this);
+        }
         self.walk_components(this, CompKind::Activate)
+    }
+
+    pub(crate) fn guest_draw_fn(&self, this: u32) -> Option<u32> {
+        let vt = self.rd(this).ok()?;
+        if !self.is_guest_code(vt) { return None; }
+        let fn_ptr = self.rd(vt.wrapping_add(SLOT_DRAW * 4)).ok()?;
+        if self.is_guest_code(fn_ptr) { Some(fn_ptr) } else { None }
+    }
+
+    pub(crate) fn draw_guest_control(&mut self, this: u32) {
+        let Some(draw_fn) = self.guest_draw_fn(this) else { return };
+        if let Ok((bmp_handle, _)) = self.ensure_system_gc() {
+            if let Some(rect_scratch) = self.alloc_zeroed(16) {
+                let (x, y) = (self.rd(this + CTRL_I_POSITION).unwrap_or(0) as i32, self.rd(this + CTRL_I_POSITION + 4).unwrap_or(0) as i32);
+                let (sw, sh) = self.screen_size();
+                let w = self.rd(this + CTRL_I_SIZE).unwrap_or(sw as u32) as i32;
+                let h = self.rd(this + CTRL_I_SIZE + 4).unwrap_or(sh as u32) as i32;
+                let (w, h) = if w <= 0 || h <= 0 { (sw, sh) } else { (w, h) };
+                let _ = self.wr(rect_scratch, x as u32);
+                let _ = self.wr(rect_scratch + 4, y as u32);
+                let _ = self.wr(rect_scratch + 8, (x + w) as u32);
+                let _ = self.wr(rect_scratch + 12, (y + h) as u32);
+                let _ = self.call_guest(
+                    draw_fn,
+                    &[this, rect_scratch],
+                    crate::callback::Continuation::ControlDrawn { bmp_handle, rect_scratch },
+                );
+            }
+        }
     }
 
     /// Start a walk over `this`'s components doing `kind` to each.
@@ -198,31 +233,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 let _ = p.list_sync(this);
                 return Some(NativeOutcome::Return);
             }
-            // Check whether this control has a real guest-code override at SLOT_DRAW (not an engine stub).
-            let guest_draw = p.rd(this).ok()
-                .filter(|&vt| vt >= crate::layout::CODE_BASE && vt < crate::layout::STUB_BASE)
-                .and_then(|vt| p.rd(vt.wrapping_add(SLOT_DRAW * 4)).ok())
-                .filter(|&fn_ptr| fn_ptr >= crate::layout::CODE_BASE && fn_ptr < crate::layout::STUB_BASE);
-            if let Some(draw_fn) = guest_draw {
-                if let Ok((bmp_handle, _)) = p.ensure_system_gc() {
-                    if let Some(rect_scratch) = p.alloc_zeroed(16) {
-                        let (x, y) = (p.rd(this + CTRL_I_POSITION).unwrap_or(0) as i32, p.rd(this + CTRL_I_POSITION + 4).unwrap_or(0) as i32);
-                        let (sw, sh) = p.screen_size();
-                        let w = p.rd(this + CTRL_I_SIZE).unwrap_or(sw as u32) as i32;
-                        let h = p.rd(this + CTRL_I_SIZE + 4).unwrap_or(sh as u32) as i32;
-                        let (w, h) = if w <= 0 || h <= 0 { (sw, sh) } else { (w, h) };
-                        let _ = p.wr(rect_scratch, x as u32);
-                        let _ = p.wr(rect_scratch + 4, y as u32);
-                        let _ = p.wr(rect_scratch + 8, (x + w) as u32);
-                        let _ = p.wr(rect_scratch + 12, (y + h) as u32);
-                        let _ = p.call_guest(
-                            draw_fn,
-                            &[this, rect_scratch],
-                            crate::callback::Continuation::ControlDrawn { bmp_handle, rect_scratch },
-                        );
-                    }
-                }
-            }
+            p.draw_guest_control(this);
             NativeOutcome::Return
         }
         // void CCoeControl::SetContainerWindowL(const CCoeControl& aContainer) (coecntrl.cpp, the Foundation source, consulted for facts):
@@ -279,6 +290,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZN11CCoeControl11SetFocusingEi" => { let r = p.control_state(this).map(|c| c.non_focusing = r1 == 0); done(p, r) }
         "_ZN11CCoeControl8SetBlankEv" => { let r = p.control_state(this).map(|c| c.blank = true); done(p, r) }
         "_ZN11CCoeControl16EnableDragEventsEv" => { let r = p.control_state(this).map(|c| c.drag_events = true); done(p, r) }
+        "_ZN11CCoeControl19HandlePointerEventLERK13TPointerEvent"
+        | "_ZN11CCoeControl25HandlePointerBufferReadyLEv" => NativeOutcome::Return,
         // TBool IsVisible() const / IsFocused() const
         "_ZNK11CCoeControl9IsVisibleEv" => match p.control_state(this) { Ok(c) => { let v = !c.hidden; p.cpu.regs[0] = v as u32; NativeOutcome::Return } Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) },
         "_ZNK11CCoeControl9IsFocusedEv" => match p.control_state(this) { Ok(c) => { let v = c.focused; p.cpu.regs[0] = v as u32; NativeOutcome::Return } Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) },

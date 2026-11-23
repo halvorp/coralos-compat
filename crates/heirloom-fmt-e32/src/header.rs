@@ -59,6 +59,8 @@ pub struct E32Header {
     pub vendor_id: u32,
     /// Capability bits (`SCapabilitySet`, two words).
     pub capabilities: u64,
+    /// `E32ImageHeaderV::iExceptionDescriptor` (offset 0x90): bit 0 = valid, upper bits = offset in code section.
+    pub exception_descriptor: u32,
 }
 
 impl E32Header {
@@ -115,6 +117,7 @@ impl E32Header {
             secure_id: w(0x80)?,
             vendor_id: w(0x84)?,
             capabilities: u64::from(w(0x88)?) | u64::from(w(0x8C)?) << 32,
+            exception_descriptor: if file.len() >= 0x94 { w(0x90)? } else { 0 },
         })
     }
 }

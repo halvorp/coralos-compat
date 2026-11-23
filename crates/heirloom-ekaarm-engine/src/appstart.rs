@@ -109,8 +109,7 @@ pub fn anchor(p: &Process, obj: u32, spec: &SlotSpec) -> Result<u32, String> {
     let slot_addr = vptr.wrapping_add(spec.slot.wrapping_mul(4));
     let v = p.mem.vm.read_u32(slot_addr).map_err(|_| format!("vtable slot {} of {} ({}) at {slot_addr:#x} is unreadable (vtable pointer {vptr:#x})", spec.slot, spec.class, spec.method))?;
     let head = format!("vtable slot {} of {} ({}) at {slot_addr:#x} holds", spec.slot, spec.class, spec.method);
-    let a = v & !1;
-    if a >= CODE_BASE && a < CODE_BASE.saturating_add(p.code_len) {
+    if p.is_guest_code(v) {
         return Ok(v);
     }
     if v >= STUB_BASE && v & 7 == 0 {
@@ -161,8 +160,7 @@ pub fn run_application(p: &mut Process) -> NativeOutcome {
             "NEXT-NEEDED eikcore EikStart::RunApplication: factory words r0-r3 = {ty:#x} {func:#x} {app:#x} {spare:#x} are not a function-type TApaApplicationFactory as its ctor writes it (iType {FACTORY_TYPE_FUNCTION}, iApplication 0, iSpare2 0)"
         ));
     }
-    let a = func & !1;
-    if !(a >= CODE_BASE && a < CODE_BASE.saturating_add(p.code_len)) {
+    if !p.is_guest_code(func) {
         return NativeOutcome::Refused(format!("NEXT-NEEDED eikcore EikStart::RunApplication: factory function {func:#x} is not in the loaded code"));
     }
     p.log.push(format!("[appstart] RunApplication: factory function {func:#x}"));
@@ -236,6 +234,14 @@ pub(crate) fn step(p: &mut Process, s: Step, r0: u32) -> Result<(), Outcome> {
 fn next_activation_or_idle(p: &mut Process, appui: u32) -> Result<(), Outcome> {
     if crate::viewappui::has_pending(p, appui) {
         return crate::viewappui::start_activation(p, appui, |block| Continuation::App(Step::ViewActivated { appui, block })).map_err(|m| if m.starts_with("NEXT-NEEDED") { Outcome::Refused(m) } else { fault(m) });
+    }
+    // Deliver initial foreground focus when the AppUi has a guest `HandleForegroundEventL` override.
+    if let Ok(vptr) = p.rd(appui) {
+        if let Ok(slot8) = p.rd(vptr.wrapping_add(8 * 4)) {
+            if p.is_guest_code(slot8) {
+                let _ = p.enqueue_focus_gained();
+            }
+        }
     }
     // `CEikonEnv::ExecuteD` -> `CActiveScheduler::Start()`: the thread enters its scheduler and stays there until `Stop`.
     p.sched_start().map_err(fault)

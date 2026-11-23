@@ -2,7 +2,11 @@
 //! a heap up to 1.5 GiB (an image's heap_max is a reservation; only heap_min is committed).
 pub const PAGE: u32 = 0x1000;
 pub const CODE_BASE: u32 = 0x0040_0000;
+/// Base address for guest companion E32 DLL code sections loaded from `sys\bin\`.
+pub const DLL_CODE_BASE: u32 = 0x0180_0000;
 pub const DATA_BASE: u32 = 0x0400_0000;
+/// Base address for guest companion E32 DLL data+bss sections.
+pub const DLL_DATA_BASE: u32 = 0x0600_0000;
 pub const STACK_TOP: u32 = 0x0C00_0000;
 pub const HEAP_BASE: u32 = 0x1000_0000;
 pub const STUB_BASE: u32 = 0x7000_0000;
@@ -11,9 +15,8 @@ pub const STUB_SVC_BASE: u32 = 0x00F0_0000;
 /// The SVC of the stub the entry point returns into (LR at start): the process returns from its entry with r0.
 pub const EXIT_SVC: u32 = 0x00FF_0000;
 
-/// Import-stub slots reserved after the image's own imports for the stubs the engine hands out itself (`Process::engine_stub`):
-/// the virtual-table entries of library objects the engine builds (a screen device, a list box, ...).
-pub const ENGINE_STUB_SLOTS: u32 = 1024;
+/// Import-stub slots reserved after the image's own imports for engine vtable stubs and dynamically loaded guest DLL imports.
+pub const ENGINE_STUB_SLOTS: u32 = 4096;
 
 pub fn pru(n: u32) -> u32 {
     n.saturating_add(PAGE - 1) & !(PAGE - 1)

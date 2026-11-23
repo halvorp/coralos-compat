@@ -86,6 +86,39 @@ impl Process {
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     let ret = p.cpu.regs[0];
     Some(match name {
+        // TDisplayMode CWsScreenDevice::DisplayMode() const
+        "_ZNK15CWsScreenDevice11DisplayModeEv" => {
+            p.cpu.regs[0] = crate::fbs::ECOLOR_16MU;
+            NativeOutcome::Return
+        }
+        // TInt CWsScreenDevice::CurrentScreenMode() const
+        "_ZNK15CWsScreenDevice17CurrentScreenModeEv" => {
+            p.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        // TPoint CWsScreenDevice::GetCurrentScreenModeScaledOrigin() const (sret in r0)
+        "_ZNK15CWsScreenDevice32GetCurrentScreenModeScaledOriginEv" => {
+            let ok = p.mem.vm.write_u32(ret, 0).is_ok() && p.mem.vm.write_u32(ret.wrapping_add(4), 0).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED ws32 {name}: sret at {ret:#x} unwritable")) }
+        }
+        // TFontSpec::TFontSpec() (gdi.h): zero TTypeface (56B) + iHeight (4B) + iFontStyle (4B).
+        "_ZN9TFontSpecC1Ev" | "_ZN9TFontSpecC2Ev" => {
+            let ok = (0..64u32).step_by(4).all(|o| p.mem.vm.write_u32(ret.wrapping_add(o), 0).is_ok());
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED gdi {name}: TFontSpec at {ret:#x} unwritable")) }
+        }
+        // void TFontStyle::SetPosture(TFontPosture) / SetStrokeWeight(TFontStrokeWeight) (gdi.h): bit 0 = italic, bit 1 = bold.
+        "_ZN10TFontStyle10SetPostureE12TFontPosture" => {
+            let flags = p.rd(ret).unwrap_or(0);
+            let next = if p.cpu.regs[1] != 0 { flags | 1 } else { flags & !1 };
+            let _ = p.wr(ret, next);
+            NativeOutcome::Return
+        }
+        "_ZN10TFontStyle15SetStrokeWeightE17TFontStrokeWeight" => {
+            let flags = p.rd(ret).unwrap_or(0);
+            let next = if p.cpu.regs[1] != 0 { flags | 2 } else { flags & !2 };
+            let _ = p.wr(ret, next);
+            NativeOutcome::Return
+        }
         // TSize CGraphicsDevice::SizeInPixels() const: the TSize (iWidth, iHeight) is returned through the hidden pointer in r0.
         "_ZNK15CWsScreenDevice12SizeInPixelsEv" => {
             let (sw, sh) = p.screen_size();

@@ -51,6 +51,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         }
         // CAknAppUi::SetKeyBlockMode(TAknKeyBlockMode) (aknappui.h): hardware keypad guard; no-op on desktop host.
         "_ZN9CAknAppUi15SetKeyBlockModeE16TAknKeyBlockMode" => NativeOutcome::Return,
+        // CAknAppUiBase::SetOrientationL(TAppUiOrientation): record landscape/portrait preference.
+        "_ZN13CAknAppUiBase15SetOrientationLENS_17TAppUiOrientationE" => NativeOutcome::Return,
         _ => return None,
     })
 }

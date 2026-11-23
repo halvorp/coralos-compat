@@ -46,20 +46,25 @@ fn split(path: &str) -> (Option<char>, Vec<&str>) {
 impl Drive {
     pub fn new() -> Self {
         let mut tree = Tree::new(255);
-        let vol = tree.add_volume("Z", false);
+        let vol = tree.add_volume("Z", true);
         Drive { tree, vol, rom: None }
     }
 
     /// The drive over a tree the host filled through `GuestMachine::volume()`: its volume `Z` (the first volume when there is no
     /// `Z`; a volume `Z` is added when the tree has none).
     pub fn from_tree(mut tree: Tree) -> Self {
-        let vol = tree.volume("Z").or_else(|| tree.children(heirloom_volume::ROOT).first().copied()).unwrap_or_else(|| tree.add_volume("Z", false));
+        let vol = tree.volume("Z").or_else(|| tree.children(heirloom_volume::ROOT).first().copied()).unwrap_or_else(|| tree.add_volume("Z", true));
         Drive { tree, vol, rom: None }
     }
 
     /// Put the device ROM behind the package's files.
     pub fn set_rom(&mut self, rom: alloc::boxed::Box<dyn RomSource>) {
         self.rom = Some(rom);
+    }
+
+    /// True if a Symbian device ROM is mounted behind the package drive.
+    pub fn has_rom(&self) -> bool {
+        self.rom.is_some()
     }
 
     /// The file's bytes: the package's, else the ROM's (owned, because a ROM file is read on demand).
@@ -153,6 +158,21 @@ impl Drive {
         let (_, comps) = split(path);
         self.tree.mkdirs(self.vol, comps).map_err(DriveError::Put)?;
         Ok(true)
+    }
+
+    /// Remove a file or empty directory from the in-memory tree.
+    pub fn delete(&mut self, path: &str) -> Result<(), DriveError> {
+        let id = self.resolve(path)?;
+        self.tree.remove(id).map_err(DriveError::Put)
+    }
+
+    /// Rename/move a file or directory within the in-memory tree.
+    pub fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), DriveError> {
+        let id = self.resolve(old_path)?;
+        let (_, mut comps) = split(new_path);
+        let leaf = comps.pop().ok_or(DriveError::NotFound)?;
+        let dir = self.tree.mkdirs(self.vol, comps).map_err(DriveError::Put)?;
+        self.tree.rename(id, dir, leaf).map_err(DriveError::Put)
     }
 
     /// The bytes of every file in the package tree (the volume's used space; the drive is read-only, so it has no free space).

@@ -15,6 +15,16 @@ pub struct Process {
     pub heap_chunk_id: ChunkId,
     /// The stub chunk (imports, then the engine's own stubs): read-execute except while a stub is being written.
     pub stub_chunk_id: ChunkId,
+    /// Total number of 8-byte stub slots committed in `stub_chunk_id`.
+    pub stub_slots_capacity: u32,
+    /// Code ranges `(base, len)` of loaded guest companion DLLs.
+    pub dll_code_ranges: Vec<(u32, u32)>,
+    /// Guest addresses of `TExceptionDescriptor` blocks (`.ARM.exidx` tables) for the main EXE and loaded guest DLLs.
+    pub exception_descriptors: Vec<u32>,
+    /// Next page-aligned code address for loading a guest companion DLL.
+    pub dll_next_code: u32,
+    /// Next page-aligned data address for loading a guest companion DLL.
+    pub dll_next_data: u32,
     /// Census mode (`Some`): an unimplemented import returns 0 to the guest and is recorded here in call order, so one run
     /// lists the whole sequence a program reaches. `None` (the default) stops at the first one.
     pub census: Option<Vec<alloc::string::String>>,
@@ -60,9 +70,11 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
     let heap_min = header.heap_min;
     let entry_point = header.entry_point;
     let uid3 = header.uid3;
+    let exception_descriptor = header.exception_descriptor;
 
-    let stub_list = stubs::build(&img.imports, table);
-    let stub_total = (stub_list.len() as u32 + layout::ENGINE_STUB_SLOTS) * 8;
+    let mut stub_list = stubs::build(&img.imports, table);
+    let stub_slots_capacity = stub_list.len() as u32 + layout::ENGINE_STUB_SLOTS;
+    let stub_total = stub_slots_capacity * 8;
     layout::check_overlap(code_len, data_len + bss_len, heap_max, stack_sz, stub_total)
         .map_err(LoadError::Overlap)?;
 
@@ -133,10 +145,16 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
     let mut idx = 0usize;
     for dll in &img.imports {
         for imp in &dll.imports {
+            let site_addr = CODE_BASE + imp.site;
             mem.vm.write_u32(
-                CODE_BASE + imp.site,
+                site_addr,
                 stubs::stub_addr(idx).wrapping_add(imp.addend as u32),
             ).map_err(|err| LoadError::Vm { chunk: "imports patch", err })?;
+            stub_list[idx].site = Some(stubs::ImportSite {
+                chunk: code_id,
+                addr: site_addr,
+                addend: imp.addend,
+            });
             idx += 1;
         }
     }
@@ -159,6 +177,15 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         heap: None,
         heap_chunk_id: heap_id,
         stub_chunk_id: stub_id,
+        stub_slots_capacity,
+        dll_code_ranges: Vec::new(),
+        exception_descriptors: if (exception_descriptor & 1) != 0 {
+            alloc::vec![CODE_BASE.wrapping_add(exception_descriptor & !1)]
+        } else {
+            Vec::new()
+        },
+        dll_next_code: layout::DLL_CODE_BASE,
+        dll_next_data: layout::DLL_DATA_BASE,
         census: None,
         uid3,
         code_len,
@@ -241,9 +268,10 @@ pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
         .map_err(|err| LoadError::Vm { chunk: "heap create", err })?;
     mem.vm.commit(heap_id, 0, heap_sz).map_err(|err| LoadError::Vm { chunk: "heap commit", err })?;
     let stubs: Vec<Stub> = stub_names.iter().enumerate().map(|(i, n)| Stub {
-        dll_base: "test".into(), dll: "test".into(), ordinal: i as u16, name: Some((*n).into()),
+        dll_base: "test".into(), dll: "test".into(), ordinal: i as u16, name: Some((*n).into()), site: None,
     }).collect();
-    let stub_total = (stubs.len() as u32 + layout::ENGINE_STUB_SLOTS) * 8;
+    let stub_slots_capacity = stubs.len() as u32 + layout::ENGINE_STUB_SLOTS;
+    let stub_total = stub_slots_capacity * 8;
     let stub_id = mem.vm.create_chunk(STUB_BASE, layout::pru(stub_total), Prot::RW)
         .map_err(|err| LoadError::Vm { chunk: "stubs create", err })?;
     mem.vm.commit(stub_id, 0, layout::pru(stub_total)).map_err(|err| LoadError::Vm { chunk: "stubs commit", err })?;
@@ -258,13 +286,24 @@ pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
     Ok(Process {
         cpu, mem, stubs, insns: 0,
         heap: Some(crate::heap::Heap::new(heap_id, HEAP_BASE, heap_sz, heap_sz)),
-        heap_chunk_id: heap_id, stub_chunk_id: stub_id, census: None, uid3: 0, code_len: 0,
+        heap_chunk_id: heap_id, stub_chunk_id: stub_id, stub_slots_capacity,
+        dll_code_ranges: Vec::new(), exception_descriptors: Vec::new(), dll_next_code: layout::DLL_CODE_BASE, dll_next_data: layout::DLL_DATA_BASE,
+        census: None, uid3: 0, code_len: 0,
         frames: Vec::new(), slots: crate::appstart::Slots::default(), nat: Default::default(), native_hook: None, log: Vec::new(), host: Default::default(), trace: None,
         datatype_host: None,
     })
 }
 
 impl Process {
+    /// True if `addr` (clearing Thumb bit 0) falls in the main EXE code or any loaded guest companion DLL code.
+    pub fn is_guest_code(&self, addr: u32) -> bool {
+        let a = addr & !1;
+        if a >= CODE_BASE && a < CODE_BASE.saturating_add(self.code_len) {
+            return true;
+        }
+        self.dll_code_ranges.iter().any(|&(b, l)| a >= b && a < b.saturating_add(l))
+    }
+
     /// TEST HOOK: map `bytes` as read-execute code at the page-aligned `base` (anything at or above `CODE_BASE` extends the
     /// loaded-code range the vtable-anchor check accepts) and return the chunk.
     #[cfg(feature = "test-hooks")]

@@ -171,8 +171,12 @@ pub enum HostObj {
     FbsGc(crate::fbs::FbsGcState),
     /// A `CDirectScreenAccess` session (`fbs.rs`).
     Dsa(crate::fbs::DsaState),
+    /// A `CDirectScreenBitmap` linear framebuffer (`fbs.rs`).
+    Dsb(crate::fbs::DsbState),
     /// A `CMdaAudioOutputStream` audio stream (`fbs.rs`).
     AudioOut(crate::fbs::AudioOutState),
+    /// A `TBidiText` laid-out text run (`fbs.rs`).
+    BidiText(String),
 }
 
 #[derive(Debug, Clone, Default)]

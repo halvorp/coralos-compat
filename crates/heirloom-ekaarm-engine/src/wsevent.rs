@@ -22,11 +22,18 @@ use crate::sched::{ACTIVE_I_FLAGS, ACTIVE_I_PRIORITY, ACTIVE_I_STATUS, FLAG_ACTI
 pub const ENV_RUN_L: &str = "_ZN8CCoeEnv4RunLEv";
 /// `EActivePriorityWsEvents` (coemain.h:49).
 const ACTIVE_PRIORITY_WS_EVENTS: u32 = 100;
-/// `TEventCode` (w32std.h:277-297): EEventNull 0, EEventKey 1, EEventKeyUp 2, EEventKeyDown 3.
+/// `TEventCode` (w32std.h:277-297): EEventNull 0, EEventKey 1, EEventKeyUp 2, EEventKeyDown 3, EEventFocusLost 5, EEventFocusGained 6.
 pub const EEVENT_KEY: u32 = 1;
 pub const EEVENT_KEY_UP: u32 = 2;
 pub const EEVENT_KEY_DOWN: u32 = 3;
-const TWS_EVENT_BYTES: u32 = 40;
+pub const EEVENT_FOCUS_LOST: u32 = 5;
+pub const EEVENT_FOCUS_GAINED: u32 = 6;
+/// `EEventPointer` (w32std.h:287) and `TPointerEvent::TType` values.
+pub const EEVENT_POINTER: u32 = 10;
+pub const EPOINTER_BUTTON1_DOWN: u32 = 0;
+pub const EPOINTER_BUTTON1_UP: u32 = 1;
+pub const EPOINTER_DRAG: u32 = 6;
+const TWS_EVENT_BYTES: u32 = 48;
 const TWS_I_HANDLE: u32 = 4;
 const TWS_I_EVENT_DATA: u32 = 16;
 /// `KErrCancel` / `KErrServerTerminated` (e32err.h): the environment's `RunL` returns without handling an event.
@@ -42,6 +49,12 @@ const ENV_VTABLE: &[(usize, &str)] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WsEvent {
     Key { ty: u32, code: u32, scan: u32, modifiers: u32 },
+    /// Touch / mouse pointer event (`EEventPointer`, `TPointerEvent`).
+    Pointer { ty: u32, x: i32, y: i32 },
+    /// Window focus gained/lost (`EEventFocusGained` / `EEventFocusLost`).
+    Focus(bool),
+    /// Initial or deferred Window Server redraw (`EEventRedraw`) for a window-owning control.
+    Redraw(u32),
     /// A menu or CBA command ID (`CAknView::HandleCommandL` / `CEikAppUi::HandleCommandL`).
     Command(u32),
     /// A list box observer event (`MEikListBoxObserver::HandleListBoxEventL(lb, event)`).
@@ -112,6 +125,29 @@ impl Process {
     pub fn deliver_command(&mut self, cmd: u32) -> Result<(), String> {
         let env = self.host.env.ok_or_else(|| String::from("the application has no environment yet: nothing can receive a command"))?;
         self.ws_enqueue(env, WsEvent::Command(cmd))
+    }
+
+    /// Deliver a touch/mouse pointer event into the Symbian Window Server event queue (`EEventPointer`).
+    pub fn deliver_pointer(&mut self, x: i32, y: i32, phase: heirloom_ui_abi::PointerPhase) -> Result<(), String> {
+        let env = self.host.env.ok_or_else(|| String::from("the application has no environment yet: nothing can receive pointer input"))?;
+        let ty = match phase {
+            heirloom_ui_abi::PointerPhase::Down => EPOINTER_BUTTON1_DOWN,
+            heirloom_ui_abi::PointerPhase::Move => EPOINTER_DRAG,
+            heirloom_ui_abi::PointerPhase::Up => EPOINTER_BUTTON1_UP,
+        };
+        self.ws_enqueue(env, WsEvent::Pointer { ty, x, y })
+    }
+
+    /// Queue an initial `EEventFocusGained` window server event (Symbian sends this when a launched app enters the foreground).
+    pub fn enqueue_focus_gained(&mut self) -> Result<(), String> {
+        let Some(env) = self.host.env else { return Ok(()) };
+        self.ws_enqueue(env, WsEvent::Focus(true))
+    }
+
+    /// Queue a Window Server redraw (`EEventRedraw`) for an activated window-owning control.
+    pub fn enqueue_redraw(&mut self, ctrl: u32) -> Result<(), String> {
+        let Some(env) = self.host.env else { return Ok(()) };
+        self.ws_enqueue(env, WsEvent::Redraw(ctrl))
     }
 
     /// Deliver a native control intent (list row selection, scroll, or activation) to a projected `CEikListBox`.
@@ -200,6 +236,58 @@ impl Process {
                 let spec = SlotSpec { class: "CCoeAppUi", method: "HandleWsEventL", slot: crate::keyroute::SLOT_HANDLE_WS_EVENT_L, inherited: crate::keyroute::INHERITED_HANDLE_WS_EVENT_L };
                 let target = anchor(self, appui, &spec)?;
                 self.call_guest(target, &[appui, block, env], Continuation::Resume)
+            }
+            WsEvent::Pointer { ty, x, y } => {
+                let block = match self.nat.ws.block {
+                    Some(b) => b,
+                    None => {
+                        let b = self.alloc_zeroed(TWS_EVENT_BYTES).ok_or_else(|| String::from("no guest heap for the window server event"))?;
+                        self.nat.ws.block = Some(b);
+                        b
+                    }
+                };
+                self.wr(block, EEVENT_POINTER)?;
+                self.wr(block + TWS_I_HANDLE, env)?;
+                // TPointerEvent (w32std.h): iType (+0), iModifiers (+4), iPosition (+8,+12), iParentPosition (+16,+20)
+                let pe = block + TWS_I_EVENT_DATA;
+                self.wr(pe, ty)?;
+                self.wr(pe + 4, 0)?;
+                self.wr(pe + 8, x as u32)?;
+                self.wr(pe + 12, y as u32)?;
+                self.wr(pe + 16, x as u32)?;
+                self.wr(pe + 20, y as u32)?;
+                let targets = self.stack_key_targets(appui).unwrap_or_default();
+                let target_ctrl = targets.into_iter().find(|&c| {
+                    self.rd(c).ok()
+                        .and_then(|vt| self.rd(vt.wrapping_add(crate::control::SLOT_HANDLE_POINTER_EVENT_L * 4)).ok())
+                        .is_some_and(|fn_ptr| self.is_guest_code(fn_ptr))
+                });
+                if let Some(ctrl) = target_ctrl {
+                    let vt = self.rd(ctrl)?;
+                    let fn_ptr = self.rd(vt.wrapping_add(crate::control::SLOT_HANDLE_POINTER_EVENT_L * 4))?;
+                    self.call_guest(fn_ptr, &[ctrl, pe], Continuation::Resume)
+                } else {
+                    Ok(())
+                }
+            }
+            WsEvent::Focus(gained) => {
+                let block = match self.nat.ws.block {
+                    Some(b) => b,
+                    None => {
+                        let b = self.alloc_zeroed(TWS_EVENT_BYTES).ok_or_else(|| String::from("no guest heap for the window server event"))?;
+                        self.nat.ws.block = Some(b);
+                        b
+                    }
+                };
+                self.wr(block, if gained { EEVENT_FOCUS_GAINED } else { EEVENT_FOCUS_LOST })?;
+                self.wr(block + TWS_I_HANDLE, env)?;
+                let spec = SlotSpec { class: "CCoeAppUi", method: "HandleWsEventL", slot: crate::keyroute::SLOT_HANDLE_WS_EVENT_L, inherited: crate::keyroute::INHERITED_HANDLE_WS_EVENT_L };
+                let target = anchor(self, appui, &spec)?;
+                self.call_guest(target, &[appui, block, env], Continuation::Resume)
+            }
+            WsEvent::Redraw(ctrl) => {
+                self.draw_guest_control(ctrl);
+                Ok(())
             }
             WsEvent::Command(cmd) => crate::viewappui::dispatch_command(self, appui, cmd),
             WsEvent::ListEvent { lb, event } => {

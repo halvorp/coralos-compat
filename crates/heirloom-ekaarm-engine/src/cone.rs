@@ -218,6 +218,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             p.log.push(format!("[eikcore] InfoWinL \"{l1}\" / \"{l2}\""));
             NativeOutcome::Return
         }
+        // void CEikonEnv::SetSystem(TBool) / InfoMsgCancel() (eikenv.h)
+        "_ZN9CEikonEnv9SetSystemEi" | "_ZN9CEikonEnv13InfoMsgCancelEv" => NativeOutcome::Return,
         // CCoeEnv::Static(): the process-wide environment (coemain.h `static inline CCoeEnv* Static()`), the singleton.
         "_ZN7CCoeEnv6StaticEv" => match p.coe_env() {
             Ok(e) => { p.cpu.regs[0] = e; NativeOutcome::Return }

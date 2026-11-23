@@ -7,6 +7,9 @@ use crate::natives::NativeOutcome;
 
 const IGNORED: &[&str] = &[
     "_ZN11RWindowBase17SetShadowDisabledEi",
+    "_ZN15RWindowTreeNode27EnableGroupListChangeEventsEv",
+    "_ZN15RWindowTreeNode29DisableVisibilityChangeEventsEv",
+    "_ZN15RWindowTreeNode24DisableFocusChangeEventsEv",
 ];
 
 pub(crate) fn native(_p: &mut Process, name: &str) -> Option<NativeOutcome> {

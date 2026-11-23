@@ -7,7 +7,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_mem_paged32::Prot;
-use crate::layout::{ENGINE_STUB_SLOTS, STUB_BASE};
+use crate::layout::STUB_BASE;
 use crate::loader::Process;
 use crate::stubs::{encode_stub, stub_addr, Stub};
 
@@ -24,25 +24,16 @@ impl Process {
             return Ok(stub_addr(i));
         }
         let idx = self.stubs.len();
-        let engine_made = self.stubs.iter().filter(|s| s.dll_base == ENGINE_DLL).count() as u32;
-        let slot_limit_hit = engine_made >= ENGINE_STUB_SLOTS;
-        let chunk_end = (STUB_BASE as u64) + ((idx as u64) + 1) * 8;
-        if slot_limit_hit || chunk_end > STUB_BASE as u64 + (self.stub_capacity() as u64) {
-            return Err(format!("the engine stub table is full ({ENGINE_STUB_SLOTS} engine stubs): cannot add {name}"));
+        if idx >= self.stub_slots_capacity as usize {
+            return Err(format!("the engine stub table is full ({} slots): cannot add {name}", self.stub_slots_capacity));
         }
         let vm = &mut self.mem.vm;
         vm.set_prot(self.stub_chunk_id, Prot::RW).map_err(|e| format!("stub page unprotect: {e:?}"))?;
         let wrote = vm.write_bytes(stub_addr(idx), &encode_stub(idx));
         vm.set_prot(self.stub_chunk_id, Prot::RX).map_err(|e| format!("stub page protect: {e:?}"))?;
         wrote.map_err(|e| format!("stub write: {e:?}"))?;
-        self.stubs.push(Stub { dll_base: String::from(ENGINE_DLL), dll: String::from(ENGINE_DLL), ordinal: 0, name: Some(String::from(name)) });
+        self.stubs.push(Stub { dll_base: String::from(ENGINE_DLL), dll: String::from(ENGINE_DLL), ordinal: 0, name: Some(String::from(name)), site: None });
         Ok(stub_addr(idx))
-    }
-
-    /// Bytes the stub chunk was created with (imports and the engine's reserve).
-    fn stub_capacity(&self) -> u32 {
-        let imports = self.stubs.iter().filter(|s| s.dll_base != ENGINE_DLL).count() as u32;
-        crate::layout::pru((imports + ENGINE_STUB_SLOTS) * 8)
     }
 
     /// Build a virtual table in guest memory: `slots[i]` is the mangled name of the native for slot `i`; `None` is a slot nobody

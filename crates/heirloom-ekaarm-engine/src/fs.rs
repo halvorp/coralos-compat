@@ -276,6 +276,72 @@ pub fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 Err(m) => refuse(m),
             }
         }
+        // TInt RFs::MkDirAll(const TDesC16& aPath) (f32file.h): create directory and any missing parents.
+        "_ZN3RFs8MkDirAllERK7TDesC16" => {
+            let sess_dir = p.fs_session(this).map(|s| s.session_path.clone()).unwrap_or_default();
+            let res = crate::desc::read16(p, r1).map(|u| resolve_drive_path(&crate::desc::to_utf8(&u), &sess_dir));
+            match res {
+                Ok(path) => {
+                    let dir_path = match path.rfind(['\\', '/']) { Some(i) => &path[..i], None => path.as_str() };
+                    let code = match p.host.drive.as_mut() {
+                        Some(d) => match d.make_dirs(dir_path) {
+                            Ok(true) => KERR_NONE,
+                            Ok(false) => KERR_ALREADY_EXISTS,
+                            Err(_) => KERR_NOT_READY,
+                        },
+                        None => KERR_NOT_READY,
+                    };
+                    p.cpu.regs[0] = code as u32;
+                    NativeOutcome::Return
+                }
+                Err(m) => refuse(m),
+            }
+        }
+        // TInt RFs::Delete(const TDesC16& aName) (f32file.h)
+        "_ZN3RFs6DeleteERK7TDesC16" => {
+            let sess_dir = p.fs_session(this).map(|s| s.session_path.clone()).unwrap_or_default();
+            let res = crate::desc::read16(p, r1).map(|u| resolve_drive_path(&crate::desc::to_utf8(&u), &sess_dir));
+            match res {
+                Ok(path) => {
+                    let code = match p.host.drive.as_mut() {
+                        Some(d) => match d.delete(&path) {
+                            Ok(()) => KERR_NONE,
+                            Err(crate::drive::DriveError::NotFound) => -1,
+                            Err(_) => KERR_NOT_READY,
+                        },
+                        None => KERR_NOT_READY,
+                    };
+                    p.cpu.regs[0] = code as u32;
+                    NativeOutcome::Return
+                }
+                Err(m) => refuse(m),
+            }
+        }
+        // TInt RFs::Rename(const TDesC16& anOldName, const TDesC16& aNewName) (f32file.h)
+        "_ZN3RFs6RenameERK7TDesC16S2_" => {
+            let sess_dir = p.fs_session(this).map(|s| s.session_path.clone()).unwrap_or_default();
+            let res = crate::desc::read16(p, r1)
+                .and_then(|u1| crate::desc::read16(p, r2).map(|u2| (u1, u2)))
+                .map(|(u1, u2)| (
+                    resolve_drive_path(&crate::desc::to_utf8(&u1), &sess_dir),
+                    resolve_drive_path(&crate::desc::to_utf8(&u2), &sess_dir),
+                ));
+            match res {
+                Ok((old_p, new_p)) => {
+                    let code = match p.host.drive.as_mut() {
+                        Some(d) => match d.rename(&old_p, &new_p) {
+                            Ok(()) => KERR_NONE,
+                            Err(crate::drive::DriveError::NotFound) => -1,
+                            Err(_) => KERR_NOT_READY,
+                        },
+                        None => KERR_NOT_READY,
+                    };
+                    p.cpu.regs[0] = code as u32;
+                    NativeOutcome::Return
+                }
+                Err(m) => refuse(m),
+            }
+        }
         // TInt CDir::Count() const (f32file.h)
         "_ZNK4CDir5CountEv" => match p.obj_get(this) {
             Some(crate::objects::HostObj::Dir(entries)) => {
@@ -577,15 +643,15 @@ pub fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             }
             NativeOutcome::Return
         }
-        // TInt RFile::Seek(TSeek aMode, TInt& aPos) const
+        // TInt RFile::Seek(TSeek aMode, TInt& aPos) const (f32file.h: ESeekAddress=0, ESeekStart=1, ESeekCurrent=2, ESeekEnd=3).
         "_ZNK5RFile4SeekE5TSeekRi" => {
             let h = p.mem.vm.read_u32(this).unwrap_or(0);
             let off = p.rd(r2).unwrap_or(0) as i32;
             if let Some(f) = p.nat.objs.open_files.get_mut(&h) {
                 let new_pos = match r1 {
-                    0 => off.max(0) as usize, // ESeekStart
-                    1 => (f.pos as i64 + off as i64).max(0) as usize, // ESeekCurrent
-                    2 => (f.data.len() as i64 + off as i64).max(0) as usize, // ESeekEnd
+                    1 => off.max(0) as usize, // ESeekStart
+                    2 => (f.pos as i64 + off as i64).max(0) as usize, // ESeekCurrent
+                    3 => (f.data.len() as i64 + off as i64).max(0) as usize, // ESeekEnd
                     _ => f.pos,
                 }.min(f.data.len());
                 f.pos = new_pos;

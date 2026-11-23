@@ -100,7 +100,13 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 p.cpu.regs[0] = o;
                 NativeOutcome::Return
             }
-            Err(m) => refuse(m),
+            Err(m) => {
+                if !p.exception_descriptors.is_empty() && m.contains("no repository file") {
+                    crate::ehabi::leave(p, -1)
+                } else {
+                    refuse(m)
+                }
+            }
         },
         // TInt CRepository::Get(TUint32 aKey, TInt& aValue)
         "_ZN11CRepository3GetEmRi" => {

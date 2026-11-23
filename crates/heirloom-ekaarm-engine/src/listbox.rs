@@ -229,7 +229,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZN11CEikListBox19HandleItemAdditionLEv" => { let r = p.list_sync(r0); ret(p, r.map(|_| 0)) }
         // CEikListBox::UpdateScrollBarsL(): sizes the guest's scroll bar thumbs. The host keeps its own scroll bar over the List control, so this
         // is a recorded no-op. DELETE WHEN the host's List control takes its scroll extent from the guest's scroll bar frame.
-        "_ZN11CEikListBox17UpdateScrollBarsLEv" => ret(p, Ok(0)),
+        "_ZN11CEikListBox17UpdateScrollBarsLEv"
+        | "_ZNK11CEikListBox23ScrollToMakeItemVisibleEi"
+        | "_ZN11CEikListBox23ScrollToMakeItemVisibleEi" => ret(p, Ok(0)),
         // TSize MinimumSize(): sret TSize in r0, this in r1. Return iSize when set, else the current client area
         // (Avkon list boxes fill their container's client pane when queried before SetRect).
         "_ZN29CAknDoubleGraphicStyleListBox11MinimumSizeEv"

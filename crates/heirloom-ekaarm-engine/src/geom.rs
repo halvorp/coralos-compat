@@ -20,6 +20,18 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         p.cpu.regs[0] = u32::from(if name.contains("neERKS_") { !eq } else { eq });
         return Some(NativeOutcome::Return);
     }
+    if name == "_ZNK5TRectneERKS_" || name == "_ZNK5TRecteqERKS_" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(a0), Ok(a1), Ok(a2), Ok(a3)) = (rd(p, this), rd(p, this + 4), rd(p, this + 8), rd(p, this + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect unreadable")));
+        };
+        let (Ok(b0), Ok(b1), Ok(b2), Ok(b3)) = (rd(p, r1), rd(p, r1 + 4), rd(p, r1 + 8), rd(p, r1 + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect arg unreadable")));
+        };
+        let eq = (a0, a1, a2, a3) == (b0, b1, b2, b3);
+        p.cpu.regs[0] = u32::from(if name.contains("neERKS_") { !eq } else { eq });
+        return Some(NativeOutcome::Return);
+    }
     if name == "_ZN5TRect7SetSizeERK5TSize" {
         let r1 = p.cpu.regs[1];
         let (Ok(x), Ok(y), Ok(w), Ok(h)) = (rd(p, this), rd(p, this + 4), rd(p, r1), rd(p, r1 + 4)) else {
@@ -93,6 +105,16 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         let axis = if name.ends_with("HeightEv") { 1 } else { 0 };
         let (Ok(tl), Ok(br)) = (rd(p, this + axis * 4), rd(p, this + 8 + axis * 4)) else { return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: the TRect at {this:#x} is unreadable"))) };
         p.cpu.regs[0] = br.wrapping_sub(tl) as u32;
+        return Some(NativeOutcome::Return);
+    }
+    // TRect TRegion::BoundingRect() const: sret TRect in r0, this in r1. Return the full screen rect.
+    if name == "_ZNK7TRegion12BoundingRectEv" {
+        let (sw, sh) = p.screen_size();
+        for (i, v) in [0i32, 0, sw, sh].iter().enumerate() {
+            if p.mem.vm.write_u32(this.wrapping_add(i as u32 * 4), *v as u32).is_err() {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect at {this:#x} unwritable")));
+            }
+        }
         return Some(NativeOutcome::Return);
     }
     // TSize TRect::Size() const: a class return, so r0 is the result's address and r1 the TRect; (iBr.iX - iTl.iX, iBr.iY - iTl.iY).

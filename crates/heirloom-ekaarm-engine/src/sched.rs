@@ -37,12 +37,13 @@ const PERIODIC_VTABLE: &[(usize, &str)] = &[
     (4, PERIODIC_RUN_L),
 ];
 
-/// Host state for one active `CPeriodic` timer (`sched.rs`).
+/// Host state for one active `CPeriodic` or `CTimer` timer (`sched.rs`).
 #[derive(Debug, Clone, Copy)]
 pub struct PeriodicTimer {
     pub interval_us: u64,
     pub deadline_us: u64,
     pub armed: bool,
+    pub one_shot: bool,
 }
 /// The queue's sentinel node: `iNext`, `iPrev`, `iPriority` (a `TPriQueLink` without the CBase part), a circular list head.
 const HEAD_BYTES: u32 = 12;
@@ -139,23 +140,37 @@ impl Process {
         self.wr(ao + ACTIVE_I_FLAGS, flags | FLAG_ACTIVE)?;
         self.wr(ao + ACTIVE_I_STATUS, crate::request::KREQUEST_PENDING)?;
         let deadline_us = self.nat.clock_us.saturating_add(delay_us);
-        self.nat.periodic_timers.insert(ao, PeriodicTimer { interval_us, deadline_us, armed: true });
+        self.nat.periodic_timers.insert(ao, PeriodicTimer { interval_us, deadline_us, armed: true, one_shot: false });
         self.complete_due_timers()
     }
 
-    /// Complete any armed `CPeriodic` timers whose deadline has been reached by `self.nat.clock_us`.
+    fn arm_oneshot(&mut self, ao: u32, delay_us: u64) -> Result<(), String> {
+        let flags = self.rd(ao + ACTIVE_I_FLAGS)?;
+        self.wr(ao + ACTIVE_I_FLAGS, flags | FLAG_ACTIVE)?;
+        self.wr(ao + ACTIVE_I_STATUS, crate::request::KREQUEST_PENDING)?;
+        let deadline_us = self.nat.clock_us.saturating_add(delay_us);
+        self.nat.periodic_timers.insert(ao, PeriodicTimer { interval_us: 0, deadline_us, armed: true, one_shot: true });
+        self.complete_due_timers()
+    }
+
+    /// Complete any armed `CPeriodic` / `CTimer` timers whose deadline has been reached by `self.nat.clock_us`.
     pub(crate) fn complete_due_timers(&mut self) -> Result<(), String> {
         let now = self.nat.clock_us;
-        let due: alloc::vec::Vec<u32> = self.nat.periodic_timers.iter()
+        let due: alloc::vec::Vec<(u32, bool)> = self.nat.periodic_timers.iter()
             .filter(|(_, t)| t.armed && t.deadline_us <= now)
-            .map(|(&ao, _)| ao)
+            .map(|(&ao, t)| (ao, t.one_shot))
             .collect();
-        for ao in due {
+        for (ao, one_shot) in due {
             let flags = self.rd(ao + ACTIVE_I_FLAGS)?;
             let status = self.rd(ao + ACTIVE_I_STATUS)?;
             if flags & FLAG_ACTIVE != 0 && status == crate::request::KREQUEST_PENDING {
                 self.wr(ao + ACTIVE_I_STATUS, 0)?; // KErrNone
                 self.nat.requests.signals += 1;
+                if one_shot {
+                    if let Some(t) = self.nat.periodic_timers.get_mut(&ao) {
+                        t.armed = false;
+                    }
+                }
             }
         }
         Ok(())
@@ -213,6 +228,44 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZN7CActiveC1Ei" | "_ZN7CActiveC2Ei" => {
             let r = (ACTIVE_I_STATUS..ACTIVE_SIZE).step_by(4).try_for_each(|o| p.wr(this + o, 0)).and_then(|_| p.wr(this + ACTIVE_I_PRIORITY, r1));
             done(p, r)
+        }
+        // CTimer::CTimer(TInt aPriority) (e32base.h): CActive (28B) + RTimer iTimer (+28, 4B).
+        "_ZN6CTimerC1Ei" | "_ZN6CTimerC2Ei" => {
+            let r = (ACTIVE_I_STATUS..ACTIVE_SIZE + 4).step_by(4).try_for_each(|o| p.wr(this + o, 0)).and_then(|_| p.wr(this + ACTIVE_I_PRIORITY, r1));
+            done(p, r)
+        }
+        // void CTimer::ConstructL(): create the local RTimer handle at +28.
+        "_ZN6CTimer10ConstructLEv" => {
+            let r = p.wr(this + ACTIVE_SIZE, 1);
+            done(p, r)
+        }
+        // void CTimer::After(TTimeIntervalMicroSeconds32 aInterval): arm one-shot timer.
+        "_ZN6CTimer5AfterE27TTimeIntervalMicroSeconds32" => {
+            let delay_us = (r1 as i32).max(0) as u64;
+            let r = p.arm_oneshot(this, delay_us);
+            done(p, r)
+        }
+        // void CTimer::HighRes(TTimeIntervalMicroSeconds32 aInterval)
+        "_ZN6CTimer7HighResE27TTimeIntervalMicroSeconds32" => {
+            let delay_us = (r1 as i32).max(0) as u64;
+            let r = p.arm_oneshot(this, delay_us);
+            done(p, r)
+        }
+        // void CTimer::DoCancel() / ~CTimer()
+        "_ZN6CTimer8DoCancelEv" => {
+            if let Some(t) = p.nat.periodic_timers.get_mut(&this) { t.armed = false; }
+            NativeOutcome::Return
+        }
+        "_ZN6CTimerD1Ev" | "_ZN6CTimerD2Ev" | "_ZN6CTimerD0Ev" => {
+            let _ = p.sched_cancel(this);
+            let _ = p.sched_remove(this);
+            p.nat.periodic_timers.remove(&this);
+            let _ = p.wr(this + ACTIVE_SIZE, 0);
+            if name.ends_with("D0Ev") {
+                if let Some(heap) = p.heap.as_mut() { let _ = heap.free(this); }
+            }
+            p.cpu.regs[0] = this;
+            NativeOutcome::Return
         }
         // static void CActiveScheduler::Add(CActive*)
         "_ZN16CActiveScheduler3AddEP7CActive" => { let r = p.sched_add(this); done(p, r) }

@@ -55,7 +55,7 @@ impl<U: GuestUi> EkaArm<U> {
     /// `start_file` refuses by name). os-eka.library makes its machines this way: the table is a file the host sends.
     pub fn without_ordinals(ui: U) -> Self {
         let mut tree = Tree::new(255);
-        tree.add_volume("Z", false);
+        tree.add_volume("Z", true);
         EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new(), datatype_host: None }
     }
     /// Attach the host's native datatype decoder (CoralOS `datatype.library` on target).
@@ -106,6 +106,8 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
             drive.set_rom(rom);
         }
         p.set_drive(drive);
+        crate::dll::resolve_guest_dlls(&mut p, ordinals)
+            .map_err(|e| Refusal(format!("ekaarm: {name}: guest DLL load failed: {e}")))?;
         if let Some(data) = self.cdl_data.take() {
             p.set_cdl_data(&data).map_err(|e| Refusal(format!("ekaarm: {name}: the layout data is refused: {e}")))?;
         }
@@ -126,6 +128,11 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
             GuestUiEvent::Key { win, code, text, modifiers, down } => {
                 if p.host.window != Some(win) { return Ok(Delivery::NotForGuestWindow); }
                 p.deliver_key(code, &text, modifiers, down).map_err(|m| Refusal(format!("ekaarm: deliver: {m}")))?;
+                Ok(Delivery::Queued)
+            }
+            GuestUiEvent::Pointer { win, x, y, phase, .. } => {
+                if p.host.window != Some(win) { return Ok(Delivery::NotForGuestWindow); }
+                p.deliver_pointer(x, y, phase).map_err(|m| Refusal(format!("ekaarm: deliver: {m}")))?;
                 Ok(Delivery::Queued)
             }
             GuestUiEvent::MenuCommand { win, token } => {

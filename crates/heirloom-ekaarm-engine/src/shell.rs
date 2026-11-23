@@ -341,9 +341,19 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // void CEikStatusPaneBase::SwitchLayoutL(TInt aLayoutResourceId): which panes exist and where is the layout resource's; only the id is kept.
         "_ZN18CEikStatusPaneBase12SwitchLayoutLEi" => { p.nat.shell.layout = Some(r1); NativeOutcome::Return }
         "_ZN18CEikStatusPaneBase11MakeVisibleEi" | "_ZN18CEikStatusPaneBase9SetDimmedEi" | "_ZN18CEikStatusPaneBase8SetFadedEi" => NativeOutcome::Return,
-        // CAknTitlePane::SetTextL(const TDesC&) and (const TDesC&, TBool aScroll)
+        // CAknTitlePane::SetTextL(const TDesC&) / (const TDesC&, TBool) and SetText(HBufC16*) (takes ownership).
         "_ZN13CAknTitlePane8SetTextLERK7TDesC16" | "_ZN13CAknTitlePane8SetTextLERK7TDesC16i" => {
             let r = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).and_then(|t| p.shell_set_title(t)).map(|_| r0);
+            ret(p, r)
+        }
+        "_ZN13CAknTitlePane7SetTextEP7HBufC16" | "_ZN13CAknTitlePane7SetTextEP7HBufC16i" => {
+            let r = if r1 == 0 {
+                Ok(r0)
+            } else {
+                let res = crate::desc::read16(p, r1).map(|u| crate::desc::to_utf8(&u)).and_then(|t| p.shell_set_title(t)).map(|_| r0);
+                if let Some(h) = p.heap.as_mut() { let _ = h.free(r1); }
+                res
+            };
             ret(p, r)
         }
         // void CAknTitlePane::SetFromResourceL(TResourceReader& aReader) (akntitle.h): TITLE_PANE starts with LTEXT txt.

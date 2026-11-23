@@ -1,13 +1,23 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use heirloom_fmt_e32::{ImportedDll, OrdinalTable};
+use heirloom_mem_paged32::ChunkId;
 use crate::layout::{STUB_BASE, STUB_SVC_BASE};
+
+/// Where an image's import word was patched in guest memory, so a loaded guest DLL can rewrite it directly.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportSite {
+    pub chunk: ChunkId,
+    pub addr: u32,
+    pub addend: u16,
+}
 
 pub struct Stub {
     pub dll_base: String,
     pub dll: String,
     pub ordinal: u16,
     pub name: Option<String>,
+    pub site: Option<ImportSite>,
 }
 
 pub fn dll_base(full: &str) -> String {
@@ -26,6 +36,7 @@ pub fn build(dlls: &[ImportedDll], table: &OrdinalTable) -> Vec<Stub> {
                 dll: d.name.clone(),
                 ordinal: imp.ordinal,
                 name: table.name_of(&d.name, imp.ordinal).map(String::from),
+                site: None,
             });
         }
     }

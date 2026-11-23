@@ -155,6 +155,37 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             p.cpu.regs[0] = match p.obj_get(r0) { Some(HostObj::AudioOut(a)) => a.bytes_played as u32, _ => 0 };
             NativeOutcome::Return
         }
+        // CMdaAudioPlayerUtility (mdaaudiosampleplayer.h): file/buffer audio playback helper.
+        "_ZN22CMdaAudioPlayerUtility14NewFilePlayerLERK7TDesC16R23MMdaAudioPlayerCallbacki22TMdaPriorityPreferenceP10CMdaServer"
+        | "_ZN22CMdaAudioPlayerUtility4NewLER23MMdaAudioPlayerCallbacki22TMdaPriorityPreference" => {
+            let slots = slots_with_gaps(16, &[
+                (0, "_ZN22CMdaAudioPlayerUtilityD1Ev"),
+                (1, "_ZN22CMdaAudioPlayerUtilityD0Ev"),
+                (2, "_ZN5CBase10Extension_EjRPvS0_"),
+            ]);
+            let r = p.alloc_zeroed(0x20)
+                .ok_or_else(|| String::from("no heap for CMdaAudioPlayerUtility"))
+                .and_then(|obj| {
+                    let vptr = p.build_vtable("CMdaAudioPlayerUtility", &slots)?;
+                    p.wr(obj, vptr)?;
+                    Ok(obj)
+                });
+            match r {
+                Ok(obj) => { p.cpu.regs[0] = obj; NativeOutcome::Return }
+                Err(m) => return refuse(m),
+            }
+        }
+        "_ZN22CMdaAudioPlayerUtility11SetPositionERK25TTimeIntervalMicroSeconds"
+        | "_ZN22CMdaAudioPlayerUtility4PlayEv"
+        | "_ZN22CMdaAudioPlayerUtility4StopEv"
+        | "_ZN22CMdaAudioPlayerUtility9SetVolumeEi"
+        | "_ZN22CMdaAudioPlayerUtility10SetRepeatsEiRK25TTimeIntervalMicroSeconds"
+        | "_ZN22CMdaAudioPlayerUtility5CloseEv" => NativeOutcome::Return,
+        "_ZN22CMdaAudioPlayerUtility9MaxVolumeEv" => { p.cpu.regs[0] = 10; NativeOutcome::Return }
+        "_ZN22CMdaAudioPlayerUtilityD1Ev" | "_ZN22CMdaAudioPlayerUtilityD0Ev" => {
+            if name.ends_with("D0Ev") { if let Some(heap) = p.heap.as_mut() { let _ = heap.free(r0); } }
+            NativeOutcome::Return
+        }
         _ => return None,
     })
 }

@@ -14,7 +14,17 @@ use crate::callback::Continuation;
 use crate::loader::Process;
 use crate::natives::NativeOutcome;
 use crate::run::Outcome;
-use crate::wsevent::{EEVENT_KEY, EEVENT_KEY_DOWN, EEVENT_KEY_UP};
+use crate::wsevent::{EEVENT_FOCUS_GAINED, EEVENT_FOCUS_LOST, EEVENT_KEY, EEVENT_KEY_DOWN, EEVENT_KEY_UP};
+
+/// `CCoeAppUi::HandleForegroundEventL(TBool)` (coeaui.h): slot 8.
+const SLOT_HANDLE_FOREGROUND_EVENT_L: u32 = 8;
+const INHERITED_HANDLE_FOREGROUND_EVENT_L: &[&str] = &[
+    "_ZN9CCoeAppUi22HandleForegroundEventLEi",
+    "_ZN9CEikAppUi22HandleForegroundEventLEi",
+    "_ZN13CAknAppUiBase22HandleForegroundEventLEi",
+    "_ZN9CAknAppUi22HandleForegroundEventLEi",
+    "_ZN13CAknViewAppUi22HandleForegroundEventLEi",
+];
 
 /// `CCoeAppUi::HandleWsEventL` (coeaui.h:175): slot 4 (`appstart.rs` lists the numbering; the FileBrowser AppUi's vtable holds its own
 /// code there, which calls the base class through an import).
@@ -23,7 +33,10 @@ pub const SLOT_HANDLE_WS_EVENT_L: u32 = 4;
 pub const INHERITED_HANDLE_WS_EVENT_L: &[&str] = HANDLE_WS_EVENT_NAMES;
 /// `CCoeAppUi::HandleKeyEventL` (coeaui.h:180): slot 7.
 const SLOT_HANDLE_KEY_EVENT_L: u32 = 7;
-const INHERITED_HANDLE_KEY_EVENT_L: &[&str] = &["_ZN9CCoeAppUi14HandleKeyEventLERK9TKeyEvent10TEventCode"];
+const INHERITED_HANDLE_KEY_EVENT_L: &[&str] = &[
+    "_ZN9CCoeAppUi15HandleKeyEventLERK9TKeyEvent10TEventCode",
+    "_ZN9CCoeAppUi14HandleKeyEventLERK9TKeyEvent10TEventCode",
+];
 /// `CCoeControl::OfferKeyEventL` (slot 3, control.rs) and the overrides of it this engine implements.
 const SLOT_OFFER_KEY_EVENT_L: u32 = 3;
 const INHERITED_OFFER_KEY_EVENT_L: &[&str] = &["_ZN11CCoeControl14OfferKeyEventLERK9TKeyEvent10TEventCode", crate::listkey::LIST_OFFER_KEY_EVENT_L];
@@ -100,8 +113,21 @@ pub(crate) fn appui_handled(p: &mut Process, mut o: Offer, r0: u32) -> Result<()
 fn handle_ws_event(p: &mut Process) -> Result<(), String> {
     let (appui, event) = (p.cpu.regs[0], p.cpu.regs[1]);
     let ty = p.rd(event)?;
+    if matches!(ty, EEVENT_FOCUS_GAINED | EEVENT_FOCUS_LOST) {
+        let fg = u32::from(ty == EEVENT_FOCUS_GAINED);
+        let spec = SlotSpec {
+            class: "CCoeAppUi",
+            method: "HandleForegroundEventL",
+            slot: SLOT_HANDLE_FOREGROUND_EVENT_L,
+            inherited: INHERITED_HANDLE_FOREGROUND_EVENT_L,
+        };
+        if let Ok(target) = anchor(p, appui, &spec) {
+            return p.call_guest(target, &[appui, fg], Continuation::Resume);
+        }
+        return Ok(());
+    }
     if !matches!(ty, EEVENT_KEY | EEVENT_KEY_UP | EEVENT_KEY_DOWN) {
-        return Err(format!("window server event type {ty}: only key events are routed"));
+        return Err(format!("window server event type {ty}: only key and focus events are routed"));
     }
     let key = event + TWS_I_EVENT_DATA;
     let alias_enter_to_ok = ty == EEVENT_KEY && p.rd(key).unwrap_or(0) == EKEY_ENTER;
@@ -115,11 +141,15 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     if matches!(
         name,
         "_ZN11CCoeControl14OfferKeyEventLERK9TKeyEvent10TEventCode"
+            | "_ZN9CCoeAppUi15HandleKeyEventLERK9TKeyEvent10TEventCode"
             | "_ZN9CCoeAppUi14HandleKeyEventLERK9TKeyEvent10TEventCode"
     ) {
         // Base `CCoeControl::OfferKeyEventL` (coecntrl.cpp) and `CCoeAppUi::HandleKeyEventL`
         // (coeaui.cpp) both do nothing and return `EKeyWasNotConsumed` (0).
         p.cpu.regs[0] = 0;
+        return Some(NativeOutcome::Return);
+    }
+    if INHERITED_HANDLE_FOREGROUND_EVENT_L.contains(&name) {
         return Some(NativeOutcome::Return);
     }
     if !HANDLE_WS_EVENT_NAMES.contains(&name) { return None; }

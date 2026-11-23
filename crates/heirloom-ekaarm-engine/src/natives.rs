@@ -50,6 +50,14 @@ pub struct NativeState {
     pub screen_size: Option<(i32, i32)>,
     /// A modal `GuestUi::request` currently blocking `CEikDialog::RunLD` (`dialog.rs`): `(request_ref, dialog_addr)`.
     pub pending_request: Option<(heirloom_ui_abi::RequestRef, u32)>,
+    /// PRNG state for C stdlib `rand()` / `srand()` (`clib.rs`).
+    pub clib_rng: u32,
+    /// Saved cursor for C stdlib `strtok()` (`clib.rs`).
+    pub clib_strtok_pos: u32,
+    /// Active ARM EHABI `User::Leave` unwinding state (`ehabi.rs`).
+    pub active_leave: Option<crate::ehabi::LeaveState>,
+    /// Reusable guest `XLeaveException` object address (`ehabi.rs`).
+    pub leave_exc_obj: Option<u32>,
 }
 
 /// A host extension to the natives: asked first with the import's mangled name; `Some` = handled. Used by tests to stand in
@@ -74,6 +82,7 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::viewappui::native(proc, name) { return Some(o); }
     if let Some(o) = crate::dialog::native(proc, name) { return Some(o); }
     if let Some(o) = crate::trap::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::ehabi::native(proc, name) { return Some(o); }
     if let Some(o) = crate::screen::native(proc, name) { return Some(o); }
     if let Some(o) = crate::desc::native(proc, name) { return Some(o); }
     if let Some(o) = crate::avkon::native(proc, name) { return Some(o); }
@@ -114,6 +123,7 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::fbs::native(proc, name) { return Some(o); }
     if let Some(o) = crate::audio::native(proc, name) { return Some(o); }
     if let Some(o) = crate::aeabimem::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::clib::native(proc, name) { return Some(o); }
     if let Some(o) = crate::format::native(proc, name) { return Some(o); }
     None
 }
@@ -194,8 +204,8 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             proc.cpu.regs[0] = proc.uid3;
             NativeOutcome::Return
         }
-        // TFileName RProcess::FileName() const (e32std.h): ARM EABI returns TBuf<256> via sret pointer in r0.
-        "_ZNK8RProcess8FileNameEv" => {
+        // TFileName RProcess::FileName() const / CApaApplication::DllName() const: ARM EABI returns TBuf<256> via sret in r0.
+        "_ZNK8RProcess8FileNameEv" | "_ZNK15CApaApplication7DllNameEv" => {
             const KMAX_FILE_NAME: u32 = 256;
             let app_stem = proc.host.drive.as_ref()
                 .and_then(|d| crate::resource::registration(d, proc.uid3).ok())
@@ -229,14 +239,215 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             NativeOutcome::Return
         }
         // Per-process initialisation of the EKA2 user side: nothing in this engine needs initialising, so it returns.
-        "_ZN4User11InitProcessEv" => {
+        "_ZN4User11InitProcessEv" | "_ZN4User16CompressAllHeapsEv" => {
             proc.cpu.regs[0] = 0;
             NativeOutcome::Return
         }
-        // UserSvr::DllSetTls(aHandle, aDllUid, aPtr) -> KErrNone; UserSvr::DllTls(aHandle, aDllUid) -> the pointer (0 = none).
+        // TLanguage User::Language() (e32const.h): ELangEnglish = 1.
+        "_ZN4User8LanguageEv" => {
+            proc.cpu.regs[0] = 1;
+            NativeOutcome::Return
+        }
+        // TUint32 Math::Random() (e32math.h): deterministic PRNG.
+        "_ZN4Math6RandomEv" => {
+            let mut s = proc.nat.clib_rng;
+            if s == 0 { s = 0x2468_ACE1; }
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            proc.nat.clib_rng = s;
+            proc.cpu.regs[0] = s;
+            NativeOutcome::Return
+        }
+        // TBool User::QueryVersionSupported(const TVersion& aCurrent, const TVersion& aRequested)
+        "_ZN4User21QueryVersionSupportedERK8TVersionS2_" => {
+            proc.cpu.regs[0] = 1;
+            NativeOutcome::Return
+        }
+        // void User::After(TTimeIntervalMicroSeconds32 aInterval) / User::AfterHighRes: advance virtual clock.
+        "_ZN4User5AfterE27TTimeIntervalMicroSeconds32"
+        | "_ZN4User12AfterHighResE27TTimeIntervalMicroSeconds32" => {
+            proc.nat.clock_us = proc.nat.clock_us.saturating_add(r0 as u64);
+            NativeOutcome::Return
+        }
+        // TBool TUid::operator==(const TUid& aUid) const / operator!=(const TUid&) const
+        "_ZNK4TUideqERKS_" | "_ZNK4TUidneERKS_" => {
+            let a = proc.rd(r0).unwrap_or(0);
+            let b = proc.rd(r1).unwrap_or(0);
+            let eq = a == b;
+            proc.cpu.regs[0] = u32::from(if name.contains("neERKS_") { !eq } else { eq });
+            NativeOutcome::Return
+        }
+        // RProperty (e32property.h): Publish & Subscribe stub — Attach succeeds, Subscribe stays pending, Get returns KErrNotFound.
+        "_ZN9RProperty6AttachE4TUidj10TOwnerType" => {
+            let _ = proc.wr(r0, 1);
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZN9RProperty9SubscribeER14TRequestStatus" => {
+            let _ = proc.wr(r1, crate::request::KREQUEST_PENDING);
+            NativeOutcome::Return
+        }
+        "_ZN9RProperty6CancelEv" | "_ZN9RProperty5CloseEv" => {
+            if name.ends_with("CloseEv") { let _ = proc.wr(r0, 0); }
+            NativeOutcome::Return
+        }
+        "_ZN9RProperty3GetERi" | "_ZN9RProperty3GetER5TDes8" | "_ZN9RProperty3GetER6TDes16"
+        | "_ZN9RProperty3GetE4TUidjRi" | "_ZN9RProperty3GetE4TUidjR5TDes8" | "_ZN9RProperty3GetE4TUidjR6TDes16" => {
+            proc.cpu.regs[0] = (-1i32) as u32; // KErrNotFound
+            NativeOutcome::Return
+        }
+        // REComSession (ecom.h): no dynamic ECom plugins registered on desktop host; list returns empty, CreateImplementationL leaves KErrNotFound.
+        "_ZN12REComSession20ListImplementationsLE4TUidR13RPointerArrayI26CImplementationInformationE"
+        | "_ZN12REComSession20ListImplementationsLE4TUidRK19TEComResolverParamsR13RPointerArrayI26CImplementationInformationE"
+        | "_ZN12REComSession20ListImplementationsLE4TUidRK19TEComResolverParamsS0_R13RPointerArrayI26CImplementationInformationE"
+        | "_ZN12REComSession10FinalCloseEv" => NativeOutcome::Return,
+        "_ZN12REComSession21CreateImplementationLE4TUidlPv" => {
+            match proc.plain_object("CEComImpl", 0x40) {
+                Ok(obj) => {
+                    let key_off = r1;
+                    if key_off < 0x3C { let _ = proc.wr(obj.wrapping_add(key_off), r0); }
+                    proc.cpu.regs[0] = obj;
+                    NativeOutcome::Return
+                }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED ecom {name}: {m}")),
+            }
+        }
+        "_ZN12REComSession23DestroyedImplementationE4TUid" => NativeOutcome::Return,
+        // TFindHandleBase / TFindServer (e32std.h): no background servers matched.
+        "_ZN15TFindHandleBaseC1ERK7TDesC16" | "_ZN15TFindHandleBaseC2ERK7TDesC16" => {
+            let _ = proc.wr(r0, 0);
+            proc.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        "_ZN11TFindServer4NextER4TBufILi256EE" => {
+            proc.cpu.regs[0] = (-1i32) as u32; // KErrNotFound
+            NativeOutcome::Return
+        }
+        // RSessionBase::CreateSession / DoSendReceive (e32std.h): non-bridged Symbian servers are absent.
+        "_ZN12RSessionBase13CreateSessionERK7TDesC16RK8TVersioni" => {
+            let _ = proc.wr(r0, 0);
+            proc.cpu.regs[0] = (-1i32) as u32; // KErrNotFound
+            NativeOutcome::Return
+        }
+        "_ZNK12RSessionBase13DoSendReceiveEiPK8TIpcArgs" => {
+            proc.cpu.regs[0] = (-5i32) as u32; // KErrNotSupported
+            NativeOutcome::Return
+        }
+        // RConnectionMonitor / RHTTPSession: offline desktop host (no cellular bearer events).
+        "_ZN18RConnectionMonitor8ConnectLEv"
+        | "_ZN18RConnectionMonitor12NotifyEventLER26MConnectionMonitorObserver"
+        | "_ZN18RConnectionMonitor5CloseEv"
+        | "_ZN12RHTTPSession5OpenLEv"
+        | "_ZN12RHTTPSession5CloseEv" => NativeOutcome::Return,
+        // CMsvSession::OpenAsyncL (msvapi.h): messaging store has no SMS/MMS events on desktop host.
+        "_ZN11CMsvSession10OpenAsyncLER19MMsvSessionObserver" => {
+            match proc.plain_object("CMsvSession", 0x20) {
+                Ok(obj) => { proc.cpu.regs[0] = obj; NativeOutcome::Return }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED msgs {name}: {m}")),
+            }
+        }
+        // CAknLongTapDetector::NewL (aknlongtapdetector.h): touch long-tap helper.
+        "_ZN19CAknLongTapDetector4NewLEP27MAknLongTapDetectorCallBack" => {
+            match proc.plain_object("CAknLongTapDetector", 0x30) {
+                Ok(obj) => { proc.cpu.regs[0] = obj; NativeOutcome::Return }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED avkon {name}: {m}")),
+            }
+        }
+        // Symbian Sensor Framework (sensrvclient / sensrvutil): no hardware accelerometer/proximity sensors on desktop host.
+        "_ZN18TSensrvChannelInfoC1Ev" | "_ZN18TSensrvChannelInfoC2Ev" => {
+            let _ = proc.mem.vm.write_bytes(r0, &[0u8; 0x40]);
+            proc.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        // Symbian Sensor Framework channel enumerator (sensrvclient ordinal 3: NewL, vtable slot 3: FindChannelsL).
+        s if s.starts_with("_ZN20CSensrvChannel") && s.ends_with("4NewLEv") => {
+            let slots = crate::enginestub::slots_with_gaps(5, &[
+                (0, "sensrv::enum_dtor1"),
+                (1, "sensrv::enum_dtor0"),
+                (2, "_ZN5CBase10Extension_EjRPvS0_"),
+                (3, "sensrv::find_channels"),
+            ]);
+            let r = proc.alloc_zeroed(16)
+                .ok_or_else(|| String::from("no heap for sensrv enumerator"))
+                .and_then(|obj| {
+                    let vptr = proc.build_vtable("SensrvEnum", &slots)?;
+                    proc.wr(obj, vptr)?;
+                    Ok(obj)
+                });
+            match r {
+                Ok(obj) => { proc.cpu.regs[0] = obj; NativeOutcome::Return }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED sensrvclient {name}: {m}")),
+            }
+        }
+        "sensrv::find_channels" => {
+            // Leave the output RArray empty (0 hardware sensors found).
+            NativeOutcome::Return
+        }
+        "sensrv::enum_dtor1" | "sensrv::enum_dtor0" => {
+            if name.ends_with("dtor0") { if let Some(h) = proc.heap.as_mut() { let _ = h.free(r0); } }
+            NativeOutcome::Return
+        }
+        // CServer2 / CSession2 / RMessagePtr2 (e32base.h): local Symbian IPC server base classes.
+        "_ZN8CServer2C2EiNS_11TServerTypeE" => {
+            let _ = crate::sched::native(proc, "_ZN7CActiveC2Ei");
+            proc.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        "_ZN8CServer26StartLERK7TDesC16" => NativeOutcome::Return,
+        "_ZN8CServer2D2Ev" | "_ZN8CServer28DoCancelEv" | "_ZN8CServer24RunLEv" => {
+            proc.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        "_ZN8CServer28RunErrorEi" | "_ZN8CServer210Extension_EjRPvS0_" | "_ZN9CSession210Extension_EjRPvS0_" => {
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZN9CSession2C2Ev" | "_ZN9CSession2D2Ev" => {
+            proc.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        "_ZN9CSession27CreateLEv"
+        | "_ZN9CSession210DisconnectERK9RMessage2"
+        | "_ZN9CSession212ServiceErrorERK9RMessage2i"
+        | "_ZNK12RMessagePtr28CompleteEi" => NativeOutcome::Return,
+        "_ZN9CSession214CountResourcesEv" | "_ZNK12RMessagePtr26ClientER7RThread10TOwnerType" => {
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        // RApaLsSession / TApaTask / TApaTaskList (apgcli.h / apgtask.h).
+        "_ZN13RApaLsSession7ConnectEv"
+        | "_ZN13RApaLsSession5CloseEv"
+        | "_ZN13RApaLsSession13StartDocumentERK7TDesC164TUidR9TThreadIdNS_11TLaunchTypeE" => {
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZN8TApaTaskC1ER10RWsSession" | "_ZN12TApaTaskListC1ER10RWsSession" => {
+            let _ = proc.wr(r0, r1);
+            proc.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        "_ZN11CMsvSession18CloseMessageServerEv" => NativeOutcome::Return,
+        // void UserSvr::ScreenInfo(TDes8& aInfo) (e32event.h TScreenInfoV01: 24 bytes)
+        "_ZN7UserSvr10ScreenInfoER5TDes8" => {
+            let (sw, sh) = proc.screen_size();
+            let words = [0u32, 0, 0, 0, sw as u32, sh as u32];
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+            match crate::desc::write8(proc, r0, &bytes) {
+                Ok(()) => NativeOutcome::Return,
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
+            }
+        }
+        // UserSvr::DllSetTls(aHandle, aDllUid, aPtr) / DllSetTls(aHandle, aPtr) -> KErrNone;
+        // UserSvr::DllTls(aHandle, aDllUid) / DllTls(aHandle) -> the pointer (0 = none); DllFreeTls(aHandle).
         "_ZN7UserSvr9DllSetTlsEiiPv" => {
             let ptr = proc.cpu.regs[2];
             proc.nat.tls.insert((r0, r1), ptr);
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZN7UserSvr9DllSetTlsEiPv" => {
+            proc.nat.tls.insert((r0, 0), r1);
             proc.cpu.regs[0] = 0;
             NativeOutcome::Return
         }
@@ -244,13 +455,17 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             proc.cpu.regs[0] = proc.nat.tls.get(&(r0, r1)).copied().unwrap_or(0);
             NativeOutcome::Return
         }
-        // Leaves: EHABI unwinding is slice 1b, so every way into one is refused by name, never ignored. DELETE WHEN the EHABI unwinder lands
-        // (18-SYMBIAN-EKA2L1.md slice 1b; ruling coral_handoffs/consult-2026-10-26-symbian-runapplication.md step 2).
-        "_ZN4User5LeaveEi" => NativeOutcome::Refused(format!("NEXT-NEEDED leave User::Leave({}): EHABI unwinding is slice 1b", r0 as i32)),
-        "_ZN4User12LeaveIfErrorEi" if (r0 as i32) < 0 => NativeOutcome::Refused(format!("NEXT-NEEDED leave User::LeaveIfError({}): EHABI unwinding is slice 1b", r0 as i32)),
-        "_ZN4User12LeaveIfErrorEi" => NativeOutcome::Return, // a non-negative value is returned as it is (r0 unchanged)
-        "__cxa_throw" => NativeOutcome::Refused(String::from("NEXT-NEEDED leave __cxa_throw: EHABI unwinding is slice 1b")),
-        "__cxa_allocate_exception" => NativeOutcome::Refused(String::from("NEXT-NEEDED leave __cxa_allocate_exception: EHABI unwinding is slice 1b")),
+        "_ZN7UserSvr6DllTlsEi" => {
+            proc.cpu.regs[0] = proc.nat.tls.get(&(r0, 0)).copied().unwrap_or(0);
+            NativeOutcome::Return
+        }
+        "_ZN7UserSvr10DllFreeTlsEi" => {
+            proc.nat.tls.remove(&(r0, 0));
+            NativeOutcome::Return
+        }
+        // C++ non-leave throw runtime (non-XLeaveException C++ exceptions are still refused by name).
+        "__cxa_throw" => NativeOutcome::Refused(String::from("NEXT-NEEDED leave __cxa_throw: non-leave C++ throw is not implemented")),
+        "__cxa_allocate_exception" => NativeOutcome::Refused(String::from("NEXT-NEEDED leave __cxa_allocate_exception: non-leave C++ throw is not implemented")),
         // CBase::operator new (inline in e32base.inl) is User::AllocZ / AllocZL: zero-filled. The L forms leave on failure.
         "_ZN4User7AllocZLEi" | "_ZN4User6AllocLEi" | "_Znwj" | "_Znaj" => {
             let len = proc.cpu.regs[0] as i32 as u32;

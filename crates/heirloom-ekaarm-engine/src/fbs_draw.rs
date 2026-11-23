@@ -79,6 +79,61 @@ impl Process {
         Ok(())
     }
 
+    pub(crate) fn present_rgb_pixels(&mut self, width: i32, height: i32, rgb: alloc::vec::Vec<u32>) {
+        let Some(win) = self.host.window else { return };
+        let rect = GuestRect { left: 0, top: 0, width, height };
+        let plane = Plane {
+            id: 0,
+            rect,
+            ops: vec![DrawOp::Pixels { rect, rgb }],
+        };
+        if let Some(ui) = self.host.ui.as_mut() {
+            let _ = ui.present_plane(win, plane);
+        }
+    }
+
+    pub(crate) fn sync_bitmap_from_guest(&mut self, bmp_h: u32) {
+        let Some((w, h, mode, stride, Some(addr))) = self.nat.fbs.bitmaps.get(&bmp_h).map(|b| {
+            (b.width.max(0) as usize, b.height.max(0) as usize, b.display_mode, b.scanline_bytes(), b.data_addr)
+        }) else {
+            return;
+        };
+        let mut raw = vec![0u8; stride * h];
+        if raw.is_empty() || self.mem.vm.read_bytes(addr, &mut raw).is_err() {
+            return;
+        }
+        if let Some(bmp) = self.nat.fbs.bitmaps.get_mut(&bmp_h) {
+            for y in 0..h {
+                let row = y * stride;
+                for x in 0..w {
+                    let px = match mode {
+                        1 => if (raw[row + x / 8] >> (x & 7)) & 1 != 0 { 0x00FF_FFFF } else { 0 },
+                        2 => { let v = (((raw[row + x / 4] >> ((x & 3) * 2)) & 3) as u32) * 85; (v << 16) | (v << 8) | v }
+                        3 | 5 => { let v = (((raw[row + x / 2] >> ((x & 1) * 4)) & 15) as u32) * 17; (v << 16) | (v << 8) | v }
+                        4 | 6 => { let v = u32::from(raw[row + x]); (v << 16) | (v << 8) | v }
+                        7 => {
+                            let word = u16::from_le_bytes([raw[row + x * 2], raw[row + x * 2 + 1]]);
+                            let r = (((word >> 11) & 0x1F) as u32 * 255) / 31;
+                            let g = (((word >> 5) & 0x3F) as u32 * 255) / 63;
+                            let b = ((word & 0x1F) as u32 * 255) / 31;
+                            (r << 16) | (g << 8) | b
+                        }
+                        8 => (u32::from(raw[row + x * 3 + 2]) << 16) | (u32::from(raw[row + x * 3 + 1]) << 8) | u32::from(raw[row + x * 3]),
+                        10 => {
+                            let word = u16::from_le_bytes([raw[row + x * 2], raw[row + x * 2 + 1]]);
+                            let r = (((word >> 8) & 0xF) as u32) * 17;
+                            let g = (((word >> 4) & 0xF) as u32) * 17;
+                            let b = ((word & 0xF) as u32) * 17;
+                            (r << 16) | (g << 8) | b
+                        }
+                        _ => (u32::from(raw[row + x * 4 + 2]) << 16) | (u32::from(raw[row + x * 4 + 1]) << 8) | u32::from(raw[row + x * 4]),
+                    };
+                    bmp.pixels[y * w + x] = px;
+                }
+            }
+        }
+    }
+
     pub(crate) fn gc_blit(
         &mut self,
         gc_addr: u32,
@@ -93,6 +148,7 @@ impl Process {
             _ => return Ok(()),
         };
         let Some(src_h) = self.bitmap_handle_of(src_bmp_addr) else { return Ok(()) };
+        self.sync_bitmap_from_guest(src_h);
         let Some(src) = self.nat.fbs.bitmaps.get(&src_h).cloned() else { return Ok(()) };
         let mask = match mask_bmp_addr {
             Some(a) if a != 0 => self.bitmap_handle_of(a).and_then(|h| self.nat.fbs.bitmaps.get(&h).cloned()),
@@ -104,6 +160,21 @@ impl Process {
         let ox = dst_pt.0 + origin.0;
         let oy = dst_pt.1 + origin.1;
         let Some(dst) = self.nat.fbs.bitmaps.get_mut(&dst_h) else { return Ok(()) };
+        // Full-screen rotated blit: when a landscape-pitched backbuffer (e.g. 640x360) is blitted at (0,0) onto a
+        // portrait screen device (360x640), apply the 90 deg CW display scanout transform so UI and touch coords align.
+        if dst_pt == (0, 0) && origin == (0, 0) && src_rect.is_none() && mask.is_none()
+            && src.width == dst.height && src.height == dst.width && dst.width != dst.height
+        {
+            for sy in 0..src.height {
+                let tx = dst.width - 1 - sy;
+                for sx in 0..src.width {
+                    if let Some(spx) = src.get(sx, sy) {
+                        dst.set(tx, sx, spx);
+                    }
+                }
+            }
+            return Ok(());
+        }
         for dy in 0..sh {
             let ty = oy + dy;
             if ty < 0 || ty >= dst.height { continue; }

@@ -5,6 +5,7 @@ use crate::natives::NativeOutcome;
 
 /// (constructor, bytes of reserved data after the vptr, header that declares them)
 const MIXINS: &[(&str, u32, &str)] = &[
+    ("_ZN8MCoeViewC2Ev", 4, "coeview.h iMCoeView_Reserved1"),
     ("_ZN28MCoeViewDeactivationObserverC2Ev", 4, "coeview.h:63 iMCoeViewDeactivationObserver_Reserved1"),
     ("_ZN19MCoeControlObserverC2Ev", 4, "coecobs.h iMCoeControlObserver_Reserved1"),
     ("_ZN25MApaServerAppExitObserverC2Ev", 4, "apaserverapp.h:106 iMApaServerAppExitObserver_Reserved1"),

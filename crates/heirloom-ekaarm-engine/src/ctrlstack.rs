@@ -9,6 +9,8 @@ use crate::objects::StackItem;
 
 /// `ECoeStackFlagRefusesAllKeys` (coeaui.h:77): the control is never offered a key event.
 pub const STACK_FLAG_REFUSES_ALL_KEYS: u32 = 0x01;
+/// `ECoeStackFlagRefusesFocus` (coeaui.h:79): the control does not take focus on the stack.
+pub const STACK_FLAG_REFUSES_FOCUS: u32 = 0x02;
 
 impl Process {
     /// Stack `control` for `view` (0 = none) at `priority` with `flags`: above every entry of lower or equal priority.
@@ -22,6 +24,19 @@ impl Process {
         }
         let at = st.stack.iter().position(|i| i.priority <= priority).unwrap_or(st.stack.len());
         st.stack.insert(at, StackItem { control, priority, flags, view });
+        let stack_copy: alloc::vec::Vec<(u32, u32)> = st.stack.iter().map(|i| (i.control, i.flags)).collect();
+        // Topmost focusing control on the stack receives keyboard/display focus (CCoeControlStack::UpdateFocus).
+        let mut focus_given = false;
+        for (c, fl) in stack_copy {
+            if let Ok(cs) = self.control_state(c) {
+                if !focus_given && (fl & STACK_FLAG_REFUSES_FOCUS) == 0 && !cs.non_focusing {
+                    cs.focused = true;
+                    focus_given = true;
+                } else {
+                    cs.focused = false;
+                }
+            }
+        }
         self.log.push(format!("[stack] {control:#x} added at priority {priority}, flags {flags:#x}"));
         Ok(())
     }

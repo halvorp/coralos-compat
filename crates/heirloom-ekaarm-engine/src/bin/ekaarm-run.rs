@@ -21,7 +21,7 @@ fn main() {
     let mut vtables: Vec<(u32, u32)> = Vec::new();
     let mut rom_dir: Option<String> = None;
     let mut rom_manifest: Option<String> = None;
-    enum Action { Key(u32), Menu(u32), SelectRow(u32), ActivateList, AnswerDialog(u32), Ticks(u32) }
+    enum Action { Key(u32), Tap(i32, i32), Menu(u32), SelectRow(u32), ActivateList, AnswerDialog(u32), Ticks(u32) }
     let mut actions: Vec<Action> = Vec::new();
     let mut rom_log = None;
     let mut dumps: Vec<(u32, u32)> = Vec::new();
@@ -44,6 +44,11 @@ fn main() {
             }
             // `--key SCAN`: once the app waits (Blocked), press and release the key with TStdScanCode SCAN (hex), run on, repeat per key.
             "--key" => actions.push(Action::Key(u32::from_str_radix(args.next().unwrap_or_else(|| usage()).trim_start_matches("0x"), 16).unwrap_or_else(|_| usage()))),
+            "--tap" => {
+                let x: i32 = args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage());
+                let y: i32 = args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage());
+                actions.push(Action::Tap(x, y));
+            }
             "--menu" => actions.push(Action::Menu(args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage()))),
             "--select-row" => actions.push(Action::SelectRow(args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage()))),
             "--activate-list" => actions.push(Action::ActivateList),
@@ -105,7 +110,15 @@ fn main() {
     proc.set_ui(RecordingGuestUi::new());
     if let Some(dir) = &drive_dir {
         match hostdir::load_dir(std::path::Path::new(dir)) {
-            Ok((drive, files)) => { println!("drive: {dir} ({files} files)"); proc.set_drive(drive); }
+            Ok((drive, files)) => {
+                println!("drive: {dir} ({files} files)");
+                proc.set_drive(drive);
+                match heirloom_ekaarm_engine::dll::resolve_guest_dlls(&mut proc, &table) {
+                    Ok(n) if n > 0 => println!("guest dlls: loaded {n}"),
+                    Ok(_) => {}
+                    Err(e) => { println!("OUTCOME DllRefused {e}"); std::process::exit(1) }
+                }
+            }
             Err(e) => { println!("OUTCOME DriveRefused {dir}: {e}"); std::process::exit(1) }
         }
     }
@@ -154,6 +167,19 @@ fn main() {
                     if let Err(m) = proc.deliver_key(scan, "", heirloom_ui_abi::Modifiers::default(), down) { println!("OUTCOME KeyRefused {scan:#x}: {m}"); std::process::exit(1) }
                     outcome = proc.run(proc.insns.saturating_add(max_insns));
                     if !matches!(outcome, Outcome::Blocked | Outcome::BudgetSpent) { break; }
+                }
+            }
+            Action::Tap(x, y) => {
+                if let Err(m) = proc.deliver_pointer(x, y, heirloom_ui_abi::PointerPhase::Down) { println!("OUTCOME TapRefused ({x},{y}): {m}"); std::process::exit(1) }
+                outcome = proc.run(proc.insns.saturating_add(max_insns));
+                if matches!(outcome, Outcome::Blocked | Outcome::BudgetSpent) {
+                    let target = proc.next_timer_deadline().unwrap_or_else(|| proc.nat.clock_us.saturating_add(20_000)).max(proc.nat.clock_us.saturating_add(1));
+                    let _ = proc.advance_clock_to(target);
+                    outcome = proc.run(proc.insns.saturating_add(max_insns));
+                }
+                if matches!(outcome, Outcome::Blocked | Outcome::BudgetSpent) {
+                    if let Err(m) = proc.deliver_pointer(x, y, heirloom_ui_abi::PointerPhase::Up) { println!("OUTCOME TapRefused ({x},{y}): {m}"); std::process::exit(1) }
+                    outcome = proc.run(proc.insns.saturating_add(max_insns));
                 }
             }
             Action::Menu(cmd) => {

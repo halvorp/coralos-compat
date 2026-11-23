@@ -123,6 +123,14 @@ pub struct DsaState {
     pub region_addr: u32,
 }
 
+/// Host state for `CDirectScreenBitmap` (`cdsb.h` / `scdv.dll`).
+#[derive(Debug, Clone, Default)]
+pub struct DsbState {
+    pub width: i32,
+    pub height: i32,
+    pub buf_addr: u32,
+}
+
 pub use crate::audio::AudioOutState;
 
 #[derive(Default)]
@@ -358,9 +366,56 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             }
             NativeOutcome::Return
         }
+        // void CFbsBitmap::Reset()
+        "_ZN10CFbsBitmap5ResetEv" => {
+            if let Some(id) = p.bitmap_handle_of(r0) {
+                p.nat.fbs.bitmaps.remove(&id);
+                p.obj_remove(r0);
+            }
+            NativeOutcome::Return
+        }
         // TInt CFbsBitmap::Handle() const
         "_ZNK10CFbsBitmap6HandleEv" => {
             p.cpu.regs[0] = p.bitmap_handle_of(r0).unwrap_or(0);
+            NativeOutcome::Return
+        }
+        // TInt CFbsBitmap::DataStride() const: bytes per scanline (32-bit aligned).
+        "_ZNK10CFbsBitmap10DataStrideEv" => {
+            p.cpu.regs[0] = p.bitmap_handle_of(r0)
+                .and_then(|id| p.nat.fbs.bitmaps.get(&id))
+                .map(|b| b.scanline_bytes() as u32)
+                .unwrap_or(0);
+            NativeOutcome::Return
+        }
+        // CApaMaskedBitmap* CApaMaskedBitmap::NewL() / NewLC() (apgicnfl.h): CFbsBitmap + companion mask CFbsBitmap* at +0x18.
+        "_ZN16CApaMaskedBitmap4NewLEv" | "_ZN16CApaMaskedBitmap5NewLCEv" => {
+            let Ok(obj) = p.plain_object("CFbsBitmap", 0x20) else { return refuse("no heap for CApaMaskedBitmap".into()) };
+            let Ok(mask) = p.plain_object("CFbsBitmap", 0x20) else { return refuse("no heap for CApaMaskedBitmap mask".into()) };
+            let h_main = p.nat.fbs.insert_bitmap(FbsBitmap::new(0, 0, ECOLOR_16MU));
+            let h_mask = p.nat.fbs.insert_bitmap(FbsBitmap::new(0, 0, 1));
+            let _ = p.obj_set(obj, HostObj::FbsBitmap(h_main));
+            let _ = p.obj_set(mask, HostObj::FbsBitmap(h_mask));
+            let _ = p.wr(obj + 0x18, mask);
+            if name.contains("NewLC") {
+                p.nat.cleanup.push(crate::cleanup::CleanupItem::Base(obj));
+            }
+            p.cpu.regs[0] = obj;
+            NativeOutcome::Return
+        }
+        // CFbsBitmap* CApaMaskedBitmap::Mask() const
+        "_ZNK16CApaMaskedBitmap4MaskEv" => {
+            p.cpu.regs[0] = p.rd(r0 + 0x18).unwrap_or(0);
+            NativeOutcome::Return
+        }
+        // void CFbsBitGc::Activate(CFbsDevice* aDevice): bind this GC to the device's bitmap.
+        "_ZN9CFbsBitGc8ActivateEP10CFbsDevice" => {
+            let h = match p.obj_get(r1) { Some(HostObj::FbsDevice(d)) => d.bitmap_handle, _ => 0 };
+            if let Some(HostObj::FbsGc(gc)) = p.obj_get(r0) {
+                gc.device_addr = r1;
+                gc.bitmap_handle = h;
+            } else {
+                let _ = p.obj_set(r0, HostObj::FbsGc(FbsGcState::new(r1, h)));
+            }
             NativeOutcome::Return
         }
         // TDisplayMode CFbsBitmap::DisplayMode() const
@@ -539,7 +594,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             if let Some(h) = h { let _ = p.present_screen_bitmap(h); }
             NativeOutcome::Return
         }
-        "_ZN16CFbsScreenDevice14SetAutoUpdateEi" => NativeOutcome::Return,
+        "_ZN16CFbsScreenDevice13SetAutoUpdateEi" => NativeOutcome::Return,
         "_ZN10CFbsDevice22GetNearestFontInPixelsERP5CFontRK9TFontSpec"
         | "_ZN10CFbsDevice36GetNearestFontToDesignHeightInPixelsERP5CFontRK9TFontSpec"
         | "_ZN10CFbsDevice33GetNearestFontToMaxHeightInPixelsERP5CFontRK9TFontSpeci" => {
@@ -583,11 +638,21 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // CDirectScreenAccess::NewL(RWsSession&, CWsScreenDevice&, RWindowBase&, MDirectScreenAccess&)
         "_ZN19CDirectScreenAccess4NewLER10RWsSessionR15CWsScreenDeviceR11RWindowBaseR19MDirectScreenAccess" => {
             let Some(dsa) = p.alloc_zeroed(DSA_BYTES) else { return refuse("no heap for CDirectScreenAccess".into()) };
+            let dsa_slots = slots_with_gaps(6, &[
+                (0, "_ZN19CDirectScreenAccessD1Ev"),
+                (1, "_ZN19CDirectScreenAccessD0Ev"),
+                (2, "_ZN5CBase10Extension_EjRPvS0_"),
+                (3, "_ZN19CDirectScreenAccess8DoCancelEv"),
+                (4, "_ZN19CDirectScreenAccess4RunLEv"),
+                (5, "_ZN19CDirectScreenAccess8RunErrorEi"),
+            ]);
+            let Ok(vptr) = p.build_vtable("CDirectScreenAccess", &dsa_slots) else { return refuse("dsa vtable".into()) };
+            let _ = p.wr(dsa, vptr);
             let (sw, sh) = p.screen_size();
             let screen_bmp_handle = p.nat.fbs.insert_bitmap(FbsBitmap::new(sw, sh, ECOLOR_16MU));
             let Ok(screen_dev_addr) = p.make_fbs_device(screen_bmp_handle, true) else { return refuse("screen dev".into()) };
             let Ok(gc_addr) = p.make_fbs_gc(screen_dev_addr, screen_bmp_handle) else { return refuse("screen gc".into()) };
-            // Simple RRegion placeholder (count=1, rect=(0,0,360,640))
+            // Simple RRegion placeholder (count=1, rect=(0,0,sw,sh))
             let Some(region_addr) = p.alloc_zeroed(32) else { return refuse("region".into()) };
             let _ = p.wr(dsa + DSA_I_GC, gc_addr);
             let _ = p.wr(dsa + DSA_I_SCREEN_DEVICE, screen_dev_addr);
@@ -596,7 +661,20 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             p.cpu.regs[0] = dsa;
             NativeOutcome::Return
         }
-        "_ZN19CDirectScreenAccess6StartLEv" => NativeOutcome::Return,
+        "_ZN19CDirectScreenAccessD1Ev" | "_ZN19CDirectScreenAccessD0Ev" => {
+            p.obj_remove(r0);
+            if name.ends_with("D0Ev") { if let Some(heap) = p.heap.as_mut() { let _ = heap.free(r0); } }
+            NativeOutcome::Return
+        }
+        "_ZN19CDirectScreenAccess8DoCancelEv" | "_ZN19CDirectScreenAccess4RunLEv" => NativeOutcome::Return,
+        "_ZN19CDirectScreenAccess8RunErrorEi" => { p.cpu.regs[0] = 0; NativeOutcome::Return }
+        "_ZN19CDirectScreenAccess6StartLEv" => {
+            // Mark CDirectScreenAccess (a CActive) as active so `iDsa->IsActive()` returns ETrue during direct screen updates.
+            let _ = p.wr(r0.wrapping_add(crate::sched::ACTIVE_I_STATUS), crate::request::KREQUEST_PENDING);
+            let flags = p.rd(r0.wrapping_add(crate::sched::ACTIVE_I_FLAGS)).unwrap_or(0);
+            let _ = p.wr(r0.wrapping_add(crate::sched::ACTIVE_I_FLAGS), flags | crate::sched::FLAG_ACTIVE);
+            NativeOutcome::Return
+        }
         "_ZN10RWsSession5FlushEv" => NativeOutcome::Return,
 
         // CFbsBitGc methods
@@ -868,6 +946,128 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 let _ = p.gc_blit(r0, pt, r2, Some(sr), Some(alpha_bmp), true);
             }
             p.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        // CDirectScreenBitmap (cdsb.h, scdv.dll ordinal 7): linear framebuffer direct screen blit.
+        "_ZN19CDirectScreenBitmap4NewLEv" | "_ZN19CDirectScreenBitmap4NewLEi" => {
+            let slots = slots_with_gaps(8, &[
+                (0, "_ZN19CDirectScreenBitmapD1Ev"),
+                (1, "_ZN19CDirectScreenBitmapD0Ev"),
+                (2, "_ZN5CBase10Extension_EjRPvS0_"),
+                (3, "_ZN19CDirectScreenBitmap6CreateERK5TRectNS_14TSettingsFlagsE"),
+                (4, "_ZN19CDirectScreenBitmap11BeginUpdateER22TAcceleratedBitmapInfo"),
+                (5, "_ZN19CDirectScreenBitmap9EndUpdateER14TRequestStatus"),
+                (6, "_ZN19CDirectScreenBitmap9EndUpdateERK5TRectR14TRequestStatus"),
+                (7, "_ZN19CDirectScreenBitmap5CloseEv"),
+            ]);
+            let r = p.alloc_zeroed(16)
+                .ok_or_else(|| String::from("no heap for CDirectScreenBitmap"))
+                .and_then(|obj| {
+                    let vptr = p.build_vtable("CDirectScreenBitmap", &slots)?;
+                    p.wr(obj, vptr)?;
+                    p.obj_set(obj, HostObj::Dsb(DsbState::default()))?;
+                    Ok(obj)
+                });
+            match r {
+                Ok(obj) => { p.cpu.regs[0] = obj; NativeOutcome::Return }
+                Err(m) => return refuse(m),
+            }
+        }
+        "_ZN19CDirectScreenBitmap6CreateERK5TRectNS_14TSettingsFlagsE" => {
+            let (sw, sh) = p.screen_size();
+            let (w, h) = match p.rd_rect(r1) {
+                Ok(rc) if rc[2] > rc[0] && rc[3] > rc[1] => (rc[2] - rc[0], rc[3] - rc[1]),
+                _ => (sw, sh),
+            };
+            let bytes = (w as u32).saturating_mul(h as u32).saturating_mul(4).max(4);
+            let old_buf = match p.obj_get(r0) { Some(HostObj::Dsb(d)) => d.buf_addr, _ => 0 };
+            if old_buf != 0 {
+                if let Some(heap) = p.heap.as_mut() { let _ = heap.free(old_buf); }
+            }
+            let Some(buf_addr) = p.alloc_zeroed(bytes) else {
+                p.cpu.regs[0] = (-4i32) as u32; // KErrNoMemory
+                return Some(NativeOutcome::Return);
+            };
+            let _ = p.obj_set(r0, HostObj::Dsb(DsbState { width: w, height: h, buf_addr }));
+            p.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZN19CDirectScreenBitmap11BeginUpdateER22TAcceleratedBitmapInfo" => {
+            let Some((w, h, buf_addr)) = (match p.obj_get(r0) {
+                Some(HostObj::Dsb(d)) if d.buf_addr != 0 => Some((d.width, d.height, d.buf_addr)),
+                _ => None,
+            }) else {
+                p.cpu.regs[0] = (-18i32) as u32; // KErrNotReady
+                return Some(NativeOutcome::Return);
+            };
+            // TAcceleratedBitmapInfo (graphicsaccelerator.h:32, 28 bytes)
+            let _ = p.wr(r1, ECOLOR_16MU);
+            let _ = p.wr(r1.wrapping_add(4), buf_addr);
+            let _ = p.wr(r1.wrapping_add(8), w as u32);
+            let _ = p.wr(r1.wrapping_add(12), h as u32);
+            let _ = p.wr(r1.wrapping_add(16), (w * 4) as u32);
+            let _ = p.wr(r1.wrapping_add(20), 5); // 1 << 5 = 32 bpp
+            let _ = p.wr(r1.wrapping_add(24), 0);
+            p.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        "_ZN19CDirectScreenBitmap9EndUpdateER14TRequestStatus"
+        | "_ZN19CDirectScreenBitmap9EndUpdateERK5TRectR14TRequestStatus" => {
+            let status_addr = if name.contains("TRect") { r2 } else { r1 };
+            if let Some((w, h, buf_addr)) = match p.obj_get(r0) {
+                Some(HostObj::Dsb(d)) if d.buf_addr != 0 => Some((d.width, d.height, d.buf_addr)),
+                _ => None,
+            } {
+                let count = (w.max(0) as usize).saturating_mul(h.max(0) as usize);
+                let mut raw = vec![0u8; count * 4];
+                if !raw.is_empty() && p.mem.vm.read_bytes(buf_addr, &mut raw).is_ok() {
+                    let mut pixels = Vec::with_capacity(count);
+                    for px in raw.chunks_exact(4) {
+                        pixels.push((u32::from(px[2]) << 16) | (u32::from(px[1]) << 8) | u32::from(px[0]));
+                    }
+                    p.present_rgb_pixels(w, h, pixels);
+                }
+            }
+            let _ = p.wr(status_addr, 0);
+            p.nat.requests.signals += 1;
+            NativeOutcome::Return
+        }
+        "_ZN19CDirectScreenBitmap5CloseEv"
+        | "_ZN19CDirectScreenBitmapD1Ev"
+        | "_ZN19CDirectScreenBitmapD0Ev" => {
+            let buf_addr = match p.obj_get(r0) { Some(HostObj::Dsb(d)) => d.buf_addr, _ => 0 };
+            if buf_addr != 0 {
+                if let Some(heap) = p.heap.as_mut() { let _ = heap.free(buf_addr); }
+            }
+            if name.ends_with("CloseEv") {
+                let _ = p.obj_set(r0, HostObj::Dsb(DsbState::default()));
+            } else {
+                p.obj_remove(r0);
+                if name.ends_with("D0Ev") {
+                    if let Some(heap) = p.heap.as_mut() { let _ = heap.free(r0); }
+                }
+            }
+            NativeOutcome::Return
+        }
+        // TBidiText (biditext.h, gdi.dll): bidirectional text layout + draw onto CGraphicsContext.
+        "_ZN9TBidiText4NewLERK7TDesC16i" => {
+            let text = crate::desc::read16(p, r0).map(|u| crate::desc::to_utf8(&u)).unwrap_or_default();
+            let Some(obj) = p.alloc_zeroed(0x20) else { return refuse("no heap for TBidiText".into()) };
+            let _ = p.obj_set(obj, HostObj::BidiText(text));
+            p.cpu.regs[0] = obj;
+            NativeOutcome::Return
+        }
+        "_ZN9TBidiText8WrapTextEiRK5CFontPK12MLineBreaker" => NativeOutcome::Return,
+        "_ZN9TBidiText18TextDirectionalityERK7TDesC16Pi" => {
+            if r1 != 0 { let _ = p.wr(r1, 0); }
+            p.cpu.regs[0] = 0; // ELeftToRight
+            NativeOutcome::Return
+        }
+        "_ZNK9TBidiText8DrawTextER16CGraphicsContextRK6TPointiNS0_10TTextAlignE" => {
+            let text = match p.obj_get(r0) { Some(HostObj::BidiText(s)) => s.clone(), _ => String::new() };
+            if let Ok((x, y)) = p.rd_point(r2) {
+                p.gc_draw_text(r1, &text, x, y);
+            }
             NativeOutcome::Return
         }
         _ => return None,
