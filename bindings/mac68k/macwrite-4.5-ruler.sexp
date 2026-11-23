@@ -7,7 +7,6 @@
 (plane-chrome
   (id "macwrite-4.5-ruler")
   (resource (type "CODE") (id 1) (length 2530) (fnv1a64 "0x73421e483f3e48ef"))
-  (present-if-text "6 lines/inch")
   (band (rect 0 0 487 46) (remap-1bit-pixels true))
   (button (rect 6 26 22 17) (clear-rect 5 25 24 19) (label " ") (icon tab-stop))
   (button (rect 32 26 22 17) (clear-rect 31 25 24 19) (label " ") (icon tab-decimal))

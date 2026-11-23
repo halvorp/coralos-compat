@@ -172,8 +172,9 @@ impl PlaneChromeBinding {
             height: ch,
         });
         let chrome_live = match &self.present_if_text {
-            None => true,
             Some(needle) => ops.iter().any(|op| matches!(op, DrawOp::Text { string, .. } if string.contains(needle.as_str()))),
+            None => self.buttons.is_empty()
+                || self.buttons.iter().any(|btn| ops.iter().any(|op| within(op_bounds(op), btn.clear_rect))),
         };
 
         let active_states: Vec<bool> = if chrome_live {
@@ -256,6 +257,12 @@ impl PlaneChromeBinding {
                                 pen_role: *pen_role,
                                 bg_role: None,
                             });
+                            handled = true;
+                            break;
+                        }
+                        DrawOp::Pixels { rect, .. }
+                            if rect.height <= 3 && (rect.top <= band.rect.top + 3 || rect.top >= band.rect.top + band.rect.height - 4) =>
+                        {
                             handled = true;
                             break;
                         }
