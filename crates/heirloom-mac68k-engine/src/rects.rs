@@ -49,7 +49,9 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA880, &[Arg::L, Arg::W, Arg::W], None, set_pt::<U>)?;
     m.register(0xA87E, &[Arg::L, Arg::L], None, add_pt::<U>)?;
     m.register(0xA87F, &[Arg::L, Arg::L], None, sub_pt::<U>)?;
-    m.register(0xA881, &[Arg::L, Arg::L], Some(Arg::B), equal_pt::<U>)
+    m.register(0xA881, &[Arg::L, Arg::L], Some(Arg::B), equal_pt::<U>)?;
+    m.register(0xA8F9, &[Arg::L, Arg::L, Arg::L], None, map_pt::<U>)?;
+    m.register(0xA8FA, &[Arg::L, Arg::L, Arg::L], None, map_rect::<U>)
 }
 
 fn set_rect<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
@@ -110,10 +112,63 @@ fn add_pt<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Ref
 fn sub_pt<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { add_sub(m, c, -1) }
 fn equal_pt<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { flag("EqualPt", c.args.get(0) == c.args.get(1)) }
 
+/// Proportional 1D coordinate mapping from `[s0, s1]` into `[d0, d1]` (Inside Macintosh: QuickDraw `MapPt`).
+fn map_coord(v: i16, s0: i16, s1: i16, d0: i16, d1: i16) -> i16 {
+    let sw = i64::from(s1) - i64::from(s0);
+    if sw == 0 { return d0; }
+    let dw = i64::from(d1) - i64::from(d0);
+    let num = (i64::from(v) - i64::from(s0)) * dw;
+    // QuickDraw rounds to nearest (half away from zero).
+    let q = if (num >= 0) == (sw > 0) {
+        (num + sw / 2) / sw
+    } else {
+        (num - sw / 2) / sw
+    };
+    (i64::from(d0) + q) as i16
+}
+
+fn map_point(v: i16, h: i16, src: &Rect, dst: &Rect) -> (i16, i16) {
+    (
+        map_coord(v, src.top, src.bottom, dst.top, dst.bottom),
+        map_coord(h, src.left, src.right, dst.left, dst.right),
+    )
+}
+
+fn map_pt<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (at, src, dst) = (c.args.get(0), read_rect(&m.mem, c.args.get(1))?, read_rect(&m.mem, c.args.get(2))?);
+    let e = Refusal::mem("Point");
+    let (v, h) = (m.mem.read_i16(at).map_err(&e)?, m.mem.read_i16(at + 2).map_err(&e)?);
+    let (nv, nh) = map_point(v, h, &src, &dst);
+    m.mem.write_u16(at, nv as u16).map_err(&e)?;
+    m.mem.write_u16(at + 2, nh as u16).map_err(&e)?;
+    done(&format!("MapPt ({v},{h}) -> ({nv},{nh})"))
+}
+
+fn map_rect<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (at, src, dst) = (c.args.get(0), read_rect(&m.mem, c.args.get(1))?, read_rect(&m.mem, c.args.get(2))?);
+    let r = read_rect(&m.mem, at)?;
+    let (top, left) = map_point(r.top, r.left, &src, &dst);
+    let (bottom, right) = map_point(r.bottom, r.right, &src, &dst);
+    write_rect(&mut m.mem, at, Rect { top, left, bottom, right })?;
+    done("MapRect")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     const R: Rect = Rect { top: 10, left: 20, bottom: 110, right: 220 };
+
+    #[test]
+    fn map_point_scales_proportionally_and_handles_degenerate_src() {
+        let src = Rect { top: 0, left: 0, bottom: 100, right: 200 };
+        let dst = Rect { top: 10, left: 20, bottom: 210, right: 620 };
+        assert_eq!(map_point(50, 100, &src, &dst), (110, 320));
+        assert_eq!(map_point(0, 0, &src, &dst), (10, 20));
+        assert_eq!(map_point(100, 200, &src, &dst), (210, 620));
+        // Negative control: zero-width/zero-height source maps safely to dst origin without div-by-zero
+        let empty = Rect { top: 5, left: 5, bottom: 5, right: 5 };
+        assert_eq!(map_point(42, 99, &empty, &dst), (10, 20));
+    }
 
     #[test]
     fn rect_algebra() {
