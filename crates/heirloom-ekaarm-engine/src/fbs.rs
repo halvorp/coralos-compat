@@ -33,6 +33,8 @@ pub struct FbsBitmap {
     pub display_mode: u32,
     pub is_gray: bool,
     pub pixels: Vec<u32>, // 0x00RRGGBB
+    /// Guest-mapped scanline buffer allocated lazily by `CFbsBitmap::DataAddress()`.
+    pub data_addr: Option<u32>,
 }
 
 impl FbsBitmap {
@@ -46,6 +48,21 @@ impl FbsBitmap {
             display_mode,
             is_gray,
             pixels: vec![0x00FF_FFFF; (w as usize).saturating_mul(h as usize)],
+            data_addr: None,
+        }
+    }
+    pub fn scanline_bytes(&self) -> usize {
+        let w = self.width.max(0) as usize;
+        // Symbian TDisplayMode (gdi.h:287): 1=EGray2, 2=EGray4, 3=EGray16, 4=EGray256,
+        // 5=EColor16, 6=EColor256, 7=EColor64K (16bpp), 8=EColor16M (24bpp), 10=EColor4K (12bpp/16bit), 11/12=32bpp.
+        match self.display_mode {
+            1 => ((w + 31) / 32) * 4,
+            2 => ((w * 2 + 31) / 32) * 4,
+            3 | 5 => ((w * 4 + 31) / 32) * 4,
+            4 | 6 => ((w + 3) / 4) * 4,
+            7 | 10 => ((w * 2 + 3) / 4) * 4,
+            8 => ((w * 3 + 3) / 4) * 4,
+            _ => w * 4, // EColor16MU (11), EColor16MA (12), etc.
         }
     }
     #[inline]
@@ -159,6 +176,8 @@ fn symbian_sample_rate(code: u32) -> u32 {
 pub struct FbsState {
     pub next_handle: u32,
     pub bitmaps: BTreeMap<u32, FbsBitmap>,
+    /// Shared screen bitmap handle + `CWindowGc` guest address returned by `SystemGc()`.
+    pub system_gc: Option<(u32, u32)>,
 }
 
 impl FbsState {
@@ -192,6 +211,12 @@ fn color256(idx: u8) -> u32 {
 
 /// Decode bitmap `index` from a Symbian `.mbm` multi-bitmap file into `(width, height, is_gray, pixels)`.
 pub fn decode_mbm(data: &[u8], index: usize) -> Result<(i32, i32, bool, Vec<u32>), String> {
+    let (w, h, mode, pixels) = decode_mbm_mode(data, index)?;
+    Ok((w, h, matches!(mode, 1 | 2 | 3 | 4), pixels))
+}
+
+/// Decode bitmap `index` from a Symbian `.mbm` multi-bitmap file into `(width, height, display_mode, pixels)`.
+pub fn decode_mbm_mode(data: &[u8], index: usize) -> Result<(i32, i32, u32, Vec<u32>), String> {
     let rd32 = |at: usize| -> Result<u32, String> {
         let b = data.get(at..at + 4).ok_or_else(|| String::from("MBM truncated"))?;
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
@@ -383,7 +408,19 @@ pub fn decode_mbm(data: &[u8], index: usize) -> Result<(i32, i32, bool, Vec<u32>
             pixels[y * w as usize + x] = rgb;
         }
     }
-    Ok((w, h, color == 0, pixels))
+    let mode = match (bpp, color == 0) {
+        (1, _) => 1,      // EGray2
+        (2, _) => 2,      // EGray4
+        (4, true) => 3,   // EGray16
+        (4, false) => 5,  // EColor16
+        (8, true) => 4,   // EGray256
+        (8, false) => 6,  // EColor256
+        (12, _) => 10,    // EColor4K
+        (16, _) => 7,     // EColor64K
+        (24, _) => 8,     // EColor16M
+        _ => ECOLOR_16MU, // EColor16MU
+    };
+    Ok((w, h, mode, pixels))
 }
 
 /// Vtable for `CFbsBitmapDevice` and `CFbsScreenDevice`.
@@ -507,7 +544,20 @@ impl Process {
         Ok(gc)
     }
 
-    fn present_screen_bitmap(&mut self, bmp_handle: u32) -> Result<(), String> {
+    /// Return `(screen_bmp_handle, gc_addr)` for `CCoeControl::SystemGc()` / `CCoeEnv::SystemGc()`, creating it on first use.
+    pub(crate) fn ensure_system_gc(&mut self) -> Result<(u32, u32), String> {
+        if let Some(pair) = self.nat.fbs.system_gc {
+            return Ok(pair);
+        }
+        let (sw, sh) = self.screen_size();
+        let bmp_h = self.nat.fbs.insert_bitmap(FbsBitmap::new(sw, sh, ECOLOR_16MU));
+        let dev = self.make_fbs_device(bmp_h, true)?;
+        let gc = self.make_fbs_gc(dev, bmp_h)?;
+        self.nat.fbs.system_gc = Some((bmp_h, gc));
+        Ok((bmp_h, gc))
+    }
+
+    pub(crate) fn present_screen_bitmap(&mut self, bmp_handle: u32) -> Result<(), String> {
         let Some(win) = self.host.window else { return Ok(()) };
         let Some(bmp) = self.nat.fbs.bitmaps.get(&bmp_handle) else { return Ok(()) };
         let rect = GuestRect { left: 0, top: 0, width: bmp.width, height: bmp.height };
@@ -568,6 +618,82 @@ impl Process {
                         dst.set(tx, ty, spx);
                     } else {
                         // Symbian EGray256 alpha mask: 255 = opaque, 0 = transparent (invert_mask is ignored on alpha masks).
+                        let a = mval;
+                        if a == 0 { continue; }
+                        if a == 255 {
+                            dst.set(tx, ty, spx);
+                        } else {
+                            let dpx = dst.get(tx, ty).unwrap_or(0);
+                            let inv = 255 - a;
+                            let r = (((spx >> 16) & 0xFF) * a + ((dpx >> 16) & 0xFF) * inv) / 255;
+                            let g = (((spx >> 8) & 0xFF) * a + ((dpx >> 8) & 0xFF) * inv) / 255;
+                            let b = ((spx & 0xFF) * a + (dpx & 0xFF) * inv) / 255;
+                            dst.set(tx, ty, (r << 16) | (g << 8) | b);
+                        }
+                    }
+                } else {
+                    dst.set(tx, ty, spx);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `CFbsBitGc::DrawBitmap` / `DrawBitmapMasked` with a destination `TRect`:
+    /// stretches or shrinks `src_rect` (or the whole source bitmap) to fill `dst_rect`.
+    fn gc_draw_bitmap_scaled(
+        &mut self,
+        gc_addr: u32,
+        dst_rect: [i32; 4],
+        src_bmp_addr: u32,
+        src_rect: Option<[i32; 4]>,
+        mask_bmp_addr: Option<u32>,
+        invert_mask: bool,
+    ) -> Result<(), String> {
+        let dw = dst_rect[2] - dst_rect[0];
+        let dh = dst_rect[3] - dst_rect[1];
+        if dw <= 0 || dh <= 0 { return Ok(()); }
+        let (dst_h, origin, clip) = match self.obj_get(gc_addr) {
+            Some(HostObj::FbsGc(g)) => (g.bitmap_handle, g.origin, g.clip_rect),
+            _ => return Ok(()),
+        };
+        let Some(src_h) = self.bitmap_handle_of(src_bmp_addr) else { return Ok(()) };
+        let Some(src) = self.nat.fbs.bitmaps.get(&src_h).cloned() else { return Ok(()) };
+        let sr = src_rect.unwrap_or([0, 0, src.width, src.height]);
+        let sw = sr[2] - sr[0];
+        let sh = sr[3] - sr[1];
+        if sw <= 0 || sh <= 0 { return Ok(()); }
+        if dw == sw && dh == sh {
+            return self.gc_blit(gc_addr, (dst_rect[0], dst_rect[1]), src_bmp_addr, src_rect, mask_bmp_addr, invert_mask);
+        }
+        let mask = match mask_bmp_addr {
+            Some(a) if a != 0 => self.bitmap_handle_of(a).and_then(|h| self.nat.fbs.bitmaps.get(&h).cloned()),
+            _ => None,
+        };
+        let ox = dst_rect[0] + origin.0;
+        let oy = dst_rect[1] + origin.1;
+        let Some(dst) = self.nat.fbs.bitmaps.get_mut(&dst_h) else { return Ok(()) };
+        for dy in 0..dh {
+            let ty = oy + dy;
+            if ty < 0 || ty >= dst.height { continue; }
+            if let Some(c) = clip { if ty < c[1] || ty >= c[3] { continue; } }
+            let sy = sr[1] + ((dy as i64 * sh as i64) / dh as i64) as i32;
+            let mdy = ((dy as i64 * sh as i64) / dh as i64) as i32;
+            for dx in 0..dw {
+                let tx = ox + dx;
+                if tx < 0 || tx >= dst.width { continue; }
+                if let Some(c) = clip { if tx < c[0] || tx >= c[2] { continue; } }
+                let sx = sr[0] + ((dx as i64 * sw as i64) / dw as i64) as i32;
+                let mdx = ((dx as i64 * sw as i64) / dw as i64) as i32;
+                let Some(spx) = src.get(sx, sy) else { continue };
+                if let Some(ref m) = mask {
+                    let mpx = m.get(sx, sy).or_else(|| m.get(mdx, mdy)).unwrap_or(0);
+                    let mval = (mpx & 0xFF) as u32;
+                    if m.display_mode == 1 {
+                        let opaque = if invert_mask { mval > 127 } else { mval <= 127 };
+                        if !opaque { continue; }
+                        dst.set(tx, ty, spx);
+                    } else {
                         let a = mval;
                         if a == 0 { continue; }
                         if a == 255 {
@@ -686,6 +812,14 @@ fn glyph_5x7(ch: char) -> [u8; 7] {
         '(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
         ')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
         '%' => [0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03],
+        '=' => [0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00],
+        '*' => [0x00, 0x15, 0x0E, 0x1F, 0x0E, 0x15, 0x00],
+        '#' => [0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x0A],
+        '\'' => [0x04, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00],
+        'Ä' | 'ä' => [0x0A, 0x00, 0x0E, 0x11, 0x1F, 0x11, 0x11],
+        'Ö' | 'ö' => [0x0A, 0x00, 0x0E, 0x11, 0x11, 0x11, 0x0E],
+        'Ü' | 'ü' => [0x0A, 0x00, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        'ß' => [0x0E, 0x11, 0x12, 0x14, 0x12, 0x11, 0x1E],
         ' ' => [0; 7],
         _ => [0; 7],
     }
@@ -711,9 +845,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                         d.read(&format!("{priv_dir}{tail}")).ok()
                     })
             }).map(|b| b.to_vec());
-            let bmp = match bytes.and_then(|b| decode_mbm(&b, idx).ok()) {
-                Some((w, h, is_gray, pixels)) => FbsBitmap {
-                    width: w, height: h, display_mode: if is_gray { 4 } else { ECOLOR_16MU }, is_gray, pixels,
+            let bmp = match bytes.and_then(|b| decode_mbm_mode(&b, idx).ok()) {
+                Some((w, h, display_mode, pixels)) => FbsBitmap {
+                    width: w, height: h, display_mode, is_gray: matches!(display_mode, 1 | 2 | 3 | 4), pixels, data_addr: None,
                 },
                 None => return refuse(format!("CreateBitmapL({path}, {idx}) failed to load MBM")),
             };
@@ -801,9 +935,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                     })
             });
             match bytes {
-                Some(b) => match decode_mbm(&b, idx) {
-                    Ok((w, h, is_gray, pixels)) => {
-                        let bmp = FbsBitmap { width: w, height: h, display_mode: if is_gray { 4 } else { ECOLOR_16MU }, is_gray, pixels };
+                Some(b) => match decode_mbm_mode(&b, idx) {
+                    Ok((w, h, display_mode, pixels)) => {
+                        let bmp = FbsBitmap { width: w, height: h, display_mode, is_gray: matches!(display_mode, 1 | 2 | 3 | 4), pixels, data_addr: None };
                         let handle = p.nat.fbs.insert_bitmap(bmp);
                         let _ = p.obj_set(r0, HostObj::FbsBitmap(handle));
                         p.cpu.regs[0] = 0;
@@ -827,6 +961,118 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // TInt CFbsBitmap::Handle() const
         "_ZNK10CFbsBitmap6HandleEv" => {
             p.cpu.regs[0] = p.bitmap_handle_of(r0).unwrap_or(0);
+            NativeOutcome::Return
+        }
+        // TDisplayMode CFbsBitmap::DisplayMode() const
+        "_ZNK10CFbsBitmap11DisplayModeEv" => {
+            p.cpu.regs[0] = p.bitmap_handle_of(r0)
+                .and_then(|id| p.nat.fbs.bitmaps.get(&id))
+                .map(|b| b.display_mode)
+                .unwrap_or(ECOLOR_16MU);
+            NativeOutcome::Return
+        }
+        // void CFbsBitmap::LockHeap(TBool) const / LockHeapLC(TBool) const
+        "_ZNK10CFbsBitmap8LockHeapEi" | "_ZNK10CFbsBitmap10LockHeapLCEi" => NativeOutcome::Return,
+        // TUint32* CFbsBitmap::DataAddress() const: lazily map scanlines into guest heap and sync pixels -> guest.
+        "_ZNK10CFbsBitmap11DataAddressEv" => {
+            let Some(id) = p.bitmap_handle_of(r0) else { p.cpu.regs[0] = 0; return Some(NativeOutcome::Return); };
+            let Some((w, h, mode, stride, existing, pixels)) = p.nat.fbs.bitmaps.get(&id).map(|b| {
+                (b.width.max(0) as usize, b.height.max(0) as usize, b.display_mode, b.scanline_bytes(), b.data_addr, b.pixels.clone())
+            }) else { p.cpu.regs[0] = 0; return Some(NativeOutcome::Return); };
+            let total = (stride * h).max(4);
+            let addr = match existing {
+                Some(a) => a,
+                None => match p.alloc_zeroed(total as u32) {
+                    Some(a) => {
+                        if let Some(b) = p.nat.fbs.bitmaps.get_mut(&id) { b.data_addr = Some(a); }
+                        a
+                    }
+                    None => { p.cpu.regs[0] = 0; return Some(NativeOutcome::Return); }
+                },
+            };
+            let mut raw = vec![0u8; stride * h];
+            for y in 0..h {
+                let row = y * stride;
+                for x in 0..w {
+                    let px = pixels[y * w + x];
+                    let (r, g, b) = (((px >> 16) & 0xFF) as u8, ((px >> 8) & 0xFF) as u8, (px & 0xFF) as u8);
+                    match mode {
+                        1 => { if r > 127 { raw[row + x / 8] |= 1 << (x & 7); } }
+                        2 => { raw[row + x / 4] |= (r >> 6) << ((x & 3) * 2); }
+                        3 | 5 => { raw[row + x / 2] |= (r >> 4) << ((x & 1) * 4); }
+                        4 | 6 => { raw[row + x] = r; }
+                        7 => {
+                            // EColor64K (16-bit RGB565)
+                            let rgb565 = (((r as u16) >> 3) << 11) | (((g as u16) >> 2) << 5) | ((b as u16) >> 3);
+                            raw[row + x * 2] = rgb565 as u8;
+                            raw[row + x * 2 + 1] = (rgb565 >> 8) as u8;
+                        }
+                        8 => {
+                            // EColor16M (24-bit BGR)
+                            raw[row + x * 3] = b; raw[row + x * 3 + 1] = g; raw[row + x * 3 + 2] = r;
+                        }
+                        10 => {
+                            // EColor4K (12-bit RGB444 in 16-bit LE)
+                            let rgb444 = (((r as u16) >> 4) << 8) | (((g as u16) >> 4) << 4) | ((b as u16) >> 4);
+                            raw[row + x * 2] = rgb444 as u8;
+                            raw[row + x * 2 + 1] = (rgb444 >> 8) as u8;
+                        }
+                        _ => {
+                            raw[row + x * 4] = b; raw[row + x * 4 + 1] = g; raw[row + x * 4 + 2] = r; raw[row + x * 4 + 3] = 0xFF;
+                        }
+                    }
+                }
+            }
+            if !raw.is_empty() { let _ = p.mem.vm.write_bytes(addr, &raw); }
+            p.cpu.regs[0] = addr;
+            NativeOutcome::Return
+        }
+        // void CFbsBitmap::UnlockHeap(TBool) const: sync any guest-modified DataAddress() scanlines back to host pixels.
+        "_ZNK10CFbsBitmap10UnlockHeapEi" => {
+            if let Some(id) = p.bitmap_handle_of(r0) {
+                if let Some((w, h, mode, stride, Some(addr))) = p.nat.fbs.bitmaps.get(&id).map(|b| {
+                    (b.width.max(0) as usize, b.height.max(0) as usize, b.display_mode, b.scanline_bytes(), b.data_addr)
+                }) {
+                    let mut raw = vec![0u8; stride * h];
+                    if !raw.is_empty() && p.mem.vm.read_bytes(addr, &mut raw).is_ok() {
+                        if let Some(bmp) = p.nat.fbs.bitmaps.get_mut(&id) {
+                            for y in 0..h {
+                                let row = y * stride;
+                                for x in 0..w {
+                                    let px = match mode {
+                                        1 => if (raw[row + x / 8] >> (x & 7)) & 1 != 0 { 0x00FF_FFFF } else { 0 },
+                                        2 => { let v = (((raw[row + x / 4] >> ((x & 3) * 2)) & 3) as u32) * 85; (v << 16) | (v << 8) | v }
+                                        3 | 5 => { let v = (((raw[row + x / 2] >> ((x & 1) * 4)) & 15) as u32) * 17; (v << 16) | (v << 8) | v }
+                                        4 | 6 => { let v = u32::from(raw[row + x]); (v << 16) | (v << 8) | v }
+                                        7 => {
+                                            // EColor64K (16-bit RGB565)
+                                            let word = u16::from_le_bytes([raw[row + x * 2], raw[row + x * 2 + 1]]);
+                                            let r = (((word >> 11) & 0x1F) as u32 * 255) / 31;
+                                            let g = (((word >> 5) & 0x3F) as u32 * 255) / 63;
+                                            let b = ((word & 0x1F) as u32 * 255) / 31;
+                                            (r << 16) | (g << 8) | b
+                                        }
+                                        8 => {
+                                            // EColor16M (24-bit BGR)
+                                            (u32::from(raw[row + x * 3 + 2]) << 16) | (u32::from(raw[row + x * 3 + 1]) << 8) | u32::from(raw[row + x * 3])
+                                        }
+                                        10 => {
+                                            // EColor4K (12-bit RGB444)
+                                            let word = u16::from_le_bytes([raw[row + x * 2], raw[row + x * 2 + 1]]);
+                                            let r = (((word >> 8) & 0xF) as u32) * 17;
+                                            let g = (((word >> 4) & 0xF) as u32) * 17;
+                                            let b = ((word & 0xF) as u32) * 17;
+                                            (r << 16) | (g << 8) | b
+                                        }
+                                        _ => (u32::from(raw[row + x * 4 + 2]) << 16) | (u32::from(raw[row + x * 4 + 1]) << 8) | u32::from(raw[row + x * 4]),
+                                    };
+                                    bmp.pixels[y * w + x] = px;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             NativeOutcome::Return
         }
         // TSize CFbsBitmap::SizeInPixels() const (hidden return pointer in r0, this in r1)
@@ -927,6 +1173,13 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         }
         "_ZNK10CFbsDevice11GetScanLineER5TDes8RK6TPointi12TDisplayMode" => NativeOutcome::Return,
 
+        // CWindowGc& CCoeControl::SystemGc() const / CCoeEnv::SystemGc() const
+        "_ZNK11CCoeControl8SystemGcEv" | "_ZNK7CCoeEnv8SystemGcEv" => {
+            match p.ensure_system_gc() {
+                Ok((_, gc)) => { p.cpu.regs[0] = gc; NativeOutcome::Return }
+                Err(m) => return refuse(m),
+            }
+        }
         // CDirectScreenAccess::NewL(RWsSession&, CWsScreenDevice&, RWindowBase&, MDirectScreenAccess&)
         "_ZN19CDirectScreenAccess4NewLER10RWsSessionR15CWsScreenDeviceR11RWindowBaseR19MDirectScreenAccess" => {
             let Some(dsa) = p.alloc_zeroed(DSA_BYTES) else { return refuse("no heap for CDirectScreenAccess".into()) };
@@ -1146,13 +1399,13 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // DrawBitmap(const TRect& aDestRect, const CFbsBitmap* aSource[, const TRect& aSourceRect])
         "_ZN9CFbsBitGc10DrawBitmapERK5TRectPK10CFbsBitmap" => {
             if let Ok(dr) = p.rd_rect(r1) {
-                let _ = p.gc_blit(r0, (dr[0], dr[1]), r2, None, None, false);
+                let _ = p.gc_draw_bitmap_scaled(r0, dr, r2, None, None, false);
             }
             NativeOutcome::Return
         }
         "_ZN9CFbsBitGc10DrawBitmapERK5TRectPK10CFbsBitmapS2_" => {
             if let (Ok(dr), Ok(sr)) = (p.rd_rect(r1), p.rd_rect(r3)) {
-                let _ = p.gc_blit(r0, (dr[0], dr[1]), r2, Some(sr), None, false);
+                let _ = p.gc_draw_bitmap_scaled(r0, dr, r2, Some(sr), None, false);
             }
             NativeOutcome::Return
         }
@@ -1161,7 +1414,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let mask_bmp = p.rd(sp).unwrap_or(0);
             let invert = p.rd(sp + 4).unwrap_or(0) != 0;
             if let (Ok(dr), Ok(sr)) = (p.rd_rect(r1), p.rd_rect(r3)) {
-                let _ = p.gc_blit(r0, (dr[0], dr[1]), r2, Some(sr), Some(mask_bmp), invert);
+                let _ = p.gc_draw_bitmap_scaled(r0, dr, r2, Some(sr), Some(mask_bmp), invert);
             }
             NativeOutcome::Return
         }

@@ -295,6 +295,25 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let r = zero(p, this, DOC_I_CONTAINER, CAPA_DOCUMENT_SIZE).and_then(|_| p.mem.vm.write_u32(this.wrapping_add(DOC_I_APPLICATION), app).map_err(|_| format!("document at {this:#x} is unwritable")));
             ctor(p, r)
         }
+        // TFileName CEikApplication::BitmapStoreName() const: ARM EABI sret TBuf<256> in r0, this in r1.
+        "_ZNK15CEikApplication15BitmapStoreNameEv" => {
+            let sret = this;
+            let stem = p.host.drive.as_ref()
+                .and_then(|d| crate::resource::registration(d, p.uid3).ok())
+                .map(|r| r.app_file)
+                .unwrap_or_else(|| alloc::string::String::from("app"));
+            let mbm_path = alloc::format!("\\resource\\apps\\{stem}.mbm");
+            let units: alloc::vec::Vec<u16> = mbm_path.encode_utf16().collect();
+            let r = (|| -> Result<(), String> {
+                p.wr(sret, (units.len() as u32) | (crate::desc::DES_BUF << crate::desc::KSHIFT_DES_TYPE))?;
+                p.wr(sret.wrapping_add(4), 256)?;
+                for (i, &u) in units.iter().enumerate() {
+                    p.mem.vm.write_u16(sret.wrapping_add(8 + 2 * i as u32), u).map_err(|_| format!("BitmapStoreName sret at {sret:#x} unwritable"))?;
+                }
+                Ok(())
+            })();
+            ctor(p, r)
+        }
         // TFileName CApaApplication::AppFullName() const: ARM EABI sret TBuf<256> in r0, this in r1.
         "_ZNK15CApaApplication11AppFullNameEv" => {
             let sret = this;

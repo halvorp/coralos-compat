@@ -100,19 +100,34 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED ws32 {name}: {m}")),
             }
         }
-        // TInt CFont::HeightInPixels() const: the requested height at the device's scale (rounded to nearest), for a font made by
-        // GetNearestFontInTwips. A logical font (FontFromId) has no height here: refused by name.
-        "_ZNK5CFont14HeightInPixelsEv" => match p.obj_get(p.cpu.regs[0]) {
-            Some(HostObj::Font(t)) => { let px = twips_to_pixels(*t); p.cpu.regs[0] = px; NativeOutcome::Return }
-            _ => NativeOutcome::Refused(format!("NEXT-NEEDED gdi {name}: the font at {:#x} is a logical font (AknLayoutUtils::FontFromId) whose height is in layout data this engine does not read", p.cpu.regs[0])),
-        },
-        // TInt CFont::BaselineOffsetInPixels() const: the ascent. Only `ascent + descent = height` is known here, so the whole height is
-        // the ascent (descent 0): no glyph data, no invented proportion. Cell positions FileBrowser derives from it are recorded, not drawn.
-        // DELETE WHEN the device profile carries a typeface's real metrics (OPEN DESIGN QUESTION: where they come from).
-        "_ZNK5CFont22BaselineOffsetInPixelsEv" => match p.obj_get(p.cpu.regs[0]) {
-            Some(HostObj::Font(t)) => { let px = twips_to_pixels(*t); p.cpu.regs[0] = px; NativeOutcome::Return }
-            _ => NativeOutcome::Refused(format!("NEXT-NEEDED gdi {name}: the font at {:#x} is a logical font (AknLayoutUtils::FontFromId): no metrics", p.cpu.regs[0])),
-        },
+        // TInt CFont::HeightInPixels() const: requested height for GetNearestFontInTwips fonts, or 14 px for logical fonts.
+        "_ZNK5CFont14HeightInPixelsEv" => {
+            let f = p.cpu.regs[0];
+            if let Some(HostObj::Font(t)) = p.obj_get(f) {
+                let px = twips_to_pixels(*t);
+                p.cpu.regs[0] = px;
+                NativeOutcome::Return
+            } else if p.nat.fonts.values().any(|&a| a == f) {
+                p.cpu.regs[0] = 14;
+                NativeOutcome::Return
+            } else {
+                NativeOutcome::Refused(format!("NEXT-NEEDED gdi {name}: the font at {f:#x} is not a known CFont"))
+            }
+        }
+        // TInt CFont::BaselineOffsetInPixels() const: ascent for GetNearestFontInTwips fonts, or 11 px for logical fonts.
+        "_ZNK5CFont22BaselineOffsetInPixelsEv" => {
+            let f = p.cpu.regs[0];
+            if let Some(HostObj::Font(t)) = p.obj_get(f) {
+                let px = twips_to_pixels(*t);
+                p.cpu.regs[0] = px;
+                NativeOutcome::Return
+            } else if p.nat.fonts.values().any(|&a| a == f) {
+                p.cpu.regs[0] = 11;
+                NativeOutcome::Return
+            } else {
+                NativeOutcome::Refused(format!("NEXT-NEEDED gdi {name}: the font at {f:#x} is not a known CFont"))
+            }
+        }
         _ => return None,
     })
 }

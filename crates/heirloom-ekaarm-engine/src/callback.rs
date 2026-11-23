@@ -59,6 +59,8 @@ pub enum Continuation {
     IdleCallback { ao: u32 },
     /// A `CPeriodic` callback returned (`sched.rs`): re-arm for the next interval regardless of r0, unless cancelled.
     PeriodicCallback { ao: u32 },
+    /// A guest `CCoeControl::Draw(const TRect&)` override returned (`control.rs`): present the screen bitmap and free scratch rect.
+    ControlDrawn { bmp_handle: u32, rect_scratch: u32 },
     /// A cooperative child `RThread` started via `RThread::Resume()`; returns to the caller of `Resume()` once it exits or enters `CActiveScheduler::Start()`.
     ThreadStart,
 }
@@ -128,6 +130,11 @@ impl Process {
             Continuation::ViewActivated { block } => { crate::viewappui::finish_activation(self, block); Ok(()) }
             Continuation::IdleCallback { ao } => crate::sched::idle_returned(self, ao, r0),
             Continuation::PeriodicCallback { ao } => crate::sched::periodic_returned(self, ao),
+            Continuation::ControlDrawn { bmp_handle, rect_scratch } => {
+                if let Some(h) = self.heap.as_mut() { let _ = h.free(rect_scratch); }
+                let _ = self.present_screen_bitmap(bmp_handle);
+                Ok(())
+            }
             Continuation::ThreadStart => Ok(()),
         }
     }

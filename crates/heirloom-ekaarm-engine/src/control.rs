@@ -188,11 +188,40 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let r = p.control_state(this).map(|s| s.hidden = r1 == 0);
             done(p, r)
         }
-        // void CCoeControl::DrawNow() / DrawDeferred() const: host renders projected controls; sync list boxes if modified.
+        // void CCoeControl::DrawNow() / DrawNow(const TRect&) / DrawDeferred() const:
+        // sync projected list boxes, and for guest-subclassed controls with a real `Draw(const TRect&)` override,
+        // invoke `Draw` against the system GC and present the updated screen bitmap.
         "_ZNK11CCoeControl7DrawNowEv" | "_ZN11CCoeControl7DrawNowEv"
+        | "_ZNK11CCoeControl7DrawNowERK5TRect" | "_ZN11CCoeControl7DrawNowERK5TRect"
         | "_ZNK11CCoeControl12DrawDeferredEv" | "_ZN11CCoeControl12DrawDeferredEv" => {
             if matches!(p.obj_get(this), Some(HostObj::List(_))) {
                 let _ = p.list_sync(this);
+                return Some(NativeOutcome::Return);
+            }
+            // Check whether this control has a real guest-code override at SLOT_DRAW (not an engine stub).
+            let guest_draw = p.rd(this).ok()
+                .filter(|&vt| vt >= crate::layout::CODE_BASE && vt < crate::layout::STUB_BASE)
+                .and_then(|vt| p.rd(vt.wrapping_add(SLOT_DRAW * 4)).ok())
+                .filter(|&fn_ptr| fn_ptr >= crate::layout::CODE_BASE && fn_ptr < crate::layout::STUB_BASE);
+            if let Some(draw_fn) = guest_draw {
+                if let Ok((bmp_handle, _)) = p.ensure_system_gc() {
+                    if let Some(rect_scratch) = p.alloc_zeroed(16) {
+                        let (x, y) = (p.rd(this + CTRL_I_POSITION).unwrap_or(0) as i32, p.rd(this + CTRL_I_POSITION + 4).unwrap_or(0) as i32);
+                        let (sw, sh) = p.screen_size();
+                        let w = p.rd(this + CTRL_I_SIZE).unwrap_or(sw as u32) as i32;
+                        let h = p.rd(this + CTRL_I_SIZE + 4).unwrap_or(sh as u32) as i32;
+                        let (w, h) = if w <= 0 || h <= 0 { (sw, sh) } else { (w, h) };
+                        let _ = p.wr(rect_scratch, x as u32);
+                        let _ = p.wr(rect_scratch + 4, y as u32);
+                        let _ = p.wr(rect_scratch + 8, (x + w) as u32);
+                        let _ = p.wr(rect_scratch + 12, (y + h) as u32);
+                        let _ = p.call_guest(
+                            draw_fn,
+                            &[this, rect_scratch],
+                            crate::callback::Continuation::ControlDrawn { bmp_handle, rect_scratch },
+                        );
+                    }
+                }
             }
             NativeOutcome::Return
         }
@@ -228,6 +257,16 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let (sw, sh) = p.screen_size();
             let r = p.control_set_extent(this, 0, 0, sw, sh);
             match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) }
+        }
+        // TSize CCoeControl::Size() const: ARM EABI sret TSize in r0, this in r1.
+        "_ZNK11CCoeControl4SizeEv" => {
+            let sret = this;
+            let ctrl = r1;
+            let (Ok(w), Ok(h)) = (p.rd(ctrl + CTRL_I_SIZE), p.rd(ctrl + CTRL_I_SIZE + 4)) else {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: control at {ctrl:#x} unreadable")));
+            };
+            let ok = p.mem.vm.write_u32(sret, w).is_ok() && p.mem.vm.write_u32(sret + 4, h).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: sret at {sret:#x} unwritable")) }
         }
         // void CCoeControl::HandleResourceChange(TInt aType): tell every component control (CCoeControl's own work for a layout or skin change).
         "_ZN11CCoeControl20HandleResourceChangeEi" => match p.walk_components(this, CompKind::ResourceChange(r1)) { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")) },

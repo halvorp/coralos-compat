@@ -219,3 +219,154 @@ fn cidle_stops_when_callback_returns_zero() {
     assert_eq!(p.guest_word(counter_addr), Some(1));
     assert_eq!(p.next_timer_deadline(), None, "CIdle returning 0 must NOT re-arm");
 }
+
+#[test]
+fn tdisplaymode_ecolor64k_is_7_and_data_address_roundtrips_rgb565() {
+    use heirloom_ekaarm_engine::fbs::decode_mbm_mode;
+    // 2x1 16-bit RGB565 MBM: pure red (0xF800), pure blue (0x001F).
+    let payload = [0x00, 0xF8, 0x1F, 0x00];
+    let mbm = build_mbm(2, 1, 16, 1, 0, &payload);
+    let (w, h, mode, px) = decode_mbm_mode(&mbm, 0).expect("16-bit RGB565 MBM");
+    assert_eq!((w, h, mode), (2, 1, 7), "EColor64K must be TDisplayMode 7 per gdi.h");
+    assert_eq!(px[0], 0x00FF_0000);
+    assert_eq!(px[1], 0x0000_00FF);
+
+    // Guest-side CFbsBitmap::Create(2x1, EColor64K=7) -> DisplayMode()==7 -> LockHeap/DataAddress/UnlockHeap.
+    let mut p = loader::bare(&[
+        "_ZN10CFbsBitmapC1Ev",                         // stub 0
+        "_ZN10CFbsBitmap6CreateERK5TSize12TDisplayMode", // stub 1
+        "_ZNK10CFbsBitmap11DisplayModeEv",             // stub 2
+        "_ZNK10CFbsBitmap8LockHeapEi",                 // stub 3
+        "_ZNK10CFbsBitmap11DataAddressEv",             // stub 4
+        "_ZNK10CFbsBitmap10UnlockHeapEi",              // stub 5
+    ]).unwrap();
+    let bmp = p.heap.as_mut().unwrap().alloc(0x40, &mut p.mem).unwrap();
+    let sz = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    p.mem.write_u32(sz, 2).unwrap();
+    p.mem.write_u32(sz + 4, 1).unwrap();
+    p.map_code(CODE_BASE, &arm_words(&[
+        0xE1A0_0004,                       // mov r0, r4 (bmp)
+        0xEF00_0000 | STUB_SVC_BASE,       // CFbsBitmap()
+        0xE1A0_0004,                       // mov r0, r4
+        0xE1A0_1005,                       // mov r1, r5 (sz)
+        0xE3A0_2007,                       // mov r2, #7 (EColor64K)
+        0xEF00_0000 | (STUB_SVC_BASE + 1), // Create
+        0xE1A0_0004,
+        0xEF00_0000 | (STUB_SVC_BASE + 2), // DisplayMode -> r6
+        0xE1A0_6000,
+        0xE1A0_0004,
+        0xE3A0_1000,
+        0xEF00_0000 | (STUB_SVC_BASE + 3), // LockHeap
+        0xE1A0_0004,
+        0xEF00_0000 | (STUB_SVC_BASE + 4), // DataAddress -> r7
+        0xE1A0_7000,
+        // Write RGB565 pure green (0x07E0) at pixel 0 and pure red (0xF800) at pixel 1
+        0xE59F_1014,                       // ldr r1, [pc, #20] (0xF80007E0)
+        0xE587_1000,                       // str r1, [r7]
+        0xE1A0_0004,
+        0xE3A0_1000,
+        0xEF00_0000 | (STUB_SVC_BASE + 5), // UnlockHeap
+        0xE1A0_0006,                       // return DisplayMode
+        0xEF00_0000 | EXIT_SVC,
+        0xF800_07E0,                       // literal: [0x07E0, 0xF800]
+    ])).unwrap();
+    p.cpu.regs[4] = bmp;
+    p.cpu.regs[5] = sz;
+    p.cpu.set_pc_interworking(CODE_BASE);
+    assert!(matches!(p.run(10_000), Outcome::Exited(7)));
+    // Verify UnlockHeap converted the RGB565 scanline into host RGB888 pixels.
+    let fb = p.nat.fbs.bitmaps.values().find(|b| b.width == 2 && b.height == 1).expect("created 2x1 bitmap");
+    assert_eq!(fb.get(0, 0), Some(0x0000_FF00), "pixel 0 must decode 0x07E0 -> green");
+    assert_eq!(fb.get(1, 0), Some(0x00FF_0000), "pixel 1 must decode 0xF800 -> red");
+}
+
+#[test]
+fn draw_bitmap_rect_scales_source_and_draw_text_renders_umlauts() {
+    let mut p = loader::bare(&[
+        "_ZN10CFbsBitmapC1Ev",                                           // stub 0
+        "_ZN10CFbsBitmap6CreateERK5TSize12TDisplayMode",                 // stub 1
+        "_ZN16CFbsBitmapDevice4NewLEP10CFbsBitmap",                      // stub 2
+        "_ZN10CFbsDevice13CreateContextERP9CFbsBitGc",                   // stub 3
+        "_ZN9CFbsBitGc10DrawBitmapERK5TRectPK10CFbsBitmap",              // stub 4
+        "_ZN9CFbsBitGc11SetPenColorERK4TRgb",                            // stub 5
+        "_ZN9CFbsBitGc8DrawTextERK7TDesC16RK6TPoint",                    // stub 6
+    ]).unwrap();
+    let src_bmp = p.heap.as_mut().unwrap().alloc(0x40, &mut p.mem).unwrap();
+    let dst_bmp = p.heap.as_mut().unwrap().alloc(0x40, &mut p.mem).unwrap();
+    let gc_out = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let sz_src = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let sz_dst = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let dst_rc = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let rgb = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let pt = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let des = p.heap.as_mut().unwrap().alloc(32, &mut p.mem).unwrap();
+    // sz_src = 2x2, sz_dst = 16x16, dst_rc = [0,0,4,4], rgb = 0 (black), pt = (6, 12)
+    p.mem.write_u32(sz_src, 2).unwrap(); p.mem.write_u32(sz_src + 4, 2).unwrap();
+    p.mem.write_u32(sz_dst, 16).unwrap(); p.mem.write_u32(sz_dst + 4, 16).unwrap();
+    p.mem.write_u32(dst_rc, 0).unwrap(); p.mem.write_u32(dst_rc + 4, 0).unwrap();
+    p.mem.write_u32(dst_rc + 8, 4).unwrap(); p.mem.write_u32(dst_rc + 12, 4).unwrap();
+    p.mem.write_u32(rgb, 0).unwrap();
+    p.mem.write_u32(pt, 6).unwrap(); p.mem.write_u32(pt + 4, 12).unwrap();
+    // TBufC16 holding "Ö" (U+00D6)
+    p.mem.write_u32(des, 1).unwrap();
+    p.mem.write_u16(des + 4, 'Ö' as u16).unwrap();
+
+    p.map_code(CODE_BASE, &arm_words(&[
+        // Construct & create src_bmp (2x2) and dst_bmp (16x16)
+        0xE1A0_0004, 0xEF00_0000 | STUB_SVC_BASE,
+        0xE1A0_0004, 0xE1A0_1006, 0xE3A0_200B, 0xEF00_0000 | (STUB_SVC_BASE + 1),
+        0xE1A0_0005, 0xEF00_0000 | STUB_SVC_BASE,
+        0xE1A0_0005, 0xE1A0_1007, 0xE3A0_200B, 0xEF00_0000 | (STUB_SVC_BASE + 1),
+        // Create device + GC for dst_bmp
+        0xE1A0_0005, 0xEF00_0000 | (STUB_SVC_BASE + 2),
+        0xE1A0_1008, 0xEF00_0000 | (STUB_SVC_BASE + 3),
+        0xE598_9000, // ldr r9, [r8] (gc)
+        0xE3A0_0000, 0xEF00_0000 | EXIT_SVC,
+    ])).unwrap();
+    p.cpu.regs[4] = src_bmp;
+    p.cpu.regs[5] = dst_bmp;
+    p.cpu.regs[6] = sz_src;
+    p.cpu.regs[7] = sz_dst;
+    p.cpu.regs[8] = gc_out;
+    p.cpu.set_pc_interworking(CODE_BASE);
+    assert!(matches!(p.run(10_000), Outcome::Exited(0)));
+
+    // Paint 4 distinct quadrant colors in src_bmp (2x2).
+    let src_fb = p.nat.fbs.bitmaps.values_mut().find(|b| b.width == 2 && b.height == 2).expect("src 2x2 bitmap");
+    src_fb.set(0, 0, 0x00FF_0000); // top-left red
+    src_fb.set(1, 0, 0x0000_FF00); // top-right green
+    src_fb.set(0, 1, 0x0000_00FF); // bottom-left blue
+    src_fb.set(1, 1, 0x00FF_FF00); // bottom-right yellow
+
+    let gc = p.cpu.regs[9];
+    p.map_code(CODE_BASE + 0x1000, &arm_words(&[
+        // DrawBitmap(dst_rc=[0,0,4,4], src_bmp) -> scales 2x2 to 4x4
+        0xE1A0_0009, 0xE1A0_100A, 0xE1A0_2004, 0xEF00_0000 | (STUB_SVC_BASE + 4),
+        // SetPenColor(black) & DrawText("Ö", (6, 12))
+        0xE1A0_0009, 0xE1A0_100B, 0xEF00_0000 | (STUB_SVC_BASE + 5),
+        0xE1A0_0009, 0xE1A0_1008, 0xE1A0_2007, 0xEF00_0000 | (STUB_SVC_BASE + 6),
+        0xE3A0_0000, 0xEF00_0000 | EXIT_SVC,
+    ])).unwrap();
+    p.cpu.regs[4] = src_bmp;
+    p.cpu.regs[7] = pt;
+    p.cpu.regs[8] = des;
+    p.cpu.regs[9] = gc;
+    p.cpu.regs[10] = dst_rc;
+    p.cpu.regs[11] = rgb;
+    p.cpu.set_pc_interworking(CODE_BASE + 0x1000);
+    assert!(matches!(p.run(10_000), Outcome::Exited(0)));
+
+    let dst_fb = p.nat.fbs.bitmaps.values().find(|b| b.width == 16 && b.height == 16).expect("dst 16x16 bitmap");
+    assert_eq!(dst_fb.get(0, 0), Some(0x00FF_0000));
+    assert_eq!(dst_fb.get(3, 0), Some(0x0000_FF00), "DrawBitmap must stretch horizontally");
+    assert_eq!(dst_fb.get(0, 3), Some(0x0000_00FF), "DrawBitmap must stretch vertically");
+    assert_eq!(dst_fb.get(3, 3), Some(0x00FF_FF00), "DrawBitmap must fill bottom-right quadrant");
+
+    let mut black_px = 0;
+    for y in 4..14 {
+        for x in 6..12 {
+            if dst_fb.get(x, y) == Some(0) { black_px += 1; }
+        }
+    }
+    assert!(black_px > 5, "umlaut 'Ö' must render non-empty dark pixels, got {black_px}");
+}
