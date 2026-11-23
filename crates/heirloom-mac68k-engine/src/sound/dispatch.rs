@@ -84,18 +84,14 @@ pub fn sound_dispatch<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, regs: &mut Regs
         }
         (0x24, 2, _) | (0x2C, 2, _) => {
             let (p, sys) = (arg32(m, 0)?, routine == 0x24);
-            let v = if sys { m.snd.sys_beep_volume } else { m.snd.default_volume }.unwrap_or(FULL_VOLUME);
+            let v = if sys { m.snd.sys_beep_volume.unwrap_or(FULL_VOLUME) } else { get_default_output_volume(m) };
             m.mem.write_u32(p, v).map_err(Refusal::mem("volume"))?;
             ret_w(m, cpu, NO_ERR as u16)?;
             format!("{} -> {v:#010x}", if sys { "GetSysBeepVolume" } else { "GetDefaultOutputVolume" })
         }
         (0x28, 2, _) | (0x30, 2, _) => {
             let (v, sys) = (arg32(m, 0)?, routine == 0x28);
-            if sys { m.snd.sys_beep_volume = Some(v); } else {
-                m.snd.default_volume = Some(v);
-                let keys: Vec<u32> = m.snd.chans.keys().copied().collect();
-                for k in keys { m.snd_apply_volume(k).map_err(|e| Refusal(format!("SetDefaultOutputVolume: {e:?}")))?; }
-            }
+            if sys { m.snd.sys_beep_volume = Some(v); } else { set_default_output_volume(m, v)?; }
             ret_w(m, cpu, NO_ERR as u16)?;
             format!("{} {v:#010x}", if sys { "SetSysBeepVolume" } else { "SetDefaultOutputVolume" })
         }
@@ -105,4 +101,17 @@ pub fn sound_dispatch<U: GuestUi>(m: &mut Mac<U>, cpu: &mut Cpu, regs: &mut Regs
         }
     };
     Ok(format!("[sound] {text}"))
+}
+
+/// Shared body for `GetDefaultOutputVolume` (68k `_SoundDispatch` $022C0018 and PPC `InterfaceLib`).
+pub fn get_default_output_volume<U: GuestUi>(m: &Mac<U>) -> u32 {
+    m.snd.default_volume.unwrap_or(FULL_VOLUME)
+}
+
+/// Shared body for `SetDefaultOutputVolume` (68k `_SoundDispatch` $02300018 and PPC `InterfaceLib`).
+pub fn set_default_output_volume<U: GuestUi>(m: &mut Mac<U>, v: u32) -> Result<(), Refusal> {
+    m.snd.default_volume = Some(v);
+    let keys: Vec<u32> = m.snd.chans.keys().copied().collect();
+    for k in keys { m.snd_apply_volume(k).map_err(|e| Refusal(format!("SetDefaultOutputVolume: {e:?}")))?; }
+    Ok(())
 }

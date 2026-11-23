@@ -287,7 +287,8 @@ pub const INTERFACELIB_ALIASES: &[(&str, &str)] = &[("GetMenu", "GetRMenu"), ("B
     // each after its trap): a name whose trap has no handler stays unbound by name (lookup below)
     ("RemoveResource", "RmveResource"), ("Get1IndResource", "Get1IxResource"), ("Get1IndType", "Get1IxType"), ("SetRectRgn", "SetRecRgn"),
     ("GetItemStyle", "GetItmStyle"), ("SetItemStyle", "SetItmStyle"), ("GetItemIcon", "GetItmIcon"), ("SetItemIcon", "SetItmIcon"),
-    ("SetItemMark", "SetItmMark"), ("GetItemMark", "GetItmMark"), ("CalcVisBehind", "CalcVBehind"), ("ReallocateHandle", "ReallocHandle"), ("SystemEdit", "SysEdit")];
+    ("SetItemMark", "SetItmMark"), ("GetItemMark", "GetItmMark"), ("CalcVisBehind", "CalcVBehind"), ("ReallocateHandle", "ReallocHandle"), ("SystemEdit", "SysEdit"),
+    ("GetMaxResourceSize", "MaxSizeRsrc")];
 
 /// How `name` would be served, given the handlers `mac` has registered.
 pub fn lookup<U: GuestUi>(mac: &Mac<U>, name: &str) -> Binding {

@@ -27,6 +27,10 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut dump: Vec<(u32, u32)> = Vec::new();
     let mut find: Vec<u32> = Vec::new();
+    let mut put_bins: Vec<(String, String)> = Vec::new();
+    let mut events: Vec<String> = Vec::new();
+    let mut save_ppm: Option<String> = None;
+    let mut frames = 0u32;
     let (mut census, mut strict, mut data, mut run, mut insns, mut rsrc, mut pcs, mut libdir, mut idle) = (false, false, None, false, 50_000_000u64, None, 0usize, None::<PathBuf>, 0u32);
     let (mut tier, mut prof) = (None::<heirloom_cpu_ppc::Tier>, false);
     while let Some(a) = args.first().cloned() {
@@ -41,6 +45,10 @@ fn main() {
             "--pcs" => { args.remove(0); if args.is_empty() { usage() } pcs = args.remove(0).parse().unwrap_or_else(|_| usage()); }
             "--libdir" => { args.remove(0); if args.is_empty() { usage() } libdir = Some(PathBuf::from(args.remove(0))); }
             "--idle" => { args.remove(0); if args.is_empty() { usage() } idle = args.remove(0).parse().unwrap_or_else(|_| usage()); }
+            "--frames" => { args.remove(0); if args.is_empty() { usage() } frames = args.remove(0).parse().unwrap_or_else(|_| usage()); }
+            "--put-bin" => { args.remove(0); if args.is_empty() { usage() } let v = args.remove(0); let (d, p) = v.split_once('=').unwrap_or_else(|| usage()); put_bins.push((d.to_string(), p.to_string())); }
+            "--event" => { args.remove(0); if args.is_empty() { usage() } events.push(args.remove(0)); }
+            "--save-ppm" => { args.remove(0); if args.is_empty() { usage() } save_ppm = Some(args.remove(0)); }
             "--bind-list" => {
                 // `--bind-list <exports file> [LIBRARY]`: for every `class<TAB>name` line (the 9.2.1 oracle's export lists) print BOUND or UNBOUND as this engine would bind it for an import from LIBRARY (default CarbonLib)
                 args.remove(0);
@@ -89,6 +97,20 @@ fn main() {
         Ok(n) => println!("resources: {n} in the application's resource fork"),
         Err(e) => println!("resources: none attached ({e})"),
     }
+    m.mac.ui.drain_audio = true;
+    for (subdir, host_path) in &put_bins {
+        let raw = std::fs::read(host_path).unwrap_or_else(|e| { eprintln!("read {host_path}: {e}"); std::process::exit(1) });
+        let opened = heirloom_fmt_resfork::container::open(&raw).unwrap_or_else(|e| { eprintln!("macbin {host_path}: {e:?}"); std::process::exit(1) });
+        let root = m.mac.fm.tree.children(heirloom_volume::ROOT)[0];
+        let dir = if subdir.is_empty() || subdir == "." { root } else { m.mac.fm.tree.mkdirs(root, subdir.split('/').filter(|s| !s.is_empty())).expect("mkdirs") };
+        let fname = opened.name.unwrap_or_else(|| Path::new(host_path).file_stem().unwrap().to_string_lossy().into_owned());
+        let fdata = opened.data.map(|r| raw[r].to_vec()).unwrap_or_default();
+        let id = m.mac.fm.tree.put_file(dir, &fname, fdata).expect("put_file");
+        let n = m.mac.fm.tree.get_mut(id);
+        n.rsrc = raw[opened.rsrc].to_vec();
+        if let Some(ft) = opened.file_type { n.finfo.file_type = ft; }
+        if let Some(cr) = opened.creator { n.finfo.creator = cr; }
+    }
     // private libraries the application carries in its own data fork (its cfrg import-library members), then every PEF file in --libdir (named by file name)
     for (lname, bytes) in heirloom_macppc_engine::source::library_fragments(&file, data_bytes.as_deref()) { println!("library {lname:?}: {} bytes inside the application file", bytes.len()); m.provide_library(&lname, &bytes); }
     if let Some(dir) = &libdir {
@@ -132,16 +154,104 @@ fn main() {
         m.trace_pcs(pcs);
         if let Some(t) = tier { m.exec().tier = t; }
         let t0 = std::time::Instant::now();
-        let (mut step, mut n) = m.run_loop(insns);
-        // --idle T: a program waiting for an event (or a timeout) is given T more ticks of virtual time and resumed, up to the instruction budget in total
-        let mut rounds = 0u32;
-        while idle > 0 && step == Step::Blocked && n < insns && rounds < 2_000_000 {
-            m.mac.advance_ticks(idle);
-            rounds += 1;
-            let (st, k) = m.run_loop(insns - n);
-            step = st; n += k;
+        let mut staged_events: std::collections::VecDeque<heirloom_ui_abi::GuestUiEvent> = Default::default();
+        let win1 = heirloom_ui_abi::UiObjectRef { id: 1, generation: 1 };
+        for ev in &events {
+            let parts: Vec<&str> = ev.split(':').collect();
+            match parts.as_slice() {
+                ["menu", id, item] => staged_events.push_back(heirloom_ui_abi::GuestUiEvent::MenuCommand {
+                    win: win1,
+                    token: heirloom_ui_abi::CallbackToken(id.parse::<u64>().unwrap() << 16 | item.parse::<u64>().unwrap()),
+                }),
+                ["click", wid, x, y] => {
+                    let w = heirloom_ui_abi::UiObjectRef { id: wid.parse().unwrap(), generation: 1 };
+                    let (px, py): (i32, i32) = (x.parse().unwrap(), y.parse().unwrap());
+                    staged_events.push_back(heirloom_ui_abi::GuestUiEvent::primary(w, px, py, heirloom_ui_abi::PointerPhase::Down));
+                    staged_events.push_back(heirloom_ui_abi::GuestUiEvent::primary(w, px, py, heirloom_ui_abi::PointerPhase::Up));
+                }
+                _ => { eprintln!("unknown event {ev}"); std::process::exit(2) }
+            }
         }
+        let (step, n) = if frames > 0 {
+            let per_frame = (insns / u64::from(frames).max(1)).clamp(500_000, 5_000_000);
+            let (mut st, mut tot) = m.run_loop(per_frame.min(insns));
+            for f in 0..frames {
+                if st == Step::Exited || matches!(st, Step::Fault(_)) || tot >= insns { break; }
+                if f % 8 == 3 {
+                    if let Some(ev) = staged_events.pop_front() {
+                        m.mac.ui.events.push_back(ev);
+                    }
+                }
+                m.mac.advance_ticks(1);
+                let (s2, k) = m.run_loop(per_frame.min(insns - tot));
+                st = s2; tot += k;
+            }
+            (st, tot)
+        } else {
+            m.mac.ui.events.extend(staged_events.drain(..));
+            let (mut st, mut tot) = m.run_loop(insns);
+            let mut rounds = 0u32;
+            while idle > 0 && st == Step::Blocked && tot < insns && rounds < 2_000_000 {
+                m.mac.advance_ticks(idle);
+                rounds += 1;
+                let (s2, k) = m.run_loop(insns - tot);
+                st = s2; tot += k;
+            }
+            (st, tot)
+        };
         let elapsed_us = t0.elapsed().as_micros() as u64;
+        if let Some(ppm_path) = save_ppm {
+            let mut sizes: std::collections::HashMap<u32, (usize, usize)> = Default::default();
+            let mut next_id = 0u32;
+            let mut target_win = None::<u32>;
+            for c in &m.mac.ui.calls {
+                match c {
+                    heirloom_ui_abi::UiCall::OpenWindow(w) => {
+                        next_id += 1;
+                        sizes.insert(next_id, (w.rect.width.max(1) as usize, w.rect.height.max(1) as usize));
+                    }
+                    heirloom_ui_abi::UiCall::PresentPlane(w, p) if !p.ops.is_empty() => {
+                        if let Some(&(ww, hh)) = sizes.get(&w.id) {
+                            if ww >= 320 && hh >= 200 { target_win = Some(w.id); }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(wid) = target_win {
+                let (w, h) = sizes[&wid];
+                let mut fb = vec![0u32; w * h];
+                for c in &m.mac.ui.calls {
+                    if let heirloom_ui_abi::UiCall::PresentPlane(wr, p) = c {
+                        if wr.id != wid { continue; }
+                        for op in &p.ops {
+                            if let heirloom_ui_abi::DrawOp::Pixels { rect, rgb } = op {
+                                let rw = rect.width.max(0) as usize;
+                                for dy in 0..rect.height.max(0) as usize {
+                                    let ty = rect.top + dy as i32;
+                                    if ty < 0 || ty >= h as i32 { continue; }
+                                    for dx in 0..rw {
+                                        let tx = rect.left + dx as i32;
+                                        if tx < 0 || tx >= w as i32 { continue; }
+                                        if let Some(&px) = rgb.get(dy * rw + dx) {
+                                            fb[ty as usize * w + tx as usize] = px;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+                for &px in &fb {
+                    out.push(((px >> 16) & 0xff) as u8);
+                    out.push(((px >> 8) & 0xff) as u8);
+                    out.push((px & 0xff) as u8);
+                }
+                std::fs::write(&ppm_path, out).expect("write ppm");
+                println!("saved {w}x{h} composited frame (win {wid}) to {ppm_path}");
+            }
+        }
         for l in &m.mac.log { println!("  | {l}"); }
         for l in &m.mac.refused { println!("  | REFUSED {l}"); }
         let why = match &step {

@@ -70,6 +70,10 @@ pub enum TbFn {
     /// `NavLoad()` / `NavUnload()` (Navigation.h: preload / release the Navigation Services library): noErr; the Nav calls here are natives, there is
     /// nothing to load or release.
     NavLoad,
+    /// Icon Utilities (`Icons.h`): `GetIconSuite(&suite, resID, selector)` and `PlotIconSuite(rect, align, transform, suite)`.
+    GetIconSuite, PlotIconSuite,
+    /// Standard File Package (`StandardFile.h`): `StandardGetFile` and `StandardPutFile` (returns `sfGood = false` when no host file picker is presented).
+    StandardGetFile, StandardPutFile,
     /// `LMGet<Name>` / `LMSet<Name>` over the table [`LOWMEM`]; the index is the row.
     LmGet(u8), LmSet(u8),
 }
@@ -99,6 +103,8 @@ impl TbFn {
             "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "LMGetTopMapHndl" => TopMapGet, "LMSetTopMapHndl" => TopMapSet, "LMGetCurMap" => CurMapGet, "LMSetCurMap" => CurMapSet, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "SetPreserveGlyph" => SetPreserveGlyph, "GetPreserveGlyph" => GetPreserveGlyph, "IsMetric" => IsMetric, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
             "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString,
             "NavLibraryVersion" => NavLibraryVersion, "NavServicesCanRun" | "NavServicesAvailable" => NavServicesCanRun, "NavLoad" | "NavUnload" => NavLoad,
+            "GetIconSuite" => GetIconSuite, "PlotIconSuite" => PlotIconSuite,
+            "StandardGetFile" => StandardGetFile, "StandardPutFile" => StandardPutFile,
             // GetMBarHeight() / GetSysFont() are the Universal Interfaces' readers of MBarHeight and SysFontFam (Menus.h, Fonts.h)
             "GetMBarHeight" => return TbFn::by_name("LMGetMBarHeight"),
             "GetSysFont" => return TbFn::by_name("LMGetSysFontFam"),
@@ -271,6 +277,73 @@ impl<U: GuestUi> MacPpc<U> {
             AbsoluteToNanoseconds => { // (buffer r3, AbsoluteTime by value r4/r5)
                 self.mac.mem.write_u32(a0, a1).and_then(|_| self.mac.mem.write_u32(a0 + 4, a2)).map_err(|_| format!("{name}: result buffer {a0:#x} leaves guest RAM"))?;
                 cpu.gpr[3] = a0; return Ok(());
+            }
+            GetIconSuite => {
+                // OSErr GetIconSuite(IconSuiteRef *theIconSuite, SInt16 theResID, IconSelectorValue selector)
+                let (out_ptr, res_id, selector) = (a0, a1 as u16 as i16, a2);
+                if out_ptr == 0 { return Ok(cpu.gpr[3] = (-50i16) as i32 as u32); }
+                let icon_types: [[u8; 4]; 6] = [*b"icl8", *b"icl4", *b"ICN#", *b"ics8", *b"ics4", *b"ics#"];
+                let has_any = heirloom_mac68k_engine::mixed::trap_opcode("GetResource").is_some_and(|op_get| {
+                    icon_types.iter().any(|&ty| {
+                        self.mac.pascal_call(op_get, &[u32::from_be_bytes(ty), u32::from(res_id as u16)])
+                            .is_ok_and(|ret| ret.value != 0)
+                    })
+                });
+                if !has_any {
+                    self.mac.mem.write_u32(out_ptr, 0).map_err(|_| format!("{name}: out ptr {out_ptr:#x} leaves guest RAM"))?;
+                    self.mac.log.push(format!("[icon] GetIconSuite id={res_id} -> noSuchIconErr (-2580)"));
+                    (-2580i16) as i32 as u32
+                } else {
+                    let h = self.mac.mm.new_handle(&mut self.mac.mem, &mut self.mac.heap, 8, true).map_err(|e| format!("{name}: NewHandle OSErr {e}"))?;
+                    let p = self.mac.mem.read_u32(h).map_err(|_| format!("{name}: bad handle {h:#x}"))?;
+                    let _ = self.mac.mem.write_u16(p, res_id as u16);
+                    let _ = self.mac.mem.write_u32(p + 4, selector);
+                    self.mac.mem.write_u32(out_ptr, h).map_err(|_| format!("{name}: out ptr {out_ptr:#x} leaves guest RAM"))?;
+                    self.mac.log.push(format!("[icon] GetIconSuite id={res_id} sel={selector:#x} -> {h:#x}"));
+                    0
+                }
+            }
+            PlotIconSuite => {
+                // OSErr PlotIconSuite(const Rect *theRect, IconAlignmentType align, IconTransformType transform, IconSuiteRef suite)
+                let (rect_ptr, suite) = (a0, a3);
+                if rect_ptr == 0 || suite == 0 { (-50i16) as i32 as u32 } else {
+                    if let Ok(p) = self.mac.mem.read_u32(suite) {
+                        if let Ok(res_id) = self.mac.mem.read_u16(p) {
+                            if let Some(op_get) = heirloom_mac68k_engine::mixed::trap_opcode("GetResource") {
+                                if let Ok(ret) = self.mac.pascal_call(op_get, &[u32::from_be_bytes(*b"ICN#"), u32::from(res_id)]) {
+                                    let h = ret.value;
+                                    if h != 0 {
+                                        if let Some(op_plot) = heirloom_mac68k_engine::mixed::trap_opcode("PlotIcon") {
+                                            let _ = self.mac.pascal_call(op_plot, &[rect_ptr, h]);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.mac.log.push(format!("[icon] PlotIconSuite rect={rect_ptr:#x} suite={suite:#x}"));
+                    0
+                }
+            }
+            StandardGetFile => {
+                // void StandardGetFile(FileFilterUPP, short numTypes, ConstSFTypeListPtr, StandardFileReply *reply)
+                let reply = a3;
+                if reply != 0 {
+                    let zeros = [0u8; 88];
+                    self.put_bytes(reply, &zeros, &name)?;
+                }
+                self.mac.log.push(format!("[stdfile] StandardGetFile reply={reply:#x} -> sfGood=false"));
+                0
+            }
+            StandardPutFile => {
+                // void StandardPutFile(ConstStr255Param prompt, ConstStr255Param defaultName, StandardFileReply *reply)
+                let reply = a2;
+                if reply != 0 {
+                    let zeros = [0u8; 88];
+                    self.put_bytes(reply, &zeros, &name)?;
+                }
+                self.mac.log.push(format!("[stdfile] StandardPutFile reply={reply:#x} -> sfGood=false"));
+                0
             }
             LmGet(i) => {
                 let (_, at, n) = LOWMEM[i as usize];

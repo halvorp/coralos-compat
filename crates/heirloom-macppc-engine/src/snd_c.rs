@@ -8,11 +8,19 @@ use heirloom_ui_abi::GuestUi;
 use heirloom_mac68k_engine::sound::SOUND_MANAGER_VERSION;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SndFn { SndChannelStatus, SndSoundManagerVersion }
+pub enum SndFn { SndChannelStatus, SndSoundManagerVersion, GetDefaultOutputVolume, SetDefaultOutputVolume, GetSoundVol, SetSoundVol }
 
 impl SndFn {
     pub fn by_name(name: &str) -> Option<SndFn> {
-        match name { "SndChannelStatus" => Some(SndFn::SndChannelStatus), "SndSoundManagerVersion" => Some(SndFn::SndSoundManagerVersion), _ => None }
+        Some(match name {
+            "SndChannelStatus" => SndFn::SndChannelStatus,
+            "SndSoundManagerVersion" => SndFn::SndSoundManagerVersion,
+            "GetDefaultOutputVolume" => SndFn::GetDefaultOutputVolume,
+            "SetDefaultOutputVolume" => SndFn::SetDefaultOutputVolume,
+            "GetSoundVol" => SndFn::GetSoundVol,
+            "SetSoundVol" => SndFn::SetSoundVol,
+            _ => return None,
+        })
     }
 }
 
@@ -32,6 +40,39 @@ impl<U: GuestUi> MacPpc<U> {
                 self.mac.mem.write_u32(buf, SOUND_MANAGER_VERSION).map_err(|_| format!("SndSoundManagerVersion: the result buffer {buf:#x} leaves guest RAM"))?;
                 let v = SOUND_MANAGER_VERSION.to_be_bytes();
                 self.mac.log.push(format!("[sound] SndSoundManagerVersion -> {:x}.{:x}.{:x} stage {:#x}", v[0], v[1] >> 4, v[1] & 0xF, v[2]));
+            }
+            SndFn::GetDefaultOutputVolume => {
+                let ptr = regs[3];
+                let v = heirloom_mac68k_engine::sound::dispatch::get_default_output_volume(&self.mac);
+                if ptr != 0 {
+                    self.mac.mem.write_u32(ptr, v).map_err(|_| format!("GetDefaultOutputVolume: {ptr:#x} leaves guest RAM"))?;
+                }
+                self.mac.log.push(format!("[sound] GetDefaultOutputVolume -> {v:#010x}"));
+                regs[3] = 0;
+            }
+            SndFn::SetDefaultOutputVolume => {
+                let v = regs[3];
+                heirloom_mac68k_engine::sound::dispatch::set_default_output_volume(&mut self.mac, v).map_err(|r| r.0)?;
+                self.mac.log.push(format!("[sound] SetDefaultOutputVolume {v:#010x}"));
+                regs[3] = 0;
+            }
+            SndFn::GetSoundVol => {
+                let ptr = regs[3];
+                let v = heirloom_mac68k_engine::sound::dispatch::get_default_output_volume(&self.mac);
+                let lvl = (((v & 0xFFFF).min(0x0100) * 7 + 0x80) / 0x0100).min(7) as u16;
+                if ptr != 0 {
+                    self.mac.mem.write_u16(ptr, lvl).map_err(|_| format!("GetSoundVol: {ptr:#x} leaves guest RAM"))?;
+                }
+                self.mac.log.push(format!("[sound] GetSoundVol -> {lvl}"));
+                regs[3] = 0;
+            }
+            SndFn::SetSoundVol => {
+                let lvl = (regs[3] as u16 & 7) as u32;
+                let side = if lvl == 0 { 0 } else { (lvl * 0x0100 + 3) / 7 };
+                let v = (side << 16) | side;
+                heirloom_mac68k_engine::sound::dispatch::set_default_output_volume(&mut self.mac, v).map_err(|r| r.0)?;
+                self.mac.log.push(format!("[sound] SetSoundVol {lvl} ({v:#010x})"));
+                regs[3] = 0;
             }
         }
         Ok(())

@@ -212,6 +212,9 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register(0xA924, &[], Some(Arg::L), front_window::<U>)?;
     m.register(0xA92C, &[Arg::L, Arg::L], Some(Arg::W), find_window::<U>)?;
     m.register(0xA91E, &[Arg::L, Arg::L], Some(Arg::B), track_go_away::<U>)?;
+    m.register(0xA92B, &[Arg::P, Arg::L, Arg::P], Some(Arg::L), grow_window::<U>)?;
+    m.register(0xA83B, &[Arg::P, Arg::L, Arg::W], Some(Arg::B), track_box::<U>)?;
+    m.register(0xA83A, &[Arg::P, Arg::W, Arg::B], None, zoom_window::<U>)?;
     m.register(0xA9F4, &[], None, exit_to_shell::<U>)
 }
 
@@ -465,4 +468,29 @@ fn track_go_away<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
     let (v, h) = point(c.args.get(1));
     let hit = m.find_window(v, h) == (IN_GO_AWAY, win);
     Ok(Done { result: u32::from(hit), log: format!("[toolbox] TrackGoAway {win:#x} ({v},{h}) -> {hit}") })
+}
+
+/// `GrowWindow(window, startPt, bData) -> LONGINT`: resizing is host-driven (`WindowResized`), so interactive tracking
+/// returns 0 (unchanged) after validating the open window.
+fn grow_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let win = c.args.get(0);
+    if !m.windows.contains_key(&win) { return Err(Refusal(format!("GrowWindow: {win:#x} is not an open window"))); }
+    Ok(Done { result: 0, log: format!("[toolbox] GrowWindow {win:#x} -> 0 (host-driven resize)") })
+}
+
+/// `TrackBox(window, thePt, partCode) -> Boolean`: TRUE when `partCode` is inZoomIn (7) or inZoomOut (8) for an open window.
+fn track_box<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (win, part) = (c.args.get(0), c.args.get(2) as u16);
+    if !m.windows.contains_key(&win) { return Err(Refusal(format!("TrackBox: {win:#x} is not an open window"))); }
+    let hit = part == 7 || part == 8;
+    Ok(Done { result: u32::from(hit), log: format!("[toolbox] TrackBox {win:#x} part {part} -> {hit}") })
+}
+
+/// `ZoomWindow(window, partCode, front)`: validate the window, bring to front if requested, and invalidate so it repaints.
+fn zoom_window<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
+    let (win, part, front) = (c.args.get(0), c.args.get(1) as u16, (c.args.get(2) & 0xFF) != 0);
+    if !m.windows.contains_key(&win) { return Err(Refusal(format!("ZoomWindow: {win:#x} is not an open window"))); }
+    if front { m.select_window_front(win)?; }
+    crate::qd::update::invalidate_all(m, win)?;
+    done(format!("[toolbox] ZoomWindow {win:#x} part {part} front={front}"))
 }
