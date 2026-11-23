@@ -112,3 +112,133 @@ fn tdes8_copy_raw_bytes_and_ttime_format_l_work() {
     assert_eq!(formatted.len(), 10, "DD/MM/YYYY format must be 10 chars, got {formatted:?}");
     assert!(formatted.contains('/'), "formatted date must contain '/', got {formatted:?}");
 }
+
+fn make_plain_rsc(id_offset: u32, resources: &[Vec<u8>]) -> Vec<u8> {
+    let mut f = Vec::new();
+    f.extend_from_slice(&0x101f_4a6bu32.to_le_bytes()); // UID1 plain
+    f.extend_from_slice(&0u32.to_le_bytes());
+    f.extend_from_slice(&(id_offset >> 8).to_le_bytes()); // UID3
+    f.extend_from_slice(&[0; 4]);
+    f.push(0);
+    f.extend_from_slice(&[0, 0]);
+    let mut sig = 4u32.to_le_bytes().to_vec();
+    sig.extend_from_slice(&(id_offset | 1).to_le_bytes());
+    let mut all = vec![sig];
+    all.extend_from_slice(resources);
+    f.extend(core::iter::repeat_n(0u8, all.len().div_ceil(8)));
+    let mut offsets = Vec::new();
+    for b in &all {
+        offsets.push(f.len() as u16);
+        f.extend_from_slice(b);
+    }
+    let index_at = f.len() as u16;
+    for o in offsets { f.extend_from_slice(&o.to_le_bytes()); }
+    f.extend_from_slice(&index_at.to_le_bytes());
+    f
+}
+
+#[test]
+fn listbox_construct_from_resource_populates_array_id_and_tbuf_reads_raw_utf16() {
+    use heirloom_ekaarm_engine::drive::Drive;
+    use heirloom_ui_abi::{RecordingGuestUi, UiCall};
+
+    const OFF: u32 = 0x1234_5000;
+    // Resource 2: raw UTF-16LE TBUF ("Play") — no leading length byte!
+    let tbuf: Vec<u8> = "Play".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    // Resource 3: ARRAY of 2 LTEXT items ("New Game", "Load Game") — 1-byte length + odd pad + UTF-16LE
+    let mut arr = 2u16.to_le_bytes().to_vec();
+    for s in ["New Game", "Load Game"] {
+        let u: Vec<u16> = s.encode_utf16().collect();
+        arr.push(u.len() as u8);
+        if arr.len() % 2 == 1 { arr.push(0xAB); }
+        for c in u { arr.extend_from_slice(&c.to_le_bytes()); }
+    }
+    // Resource 4: STRUCT LISTBOX { BYTE version=0; LONG flags=0; WORD h=5; WORD w=10; LLINK array_id=OFF|3; }
+    let mut lb_res = vec![0u8];
+    lb_res.extend_from_slice(&0u32.to_le_bytes());
+    lb_res.extend_from_slice(&5u16.to_le_bytes());
+    lb_res.extend_from_slice(&10u16.to_le_bytes());
+    lb_res.extend_from_slice(&(OFF | 3).to_le_bytes());
+
+    const EIK_OFF: u32 = 0x19bd_6000;
+    let mut color_list = (EIK_OFF | 6).to_le_bytes().to_vec();
+    color_list.extend_from_slice(&(EIK_OFF | 7).to_le_bytes());
+    let mut colors = 59u16.to_le_bytes().to_vec();
+    for i in 0u16..59 { colors.extend_from_slice(&i.to_le_bytes()); colors.extend_from_slice(&[i as u8; 3]); }
+    let eikpriv = make_plain_rsc(EIK_OFF, &[vec![0; 8], color_list, vec![0; 2], vec![0; 2], colors, 0u16.to_le_bytes().to_vec()]);
+    let test_rsc = make_plain_rsc(OFF, &[tbuf, arr, lb_res]);
+
+    struct TestRom { eikpriv: Vec<u8>, test_rsc: Vec<u8> }
+    impl heirloom_ekaarm_engine::drive::RomSource for TestRom {
+        fn read(&self, path: &str) -> Option<Vec<u8>> {
+            if path.eq_ignore_ascii_case("\\resource\\uiklaf\\eikpriv.rsc") { Some(self.eikpriv.clone()) }
+            else if path.eq_ignore_ascii_case("\\resource\\test.rsc") { Some(self.test_rsc.clone()) }
+            else { None }
+        }
+        fn exists(&self, path: &str) -> bool { self.read(path).is_some() }
+        fn list(&self, path: &str) -> Option<Vec<String>> {
+            if path.eq_ignore_ascii_case("\\resource") { Some(vec!["uiklaf".into(), "test.rsc".into()]) }
+            else if path.eq_ignore_ascii_case("\\resource\\uiklaf") { Some(vec!["eikpriv.rsc".into()]) }
+            else { None }
+        }
+    }
+    let mut drive = Drive::new();
+    drive.set_rom(Box::new(TestRom { eikpriv, test_rsc }));
+
+    let mut p = loader::bare(&[
+        "_ZNK7CCoeEnv20ReadResourceAsDes16LER6TDes16i",                                // stub 0
+        "_ZN22CAknSingleStyleListBoxC1Ev",                                            // stub 1
+        "_ZNK7CCoeEnv22CreateResourceReaderLCER15TResourceReaderi",                    // stub 2
+        "_ZN24CEikFormattedCellListBox22ConstructFromResourceLER15TResourceReader",   // stub 3
+        "_ZNK24CEikFormattedCellListBox5ModelEv",                                     // stub 4
+        "_ZNK17CTextListBoxModel13NumberOfItemsEv",                                   // stub 5
+        "_ZN22CAknMessageQueryDialog4NewLER7TDesC16RKN15CAknQueryDialog5TToneE",      // stub 6
+        "_ZN10CEikDialog5RunLDEv",                                                    // stub 7
+    ]).unwrap();
+    p.host.drive = Some(drive);
+    p.host.ui = Some(Box::new(RecordingGuestUi::new()));
+
+    let out_des = p.heap.as_mut().unwrap().alloc(64, &mut p.mem).unwrap();
+    p.mem.write_u32(out_des, 3 << 28).unwrap();
+    p.mem.write_u32(out_des + 4, 24).unwrap();
+    let lb = p.heap.as_mut().unwrap().alloc(0x100, &mut p.mem).unwrap();
+    let reader = p.heap.as_mut().unwrap().alloc(32, &mut p.mem).unwrap();
+    let tone = p.heap.as_mut().unwrap().alloc(8, &mut p.mem).unwrap();
+
+    p.map_code(CODE_BASE, &arm_words(&[
+        // ReadResourceAsDes16L(out_des, OFF|2)
+        0xE3A0_0000, 0xE1A0_1004, 0xE1A0_2007, 0xEF00_0000 | STUB_SVC_BASE,
+        // Construct listbox + ConstructFromResourceL(OFF|4)
+        0xE1A0_0005, 0xEF00_0000 | (STUB_SVC_BASE + 1),
+        0xE3A0_0000, 0xE1A0_1006, 0xE1A0_2008, 0xEF00_0000 | (STUB_SVC_BASE + 2),
+        0xE1A0_0005, 0xE1A0_1006, 0xEF00_0000 | (STUB_SVC_BASE + 3),
+        // model = lb->Model(); r9 = model->NumberOfItems()
+        0xE1A0_0005, 0xEF00_0000 | (STUB_SVC_BASE + 4),
+        0xEF00_0000 | (STUB_SVC_BASE + 5),
+        0xE1A0_9000,
+        // dlg = CAknMessageQueryDialog::NewL(out_des, tone); dlg->RunLD()
+        0xE1A0_0004, 0xE1A0_100A, 0xEF00_0000 | (STUB_SVC_BASE + 6),
+        0xEF00_0000 | (STUB_SVC_BASE + 7),
+        0xE1A0_0009, 0xEF00_0000 | EXIT_SVC,
+    ])).unwrap();
+    p.cpu.regs[4] = out_des;
+    p.cpu.regs[5] = lb;
+    p.cpu.regs[6] = reader;
+    p.cpu.regs[7] = OFF | 2;
+    p.cpu.regs[8] = OFF | 4;
+    p.cpu.regs[10] = tone;
+    p.cpu.set_pc_interworking(CODE_BASE);
+
+    // RunLD blocks waiting for host dialog response.
+    let out = p.run(10_000);
+    assert!(matches!(out, Outcome::Blocked), "expected Blocked, got {out:?}");
+    // Verify STRUCT LISTBOX populated 2 items from array_id (fails without array_id parsing!).
+    assert_eq!(p.cpu.regs[9], 2, "STRUCT LISTBOX array_id must populate 2 model items");
+    // Verify ReadResourceAsDes16L decoded raw UTF-16LE TBUF ("Play") and CAknMessageQueryDialog::NewL kept it!
+    let ui = p.host.ui.as_ref().unwrap().as_any().downcast_ref::<RecordingGuestUi>().unwrap();
+    let req_text = ui.calls.iter().find_map(|c| match c {
+        UiCall::Request(_, m) => Some(m.text.clone()),
+        _ => None,
+    });
+    assert_eq!(req_text.as_deref(), Some("Play"), "TBUF read + MessageQueryDialog::NewL must project \"Play\"");
+}

@@ -71,6 +71,34 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 Err(m) => refuse(m),
             }
         }
+        // CAknQueryDialog* CAknQueryDialog::NewL(const TTone& aTone)
+        "_ZN15CAknQueryDialog4NewLERKNS_5TToneE" => {
+            let res = (|| -> Result<u32, String> {
+                let dlg = p.alloc_zeroed(0x100).ok_or_else(|| String::from("no heap for CAknQueryDialog"))?;
+                p.dialog_construct(dlg)?;
+                Ok(dlg)
+            })();
+            match res {
+                Ok(dlg) => { p.cpu.regs[0] = dlg; NativeOutcome::Return }
+                Err(m) => refuse(m),
+            }
+        }
+        // CAknMessageQueryDialog* CAknMessageQueryDialog::NewL(TDesC16& aMessage, const TTone& aTone)
+        "_ZN22CAknMessageQueryDialog4NewLER7TDesC16RKN15CAknQueryDialog5TToneE" => {
+            let res = (|| -> Result<u32, String> {
+                let msg = crate::desc::read16(p, r0).map(|u| crate::desc::to_utf8(&u))?;
+                let dlg = p.alloc_zeroed(0x100).ok_or_else(|| String::from("no heap for CAknMessageQueryDialog"))?;
+                p.dialog_construct(dlg)?;
+                if let Some(HostObj::Dialog(d)) = p.obj_get(dlg) {
+                    d.text = msg;
+                }
+                Ok(dlg)
+            })();
+            match res {
+                Ok(dlg) => { p.cpu.regs[0] = dlg; NativeOutcome::Return }
+                Err(m) => refuse(m),
+            }
+        }
         "_ZN22CAknMessageQueryDialogD1Ev" | "_ZN22CAknMessageQueryDialogD0Ev" => {
             p.obj_remove(r0);
             if name.ends_with("D0Ev") {

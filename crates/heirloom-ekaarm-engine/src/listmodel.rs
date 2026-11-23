@@ -124,6 +124,11 @@ impl Process {
         Ok(m)
     }
 
+    /// Replace a `CTextListBoxModel`'s `MDesC16Array*` with a `CDesC16ArrayFlat` (`arr`).
+    pub(crate) fn model_set_desarr(&mut self, model: u32, arr: u32) -> Result<(), String> {
+        self.wr(model + MODEL_I_ARRAY, arr + MDESC_BASE)
+    }
+
     /// The `CDesC16Array` interface pointer the model at `model` was given (0 = none).
     pub(crate) fn model_array(&self, model: u32) -> Result<u32, String> {
         self.rd(model + MODEL_I_ARRAY)

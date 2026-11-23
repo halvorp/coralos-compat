@@ -247,6 +247,14 @@ impl Process {
         Ok(c)
     }
 
+    /// The application menu bar (`CEikMenuBar`), made on first need.
+    pub(crate) fn shell_menu_bar(&mut self) -> Result<u32, String> {
+        if let Some(m) = self.nat.shell.menu_bar { return Ok(m); }
+        let m = self.make_control("CEikMenuBar", 0x80, &[])?;
+        self.nat.shell.menu_bar = Some(m);
+        Ok(m)
+    }
+
     fn shell_status_pane(&mut self) -> Result<u32, String> {
         if let Some(s) = self.nat.shell.status_pane { return Ok(s); }
         let s = self.alloc_zeroed(0x40).ok_or_else(|| String::from("no guest heap for the status pane"))?;
@@ -292,6 +300,26 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         // MEikAppUiFactory* CEikonEnv::AppUiFactory() const
         "_ZNK9CEikonEnv12AppUiFactoryEv" => { let r = p.shell_factory(); ret(p, r) }
         "CAknAppUiFactory::Cba" | "_ZN9CAknAppUi3CbaEv" | "_ZNK9CAknAppUi3CbaEv" => { let r = p.shell_cba(); ret(p, r) }
+        "CAknAppUiFactory::MenuBar" => { let r = p.shell_menu_bar(); ret(p, r) }
+        // void CEikMenuBar::SetMenuTitleResourceId(TInt aMenuTitleResourceId): read MENU_BAR resource & project to host menu bar.
+        "_ZN11CEikMenuBar22SetMenuTitleResourceIdEi" => {
+            if r1 != 0 {
+                if let Ok(titles) = p.read_menu_bar(r1) {
+                    p.nat.shell.menu = titles.clone();
+                    let _ = p.project_menu_bar(&titles);
+                }
+            }
+            NativeOutcome::Return
+        }
+        // void CEikButtonGroupContainer::SetCommandSetL(TInt aResourceId): read CBA resource.
+        "_ZN24CEikButtonGroupContainer14SetCommandSetLEi" => {
+            if r1 != 0 {
+                if let Ok(btns) = p.read_cba(r1) {
+                    p.nat.shell.cba_buttons = btns;
+                }
+            }
+            NativeOutcome::Return
+        }
         // CEikMenuBar* CAknView::MenuBar() const: iMenu.
         "_ZNK8CAknView7MenuBarEv" => ret(p, p.mem.vm.read_u32(r0 + crate::view::VIEW_I_MENU).map_err(|_| format!("the view at {r0:#x} is unreadable"))),
         // MEikAppUiFactory::StatusPane() const, CAknView::StatusPane() const, CAknAppUi::StatusPane()

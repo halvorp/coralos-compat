@@ -159,9 +159,24 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         | "_ZN17CEikColumnListBox22ConstructFromResourceLER15TResourceReader" => {
             let r = crate::cone::read_resource_reader(p, r1)
                 .and_then(|bytes| {
-                    // LISTBOX resource (eikon.rh): BYTE version, WORD flags (or flags in first word).
-                    let flags = if bytes.len() >= 3 { u16::from_le_bytes([bytes[1], bytes[2]]) as u32 } else { 0 };
-                    p.list_construct_l(r0, flags)
+                    // STRUCT LISTBOX (eikon.rh:82-89): BYTE version, LONG flags, WORD height, WORD width, LLINK array_id.
+                    let flags = if bytes.len() >= 5 {
+                        u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]])
+                    } else if bytes.len() >= 3 {
+                        u16::from_le_bytes([bytes[1], bytes[2]]) as u32
+                    } else {
+                        0
+                    };
+                    p.list_construct_l(r0, flags)?;
+                    if bytes.len() >= 13 {
+                        let array_id = u32::from_le_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]);
+                        if array_id != 0 {
+                            let arr = crate::cone::read_desc16_array_resource(p, array_id)?;
+                            let model = p.rd(r0 + LB_I_MODEL)?.wrapping_sub(4);
+                            p.model_set_desarr(model, arr)?;
+                        }
+                    }
+                    Ok(())
                 });
             ret(p, r.map(|_| 0))
         }

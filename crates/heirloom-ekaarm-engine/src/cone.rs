@@ -143,28 +143,26 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             p.nat.cleanup.push(crate::cleanup::CleanupItem::Any(buf));
             NativeOutcome::Return
         }
+        // void CCoeEnv::ReadResourceAsDes16L(TDes16& aDes, TInt aResourceId) const (coemain.h):
+        // reads a TBUF resource (raw UTF-16LE code units, no length prefix) into aDes.
+        "_ZNK7CCoeEnv20ReadResourceAsDes16LER6TDes16i" | "_ZNK7CCoeEnv13ReadResourceLER6TDes16i" => {
+            let (des, res_id) = (p.cpu.regs[1], p.cpu.regs[2]);
+            let res = p.resource(res_id).and_then(|bytes| {
+                let units: alloc::vec::Vec<u16> = bytes.chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
+                crate::desc::write16(p, des, &units)
+            });
+            match res {
+                Ok(()) => NativeOutcome::Return,
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")),
+            }
+        }
         // CDesC16ArrayFlat* CCoeEnv::ReadDesC16ArrayResourceL(TInt aResourceId) (coemain.h):
         // reads an ARRAY of LTEXT items from the resource into a newly allocated CDesC16ArrayFlat.
         "_ZN7CCoeEnv24ReadDesC16ArrayResourceLEi" => {
             let res_id = p.cpu.regs[1];
-            let res = (|| -> Result<u32, String> {
-                let bytes = p.resource(res_id)?;
-                let mut r = heirloom_fmt_rsc::Reader::new(&bytes);
-                let count = r.word().map_err(|e| format!("resource {res_id:#x}: {e:?}"))? as usize;
-                let mut items = alloc::vec::Vec::with_capacity(count);
-                for _ in 0..count {
-                    items.push(r.ltext().map_err(|e| format!("resource {res_id:#x}: {e:?}"))?);
-                }
-                let arr = p.alloc_zeroed(crate::listmodel::DESARR_SIZE)
-                    .ok_or_else(|| String::from("out of heap for CDesC16ArrayFlat"))?;
-                p.desarr_construct(arr, (count as u32).max(4))?;
-                for item in &items {
-                    let units: alloc::vec::Vec<u16> = item.encode_utf16().collect();
-                    p.desarr_append_units(arr, &units)?;
-                }
-                Ok(arr)
-            })();
-            match res {
+            match read_desc16_array_resource(p, res_id) {
                 Ok(arr) => { p.cpu.regs[0] = arr; NativeOutcome::Return }
                 Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED cone {name}: {m}")),
             }
@@ -264,4 +262,23 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZN10RWsSession11ComputeModeENS_12TComputeModeE" => NativeOutcome::Return,
         _ => return None,
     })
+}
+
+/// Read an `ARRAY` of `LTEXT` items from `res_id` into a newly allocated guest `CDesC16ArrayFlat`.
+pub(crate) fn read_desc16_array_resource(p: &mut Process, res_id: u32) -> Result<u32, String> {
+    let bytes = p.resource(res_id)?;
+    let mut r = heirloom_fmt_rsc::Reader::new(&bytes);
+    let count = r.word().map_err(|e| format!("resource {res_id:#x}: {e:?}"))? as usize;
+    let mut items = alloc::vec::Vec::with_capacity(count);
+    for _ in 0..count {
+        items.push(r.ltext().map_err(|e| format!("resource {res_id:#x}: {e:?}"))?);
+    }
+    let arr = p.alloc_zeroed(crate::listmodel::DESARR_SIZE)
+        .ok_or_else(|| String::from("out of heap for CDesC16ArrayFlat"))?;
+    p.desarr_construct(arr, (count as u32).max(4))?;
+    for item in &items {
+        let units: alloc::vec::Vec<u16> = item.encode_utf16().collect();
+        p.desarr_append_units(arr, &units)?;
+    }
+    Ok(arr)
 }
