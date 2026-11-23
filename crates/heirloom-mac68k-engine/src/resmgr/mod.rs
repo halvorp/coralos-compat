@@ -69,6 +69,9 @@ impl ResMgr {
     pub fn open_fork(&mut self, ref_num: i16, fork: ResFork) {
         self.files.push(ResFile { ref_num, fork, loaded: BTreeMap::new(), dirty: false, map_handle: 0 });
         self.cur = ref_num;
+        // Opening a resource file puts its map at the head of TopMapHndl (Inside Macintosh: More Macintosh Toolbox 1-122),
+        // superseding any earlier LMSetTopMapHndl override so callers comparing TopMapHndl before/after OpenResFile see the new map.
+        self.top_set = None;
     }
     /// The System file's resources (reference number 0): searched AFTER every other open file, so an application's own
     /// resource of the same type and ID wins. This is where the shared `'dcmp'` set comes from.
@@ -92,24 +95,33 @@ impl ResMgr {
     pub fn is_resource(&self, h: u32) -> bool { self.by_handle.contains_key(&h) }
 }
 
-/// The resource map header fields a map handle carries (Inside Macintosh: More Macintosh Toolbox 1-122, the resource map): the next
-/// (older) map's handle at 16, the file's reference number at 20, the map attributes at 22. The type and name lists that follow
-/// in a real map are NOT materialised (the maps live in the engine): a program that walks them is a named gap.
+/// The resource map header fields a map handle carries (Inside Macintosh: More Macintosh Toolbox 1-122, the resource map):
+/// 16-byte resource header copy, the next (older) map's handle at 16, the file's reference number at 20, the map attributes at 22,
+/// the type-list offset at 24 and name-list offset at 26, followed by the full type list, reference lists and name list.
 const MAP_NEXT: u32 = 16;
 const MAP_REF_NUM: u32 = 20;
-const MAP_LEN: u32 = 28;
 
 impl<U: GuestUi> Mac<U> {
-    /// The handle standing for file `rn`'s resource map (made on first ask, its header fields written).
+    /// The handle standing for file `rn`'s resource map (materialised on first ask with the fork's real Inside Macintosh
+    /// resource map — header, type list, reference lists and name list — and kept current when the fork is modified).
     pub fn res_map_handle(&mut self, rn: i16) -> Result<u32, Refusal> {
         let i = self.rm.files.iter().position(|f| f.ref_num == rn).ok_or_else(|| Refusal(format!("refNum {rn} is not an open resource file")))?;
+        let need_fill = self.rm.files[i].map_handle == 0 || self.rm.files[i].dirty;
+        let map_bytes = if need_fill { Some(self.rm.files[i].fork.map_bytes()) } else { None };
         if self.rm.files[i].map_handle == 0 {
-            let h = self.mm.new_handle(&mut self.mem, &mut self.heap, MAP_LEN, true).map_err(|e| Refusal(format!("no memory for a map handle (memory error {e})")))?;
+            let len = map_bytes.as_ref().map_or(28, Vec::len) as u32;
+            let h = self.mm.new_handle(&mut self.mem, &mut self.heap, len, true).map_err(|e| Refusal(format!("no memory for a map handle (memory error {e})")))?;
             self.rm.files[i].map_handle = h;
+        } else if let Some(ref mb) = map_bytes {
+            let h = self.rm.files[i].map_handle;
+            let _ = self.mm.set_handle_size(&mut self.mem, &mut self.heap, h, mb.len() as u32);
         }
         let h = self.rm.files[i].map_handle;
         let next = if i > 0 { self.res_map_handle(self.rm.files[i - 1].ref_num)? } else { 0 };
         let p = self.mem.read_u32(h).map_err(Refusal::mem("map handle"))?;
+        if let Some(mb) = map_bytes {
+            self.mem.write_bytes(p, &mb).map_err(Refusal::mem("map handle"))?;
+        }
         self.mem.write_u32(p + MAP_NEXT, next).and_then(|_| self.mem.write_u16(p + MAP_REF_NUM, rn as u16)).map_err(Refusal::mem("map handle"))?;
         Ok(h)
     }
@@ -232,6 +244,43 @@ impl<U: GuestUi> Mac<U> {
         let f = self.rm.file(rn)?;
         let e = f.fork.entry(i)?;
         Some((e.ty, e.id, f.fork.name(i).map(<[u8]>::to_vec)))
+    }
+    /// `GetNextFOND(fondHandle)` (Resources.h / Inside Macintosh): the next `'FOND'` resource handle with the same ID in an
+    /// older open resource file, or `0` (`NULL`) when none exists.
+    pub fn next_fond(&mut self, h: u32) -> Result<u32, i16> {
+        let Some(&(rn, i)) = self.rm.by_handle.get(&h) else { self.set_res_err(RES_NOT_FOUND); return Err(RES_NOT_FOUND); };
+        let Some(pos) = self.rm.files.iter().position(|f| f.ref_num == rn) else { self.set_res_err(RES_F_NOT_FOUND); return Err(RES_F_NOT_FOUND); };
+        let Some((ty, id)) = self.rm.files[pos].fork.entry(i).map(|e| (e.ty, e.id)) else { self.set_res_err(RES_NOT_FOUND); return Err(RES_NOT_FOUND); };
+        if ty != *b"FOND" { self.set_res_err(0); return Ok(0); }
+        let found = self.rm.files[..pos].iter().rev().find_map(|f| f.fork.find(*b"FOND", id).map(|e| (f.ref_num, e)));
+        match found {
+            Some((older_rn, older_entry)) => {
+                let r = self.load_entry(older_rn, older_entry);
+                self.track_res_err(r)
+            }
+            None => { self.set_res_err(0); Ok(0) }
+        }
+    }
+    /// `ReadPartialResource(theResource, offset, buffer, count)` (Resources.h, Inside Macintosh: More Macintosh Toolbox 1-106):
+    /// copies `count` bytes starting at `offset` from the resource's data into `buffer`. Out-of-bounds reads copy what is
+    /// available and set `ResErr = inputOutOfBounds (-190)`.
+    pub fn read_partial_resource(&mut self, h: u32, offset: i32, buffer: u32, count: i32) -> Result<usize, i16> {
+        const INPUT_OUT_OF_BOUNDS: i16 = -190;
+        let Some(&(rn, i)) = self.rm.by_handle.get(&h) else { self.set_res_err(RES_NOT_FOUND); return Err(RES_NOT_FOUND); };
+        let Some(data) = self.rm.file(rn).and_then(|f| f.fork.data(i)).map(<[u8]>::to_vec) else { self.set_res_err(RES_NOT_FOUND); return Err(RES_NOT_FOUND); };
+        if offset < 0 || count < 0 { self.set_res_err(INPUT_OUT_OF_BOUNDS); return Err(INPUT_OUT_OF_BOUNDS); }
+        let (off, cnt) = (offset as usize, count as usize);
+        if off > data.len() { self.set_res_err(INPUT_OUT_OF_BOUNDS); return Err(INPUT_OUT_OF_BOUNDS); }
+        let avail = (data.len() - off).min(cnt);
+        if avail > 0 && buffer != 0 {
+            self.mem.write_bytes(buffer, &data[off..off + avail]).map_err(|_| { self.set_res_err(INPUT_OUT_OF_BOUNDS); INPUT_OUT_OF_BOUNDS })?;
+        }
+        if off.saturating_add(cnt) > data.len() {
+            self.set_res_err(INPUT_OUT_OF_BOUNDS);
+            return Err(INPUT_OUT_OF_BOUNDS);
+        }
+        self.set_res_err(0);
+        Ok(avail)
     }
 }
 
@@ -422,3 +471,47 @@ fn ind_type<U: GuestUi>(m: &mut Mac<U>, c: &Call, only_cur: bool) -> Result<Done
 }
 fn get_ind_type<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { ind_type(m, c, false) }
 fn get1_ind_type<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> { ind_type(m, c, true) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heirloom_fmt_resfork::writer::ForkBuilder;
+    use heirloom_ui_abi::RecordingGuestUi;
+
+    #[test]
+    fn map_handle_top_reset_next_fond_and_read_partial_resource() {
+        let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+        let f1 = ResFork::parse(ForkBuilder::new().add(b"FOND", 42, Some("Older"), b"0123456789").build()).unwrap();
+        let f2 = ResFork::parse(ForkBuilder::new().add(b"FOND", 42, Some("Newer"), b"abcdefghij").add(b"STR ", 1, None, b"hi").build()).unwrap();
+        m.rm.open_fork(10, f1);
+        let top1 = m.top_map_handle().unwrap();
+        m.set_top_map_handle(top1).unwrap();
+        // Opening a newer file resets TopMapHndl so callers comparing before/after OpenResFile see the new map.
+        m.rm.open_fork(20, f2);
+        let top2 = m.top_map_handle().unwrap();
+        assert_ne!(top2, top1);
+        let p2 = m.mem.read_u32(top2).unwrap();
+        assert_eq!(m.mem.read_u16(p2 + 20).unwrap() as i16, 20);
+        assert_eq!(m.mem.read_u16(p2 + 24).unwrap(), 28, "real type-list offset");
+
+        // GetNextFOND finds the shadowed FOND in the older file, then returns 0.
+        let newer = m.get_resource(*b"FOND", 42, false).unwrap();
+        let older = m.next_fond(newer).unwrap();
+        assert_ne!(older, 0);
+        assert_ne!(older, newer);
+        assert_eq!(m.next_fond(older).unwrap(), 0, "no third FOND");
+        // NEGATIVE CONTROL: non-FOND resource returns 0; non-resource handle returns resNotFound.
+        let s = m.get_resource(*b"STR ", 1, false).unwrap();
+        assert_eq!(m.next_fond(s).unwrap(), 0);
+        assert_eq!(m.next_fond(0x1234), Err(RES_NOT_FOUND));
+
+        // ReadPartialResource copies an interior slice and reports inputOutOfBounds (-190) past EOF.
+        let buf = m.mm.new_ptr(&mut m.mem, &mut m.heap, 16, true).unwrap();
+        assert_eq!(m.read_partial_resource(newer, 2, buf, 4), Ok(4));
+        let mut got = [0u8; 4];
+        for (i, b) in got.iter_mut().enumerate() { *b = m.mem.read_u8(buf + i as u32).unwrap(); }
+        assert_eq!(&got, b"cdef");
+        assert_eq!(m.read_partial_resource(newer, 8, buf, 5), Err(-190));
+        assert_eq!(m.read_partial_resource(0x1234, 0, buf, 2), Err(RES_NOT_FOUND));
+    }
+}

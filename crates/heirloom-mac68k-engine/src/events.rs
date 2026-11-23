@@ -243,11 +243,41 @@ fn flush_events<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> Result
     while let Some(e) = m.ev.queue.pop_front() {
         let bit = 1u16 << e.what;
         if !stopped && stop_mask & bit != 0 { stopped = true; }
-        if !stopped && event_mask & bit != 0 { continue; }
+        // Inside Macintosh: Macintosh Toolbox Essentials 2-102: FlushEvents removes low-level OS events, not
+        // Window Manager update events for open visible windows whose updateRgn is still non-empty.
+        let keep_wm = e.what == UPDATE_EVT && e.message != 0
+            && m.windows.get(&e.message).is_some_and(|w| w.visible)
+            && m.qd.update.get(&e.message).is_some_and(|g| !g.is_empty());
+        if !stopped && !keep_wm && event_mask & bit != 0 { continue; }
         kept.push_back(e);
     }
     m.ev.queue = kept;
     r.err(0);
     Ok(format!("[event] FlushEvents mask {event_mask:#06x} stop {stop_mask:#06x}: removed {}", before - m.ev.queue.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::toolbox::WindowSpec;
+    use heirloom_ui_abi::RecordingGuestUi;
+
+    #[test]
+    fn flush_events_drops_os_events_but_keeps_live_window_update_events() {
+        let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+        let win = m.make_window(WindowSpec {
+            storage: 0, rect: Rect { top: 20, left: 20, bottom: 120, right: 220 }, title: "W".into(),
+            visible: true, proc_id: 0, behind: 0xFFFF_FFFF, go_away: true, ref_con: 0,
+        }).unwrap();
+        m.post(KEY_DOWN, 0x61, 0, 0);
+        m.post(UPDATE_EVT, 0, 0, 0); // synthetic non-window updateEvt
+        let mut cpu = Cpu::detached();
+        let mut regs = Regs::read(&cpu, 0xA032);
+        regs.d0 = 0x0000_FFFF;
+        flush_events(&mut m, &mut cpu, &mut regs).unwrap();
+        assert!(m.ev.queue.iter().any(|e| e.what == UPDATE_EVT && e.message == win), "live window updateEvt survives FlushEvents");
+        assert!(!m.ev.queue.iter().any(|e| e.what == KEY_DOWN), "hardware keyDown is flushed");
+        assert!(!m.ev.queue.iter().any(|e| e.what == UPDATE_EVT && e.message == 0), "NEGATIVE: synthetic non-window updateEvt is flushed");
+    }
 }
 

@@ -142,6 +142,25 @@ impl ResFork {
         }
         b.build()
     }
+
+    /// The Resource Manager's in-memory resource map bytes (Inside Macintosh: More Macintosh Toolbox 1-122): the 28-byte map
+    /// header followed by the type list, reference lists and name list. When the fork has not been edited since parsing, the
+    /// original validated map slice is returned directly; otherwise the map is rebuilt from the current live entries.
+    pub fn map_bytes(&self) -> Vec<u8> {
+        let unmodified = !self.bytes.is_empty() && self.entries.iter().all(|e| e.own.is_none() && !e.removed);
+        if unmodified {
+            if let (Some(mo), Some(ml)) = (be32(&self.bytes, 4), be32(&self.bytes, 12)) {
+                let (mo, ml) = (mo as usize, ml as usize);
+                if ml >= 28 && mo.checked_add(ml).is_some_and(|e| e <= self.bytes.len()) {
+                    return self.bytes[mo..mo + ml].to_vec();
+                }
+            }
+        }
+        let built = self.to_bytes();
+        let mo = be32(&built, 4).unwrap_or(0) as usize;
+        let ml = be32(&built, 12).unwrap_or(0) as usize;
+        built[mo..mo + ml].to_vec()
+    }
 }
 
 fn index(b: &[u8]) -> Result<Vec<ResEntry>, ForkError> {
@@ -188,4 +207,35 @@ fn index(b: &[u8]) -> Result<Vec<ResEntry>, ForkError> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::writer::ForkBuilder;
+
+    #[test]
+    fn map_bytes_preserves_type_list_for_unmodified_and_mutated_forks() {
+        let raw = ForkBuilder::new()
+            .add(b"FOND", 128, Some("TestFont"), &[1, 2, 3, 4])
+            .build();
+        let mut fork = ResFork::parse(raw).unwrap();
+        let m1 = fork.map_bytes();
+        assert!(m1.len() >= 38);
+        assert_eq!(be16(&m1, 24), Some(28), "typeListOffset starts right after the 28-byte map header");
+        assert_eq!(&m1[30..34], b"FOND");
+
+        // Mutating the fork rebuilds the map with the new type included.
+        fork.add(*b"NFNT", 200, None, 0, alloc::vec![9, 8]);
+        let m2 = fork.map_bytes();
+        assert_eq!(be16(&m2, 24), Some(28));
+        assert_eq!(be16(&m2, 28), Some(1), "two distinct types -> count - 1 == 1");
+        assert!(m2.windows(4).any(|w| w == b"NFNT"));
+
+        // NEGATIVE CONTROL: an empty fork still yields a valid 30-byte resource map with 0xFFFF type count.
+        let empty = ResFork::parse(ForkBuilder::new().build()).unwrap();
+        let me = empty.map_bytes();
+        assert_eq!(me.len(), 30);
+        assert_eq!(be16(&me, 28), Some(0xFFFF));
+    }
 }

@@ -32,11 +32,13 @@ const KEY_HIERARCHICAL: u8 = 0x1B;
 /// A check mark in the system font; any non-zero mark is "checked" for GuestUi.
 pub const CHECK_MARK: u8 = 0x12;
 
-/// Menu Manager state: id -> handle for every known menu, and the ids in the menu bar in order.
+/// Menu Manager state: id -> handle for every known menu, the top-level ids in the menu bar in order,
+/// and the hierarchical/popup submenu ids currently inserted in the menu list (`InsertMenu(h, -1)`).
 #[derive(Default)]
 pub struct MenuMgr {
     pub by_id: BTreeMap<i16, u32>,
     pub bar: Vec<i16>,
+    pub submenus: Vec<i16>,
     /// DrawMenuBar has run: new windows get the strip.
     pub drawn: bool,
     /// `HideMenuBar` is in effect: the host's strip is empty and `MBarHeight` is 0 until `ShowMenuBar` (spec: macos9-specs/MenusLib/HideMenuBar).
@@ -50,6 +52,7 @@ impl MenuMgr {
         self.by_id.retain(|_, v| *v != h);
         let ids: Vec<i16> = self.by_id.keys().copied().collect();
         self.bar.retain(|i| ids.contains(i));
+        self.submenus.retain(|i| ids.contains(i));
     }
 
     /// Decode a `MenuItem` token to the choice `MenuSelect` returns, checking the menu and item exist.
@@ -255,6 +258,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
 fn init_menus<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
     m.menus.by_id.clear();
     m.menus.bar.clear();
+    m.menus.submenus.clear();
     m.menus.drawn = false;
     let list = m.mm.new_handle(&mut m.mem, &mut m.heap, 8, true).map_err(|e| Refusal(format!("InitMenus: no memory ({e})")))?;
     m.mem.write_u32(crate::lowmem::MENU_LIST, list).map_err(Refusal::mem("MenuList"))?;
@@ -380,7 +384,9 @@ fn insert_menu<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
     h_of(m, "InsertMenu", h)?;
     let id = m.menu_view(h)?.id;
     m.menus.by_id.insert(id, h);
-    if before != -1 && !m.menus.bar.contains(&id) {
+    if before == -1 {
+        if !m.menus.submenus.contains(&id) { m.menus.submenus.push(id); }
+    } else if !m.menus.bar.contains(&id) {
         let at = m.menus.bar.iter().position(|&b| b == before).unwrap_or(m.menus.bar.len());
         m.menus.bar.insert(at, id);
     }
@@ -390,11 +396,13 @@ fn insert_menu<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done
 fn delete_menu<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let id = c.args.get(0) as u16 as i16;
     m.menus.bar.retain(|&b| b != id);
+    m.menus.submenus.retain(|&b| b != id);
     done(format!("[menu] DeleteMenu {id}"))
 }
 
 fn clear_menu_bar<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
     m.menus.bar.clear();
+    m.menus.submenus.clear();
     done("[menu] ClearMenuBar".into())
 }
 
@@ -436,7 +444,10 @@ fn set_menu_bar<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
 
 fn get_mhandle<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let id = c.args.get(0) as u16 as i16;
-    let h = m.menus.by_id.get(&id).copied().unwrap_or(0);
+    // Inside Macintosh: Macintosh Toolbox Essentials 3-131: GetMenuHandle returns the handle only if the menu is
+    // currently in the menu list (top-level menu bar or hierarchical submenu list), else NIL.
+    let in_list = m.menus.bar.contains(&id) || m.menus.submenus.contains(&id);
+    let h = if in_list { m.menus.by_id.get(&id).copied().unwrap_or(0) } else { 0 };
     Ok(Done { result: h, log: format!("[menu] GetMHandle {id} -> {h:#x}") })
 }
 
@@ -572,5 +583,24 @@ mod tests {
         assert!(m.menus.by_id.is_empty() && m.menus.bar.is_empty(), "the menu is gone from the id table and the bar");
         assert!(m.menu_view(h).is_err(), "NEGATIVE: a disposed MenuHandle is not a menu");
         assert!(m.menus.choice_for_token(&m.mem, &m.mm, 5 << 16 | 1).is_err());
+    }
+
+    #[test]
+    fn get_menu_handle_only_answers_for_menus_in_the_current_menu_list() {
+        let mut m = Mac::new(RecordingGuestUi::new()).unwrap();
+        let top = make_menu(&mut m, 1, b"File".to_vec()).unwrap();
+        let sub = make_menu(&mut m, 500, b"Sub".to_vec()).unwrap();
+        // NEGATIVE CONTROL: NewMenu alone does not put a menu into the menu list.
+        assert_eq!(m.pascal_call(0xA949, &[1]).unwrap().value, 0);
+        assert_eq!(m.pascal_call(0xA949, &[500]).unwrap().value, 0);
+        // InsertMenu into the bar (before=0) and submenu list (before=-1).
+        m.pascal_call(0xA935, &[top, 0]).unwrap();
+        m.pascal_call(0xA935, &[sub, 0xFFFF]).unwrap();
+        assert_eq!(m.pascal_call(0xA949, &[1]).unwrap().value, top);
+        assert_eq!(m.pascal_call(0xA949, &[500]).unwrap().value, sub);
+        // ClearMenuBar clears both lists so GetMenuHandle returns NIL again.
+        m.pascal_call(0xA934, &[]).unwrap();
+        assert_eq!(m.pascal_call(0xA949, &[1]).unwrap().value, 0);
+        assert_eq!(m.pascal_call(0xA949, &[500]).unwrap().value, 0);
     }
 }

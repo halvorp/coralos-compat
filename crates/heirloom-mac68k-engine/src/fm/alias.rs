@@ -124,6 +124,8 @@ impl FileMgr {
             b"flnt" => { let sys = make(self, vol, "System Folder")?; let tmp = make(self, sys, "Temporary Items")?; make(self, tmp, "Cleanup At Startup")? }
             // kColorSyncProfilesFolderType (Mac OS 8.5+): System Folder:ColorSync Profiles
             b"prof" => { let sys = make(self, vol, "System Folder")?; make(self, sys, "ColorSync Profiles")? }
+            // kDocumentsFolderType (Mac OS 8.5+, Folders.h): Documents at the volume's root
+            b"docs" => make(self, vol, "Documents")?,
             t => {
                 let (_, name) = SYSTEM_SUB.iter().find(|(k, _)| *k == t).ok_or(err::FNF_ERR)?;
                 let sys = make(self, vol, "System Folder")?;
