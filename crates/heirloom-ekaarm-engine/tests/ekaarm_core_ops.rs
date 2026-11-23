@@ -416,3 +416,40 @@ fn trect_ops_f32_eabi_and_rfile_set_size_with_negative_control() {
     assert_eq!(p.mem.read_u32(sz_out).unwrap(), 128, "RFile::SetSize(128) must resize open file");
     assert_eq!(p.cpu.regs[11] as i32, -6, "RFile::SetSize(-1) negative control must return KErrArgument (-6)");
 }
+
+#[test]
+fn rfs_get_dir_returns_kerr_path_not_found_for_missing_directory() {
+    use heirloom_ekaarm_engine::drive::Drive;
+    let mut p = loader::bare(&[
+        "_ZN3RFs7ConnectEi",                      // stub 0
+        "_ZNK3RFs6GetDirERK7TDesC16jjRP4CDir",    // stub 1
+    ]).unwrap();
+    let mut drive = Drive::new();
+    drive.put_file("C:\\existing\\a.txt", vec![1]).unwrap();
+    p.host.drive = Some(drive);
+
+    let rfs = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    let missing = p.heap.as_mut().unwrap().alloc(64, &mut p.mem).unwrap();
+    let out_dir = p.heap.as_mut().unwrap().alloc(16, &mut p.mem).unwrap();
+    p.mem.write_u32(out_dir, 0xDEAD_BEEF).unwrap();
+    let path = "C:\\no_such_dir\\*";
+    p.mem.write_u32(missing, path.len() as u32).unwrap();
+    for (i, u) in path.encode_utf16().enumerate() { p.mem.write_u16(missing + 4 + i as u32 * 2, u).unwrap(); }
+
+    let sp = p.cpu.regs[13].wrapping_sub(8);
+    p.cpu.regs[13] = sp;
+    p.mem.write_u32(sp, out_dir).unwrap();
+
+    p.map_code(CODE_BASE, &arm_words(&[
+        0xE1A0_0004, 0xE3A0_1000, 0xEF00_0000 | STUB_SVC_BASE,
+        0xE1A0_0004, 0xE1A0_1005, 0xE3A0_2000, 0xE3A0_3000, 0xEF00_0000 | (STUB_SVC_BASE + 1),
+        0xEF00_0000 | EXIT_SVC,
+    ])).unwrap();
+    p.cpu.regs[4] = rfs;
+    p.cpu.regs[5] = missing;
+    p.cpu.set_pc_interworking(CODE_BASE);
+
+    let out = p.run(10_000);
+    assert!(matches!(out, Outcome::Exited(code) if code as i32 == -12), "missing dir must return KErrPathNotFound (-12), got {out:?}");
+    assert_eq!(p.mem.read_u32(out_dir).unwrap(), 0, "out CDir* must be NULL on KErrPathNotFound");
+}

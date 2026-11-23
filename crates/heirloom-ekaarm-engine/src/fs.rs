@@ -236,7 +236,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                     Some(i) => &path[..i],
                     None => path.as_str(),
                 };
-                let all: alloc::vec::Vec<crate::objects::DirEntry> = p.host.drive.as_ref()
+                let maybe_all: Option<alloc::vec::Vec<crate::objects::DirEntry>> = p.host.drive.as_ref()
                     .and_then(|d| {
                         d.list_entries(dir_path).ok().map(|v| {
                             v.into_iter()
@@ -249,8 +249,12 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                                     .collect()
                             })
                         })
-                    })
-                    .unwrap_or_default();
+                    });
+                let Some(all) = maybe_all else {
+                    p.wr(entry_out_addr, 0)?;
+                    if let Some(d_out) = dir_out_addr { p.wr(d_out, 0)?; }
+                    return Ok(-12i32); // KErrPathNotFound (e32err.h)
+                };
                 if let Some(d_out) = dir_out_addr {
                     let (dirs, files): (alloc::vec::Vec<_>, alloc::vec::Vec<_>) =
                         all.into_iter().partition(|e| e.is_dir);
@@ -265,10 +269,10 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                     p.obj_set(cdir, crate::objects::HostObj::Dir(all))?;
                     p.wr(entry_out_addr, cdir)?;
                 }
-                Ok(())
+                Ok(KERR_NONE)
             });
             match res {
-                Ok(()) => { p.cpu.regs[0] = KERR_NONE as u32; NativeOutcome::Return }
+                Ok(code) => { p.cpu.regs[0] = code as u32; NativeOutcome::Return }
                 Err(m) => refuse(m),
             }
         }
