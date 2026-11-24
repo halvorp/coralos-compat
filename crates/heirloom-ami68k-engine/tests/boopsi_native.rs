@@ -192,3 +192,38 @@ fn gzz_client_gadgets_offset_by_borders_border_gadgets_stay_outer_and_sysiclass_
     assert_eq!(up.rect, GuestRect { left: 286, top: 175, width: 14, height: 14 }, "border arrow stays in outer window coordinates");
     assert_eq!(ctls.len(), 4, "sysiclass DEPTHIMAGE and CLOSEIMAGE frame gadgets must not register as duplicate controls: {ctls:?}");
 }
+
+#[test]
+fn frbuttonclass_is_a_builtin_button_superclass_for_reaction_button_gadget() {
+    use heirloom_ui_abi::ControlKind;
+    const OPEN_WINDOW_TAG_LIST: i32 = -606;
+    const ADD_GLIST: i32 = -438;
+    const MAKE_CLASS: i32 = -678;
+    const FREE_CLASS: i32 = -714;
+    let mut g = G::new_plane();
+    let (title, sub_name, sup_name, bad_sup, lbl) = (
+        g.s("ReAction"),
+        g.s("button.gadget"),
+        g.s("frbuttonclass"),
+        g.s("no-such-superclass"),
+        g.s("Go"),
+    );
+    let wtags = g.tags(&[(WA + 3, 200), (WA + 4, 80), (WA + 11, title)]);
+    let btags = g.tags(&[(GA + 1, 10), (GA + 3, 20), (GA + 5, 60), (GA + 7, 22), (GA + 9, lbl)]);
+    g.run(&[
+        intu(OPEN_WINDOW_TAG_LIST, &[a(0, 0), a(1, wtags)]),
+        // Subclassing frbuttonclass (as AmigaOS ReAction button.gadget does in its LibInit) must succeed.
+        intu(MAKE_CLASS, &[a(0, sub_name), a(1, sup_name), a(2, 0), d(0, 16), d(1, 0)]),
+        // Negative control: unknown superclass still returns NULL.
+        intu(MAKE_CLASS, &[a(0, sub_name), a(1, bad_sup), a(2, 0), d(0, 16), d(1, 0)]),
+        // Direct instantiation of frbuttonclass produces a native Button control.
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, sup_name), a(2, btags)]),
+        intu(ADD_GLIST, &[a_res(0, 0), a_res(1, 3), d(0, 0xFFFF), d(1, 1), a(2, 0)]),
+        intu(FREE_CLASS, &[a_res(0, 1)]),
+    ]);
+    assert_ne!(g.result(1), 0, "MakeClass(\"button.gadget\", \"frbuttonclass\") must succeed");
+    assert_eq!(g.result(2), 0, "unknown superclass must still return NULL");
+    assert_ne!(g.result(3), 0, "NewObjectA(\"frbuttonclass\") must succeed");
+    let btn = g.a.ui.controls.values().map(|(_, c)| c).find(|c| c.label == "Go").expect("frbuttonclass native Button");
+    assert!(matches!(btn.kind, ControlKind::Button), "{:?}", btn.kind);
+}
