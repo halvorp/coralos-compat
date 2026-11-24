@@ -152,7 +152,8 @@ impl E<'_, '_> {
         if self.env.logged {
             let t = self.a.tag;
             self.cat(tg::NOTE);
-            // h_note is a C call: the cache's caller-saved registers are kept across it (rsp stays 16-byte aligned)
+            // h_note is a C call: caller-saved GPRs and region XMM locals are kept across it (rsp stays 16-byte aligned)
+            self.store_fp_locals();
             let a = &mut self.a;
             for r in crate::jit_regs::CALLER_SAVED.iter().chain(&crate::jit_regs::LOCAL_REGS) { a.push(*r); }
             a.alu_ri64(Alu::Sub, RSP, 8);
@@ -163,6 +164,7 @@ impl E<'_, '_> {
             a.call_r(RAX);
             a.alu_ri64(Alu::Add, RSP, 8);
             for r in crate::jit_regs::CALLER_SAVED.iter().chain(&crate::jit_regs::LOCAL_REGS).rev() { a.pop(*r); }
+            self.load_fp_locals();
             self.a.set_tag(t);
         }
     }

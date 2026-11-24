@@ -308,7 +308,7 @@ impl Asm {
         self.op_m(if bits == 16 { Some(0x66) } else { None }, bits == 64, &[0x0F, 0x38, 0xF1], r, mm, false)
     }
 
-    // ---- SSE2 (x86-64 baseline): scalar double / single, xmm0..xmm7 only ----
+    // ---- SSE2 (x86-64 baseline): scalar double / single, xmm0..xmm15 ----
     /// `pre` op xmm, [m] (pre = F2: movsd 10 / addsd 58 / mulsd 59 / subsd 5C; 66: ucomisd 2E).
     pub(crate) fn sse_m(&mut self, pre: u8, opc: u8, x: u8, mm: M) { self.op_m(Some(pre), false, &[0x0F, opc], x, mm, false) }
     /// `pre` op xmm, xmm (F2 5A cvtsd2ss, F3 5A cvtss2sd).
@@ -316,6 +316,24 @@ impl Asm {
         self.u8(pre);
         self.op_r(false, &[0x0F, opc], x, y, false);
     }
+    /// andpd / orpd / xorpd xmm, [m] (16-byte aligned memory operand).
+    pub(crate) fn andpd_m(&mut self, x: u8, mm: M) { self.sse_m(0x66, 0x54, x, mm) }
+    pub(crate) fn orpd_m(&mut self, x: u8, mm: M) { self.sse_m(0x66, 0x56, x, mm) }
+    pub(crate) fn xorpd_m(&mut self, x: u8, mm: M) { self.sse_m(0x66, 0x57, x, mm) }
+    /// FMA3 (CPUID `cpu_has_fma`): 3-byte VEX.LIG.66.0F38.W1 `opc` /r: `dst = dst * src1 (+|-) src2`.
+    fn vex_fma_sd(&mut self, opc: u8, dst: u8, src1: u8, src2: u8) {
+        let r = (!(dst >> 3) & 1) << 7;
+        let b = (!(src2 >> 3) & 1) << 5;
+        self.u8(0xC4);
+        self.u8(r | 0x40 | b | 0x02); // X=1 (unused), mmmmm=00010 (0F38)
+        self.u8(0x80 | ((!src1 & 0x0F) << 3) | 0x01); // W=1, L=0, pp=01 (66)
+        self.u8(opc);
+        self.u8(0xC0 | ((dst & 7) << 3) | (src2 & 7));
+    }
+    /// vfmadd213sd dst, src1, src2 (`dst = dst * src1 + src2`).
+    pub(crate) fn vfmadd213sd(&mut self, dst: u8, src1: u8, src2: u8) { self.vex_fma_sd(0xA9, dst, src1, src2) }
+    /// vfmsub213sd dst, src1, src2 (`dst = dst * src1 - src2`).
+    pub(crate) fn vfmsub213sd(&mut self, dst: u8, src1: u8, src2: u8) { self.vex_fma_sd(0xAB, dst, src1, src2) }
     /// movq r64, xmm / movd xmm, r32.
     pub(crate) fn movq_rx(&mut self, r: u8, x: u8) { self.u8(0x66); self.op_r(true, &[0x0F, 0x7E], x, r, false) }
     pub(crate) fn movd_xr(&mut self, x: u8, r: u8) { self.u8(0x66); self.op_r(false, &[0x0F, 0x6E], x, r, false) }
@@ -420,6 +438,7 @@ mod tests {
     #[test]
     fn the_movbe_probe_agrees_with_std_feature_detection() {
         assert_eq!(cpu_has_movbe(), std::is_x86_feature_detected!("movbe"));
+        assert_eq!(cpu_has_fma(), std::is_x86_feature_detected!("fma") && std::is_x86_feature_detected!("avx"));
     }
 
     /// Tier::JitWide's assembler: the same instructions with every displacement and immediate in its 4-byte form.
@@ -561,6 +580,15 @@ mod tests {
         assert_eq!(enc(|a| a.adc_ro(RDX, O::R(R11))), [0x41, 0x13, 0xD3]); // adc edx,r11d (the 13 /r form)
         assert_eq!(enc(|a| a.bt_oi(O::R(R10), 31)), [0x41, 0x0F, 0xBA, 0xE2, 31]); // bt r10d,31
         assert_eq!(enc(|a| a.bt_oi(O::R(RBP), 3)), [0x0F, 0xBA, 0xE5, 3]); // bt ebp,3
+        // Dolphin-slice 1: xmm8..xmm15 REX encodings, SSE sign masks, and FMA3 VEX scalar double forms
+        assert_eq!(enc(|a| a.sse_m(0xF2, 0x10, 8, m(RBX, 0x10))), [0xF2, 0x44, 0x0F, 0x10, 0x43, 0x10]); // movsd xmm8,[rbx+0x10]
+        assert_eq!(enc(|a| a.sse_m(0xF2, 0x11, 15, m(RBX, 0x10))), [0xF2, 0x44, 0x0F, 0x11, 0x7B, 0x10]); // movsd [rbx+0x10],xmm15
+        assert_eq!(enc(|a| a.sse_r(0xF2, 0x58, 9, 10)), [0xF2, 0x45, 0x0F, 0x58, 0xCA]); // addsd xmm9,xmm10
+        assert_eq!(enc(|a| a.movapd(8, 0)), [0x66, 0x44, 0x0F, 0x28, 0xC0]); // movapd xmm8,xmm0
+        assert_eq!(enc(|a| a.andpd_m(8, m(R13, 0x10))), [0x66, 0x45, 0x0F, 0x54, 0x45, 0x10]); // andpd xmm8,[r13+0x10]
+        assert_eq!(enc(|a| a.xorpd_m(9, m(R13, 0x20))), [0x66, 0x45, 0x0F, 0x57, 0x4D, 0x20]); // xorpd xmm9,[r13+0x20]
+        assert_eq!(enc(|a| a.vfmadd213sd(0, 1, 2)), [0xC4, 0xE2, 0xF1, 0xA9, 0xC2]); // vfmadd213sd xmm0,xmm1,xmm2
+        assert_eq!(enc(|a| a.vfmsub213sd(0, 9, 10)), [0xC4, 0xC2, 0xB1, 0xAB, 0xC2]); // vfmsub213sd xmm0,xmm9,xmm10
         let mut a = Asm::default();
         let f = a.jcc(Cc::Ne);
         a.ret();
@@ -580,4 +608,22 @@ pub(crate) fn cpu_has_movbe() -> bool {
             inout("ecx") 0u32 => ecx, out("edx") _, options(nostack, preserves_flags));
     }
     ecx & (1 << 22) != 0
+}
+
+/// CPUID.1:ECX[12] FMA3 + [27] OSXSAVE + [28] AVX + XCR0[2:1] (OS saves XMM/YMM state). False on Airmont/Z8350.
+pub(crate) fn cpu_has_fma() -> bool {
+    let ecx: u32;
+    // SAFETY: CPUID leaf 1 exists on every x86-64 processor; rbx is preserved around cpuid.
+    unsafe {
+        core::arch::asm!("mov {t}, rbx", "cpuid", "mov rbx, {t}", t = out(reg) _, inout("eax") 1u32 => _,
+            inout("ecx") 0u32 => ecx, out("edx") _, options(nostack, preserves_flags));
+    }
+    const NEED: u32 = (1 << 12) | (1 << 27) | (1 << 28);
+    if ecx & NEED != NEED { return false; }
+    let xcr0_lo: u32;
+    // SAFETY: OSXSAVE (CPUID.1:ECX[27]) was just confirmed set, so xgetbv(0) is valid in ring 3.
+    unsafe {
+        core::arch::asm!("xgetbv", in("ecx") 0u32, out("eax") xcr0_lo, out("edx") _, options(nostack, nomem, preserves_flags));
+    }
+    xcr0_lo & 0x06 == 0x06
 }

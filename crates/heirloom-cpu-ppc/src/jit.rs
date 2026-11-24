@@ -152,10 +152,13 @@ pub(crate) struct Jit {
     mask: u32,
     /// Big-endian accesses by MOVBE (CPUID, at creation; Exec::set_jit_movbe(false) forces the BSWAP forms).
     pub(crate) movbe: bool,
+    /// Double-precision FMA via FMA3 (CPUID + XCR0, at creation; Exec::set_jit_fma(false) forces the non-FMA3 path).
+    pub(crate) fma: bool,
     /// Tier::JitWide: code with every displacement and immediate 4 bytes long (jit_asm::Asm::wide).
     pub(crate) wide: bool,
-    /// The CPU has MOVBE (CPUID once, at creation).
+    /// The CPU has MOVBE / FMA3 (CPUID once, at creation).
     hw_movbe: bool,
+    hw_fma: bool,
     /// Opt-in clock timing translation (JitStats.translate_time); None = untimed, no clock reads.
     pub(crate) timer: Option<fn() -> u64>,
     /// Consecutive refused publishes; and true once the provider failed in a way the JIT cannot work around (a withdraw,
@@ -210,7 +213,7 @@ impl Jit {
             arena, enter: 0, exit_stub: 0, table: vec![EMPTY; 1 << TABLE_BITS].into_boxed_slice(), links: vec![0; LINKS].into_boxed_slice(),
             nlinks: 1, link_owner: vec![0; LINKS].into_boxed_slice(), free_links: Vec::new(), link_gen: vec![ANY_GEN; LINKS].into_boxed_slice(), link_home: vec![0; LINKS].into_boxed_slice(), ibtc: vec![[IBTC_EMPTY, 0]; 1 << IBTC_BITS].into_boxed_slice(), by_target: BTreeMap::new(), blocks: PcMap::new(EMPTY), hot: vec![(EMPTY_PC, 0, 0); 1 << IBTC_BITS].into_boxed_slice(), cold: None, pending: Vec::new(),
             pending_pcs: PcMap::new(()), pending_at: 0, clock: 0, publish_after: PUBLISH_AFTER, ctx, stats: JitStats::default(), seen_flushes: 0, seen_t1_flushes: 0, gen_base: core::ptr::null_mut(), helper: 0,
-            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(), knobs: 0,
+            logged: false, mutant, lock_seed: 0x2545_F491, mask: u32::MAX, movbe: false, fma: false, wide: false, hw_movbe: crate::jit_asm::cpu_has_movbe(), hw_fma: crate::jit_asm::cpu_has_fma(), timer: None, refusals: 0, dead: false, smap: crate::jit_smap::StoreMap::new(), knobs: 0,
             region_after: crate::jit_region::REGION_AFTER, region_shape: Default::default(), region_census: false, churn: Default::default(), regions: BTreeMap::new(), page_gen: BTreeMap::new(), seen_bumps: 0, region_times: Vec::new(), refused_last: false, tagmap: None, stub_tags: Vec::new(), tag_words: Vec::new(), units: Vec::new(), unit_kind: 0, so_aware: false,
         };
         j.stats.arena_bytes = j.arena.len as u64;
@@ -311,15 +314,17 @@ impl Jit {
         self.ctx.counters.fill(n);
     }
 
-    /// Change how code is made (lockstep journaling, a planted mutant, MOVBE): everything compiled is dropped.
-    pub(crate) fn reconfigure(&mut self, logged: bool, mutant: u8, movbe: bool, wide: bool, knobs: u32) {
+    /// Change how code is made (lockstep journaling, a planted mutant, MOVBE, FMA3): everything compiled is dropped.
+    pub(crate) fn reconfigure(&mut self, logged: bool, mutant: u8, movbe: bool, fma: bool, wide: bool, knobs: u32) {
         let movbe = movbe && self.hw_movbe;
-        if (logged, mutant, movbe, wide, knobs) == (self.logged, self.mutant, self.movbe, self.wide, self.knobs) { return; }
+        let fma = fma && self.hw_fma;
+        if (logged, mutant, movbe, fma, wide, knobs) == (self.logged, self.mutant, self.movbe, self.fma, self.wide, self.knobs) { return; }
         self.knobs = knobs;
         let stubs_change = mutant != self.mutant; // the stubs depend on the mutant only (MUT_EXIT_COUNT)
         self.logged = logged;
         self.mutant = mutant;
         self.movbe = movbe;
+        self.fma = fma;
         self.wide = wide;
         self.stats.reconfigures += 1;
         if stubs_change { self.flush(); } else if self.stats.compiled != 0 { self.drop_code(); }
@@ -436,10 +441,12 @@ impl Jit {
         let pages: Vec<(usize, u64)> = plan.pages.iter().map(|p| (p.0, p.1)).collect();
         let len = plan.maxfwd[0];
         let pins = core::cell::Cell::new(0u32);
+        let fp_locals = core::cell::Cell::new(0u32);
         self.unit_kind = 2;
         let entry = self.emit_place(head, plan.pages[0].1, &pages, at, len, false, h_note::<H> as HNote as usize as u64, |env| {
             let r = jit_emit::compile_region(&plan.nodes, &plan.maxfwd, &plan.pages, &plan.rets, env);
             pins.set(env.displaced);
+            fp_locals.set(env.fp_locals_count);
             r
         });
         if let Some(e) = entry {
@@ -448,8 +455,9 @@ impl Jit {
             self.stats.regions += 1;
             self.stats.region_nodes += plan.nodes.len() as u64;
             self.stats.region_displaced += pins.get() as u64;
+            self.stats.region_fp_locals += fp_locals.get() as u64;
             self.stats.region_insns += plan.nodes.iter().map(|n| n.1.len() as u64).sum::<u64>();
-            self.stats.region_fused += crate::jit_rflow::fuse_marks(&plan.nodes, &plan.rets, false).iter().flatten().filter(|&&f| f).count() as u64;
+            self.stats.region_fused += crate::jit_rflow::fuse_marks(&plan.nodes, &plan.rets, false).iter().flatten().filter(|&&f| f != crate::jit_rflow::CrOpt::Normal).count() as u64;
         }
         if let (Some(c), Some(t0)) = (self.timer, t0) {
             let d = c().wrapping_sub(t0);
@@ -517,7 +525,7 @@ impl Jit {
             by_target.entry(target).or_default().push(i as u32);
             &links[i] as *const u64
         };
-        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { ibtc_mask }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: self.region_census, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware, displaced: 0 };
+        let mut env = Env { note, mask: self.mask, link: &mut link, chain: true, logged: self.logged, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { ibtc_mask }, knobs: self.knobs, movbe: self.movbe, fma: self.fma, wide: self.wide, counter: None, census: self.region_census, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware, displaced: 0, fp_locals_count: 0 };
         let (code, inner) = emit(&mut env);
         let homes = core::mem::take(&mut env.homes);
         let runs = core::mem::take(&mut env.tag_runs);
@@ -612,7 +620,7 @@ impl Jit {
     fn compile_native(&mut self, pc: u32, gen: u64, at: u64) {
         let t0 = self.timer.map(|c| c());
         let mut none = |_: u32| -> *const u64 { core::ptr::null() };
-        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { self.ibtc_mask() }, knobs: self.knobs, movbe: self.movbe, wide: self.wide, counter: None, census: false, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware, displaced: 0 };
+        let mut env = Env { note: 0, mask: self.mask, link: &mut none, chain: true, logged: false, mutant: self.mutant, table_mask: if self.mutant == crate::jit_emit::MUT_IBTC_SMALL { (1 << 14) - 1 } else { self.ibtc_mask() }, knobs: self.knobs, movbe: self.movbe, fma: self.fma, wide: self.wide, counter: None, census: false, homes: Vec::new(), tags: self.tagmap.is_some(), tag_runs: Vec::new(), tag_words: Vec::new(), so_free: !self.so_aware, displaced: 0, fp_locals_count: 0 };
         let code = jit_emit::compile_native(pc, &mut env);
         let runs = core::mem::take(&mut env.tag_runs);
         if let Some(p) = self.place(&code, 0, Vec::new(), pc, 1, gen, at) { self.tag_code(p, code.len(), &runs); }

@@ -6,7 +6,7 @@ use alloc::collections::BTreeMap;
 use core::mem::offset_of;
 
 /// What JIT code reads through r13, and what its helpers find. Rebuilt before every entry.
-#[repr(C)]
+#[repr(C, align(16))]
 /// FIELD ORDER: what JIT code reads on its hot paths comes first - the page generations, the budget, the common exit, the
 /// pending FPRF source, the four RAM limits, CR field 0's constants, RAM's length, the FP finiteness constants, the pending
 /// FPRF kind and the IBTC's base and counters fill the first 128 bytes, so each is `[r13 + disp8]` (one byte) instead of a
@@ -49,6 +49,9 @@ pub(crate) struct Ctx {
     pub(crate) ibtc_hits: u64,
     pub(crate) ibtc_misses: u64,
     // ---- 128 bytes: below, a 4-byte displacement ----
+    /// 16-byte-aligned SSE bit masks for inline fabs / fneg / fnabs in XMM registers.
+    pub(crate) k_sign: [u64; 2],
+    pub(crate) k_abs: [u64; 2],
     /// Per CR field f: the field's LT and GT nibbles already in place (8 << s, 4 << s; s = 28 - 4f) - the CMOV sources of
     /// jit_emit's cr_set.
     pub(crate) crk: [[u32; 2]; 8],
@@ -126,12 +129,21 @@ impl Ctx {
         c.crk = core::array::from_fn(|f| [8 << (28 - 4 * f), 4 << (28 - 4 * f)]);
         c.crk0 = c.crk[0];
         (c.k_inf2, c.k_tiny2) = (0xFFE0_0000_0000_0000, 897 << 53);
+        c.k_sign = [1u64 << 63, 0];
+        c.k_abs = [!(1u64 << 63), 0];
         c
     }
 }
 
 
-const _: () = assert!(offset_of!(Ctx, ibtc_misses) + 8 <= 128 && offset_of!(Ctx, crk0) < 128 && offset_of!(Ctx, len) < 128, "Ctx's hot fields must stay within a one-byte displacement of r13");
+const _: () = assert!(
+    offset_of!(Ctx, ibtc_misses) + 8 <= 128
+        && offset_of!(Ctx, crk0) < 128
+        && offset_of!(Ctx, len) < 128
+        && offset_of!(Ctx, k_sign) % 16 == 0
+        && offset_of!(Ctx, k_abs) % 16 == 0,
+    "Ctx hot fields < 128 and SSE masks 16-byte aligned"
+);
 
 impl Ctx {
     /// The offset of CR field `f`'s LT / GT constants (`f` 0..=7): field 0's in the hot first 128 bytes.

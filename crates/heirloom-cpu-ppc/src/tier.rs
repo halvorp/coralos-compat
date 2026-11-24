@@ -33,6 +33,7 @@ pub struct Exec {
     jit_refused: bool,
     jit_publish_after: Option<u64>,
     jit_movbe: Option<bool>,
+    jit_fma: Option<bool>,
     jit_clock: Option<fn() -> u64>,
     jit_arena: Option<usize>,
     jit_region_after: Option<u32>,
@@ -58,7 +59,7 @@ impl Exec {
             code_mem: None,
             #[cfg(target_arch = "x86_64")]
             jit: None,
-            jit_mutant: 0, jit_knobs: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_cold: None, jit_region_shape: None, jit_region_census: false, jit_tags: false,
+            jit_mutant: 0, jit_knobs: 0, jit_refused: false, jit_publish_after: None, jit_movbe: None, jit_fma: None, jit_clock: None, jit_arena: None, jit_region_after: None, jit_cold: None, jit_region_shape: None, jit_region_census: false, jit_tags: false,
         }
     }
     /// Executable memory for [`Tier::Jit`] / [`Tier::JitLockstep`] (the caller holds the authority for it; this crate makes
@@ -194,6 +195,11 @@ impl Exec {
     pub fn set_jit_movbe(&mut self, on: bool) {
         self.jit_movbe = Some(on);
     }
+    /// Tests: false forces the non-FMA3 path (Airmont / Z8350 behaviour) even on an FMA3-capable host.
+    #[doc(hidden)]
+    pub fn set_jit_fma(&mut self, on: bool) {
+        self.jit_fma = Some(on);
+    }
     /// NEGATIVE CONTROL ONLY: plant JIT mutant `m` - one of the `MUT_*` constants of jit_emit.rs (1-25: e.g. 3 no code-watch
     /// test on stores, 8 / 9 the global pins not loaded after a helper / not stored at the exit, 19 a store map that stops
     /// mirroring the watch), each documented there. The JIT gates must go RED with each.
@@ -280,7 +286,7 @@ impl Exec {
             }
             // lockstep journaling, a planted mutant or MOVBE changed since the code was made: it is dropped and remade
             if let Some(j) = self.jit.as_mut() {
-                j.reconfigure(lock, self.jit_mutant, self.jit_movbe != Some(false), self.tier == Tier::JitWide, self.jit_knobs);
+                j.reconfigure(lock, self.jit_mutant, self.jit_movbe != Some(false), self.jit_fma != Some(false), self.tier == Tier::JitWide, self.jit_knobs);
                 // Tier::JitBlocks: no new regions (those already formed stay until evicted or replaced)
                 let after = if self.tier == Tier::JitBlocks { 0 } else { self.jit_region_after.unwrap_or(crate::jit::REGION_AFTER) };
                 if j.region_after != after { j.set_region_after(after); }

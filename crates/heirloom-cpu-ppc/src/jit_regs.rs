@@ -45,9 +45,26 @@ pub(crate) const CALLER_SAVED: [u8; 3] = [R9, R10, R11];
 fn global(off: usize) -> Option<u8> { GLOBALS.iter().find(|g| g.0 == off).map(|g| g.1) }
 /// The host registers a region's locals live in.
 pub(crate) const LOCAL_REGS: [u8; 2] = [RSI, RDI];
+/// The host XMM registers a region's FPR locals live in (xmm8..xmm15: unused by every scalar scratch / stub path).
+pub(crate) const FP_LOCAL_REGS: [u8; 8] = [8, 9, 10, 11, 12, 13, 14, 15];
 /// A GPR becomes a region local when the region's code accesses it at least this often (a load at entry and a store per
 /// exit must pay off).
 const LOCAL_MIN_USES: u32 = 4;
+/// An FPR becomes a region FP local when accessed at least this often in the region (zero GPR pressure).
+const FP_LOCAL_MIN_USES: u32 = 2;
+
+/// Pick up to 8 most-used FPRs in a region for `xmm8..xmm15`: `(fpr_index, xmm_reg, written)`.
+pub(crate) fn pick_fp_locals(uses: &[u32; 32], writes: &[u32; 32]) -> alloc::vec::Vec<(usize, u8, bool)> {
+    let mut v: alloc::vec::Vec<(u32, usize)> = (0..32usize)
+        .filter(|&n| uses[n] >= FP_LOCAL_MIN_USES)
+        .map(|n| (uses[n], n))
+        .collect();
+    v.sort_unstable_by(|a, b| b.cmp(a));
+    v.into_iter()
+        .zip(FP_LOCAL_REGS)
+        .map(|((_, n), x)| (n, x, writes[n] != 0))
+        .collect()
+}
 
 /// A GPR local must be used this many times MORE than the global pin whose host register it takes (h86 fnreg: the pin's value
 /// is stored at the region's entry and loaded back at every exit; a local in a free register pays only its own load / store).
@@ -115,18 +132,82 @@ impl E<'_, '_> {
         for &(off, h) in &self.displaced { self.a.ld32(h, crate::jit_emit::cpu_m(off as i32)); }
         self.a.set_tag(t);
     }
-    /// Load every region local from the Cpu (region entry; after a helper call).
+    /// Load every region local (GPR + FPR) from the Cpu (region entry; after a helper call).
     pub(crate) fn load_locals(&mut self) {
         let t = self.cat(crate::jit_census::LOCALS_LOAD);
         for &(off, h, _) in &self.locals { self.a.ld32(h, crate::jit_emit::cpu_m(off as i32)); }
+        for &(n, x, _) in &self.fp_locals { self.a.sse_m(0xF2, 0x10, x, crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8))); }
         self.a.set_tag(t);
     }
-    /// Store every region local the region writes into the Cpu (every exit; before a helper call).
+    /// Store every region local (GPR + FPR) the region writes into the Cpu (every exit; before a helper call).
     pub(crate) fn store_locals(&mut self) {
         if self.env.mutant == crate::jit_emit::MUT_REGION_LOCAL_EXIT { return; }
         let t = self.cat(crate::jit_census::LOCALS_STORE);
         for &(off, h, w) in &self.locals { if w { self.a.st32(crate::jit_emit::cpu_m(off as i32), h); } }
+        if self.env.mutant != crate::jit_mutants::MUT_FP_LOCAL_EXIT {
+            for &(n, x, w) in &self.fp_locals { if w { self.a.sse_m(0xF2, 0x11, x, crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8))); } }
+        }
         self.a.set_tag(t);
+    }
+    /// Save / reload region FPR locals only (around lockstep `h_note` which is a C call that may clobber caller-saved XMMs).
+    pub(crate) fn store_fp_locals(&mut self) {
+        for &(n, x, w) in &self.fp_locals { if w { self.a.sse_m(0xF2, 0x11, x, crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8))); } }
+    }
+    pub(crate) fn load_fp_locals(&mut self) {
+        for &(n, x, _) in &self.fp_locals { self.a.sse_m(0xF2, 0x10, x, crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8))); }
+    }
+    /// Record an FPR access and return its resident XMM register (`xmm8..xmm15`) when cached in this region.
+    pub(crate) fn fp_reg(&mut self, n: usize, write: bool) -> Option<u8> {
+        let i = n & 31;
+        self.fpr_uses[i] += 1;
+        if write { self.fpr_writes[i] += 1; }
+        self.fp_locals.iter().find(|l| l.0 == i).map(|l| l.1)
+    }
+    /// Peek whether FPR `n` is resident in an XMM register without changing dry-run counts.
+    pub(crate) fn fp_cached(&self, n: usize) -> Option<u8> {
+        self.fp_locals.iter().find(|l| l.0 == (n & 31)).map(|l| l.1)
+    }
+    /// Load FPR `n` into host XMM register `dst_xmm`.
+    pub(crate) fn fp_load(&mut self, dst_xmm: u8, n: usize) {
+        match self.fp_reg(n, false) {
+            Some(x) => if x != dst_xmm { self.a.movapd(dst_xmm, x); },
+            None => self.a.sse_m(0xF2, 0x10, dst_xmm, crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8))),
+        }
+    }
+    /// Store host XMM register `src_xmm` into FPR `n`.
+    pub(crate) fn fp_store(&mut self, n: usize, src_xmm: u8) {
+        match self.fp_reg(n, true) {
+            Some(x) => if x != src_xmm { self.a.movapd(x, src_xmm); },
+            None => self.a.sse_m(0xF2, 0x11, src_xmm, crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8))),
+        }
+    }
+    /// Emit `pre 0F opc dst_xmm, fpr(n)` directly register-to-register when cached, else from memory.
+    pub(crate) fn fp_op(&mut self, pre: u8, opc: u8, dst_xmm: u8, n: usize) {
+        match self.fp_reg(n, false) {
+            Some(x) => self.a.sse_r(pre, opc, dst_xmm, x),
+            None => self.a.sse_m(pre, opc, dst_xmm, crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8))),
+        }
+    }
+    /// Load FPR `n`'s raw 64 bits into host GPR `dst_gpr`.
+    pub(crate) fn fp_load_gpr(&mut self, dst_gpr: u8, n: usize) {
+        match self.fp_reg(n, false) {
+            Some(x) => self.a.movq_rx(dst_gpr, x),
+            None => self.a.ld64(dst_gpr, crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8))),
+        }
+    }
+    /// Store host GPR `src_gpr`'s raw 64 bits into FPR `n`.
+    pub(crate) fn fp_store_gpr(&mut self, n: usize, src_gpr: u8) {
+        match self.fp_reg(n, true) {
+            Some(x) => self.a.movq_xr(x, src_gpr),
+            None => self.a.st64(crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8)), src_gpr),
+        }
+    }
+    /// Compare 64-bit `RAX` against FPR `n`'s raw 64 bits (clobbers `RCX` only when `n` is in XMM).
+    pub(crate) fn fp_cmp_rax(&mut self, n: usize) {
+        match self.fp_cached(n) {
+            Some(x) => { self.a.movq_rx(RCX, x); self.a.alu_rr64(Alu::Cmp, RAX, RCX); }
+            None => self.a.alu_rm64(Alu::Cmp, RAX, crate::jit_emit::cpu_m(crate::jit_emit::fpr(n as u8))),
+        }
     }
     /// The Cpu field at `off`, to read / to write / to read and write (the same operand: named for the reader).
     pub(crate) fn r(&mut self, off: usize) -> O { self.field(off) }

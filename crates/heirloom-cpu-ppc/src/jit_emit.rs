@@ -44,6 +44,8 @@ pub(crate) struct Env<'a> {
     pub(crate) knobs: u32,
     /// Use MOVBE for big-endian loads and stores (CPUID-dispatched: jit_asm::cpu_has_movbe).
     pub(crate) movbe: bool,
+    /// Use FMA3 for double-precision fmadd/fmsub/fnmadd/fnmsub (CPUID-dispatched: jit_asm::cpu_has_fma).
+    pub(crate) fma: bool,
     /// Every displacement and immediate in its 4-byte form (Tier::JitWide, jit_asm::Asm::wide).
     pub(crate) wide: bool,
     /// The Ctx offset of this block's entry counter (jit_region: a region forms when it runs out); None = no counter.
@@ -62,6 +64,8 @@ pub(crate) struct Env<'a> {
     pub(crate) tag_words: Vec<(u32, u32, u32)>,
     /// OUT (a region): the global pins its binding displaced (jit_regs pick_locals).
     pub(crate) displaced: u32,
+    /// OUT (a region): the FPR locals cached in xmm8..xmm15 (jit_regs pick_fp_locals).
+    pub(crate) fp_locals_count: u32,
 }
 
 pub(crate) const fn gpr(n: u8) -> i32 { (offset_of!(Cpu, gpr) + 4 * (n as usize & 31)) as i32 }
@@ -105,16 +109,20 @@ pub(crate) struct E<'a, 'b> {
     rg: Option<Rg>,
     /// Region locals (jit_regs): (Cpu offset, host register, written in the region).
     pub(crate) locals: Vec<(usize, u8, bool)>,
+    /// Region FPR locals cached in `xmm8..xmm15` (jit_regs): (fpr index 0..32, xmm reg 8..=15, written in the region).
+    pub(crate) fp_locals: Vec<(usize, u8, bool)>,
     /// Global pins whose host register holds a local in this region (jit_regs pick_locals): (Cpu offset, host register).
     pub(crate) displaced: Vec<(usize, u8)>,
-    /// GPR accesses / writes emitted so far (the dry run that picks the locals reads them).
+    /// GPR / FPR accesses and writes emitted so far (the dry run that picks the locals reads them).
     pub(crate) uses: [u32; 32],
     pub(crate) writes: [u32; 32],
+    pub(crate) fpr_uses: [u32; 32],
+    pub(crate) fpr_writes: [u32; 32],
     /// A dry run: no link slot is taken (the code is thrown away).
     dry: bool,
-    /// The current region node's fused compares (jit_rflow), and a fused compare's flags waiting for its branch
+    /// The current region node's CR optimisations (jit_rflow), and a fused compare / Rc=1 op's flags waiting for its branch
     /// (Some(signed)).
-    fuse: Vec<bool>,
+    fuse: Vec<crate::jit_rflow::CrOpt>,
     flags: Option<bool>,
     /// The targets of the chained exits emitted so far, in link-slot order: each gets an exit tail (`exit_tails`).
     tails_to: Vec<u32>,
@@ -212,10 +220,11 @@ pub(crate) fn compile(ops: &[Op], pc: u32, gen: u64, page: usize, env: &mut Env)
 /// past that one) and the budget for the longest forward path, then the nodes in layout order, each followed by its own
 /// slow paths and side exits; internal edges are direct jumps (`go`). Answers the code and the offset of its inner entry.
 pub(crate) fn compile_region(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], env: &mut Env) -> (Vec<u8>, usize) {
-    // a dry run counts the GPR accesses: the most-used ones become locals for the real one
+    // a dry run counts the GPR & FPR accesses: the most-used ones become region locals for the real pass
     let fuse = crate::jit_rflow::fuse_marks(nodes, rets, env.mutant == MUT_CR_LIVE_OUT);
-    let binding = {
-        let dry = emit_region(nodes, maxfwd, pages, rets, &fuse, env, (Vec::new(), Vec::new()), true);
+    let knobs = env.knobs;
+    let (binding, fp_locals) = {
+        let dry = emit_region(nodes, maxfwd, pages, rets, &fuse, env, (Vec::new(), Vec::new()), Vec::new(), true);
         // pins are displaced only in a region that LOOPS (an edge back to a node at or before its source): its entry and exit
         // costs are paid once per entry, its uses once per trip (measured: in straight-line regions the binding's own loads
         // and stores ate what it saved)
@@ -224,19 +233,23 @@ pub(crate) fn compile_region(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[
             crate::jit_region::successors(*pc, ops, false, &mut succ);
             succ.iter().any(|t| nodes[..=i].iter().any(|n| n.0 == *t))
         });
-        crate::jit_regs::pick_locals(&dry.uses, &dry.writes, loops && env.knobs & heirloom_cpu_abi::ppc::KNOB_NO_DISPLACE == 0)
+        let gpr_bind = crate::jit_regs::pick_locals(&dry.uses, &dry.writes, loops && knobs & heirloom_cpu_abi::ppc::KNOB_NO_DISPLACE == 0);
+        let fpr_bind = crate::jit_regs::pick_fp_locals(&dry.fpr_uses, &dry.fpr_writes);
+        (gpr_bind, fpr_bind)
     };
     let pins = binding.1.len() as u32;
-    let mut e = emit_region(nodes, maxfwd, pages, rets, &fuse, env, binding, false);
+    let fp_cnt = fp_locals.len() as u32;
+    let mut e = emit_region(nodes, maxfwd, pages, rets, &fuse, env, binding, fp_locals, false);
     e.e.env.displaced = pins;
+    e.e.env.fp_locals_count = fp_cnt;
     let inner = e.inner;
     e.e.env.tag_runs = e.e.a.tags.take().unwrap_or_default();
     (e.e.a.b, inner)
 }
 
-struct Emitted<'a, 'b> { e: E<'a, 'b>, inner: usize, uses: [u32; 32], writes: [u32; 32] }
+struct Emitted<'a, 'b> { e: E<'a, 'b>, inner: usize, uses: [u32; 32], writes: [u32; 32], fpr_uses: [u32; 32], fpr_writes: [u32; 32] }
 
-fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], fuse: &[Vec<bool>], env: &'a mut Env<'b>, binding: (Vec<(usize, u8, bool)>, Vec<(usize, u8)>), dry: bool) -> Emitted<'a, 'b> {
+fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize, u64, u32)], rets: &[u32], fuse: &[Vec<crate::jit_rflow::CrOpt>], env: &'a mut Env<'b>, binding: (Vec<(usize, u8, bool)>, Vec<(usize, u8)>), fp_locals: Vec<(usize, u8, bool)>, dry: bool) -> Emitted<'a, 'b> {
     let mut e = E::new(&nodes[0].1, nodes[0].0, env);
     e.dry = dry;
     e.rg = Some(Rg { pcs: nodes.iter().map(|n| n.0).collect(), maxfwd: maxfwd.to_vec(), labels: alloc::vec![None; nodes.len()], fwd: Vec::new(), backs: Vec::new(), cur: 0, rets: rets.to_vec(), deferred: Vec::new() });
@@ -257,6 +270,7 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
     a.alu_mi64(Alu::Cmp, ctx(offset_of!(Ctx, left)), maxfwd[0] as u32);
     bails.push(a.jcc(Cc::B));
     (e.locals, e.displaced) = binding;
+    e.fp_locals = fp_locals;
     if e.env.census { e.a.alu_mi64(Alu::Add, ctx(offset_of!(Ctx, rentries)), 1); }
     e.bind_entry();
     for (k, (pc, ops)) in nodes.iter().enumerate() {
@@ -280,8 +294,8 @@ fn emit_region<'a, 'b>(nodes: &[(u32, Vec<Op>)], maxfwd: &[u32], pages: &[(usize
     a.st32i(cpu(PC), nodes[0].0);
     a.mov_ri(RAX, EXIT_BAIL);
     a.jmp_m(ctx(offset_of!(Ctx, exit)));
-    let (uses, writes) = (e.uses, e.writes);
-    Emitted { e, inner, uses, writes }
+    let (uses, writes, fpr_uses, fpr_writes) = (e.uses, e.writes, e.fpr_uses, e.fpr_writes);
+    Emitted { e, inner, uses, writes, fpr_uses, fpr_writes }
 }
 
 /// Jump to the published block at the guest pc in r8d if the IBTC's entry for it holds that block; else fall through (rax,
@@ -351,11 +365,11 @@ pub(crate) fn compile_native(pc: u32, env: &mut Env) -> Vec<u8> {
 
 impl<'a, 'b> E<'a, 'b> {
     pub(crate) fn new(ops: &[Op], pc: u32, env: &'a mut Env<'b>) -> Self {
-        E { a: Asm { wide: env.wide, tags: env.tags.then(Vec::new), ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), displaced: Vec::new(), uses: [0; 32], writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new(), kind: tg::NO_K << 8, stfs_outs: Vec::new(), fma_outs: Vec::new(), groups: Vec::new(), sgroups: Vec::new(), slow_leave: Vec::new(), facts: Default::default(), leaving: false, helped: false, ca_lazy: None, ca_at: Vec::new() }
+        E { a: Asm { wide: env.wide, tags: env.tags.then(Vec::new), ..Asm::default() }, env, pc, slow: Vec::new(), sides: Vec::new(), n: ops.len(), resume: Vec::new(), words: ops.iter().map(|o| o.w).collect(), rg: None, locals: Vec::new(), fp_locals: Vec::new(), displaced: Vec::new(), uses: [0; 32], writes: [0; 32], fpr_uses: [0; 32], fpr_writes: [0; 32], dry: false, fuse: Vec::new(), flags: None, tails_to: Vec::new(), kind: tg::NO_K << 8, stfs_outs: Vec::new(), fma_outs: Vec::new(), groups: Vec::new(), sgroups: Vec::new(), slow_leave: Vec::new(), facts: Default::default(), leaving: false, helped: false, ca_lazy: None, ca_at: Vec::new() }
     }
 
     /// Start region node `k` (its code begins here: forward jumps waiting for it land here).
-    fn start_node(&mut self, k: usize, pc: u32, ops: &[Op], fuse: &[bool]) {
+    fn start_node(&mut self, k: usize, pc: u32, ops: &[Op], fuse: &[crate::jit_rflow::CrOpt]) {
         (self.pc, self.n) = (pc, ops.len());
         self.fuse.clear();
         self.fuse.extend_from_slice(fuse);
@@ -586,7 +600,7 @@ impl E<'_, '_> {
             // not exactly a single: the PowerPC's bit selection (the shared stub; a single denormal is the slow path's)
             if let Some(inexact) = inexact {
                 self.a.here(inexact);
-                self.a.ld64(RDX, cpu_m(fpr(s as u8)));
+                self.fp_load_gpr(RDX, s);
                 self.a.call_m(ctx(offset_of!(Ctx, stfs)));
                 self.slow_if(Cc::Ne, i);
                 let j = self.a.jmp();
@@ -670,6 +684,29 @@ impl E<'_, '_> {
     pub(crate) fn cr0_of_logic_flags(&mut self) {
         self.cr_set(0, Cc::L, Cc::G);
     }
+    /// CR0 from the signed value in host register `r`, honouring region CR-liveness (`CrOpt::Fuse` / `CrOpt::Dead`).
+    fn cr0_opt(&mut self, i: usize, r: u8) {
+        use crate::jit_rflow::CrOpt;
+        match self.fuse.get(i).copied().unwrap_or(CrOpt::Normal) {
+            CrOpt::Dead => {}
+            CrOpt::Fuse => {
+                let t = self.cat(tg::CR_SET);
+                self.a.test_rr(r, r);
+                self.a.set_tag(t);
+                self.flags = Some(true);
+            }
+            CrOpt::Normal => self.cr0_of(r),
+        }
+    }
+    /// CR0 from logic flags (AND / OR / XOR: SF/ZF valid, OF=0), honouring region CR-liveness (`CrOpt::Fuse` / `CrOpt::Dead`).
+    fn cr0_opt_logic(&mut self, i: usize) {
+        use crate::jit_rflow::CrOpt;
+        match self.fuse.get(i).copied().unwrap_or(CrOpt::Normal) {
+            CrOpt::Dead => {}
+            CrOpt::Fuse => self.flags = Some(true),
+            CrOpt::Normal => self.cr0_of_logic_flags(),
+        }
+    }
     /// r8d = all ones when CF (the op right before) is set, else 0 - inverted first when `invert` (a borrow is CA = 0): the
     /// mask `ca_from_mask` takes. Flags clobbered.
     pub(crate) fn ca_mask_cf(&mut self, invert: bool) {
@@ -713,14 +750,14 @@ impl E<'_, '_> {
                 self.ldg(RDX, s);
                 self.a.alu_ri(Alu::And, RDX, op.imm);
                 self.stg(d, RDX);
-                self.cr0_of_logic_flags();
+                self.cr0_opt_logic(i);
             }
             K::Addic | K::AddicRc if self.ca_lazy_on() => {
                 self.ldg(RDX, s);
                 self.ca_defer(crate::jit_lazyca::Lazy::AddImm(op.imm));
                 self.a.alu_ri(Alu::Add, RDX, op.imm);
                 self.stg(d, RDX);
-                if op.k == K::AddicRc { self.cr0_of_edx(); }
+                if op.k == K::AddicRc { self.cr0_opt(i, RDX); }
             }
             K::Addic | K::AddicRc => {
                 self.ldg(RDX, s);
@@ -728,7 +765,7 @@ impl E<'_, '_> {
                 self.ca_mask_cf(false);
                 self.stg(d, RDX);
                 self.ca_from_mask();
-                if op.k == K::AddicRc { self.cr0_of_edx(); }
+                if op.k == K::AddicRc { self.cr0_opt(i, RDX); }
             }
             K::Subfic => {
                 // CA = carry of (!rA + imm + 1) = no borrow in imm - rA
@@ -746,9 +783,12 @@ impl E<'_, '_> {
                 if b & 31 != 0 { self.a.sh_ri(Sh::Rol, r, b & 31); }
                 self.a.alu_ri(Alu::And, r, op.imm);
                 self.stg(d, r);
-                if op.k == K::RlwinmRc { self.cr0_of_logic_flags(); }
+                if op.k == K::RlwinmRc { self.cr0_opt_logic(i); }
             }
             K::Cmpi | K::Cmpli | K::Cmp | K::Cmpl => {
+                use crate::jit_rflow::CrOpt;
+                let opt = self.fuse.get(i).copied().unwrap_or(CrOpt::Normal);
+                if opt == CrOpt::Dead { return false; }
                 if matches!(op.k, K::Cmpi | K::Cmpli) {
                     let o = self.gr(s);
                     self.a.alu_oi(Alu::Cmp, o, op.imm);
@@ -758,7 +798,7 @@ impl E<'_, '_> {
                 }
                 let signed = matches!(op.k, K::Cmpi | K::Cmp);
                 // fused (jit_rflow): the branch right after reads the flags; the field is never written
-                if self.fuse.get(i) == Some(&true) { self.flags = Some(signed); }
+                if opt == CrOpt::Fuse { self.flags = Some(signed); }
                 else if signed { self.cr_set(d, Cc::L, Cc::G) } else { self.cr_set(d, Cc::B, Cc::A) }
             }
             // mr: a move (no flags needed)
@@ -767,10 +807,10 @@ impl E<'_, '_> {
                 let alu = match op.k { K::Or | K::OrRc => Alu::Or, K::And | K::AndRc => Alu::And, K::Xor => Alu::Xor, _ => Alu::Add };
                 let r = self.op_rr(alu, d, s, b);
                 match op.k {
-                    K::OrRc | K::AndRc => self.cr0_of_logic_flags(),
+                    K::OrRc | K::AndRc => self.cr0_opt_logic(i),
                     // an add's OF is not the result's sign test: only the planted mutant reads CR0 from it
                     K::AddRc if self.env.mutant == MUT_LAZY_FLAGS => self.cr0_of_logic_flags(),
-                    K::AddRc => self.cr0_of(r),
+                    K::AddRc => self.cr0_opt(i, r),
                     _ => {}
                 }
             }
@@ -780,7 +820,7 @@ impl E<'_, '_> {
                 self.ldg(RDX, b);
                 self.alug(Alu::Sub, RDX, s);
                 self.stg(d, RDX);
-                if op.k == K::SubfRc { self.cr0_of_edx(); }
+                if op.k == K::SubfRc { self.cr0_opt(i, RDX); }
             }
             K::Neg => { self.ldg(RDX, s); self.a.neg(RDX); self.stg(d, RDX); }
             K::Mullw => { self.ldg(RDX, s); let o = self.gr(b); self.a.imul_ro(RDX, o); self.stg(d, RDX); }
@@ -792,7 +832,7 @@ impl E<'_, '_> {
                 self.ca_defer(crate::jit_lazyca::Lazy::Sra(if sh == 0 { 0 } else { (1u32 << sh) - 1 }));
                 if sh != 0 { self.a.sh_ri(Sh::Sar, RDX, sh); }
                 self.stg(d, RDX);
-                if op.k == K::SrawiRc { self.cr0_of_edx(); }
+                if op.k == K::SrawiRc { self.cr0_opt(i, RDX); }
             }
             K::Srawi | K::SrawiRc => {
                 // CA = negative and a one bit shifted out = (rS & (0x80000000 | low bits)) > 0x80000000, unsigned: the
@@ -810,7 +850,7 @@ impl E<'_, '_> {
                 if sh != 0 { self.a.sh_ri(Sh::Sar, RDX, sh); }
                 self.stg(d, RDX);
                 self.ca_from_mask();
-                if op.k == K::SrawiRc { self.cr0_of_edx(); }
+                if op.k == K::SrawiRc { self.cr0_opt(i, RDX); }
             }
             K::Slw | K::Srw => {
                 self.ldg(RCX, b);
@@ -835,14 +875,14 @@ impl E<'_, '_> {
             K::Lfd => {
                 self.ea(i, Ea::of(op, false), 8);
                 self.ld_be(8, false);
-                self.a.st64(cpu_m(fpr(d)), RDX);
+                self.fp_store_gpr(d as usize, RDX);
             }
             K::Stw | K::Stb | K::Sth | K::Stwu | K::Stbu | K::Stwx | K::Stbx | K::Stfd => {
                 let n = match op.k { K::Stw | K::Stwu | K::Stwx => 4, K::Sth => 2, K::Stfd => 8, _ => 1 };
                 let indexed = matches!(op.k, K::Stwx | K::Stbx);
                 self.ea_regs(Ea::of(op, indexed));
                 self.store_guard(i, Ea::of(op, indexed), n);
-                if n == 8 { self.a.ld64(RDX, cpu_m(fpr(d))); self.st_be(n); } else { self.st_gpr(d, n) }
+                if n == 8 { self.fp_load_gpr(RDX, d as usize); self.st_be(n); } else { self.st_gpr(d, n) }
                 if matches!(op.k, K::Stwu | K::Stbu) { self.stg(s, R8); }
             }
             K::B => { self.go(op.imm, i + 1); return true; }

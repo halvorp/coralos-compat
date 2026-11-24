@@ -20,6 +20,9 @@ mod fnreg;
 /// The h86 native routines (jit_xnat: the palette blit, the nibble-rotate rows, the bitset scan): tests/tier2/native.rs.
 #[path = "tier2/native.rs"]
 mod native;
+/// Dolphin-inspired Slice 1 (region FPR cache xmm8..xmm15, CPUID FMA3 double FMA, Rc=1 CR0 dead/fuse): tests/tier2/fpr_cache.rs.
+#[path = "tier2/fpr_cache.rs"]
+mod fpr_cache;
 
 const BUF: u32 = 0x4000;
 const NATIVE: u32 = 0xF100;

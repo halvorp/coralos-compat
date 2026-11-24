@@ -38,7 +38,7 @@ pub(crate) fn effect(op: &Op) -> Fx {
         K::Fp63 if matches!(xo10, 0 | 32) => Fx::None,
         K::Fp63 if !rc && matches!(xo10, 40 | 72 | 136 | 264) => Fx::Copy { d: rt, s: rb },
         K::Fp63 if !rc && xo10 == 12 => Fx::Single { d: rt, rn: true },
-        K::Fp63 if !rc && matches!(xo5, 18 | 20 | 21 | 25) => Fx::Kill { d: rt, rn: true },
+        K::Fp63 if !rc && matches!(xo5, 18 | 20 | 21 | 25 | 28..=31) => Fx::Kill { d: rt, rn: true },
         K::Fp63 => Fx::Kill { d: rt, rn: false },
         // the X-form FP loads tier 2 runs inline (lfsx / lfsux / lfdx / lfdux)
         K::Generic if w >> 26 == 31 && matches!(xo10, 535 | 567 | 599 | 631) => Fx::Kill { d: rt, rn: false },

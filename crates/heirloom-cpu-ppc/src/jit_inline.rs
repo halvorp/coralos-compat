@@ -52,7 +52,7 @@ impl E<'_, '_> {
         self.a.sse_r(0x66, 0x2E, 0, 0); // ucomisd xmm0, xmm0
         self.slow_if(Cc::P, i);
         self.a.set_tag(t);
-        self.a.sse_m(0xF2, 0x11, 0, f(d)); // movsd [frD], xmm0
+        self.fp_store(d, 0);
     }
 
     fn stfs(&mut self, i: usize, e: Ea, s: usize) {
@@ -62,17 +62,17 @@ impl E<'_, '_> {
         // bit-selection stub out of line (emit_stfs_bits: a single denormal is the slow path's there too)
         // (a value the facts know is such a single - jit_ffacts EXACT - takes no round trip)
         let known = self.facts.exact >> s & 1 != 0;
-        let a = &mut self.a;
         let inexact = if known {
-            a.sse_m(0xF2, 0x5A, 1, f(s)); // cvtsd2ss xmm1, [frS]
+            self.fp_op(0xF2, 0x5A, 1, s); // cvtsd2ss xmm1, fpr(s)
             None
         } else {
-            a.sse_m(0xF2, 0x10, 0, f(s));
+            self.fp_load(0, s);
+            let a = &mut self.a;
             a.sse_r(0xF2, 0x5A, 1, 0); // cvtsd2ss xmm1, xmm0
             a.sse_r(0xF3, 0x5A, 2, 1); // cvtss2sd xmm2, xmm1
             a.movq_rx(RAX, 2);
-            a.alu_rm64(Alu::Cmp, RAX, f(s));
-            Some(a.jcc(Cc::Ne))
+            self.fp_cmp_rax(s);
+            Some(self.a.jcc(Cc::Ne))
         };
         let a = &mut self.a;
         a.movd_rx(RDX, 1);
@@ -84,9 +84,8 @@ impl E<'_, '_> {
         self.store_guard(i, e, 4);
         // edx survives the guards (eax / r8 / ecx), except lockstep's journal call: the value again then
         if self.env.logged {
-            let a = &mut self.a;
-            a.ld64(RDX, f(s));
-            a.call_m(crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, stfs)));
+            self.fp_load_gpr(RDX, s);
+            self.a.call_m(crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, stfs)));
         }
         self.st_be(4);
     }
@@ -97,15 +96,33 @@ impl E<'_, '_> {
             match w.xo() {
                 0 | 32 => { self.fcmp(i, w.bf() as u8, a_, b); return true; }
                 40 | 72 | 136 | 264 if !w.rc() => {
-                    let a = &mut self.a;
-                    a.ld64(RDX, f(b));
-                    match w.xo() {
-                        40 => { a.mov_ri64(RCX, 1 << 63); a.alu_rr64(Alu::Xor, RDX, RCX); }
-                        136 => { a.mov_ri64(RCX, 1 << 63); a.alu_rr64(Alu::Or, RDX, RCX); }
-                        264 => { a.sh_ri64(Sh::Shl, RDX, 1); a.sh_ri64(Sh::Shr, RDX, 1); }
-                        _ => {}
+                    // When either operand is resident in XMM (region FP local), stay in SSE domain (zero GPR crossing).
+                    let xb = self.fp_reg(b, false);
+                    let xd = self.fp_reg(d, true);
+                    if xb.is_some() || xd.is_some() {
+                        let dst = xd.unwrap_or(0);
+                        match xb {
+                            Some(s) => if s != dst { self.a.movapd(dst, s); },
+                            None => self.a.sse_m(0xF2, 0x10, dst, f(b)),
+                        }
+                        match w.xo() {
+                            40 => self.a.xorpd_m(dst, crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, k_sign))),
+                            136 => self.a.orpd_m(dst, crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, k_sign))),
+                            264 => self.a.andpd_m(dst, crate::jit_emit::ctx(offset_of!(crate::jit::Ctx, k_abs))),
+                            _ => {}
+                        }
+                        if xd.is_none() { self.a.sse_m(0xF2, 0x11, dst, f(d)); }
+                    } else {
+                        let a = &mut self.a;
+                        a.ld64(RDX, f(b));
+                        match w.xo() {
+                            40 => { a.mov_ri64(RCX, 1 << 63); a.alu_rr64(Alu::Xor, RDX, RCX); }
+                            136 => { a.mov_ri64(RCX, 1 << 63); a.alu_rr64(Alu::Or, RDX, RCX); }
+                            264 => { a.sh_ri64(Sh::Shl, RDX, 1); a.sh_ri64(Sh::Shr, RDX, 1); }
+                            _ => {}
+                        }
+                        a.st64(f(d), RDX);
                     }
-                    a.st64(f(d), RDX);
                     return true;
                 }
                 12 if !w.rc() => { self.frsp(i, d, b); return true; }
@@ -115,30 +132,36 @@ impl E<'_, '_> {
                 _ => {}
             }
         }
-        if single && (28..=31).contains(&w.xo5()) {
+        if (28..=31).contains(&w.xo5()) {
             if w.rc() { return false; }
-            self.fmadds(i, w.xo5(), d, a_, b, c);
-            return true;
+            if single {
+                self.fmadds(i, w.xo5(), d, a_, b, c);
+                return true;
+            } else if self.env.fma {
+                self.fmadd_d(i, w.xo5(), d, a_, b, c);
+                return true;
+            }
+            return false;
         }
         let (opc, src) = match w.xo5() { 18 => (0x5E, b), 20 => (0x5C, b), 21 => (0x58, b), 25 => (0x59, c), _ => return false };
         if w.rc() { return false; }
         if w.xo5() == 18 {
             // a zero divisor (ZX, or VXZDZ for 0/0) is tier 0's
-            self.a.ld64(RCX, f(b));
+            self.fp_load_gpr(RCX, b);
             self.a.alu_rr64(Alu::Add, RCX, RCX);
             self.slow_if(Cc::E, i);
         }
         self.rn_test(i);
+        self.fp_load(0, a_);
+        self.fp_op(0xF2, opc, 0, src);
         let a = &mut self.a;
-        a.sse_m(0xF2, 0x10, 0, f(a_));
-        a.sse_m(0xF2, opc, 0, f(src));
         if single && self.env.mutant != MUT_FP_SINGLE {
             a.sse_r(0xF2, 0x5A, 0, 0); // cvtsd2ss
             a.sse_r(0xF3, 0x5A, 0, 0); // cvtss2sd
         }
         a.movq_rx(RAX, 0);
         self.slow_unless_finite(i);
-        self.a.st64(f(d), RAX);
+        self.fp_store(d, 0);
         self.fprf(single);
         true
     }
@@ -255,9 +278,8 @@ impl E<'_, '_> {
     /// fcmpu / fcmpo of ordered operands: CR field `bf` and FPSCR[FPCC] = FL FG FE (FU 0); FPRF[C] untouched.
     fn fcmp(&mut self, i: usize, bf: u8, ra: usize, rb: usize) {
         self.fprf_settle();
-        let a = &mut self.a;
-        a.sse_m(0xF2, 0x10, 0, f(ra));
-        a.sse_m(0x66, 0x2E, 0, f(rb)); // ucomisd
+        self.fp_load(0, ra);
+        self.fp_op(0x66, 0x2E, 0, rb); // ucomisd
         self.slow_if(Cc::P, i);
         // FL FG FE as CR field bf's nibble, in place: EQ, then the Ctx's LT / GT constants of that field by CMOV (cr_set's)
         let sh = 28 - 4 * (bf as u32 & 7);
@@ -399,13 +421,13 @@ impl E<'_, '_> {
     /// frsp, Rc=0, RN = 0: frD = (frB as f32) as f64 when that is finite (a NaN, an infinity or an overflow goes slow).
     fn frsp(&mut self, i: usize, d: usize, b: usize) {
         self.rn_test(i);
+        self.fp_load(0, b);
         let a = &mut self.a;
-        a.sse_m(0xF2, 0x10, 0, f(b));
         a.sse_r(0xF2, 0x5A, 0, 0);
         a.sse_r(0xF3, 0x5A, 0, 0);
         a.movq_rx(RAX, 0);
         self.slow_unless_finite(i);
-        self.a.st64(f(d), RAX);
+        self.fp_store(d, 0);
         self.fprf(true);
     }
 

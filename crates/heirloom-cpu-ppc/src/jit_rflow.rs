@@ -34,9 +34,20 @@ fn effect(op: &Op) -> (u8, u8) {
     }
 }
 
-/// The fused compares of a region (jit_region::Plan's nodes and return points): per node, per instruction, true = the
-/// compare there only sets the flags for the branch after it. `ignore_liveness` = planted mutant 27 (fuse when live too).
-pub(crate) fn fuse_marks(nodes: &[(u32, Vec<Op>)], rets: &[u32], ignore_liveness: bool) -> Vec<Vec<bool>> {
+/// Per-instruction CR optimisation decided by backward CR-field liveness over a region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CrOpt {
+    /// Materialise the CR field normally.
+    Normal,
+    /// Fuse with the immediately following conditional branch (`bc`/`bcl`) on host EFLAGS; skip writing CR.
+    Fuse,
+    /// The CR field written by this compare or `Rc=1` form is dead on every path after it; skip writing CR.
+    Dead,
+}
+
+/// The CR optimisation marks of a region (jit_region::Plan's nodes and return points): per node, per instruction.
+/// `ignore_liveness` = planted mutant 27 (fuse when live too).
+pub(crate) fn fuse_marks(nodes: &[(u32, Vec<Op>)], rets: &[u32], ignore_liveness: bool) -> Vec<Vec<CrOpt>> {
     let index = |pc: u32| nodes.iter().position(|n| n.0 == pc);
     let mut live_in = vec![0u8; nodes.len()];
     let mut after: Vec<Vec<u8>> = nodes.iter().map(|n| vec![0u8; n.1.len()]).collect();
@@ -72,11 +83,22 @@ pub(crate) fn fuse_marks(nodes: &[(u32, Vec<Op>)], rets: &[u32], ignore_liveness
     }
     nodes.iter().enumerate().map(|(k, (_, ops))| {
         (0..ops.len()).map(|i| {
-            let (op, Some(br)) = (&ops[i], ops.get(i + 1)) else { return false };
-            let f = op.d & 7;
-            matches!(op.k, K::Cmpi | K::Cmpli | K::Cmp | K::Cmpl) && matches!(br.k, K::Bc | K::Bcl)
-                && br.d & 0x04 != 0 && br.d & 0x10 == 0 && (br.a & 31) >> 2 == f && br.a & 3 != 3
-                && (after[k][i + 1] & (1 << f) == 0 || ignore_liveness)
+            let op = &ops[i];
+            let field = match op.k {
+                K::Cmpi | K::Cmpli | K::Cmp | K::Cmpl => Some(op.d & 7),
+                K::AndiRc | K::AddicRc | K::RlwinmRc | K::OrRc | K::AndRc | K::AddRc | K::SubfRc | K::SrawiRc => Some(0),
+                _ => None,
+            };
+            let Some(f) = field else { return CrOpt::Normal };
+            let bit = 1u8 << f;
+            if let Some(br) = ops.get(i + 1) {
+                let can_fuse = matches!(br.k, K::Bc | K::Bcl)
+                    && br.d & 0x04 != 0 && br.d & 0x10 == 0
+                    && (br.a & 31) >> 2 == f && br.a & 3 != 3
+                    && (after[k][i + 1] & bit == 0 || ignore_liveness);
+                if can_fuse { return CrOpt::Fuse; }
+            }
+            if after[k][i] & bit == 0 { CrOpt::Dead } else { CrOpt::Normal }
         }).collect()
     }).collect()
 }

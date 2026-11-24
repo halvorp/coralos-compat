@@ -116,3 +116,5 @@ pub(crate) const MUT_NAT_ALPHA_CA: u8 = 49;
 pub(crate) const MUT_NAT_GRID_COUNT: u8 = 50;
 /// The native tile expansion (jit_xpix TILEEXPAND) counts a row one instruction short.
 pub(crate) const MUT_NAT_TILE_COUNT: u8 = 51;
+/// A region's exits do not store its cached FPR locals (jit_regs `store_fp_locals`): a side exit drops a dirty FPR.
+pub(crate) const MUT_FP_LOCAL_EXIT: u8 = 52;

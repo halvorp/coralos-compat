@@ -43,9 +43,12 @@ impl E<'_, '_> {
         let (ka, kc, kb) = (known(a_), known(c), known(b));
         let t = self.cat(crate::jit_census::FP_GUARD);
         if !ka && !kc {
+            self.fp_load(1, a_);
+            match self.fp_reg(c, false) {
+                Some(xc) => self.a.sse_r(0x66, 0x14, 1, xc), // unpcklpd xmm1, xmmC
+                None => self.a.sse_m(0x66, 0x16, 1, f(c)),   // movhpd xmm1, [c]
+            }
             let a = &mut self.a;
-            a.sse_m(0xF2, 0x10, 1, f(a_));
-            a.sse_m(0x66, 0x16, 1, f(c)); // movhpd xmm1, [c]
             a.sse_r(0x66, 0x5A, 2, 1); // cvtpd2ps
             a.cvtps2pd(2, 2);
             a.cmpneqpd(2, 1);
@@ -54,35 +57,36 @@ impl E<'_, '_> {
             self.slow_if(Cc::Ne, i);
         } else if !ka || !kc {
             let r = if ka { c } else { a_ };
+            self.fp_load(1, r);
             let a = &mut self.a;
-            a.sse_m(0xF2, 0x10, 1, f(r));
             a.sse_r(0xF2, 0x5A, 2, 1); // cvtsd2ss
             a.sse_r(0xF3, 0x5A, 2, 2); // cvtss2sd
             a.movq_rx(RAX, 2);
-            a.alu_rm64(Alu::Cmp, RAX, f(r));
+            self.fp_cmp_rax(r);
             self.slow_if(Cc::Ne, i);
         }
-        let a = &mut self.a;
-        a.sse_m(0xF2, 0x10, 3, f(b));
+        self.fp_load(3, b);
         if !kb {
+            let a = &mut self.a;
             a.sse_r(0xF2, 0x5A, 4, 3); // cvtsd2ss
             a.sse_r(0xF3, 0x5A, 4, 4); // cvtss2sd
             a.movq_rx(RAX, 4);
-            a.alu_rm64(Alu::Cmp, RAX, f(b));
+            self.fp_cmp_rax(b);
             self.slow_if(Cc::Ne, i);
         }
         self.a.set_tag(t);
-        let a = &mut self.a;
-        a.sse_m(0xF2, 0x10, 0, f(a_));
-        a.sse_m(0xF2, 0x59, 0, f(c)); // p = a * c (exact)
+        self.fp_load(0, a_);
+        self.fp_op(0xF2, 0x59, 0, c); // p = a * c (exact)
         if sub {
-            a.ld64(RDX, f(b));
+            self.fp_load_gpr(RDX, b);
+            let a = &mut self.a;
             a.mov_ri64(RCX, SIGN);
             a.alu_rr64(Alu::Xor, RDX, RCX);
             a.movq_xr(1, RDX); // b negated for the subtract forms
         } else {
-            a.movapd(1, 3); // b
+            self.a.movapd(1, 3); // b
         }
+        let a = &mut self.a;
         a.movapd(2, 0);
         a.sse_r(0xF2, 0x58, 2, 1); // s = p + b
         a.movq_rx(RAX, 2);
@@ -109,10 +113,43 @@ impl E<'_, '_> {
         a.sse_r(0xF3, 0x5A, 2, 2);
         a.movq_rx(RAX, 2);
         self.slow_unless_finite(i); // overflow: OX is tier 0's
-        let a = &mut self.a;
-        if neg { a.mov_ri64(RCX, SIGN); a.alu_rr64(Alu::Xor, RAX, RCX); }
-        a.st64(f(d), RAX);
+        if neg {
+            let a = &mut self.a;
+            a.mov_ri64(RCX, SIGN);
+            a.alu_rr64(Alu::Xor, RAX, RCX);
+            self.fp_store_gpr(d, RAX);
+        } else {
+            self.fp_store(d, 2);
+        }
         self.fprf(true);
+    }
+
+    /// fmadd / fmsub / fnmadd / fnmsub (opcode 63, xo5 28..=31), Rc=0, CPUID FMA3:
+    /// frD = [-](frA * frC [+-] frB) rounded once in IEEE-754 double precision; non-finite operands or overflow go slow.
+    pub(crate) fn fmadd_d(&mut self, i: usize, xo5: u32, d: usize, a_: usize, b: usize, c: usize) {
+        let (sub, neg) = (xo5 & 1 == 0, xo5 >= 30);
+        self.rn_test(i);
+        self.fp_load(0, a_);
+        let xc = match self.fp_reg(c, false) {
+            Some(x) => x,
+            None => { self.a.sse_m(0xF2, 0x10, 1, f(c)); 1 }
+        };
+        let xb = match self.fp_reg(b, false) {
+            Some(x) => x,
+            None => { self.a.sse_m(0xF2, 0x10, 2, f(b)); 2 }
+        };
+        if sub { self.a.vfmsub213sd(0, xc, xb); } else { self.a.vfmadd213sd(0, xc, xb); }
+        self.a.movq_rx(RAX, 0);
+        self.slow_unless_finite(i);
+        if neg {
+            let a = &mut self.a;
+            a.mov_ri64(RCX, SIGN);
+            a.alu_rr64(Alu::Xor, RAX, RCX);
+            self.fp_store_gpr(d, RAX);
+        } else {
+            self.fp_store(d, 0);
+        }
+        self.fprf(false);
     }
 
 }
@@ -152,8 +189,8 @@ pub(crate) fn emit_fma_odd(a: &mut Asm, twice: bool) {
 impl E<'_, '_> {
     /// fctiwz, Rc=0: frD = 0xFFF80000_00000000 | (frB truncated to i32).
     pub(crate) fn fctiwz(&mut self, i: usize, d: usize, b: usize) {
+        self.fp_load(0, b);
         let a = &mut self.a;
-        a.sse_m(0xF2, 0x10, 0, f(b));
         a.cvttsd2si(RAX, 0);
         a.alu_ri(Alu::Cmp, RAX, 0x8000_0000);
         self.slow_if(Cc::E, i);
@@ -174,6 +211,6 @@ impl E<'_, '_> {
         a.mov_rr(RAX, RAX); // zero-extend
         a.mov_ri64(RDX, 0xFFF8_0000_0000_0000);
         a.alu_rr64(Alu::Or, RDX, RAX);
-        a.st64(f(d), RDX);
+        self.fp_store_gpr(d, RDX);
     }
 }
