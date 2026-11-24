@@ -422,3 +422,51 @@ fn the_home_input_sets_the_powerpc_programs_folder_through_the_table() {
     let _ = bad.send(&frames);
     assert!(matches!(bad.reports.last(), Some(Report::Started(Err(e))) if e.contains("Nowhere")), "{:?}", bad.reports);
 }
+
+#[test]
+fn display_size_input_sets_main_device_and_screen_bounds_and_refuses_bad_bytes() {
+    bind();
+    let input = |b: &[u8]| control(Control::Input { name: "display-size".into(), offset: 0, total: b.len() as u32, chunk: b.to_vec() });
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&1280u16.to_le_bytes());
+    payload.extend_from_slice(&800u16.to_le_bytes());
+
+    let mut sink = Box::new(Sink::default());
+    let mut s = session(&mut sink, false);
+    let mut frames = vec![input(&payload)];
+    frames.extend(program(&app(), "PPC Hello"));
+    for f in &frames {
+        s.apply(f).unwrap();
+    }
+    s.apply(&control(Control::Advance { virtual_us: 0 })).unwrap();
+    s.apply(&control(Control::Step { budget: BUDGET })).unwrap();
+    let m = &s.machine().mac;
+    let crsr_pin = [0, 2, 4, 6].map(|o| m.mem.read_i16(heirloom_mac68k_engine::lowmem::CRSR_PIN + o).unwrap());
+    assert_eq!(crsr_pin, [0, 0, 800, 1280], "display-size input updates low-memory CrsrPin (screenBits.bounds)");
+    let gd = m.cqd.main_device;
+    assert_ne!(gd, 0, "InitGraf created the main GDevice");
+    let p = m.mem.read_u32(gd).unwrap();
+    let gd_rect = [0, 2, 4, 6].map(|o| m.mem.read_i16(p + 34 + o).unwrap());
+    assert_eq!(gd_rect, [0, 0, 800, 1280], "display-size input updates main GDevice gdRect");
+
+    // NEGATIVE CONTROL: default session without display-size stays at 640x480.
+    let mut s_def = session(&mut sink, false);
+    for f in &program(&app(), "PPC Hello") {
+        s_def.apply(f).unwrap();
+    }
+    s_def.apply(&control(Control::Advance { virtual_us: 0 })).unwrap();
+    s_def.apply(&control(Control::Step { budget: BUDGET })).unwrap();
+    let md = &s_def.machine().mac;
+    let p_def = md.mem.read_u32(md.cqd.main_device).unwrap();
+    let def_rect = [0, 2, 4, 6].map(|o| md.mem.read_i16(p_def + 34 + o).unwrap());
+    assert_eq!(def_rect, [0, 0, 480, 640], "default main device stays 640x480");
+
+    // NEGATIVE CONTROL: truncated or zero display-size is refused by name.
+    for bad in [&[0u8, 5][..], &[0u8, 0, 0x20, 0x03][..]] {
+        let mut remote = Remote::new(FAMILY_MACPPC, "").unwrap();
+        let mut frames = vec![input(bad)];
+        frames.extend(program(&app(), "PPC Hello"));
+        let _ = remote.send(&frames);
+        assert!(matches!(remote.reports.last(), Some(Report::Started(Err(e))) if e.contains("display-size")), "{:?}", remote.reports);
+    }
+}
