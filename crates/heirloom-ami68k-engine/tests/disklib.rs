@@ -111,3 +111,68 @@ fn a_library_that_gives_every_opener_its_own_base_is_closed_through_that_base() 
     assert_eq!(a.refused.len(), 1, "{:?}", a.refused);
     assert!(a.refused[0].contains("is not an open library base"), "{:?}", a.refused);
 }
+
+#[test]
+fn autoinit_library_without_datainit_inherits_romtag_version_name_and_idstring() {
+    // Build a minimal RTF_AUTOINIT disk library with dataInit == 0 and rt_Version == 44 (like AROS colorwheel.gadget).
+    // Layout:
+    //   0x00: open_fn  = move.l a6,d0 (0x200E); rts (0x4E75)
+    //   0x04: close_fn = moveq #0,d0  (0x7000); rts (0x4E75)
+    //   0x08: func_tbl = [0x00, 0x04, 0x04, 0x04, 0xFFFFFFFF] (relocs at 0x08..0x14)
+    //   0x1C: init_tbl = [dataSize=34, funcs=0x08, dataInit=0, initRoutine=0] (reloc at 0x20)
+    //   0x2C: RomTag   = matchword 0x4AFC, matchtag=0x2C, endskip=0x46, flags=0x80 (RTF_AUTOINIT), ver=44, type=9, pri=0, name=0x48, id=0x54, init=0x1C
+    //   0x48: "ver.library\0" (12 bytes)
+    //   0x54: "ver 44.1\0"    (9 bytes + pad)
+    let mut code = vec![0u8; 0x64];
+    let w16 = |b: &mut [u8], o: usize, v: u16| b[o..o + 2].copy_from_slice(&v.to_be_bytes());
+    let w32 = |b: &mut [u8], o: usize, v: u32| b[o..o + 4].copy_from_slice(&v.to_be_bytes());
+    w16(&mut code, 0x00, 0x200E); w16(&mut code, 0x02, 0x4E75);
+    w16(&mut code, 0x04, 0x7000); w16(&mut code, 0x06, 0x4E75);
+    w32(&mut code, 0x08, 0x00); w32(&mut code, 0x0C, 0x04); w32(&mut code, 0x10, 0x04); w32(&mut code, 0x14, 0x04); w32(&mut code, 0x18, 0xFFFF_FFFF);
+    w32(&mut code, 0x1C, 34); w32(&mut code, 0x20, 0x08); w32(&mut code, 0x24, 0); w32(&mut code, 0x28, 0);
+    w16(&mut code, 0x2C, 0x4AFC); w32(&mut code, 0x2E, 0x2C); w32(&mut code, 0x32, 0x46);
+    code[0x36] = 0x80; // RTF_AUTOINIT
+    code[0x37] = 44;   // rt_Version
+    code[0x38] = 9;    // NT_LIBRARY
+    code[0x39] = 0;    // rt_Pri
+    w32(&mut code, 0x3A, 0x48); // rt_Name
+    w32(&mut code, 0x3E, 0x54); // rt_IdString
+    w32(&mut code, 0x42, 0x1C); // rt_Init
+    code[0x48..0x54].copy_from_slice(b"ver.library\0");
+    code[0x54..0x5D].copy_from_slice(b"ver 44.1\0");
+    let relocs = vec![(0, 0x08), (0, 0x0C), (0, 0x10), (0, 0x14), (0, 0x20), (0, 0x2E), (0, 0x32), (0, 0x3A), (0, 0x3E), (0, 0x42)];
+    let lib_hunk = build(&[Hunk::code(code, relocs)], None);
+
+    // Tiny caller: OpenLibrary("ver.library", 39) -> store at 0x1F000; OpenLibrary("ver.library", 45) -> store at 0x1F004; rts.
+    let mut p = Vec::new();
+    let emit = |p: &mut Vec<u8>, w: &[u16]| { for &x in w { p.extend_from_slice(&x.to_be_bytes()); } };
+    emit(&mut p, &[
+        0x2C78, 0x0004,             // movea.l 4.w, a6
+        0x43FA, 0x0022,             // lea name(pc), a1 (pc = 0x06 -> 0x28)
+        0x7027,                     // moveq #39, d0
+        0x4EAE, (-552i16) as u16,   // jsr _LVOOpenLibrary(a6)
+        0x23C0, 0x0001, 0xF000,     // move.l d0, 0x1F000
+        0x43FA, 0x0012,             // lea name(pc), a1 (pc = 0x16 -> 0x28)
+        0x702D,                     // moveq #45, d0
+        0x4EAE, (-552i16) as u16,   // jsr _LVOOpenLibrary(a6)
+        0x23C0, 0x0001, 0xF004,     // move.l d0, 0x1F004
+        0x7000,                     // moveq #0, d0
+        0x4E75,                     // rts
+    ]);
+    assert_eq!(p.len(), 0x28);
+    p.extend_from_slice(b"ver.library\0");
+    let prog = build(&[Hunk::code(p, vec![])], None);
+
+    let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    a.fs.vol.put_file("LIBS:ver.library", lib_hunk).unwrap();
+    let r = a.run_hunk(&prog, 200_000).unwrap();
+    assert!(r.stats.halted, "{:?} {:?}", r.stats, a.refused);
+    let ok_base = a.mem.read_u32(0x1F000).unwrap();
+    let too_new = a.mem.read_u32(0x1F004).unwrap();
+    assert_ne!(ok_base, 0, "OpenLibrary(ver=39) must succeed for rt_Version=44 library: {:?}", a.log);
+    assert_eq!(too_new, 0, "NEGATIVE CONTROL: OpenLibrary(ver=45) must return NULL for rt_Version=44 library");
+    assert_eq!(a.mem.read_u16(ok_base + 20).unwrap(), 44, "lib_Version seeded from rt_Version");
+    assert_eq!(a.mem.read_u8(ok_base + 8).unwrap(), 9, "ln_Type seeded from rt_Type (NT_LIBRARY)");
+    let id_ptr = a.mem.read_u32(ok_base + 24).unwrap();
+    assert_eq!(a.mem.read_cstr(id_ptr).unwrap(), "ver 44.1");
+}
