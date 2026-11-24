@@ -31,7 +31,7 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::boopsi_draw::{sysi_which, DOWNIMAGE, LEFTIMAGE, RIGHTIMAGE, UPIMAGE};
+use crate::boopsi_draw::{sysi_which, CLOSEIMAGE, DEPTHIMAGE, DOWNIMAGE, LEFTIMAGE, RIGHTIMAGE, SDEPTHIMAGE, SIZEIMAGE, UPIMAGE, ZOOMIMAGE};
 use crate::boopsi_ids::*;
 use crate::iclass::Native;
 use crate::{machine::Amiga, Refusal};
@@ -152,6 +152,11 @@ fn plan<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32) -> Result<Option<(Contro
         ControlKind::Field { text: opt_str(a, buf, "StringInfo.Buffer")?, max_len: max.saturating_sub(1), editable: true, integer: act & GACT_LONGINT != 0 }
     } else if matches!(sys, Some(Native::Button)) || (classic && ty & GTYP_GTYPEMASK == GTYP_BOOLGADGET) {
         let render = if fl & GFLG_GADGIMAGE != 0 { r32(a, g + GAD_RENDER, "Gadget.GadgetRender")? } else { 0 };
+        // System window-frame images (close/depth/zoom/size) belong to CoralOS's own window chrome; never project
+        // them as duplicate native buttons inside the client area (HANDOFF-HEIRLOOM §1 #3).
+        if matches!(sysi_which(a, render), Some(DEPTHIMAGE | ZOOMIMAGE | SIZEIMAGE | CLOSEIMAGE | SDEPTHIMAGE)) {
+            return Ok(None);
+        }
         let label = label_of(a, g, fl)?;
         let arrow = sysi_which(a, render).and_then(|w| match w { LEFTIMAGE => Some(ArrowDir::Left), UPIMAGE => Some(ArrowDir::Up), RIGHTIMAGE => Some(ArrowDir::Right), DOWNIMAGE => Some(ArrowDir::Down), _ => None });
         let acts = act & (GACT_RELVERIFY | GACT_IMMEDIATE | GACT_TOGGLESELECT) != 0;

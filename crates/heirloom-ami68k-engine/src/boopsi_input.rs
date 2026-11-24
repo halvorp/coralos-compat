@@ -98,10 +98,31 @@ pub fn pump<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu, w: Waiting) -> Result<b
 
 fn rd16<U: GuestUi>(a: &Amiga<U>, at: u32) -> Result<i32, Refusal> { a.mem.read_u16(at).map(|v| v as i16 as i32).map_err(Refusal::mem("Gadget")) }
 
-/// The gadget's box in window coordinates (boopsigadgets.c: RELRIGHT adds Width-1, RELBOTTOM Height-1, RELWIDTH/RELHEIGHT the size).
+/// The gadget's box in outer window coordinates (boopsigadgets.c: RELRIGHT adds Width-1, RELBOTTOM Height-1,
+/// RELWIDTH/RELHEIGHT the size). For a `WFLG_GIMMEZEROZERO` window, client gadgets (neither `GTYP_GZZGADGET` nor
+/// `GACT_*BORDER`) resolve against inner `(GZZWidth, GZZHeight)` and offset by `(BorderLeft, BorderTop)` so they
+/// align with the inner canvas (`graphics::content::layout_of`), while border gadgets stay in outer coordinates.
 pub(crate) fn gadget_box<U: GuestUi>(a: &Amiga<U>, win: u32, g: u32) -> Result<(i32, i32, i32, i32), Refusal> {
+    const WD_FLAGS: u32 = 24;
+    const WD_BORDER_LEFT: u32 = 54;
+    const WD_GZZ_WIDTH: u32 = 112;
+    const WD_GZZ_HEIGHT: u32 = 114;
+    const WFLG_GIMMEZEROZERO: u32 = 0x400;
+    const BORDER_MASK: u32 = GACT_RIGHTBORDER | GACT_LEFTBORDER | GACT_TOPBORDER | GACT_BOTTOMBORDER;
+
     let fl = a.mem.read_u16(g + GAD_FLAGS).map_err(Refusal::mem("Gadget.Flags"))? as u32;
-    let (mut ww, mut wh) = (rd16(a, win + 8)?, rd16(a, win + 10)?);
+    let ty = a.mem.read_u16(g + GAD_TYPE).map_err(Refusal::mem("Gadget.GadgetType"))? as u32;
+    let act = a.mem.read_u16(g + GAD_ACTIVATION).map_err(Refusal::mem("Gadget.Activation"))? as u32;
+    let wflags = a.mem.read_u32(win + WD_FLAGS).map_err(Refusal::mem("Window.Flags"))?;
+    let gzz_client = a.req.origin.get(&g).is_none()
+        && wflags & WFLG_GIMMEZEROZERO != 0
+        && ty & GTYP_GZZGADGET == 0
+        && act & BORDER_MASK == 0;
+    let (mut ww, mut wh) = if gzz_client {
+        (rd16(a, win + WD_GZZ_WIDTH)?, rd16(a, win + WD_GZZ_HEIGHT)?)
+    } else {
+        (rd16(a, win + 8)?, rd16(a, win + 10)?)
+    };
     let (mut l, mut t, mut w, mut h) = (rd16(a, g + GAD_LEFT)?, rd16(a, g + GAD_TOP)?, rd16(a, g + GAD_WIDTH)?, rd16(a, g + GAD_HEIGHT)?);
     // A Requester's gadget is relative to the requester's own rectangle (request_region.rs), which the Rel* flags refer to as well.
     let origin = a.req.origin.get(&g).copied();
@@ -110,7 +131,15 @@ pub(crate) fn gadget_box<U: GuestUi>(a: &Amiga<U>, win: u32, g: u32) -> Result<(
     if fl & GFLG_RELBOTTOM != 0 { t += wh - 1; }
     if fl & GFLG_RELWIDTH != 0 { w += ww; }
     if fl & GFLG_RELHEIGHT != 0 { h += wh; }
-    if let Some(o) = origin { l += o.x; t += o.y; }
+    if let Some(o) = origin {
+        l += o.x;
+        t += o.y;
+    } else if gzz_client {
+        let bl = a.mem.read_u8(win + WD_BORDER_LEFT).map_err(Refusal::mem("Window.BorderLeft"))? as i32;
+        let bt = a.mem.read_u8(win + WD_BORDER_LEFT + 1).map_err(Refusal::mem("Window.BorderTop"))? as i32;
+        l += bl;
+        t += bt;
+    }
     Ok((l, t, w, h))
 }
 
