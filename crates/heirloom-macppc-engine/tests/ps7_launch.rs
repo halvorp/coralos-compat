@@ -43,6 +43,15 @@ fn started() -> Option<MacPpc<RecordingGuestUi>> {
             m.mac.set_display_size(w.parse().unwrap(), h.parse().unwrap()).unwrap();
         }
     }
+    if let Ok(ts) = std::env::var("PS7_TIER") {
+        if let Some(t) = heirloom_cpu_ppc::Tier::parse(&ts) {
+            #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+            if matches!(t, heirloom_cpu_ppc::Tier::Jit | heirloom_cpu_ppc::Tier::JitLockstep | heirloom_cpu_ppc::Tier::JitBlocks | heirloom_cpu_ppc::Tier::JitWide) {
+                m.exec().set_code_mem(Box::new(heirloom_cpu_ppc::HostCodeMem::new()));
+            }
+            m.exec().tier = t;
+        }
+    }
     // the compat repo's window-definition bindings (DATA, bindings/macppc/*.sexp), as the host hands them to the engine
     for b in wdef_bindings::load("macppc") { eprintln!("BINDING {}", b.id); m.add_window_def_binding(b); }
     let vol = GuestMachine::volume(&mut m);
@@ -108,6 +117,7 @@ fn ps7_launch_host_run() {
         return;
     }
     // PS7_ACTIONS: drive it first with the shared verbs (ps7_common::act), then PS7_SLICES more slices
+    let t0 = std::time::Instant::now();
     let mut t = 0u64;
     if let Ok(actions) = std::env::var("PS7_ACTIONS") { let ok = ps7_common::act(&mut m, &mut t, &actions); eprintln!("ACTIONS DONE: {ok}"); }
     let slices: u32 = std::env::var("PS7_SLICES").ok().and_then(|s| s.parse().ok()).unwrap_or(500);
@@ -124,6 +134,12 @@ fn ps7_launch_host_run() {
         t += 20_000;
         GuestMachine::advance_clock_to(&mut m, t).unwrap();
     }
+    let elapsed_us = t0.elapsed().as_micros() as u64;
+    let prof = m.exec().prof;
+    let tier = m.exec().tier;
+    let jst = m.exec().jit_stats();
+    eprintln!("PS7-PROF {} jit_insns={} compiled={} regions={} fp_locals={} fused={} helpers={} refused={}",
+        prof.line(elapsed_us, tier), jst.insns, jst.compiled, jst.regions, jst.region_fp_locals, jst.region_fused, jst.helpers, jst.refused);
     drain(&mut m);
     eprintln!("STOPPED {stop:?} {:?}", m.fault());
     if let Some(c) = m.cpu() {
