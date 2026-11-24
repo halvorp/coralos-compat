@@ -52,8 +52,9 @@ fn started() -> Option<MacPpc<RecordingGuestUi>> {
             m.exec().tier = t;
         }
     }
-    // the compat repo's window-definition bindings (DATA, bindings/macppc/*.sexp), as the host hands them to the engine
+    // the compat repo's window-definition and plane-chrome bindings (DATA, bindings/macppc/*.sexp), as the host hands them to the engine
     for b in wdef_bindings::load("macppc") { eprintln!("BINDING {}", b.id); m.add_window_def_binding(b); }
+    for pc in wdef_bindings::load_plane_chrome("macppc") { eprintln!("PLANE-CHROME {}", pc.id); m.mac.add_plane_chrome_binding(pc); }
     let vol = GuestMachine::volume(&mut m);
     vol.enable_streams();
     vol.set_stream_source(Box::new(Files));
