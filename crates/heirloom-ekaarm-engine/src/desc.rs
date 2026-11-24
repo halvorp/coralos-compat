@@ -226,6 +226,16 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
             let r = read16(p, this).and_then(|mut a| { a.extend(read16(p, r1)?); write16(p, this, &a) });
             match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
         }
+        // void TDes8::Append(const TDesC16& aDes): narrow-append UTF-16 code units into an 8-bit descriptor (>0xFF becomes '?').
+        "_ZN5TDes86AppendERK7TDesC16" => {
+            let r = read8(p, this).and_then(|mut a| {
+                for u in read16(p, r1)? {
+                    a.push(if u <= 0xFF { u as u8 } else { b'?' });
+                }
+                write8(p, this, &a)
+            });
+            match r { Ok(()) => NativeOutcome::Return, Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")) }
+        }
         // void TDes16::Append(TChar aChar) (e32des16.h): append one UTF-16 code unit.
         "_ZN6TDes166AppendE5TChar" => {
             let r = read16(p, this).and_then(|mut a| { a.push(r1 as u16); write16(p, this, &a) });

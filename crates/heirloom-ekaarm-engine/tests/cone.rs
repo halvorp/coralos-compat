@@ -33,7 +33,7 @@ struct App {
 }
 
 const FILE_BROWSER: App = App { exe: "FileBrowser.exe", tree: "nokiafilebrowser", loc_rsc: "resource/apps/filebrowser.rsc", loc_id: 0x3ec9_005d, caption: "FileBrowser", refusal: "CdlEngine11GetFunctionE4TUidi" };
-const HERO: App = App { exe: "HeroOfSparta.exe", tree: "hero-of-sparta", loc_rsc: "resource/apps/heroofsparta.rsc", loc_id: 0x08f6_f004, caption: "HeroOfSparta", refusal: "ws32/609" };
+const HERO: App = App { exe: "HeroOfSparta.exe", tree: "hero-of-sparta", loc_rsc: "resource/apps/heroofsparta.rsc", loc_id: 0x08f6_f004, caption: "HeroOfSparta", refusal: "libGLESv1_CM/135" };
 
 fn load(app: &App) -> Option<Process> {
     let path = format!("{E32}/{}", app.exe);

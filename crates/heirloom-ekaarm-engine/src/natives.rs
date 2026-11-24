@@ -749,6 +749,10 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             Err(e) => NativeOutcome::Refused(format!("NEXT-NEEDED {}/{} _ZN4User5PanicE ({e})", dll_base, ordinal)),
         },
         "" => match (dll_base.as_str(), ordinal) {
+            // S60 5th / Symbian^3 ws32 ordinal 609: RWindowBase::EnableAdvancedPointers() (multi-touch enable, void).
+            ("ws32", 609) => NativeOutcome::Return,
+            // Nokia OOM Monitor (goommonitor.dll): ROomMonitorSession::Connect() (ord 10) / RequestFreeMemory(TInt) (ord 23) -> KErrNone.
+            ("goommonitor", 10) | ("goommonitor", 23) => { proc.cpu.regs[0] = 0; NativeOutcome::Return }
             // S60 imut.dll (imcvcodc.h) TImCodecB64: standard RFC 4648 Base64 codec.
             // Ordinal 27 = TImCodecB64::TImCodecB64(), 24 = TImCodecB64::Initialise(),
             // 25 = TInt TImCodecB64::Decode(const TDesC8& aSrcString, TDes8& rDestString).

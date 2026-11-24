@@ -12,6 +12,17 @@ const IGNORED: &[&str] = &[
     "_ZN15RWindowTreeNode24DisableFocusChangeEventsEv",
 ];
 
-pub(crate) fn native(_p: &mut Process, name: &str) -> Option<NativeOutcome> {
+/// Symbian `TDisplayMode::EColor16MU` (32-bit xRGB8888, `gdi.h`): matches our 32-bit host surface and HAL `EDisplayBitsPerPixel = 32`.
+const ECOLOR_16MU: u32 = 10;
+
+pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
+    if name == "_ZN11RWindowBase11DisplayModeEv" {
+        p.cpu.regs[0] = ECOLOR_16MU;
+        return Some(NativeOutcome::Return);
+    }
+    if name == "_ZN15RWindowTreeNode28EnableVisibilityChangeEventsEv" {
+        p.cpu.regs[0] = 0; // KErrNone
+        return Some(NativeOutcome::Return);
+    }
     IGNORED.contains(&name).then_some(NativeOutcome::Return)
 }
