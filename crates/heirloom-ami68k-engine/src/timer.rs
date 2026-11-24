@@ -173,9 +173,58 @@ pub fn abort_io<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
 
 /// The vectors of the `timer.device` base OpenDevice hands out that are implemented; every other one stays a named refusal.
 pub fn register<U: GuestUi>(b: crate::libtable::LibraryBuilder<U>) -> crate::libtable::LibraryBuilder<U> {
-    b.func(LVO_READ_ECLOCK, "ReadEClock", read_eclock::<U>)
+    b.func(-42, "AddTime", add_time::<U>)
+        .func(-48, "SubTime", sub_time::<U>)
+        .func(-54, "CmpTime", cmp_time::<U>)
+        .func(LVO_READ_ECLOCK, "ReadEClock", read_eclock::<U>)
         .func(LVO_GET_SYS_TIME, "GetSysTime", get_time::<U>)
         .func(LVO_GET_UP_TIME, "GetUpTime", get_time::<U>)
+}
+
+fn read_tv<U: GuestUi>(a: &Amiga<U>, addr: u32) -> Result<(u32, u32), Refusal> {
+    Ok((a.mem.read_u32(addr).map_err(m("timeval.tv_secs"))?, a.mem.read_u32(addr + 4).map_err(m("timeval.tv_micro"))?))
+}
+
+fn write_tv<U: GuestUi>(a: &mut Amiga<U>, addr: u32, secs: u32, micros: u32) -> Result<(), Refusal> {
+    a.mem.write_u32(addr, secs).map_err(m("timeval.tv_secs"))?;
+    a.mem.write_u32(addr + 4, micros).map_err(m("timeval.tv_micro"))
+}
+
+/// AddTime(a0 = dest, a1 = src): dest += src (normalising micros >= 1_000_000 into secs).
+fn add_time<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (dst, src) = (cpu.areg(0), cpu.areg(1));
+    let ((ds, du), (ss, su)) = (read_tv(a, dst)?, read_tv(a, src)?);
+    let total_u = u64::from(du) + u64::from(su);
+    let secs = ds.wrapping_add(ss).wrapping_add((total_u / 1_000_000) as u32);
+    let micros = (total_u % 1_000_000) as u32;
+    write_tv(a, dst, secs, micros)?;
+    Ok(format!("[timer.device] AddTime {dst:#x} += {src:#x} -> {secs}.{micros:06}"))
+}
+
+/// SubTime(a0 = dest, a1 = src): dest -= src (borrowing 1_000_000 micros from secs when dest.micro < src.micro).
+fn sub_time<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (dst, src) = (cpu.areg(0), cpu.areg(1));
+    let ((ds, du), (ss, su)) = (read_tv(a, dst)?, read_tv(a, src)?);
+    let (secs, micros) = if du >= su {
+        (ds.wrapping_sub(ss), du - su)
+    } else {
+        (ds.wrapping_sub(ss).wrapping_sub(1), du + 1_000_000 - su)
+    };
+    write_tv(a, dst, secs, micros)?;
+    Ok(format!("[timer.device] SubTime {dst:#x} -= {src:#x} -> {secs}.{micros:06}"))
+}
+
+/// CmpTime(a0 = dest, a1 = src) -> d0: AmigaOS autodoc sign convention: -1 if dest > src, 0 if equal, +1 if dest < src.
+fn cmp_time<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (dst, src) = (cpu.areg(0), cpu.areg(1));
+    let (d, s) = (read_tv(a, dst)?, read_tv(a, src)?);
+    let res: i32 = match d.cmp(&s) {
+        core::cmp::Ordering::Greater => -1,
+        core::cmp::Ordering::Equal => 0,
+        core::cmp::Ordering::Less => 1,
+    };
+    cpu.set_d0(res as u32);
+    Ok(format!("[timer.device] CmpTime {dst:#x} vs {src:#x} -> {res}"))
 }
 
 /// ReadEClock(a0 = struct EClockVal* dest) -> d0 = E-clock ticks per second (1_000_000 Hz = virtual clock microseconds).
@@ -196,4 +245,62 @@ fn get_time<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     a.mem.write_u32(tv, s).map_err(m("timeval.tv_secs"))?;
     a.mem.write_u32(tv + 4, us).map_err(m("timeval.tv_micro"))?;
     Ok(format!("[timer.device] GetSysTime -> {s}.{us:06}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heirloom_fmt_hunk::writer::{build, Hunk};
+    use heirloom_ui_abi::RecordingGuestUi;
+
+    #[test]
+    fn add_sub_and_cmp_time_follow_amigaos_timeval_arithmetic() {
+        // Test AddTime (carry), SubTime (borrow), and CmpTime (-1 when dest > src, 0 eq, +1 when dest < src) via timer.device vectors.
+        let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+        let tv_a = 0x1F100u32;
+        let tv_b = 0x1F110u32;
+        // A = 2.700000, B = 1.500000
+        write_tv(&mut a, tv_a, 2, 700_000).unwrap();
+        write_tv(&mut a, tv_b, 1, 500_000).unwrap();
+        let io = 0x1F200u32;
+        let dev_name = 0x1F280u32;
+        a.mem.write_bytes(dev_name, b"timer.device\0").unwrap();
+        let mut p = Vec::new();
+        let emit = |p: &mut Vec<u8>, w: &[u16]| { for &x in w { p.extend_from_slice(&x.to_be_bytes()); } };
+        emit(&mut p, &[
+            0x2C78, 0x0004,                                     // movea.l 4.w, a6
+            0x207C, (dev_name >> 16) as u16, dev_name as u16,   // lea "timer.device", a0
+            0x7000,                                             // moveq #0, d0 (UNIT_VBLANK)
+            0x227C, (io >> 16) as u16, io as u16,               // lea io, a1
+            0x7200,                                             // moveq #0, d1
+            0x4EAE, (-444i16) as u16,                           // jsr _LVOOpenDevice(a6)
+            0x2C69, 0x0014,                                     // movea.l 20(a1), a6 (io_Device = TimerBase)
+            // CmpTime(A=2.7, B=1.5) -> -1
+            0x207C, (tv_a >> 16) as u16, tv_a as u16,
+            0x227C, (tv_b >> 16) as u16, tv_b as u16,
+            0x4EAE, (-54i16) as u16,
+            0x23C0, 0x0001, 0xF000,
+            // AddTime(A, B) -> A = 4.200000
+            0x4EAE, (-42i16) as u16,
+            // SubTime(A, B) -> A = 2.700000 (tests borrow: 200_000 < 500_000)
+            0x4EAE, (-48i16) as u16,
+            // CmpTime(B=1.5, A=2.7) -> +1
+            0x207C, (tv_b >> 16) as u16, tv_b as u16,
+            0x227C, (tv_a >> 16) as u16, tv_a as u16,
+            0x4EAE, (-54i16) as u16,
+            0x23C0, 0x0001, 0xF004,
+            // CmpTime(A, A) -> 0
+            0x207C, (tv_a >> 16) as u16, tv_a as u16,
+            0x4EAE, (-54i16) as u16,
+            0x23C0, 0x0001, 0xF008,
+            0x7000, 0x4E75,
+        ]);
+        let prog = build(&[Hunk::code(p, vec![])], None);
+        let r = a.run_hunk(&prog, 50_000).unwrap();
+        assert!(r.stats.halted, "{:?} {:?}", r.stats, a.refused);
+        assert_eq!(a.mem.read_u32(0x1F000).unwrap() as i32, -1, "dest > src -> -1");
+        assert_eq!(a.mem.read_u32(0x1F004).unwrap() as i32, 1, "dest < src -> +1");
+        assert_eq!(a.mem.read_u32(0x1F008).unwrap() as i32, 0, "dest == src -> 0");
+        assert_eq!(read_tv(&a, tv_a).unwrap(), (2, 700_000), "AddTime(carry) + SubTime(borrow) round-tripped");
+    }
 }
