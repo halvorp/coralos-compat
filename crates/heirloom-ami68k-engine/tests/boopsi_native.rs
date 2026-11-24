@@ -100,3 +100,95 @@ fn propgclass_keeps_a_real_prop_info_and_derives_pot_and_body_from_total_visible
     assert_eq!(g.r16(pi) & 6, 2, "PGA_Freedom replaced FREEVERT by FREEHORIZ");
     assert_eq!((g.r16(pi + 6), g.r16(pi + 2)), (0xFFFF, 0), "Visible >= Total: full body, pot 0 (the knob fills the container)");
 }
+
+#[test]
+fn gzz_client_gadgets_offset_by_borders_border_gadgets_stay_outer_and_sysiclass_chrome_is_suppressed() {
+    use heirloom_ui_abi::{ArrowDir, ControlKind, GuestRect};
+    const OPEN_WINDOW_TAG_LIST: i32 = -606;
+    const ADD_GLIST: i32 = -438;
+    const SYSIA_WHICH: u32 = IA + 0x0D;
+    const DEPTHIMAGE: u32 = 0x00;
+    const CLOSEIMAGE: u32 = 0x03;
+    const UPIMAGE: u32 = 0x0B;
+
+    let mut g = G::new_plane();
+    let (title, btn_cl, prop_cl, sysi_cl, ok_lbl, rel_lbl) = (
+        g.s("GZZ"),
+        g.s("buttongclass"),
+        g.s("propgclass"),
+        g.s("sysiclass"),
+        g.s("OK"),
+        g.s("Rel"),
+    );
+    // Open a 300x200 WFLG_GIMMEZEROZERO window with title => borders (4, 15, 4, 4), GZZ 292x181.
+    let wtags = g.tags(&[
+        (WA + 3, 300),
+        (WA + 4, 200),
+        (WA + 11, title),
+        (WA + 46, 1), // WA_GimmeZeroZero
+    ]);
+    // 1. Client button at GZZ (10, 8, 60, 20) -> outer (14, 23, 60, 20).
+    let t_client = g.tags(&[(GA + 1, 10), (GA + 3, 8), (GA + 5, 60), (GA + 7, 20), (GA + 9, ok_lbl)]);
+    // 2. RelRight client button at GZZ (-40, 8, 30, 20) -> left = 4 + (292 - 1 - 40) = 255, top = 23.
+    let t_rel = g.tags(&[(GA + 2, (-40i32) as u32), (GA + 3, 8), (GA + 5, 30), (GA + 7, 20), (GA + 9, rel_lbl)]);
+    // 3. Border scrollbar (GA_GZZGadget + GA_RightBorder) at outer RelRight (-13, 15, 14, 160) -> (286, 15, 14, 160).
+    let t_scroll = g.tags(&[
+        (GA + 2, (-13i32) as u32),
+        (GA + 3, 15),
+        (GA + 5, 14),
+        (GA + 7, 160),
+        (GA + 15, 1), // GA_GZZGadget
+        (GA + 24, 1), // GA_RightBorder
+        (PGA + 7, 100),
+        (PGA + 8, 25),
+    ]);
+    // 4. Duplicate sysiclass window-chrome gadgets (DEPTHIMAGE, CLOSEIMAGE) in GACT_TOPBORDER -> must be suppressed.
+    let t_depth_im = g.tags(&[(SYSIA_WHICH, DEPTHIMAGE)]);
+    let t_close_im = g.tags(&[(SYSIA_WHICH, CLOSEIMAGE)]);
+    let t_up_im = g.tags(&[(SYSIA_WHICH, UPIMAGE)]);
+
+    g.run(&[
+        intu(OPEN_WINDOW_TAG_LIST, &[a(0, 0), a(1, wtags)]),
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, btn_cl), a(2, t_client)]),
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, btn_cl), a(2, t_rel)]),
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, prop_cl), a(2, t_scroll)]),
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, sysi_cl), a(2, t_depth_im)]),
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, sysi_cl), a(2, t_close_im)]),
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, sysi_cl), a(2, t_up_im)]),
+    ]);
+    let (win, b_client, b_rel, s_border, im_depth, im_close, im_up) = (
+        g.result(0),
+        g.result(1),
+        g.result(2),
+        g.result(3),
+        g.result(4),
+        g.result(5),
+        g.result(6),
+    );
+    let t_depth_gad = g.tags(&[(GA + 1, 0), (GA + 3, 0), (GA + 5, 20), (GA + 7, 14), (GA + 10, im_depth), (GA + 26, 1)]);
+    let t_close_gad = g.tags(&[(GA + 1, 20), (GA + 3, 0), (GA + 5, 20), (GA + 7, 14), (GA + 10, im_close), (GA + 26, 1)]);
+    // Negative control: sysiclass UPIMAGE arrow in GACT_RIGHTBORDER stays a native ArrowButton.
+    let t_up_gad = g.tags(&[(GA + 2, (-13i32) as u32), (GA + 3, 175), (GA + 5, 14), (GA + 7, 14), (GA + 10, im_up), (GA + 15, 1), (GA + 24, 1)]);
+    g.run(&[
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, btn_cl), a(2, t_depth_gad)]),
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, btn_cl), a(2, t_close_gad)]),
+        intu(NEW_OBJECT_A, &[a(0, 0), a(1, btn_cl), a(2, t_up_gad)]),
+        intu(ADD_GLIST, &[a(0, win), a(1, b_client), d(0, 0xFFFF), d(1, 1), a(2, 0)]),
+        intu(ADD_GLIST, &[a(0, win), a(1, b_rel), d(0, 0xFFFF), d(1, 1), a(2, 0)]),
+        intu(ADD_GLIST, &[a(0, win), a(1, s_border), d(0, 0xFFFF), d(1, 1), a(2, 0)]),
+        intu(ADD_GLIST, &[a(0, win), a_res(1, 0), d(0, 0xFFFF), d(1, 1), a(2, 0)]),
+        intu(ADD_GLIST, &[a(0, win), a_res(1, 1), d(0, 0xFFFF), d(1, 1), a(2, 0)]),
+        intu(ADD_GLIST, &[a(0, win), a_res(1, 2), d(0, 0xFFFF), d(1, 1), a(2, 0)]),
+    ]);
+
+    let ctls: Vec<_> = g.a.ui.controls.values().map(|(_, c)| c.clone()).collect();
+    let ok = ctls.iter().find(|c| c.label == "OK").expect("client OK button");
+    assert_eq!(ok.rect, GuestRect { left: 14, top: 23, width: 60, height: 20 }, "GZZ client gadget offsets by (BorderLeft, BorderTop)");
+    let rel = ctls.iter().find(|c| c.label == "Rel").expect("client Rel button");
+    assert_eq!(rel.rect, GuestRect { left: 255, top: 23, width: 30, height: 20 }, "GZZ client RelRight resolves against GZZWidth + BorderLeft");
+    let sb = ctls.iter().find(|c| matches!(c.kind, ControlKind::ScrollBar { .. })).expect("border scrollbar");
+    assert_eq!(sb.rect, GuestRect { left: 286, top: 15, width: 14, height: 160 }, "GZZ border scrollbar stays in outer window coordinates");
+    let up = ctls.iter().find(|c| matches!(c.kind, ControlKind::ArrowButton { dir: ArrowDir::Up })).expect("border arrow button");
+    assert_eq!(up.rect, GuestRect { left: 286, top: 175, width: 14, height: 14 }, "border arrow stays in outer window coordinates");
+    assert_eq!(ctls.len(), 4, "sysiclass DEPTHIMAGE and CLOSEIMAGE frame gadgets must not register as duplicate controls: {ctls:?}");
+}
