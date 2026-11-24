@@ -128,8 +128,13 @@ pub fn init(mem: &mut GuestMem) -> Result<(), Refusal> {
 /// The display a machine profile has: `CrsrPin` (the rectangle the cursor is confined to, which `InitGraf` copies into
 /// `screenBits.bounds`) and `ScreenRow` (the 1-bit view's rowBytes).
 pub fn set_screen(mem: &mut GuestMem, color: bool) -> Result<(), Refusal> {
-    let e = Refusal::mem("low-memory globals");
     let (w, h) = screen_size(color);
+    set_screen_dims(mem, w, h)
+}
+
+/// Write an explicit screen size `(w, h)` into `ScreenRow` and `CrsrPin` (copied into `screenBits.bounds` at `InitGraf`).
+pub fn set_screen_dims(mem: &mut GuestMem, w: i16, h: i16) -> Result<(), Refusal> {
+    let e = Refusal::mem("low-memory globals");
     mem.write_u16(SCREEN_ROW, (w / 8) as u16).map_err(&e)?;
     for (i, v) in [0, 0, h, w].into_iter().enumerate() { mem.write_u16(CRSR_PIN + 2 * i as u32, v as u16).map_err(&e)?; }
     Ok(())

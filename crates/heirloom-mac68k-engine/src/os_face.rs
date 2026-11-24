@@ -27,6 +27,10 @@ impl OsFamily for MacFamily {
         if profile.is_empty() { Mac::new(ui) } else { Mac::with_profile(ui, profile) }
     }
     fn input(m: &mut Mac<LibUi>, name: &str, bytes: alloc::vec::Vec<u8>) -> Result<(), alloc::string::String> {
+        if name == crate::machine::DISPLAY_SIZE_INPUT {
+            let (w, h) = crate::machine::parse_display_size(&bytes)?;
+            return m.set_display_size(w, h).map_err(|r| r.0);
+        }
         if name == heirloom_bind::wire::CDEF_BINDING_INPUT {
             let b = heirloom_bind::wire::decode_cdef(&bytes)?;
             m.add_control_def_binding(b);

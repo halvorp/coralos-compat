@@ -51,10 +51,33 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
 }
 
 impl<U: GuestUi> Mac<U> {
+    /// Logical screen size `(w, h)`: host-bridged `display_size` when configured, else the machine profile's default.
+    pub fn screen_bounds(&self) -> (i16, i16) {
+        self.display_size.unwrap_or_else(|| crate::lowmem::screen_size(self.profile.color_qd))
+    }
+
+    /// Bridge the host display/work-area dimensions into low-memory `CrsrPin` (`screenBits.bounds`) and, if already
+    /// created, the main `GDevice`'s `gdRect` and `gdPMap->bounds`.
+    pub fn set_display_size(&mut self, w: i16, h: i16) -> Result<(), Refusal> {
+        self.display_size = Some((w, h));
+        crate::lowmem::set_screen_dims(&mut self.mem, w, h)?;
+        if self.cqd.main_device != 0 {
+            let screen = Rect { top: 0, left: 0, bottom: h, right: w };
+            let p = self.deref_handle(self.cqd.main_device, "GDevice")?;
+            crate::qd::port::write_rect(&mut self.mem, p + GD_RECT, screen)?;
+            let pm = self.mem.read_u32(p + GD_PMAP).map_err(Refusal::mem("GDevice.gdPMap"))?;
+            if pm != 0 {
+                let pmp = self.deref_handle(pm, "gdPMap")?;
+                crate::qd::port::write_rect(&mut self.mem, pmp + 6, screen)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Make the main screen device (once) when this machine has Color QuickDraw, and publish it.
     pub fn init_devices(&mut self) -> Result<(), Refusal> {
         if !self.profile.color_qd || self.cqd.main_device != 0 { return Ok(()); }
-        let (w, h) = crate::lowmem::screen_size(true);
+        let (w, h) = self.screen_bounds();
         let screen = Rect { top: 0, left: 0, bottom: h, right: w };
         let table = self.new_ctab(&color::clut8(), u32::from(SCREEN_DEPTH), super::ctab::DEVICE_TABLE)?;
         let pm = self.new_pixmap(SCREEN_DEPTH, screen, SCREEN_BASE, u32::from(w as u16), table)?;

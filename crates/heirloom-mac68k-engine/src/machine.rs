@@ -159,6 +159,24 @@ pub struct Mac<U: GuestUi> {
     pub datatype_host: Option<alloc::boxed::Box<dyn heirloom_common::datatype::NativeDatatype>>,
     /// Count of images decoded through `datatype_host`.
     pub native_datatype_decodes: u64,
+    /// Optional host-bridged desktop display size `(width, height)` overriding the default 512x342 / 640x480 screen.
+    pub display_size: Option<(i16, i16)>,
+}
+
+/// `Control::Input` name for bridging the host work-area/display dimensions (4 bytes: `w: u16 LE, h: u16 LE`).
+pub const DISPLAY_SIZE_INPUT: &str = "display-size";
+
+/// Decode a `display-size` input payload (`w: u16 LE, h: u16 LE`) and validate bounds (320..=4096 x 240..=4096).
+pub fn parse_display_size(bytes: &[u8]) -> Result<(i16, i16), alloc::string::String> {
+    if bytes.len() != 4 {
+        return Err(alloc::format!("{DISPLAY_SIZE_INPUT}: expected 4 bytes (u16 LE width, height), got {}", bytes.len()));
+    }
+    let w = u16::from_le_bytes([bytes[0], bytes[1]]);
+    let h = u16::from_le_bytes([bytes[2], bytes[3]]);
+    if !(320..=4096).contains(&w) || !(240..=4096).contains(&h) {
+        return Err(alloc::format!("{DISPLAY_SIZE_INPUT}: dimensions {w}x{h} outside 320..=4096 x 240..=4096"));
+    }
+    Ok((w as i16, h as i16))
 }
 
 /// The prefix every unimplemented-trap refusal starts with (a census runner keys on it).
@@ -171,7 +189,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![], cursor_devices: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), procs: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT, cross_isa_running: false, cross_isa_returned: None, datatype_host: None, native_datatype_decodes: 0,
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), procs: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT, cross_isa_running: false, cross_isa_returned: None, datatype_host: None, native_datatype_decodes: 0, display_size: None,
         };
         m.rm.add_system(crate::system_res::system_fork());
         m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start

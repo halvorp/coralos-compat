@@ -38,6 +38,11 @@ fn started() -> Option<MacPpc<RecordingGuestUi>> {
     let creator = row.get(2).map_or(*b"????", |c| fourcc(c));
     let app = heirloom_fmt_resfork::writer::macbinary(&leaf, b"APPL", &creator, &data, &rsrc);
     let mut m = MacPpc::for_program(RecordingGuestUi::new(), &app).unwrap();
+    if let Ok(ds) = std::env::var("PS7_DISPLAY") {
+        if let Some((w, h)) = ds.split_once('x') {
+            m.mac.set_display_size(w.parse().unwrap(), h.parse().unwrap()).unwrap();
+        }
+    }
     // the compat repo's window-definition bindings (DATA, bindings/macppc/*.sexp), as the host hands them to the engine
     for b in wdef_bindings::load("macppc") { eprintln!("BINDING {}", b.id); m.add_window_def_binding(b); }
     let vol = GuestMachine::volume(&mut m);

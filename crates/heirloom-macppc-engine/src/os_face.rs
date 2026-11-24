@@ -88,6 +88,10 @@ impl OsFamily for MacPpcFamily {
             let parts: Vec<&str> = path.split(':').collect();
             return heirloom_common::GuestMachine::set_home(m, &parts).map_err(|r| r.0);
         }
+        if name == heirloom_mac68k_engine::machine::DISPLAY_SIZE_INPUT {
+            let (w, h) = heirloom_mac68k_engine::machine::parse_display_size(&bytes)?;
+            return m.mac.set_display_size(w, h).map_err(|r| r.0);
+        }
         if name == heirloom_bind::wire::WDEF_BINDING_INPUT {
             let b = heirloom_bind::wire::decode_wdef(&bytes)?;
             m.add_window_def_binding(b);
