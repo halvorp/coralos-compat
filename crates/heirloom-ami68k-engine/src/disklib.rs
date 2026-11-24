@@ -27,9 +27,17 @@ const RTC_MATCHWORD: u16 = 0x4AFC;
 const RTF_AUTOINIT: u8 = 0x80;
 const NT_LIBRARY: u8 = 9;
 const RT_FLAGS: u32 = 10;
+const RT_VERSION: u32 = 11;
 const RT_TYPE: u32 = 12;
+const RT_PRI: u32 = 13;
 const RT_NAME: u32 = 14;
+const RT_IDSTRING: u32 = 18;
 const RT_INIT: u32 = 22;
+/// `struct Library` header offsets seeded by Exec's `InitResident` when `RTF_AUTOINIT` leaves them zero.
+const LN_TYPE: u32 = 8;
+const LN_PRI: u32 = 9;
+const LN_NAME: u32 = 10;
+const LIB_IDSTRING: u32 = 24;
 /// The vectors every library has, as negative offsets from its base.
 const LVO_OPEN: u32 = 6;
 const LVO_CLOSE: u32 = 12;
@@ -100,7 +108,11 @@ fn load_new<U: GuestUi>(a: &mut Amiga<U>, name: &str, key: String, path: String,
         let _ = loadseg::unload(a, seg.bptr);
         return Err(Refusal(format!("OpenLibrary \"{name}\": {path} is a resident of type {ty}, not a library")));
     }
-    let rt_name = a.mem.read_cstr(rd(a, tag + RT_NAME, "rt_Name")?).map_err(Refusal::mem("rt_Name"))?;
+    let rt_version = a.mem.read_u8(tag + RT_VERSION).map_err(Refusal::mem("rt_Version"))?;
+    let rt_pri = a.mem.read_u8(tag + RT_PRI).map_err(Refusal::mem("rt_Pri"))?;
+    let rt_name_ptr = rd(a, tag + RT_NAME, "rt_Name")?;
+    let rt_id_ptr = rd(a, tag + RT_IDSTRING, "rt_IdString")?;
+    let rt_name = a.mem.read_cstr(rt_name_ptr).map_err(Refusal::mem("rt_Name"))?;
     let init = rd(a, tag + RT_INIT, "rt_Init")?;
     let record = move |a: &mut Amiga<U>, base: u32| -> usize {
         a.fs.disk_libs.push(DiskLib { key, name: rt_name, path, base, seglist: seg.bptr, open_count: 0, openers: Vec::new() });
@@ -118,6 +130,24 @@ fn load_new<U: GuestUi>(a: &mut Amiga<U>, name: &str, key: String, path: String,
     }
     let (data_size, funcs, data_init, init_routine) = (rd(a, init, "init table")?, rd(a, init + 4, "init table")?, rd(a, init + 8, "init table")?, rd(a, init + 12, "init table")?);
     let made = makelib::make_library(a, funcs, data_init, data_size).inspect_err(|_| { let _ = loadseg::unload(a, seg.bptr); })?;
+    // AmigaOS / AROS Exec InitResident (RTF_AUTOINIT): when dataInit leaves struct Library header fields zero,
+    // populate ln_Type, ln_Pri, ln_Name, lib_Version, and lib_IdString from the RomTag before calling initRoutine.
+    let e = Refusal::mem("InitResident Library header");
+    if a.mem.read_u8(made.base + LN_TYPE).map_err(&e)? == 0 {
+        a.mem.write_u8(made.base + LN_TYPE, ty).map_err(&e)?;
+    }
+    if a.mem.read_u8(made.base + LN_PRI).map_err(&e)? == 0 {
+        a.mem.write_u8(made.base + LN_PRI, rt_pri).map_err(&e)?;
+    }
+    if a.mem.read_u32(made.base + LN_NAME).map_err(&e)? == 0 {
+        a.mem.write_u32(made.base + LN_NAME, rt_name_ptr).map_err(&e)?;
+    }
+    if a.mem.read_u16(made.base + LIB_VERSION).map_err(&e)? == 0 {
+        a.mem.write_u16(made.base + LIB_VERSION, u16::from(rt_version)).map_err(&e)?;
+    }
+    if a.mem.read_u32(made.base + LIB_IDSTRING).map_err(&e)? == 0 {
+        a.mem.write_u32(made.base + LIB_IDSTRING, rt_id_ptr).map_err(&e)?;
+    }
     if init_routine == 0 {
         let i = record(a, made.base);
         return open_next(a, i, want);
