@@ -18,6 +18,24 @@ pub enum FontRole { Ui, Mono, Title }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestPoint { pub x: i32, pub y: i32 }
 
+/// A compact utility palette part known only from version-bound declarative binding DATA (`heirloom-bind`),
+/// never inferred heuristically; the host replays it through `gadget.library`'s compact `pl-*` parts in both light and dark modes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PalettePart {
+    /// Compact palette tab strip (`PART_PALETTE_TABS`).
+    Tabs { labels: Vec<String>, active: u16, flyout: bool },
+    /// Multi-column tool rail (`PART_TOOL_PALETTE`): `(icon, has_flyout, break_after)`.
+    ToolGrid { cols: u8, tools: Vec<(IconRole, bool, bool)>, active: i32 },
+    /// Foreground + background colour well with swap/reset (`PART_COLOR_WELL`).
+    ColorWell { fore: u32, back: u32, active: i8 },
+    /// Palette footer action key band (`PART_PALETTE_FOOTER`): `(icon, latched, enabled)`.
+    Footer { keys: Vec<(IconRole, bool, bool)> },
+    /// Compact toggle-key strip (`PART_MINI_TOGGLES`).
+    MiniToggles { keys: Vec<IconRole>, latched: u32 },
+    /// Horizontal gradient slider row (`PART_GRADIENT_SLIDER`).
+    GradientSlider { label: String, stops: Vec<u32>, permille: u16 },
+}
+
 /// One recorded drawing operation. All coordinates are window coordinates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrawOp {
@@ -43,6 +61,8 @@ pub enum DrawOp {
     /// state as the program drew it, `accent` an optional mark in an exact guest colour (`0x00RRGGBB`): the program's own colour
     /// for this button, shown as a tag, never as the face's fill. Input stays the guest's: the face is drawing, not a control.
     Face { rect: GuestRect, label: String, pressed: bool, accent: Option<u32> },
+    /// A utility palette part known from version-bound binding DATA (`heirloom-bind`), replayed through the host's compact `pl-*` parts.
+    Palette { rect: GuestRect, part: PalettePart },
 }
 
 impl DrawOp {
@@ -56,6 +76,16 @@ impl DrawOp {
                 Err(UiRefusal::InvalidGeometry("pixel op: count is not the rect's area")),
             DrawOp::Face { rect, .. } if bad(rect) => Err(UiRefusal::InvalidGeometry("draw op with a negative size")),
             DrawOp::Face { accent: Some(rgb), .. } if rgb >> 24 != 0 => Err(UiRefusal::InvalidGeometry("face accent is not 0x00RRGGBB")),
+            DrawOp::Palette { rect, .. } if bad(rect) => Err(UiRefusal::InvalidGeometry("draw op with a negative size")),
+            DrawOp::Palette { part: PalettePart::Tabs { labels, .. }, .. } if labels.is_empty() =>
+                Err(UiRefusal::InvalidGeometry("palette tabs with no labels")),
+            DrawOp::Palette { part: PalettePart::ToolGrid { cols: 0, .. }, .. } =>
+                Err(UiRefusal::InvalidGeometry("palette tool grid with zero columns")),
+            DrawOp::Palette { part: PalettePart::ColorWell { fore, back, .. }, .. } if (*fore >> 24 != 0) || (*back >> 24 != 0) =>
+                Err(UiRefusal::InvalidGeometry("palette color well colour is not 0x00RRGGBB")),
+            DrawOp::Palette { part: PalettePart::GradientSlider { stops, permille, .. }, .. }
+                if *permille > 1000 || stops.len() < 2 || stops.iter().any(|c| c >> 24 != 0) =>
+                Err(UiRefusal::InvalidGeometry("palette gradient slider invalid stops or permille")),
             DrawOp::Text { px: 0, .. } => Err(UiRefusal::InvalidGeometry("text with a zero pixel size")),
             DrawOp::Text { width, .. } if *width < 0 => Err(UiRefusal::InvalidGeometry("text with a negative run width")),
             _ => Ok(()),

@@ -35,7 +35,11 @@ pub mod wire;
 
 pub use cdef::{ControlDefBinding, ControlDefIdentity, ControlDefKind};
 pub use parse::{parse, recognise, Group, Label, Parsed, Placement, Recognised, Refusal};
-pub use plane_chrome::{BandRule, ButtonRule, PlaneChromeBinding, PlaneChromeIdentity};
+pub use plane_chrome::{
+    BandRule, ButtonRule, FooterKeyRule, MiniToggleRule, PaletteRule, PaletteRuleKind,
+    PixelMaskGuard, PlaneChromeBinding, PlaneChromeIdentity, TabProbeRule, ToolCellRule,
+    WindowRange,
+};
 pub use spec::{
     AnchorRule, BindingSpec, BoxField, CStrField, CountRule, FileForm, FlagTest, GroupLayout,
     IntWidth, ItemLayout, PlacementLayout, StrListPick,

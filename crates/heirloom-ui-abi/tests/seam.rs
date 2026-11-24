@@ -151,6 +151,30 @@ fn a_face_is_recorded_as_sent_and_a_bad_one_is_refused_by_name() {
     assert_eq!(ui.planes[&(w.id, 9)], p, "and the earlier frame stands");
 }
 
+#[test]
+fn a_palette_op_is_recorded_and_invalid_ones_are_refused_by_name() {
+    let mut ui = RecordingGuestUi::new();
+    let w = ui.open_window(win()).unwrap();
+    let ops = vec![
+        DrawOp::Palette { rect: r(0, 0, 120, 22), part: PalettePart::Tabs { labels: vec!["Color".into()], active: 0, flyout: true } },
+        DrawOp::Palette { rect: r(0, 22, 48, 48), part: PalettePart::ColorWell { fore: 0x0010_2030, back: 0x00FF_FFFF, active: 0 } },
+    ];
+    let p = Plane { id: 10, rect: r(0, 0, 120, 70), ops };
+    ui.present_plane(w, p.clone()).unwrap();
+    assert_eq!(ui.planes[&(w.id, 10)], p);
+    assert!(!p.is_raw(), "palette parts are named replayed ops, not raw pixels");
+    let n = ui.calls.len();
+    let empty_tabs = Plane { id: 10, rect: r(0, 0, 40, 20), ops: vec![DrawOp::Palette { rect: r(0, 0, 40, 20), part: PalettePart::Tabs { labels: vec![], active: 0, flyout: false } }] };
+    let zero_cols = Plane { id: 10, rect: r(0, 0, 40, 20), ops: vec![DrawOp::Palette { rect: r(0, 0, 40, 20), part: PalettePart::ToolGrid { cols: 0, tools: vec![], active: -1 } }] };
+    let bad_well = Plane { id: 10, rect: r(0, 0, 40, 20), ops: vec![DrawOp::Palette { rect: r(0, 0, 40, 20), part: PalettePart::ColorWell { fore: 0xFF00_0000, back: 0, active: 0 } }] };
+    let bad_slider = Plane { id: 10, rect: r(0, 0, 40, 20), ops: vec![DrawOp::Palette { rect: r(0, 0, 40, 20), part: PalettePart::GradientSlider { label: "R".into(), stops: vec![0, 0xFF], permille: 1001 } }] };
+    for bad in [empty_tabs, zero_cols, bad_well, bad_slider] {
+        assert!(matches!(ui.present_plane(w, bad), Err(UiRefusal::InvalidGeometry(_))));
+    }
+    assert_eq!(ui.calls.len(), n);
+    assert_eq!(ui.planes[&(w.id, 10)], p);
+}
+
 /// A host with no plane replay refuses by name (the trait default), so an engine can fall back to `present_content`.
 #[test]
 fn the_default_present_plane_is_a_named_refusal() {

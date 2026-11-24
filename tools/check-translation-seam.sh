@@ -55,14 +55,14 @@ check_names() { # $1 = root
   return $bad
 }
 
-check_faces() { # $1 = root; DrawOp::Face is made only by the binding interpreter
+check_faces() { # $1 = root; DrawOp::Face and DrawOp::Palette are made only by the binding interpreter
   local root=$1 bad=0 f hits
   while IFS= read -r f; do
     case "$f" in */crates/heirloom-bind/*|*/crates/heirloom-ui-abi/*|*/crates/heirloom-present/*) continue ;; esac
     hits=$(awk '{ l=$0; n=0
         for (i=1; i<=length(l); i++) { c=substr(l,i,1); if (c=="\"") n++; else if (c=="/" && substr(l,i,2)=="//" && n%2==0) { l=substr(l,1,i-1); break } }
-        if (l ~ /DrawOp::Face[ \t]*[{]/) print FILENAME ":" NR ": " $0 }' "$f")
-    [ -n "$hits" ] && { echo "$hits" | sed 's/^/RED  seam\/faces: a button face made outside the binding interpreter: /'; bad=1; }
+        if (l ~ /DrawOp::(Face|Palette)[ \t]*[{]/) print FILENAME ":" NR ": " $0 }' "$f")
+    [ -n "$hits" ] && { echo "$hits" | sed 's/^/RED  seam\/faces: a bound face or palette op made outside the binding interpreter: /'; bad=1; }
   done < <(find "$root"/crates -path '*/src/*' -name '*.rs' 2>/dev/null | sort)
   return $bad
 }

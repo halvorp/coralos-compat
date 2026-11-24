@@ -6,13 +6,113 @@
 //! digest), never by a program's or file's name. Any other build or modified resource stays untouched.
 use alloc::string::String;
 use alloc::vec::Vec;
-use heirloom_ui_abi::{DrawOp, GuestPoint, GuestRect, IconRole, PenRole};
+use heirloom_ui_abi::{DrawOp, GuestPoint, GuestRect, IconRole, PalettePart, PenRole};
 
 /// What identifies the exact guest binary build a [`PlaneChromeBinding`] belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlaneChromeIdentity {
     /// A resource in the guest's resource chain: type (e.g. `CODE`), ID, exact byte length, and FNV-1a 64 digest.
     Resource { res_type: [u8; 4], res_id: i16, length: u32, fnv1a64: u64 },
+}
+
+/// Inclusive pixel-size window filter (`max == 0` means unbounded above).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowRange {
+    pub min_w: i32,
+    pub max_w: i32,
+    pub min_h: i32,
+    pub max_h: i32,
+}
+
+impl WindowRange {
+    pub fn matches(&self, win_w: i32, win_h: i32) -> bool {
+        win_w >= self.min_w
+            && (self.max_w <= 0 || win_w <= self.max_w)
+            && win_h >= self.min_h
+            && (self.max_h <= 0 || win_h <= self.max_h)
+    }
+}
+
+/// Content-identifying guard over a guest `DrawOp::Pixels` box: FNV-1a 64 of the 1-bit dark-pixel mask (`luma < dark_luma`).
+/// Invariant to active/inactive background shade so a palette stays identified across tab switches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PixelMaskGuard {
+    pub rect: GuestRect,
+    pub dark_luma: u8,
+    pub fnv1a64: u64,
+}
+
+/// One tab entry in [`PaletteRuleKind::Tabs`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabProbeRule {
+    pub label: String,
+    /// Sample box on the tab's background; the brightest tab (highest mean luma) is active.
+    pub probe_rect: GuestRect,
+}
+
+/// One tool cell in [`PaletteRuleKind::ToolGrid`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToolCellRule {
+    pub icon: IconRole,
+    pub has_flyout: bool,
+    pub break_after: bool,
+    /// Sample box checked for sunken/active shading (darkest cell noticeably darker than max luma).
+    pub probe_rect: GuestRect,
+}
+
+/// One action key in [`PaletteRuleKind::Footer`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FooterKeyRule {
+    pub icon: IconRole,
+    /// Optional sample box; when present, checks whether dark ink pixels exist (enabled vs ghosted).
+    pub probe_rect: Option<GuestRect>,
+}
+
+/// One toggle key in [`PaletteRuleKind::MiniToggles`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MiniToggleRule {
+    pub icon: IconRole,
+    /// Sample box checked for latched state (`mean_luma < threshold_luma`).
+    pub probe_rect: GuestRect,
+    pub threshold_luma: u8,
+}
+
+/// What a [`PaletteRule`] emits into the display list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaletteRuleKind {
+    /// Emit `DrawOp::Fill { rect, pen_role }` (typically `PenRole::Surface`).
+    SurfaceFill { pen_role: PenRole },
+    /// Crop and preserve the guest pixels inside `rect` from incoming `DrawOp::Pixels` ops.
+    KeepPixels,
+    /// Emit `DrawOp::Palette(PalettePart::Tabs)` with live active-tab probing.
+    Tabs { tabs: Vec<TabProbeRule>, flyout: bool },
+    /// Emit `DrawOp::Palette(PalettePart::ToolGrid)` with live active-tool probing.
+    ToolGrid { cols: u8, tools: Vec<ToolCellRule> },
+    /// Emit `DrawOp::Palette(PalettePart::ColorWell)` by sampling live `fore` and `back` RGB pixels.
+    ColorWell { fore_pt: GuestPoint, back_pt: GuestPoint },
+    /// Emit `DrawOp::Palette(PalettePart::Footer)`.
+    Footer { keys: Vec<FooterKeyRule> },
+    /// Emit `DrawOp::Palette(PalettePart::MiniToggles)` with live latched-bit probing.
+    MiniToggles { keys: Vec<MiniToggleRule> },
+    /// Emit `DrawOp::Palette(PalettePart::GradientSlider)` with optional live thumb scan along `track_rect`.
+    GradientSlider {
+        label: String,
+        stops: Vec<u32>,
+        track_rect: Option<GuestRect>,
+        default_permille: u16,
+    },
+}
+
+/// One declarative compact-palette interior rule.
+/// Coordinates in `rect` and `clear_rect` support edge anchoring:
+/// `left < 0` anchors to `win_w + left`, `top < 0` to `win_h + top`,
+/// `width <= 0` stretches to `win_w - resolved_left + width`,
+/// `height <= 0` stretches to `win_h - resolved_top + height`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaletteRule {
+    pub rect: GuestRect,
+    pub clear_rect: Option<GuestRect>,
+    pub kind: PaletteRuleKind,
 }
 
 /// A toolbar / ruler band whose raw white background and heavy black border lines become a Sandstone theme strip.
@@ -50,6 +150,12 @@ pub struct PlaneChromeBinding {
     pub buttons: Vec<ButtonRule>,
     /// Suppress redundant guest-drawn grow/resize chrome inside the bottom-right `(w, h)` corner of the window.
     pub suppress_bottom_right: Option<(i32, i32)>,
+    /// Optional window pixel-size filter (used by compact-palette bindings so each rule set targets one palette geometry).
+    pub window_range: Option<WindowRange>,
+    /// Optional 1-bit dark-pixel mask guards (all must match) to distinguish same-sized palettes without app names.
+    pub pixel_guards: Vec<PixelMaskGuard>,
+    /// Declarative compact-palette rules (`DrawOp::Fill`, `KeepPixels`, `DrawOp::Palette`).
+    pub palette_rules: Vec<PaletteRule>,
 }
 
 fn op_bounds(op: &DrawOp) -> GuestRect {
@@ -59,7 +165,8 @@ fn op_bounds(op: &DrawOp) -> GuestRect {
         | DrawOp::Icon { rect, .. }
         | DrawOp::Pixels { rect, .. }
         | DrawOp::Swatch { rect, .. }
-        | DrawOp::Face { rect, .. } => *rect,
+        | DrawOp::Face { rect, .. }
+        | DrawOp::Palette { rect, .. } => *rect,
         DrawOp::Line { a, b, .. } => GuestRect {
             left: a.x.min(b.x),
             top: a.y.min(b.y),
@@ -72,6 +179,144 @@ fn op_bounds(op: &DrawOp) -> GuestRect {
             width: (*width).max(1),
             height: (*px as i32).max(1),
         },
+    }
+}
+
+fn luma(rgb: u32) -> u32 {
+    let r = (rgb >> 16) & 0xFF;
+    let g = (rgb >> 8) & 0xFF;
+    let b = rgb & 0xFF;
+    (r * 299 + g * 587 + b * 114) / 1000
+}
+
+fn resolve_rect(r: GuestRect, win_w: i32, win_h: i32) -> GuestRect {
+    let left = if r.left < 0 { (win_w + r.left).max(0) } else { r.left };
+    let top = if r.top < 0 { (win_h + r.top).max(0) } else { r.top };
+    let width = if r.width <= 0 { (win_w - left + r.width).max(0) } else { r.width };
+    let height = if r.height <= 0 { (win_h - top + r.height).max(0) } else { r.height };
+    GuestRect { left, top, width, height }
+}
+
+fn resolve_point(p: GuestPoint, win_w: i32, win_h: i32) -> GuestPoint {
+    GuestPoint {
+        x: if p.x < 0 { (win_w + p.x).max(0) } else { p.x },
+        y: if p.y < 0 { (win_h + p.y).max(0) } else { p.y },
+    }
+}
+
+fn sample_rgb(ops: &[DrawOp], x: i32, y: i32) -> Option<u32> {
+    for op in ops.iter().rev() {
+        if let DrawOp::Pixels { rect, rgb } = op {
+            if x >= rect.left
+                && x < rect.left + rect.width
+                && y >= rect.top
+                && y < rect.top + rect.height
+            {
+                let idx = ((y - rect.top) * rect.width + (x - rect.left)) as usize;
+                if let Some(&px) = rgb.get(idx) {
+                    return Some(px & 0x00FF_FFFF);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn mean_luma(ops: &[DrawOp], area: GuestRect) -> Option<u32> {
+    if area.width <= 0 || area.height <= 0 {
+        return None;
+    }
+    let mut sum = 0u64;
+    let mut count = 0u64;
+    for y in area.top..(area.top + area.height) {
+        for x in area.left..(area.left + area.width) {
+            if let Some(px) = sample_rgb(ops, x, y) {
+                sum += luma(px) as u64;
+                count += 1;
+            }
+        }
+    }
+    if count == 0 { None } else { Some((sum / count) as u32) }
+}
+
+/// FNV-1a 64 hash of the 1-bit dark-pixel mask (`luma < dark_luma`) over `area`, row-major.
+pub fn dark_mask_hash(ops: &[DrawOp], area: GuestRect, dark_luma: u8) -> Option<u64> {
+    if area.width <= 0 || area.height <= 0 {
+        return None;
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut any = false;
+    let thr = u32::from(dark_luma);
+    for y in area.top..(area.top + area.height) {
+        for x in area.left..(area.left + area.width) {
+            let bit = match sample_rgb(ops, x, y) {
+                Some(px) => {
+                    any = true;
+                    u8::from(luma(px) < thr)
+                }
+                None => 0,
+            };
+            h ^= u64::from(bit);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    if any { Some(h) } else { None }
+}
+
+fn crop_pixels(ops: &[DrawOp], area: GuestRect) -> Option<Vec<u32>> {
+    if area.width <= 0 || area.height <= 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity((area.width * area.height) as usize);
+    let mut any = false;
+    for y in area.top..(area.top + area.height) {
+        for x in area.left..(area.left + area.width) {
+            if let Some(px) = sample_rgb(ops, x, y) {
+                any = true;
+                out.push(px);
+            } else {
+                out.push(0x00DD_DDDD);
+            }
+        }
+    }
+    if any { Some(out) } else { None }
+}
+
+fn probe_slider_permille(ops: &[DrawOp], tr: GuestRect, default_permille: u16) -> u16 {
+    if tr.width <= 1 || tr.height <= 0 {
+        return default_permille.min(1000);
+    }
+    let mut col_sum = 0u64;
+    let mut col_cnt = 0u64;
+    let mut best_x = 0i32;
+    let mut min_col = u32::MAX;
+    for dx in 0..tr.width {
+        let mut s = 0u64;
+        let mut c = 0u64;
+        for dy in 0..tr.height {
+            if let Some(px) = sample_rgb(ops, tr.left + dx, tr.top + dy) {
+                s += luma(px) as u64;
+                c += 1;
+            }
+        }
+        if c > 0 {
+            let avg = (s / c) as u32;
+            col_sum += avg as u64;
+            col_cnt += 1;
+            if avg < min_col {
+                min_col = avg;
+                best_x = dx;
+            }
+        }
+    }
+    if col_cnt == 0 {
+        return default_permille.min(1000);
+    }
+    let overall = (col_sum / col_cnt) as u32;
+    if min_col + 25 <= overall {
+        ((best_x as u64 * 1000) / (tr.width as u64 - 1)).min(1000) as u16
+    } else {
+        default_permille.min(1000)
     }
 }
 
@@ -165,6 +410,20 @@ impl PlaneChromeBinding {
     /// Rewrite `ops` for a window of pixel size `(win_w, win_h)` according to this binding's declarative rules.
     pub fn apply(&self, ops: Vec<DrawOp>, win_size: (i32, i32)) -> Vec<DrawOp> {
         let (win_w, win_h) = win_size;
+        if let Some(wr) = self.window_range {
+            if !wr.matches(win_w, win_h) {
+                return ops;
+            }
+        }
+        if !self.pixel_guards.is_empty() {
+            let all_match = self.pixel_guards.iter().all(|g| {
+                let area = resolve_rect(g.rect, win_w, win_h);
+                dark_mask_hash(&ops, area, g.dark_luma) == Some(g.fnv1a64)
+            });
+            if !all_match {
+                return ops;
+            }
+        }
         let corner_box = self.suppress_bottom_right.map(|(cw, ch)| GuestRect {
             left: (win_w - cw).max(0),
             top: (win_h - ch).max(0),
@@ -186,7 +445,170 @@ impl PlaneChromeBinding {
             Vec::new()
         };
 
-        let mut out = Vec::with_capacity(ops.len() + self.buttons.len() * 2 + self.bands.len() * 2);
+        // Pre-resolve palette clear boxes and evaluate live pixel probes BEFORE dropping guest ops.
+        let palette_clears: Vec<GuestRect> = if chrome_live {
+            self.palette_rules
+                .iter()
+                .filter_map(|r| r.clear_rect.map(|cr| resolve_rect(cr, win_w, win_h)))
+                .filter(|r| r.width > 0 && r.height > 0)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let mut palette_emitted: Vec<DrawOp> = Vec::with_capacity(self.palette_rules.len());
+        if chrome_live && !self.palette_rules.is_empty() {
+            for rule in &self.palette_rules {
+                let rect = resolve_rect(rule.rect, win_w, win_h);
+                if rect.width <= 0 || rect.height <= 0 {
+                    continue;
+                }
+                match &rule.kind {
+                    PaletteRuleKind::SurfaceFill { pen_role } => {
+                        palette_emitted.push(DrawOp::Fill { rect, pen_role: *pen_role });
+                    }
+                    PaletteRuleKind::KeepPixels => {
+                        if let Some(rgb) = crop_pixels(&ops, rect) {
+                            palette_emitted.push(DrawOp::Pixels { rect, rgb });
+                        }
+                    }
+                    PaletteRuleKind::Tabs { tabs, flyout } => {
+                        if tabs.is_empty() {
+                            continue;
+                        }
+                        let mut active: u16 = 0;
+                        let mut best_luma: u32 = 0;
+                        for (idx, t) in tabs.iter().enumerate() {
+                            let area = resolve_rect(t.probe_rect, win_w, win_h);
+                            if let Some(m) = mean_luma(&ops, area) {
+                                if m > best_luma {
+                                    best_luma = m;
+                                    active = idx as u16;
+                                }
+                            }
+                        }
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::Tabs {
+                                labels: tabs.iter().map(|t| t.label.clone()).collect(),
+                                active,
+                                flyout: *flyout,
+                            },
+                        });
+                    }
+                    PaletteRuleKind::ToolGrid { cols, tools } => {
+                        if *cols == 0 || tools.is_empty() {
+                            continue;
+                        }
+                        let lumas: Vec<Option<u32>> = tools
+                            .iter()
+                            .map(|t| mean_luma(&ops, resolve_rect(t.probe_rect, win_w, win_h)))
+                            .collect();
+                        let max_l = lumas.iter().flatten().copied().max().unwrap_or(0);
+                        let mut active: i32 = -1;
+                        let mut min_l = u32::MAX;
+                        for (idx, l) in lumas.iter().enumerate() {
+                            if let Some(v) = *l {
+                                if v < min_l {
+                                    min_l = v;
+                                    active = idx as i32;
+                                }
+                            }
+                        }
+                        if min_l == u32::MAX || min_l + 10 > max_l {
+                            active = -1;
+                        }
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::ToolGrid {
+                                cols: *cols,
+                                tools: tools.iter().map(|t| (t.icon, t.has_flyout, t.break_after)).collect(),
+                                active,
+                            },
+                        });
+                    }
+                    PaletteRuleKind::ColorWell { fore_pt, back_pt } => {
+                        let fp = resolve_point(*fore_pt, win_w, win_h);
+                        let bp = resolve_point(*back_pt, win_w, win_h);
+                        let fore = sample_rgb(&ops, fp.x, fp.y).unwrap_or(0x0000_0000);
+                        let back = sample_rgb(&ops, bp.x, bp.y).unwrap_or(0x00FF_FFFF);
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::ColorWell { fore, back, active: 0 },
+                        });
+                    }
+                    PaletteRuleKind::Footer { keys } => {
+                        let out_keys = keys
+                            .iter()
+                            .map(|k| {
+                                let enabled = match k.probe_rect {
+                                    None => true,
+                                    Some(pr) => {
+                                        let area = resolve_rect(pr, win_w, win_h);
+                                        // Enabled icon glyphs have dark ink (< 100 luma); ghosted icons are washed gray.
+                                        let mut has_dark = false;
+                                        for y in area.top..(area.top + area.height) {
+                                            for x in area.left..(area.left + area.width) {
+                                                if sample_rgb(&ops, x, y).is_some_and(|px| luma(px) < 100) {
+                                                    has_dark = true;
+                                                    break;
+                                                }
+                                            }
+                                            if has_dark {
+                                                break;
+                                            }
+                                        }
+                                        has_dark
+                                    }
+                                };
+                                (k.icon, false, enabled)
+                            })
+                            .collect();
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::Footer { keys: out_keys },
+                        });
+                    }
+                    PaletteRuleKind::MiniToggles { keys } => {
+                        let mut latched: u32 = 0;
+                        for (idx, k) in keys.iter().enumerate() {
+                            if idx < 32 {
+                                let area = resolve_rect(k.probe_rect, win_w, win_h);
+                                if mean_luma(&ops, area).is_some_and(|m| m < u32::from(k.threshold_luma)) {
+                                    latched |= 1u32 << idx;
+                                }
+                            }
+                        }
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::MiniToggles {
+                                keys: keys.iter().map(|k| k.icon).collect(),
+                                latched,
+                            },
+                        });
+                    }
+                    PaletteRuleKind::GradientSlider { label, stops, track_rect, default_permille } => {
+                        if stops.len() < 2 {
+                            continue;
+                        }
+                        let permille = match track_rect {
+                            Some(tr) => probe_slider_permille(&ops, resolve_rect(*tr, win_w, win_h), *default_permille),
+                            None => (*default_permille).min(1000),
+                        };
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::GradientSlider {
+                                label: label.clone(),
+                                stops: stops.clone(),
+                                permille,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut out = Vec::with_capacity(ops.len() + self.buttons.len() * 2 + self.bands.len() * 2 + palette_emitted.len());
 
         // Emit Sandstone toolbar band ground first so remaining ruler ticks/text sit cleanly on top.
         if chrome_live {
@@ -214,6 +636,9 @@ impl PlaneChromeBinding {
                 }
             }
             if chrome_live {
+                if palette_clears.iter().any(|cr| within(b, *cr)) {
+                    continue;
+                }
                 if self.buttons.iter().any(|btn| within(b, btn.clear_rect)) {
                     continue;
                 }
@@ -283,6 +708,7 @@ impl PlaneChromeBinding {
         }
 
         if chrome_live {
+            out.extend(palette_emitted);
             for (btn, &pressed) in self.buttons.iter().zip(active_states.iter()) {
                 let label = if btn.label.is_empty() { String::from(" ") } else { btn.label.clone() };
                 out.push(DrawOp::Face { rect: btn.rect, label, pressed, accent: None });
@@ -335,6 +761,9 @@ mod tests {
                 },
             ],
             suppress_bottom_right: Some((22, 22)),
+            window_range: None,
+            pixel_guards: vec![],
+            palette_rules: vec![],
         };
 
         let ops = vec![
@@ -361,5 +790,132 @@ mod tests {
         let hidden = vec![DrawOp::Line { a: GuestPoint { x: 327, y: 27 }, b: GuestPoint { x: 359, y: 27 }, pen_role: PenRole::Text }];
         let out_hidden = binding.apply(hidden, (506, 297));
         assert!(!out_hidden.iter().any(|o| matches!(o, DrawOp::Face { .. })));
+    }
+
+    #[test]
+    fn palette_rules_probe_live_tabs_tools_colors_sliders_and_respect_guards() {
+        let mut buf = vec![0x00DD_DDDDu32; 200 * 100];
+        let set_box = |b: &mut [u32], r: GuestRect, c: u32| {
+            for y in r.top..(r.top + r.height) {
+                for x in r.left..(r.left + r.width) {
+                    b[(y * 200 + x) as usize] = c;
+                }
+            }
+        };
+        // Tab 0 dark/inactive, Tab 1 bright/active
+        set_box(&mut buf, gr(4, 2, 40, 14), 0x00BB_BBBB);
+        set_box(&mut buf, gr(50, 2, 40, 14), 0x00EE_EEEE);
+        // Guard ink pixel inside (6, 4, 8, 8)
+        set_box(&mut buf, gr(8, 6, 3, 3), 0x0010_1010);
+        // Tool 0 inactive, Tool 1 active (darker)
+        set_box(&mut buf, gr(4, 24, 20, 20), 0x00DD_DDDD);
+        set_box(&mut buf, gr(26, 24, 20, 20), 0x0099_9999);
+        // Live FG/BG color samples
+        set_box(&mut buf, gr(60, 30, 8, 8), 0x00C8_2010);
+        set_box(&mut buf, gr(74, 38, 8, 8), 0x0010_40A0);
+        // Slider track at y=60, x=20..120 with black thumb at x=70 (500 permille)
+        set_box(&mut buf, gr(20, 60, 101, 6), 0x00CC_CCDC);
+        set_box(&mut buf, gr(70, 60, 1, 6), 0x0000_0000);
+        // Latched toggle 0 (dark), unlatched toggle 1 (bright)
+        set_box(&mut buf, gr(140, 24, 14, 14), 0x0080_8080);
+        set_box(&mut buf, gr(158, 24, 14, 14), 0x00EE_EEEE);
+
+        let ops = vec![DrawOp::Pixels { rect: gr(0, 0, 200, 100), rgb: buf }];
+        let hash = dark_mask_hash(&ops, gr(6, 4, 8, 8), 80).unwrap();
+
+        let binding = PlaneChromeBinding {
+            id: String::from("test-palette"),
+            identity: PlaneChromeIdentity::Resource { res_type: *b"WDEF", res_id: 128, length: 100, fnv1a64: 0x42 },
+            present_if_text: None,
+            bands: vec![],
+            buttons: vec![],
+            suppress_bottom_right: None,
+            window_range: Some(WindowRange { min_w: 190, max_w: 210, min_h: 90, max_h: 110 }),
+            pixel_guards: vec![PixelMaskGuard { rect: gr(6, 4, 8, 8), dark_luma: 80, fnv1a64: hash }],
+            palette_rules: vec![
+                PaletteRule {
+                    rect: gr(0, 0, 0, 0),
+                    clear_rect: Some(gr(0, 0, 0, 0)),
+                    kind: PaletteRuleKind::SurfaceFill { pen_role: PenRole::Surface },
+                },
+                PaletteRule {
+                    rect: gr(0, 0, 0, 20),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::Tabs {
+                        tabs: vec![
+                            TabProbeRule { label: String::from("Color"), probe_rect: gr(4, 2, 40, 14) },
+                            TabProbeRule { label: String::from("Swatches"), probe_rect: gr(50, 2, 40, 14) },
+                        ],
+                        flyout: true,
+                    },
+                },
+                PaletteRule {
+                    rect: gr(0, 22, 52, 24),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::ToolGrid {
+                        cols: 2,
+                        tools: vec![
+                            ToolCellRule { icon: IconRole::BoxSelect, has_flyout: true, break_after: false, probe_rect: gr(4, 24, 20, 20) },
+                            ToolCellRule { icon: IconRole::Move, has_flyout: false, break_after: false, probe_rect: gr(26, 24, 20, 20) },
+                        ],
+                    },
+                },
+                PaletteRule {
+                    rect: gr(56, 24, 36, 32),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::ColorWell {
+                        fore_pt: GuestPoint { x: 64, y: 34 },
+                        back_pt: GuestPoint { x: 78, y: 42 },
+                    },
+                },
+                PaletteRule {
+                    rect: gr(10, 56, 120, 14),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::GradientSlider {
+                        label: String::from("R"),
+                        stops: vec![0x0000_0000, 0x00FF_0000],
+                        track_rect: Some(gr(20, 60, 101, 6)),
+                        default_permille: 0,
+                    },
+                },
+                PaletteRule {
+                    rect: gr(136, 22, 40, 18),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::MiniToggles {
+                        keys: vec![
+                            MiniToggleRule { icon: IconRole::Lock, probe_rect: gr(140, 24, 14, 14), threshold_luma: 180 },
+                            MiniToggleRule { icon: IconRole::Paintbrush, probe_rect: gr(158, 24, 14, 14), threshold_luma: 180 },
+                        ],
+                    },
+                },
+                PaletteRule {
+                    rect: gr(0, -20, 0, 20),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::Footer {
+                        keys: vec![FooterKeyRule { icon: IconRole::Trash, probe_rect: None }],
+                    },
+                },
+            ],
+        };
+
+        let out = binding.apply(ops.clone(), (200, 100));
+        assert!(!out.iter().any(|o| matches!(o, DrawOp::Pixels { .. })), "Platinum pixels cleared");
+        assert!(out.iter().any(|o| matches!(o, DrawOp::Fill { rect, pen_role: PenRole::Surface } if *rect == gr(0, 0, 200, 100))));
+        assert!(out.iter().any(|o| matches!(o, DrawOp::Palette { part: PalettePart::Tabs { active: 1, flyout: true, .. }, .. })));
+        assert!(out.iter().any(|o| matches!(o, DrawOp::Palette { part: PalettePart::ToolGrid { active: 1, .. }, .. })));
+        assert!(out.iter().any(|o| matches!(o, DrawOp::Palette { part: PalettePart::ColorWell { fore: 0x00C8_2010, back: 0x0010_40A0, .. }, .. })));
+        assert!(out.iter().any(|o| matches!(o, DrawOp::Palette { part: PalettePart::GradientSlider { permille: 500, .. }, .. })));
+        assert!(out.iter().any(|o| matches!(o, DrawOp::Palette { part: PalettePart::MiniToggles { latched: 0b01, .. }, .. })));
+        assert!(out.iter().any(|o| matches!(o, DrawOp::Palette { rect, part: PalettePart::Footer { .. } } if *rect == gr(0, 80, 200, 20))), "bottom-anchored footer");
+
+        // NEGATIVE CONTROLS: wrong window size and wrong pixel guard leave guest ops untouched.
+        let wrong_size = binding.apply(ops.clone(), (300, 100));
+        assert!(wrong_size.iter().any(|o| matches!(o, DrawOp::Pixels { .. })));
+        assert!(!wrong_size.iter().any(|o| matches!(o, DrawOp::Palette { .. })));
+
+        let mut bad_guard = binding.clone();
+        bad_guard.pixel_guards[0].fnv1a64 ^= 1;
+        let wrong_guard = bad_guard.apply(ops, (200, 100));
+        assert!(!wrong_guard.iter().any(|o| matches!(o, DrawOp::Palette { .. })));
     }
 }

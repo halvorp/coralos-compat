@@ -85,6 +85,34 @@ fn plane() -> Plane {
             DrawOp::Swatch { rect: rect(), rgb: 0x00C0_3020 },
             DrawOp::Face { rect: rect(), label: "Copy".into(), pressed: true, accent: Some(0x0012_3456) },
             DrawOp::Face { rect: rect(), label: String::new(), pressed: false, accent: None },
+            DrawOp::Palette {
+                rect: rect(),
+                part: PalettePart::Tabs { labels: vec!["Layers".into(), "Channels".into()], active: 0, flyout: true },
+            },
+            DrawOp::Palette {
+                rect: rect(),
+                part: PalettePart::ToolGrid {
+                    cols: 2,
+                    tools: vec![(IconRole::BoxSelect, true, false), (IconRole::Move, false, true)],
+                    active: 1,
+                },
+            },
+            DrawOp::Palette {
+                rect: rect(),
+                part: PalettePart::ColorWell { fore: 0x0011_2233, back: 0x00FF_FFEE, active: 0 },
+            },
+            DrawOp::Palette {
+                rect: rect(),
+                part: PalettePart::Footer { keys: vec![(IconRole::FilePlus, false, true), (IconRole::Trash, false, false)] },
+            },
+            DrawOp::Palette {
+                rect: rect(),
+                part: PalettePart::MiniToggles { keys: vec![IconRole::Lock, IconRole::Paintbrush], latched: 0b01 },
+            },
+            DrawOp::Palette {
+                rect: rect(),
+                part: PalettePart::GradientSlider { label: "R".into(), stops: vec![0x0000_0000, 0x00FF_0000], permille: 500 },
+            },
         ],
     }
 }

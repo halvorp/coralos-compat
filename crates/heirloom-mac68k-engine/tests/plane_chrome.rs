@@ -84,6 +84,9 @@ fn sample_binding(code_bytes: &[u8], hash: u64) -> PlaneChromeBinding {
             },
         ],
         suppress_bottom_right: Some((22, 22)),
+        window_range: None,
+        pixel_guards: vec![],
+        palette_rules: vec![],
     }
 }
 

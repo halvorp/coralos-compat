@@ -35,7 +35,7 @@ impl Rec {
     /// kit face covers its box, so the program's own drawing wholly under it never shows at the face's rounded corners), and a text
     /// run that paints its cell first (`bg_role` Some: JAM2) do; a JAM1 run, a line, a bevel edge or an icon leave pixels under them.
     pub fn opaque(&self) -> bool {
-        matches!(self, Rec::Hole(_) | Rec::Op { op: DrawOp::Fill { .. } | DrawOp::Swatch { .. } | DrawOp::Face { .. } | DrawOp::Text { bg_role: Some(_), .. }, .. })
+        matches!(self, Rec::Hole(_) | Rec::Op { op: DrawOp::Fill { .. } | DrawOp::Swatch { .. } | DrawOp::Face { .. } | DrawOp::Palette { .. } | DrawOp::Text { bg_role: Some(_), .. }, .. })
     }
 }
 
@@ -161,6 +161,7 @@ pub fn moved(op: &DrawOp, (dx, dy): (i32, i32)) -> DrawOp {
         DrawOp::Pixels { rect, rgb } => DrawOp::Pixels { rect: r(rect), rgb: rgb.clone() },
         DrawOp::Swatch { rect, rgb } => DrawOp::Swatch { rect: r(rect), rgb: *rgb },
         DrawOp::Face { rect, label, pressed, accent } => DrawOp::Face { rect: r(rect), label: label.clone(), pressed: *pressed, accent: *accent },
+        DrawOp::Palette { rect, part } => DrawOp::Palette { rect: r(rect), part: part.clone() },
     }
 }
 

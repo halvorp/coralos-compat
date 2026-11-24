@@ -506,6 +506,36 @@ pub(super) fn put_icon_role(out: &mut Vec<u8>, value: &IconRole) {
         IconRole::AlignJustify => 11,
         IconRole::TabStop => 12,
         IconRole::TabDecimal => 13,
+        IconRole::BoxSelect => 14,
+        IconRole::Move => 15,
+        IconRole::Lasso => 16,
+        IconRole::MagicWand => 17,
+        IconRole::Crop => 18,
+        IconRole::Paintbrush => 19,
+        IconRole::Stamp => 20,
+        IconRole::Eraser => 21,
+        IconRole::PaintBucket => 22,
+        IconRole::Droplet => 23,
+        IconRole::MousePointer => 24,
+        IconRole::Type => 25,
+        IconRole::PenTool => 26,
+        IconRole::Shapes => 27,
+        IconRole::Pipette => 28,
+        IconRole::Hand => 29,
+        IconRole::ZoomIn => 30,
+        IconRole::ZoomOut => 31,
+        IconRole::Eye => 32,
+        IconRole::Link => 33,
+        IconRole::Lock => 34,
+        IconRole::FilePlus => 35,
+        IconRole::FolderPlus => 36,
+        IconRole::Layers => 37,
+        IconRole::Sliders => 38,
+        IconRole::Square => 39,
+        IconRole::SquaresUnite => 40,
+        IconRole::SquaresSubtract => 41,
+        IconRole::SquaresIntersect => 42,
+        IconRole::SquareDashed => 43,
     });
 }
 
@@ -526,7 +556,119 @@ pub(super) fn get_icon_role(reader: &mut Reader<'_>) -> Result<IconRole, WireErr
         11 => IconRole::AlignJustify,
         12 => IconRole::TabStop,
         13 => IconRole::TabDecimal,
+        14 => IconRole::BoxSelect,
+        15 => IconRole::Move,
+        16 => IconRole::Lasso,
+        17 => IconRole::MagicWand,
+        18 => IconRole::Crop,
+        19 => IconRole::Paintbrush,
+        20 => IconRole::Stamp,
+        21 => IconRole::Eraser,
+        22 => IconRole::PaintBucket,
+        23 => IconRole::Droplet,
+        24 => IconRole::MousePointer,
+        25 => IconRole::Type,
+        26 => IconRole::PenTool,
+        27 => IconRole::Shapes,
+        28 => IconRole::Pipette,
+        29 => IconRole::Hand,
+        30 => IconRole::ZoomIn,
+        31 => IconRole::ZoomOut,
+        32 => IconRole::Eye,
+        33 => IconRole::Link,
+        34 => IconRole::Lock,
+        35 => IconRole::FilePlus,
+        36 => IconRole::FolderPlus,
+        37 => IconRole::Layers,
+        38 => IconRole::Sliders,
+        39 => IconRole::Square,
+        40 => IconRole::SquaresUnite,
+        41 => IconRole::SquaresSubtract,
+        42 => IconRole::SquaresIntersect,
+        43 => IconRole::SquareDashed,
         _ => return Err(WireError::UnknownTag { what: "IconRole", tag }),
+    })
+}
+
+fn put_palette_part(out: &mut Vec<u8>, part: &crate::PalettePart) {
+    use crate::PalettePart;
+    match part {
+        PalettePart::Tabs { labels, active, flyout } => {
+            out.push(0);
+            put_vec(out, labels, |out, s| put_string(out, s));
+            put_u16(out, *active);
+            put_bool(out, *flyout);
+        }
+        PalettePart::ToolGrid { cols, tools, active } => {
+            out.push(1);
+            out.push(*cols);
+            put_vec(out, tools, |out, (role, fly, brk)| {
+                put_icon_role(out, role);
+                put_bool(out, *fly);
+                put_bool(out, *brk);
+            });
+            put_i32(out, *active);
+        }
+        PalettePart::ColorWell { fore, back, active } => {
+            out.push(2);
+            put_u32(out, *fore);
+            put_u32(out, *back);
+            out.push(*active as u8);
+        }
+        PalettePart::Footer { keys } => {
+            out.push(3);
+            put_vec(out, keys, |out, (role, on, en)| {
+                put_icon_role(out, role);
+                put_bool(out, *on);
+                put_bool(out, *en);
+            });
+        }
+        PalettePart::MiniToggles { keys, latched } => {
+            out.push(4);
+            put_vec(out, keys, put_icon_role);
+            put_u32(out, *latched);
+        }
+        PalettePart::GradientSlider { label, stops, permille } => {
+            out.push(5);
+            put_string(out, label);
+            put_vec(out, stops, |out, c| put_u32(out, *c));
+            put_u16(out, *permille);
+        }
+    }
+}
+
+fn get_palette_part(reader: &mut Reader<'_>) -> Result<crate::PalettePart, WireError> {
+    use crate::PalettePart;
+    let tag = reader.u8()?;
+    Ok(match tag {
+        0 => PalettePart::Tabs {
+            labels: reader.vec(4, |r| r.string())?,
+            active: reader.u16()?,
+            flyout: reader.boolean()?,
+        },
+        1 => PalettePart::ToolGrid {
+            cols: reader.u8()?,
+            tools: reader.vec(3, |r| Ok((get_icon_role(r)?, r.boolean()?, r.boolean()?)))?,
+            active: reader.i32()?,
+        },
+        2 => PalettePart::ColorWell {
+            fore: reader.u32()?,
+            back: reader.u32()?,
+            active: reader.u8()? as i8,
+        },
+        3 => PalettePart::Footer {
+            keys: reader.vec(3, |r| Ok((get_icon_role(r)?, r.boolean()?, r.boolean()?)))?,
+        },
+        4 => PalettePart::MiniToggles {
+            keys: reader.vec(1, get_icon_role)?,
+            latched: reader.u32()?,
+        },
+        5 => PalettePart::GradientSlider {
+            label: reader.string()?,
+            stops: reader.vec(4, |r| r.u32())?,
+            permille: reader.u16()?,
+        },
+        _ => return Err(WireError::UnknownTag { what: "PalettePart", tag }),
     })
 }
 
@@ -580,6 +722,11 @@ pub(super) fn put_draw_op(out: &mut Vec<u8>, value: &DrawOp) {
             put_bool(out, *pressed);
             put_option(out, accent, |out, value| put_u32(out, *value));
         }
+        DrawOp::Palette { rect, part } => {
+            out.push(8);
+            put_rect(out, rect);
+            put_palette_part(out, part);
+        }
     }
 }
 
@@ -613,6 +760,10 @@ pub(super) fn get_draw_op(reader: &mut Reader<'_>) -> Result<DrawOp, WireError> 
             label: reader.string()?,
             pressed: reader.boolean()?,
             accent: reader.option(|reader| reader.u32())?,
+        },
+        8 => DrawOp::Palette {
+            rect: get_rect(reader)?,
+            part: get_palette_part(reader)?,
         },
         _ => return Err(WireError::UnknownTag { what: "DrawOp", tag }),
     })

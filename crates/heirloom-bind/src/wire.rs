@@ -3,10 +3,14 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use heirloom_ui_abi::{GuestRect, IconRole, WindowRole};
+use heirloom_ui_abi::{GuestPoint, GuestRect, IconRole, PenRole, WindowRole};
 
 use crate::cdef::{ControlDefBinding, ControlDefIdentity, ControlDefKind};
-use crate::plane_chrome::{BandRule, ButtonRule, PlaneChromeBinding, PlaneChromeIdentity};
+use crate::plane_chrome::{
+    BandRule, ButtonRule, FooterKeyRule, MiniToggleRule, PaletteRule, PaletteRuleKind,
+    PixelMaskGuard, PlaneChromeBinding, PlaneChromeIdentity, TabProbeRule, ToolCellRule,
+    WindowRange,
+};
 use crate::spec::{
     AnchorRule, BindingSpec, BoxField, CStrField, CountRule, FileForm, FlagTest, GroupLayout,
     IntWidth, ItemLayout, PlacementLayout, StrListPick,
@@ -338,6 +342,36 @@ fn encode_icon_role(r: IconRole) -> u8 {
         IconRole::AlignJustify => 11,
         IconRole::TabStop => 12,
         IconRole::TabDecimal => 13,
+        IconRole::BoxSelect => 14,
+        IconRole::Move => 15,
+        IconRole::Lasso => 16,
+        IconRole::MagicWand => 17,
+        IconRole::Crop => 18,
+        IconRole::Paintbrush => 19,
+        IconRole::Stamp => 20,
+        IconRole::Eraser => 21,
+        IconRole::PaintBucket => 22,
+        IconRole::Droplet => 23,
+        IconRole::MousePointer => 24,
+        IconRole::Type => 25,
+        IconRole::PenTool => 26,
+        IconRole::Shapes => 27,
+        IconRole::Pipette => 28,
+        IconRole::Hand => 29,
+        IconRole::ZoomIn => 30,
+        IconRole::ZoomOut => 31,
+        IconRole::Eye => 32,
+        IconRole::Link => 33,
+        IconRole::Lock => 34,
+        IconRole::FilePlus => 35,
+        IconRole::FolderPlus => 36,
+        IconRole::Layers => 37,
+        IconRole::Sliders => 38,
+        IconRole::Square => 39,
+        IconRole::SquaresUnite => 40,
+        IconRole::SquaresSubtract => 41,
+        IconRole::SquaresIntersect => 42,
+        IconRole::SquareDashed => 43,
     }
 }
 
@@ -357,7 +391,85 @@ fn decode_icon_role(t: u8) -> Result<IconRole, String> {
         11 => Ok(IconRole::AlignJustify),
         12 => Ok(IconRole::TabStop),
         13 => Ok(IconRole::TabDecimal),
+        14 => Ok(IconRole::BoxSelect),
+        15 => Ok(IconRole::Move),
+        16 => Ok(IconRole::Lasso),
+        17 => Ok(IconRole::MagicWand),
+        18 => Ok(IconRole::Crop),
+        19 => Ok(IconRole::Paintbrush),
+        20 => Ok(IconRole::Stamp),
+        21 => Ok(IconRole::Eraser),
+        22 => Ok(IconRole::PaintBucket),
+        23 => Ok(IconRole::Droplet),
+        24 => Ok(IconRole::MousePointer),
+        25 => Ok(IconRole::Type),
+        26 => Ok(IconRole::PenTool),
+        27 => Ok(IconRole::Shapes),
+        28 => Ok(IconRole::Pipette),
+        29 => Ok(IconRole::Hand),
+        30 => Ok(IconRole::ZoomIn),
+        31 => Ok(IconRole::ZoomOut),
+        32 => Ok(IconRole::Eye),
+        33 => Ok(IconRole::Link),
+        34 => Ok(IconRole::Lock),
+        35 => Ok(IconRole::FilePlus),
+        36 => Ok(IconRole::FolderPlus),
+        37 => Ok(IconRole::Layers),
+        38 => Ok(IconRole::Sliders),
+        39 => Ok(IconRole::Square),
+        40 => Ok(IconRole::SquaresUnite),
+        41 => Ok(IconRole::SquaresSubtract),
+        42 => Ok(IconRole::SquaresIntersect),
+        43 => Ok(IconRole::SquareDashed),
         _ => Err(format!("plane-chrome wire: bad icon role {t}")),
+    }
+}
+
+fn encode_pen_role(p: PenRole) -> u8 {
+    match p {
+        PenRole::Surface => 0,
+        PenRole::Text => 1,
+        PenRole::TextMuted => 2,
+        PenRole::Shine => 3,
+        PenRole::Shadow => 4,
+        PenRole::Fill => 5,
+        PenRole::FillText => 6,
+        PenRole::Accent => 7,
+        PenRole::Highlight => 8,
+        PenRole::Background => 9,
+        PenRole::Selection => 10,
+    }
+}
+
+fn decode_pen_role(t: u8) -> Result<PenRole, String> {
+    match t {
+        0 => Ok(PenRole::Surface),
+        1 => Ok(PenRole::Text),
+        2 => Ok(PenRole::TextMuted),
+        3 => Ok(PenRole::Shine),
+        4 => Ok(PenRole::Shadow),
+        5 => Ok(PenRole::Fill),
+        6 => Ok(PenRole::FillText),
+        7 => Ok(PenRole::Accent),
+        8 => Ok(PenRole::Highlight),
+        9 => Ok(PenRole::Background),
+        10 => Ok(PenRole::Selection),
+        _ => Err(format!("plane-chrome wire: bad pen role {t}")),
+    }
+}
+
+fn put_point(b: &mut Vec<u8>, p: GuestPoint) {
+    b.extend_from_slice(&p.x.to_le_bytes());
+    b.extend_from_slice(&p.y.to_le_bytes());
+}
+
+fn put_opt_rect(b: &mut Vec<u8>, r: Option<GuestRect>) {
+    match r {
+        None => b.push(0),
+        Some(rect) => {
+            b.push(1);
+            put_rect(b, rect);
+        }
     }
 }
 
@@ -415,6 +527,97 @@ pub fn encode_plane_chrome(pc: &PlaneChromeBinding) -> Result<Vec<u8>, String> {
             b.push(1);
             b.extend_from_slice(&cw.to_le_bytes());
             b.extend_from_slice(&ch.to_le_bytes());
+        }
+    }
+    if pc.window_range.is_some() || !pc.pixel_guards.is_empty() || !pc.palette_rules.is_empty() {
+        b.push(1); // v1 extension tag
+        match pc.window_range {
+            None => b.push(0),
+            Some(wr) => {
+                b.push(1);
+                b.extend_from_slice(&wr.min_w.to_le_bytes());
+                b.extend_from_slice(&wr.max_w.to_le_bytes());
+                b.extend_from_slice(&wr.min_h.to_le_bytes());
+                b.extend_from_slice(&wr.max_h.to_le_bytes());
+            }
+        }
+        let gn: u8 = pc.pixel_guards.len().try_into().map_err(|_| String::from("plane-chrome wire: too many pixel guards"))?;
+        b.push(gn);
+        for g in &pc.pixel_guards {
+            put_rect(&mut b, g.rect);
+            b.push(g.dark_luma);
+            b.extend_from_slice(&g.fnv1a64.to_le_bytes());
+        }
+        let pn: u8 = pc.palette_rules.len().try_into().map_err(|_| String::from("plane-chrome wire: too many palette rules"))?;
+        b.push(pn);
+        for pr in &pc.palette_rules {
+            put_rect(&mut b, pr.rect);
+            put_opt_rect(&mut b, pr.clear_rect);
+            match &pr.kind {
+                PaletteRuleKind::SurfaceFill { pen_role } => {
+                    b.push(0);
+                    b.push(encode_pen_role(*pen_role));
+                }
+                PaletteRuleKind::KeepPixels => {
+                    b.push(1);
+                }
+                PaletteRuleKind::Tabs { tabs, flyout } => {
+                    b.push(2);
+                    b.push(u8::from(*flyout));
+                    let tn: u8 = tabs.len().try_into().map_err(|_| String::from("plane-chrome wire: too many tabs"))?;
+                    b.push(tn);
+                    for t in tabs {
+                        put_str(&mut b, &t.label)?;
+                        put_rect(&mut b, t.probe_rect);
+                    }
+                }
+                PaletteRuleKind::ToolGrid { cols, tools } => {
+                    b.push(3);
+                    b.push(*cols);
+                    let tn: u8 = tools.len().try_into().map_err(|_| String::from("plane-chrome wire: too many tools"))?;
+                    b.push(tn);
+                    for t in tools {
+                        b.push(encode_icon_role(t.icon));
+                        b.push(u8::from(t.has_flyout) | (u8::from(t.break_after) << 1));
+                        put_rect(&mut b, t.probe_rect);
+                    }
+                }
+                PaletteRuleKind::ColorWell { fore_pt, back_pt } => {
+                    b.push(4);
+                    put_point(&mut b, *fore_pt);
+                    put_point(&mut b, *back_pt);
+                }
+                PaletteRuleKind::Footer { keys } => {
+                    b.push(5);
+                    let kn: u8 = keys.len().try_into().map_err(|_| String::from("plane-chrome wire: too many footer keys"))?;
+                    b.push(kn);
+                    for k in keys {
+                        b.push(encode_icon_role(k.icon));
+                        put_opt_rect(&mut b, k.probe_rect);
+                    }
+                }
+                PaletteRuleKind::MiniToggles { keys } => {
+                    b.push(6);
+                    let kn: u8 = keys.len().try_into().map_err(|_| String::from("plane-chrome wire: too many mini toggles"))?;
+                    b.push(kn);
+                    for k in keys {
+                        b.push(encode_icon_role(k.icon));
+                        put_rect(&mut b, k.probe_rect);
+                        b.push(k.threshold_luma);
+                    }
+                }
+                PaletteRuleKind::GradientSlider { label, stops, track_rect, default_permille } => {
+                    b.push(7);
+                    put_str(&mut b, label)?;
+                    let sn: u8 = stops.len().try_into().map_err(|_| String::from("plane-chrome wire: too many stops"))?;
+                    b.push(sn);
+                    for &s in stops {
+                        b.extend_from_slice(&s.to_le_bytes());
+                    }
+                    put_opt_rect(&mut b, *track_rect);
+                    b.extend_from_slice(&default_permille.to_le_bytes());
+                }
+            }
         }
     }
     Ok(b)
@@ -475,8 +678,117 @@ pub fn decode_plane_chrome(bytes: &[u8]) -> Result<PlaneChromeBinding, String> {
         1 => Some((r.i32()?, r.i32()?)),
         t => return Err(format!("plane-chrome wire: bad suppress tag {t}")),
     };
+    let (window_range, pixel_guards, palette_rules) = if r.remaining() > 0 {
+        match r.u8()? {
+            1 => {
+                let window_range = match r.u8()? {
+                    0 => None,
+                    1 => Some(WindowRange { min_w: r.i32()?, max_w: r.i32()?, min_h: r.i32()?, max_h: r.i32()? }),
+                    t => return Err(format!("plane-chrome wire: bad window_range tag {t}")),
+                };
+                let gn = r.u8()? as usize;
+                let mut pixel_guards = Vec::with_capacity(gn);
+                for _ in 0..gn {
+                    pixel_guards.push(PixelMaskGuard { rect: r.rect()?, dark_luma: r.u8()?, fnv1a64: r.u64()? });
+                }
+                let pn = r.u8()? as usize;
+                let mut palette_rules = Vec::with_capacity(pn);
+                for _ in 0..pn {
+                    let rect = r.rect()?;
+                    let clear_rect = r.opt_rect()?;
+                    let kind = match r.u8()? {
+                        0 => PaletteRuleKind::SurfaceFill { pen_role: decode_pen_role(r.u8()?)? },
+                        1 => PaletteRuleKind::KeepPixels,
+                        2 => {
+                            let flyout = match r.u8()? {
+                                0 => false,
+                                1 => true,
+                                t => return Err(format!("plane-chrome wire: bad flyout bool {t}")),
+                            };
+                            let tn = r.u8()? as usize;
+                            let mut tabs = Vec::with_capacity(tn);
+                            for _ in 0..tn {
+                                tabs.push(TabProbeRule { label: r.str()?, probe_rect: r.rect()? });
+                            }
+                            PaletteRuleKind::Tabs { tabs, flyout }
+                        }
+                        3 => {
+                            let cols = r.u8()?;
+                            let tn = r.u8()? as usize;
+                            let mut tools = Vec::with_capacity(tn);
+                            for _ in 0..tn {
+                                let icon = decode_icon_role(r.u8()?)?;
+                                let flags = r.u8()?;
+                                if flags & !0x03 != 0 {
+                                    return Err(format!("plane-chrome wire: bad tool flags {flags:#x}"));
+                                }
+                                tools.push(ToolCellRule {
+                                    icon,
+                                    has_flyout: flags & 1 != 0,
+                                    break_after: flags & 2 != 0,
+                                    probe_rect: r.rect()?,
+                                });
+                            }
+                            PaletteRuleKind::ToolGrid { cols, tools }
+                        }
+                        4 => PaletteRuleKind::ColorWell {
+                            fore_pt: GuestPoint { x: r.i32()?, y: r.i32()? },
+                            back_pt: GuestPoint { x: r.i32()?, y: r.i32()? },
+                        },
+                        5 => {
+                            let kn = r.u8()? as usize;
+                            let mut keys = Vec::with_capacity(kn);
+                            for _ in 0..kn {
+                                keys.push(FooterKeyRule { icon: decode_icon_role(r.u8()?)?, probe_rect: r.opt_rect()? });
+                            }
+                            PaletteRuleKind::Footer { keys }
+                        }
+                        6 => {
+                            let kn = r.u8()? as usize;
+                            let mut keys = Vec::with_capacity(kn);
+                            for _ in 0..kn {
+                                keys.push(MiniToggleRule {
+                                    icon: decode_icon_role(r.u8()?)?,
+                                    probe_rect: r.rect()?,
+                                    threshold_luma: r.u8()?,
+                                });
+                            }
+                            PaletteRuleKind::MiniToggles { keys }
+                        }
+                        7 => {
+                            let label = r.str()?;
+                            let sn = r.u8()? as usize;
+                            let mut stops = Vec::with_capacity(sn);
+                            for _ in 0..sn {
+                                stops.push(r.u32()?);
+                            }
+                            let track_rect = r.opt_rect()?;
+                            let default_permille = r.u16()?;
+                            PaletteRuleKind::GradientSlider { label, stops, track_rect, default_permille }
+                        }
+                        t => return Err(format!("plane-chrome wire: bad palette rule tag {t}")),
+                    };
+                    palette_rules.push(PaletteRule { rect, clear_rect, kind });
+                }
+                (window_range, pixel_guards, palette_rules)
+            }
+            t => return Err(format!("plane-chrome wire: bad extension tag {t}")),
+        }
+    } else {
+        (None, Vec::new(), Vec::new())
+    };
     r.finish("plane-chrome wire")?;
-    Ok(PlaneChromeBinding { id, identity, present_if_text, bands, buttons, suppress_bottom_right })
+    Ok(PlaneChromeBinding {
+        id,
+        identity,
+        present_if_text,
+        bands,
+        buttons,
+        suppress_bottom_right,
+        window_range,
+        pixel_guards,
+        palette_rules,
+    })
 }
 
 fn put_str(b: &mut Vec<u8>, s: &str) -> Result<(), String> {
@@ -544,6 +856,16 @@ impl<'a> Reader<'a> {
     fn u64(&mut self) -> Result<u64, String> { Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap())) }
     fn rect(&mut self) -> Result<GuestRect, String> {
         Ok(GuestRect { left: self.i32()?, top: self.i32()?, width: self.i32()?, height: self.i32()? })
+    }
+    fn opt_rect(&mut self) -> Result<Option<GuestRect>, String> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => Ok(Some(self.rect()?)),
+            t => Err(format!("binding wire: bad rect option tag {t}")),
+        }
+    }
+    fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.pos)
     }
     fn four(&mut self) -> Result<[u8; 4], String> { Ok(self.take(4)?.try_into().unwrap()) }
     fn str(&mut self) -> Result<String, String> {
@@ -701,6 +1023,9 @@ mod tests {
                 icon: Some(IconRole::AlignLeft),
             }],
             suppress_bottom_right: Some((22, 22)),
+            window_range: None,
+            pixel_guards: vec![],
+            palette_rules: vec![],
         };
         let bytes = encode_plane_chrome(&pc).unwrap();
         assert_eq!(decode_plane_chrome(&bytes).unwrap(), pc);
@@ -708,5 +1033,93 @@ mod tests {
         bad_magic[0] = b'Z';
         assert!(decode_plane_chrome(&bad_magic).unwrap_err().contains("bad magic"));
         assert!(decode_plane_chrome(&bytes[..bytes.len() - 1]).unwrap_err().contains("truncated"));
+
+        // Extended palette-rule binding roundtrip + bad extension tag rejection.
+        let ext = PlaneChromeBinding {
+            id: String::from("test-palette-wire"),
+            identity: PlaneChromeIdentity::Resource {
+                res_type: *b"WDEF",
+                res_id: 128,
+                length: 15012,
+                fnv1a64: 0xccfe_72ef_63c8_a2ab,
+            },
+            present_if_text: None,
+            bands: vec![],
+            buttons: vec![],
+            suppress_bottom_right: None,
+            window_range: Some(WindowRange { min_w: 200, max_w: 214, min_h: 100, max_h: 120 }),
+            pixel_guards: vec![PixelMaskGuard { rect: gr(4, 2, 48, 12), dark_luma: 80, fnv1a64: 0x1234_5678 }],
+            palette_rules: vec![
+                PaletteRule {
+                    rect: gr(0, 0, 0, 0),
+                    clear_rect: Some(gr(0, 0, 0, 0)),
+                    kind: PaletteRuleKind::SurfaceFill { pen_role: PenRole::Surface },
+                },
+                PaletteRule {
+                    rect: gr(0, 0, 0, 22),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::Tabs {
+                        tabs: vec![TabProbeRule { label: String::from("Color"), probe_rect: gr(4, 2, 36, 14) }],
+                        flyout: true,
+                    },
+                },
+                PaletteRule {
+                    rect: gr(2, 24, 52, 240),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::ToolGrid {
+                        cols: 2,
+                        tools: vec![ToolCellRule {
+                            icon: IconRole::BoxSelect,
+                            has_flyout: true,
+                            break_after: true,
+                            probe_rect: gr(4, 26, 20, 20),
+                        }],
+                    },
+                },
+                PaletteRule {
+                    rect: gr(6, 270, 44, 40),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::ColorWell {
+                        fore_pt: GuestPoint { x: 16, y: 280 },
+                        back_pt: GuestPoint { x: 32, y: 294 },
+                    },
+                },
+                PaletteRule {
+                    rect: gr(0, -22, 0, 22),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::Footer {
+                        keys: vec![FooterKeyRule { icon: IconRole::Trash, probe_rect: Some(gr(180, -18, 16, 14)) }],
+                    },
+                },
+                PaletteRule {
+                    rect: gr(8, 50, 80, 20),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::MiniToggles {
+                        keys: vec![MiniToggleRule { icon: IconRole::Lock, probe_rect: gr(10, 52, 14, 14), threshold_luma: 180 }],
+                    },
+                },
+                PaletteRule {
+                    rect: gr(8, 76, 190, 14),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::GradientSlider {
+                        label: String::from("R"),
+                        stops: vec![0x0000_0000, 0x00FF_0000],
+                        track_rect: Some(gr(26, 78, 120, 8)),
+                        default_permille: 500,
+                    },
+                },
+                PaletteRule {
+                    rect: gr(4, 22, 198, 66),
+                    clear_rect: None,
+                    kind: PaletteRuleKind::KeepPixels,
+                },
+            ],
+        };
+        let ext_bytes = encode_plane_chrome(&ext).unwrap();
+        assert_eq!(decode_plane_chrome(&ext_bytes).unwrap(), ext);
+        assert!(decode_plane_chrome(&ext_bytes[..ext_bytes.len() - 1]).unwrap_err().contains("truncated"));
+        let mut bad_ext = bytes;
+        bad_ext.push(99);
+        assert!(decode_plane_chrome(&bad_ext).unwrap_err().contains("extension tag"));
     }
 }
