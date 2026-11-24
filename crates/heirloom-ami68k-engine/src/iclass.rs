@@ -20,14 +20,15 @@ use crate::cpu::Cpu;
 
 /// The host implementation behind a native class.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Native { Root, Image, Gadget, Button, Strg, Prop, Sysi, Frame, Ic, Model, Datatype, Mui(Kind) }
+pub enum Native { Root, Image, Gadget, Button, FrButton, Strg, Prop, Sysi, Frame, Ic, Model, Datatype, Mui(Kind) }
 
 /// (public name, superclass name, implementation, instance size). Supers come first. The MUI classes follow, from `mui::classes`.
-pub const NATIVE: [(&str, &str, Native, u16); 11] = [
+pub const NATIVE: [(&str, &str, Native, u16); 12] = [
     ("rootclass", "", Native::Root, 0),
     ("imageclass", "rootclass", Native::Image, IMG_SIZE as u16),
     ("gadgetclass", "rootclass", Native::Gadget, GDATA_SIZE as u16),
     ("buttongclass", "gadgetclass", Native::Button, 0),
+    ("frbuttonclass", "buttongclass", Native::FrButton, 0),
     ("strgclass", "gadgetclass", Native::Strg, STRG_DATA as u16),
     ("propgclass", "gadgetclass", Native::Prop, PROP_DATA as u16),
     ("sysiclass", "imageclass", Native::Sysi, 0),

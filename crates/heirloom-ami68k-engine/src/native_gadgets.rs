@@ -81,7 +81,7 @@ fn system_class<U: GuestUi>(a: &Amiga<U>, g: u32) -> Option<Native> {
 
 /// Is `g` the instance of a system class itself (not of a guest subclass)?
 fn direct_system<U: GuestUi>(a: &Amiga<U>, g: u32) -> bool {
-    a.classes.class_of(g).and_then(|c| a.classes.recs.get(&c)).is_some_and(|r| matches!(r.native, Some(Native::Button | Native::Prop | Native::Strg)))
+    a.classes.class_of(g).and_then(|c| a.classes.recs.get(&c)).is_some_and(|r| matches!(r.native, Some(Native::Button | Native::FrButton | Native::Prop | Native::Strg)))
 }
 
 /// The (total, visible, top) of the one free axis of a PropInfo. A propgclass gadget keeps PGA_Total/Visible/Top beside the PropInfo;
@@ -150,7 +150,7 @@ fn plan<U: GuestUi>(a: &mut Amiga<U>, win: u32, g: u32) -> Result<Option<(Contro
         let buf = r32(a, special, "StringInfo.Buffer")?;
         let max = r16(a, special + SI_MAX_CHARS, "StringInfo.MaxChars")?;
         ControlKind::Field { text: opt_str(a, buf, "StringInfo.Buffer")?, max_len: max.saturating_sub(1), editable: true, integer: act & GACT_LONGINT != 0 }
-    } else if matches!(sys, Some(Native::Button)) || (classic && ty & GTYP_GTYPEMASK == GTYP_BOOLGADGET) {
+    } else if matches!(sys, Some(Native::Button | Native::FrButton)) || (classic && ty & GTYP_GTYPEMASK == GTYP_BOOLGADGET) {
         let render = if fl & GFLG_GADGIMAGE != 0 { r32(a, g + GAD_RENDER, "Gadget.GadgetRender")? } else { 0 };
         // System window-frame images (close/depth/zoom/size) belong to CoralOS's own window chrome; never project
         // them as duplicate native buttons inside the client area (HANDOFF-HEIRLOOM §1 #3).
