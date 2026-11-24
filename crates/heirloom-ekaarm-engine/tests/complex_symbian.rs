@@ -324,3 +324,36 @@ fn guest_dll_resolver_returns_zero_when_no_companion_dll_present() {
     let table = OrdinalTable::parse("").unwrap();
     assert_eq!(dll::resolve_guest_dlls(&mut p, &table).unwrap(), 0);
 }
+
+#[test]
+fn tdes8_append_tdesc16_and_rwindowbase_display_mode_visibility_work() {
+    let names = [
+        "_ZN5TDes86AppendERK7TDesC16",
+        "_ZN11RWindowBase11DisplayModeEv",
+        "_ZN15RWindowTreeNode28EnableVisibilityChangeEventsEv",
+    ];
+    let mut p = proc(&names);
+    // Build TBuf8<16> containing "hi:" and TBuf16<16> containing "ok\u{2603}" (non-Latin1 narrows to '?').
+    let dst = alloc(&mut p, 32);
+    wr(&mut p, dst, (3u32 << 28) | 3);
+    wr(&mut p, dst + 4, 16);
+    for (i, b) in b"hi:".iter().enumerate() {
+        p.mem.write_u8(dst + 8 + i as u32, *b).unwrap();
+    }
+    let src = alloc(&mut p, 48);
+    write_tbuf16(&mut p, src, "ok\u{2603}");
+    ok(&mut p, names[0], &[dst, src]);
+    assert_eq!(rd(&mut p, dst) & 0x0FFF_FFFF, 6, "TDes8 length updated to 3 + 3");
+    let got: Vec<u8> = (0..6).map(|i| p.mem.read_u8(dst + 8 + i).unwrap()).collect();
+    assert_eq!(got, b"hi:ok?", "UTF-16 narrows to Latin-1 with '?' for >0xFF");
+
+    // Negative control: overflowing max_len refuses cleanly.
+    let big = alloc(&mut p, 80);
+    write_tbuf16(&mut p, big, "0123456789ABCDEF");
+    assert!(refused(&mut p, names[0], &[dst, big]).contains("maximum"));
+
+    // RWindowBase::DisplayMode() -> EColor16MU (10); EnableVisibilityChangeEvents() -> KErrNone (0).
+    let win = alloc(&mut p, 16);
+    assert_eq!(ok(&mut p, names[1], &[win]), 10, "DisplayMode returns EColor16MU (10)");
+    assert_eq!(ok(&mut p, names[2], &[win]), 0, "EnableVisibilityChangeEvents returns KErrNone (0)");
+}
