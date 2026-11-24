@@ -165,6 +165,7 @@ impl<U: GuestUi> Amiga<U> {
             .func(memory::LVO_ALLOC_VEC, "AllocVec", memory::alloc_vec::<U>)
             .func(memory::LVO_FREE_VEC, "FreeVec", memory::free_vec::<U>)
             .func(memory::LVO_AVAIL_MEM, "AvailMem", memory::avail_mem::<U>)
+            .func(memory::LVO_TYPE_OF_MEM, "TypeOfMem", memory::type_of_mem::<U>)
             .func(memory::LVO_COPY_MEM, "CopyMem", memory::copy_mem::<U>)
             .with(crate::exec_task::register::<U>)
             .with(crate::exec_patch::register::<U>)

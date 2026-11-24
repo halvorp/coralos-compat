@@ -20,6 +20,7 @@ pub const LVO_AVAIL_MEM: i32 = -216;
 pub const LVO_ALLOC_ENTRY: i32 = -222;
 pub const LVO_FREE_ENTRY: i32 = -228;
 pub const LVO_SET_SIGNAL: i32 = -306;
+pub const LVO_TYPE_OF_MEM: i32 = -534;
 pub const LVO_COPY_MEM: i32 = -624;
 pub const LVO_ALLOC_VEC: i32 = -684;
 pub const LVO_FREE_VEC: i32 = -690;
@@ -150,6 +151,16 @@ pub fn avail_mem<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     let n = a.heap.available(cpu.dreg(1) & MEMF_LARGEST != 0);
     cpu.set_d0(n);
     Ok(format!("[exec] AvailMem req={:#x} -> {n}", cpu.dreg(1)))
+}
+
+/// TypeOfMem(a1 = address): returns MEMF_PUBLIC | MEMF_FAST (0x5) for valid guest RAM addresses, else 0.
+pub fn type_of_mem<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    const MEMF_PUBLIC: u32 = 1 << 0;
+    const MEMF_FAST: u32 = 1 << 2;
+    let addr = cpu.areg(1);
+    let attrs = if addr != 0 && a.mem.read_u8(addr).is_ok() { MEMF_PUBLIC | MEMF_FAST } else { 0 };
+    cpu.set_d0(attrs);
+    Ok(format!("[exec] TypeOfMem {addr:#x} -> {attrs:#x}"))
 }
 
 /// CopyMem(a0 = source, a1 = dest, d0 = size); overlapping copies are undefined on AmigaOS, copied forwards here.
@@ -331,5 +342,40 @@ mod tests {
         let (oom, _) = alloc_entry_list(&mut a, req_list).unwrap();
         assert_eq!(oom, 0x8000_0000 | MEMF_CLEAR);
         assert_eq!(a.heap.available(false), free_before);
+    }
+
+    #[test]
+    fn type_of_mem_returns_public_fast_for_valid_ram_and_zero_for_null_or_unmapped() {
+        use heirloom_fmt_hunk::writer::{build, Hunk};
+        let mut p = Vec::new();
+        let emit = |p: &mut Vec<u8>, w: &[u16]| { for &x in w { p.extend_from_slice(&x.to_be_bytes()); } };
+        // Allocate 32 bytes via AllocMem, test TypeOfMem(ptr), TypeOfMem(NULL), TypeOfMem(0xDEADBEEF), FreeMem, rts.
+        emit(&mut p, &[
+            0x2C78, 0x0004,                   // movea.l 4.w, a6
+            0x7020,                           // moveq #32, d0
+            0x7200,                           // moveq #0, d1
+            0x4EAE, LVO_ALLOC_MEM as u16,     // jsr _LVOAllocMem(a6)
+            0x2240,                           // movea.l d0, a1
+            0x2440,                           // movea.l d0, a2 (save ptr)
+            0x4EAE, LVO_TYPE_OF_MEM as u16,   // jsr _LVOTypeOfMem(a6)
+            0x23C0, 0x0001, 0xF000,           // move.l d0, 0x1F000
+            0x93C9,                           // suba.l a1, a1 (NULL)
+            0x4EAE, LVO_TYPE_OF_MEM as u16,   // jsr _LVOTypeOfMem(a6)
+            0x23C0, 0x0001, 0xF004,           // move.l d0, 0x1F004
+            0x227C, 0xDEAD, 0xBEEF,           // movea.l #0xDEADBEEF, a1
+            0x4EAE, LVO_TYPE_OF_MEM as u16,   // jsr _LVOTypeOfMem(a6)
+            0x23C0, 0x0001, 0xF008,           // move.l d0, 0x1F008
+            0x224A,                           // movea.l a2, a1
+            0x7020,                           // moveq #32, d0
+            0x4EAE, LVO_FREE_MEM as u16,      // jsr _LVOFreeMem(a6)
+            0x7000, 0x4E75,                   // moveq #0, d0; rts
+        ]);
+        let prog = build(&[Hunk::code(p, vec![])], None);
+        let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+        let r = a.run_hunk(&prog, 50_000).unwrap();
+        assert!(r.stats.halted, "{:?} {:?}", r.stats, a.refused);
+        assert_eq!(a.mem.read_u32(0x1F000).unwrap(), 0x05, "valid guest RAM reports MEMF_PUBLIC | MEMF_FAST");
+        assert_eq!(a.mem.read_u32(0x1F004).unwrap(), 0, "NULL reports 0");
+        assert_eq!(a.mem.read_u32(0x1F008).unwrap(), 0, "unmapped address reports 0");
     }
 }
