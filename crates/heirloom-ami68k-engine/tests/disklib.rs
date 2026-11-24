@@ -176,3 +176,57 @@ fn autoinit_library_without_datainit_inherits_romtag_version_name_and_idstring()
     let id_ptr = a.mem.read_u32(ok_base + 24).unwrap();
     assert_eq!(a.mem.read_cstr(id_ptr).unwrap(), "ver 44.1");
 }
+
+#[test]
+fn guest_added_library_in_liblist_can_be_opened_and_closed_by_name() {
+    // Models an application (like AWeb's awebplugin.library) that builds an in-memory Library and links it via AddLibrary,
+    // after which plugins call OpenLibrary("inmem.library", 1) and CloseLibrary(base).
+    let mut p = Vec::new();
+    let emit = |p: &mut Vec<u8>, w: &[u16]| { for &x in w { p.extend_from_slice(&x.to_be_bytes()); } };
+    // Layout:
+    //   0x00: main program -> MakeLibrary/manual setup at 0x1F100 (base = 0x1F10C, vectors at -6 and -12),
+    //         AddLibrary(base), OpenLibrary("inmem.library", 1) -> [0x1F000], CloseLibrary(d0), rts.
+    // Even simpler: pre-build the library struct in guest RAM after loading, or call AddLibrary + OpenLibrary from guest code.
+    let lib_base = 0x0001_F110u32;
+    let name_addr = 0x0001_F200u32;
+    let open_fn = 0x0001_F220u32;
+    let close_fn = 0x0001_F230u32;
+    emit(&mut p, &[
+        0x2C78, 0x0004,                                               // movea.l 4.w, a6
+        0x227C, (lib_base >> 16) as u16, lib_base as u16,             // movea.l #lib_base, a1
+        0x4EAE, (-396i16) as u16,                                     // jsr _LVOAddLibrary(a6)
+        0x227C, (name_addr >> 16) as u16, name_addr as u16,           // movea.l #name_addr, a1
+        0x7001,                                                       // moveq #1, d0
+        0x4EAE, (-552i16) as u16,                                     // jsr _LVOOpenLibrary(a6)
+        0x23C0, 0x0001, 0xF000,                                       // move.l d0, 0x1F000
+        0x2240,                                                       // movea.l d0, a1
+        0x4EAE, (-414i16) as u16,                                     // jsr _LVOCloseLibrary(a6)
+        0x227C, (name_addr >> 16) as u16, name_addr as u16,           // movea.l #name_addr, a1
+        0x7009,                                                       // moveq #9, d0 (too new -> NULL)
+        0x4EAE, (-552i16) as u16,                                     // jsr _LVOOpenLibrary(a6)
+        0x23C0, 0x0001, 0xF004,                                       // move.l d0, 0x1F004
+        0x7000, 0x4E75,                                               // moveq #0, d0; rts
+    ]);
+    let prog = build(&[Hunk::code(p, vec![])], None);
+    let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+    // Write library name, Open/Close vectors (JMP abs.l), Open/Close guest code, and struct Library header.
+    a.mem.write_bytes(name_addr, b"inmem.library\0").unwrap();
+    // Open: addq.w #1, 32(a6) ; move.l a6, d0 ; rts
+    a.mem.write_bytes(open_fn, &[0x52, 0x6E, 0x00, 0x20, 0x20, 0x0E, 0x4E, 0x75]).unwrap();
+    // Close: subq.w #1, 32(a6) ; moveq #0, d0 ; rts
+    a.mem.write_bytes(close_fn, &[0x53, 0x6E, 0x00, 0x20, 0x70, 0x00, 0x4E, 0x75]).unwrap();
+    a.mem.write_u16(lib_base - 6, 0x4EF9).unwrap();
+    a.mem.write_u32(lib_base - 4, open_fn).unwrap();
+    a.mem.write_u16(lib_base - 12, 0x4EF9).unwrap();
+    a.mem.write_u32(lib_base - 10, close_fn).unwrap();
+    a.mem.write_u8(lib_base + 8, 9).unwrap(); // NT_LIBRARY
+    a.mem.write_u32(lib_base + 10, name_addr).unwrap(); // ln_Name
+    a.mem.write_u16(lib_base + 20, 2).unwrap(); // lib_Version = 2
+
+    let r = a.run_hunk(&prog, 50_000).unwrap();
+    assert!(r.stats.halted, "{:?} {:?}", r.stats, a.refused);
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+    assert_eq!(a.mem.read_u32(0x1F000).unwrap(), lib_base, "OpenLibrary found LibList library and ran Open vector");
+    assert_eq!(a.mem.read_u32(0x1F004).unwrap(), 0, "NEGATIVE CONTROL: version 9 > 2 returned NULL");
+    assert_eq!(a.mem.read_u16(lib_base + 32).unwrap(), 0, "Open incremented and Close decremented lib_OpenCnt");
+}

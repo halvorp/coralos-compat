@@ -50,6 +50,33 @@ pub fn remove(mem: &mut GuestMem, node: u32) -> Result<(), Refusal> {
     mem.write_u32(succ + 4, pred).map_err(&m)
 }
 
+/// Walk `LIB_LIST` for a library whose `ln_Name` matches `name` (case-insensitive, as AmigaOS `FindName` / `OpenLibrary` on libraries).
+pub fn find_lib(mem: &GuestMem, name: &str) -> Option<u32> {
+    let mut node = mem.read_u32(LIB_LIST).ok()?;
+    for _ in 0..256 {
+        let succ = mem.read_u32(node).ok()?;
+        if succ == 0 { break; }
+        let np = mem.read_u32(node + 10).ok().unwrap_or(0);
+        if np != 0 && mem.read_cstr(np).ok().is_some_and(|s| s.eq_ignore_ascii_case(name)) {
+            return Some(node);
+        }
+        node = succ;
+    }
+    None
+}
+
+/// True when `base` is currently linked in `LIB_LIST`.
+pub fn has_lib(mem: &GuestMem, base: u32) -> bool {
+    let Ok(mut node) = mem.read_u32(LIB_LIST) else { return false };
+    for _ in 0..256 {
+        let Ok(succ) = mem.read_u32(node) else { break };
+        if succ == 0 { break; }
+        if node == base { return true; }
+        node = succ;
+    }
+    false
+}
+
 /// AddLibrary(a1 = library): link it into LibList.
 pub fn add_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let lib = cpu.areg(1);

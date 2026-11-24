@@ -21,6 +21,22 @@ pub fn open_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
         None => {
             // A library on disk (LIBS:, PROGDIR:Libs): loaded and initialised in the guest, which sets D0 itself.
             if let Some(line) = crate::disklib::try_open(a, cpu, &name, ver)? { return Ok(line); }
+            // A guest-registered in-memory library added via AddLibrary (e.g. AWeb's awebplugin.library): run its Open vector.
+            if let Some(lib_base) = crate::execlists::find_lib(&a.mem, &name) {
+                let have = a.mem.read_u16(lib_base + crate::makelib::LIB_VERSION).map_err(Refusal::mem("lib_Version"))? as u32;
+                if have < ver {
+                    cpu.set_d0(0);
+                    return Ok(format!("[exec] OpenLibrary \"{name}\" (LibList {lib_base:#x}): version {have} < {ver} -> NULL"));
+                }
+                let next = crate::guest_call::Next::Call {
+                    target: lib_base - 6,
+                    d0: ver,
+                    aregs: alloc::vec![(6, lib_base)],
+                    then: alloc::boxed::Box::new(|_, _, d0| Ok(crate::guest_call::Next::Return(d0))),
+                };
+                crate::guest_call::start(a, cpu, next)?;
+                return Ok(format!("[exec] OpenLibrary name=\"{name}\" ver={ver} -> LibList {lib_base:#x} (Open vector in the guest)"));
+            }
             match crate::libtable::known_library(&name) {
                 Some(known) => a.open_known_library(known)?,
                 None => 0,
@@ -36,6 +52,16 @@ pub fn close_library<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Stri
     let base = cpu.areg(1);
     if base == 0 { return Ok("[exec] CloseLibrary NULL (a no-op, as exec's autodoc allows)".into()); }
     if let Some(i) = crate::disklib::index_of_base(a, base) { return crate::disklib::close(a, cpu, i, base); }
+    if crate::execlists::has_lib(&a.mem, base) {
+        let next = crate::guest_call::Next::Call {
+            target: base - 12,
+            d0: 0,
+            aregs: alloc::vec![(6, base)],
+            then: alloc::boxed::Box::new(|_, _, _| Ok(crate::guest_call::Next::Return(0))),
+        };
+        crate::guest_call::start(a, cpu, next)?;
+        return Ok(format!("[exec] CloseLibrary LibList base={base:#x} (Close vector in the guest)"));
+    }
     let l = a.libs.iter_mut().find(|l| l.base == base)
         .ok_or_else(|| Refusal(format!("CloseLibrary: {base:#x} is not an open library base")))?;
     if l.open_count == 0 { return Err(Refusal(format!("CloseLibrary: {} closed more times than opened", l.name))); }
