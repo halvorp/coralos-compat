@@ -197,9 +197,12 @@ impl<U: GuestUi> Mac<U> {
             let n = i as u32 + 1;
             let sub = if it.key == KEY_HIERARCHICAL && depth < 4 { self.menu_model(&[i16::from(it.mark)], depth + 1)?.into_iter().next().map(|m| m.items).unwrap_or_default() } else { Vec::new() };
             let plain = it.key != KEY_HIERARCHICAL;
+            let enabled = n > 31 || p.flags & (1 << n) != 0;
+            // Inside Macintosh I (Menu Manager): disabled all-hyphen items ("-", "--", "---") are horizontal dividers.
+            let is_divider = !enabled && !it.text.is_empty() && it.text.iter().all(|&b| b == b'-');
             out.push(MenuItem {
-                label: mac_text(&it.text),
-                enabled: n > 31 || p.flags & (1 << n) != 0,
+                label: if is_divider { String::from("-") } else { mac_text(&it.text) },
+                enabled,
                 shortcut: (plain && it.key >= 0x20).then(|| char::from(it.key).to_ascii_uppercase()),
                 check: (plain && it.mark != 0).then_some(true),
                 sub_items: sub,
