@@ -166,7 +166,7 @@ fn photoshop_7_palettes_translate_natively_when_bound_and_stay_raw_when_unbound(
                 PalettePart::Tabs { labels, active, flyout } => {
                     eprintln!("  Tabs: {labels:?} active={active} flyout={flyout}");
                     assert_eq!(*active, 0);
-                    assert!(*flyout);
+                    assert_eq!(*flyout, labels[0] != "File Browser", "only Options bar palette well tabs omit the flyout key");
                     saw_tabs.insert(labels[0].clone());
                 }
                 PalettePart::GradientSlider { label, permille, .. } => {
@@ -198,7 +198,7 @@ fn photoshop_7_palettes_translate_natively_when_bound_and_stay_raw_when_unbound(
     }
     assert!(saw_tool_grid, "expected Tools palette ToolGrid");
     assert!(saw_color_well >= 2, "expected Tools + Color palette ColorWell, got {saw_color_well}");
-    for tab in ["Navigator", "Color", "History", "Layers"] {
+    for tab in ["Navigator", "Color", "History", "Layers", "File Browser"] {
         assert!(saw_tabs.contains(tab), "missing native Tabs for {tab:?}; got {saw_tabs:?}");
     }
     for ch in ["R", "G", "B"] {
