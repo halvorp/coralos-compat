@@ -101,6 +101,16 @@ pub enum PaletteRuleKind {
         track_rect: Option<GuestRect>,
         default_permille: u16,
     },
+    /// Emit compact 11 px `DrawOp::Text` label (e.g. `"Feather:"`, `"Opacity:"`, `"Lock:"`, `"Fill:"`, `"100%"`).
+    Label { text: String, muted: bool },
+    /// Emit `DrawOp::Palette(PalettePart::Popup)` (`PART_POPUP_COMPACT`).
+    Popup { label: String, icon: Option<IconRole>, enabled: bool },
+    /// Emit `DrawOp::Palette(PalettePart::Check)` (`PART_CHECK_COMPACT`), optionally probing dark checkmark ink.
+    Check { label: String, probe_rect: Option<GuestRect>, enabled: bool },
+    /// Emit `DrawOp::Palette(PalettePart::FieldXs)` (`PART_FIELD_XS` / `PART_NUMERIC_FIELD`).
+    FieldXs { value: String, unit: String, numeric_cap: bool, enabled: bool },
+    /// Emit `DrawOp::Palette(PalettePart::MiniSlider)` (`PART_MINI_SLIDER`).
+    MiniSlider { track_rect: Option<GuestRect>, default_permille: u16, enabled: bool },
 }
 
 /// One declarative compact-palette interior rule.
@@ -180,6 +190,31 @@ fn op_bounds(op: &DrawOp) -> GuestRect {
             height: (*px as i32).max(1),
         },
     }
+}
+
+/// True when a cropped `KeepPixels` box is pure empty Platinum chrome grey (neutral light grey with no document pixels,
+/// borders, text, or colour ramps). Skipping it lets the underlying `PenRole::Surface` fill show through cleanly in dark mode.
+fn is_uniform_platinum_ground(rgb: &[u32]) -> bool {
+    if rgb.is_empty() {
+        return true;
+    }
+    let mut min_l = 255u32;
+    let mut max_l = 0u32;
+    for &px in rgb {
+        let r = ((px >> 16) & 0xFF) as i32;
+        let g = ((px >> 8) & 0xFF) as i32;
+        let b = (px & 0xFF) as i32;
+        if (r - g).abs() > 6 || (g - b).abs() > 6 || (r - b).abs() > 6 {
+            return false;
+        }
+        let l = luma(px);
+        if l < 185 || l > 248 {
+            return false;
+        }
+        if l < min_l { min_l = l; }
+        if l > max_l { max_l = l; }
+    }
+    max_l.saturating_sub(min_l) <= 36
 }
 
 fn luma(rgb: u32) -> u32 {
@@ -469,7 +504,9 @@ impl PlaneChromeBinding {
                     }
                     PaletteRuleKind::KeepPixels => {
                         if let Some(rgb) = crop_pixels(&ops, rect) {
-                            palette_emitted.push(DrawOp::Pixels { rect, rgb });
+                            if !is_uniform_platinum_ground(&rgb) {
+                                palette_emitted.push(DrawOp::Pixels { rect, rgb });
+                            }
                         }
                     }
                     PaletteRuleKind::Tabs { tabs, flyout } => {
@@ -602,6 +639,65 @@ impl PlaneChromeBinding {
                                 stops: stops.clone(),
                                 permille,
                             },
+                        });
+                    }
+                    PaletteRuleKind::Label { text, muted } => {
+                        palette_emitted.push(DrawOp::Text {
+                            at: GuestPoint { x: rect.left, y: rect.top },
+                            string: text.clone(),
+                            font_role: heirloom_ui_abi::FontRole::Ui,
+                            px: 11,
+                            width: rect.width,
+                            pen_role: if *muted { PenRole::TextMuted } else { PenRole::Text },
+                            bg_role: None,
+                        });
+                    }
+                    PaletteRuleKind::Popup { label, icon, enabled } => {
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::Popup {
+                                label: label.clone(),
+                                icon: *icon,
+                                enabled: *enabled,
+                            },
+                        });
+                    }
+                    PaletteRuleKind::Check { label, probe_rect, enabled } => {
+                        let checked = match probe_rect {
+                            None => false,
+                            Some(pr) => {
+                                let area = resolve_rect(*pr, win_w, win_h);
+                                mean_luma(&ops, area).is_some_and(|m| m < 210)
+                            }
+                        };
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::Check {
+                                label: label.clone(),
+                                checked,
+                                enabled: *enabled,
+                            },
+                        });
+                    }
+                    PaletteRuleKind::FieldXs { value, unit, numeric_cap, enabled } => {
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::FieldXs {
+                                value: value.clone(),
+                                unit: unit.clone(),
+                                numeric_cap: *numeric_cap,
+                                enabled: *enabled,
+                            },
+                        });
+                    }
+                    PaletteRuleKind::MiniSlider { track_rect, default_permille, enabled } => {
+                        let permille = match track_rect {
+                            Some(tr) => probe_slider_permille(&ops, resolve_rect(*tr, win_w, win_h), *default_permille),
+                            None => (*default_permille).min(1000),
+                        };
+                        palette_emitted.push(DrawOp::Palette {
+                            rect,
+                            part: PalettePart::MiniSlider { permille, enabled: *enabled },
                         });
                     }
                 }

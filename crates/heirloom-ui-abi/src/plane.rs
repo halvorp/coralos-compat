@@ -34,6 +34,14 @@ pub enum PalettePart {
     MiniToggles { keys: Vec<IconRole>, latched: u32 },
     /// Horizontal gradient slider row (`PART_GRADIENT_SLIDER`).
     GradientSlider { label: String, stops: Vec<u32>, permille: u16 },
+    /// Compact pop-up trigger (`PART_POPUP_COMPACT`: chevron, icon+chevron, or label+chevron).
+    Popup { label: String, icon: Option<IconRole>, enabled: bool },
+    /// Compact square checkbox (`PART_CHECK_COMPACT`).
+    Check { label: String, checked: bool, enabled: bool },
+    /// Compact text/numeric field (`PART_FIELD_XS` or `PART_NUMERIC_FIELD` when `numeric_cap` is true).
+    FieldXs { value: String, unit: String, numeric_cap: bool, enabled: bool },
+    /// Compact horizontal mini slider (`PART_MINI_SLIDER`).
+    MiniSlider { permille: u16, enabled: bool },
 }
 
 /// One recorded drawing operation. All coordinates are window coordinates.
@@ -86,6 +94,8 @@ impl DrawOp {
             DrawOp::Palette { part: PalettePart::GradientSlider { stops, permille, .. }, .. }
                 if *permille > 1000 || stops.len() < 2 || stops.iter().any(|c| c >> 24 != 0) =>
                 Err(UiRefusal::InvalidGeometry("palette gradient slider invalid stops or permille")),
+            DrawOp::Palette { part: PalettePart::MiniSlider { permille, .. }, .. } if *permille > 1000 =>
+                Err(UiRefusal::InvalidGeometry("palette mini slider permille out of range")),
             DrawOp::Text { px: 0, .. } => Err(UiRefusal::InvalidGeometry("text with a zero pixel size")),
             DrawOp::Text { width, .. } if *width < 0 => Err(UiRefusal::InvalidGeometry("text with a negative run width")),
             _ => Ok(()),

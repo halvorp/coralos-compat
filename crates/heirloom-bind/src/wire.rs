@@ -617,6 +617,41 @@ pub fn encode_plane_chrome(pc: &PlaneChromeBinding) -> Result<Vec<u8>, String> {
                     put_opt_rect(&mut b, *track_rect);
                     b.extend_from_slice(&default_permille.to_le_bytes());
                 }
+                PaletteRuleKind::Label { text, muted } => {
+                    b.push(8);
+                    put_str(&mut b, text)?;
+                    b.push(u8::from(*muted));
+                }
+                PaletteRuleKind::Popup { label, icon, enabled } => {
+                    b.push(9);
+                    put_str(&mut b, label)?;
+                    match icon {
+                        None => b.push(0),
+                        Some(role) => {
+                            b.push(1);
+                            b.push(encode_icon_role(*role));
+                        }
+                    }
+                    b.push(u8::from(*enabled));
+                }
+                PaletteRuleKind::Check { label, probe_rect, enabled } => {
+                    b.push(10);
+                    put_str(&mut b, label)?;
+                    put_opt_rect(&mut b, *probe_rect);
+                    b.push(u8::from(*enabled));
+                }
+                PaletteRuleKind::FieldXs { value, unit, numeric_cap, enabled } => {
+                    b.push(11);
+                    put_str(&mut b, value)?;
+                    put_str(&mut b, unit)?;
+                    b.push(u8::from(*numeric_cap) | (u8::from(*enabled) << 1));
+                }
+                PaletteRuleKind::MiniSlider { track_rect, default_permille, enabled } => {
+                    b.push(12);
+                    put_opt_rect(&mut b, *track_rect);
+                    b.extend_from_slice(&default_permille.to_le_bytes());
+                    b.push(u8::from(*enabled));
+                }
             }
         }
     }
@@ -765,6 +800,39 @@ pub fn decode_plane_chrome(bytes: &[u8]) -> Result<PlaneChromeBinding, String> {
                             let track_rect = r.opt_rect()?;
                             let default_permille = r.u16()?;
                             PaletteRuleKind::GradientSlider { label, stops, track_rect, default_permille }
+                        }
+                        8 => {
+                            let text = r.str()?;
+                            let muted = r.u8()? != 0;
+                            PaletteRuleKind::Label { text, muted }
+                        }
+                        9 => {
+                            let label = r.str()?;
+                            let icon = match r.u8()? {
+                                0 => None,
+                                1 => Some(decode_icon_role(r.u8()?)?),
+                                t => return Err(format!("plane-chrome wire: bad popup icon tag {t}")),
+                            };
+                            let enabled = r.u8()? != 0;
+                            PaletteRuleKind::Popup { label, icon, enabled }
+                        }
+                        10 => {
+                            let label = r.str()?;
+                            let probe_rect = r.opt_rect()?;
+                            let enabled = r.u8()? != 0;
+                            PaletteRuleKind::Check { label, probe_rect, enabled }
+                        }
+                        11 => {
+                            let value = r.str()?;
+                            let unit = r.str()?;
+                            let fl = r.u8()?;
+                            PaletteRuleKind::FieldXs { value, unit, numeric_cap: fl & 1 != 0, enabled: fl & 2 != 0 }
+                        }
+                        12 => {
+                            let track_rect = r.opt_rect()?;
+                            let default_permille = r.u16()?;
+                            let enabled = r.u8()? != 0;
+                            PaletteRuleKind::MiniSlider { track_rect, default_permille, enabled }
                         }
                         t => return Err(format!("plane-chrome wire: bad palette rule tag {t}")),
                     };

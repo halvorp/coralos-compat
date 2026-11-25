@@ -634,6 +634,30 @@ fn put_palette_part(out: &mut Vec<u8>, part: &crate::PalettePart) {
             put_vec(out, stops, |out, c| put_u32(out, *c));
             put_u16(out, *permille);
         }
+        PalettePart::Popup { label, icon, enabled } => {
+            out.push(6);
+            put_string(out, label);
+            put_option(out, icon, put_icon_role);
+            put_bool(out, *enabled);
+        }
+        PalettePart::Check { label, checked, enabled } => {
+            out.push(7);
+            put_string(out, label);
+            put_bool(out, *checked);
+            put_bool(out, *enabled);
+        }
+        PalettePart::FieldXs { value, unit, numeric_cap, enabled } => {
+            out.push(8);
+            put_string(out, value);
+            put_string(out, unit);
+            put_bool(out, *numeric_cap);
+            put_bool(out, *enabled);
+        }
+        PalettePart::MiniSlider { permille, enabled } => {
+            out.push(9);
+            put_u16(out, *permille);
+            put_bool(out, *enabled);
+        }
     }
 }
 
@@ -667,6 +691,26 @@ fn get_palette_part(reader: &mut Reader<'_>) -> Result<crate::PalettePart, WireE
             label: reader.string()?,
             stops: reader.vec(4, |r| r.u32())?,
             permille: reader.u16()?,
+        },
+        6 => PalettePart::Popup {
+            label: reader.string()?,
+            icon: reader.option(get_icon_role)?,
+            enabled: reader.boolean()?,
+        },
+        7 => PalettePart::Check {
+            label: reader.string()?,
+            checked: reader.boolean()?,
+            enabled: reader.boolean()?,
+        },
+        8 => PalettePart::FieldXs {
+            value: reader.string()?,
+            unit: reader.string()?,
+            numeric_cap: reader.boolean()?,
+            enabled: reader.boolean()?,
+        },
+        9 => PalettePart::MiniSlider {
+            permille: reader.u16()?,
+            enabled: reader.boolean()?,
         },
         _ => return Err(WireError::UnknownTag { what: "PalettePart", tag }),
     })

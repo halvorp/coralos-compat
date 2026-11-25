@@ -273,6 +273,56 @@ pub fn read_plane_chrome(src: &str) -> Result<Vec<PlaneChromeBinding>, String> {
                         kind: PaletteRuleKind::GradientSlider { label, stops, track_rect, default_permille },
                     });
                 }
+                "palette-label" => {
+                    let text = match field(args, "text")?.first() { Some(S::Str(s)) => s.clone(), x => return Err(format!("lbl text {x:?}")) };
+                    let muted = opt_field(args, "muted").map(|_| boolean(args, "muted")).transpose()?.unwrap_or(true);
+                    palette_rules.push(PaletteRule {
+                        rect: rect4(field(args, "rect")?, "lbl rect")?,
+                        clear_rect: opt_field(args, "clear-rect").map(|a| rect4(a, "lbl clear")).transpose()?,
+                        kind: PaletteRuleKind::Label { text, muted },
+                    });
+                }
+                "palette-popup" => {
+                    let label = match opt_field(args, "label").and_then(|a| a.first()) { Some(S::Str(s)) => s.clone(), _ => String::new() };
+                    let icon = opt_field(args, "icon").map(|a| icon_role(a.first(), "pop icon")).transpose()?;
+                    let enabled = opt_field(args, "enabled").map(|_| boolean(args, "enabled")).transpose()?.unwrap_or(true);
+                    palette_rules.push(PaletteRule {
+                        rect: rect4(field(args, "rect")?, "pop rect")?,
+                        clear_rect: opt_field(args, "clear-rect").map(|a| rect4(a, "pop clear")).transpose()?,
+                        kind: PaletteRuleKind::Popup { label, icon, enabled },
+                    });
+                }
+                "palette-check" => {
+                    let label = match field(args, "label")?.first() { Some(S::Str(s)) => s.clone(), x => return Err(format!("chk label {x:?}")) };
+                    let probe_rect = opt_field(args, "probe").map(|a| rect4(a, "chk probe")).transpose()?;
+                    let enabled = opt_field(args, "enabled").map(|_| boolean(args, "enabled")).transpose()?.unwrap_or(true);
+                    palette_rules.push(PaletteRule {
+                        rect: rect4(field(args, "rect")?, "chk rect")?,
+                        clear_rect: opt_field(args, "clear-rect").map(|a| rect4(a, "chk clear")).transpose()?,
+                        kind: PaletteRuleKind::Check { label, probe_rect, enabled },
+                    });
+                }
+                "palette-field" => {
+                    let value = match opt_field(args, "value").and_then(|a| a.first()) { Some(S::Str(s)) => s.clone(), _ => String::new() };
+                    let unit = match opt_field(args, "unit").and_then(|a| a.first()) { Some(S::Str(s)) => s.clone(), _ => String::new() };
+                    let numeric_cap = opt_field(args, "numeric-cap").map(|_| boolean(args, "numeric-cap")).transpose()?.unwrap_or(false);
+                    let enabled = opt_field(args, "enabled").map(|_| boolean(args, "enabled")).transpose()?.unwrap_or(true);
+                    palette_rules.push(PaletteRule {
+                        rect: rect4(field(args, "rect")?, "fld rect")?,
+                        clear_rect: opt_field(args, "clear-rect").map(|a| rect4(a, "fld clear")).transpose()?,
+                        kind: PaletteRuleKind::FieldXs { value, unit, numeric_cap, enabled },
+                    });
+                }
+                "palette-mini-slider" => {
+                    let track_rect = opt_field(args, "track").map(|a| rect4(a, "ms track")).transpose()?;
+                    let default_permille = opt_field(args, "default").map(|_| int(args, "default")).transpose()?.unwrap_or(0) as u16;
+                    let enabled = opt_field(args, "enabled").map(|_| boolean(args, "enabled")).transpose()?.unwrap_or(true);
+                    palette_rules.push(PaletteRule {
+                        rect: rect4(field(args, "rect")?, "ms rect")?,
+                        clear_rect: opt_field(args, "clear-rect").map(|a| rect4(a, "ms clear")).transpose()?,
+                        kind: PaletteRuleKind::MiniSlider { track_rect, default_permille, enabled },
+                    });
+                }
                 _ => {}
             }
         }

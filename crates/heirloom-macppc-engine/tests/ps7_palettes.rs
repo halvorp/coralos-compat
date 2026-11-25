@@ -15,7 +15,7 @@ mod wdef_bindings;
 #[test]
 fn photoshop_7_palette_bindings_parse_and_wire_roundtrip() {
     let bindings = wdef_bindings::load_plane_chrome("macppc");
-    assert_eq!(bindings.len(), 5, "expected 5 Photoshop 7 palette bindings, got {}", bindings.len());
+    assert_eq!(bindings.len(), 6, "expected 6 Photoshop 7 palette bindings (5 floating palettes + Options bar), got {}", bindings.len());
     let ids: Vec<&str> = bindings.iter().map(|b| b.id.as_str()).collect();
     for want in [
         "photoshop-7.0-palette-tools",
@@ -23,11 +23,12 @@ fn photoshop_7_palette_bindings_parse_and_wire_roundtrip() {
         "photoshop-7.0-palette-color",
         "photoshop-7.0-palette-history",
         "photoshop-7.0-palette-layers",
+        "photoshop-7.0-palette-options",
     ] {
         assert!(ids.contains(&want), "missing binding {want:?} in {ids:?}");
     }
     for b in &bindings {
-        assert!(!b.pixel_guards.is_empty(), "{} must carry a pixel-mask guard", b.id);
+        assert!(!b.pixel_guards.is_empty() || b.window_range.is_some(), "{} must carry a pixel-mask guard or window-range", b.id);
         assert!(!b.palette_rules.is_empty(), "{} must carry palette rules", b.id);
         let wire = heirloom_bind::wire::encode_plane_chrome(b).expect("encode_plane_chrome");
         let decoded = heirloom_bind::wire::decode_plane_chrome(&wire).expect("decode_plane_chrome");
@@ -179,6 +180,18 @@ fn photoshop_7_palettes_translate_natively_when_bound_and_stay_raw_when_unbound(
                 PalettePart::MiniToggles { keys, latched } => {
                     eprintln!("  MiniToggles: {} keys latched={latched:#b}", keys.len());
                     saw_mini_toggles += 1;
+                }
+                PalettePart::Popup { label, icon, .. } => {
+                    eprintln!("  Popup: label={label:?} icon={icon:?}");
+                }
+                PalettePart::Check { label, checked, .. } => {
+                    eprintln!("  Check: label={label:?} checked={checked}");
+                }
+                PalettePart::FieldXs { value, unit, numeric_cap, .. } => {
+                    eprintln!("  FieldXs: value={value:?} unit={unit:?} cap={numeric_cap}");
+                }
+                PalettePart::MiniSlider { permille, .. } => {
+                    eprintln!("  MiniSlider: permille={permille}");
                 }
             }
         }
