@@ -117,6 +117,7 @@ const CHUNKYIMAGE: &[(u32, Ty)] = &[(MUIA_ChunkyImage_Pixels, Num), (MUIA_Chunky
 const BODYCHUNK: &[(u32, Ty)] = &[(MUIA_Bodychunk_Body, Num), (MUIA_Bodychunk_Compression, Num), (MUIA_Bodychunk_Depth, Num), (MUIA_Bodychunk_Masking, Num)];
 const DATASPACE: &[(u32, Ty)] = &[(MUIA_Dataspace_Pool, Num)];
 const IMAGEDISPLAY: &[(u32, Ty)] = &[(MUIA_Imagedisplay_Spec, Num), (MUIA_Imagedisplay_UseDefSize, Num), (MUIA_Imagedisplay_FreeHoriz, Num), (MUIA_Imagedisplay_FreeVert, Num)];
+const PENDISPLAY: &[(u32, Ty)] = &[(0x8042a748, Num), (0x8042dc24, Num), (0x8042a1a9, Num), (0x8042a204, Num)]; // Pen, Reference, RGBcolor, Spec
 
 /// The attributes `kind` itself defines (ancestors' are looked up separately).
 fn own(kind: Kind) -> &'static [(u32, Ty)] {
@@ -127,7 +128,7 @@ fn own(kind: Kind) -> &'static [(u32, Ty)] {
         Kind::Register => REGISTER, Kind::Text => TEXT, Kind::String => STRING, Kind::Cycle => CYCLE, Kind::Radio => RADIO,
         Kind::Numeric => NUMERIC, Kind::Slider => SLIDER, Kind::Numericbutton => &[], Kind::Gauge => GAUGE, Kind::Prop => PROP, Kind::Scrollbar => SCROLLBAR,
         Kind::List => LIST, Kind::Listview => LISTVIEW, Kind::Popstring => POPSTRING, Kind::Popasl => POPASL, Kind::Popobject => POPOBJECT,
-        Kind::Bitmap => BITMAP, Kind::ChunkyImage => CHUNKYIMAGE, Kind::Bodychunk => BODYCHUNK, Kind::Imagedisplay => IMAGEDISPLAY, Kind::Semaphore => &[], Kind::Dataspace => DATASPACE,
+        Kind::Bitmap => BITMAP, Kind::ChunkyImage => CHUNKYIMAGE, Kind::Bodychunk => BODYCHUNK, Kind::Imagedisplay => IMAGEDISPLAY, Kind::Pendisplay => PENDISPLAY, Kind::Semaphore => &[], Kind::Dataspace => DATASPACE,
     }
 }
 

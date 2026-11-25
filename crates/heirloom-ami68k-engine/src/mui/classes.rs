@@ -13,7 +13,7 @@ pub enum Kind {
     Notify, Family, Application, Window, Menustrip, Menu, Menuitem,
     Area, Rectangle, Balance, Image, Group, Virtgroup, Scrollgroup, Register, Text, String, Cycle, Radio,
     Numeric, Slider, Numericbutton, Gauge, Prop, Scrollbar, List, Listview, Popstring, Popasl, Popobject,
-    Bitmap, ChunkyImage, Bodychunk, Imagedisplay,
+    Bitmap, ChunkyImage, Bodychunk, Imagedisplay, Pendisplay,
     Semaphore, Dataspace,
 }
 
@@ -56,6 +56,7 @@ pub const CLASSES: &[Class] = &[
     c("ChunkyImage.mui", Some(Kind::Bitmap), Kind::ChunkyImage, false),
     c("Bodychunk.mui", Some(Kind::Bitmap), Kind::Bodychunk, false),
     c("Imagedisplay.mui", Some(Kind::Area), Kind::Imagedisplay, false),
+    c("Pendisplay.mui", Some(Kind::Area), Kind::Pendisplay, false),
     c("Semaphore.mui", None, Kind::Semaphore, false),
     c("Dataspace.mui", Some(Kind::Semaphore), Kind::Dataspace, false),
 ];

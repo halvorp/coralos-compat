@@ -98,7 +98,7 @@ pub fn leaf(o: &Objects, obj: u32) -> Option<ControlKind> {
             if o.num(obj, MUIA_Image_Spec) == Some(MUII_CheckMark) && mode == MUIV_InputMode_Toggle { ControlKind::Checkbox { checked: selected } }
             else if pushable { ControlKind::Button } else { return None }
         }
-        Kind::Area if pushable => ControlKind::Button,
+        Kind::Area | Kind::Pendisplay if pushable => ControlKind::Button,
         Kind::String => {
             let accept = o.text(obj, MUIA_String_Accept);
             let integer = !accept.is_empty() && accept.chars().all(|c| c.is_ascii_digit() || c == '-');

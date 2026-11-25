@@ -141,6 +141,8 @@ pub fn method<U: GuestUi>(a: &mut Amiga<U>, obj: u32, id: u32, args: &[u32]) -> 
             let l = list::list_of(&a.objects, obj).ok_or_else(|| Refusal("MUI Listview has no List".into()))?;
             method(a, l, id, args)
         }
+        // Pendisplay.mui pen selection methods (SetMUIPen, SetColormap, SetRGB).
+        0x8042039d | 0x80426c80 | 0x8042c131 if kind.is_a(Kind::Pendisplay) => Ok(0),
         _ if kind.is_a(Kind::Semaphore) => {
             if let Some(r) = store::semaphore_method(a, obj, id)? { return Ok(r); }
             if kind == Kind::Dataspace { if let Some(r) = store::dataspace_method(a, obj, id, args)? { return Ok(r); } }

@@ -426,6 +426,9 @@ fn a_menustrip_is_built_from_a_newmenu_array_and_make_object_refuses_what_it_doe
     let vg = make(&mut a, "Virtgroup.mui", &[]).unwrap();
     let sg = make(&mut a, "Scrollgroup.mui", &[(MUIA_Scrollgroup_Contents, vg), (0x8042f50e, 1)]).unwrap();
     assert_eq!(get_attr(&mut a, sg, 0x8042f50e).unwrap(), 1, "MUIA_Scrollgroup_AutoBars stored cleanly");
+    let pd = make(&mut a, "Pendisplay.mui", &[(0x8042a748, 3)]).unwrap();
+    assert_eq!(get_attr(&mut a, pd, 0x8042a748).unwrap(), 3);
+    assert_eq!(method(&mut a, pd, 0x8042c131, &[0xFFFF_FFFF, 0, 0]).unwrap(), 0);
 }
 
 #[test]
