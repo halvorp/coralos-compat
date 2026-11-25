@@ -157,11 +157,29 @@ pub const TABLE: &[Row] = &[
 #[derive(Debug, Clone)]
 pub struct Facts { pub owner: u32, pub rect: Rect, pub vis: bool, pub hilite: u8, pub value: i16, pub min: i16, pub max: i16, pub proc_id: u16, pub title: String,
     /// A pop-up's item titles (read from its MENU resource when it was made); empty for every other control.
-    pub items: Vec<String> }
+    pub items: Vec<String>,
+    /// A pop-up's `titleWidth` (`maxValue` at `NewControl` time); 0 for non-popups.
+    pub title_width: i16,
+    /// Active `SetOrigin` port offset `(ox, oy)` captured when `Draw1Control` painted this control (window pixel = local - origin).
+    pub drawn_origin: Option<(i16, i16)> }
+
+/// Shift a control's local `rect` into window-pixel coordinates using any `SetOrigin` offset from `Draw1Control`.
+fn win_rect(f: &Facts) -> Rect {
+    match f.drawn_origin {
+        Some((ox, oy)) => Rect {
+            top: f.rect.top.wrapping_sub(oy),
+            left: f.rect.left.wrapping_sub(ox),
+            bottom: f.rect.bottom.wrapping_sub(oy),
+            right: f.rect.right.wrapping_sub(ox),
+        },
+        None => f.rect,
+    }
+}
 
 /// The attribute map, as data over the record: facts -> the role's model. `None`: the role has no kit part yet.
 fn model(row: &Proc, f: &Facts, token: u32) -> Option<ControlModel> {
-    let (w, h) = (i32::from(f.rect.right) - i32::from(f.rect.left), i32::from(f.rect.bottom) - i32::from(f.rect.top));
+    let mut r = win_rect(f);
+    let (w, h) = (i32::from(r.right) - i32::from(r.left), i32::from(r.bottom) - i32::from(r.top));
     let kind = match row.cdef.role()? {
         Role::Button => ControlKind::Button,
         Role::Check if row.cdef == Cdef::RadioButton => {
@@ -172,13 +190,30 @@ fn model(row: &Proc, f: &Facts, token: u32) -> Option<ControlModel> {
         Role::Scroll => ControlKind::ScrollBar { vertical: h >= w, total: (i32::from(f.max) - i32::from(f.min)).max(0) as u32 + 1, visible: 1, top: (i32::from(f.value) - i32::from(f.min)).max(0) as u32 },
         // a pop-up whose menu could not be read has no kit part: the plane draws it (named in the log at creation)
         Role::Choice if !f.items.is_empty() => {
+            // Inside Macintosh: Toolbox Essentials 5-25: a pop-up's contrlRect includes its titleWidth on the left and the
+            // pop-up button on the right. Advance `r.left` past the title lane so the host renders the label beside the button
+            // instead of clipping it off the left edge of the dialog.
+            if !f.title.is_empty() {
+                let tw = if f.title_width > 0 {
+                    i32::from(f.title_width)
+                } else if f.title_width < 0 {
+                    f.title.chars().count() as i32 * 8 + 8
+                } else {
+                    0
+                };
+                if tw > 0 && tw < w - 24 {
+                    r.left = r.left.wrapping_add(tw as i16);
+                }
+            }
             let last = f.items.len() as i32 - 1;
             ControlKind::Choice { style: ChoiceStyle::Popup, labels: f.items.clone(), selected: (i32::from(f.value) - 1).clamp(0, last) as u32 }
         }
         _ => return None,
     };
-    let label = if row.cdef == Cdef::ScrollBar { String::new() } else { f.title.clone() };
-    Some(ControlModel { kind, label, rect: guest_rect(f.rect), enabled: f.hilite < INACTIVE, token: CallbackToken(u64::from(token)) })
+    // Radio buttons already carry their title inside `Choice { style: Radio, labels: [title] }`; keeping `ControlModel.label`
+    // non-empty would cause hosts to draw a duplicate label to the left of the radio circle.
+    let label = if matches!(row.cdef, Cdef::ScrollBar | Cdef::RadioButton) { String::new() } else { f.title.clone() };
+    Some(ControlModel { kind, label, rect: guest_rect(r), enabled: f.hilite < INACTIVE, token: CallbackToken(u64::from(token)) })
 }
 
 impl<U: GuestUi> Mac<U> {
@@ -301,7 +336,9 @@ impl<U: GuestUi> Mac<U> {
             vis: self.mem.read_u8(p + C_VIS).map_err(&e)? != 0, hilite: self.mem.read_u8(p + C_HILITE).map_err(&e)?,
             value: self.mem.read_i16(p + C_VALUE).map_err(&e)?, min: self.mem.read_i16(p + C_MIN).map_err(&e)?, max: self.mem.read_i16(p + C_MAX).map_err(&e)?,
             proc_id: self.tr.procs[&ctl], title: read_pstring(&self.mem, p + C_TITLE)?,
-            items: self.tr.popups.get(&ctl).and_then(|&(_, h)| self.menu_view(h).ok()).map(|m| m.items.iter().map(|i| crate::menu::mac_text(&i.text)).collect()).unwrap_or_default(),
+            items: self.tr.popups.get(&ctl).and_then(|&(_, h, _)| self.menu_view(h).ok()).map(|m| m.items.iter().map(|i| crate::menu::mac_text(&i.text)).collect()).unwrap_or_default(),
+            title_width: self.tr.popups.get(&ctl).map_or(0, |&(_, _, tw)| tw),
+            drawn_origin: self.tr.drawn_origin.get(&ctl).map(|&(_, ox, oy)| (ox, oy)),
         })
     }
 
@@ -368,17 +405,18 @@ impl<U: GuestUi> Mac<U> {
         self.tr.procs.insert(ctl, proc_id);
         match self.proc_of(proc_id) {
             None => self.log.push(format!("[control] procID {proc_id} has no row in the Control Manager table: drawn into the content plane as the default look")),
-            Some(r) if r.cdef == Cdef::PopupMenu => self.make_popup(ctl, proc_id, min)?,
+            Some(r) if r.cdef == Cdef::PopupMenu => self.make_popup(ctl, proc_id, min, max)?,
             Some(_) => {}
         }
         self.sync_control(ctl)?;
         Ok(ctl)
     }
 
-    /// A pop-up's menu: `minValue` was the MENU resource ID; the CDEF publishes `contrlMin` 1 and `contrlMax` = the item count, and keeps
-    /// the menu in its private data: `contrlData` is a handle to `PopupPrivateData { MenuHandle mHandle; SInt16 mID; }` (Controls.h), what a
-    /// classic program reads and Carbon's `GetControlPopupMenuHandle` returns.
-    fn make_popup(&mut self, ctl: u32, proc_id: u16, menu_id: i16) -> Result<(), Refusal> {
+    /// A pop-up's menu: `minValue` was the MENU resource ID; `maxValue` was the title width in pixels; the CDEF publishes
+    /// `contrlMin` 1 and `contrlMax` = the item count, and keeps the menu in its private data: `contrlData` is a handle to
+    /// `PopupPrivateData { MenuHandle mHandle; SInt16 mID; }` (Controls.h), what a classic program reads and Carbon's
+    /// `GetControlPopupMenuHandle` returns.
+    fn make_popup(&mut self, ctl: u32, proc_id: u16, menu_id: i16, title_width: i16) -> Result<(), Refusal> {
         let mut attached_h = 0u32;
         let why = if proc_id & POPUP_USE_ADD_RES_MENU != 0 { Some("popupUseAddResMenu builds its menu from a resource TYPE at run time".to_string()) } else {
             let found = self.get_resource(*b"MENU", menu_id, false).or_else(|e| {
@@ -401,7 +439,7 @@ impl<U: GuestUi> Mac<U> {
         // Always allocate PopupPrivateData { MenuHandle mHandle; SInt16 mID; } in contrlData (Controls.h): programs
         // creating dynamic pop-ups (e.g. menuID -12345 / popupUseAddResMenu) verify contrlData != NIL and attach their
         // MenuHandle afterwards (via SetControlPopupMenuHandle or directly through contrlData).
-        self.tr.popups.insert(ctl, (menu_id, attached_h));
+        self.tr.popups.insert(ctl, (menu_id, attached_h, title_width));
         let data = self.mm.new_handle(&mut self.mem, &mut self.heap, POPUP_DATA_SIZE, true).map_err(|e| Refusal(format!("NewControl: no memory for the pop-up's private data (memFullErr {e})")))?;
         let (p, e) = (self.mm.block(data).map(|b| b.ptr).unwrap_or(0), Refusal::mem("PopupPrivateData"));
         self.mem.write_u32(p, attached_h).and_then(|_| self.mem.write_u16(p + 4, menu_id as u16)).map_err(&e)?;
@@ -431,21 +469,22 @@ impl<U: GuestUi> Mac<U> {
             if data != 0 { let _ = self.dispose_handle(data); }
         }
         self.tr.procs.remove(&ctl);
+        self.tr.drawn_origin.remove(&ctl);
         self.tr.tracks.remove(&ctl);
         self.dispose_handle(ctl).map_err(|e| Refusal(format!("DisposeControl: memory manager error {e}")))
     }
 
     /// A pop-up control's menu (`PopupPrivateData.mHandle` of its `contrlData`), `None` for any other control.
-    pub fn popup_menu(&self, ctl: u32) -> Option<(i16, u32)> { self.tr.popups.get(&ctl).copied() }
+    pub fn popup_menu(&self, ctl: u32) -> Option<(i16, u32)> { self.tr.popups.get(&ctl).map(|&(id, h, _)| (id, h)) }
 
     /// Carbon's `SetControlPopupMenuHandle`: the pop-up shows `menu` from now on (its private data and the item count follow it).
     pub fn set_popup_menu(&mut self, ctl: u32, menu: u32) -> Result<(), Refusal> {
-        let (id, _) = self.popup_menu(ctl).ok_or_else(|| Refusal(format!("SetControlPopupMenuHandle: {ctl:#x} is not a pop-up control")))?;
+        let (id, _, tw) = self.tr.popups.get(&ctl).copied().ok_or_else(|| Refusal(format!("SetControlPopupMenuHandle: {ctl:#x} is not a pop-up control")))?;
         let n = self.menu_view(menu)?.items.len();
         let e = Refusal::mem("PopupPrivateData");
         let data = self.mem.read_u32(self.control_rec(ctl, "SetControlPopupMenuHandle")? + C_DATA).map_err(&e)?;
         if let Some(p) = self.mm.block(data).map(|b| b.ptr) { self.mem.write_u32(p, menu).map_err(&e)?; }
-        self.tr.popups.insert(ctl, (id, menu));
+        self.tr.popups.insert(ctl, (id, menu, tw));
         self.set_control_field(ctl, C_MAX, n.min(i16::MAX as usize) as i16)?;
         self.sync_control(ctl)
     }
@@ -461,7 +500,11 @@ impl<U: GuestUi> Mac<U> {
         let row = self.proc_of(f.proc_id).ok_or_else(|| Refusal(format!("Intent: procID {} has no row in the Control Manager table", f.proc_id)))?;
         if f.hilite >= INACTIVE { return Err(Refusal(format!("Intent: {} {ctl:#x} is inactive (contrlHilite {})", row.name, f.hilite))); }
         let g = gesture(row, &f, &intent)?;
-        let (v, h) = click_point(row, &f);
+        let (lv, lh) = click_point(row, &f);
+        let (v, h) = match f.drawn_origin {
+            Some((ox, oy)) => (lv.wrapping_sub(oy), lh.wrapping_sub(ox)),
+            None => (lv, lh),
+        };
         self.tr.supersede();
         if let Some(item) = self.dialog_item_of(f.owner, ctl) {
             // DialogSelect runs TrackControl first: the control's value is what the gesture left, THEN the item is reported
@@ -651,9 +694,19 @@ fn updt_control<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Don
     done(format!("[control] UpdtControl {:#x}: {} control(s) (the region {:#x} only clips)", c.args.get(0), all.len(), c.args.get(1)))
 }
 fn draw_one<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
-    m.control_rec(c.args.get(0), "Draw1Control")?;
-    m.draw_fallback(c.args.get(0))?;
-    done(format!("[control] Draw1Control {:#x}", c.args.get(0)))
+    let ctl = c.args.get(0);
+    m.control_rec(ctl, "Draw1Control")?;
+    let f = m.control_facts(ctl)?;
+    let pr = read_rect(&m.mem, f.owner + 16).unwrap_or(Rect { top: 0, left: 0, bottom: 0, right: 0 });
+    // MacApp/PowerPlant/Toolbox views unlink controls from WR_CONTROL_LIST and draw each via `SetOrigin(-x, -y); Draw1Control(ctl)`.
+    // Recording the active port origin and re-syncing projects those controls natively at their real window-pixel coordinates.
+    if pr.left != 0 || pr.top != 0 || m.tr.drawn_origin.contains_key(&ctl) || m.tr.projected(Obj::Control(ctl)).is_none() {
+        m.tr.drawn_origin.insert(ctl, (f.owner, pr.left, pr.top));
+        m.sync_control(ctl)?;
+    } else {
+        m.draw_fallback(ctl)?;
+    }
+    done(format!("[control] Draw1Control {ctl:#x} owner={:#x} portOrigin=({},{}) rect=({},{},{},{}) title={:?}", f.owner, pr.left, pr.top, f.rect.left, f.rect.top, f.rect.right, f.rect.bottom, f.title))
 }
 
 /// `FindControl(thePoint, theWindow, VAR whichControl): INTEGER`: geometric over the window's list, local coordinates;

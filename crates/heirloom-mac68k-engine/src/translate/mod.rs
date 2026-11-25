@@ -31,7 +31,8 @@ use crate::events::Delivered;
 use crate::machine::Mac;
 use crate::pascal::Rect;
 use crate::Refusal;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::format;
 use heirloom_ui_abi::{CallbackToken, ControlModel, ControlValue, GuestUi, Intent, UiObjectRef};
 use heirloom_translate::{Projected, Projections};
 
@@ -47,12 +48,16 @@ pub enum Obj {
     Control(u32),
     /// The `Handle` of a dialog's static or editable text item.
     Text(u32),
+    /// A live single-line TextEdit `TEHandle` projected as an editable native field.
+    TextEdit(u32),
+    /// A declarative `plane_chrome` bound edit field (`PaletteRuleKind::EditField`) projected as an editable native field.
+    BoundField(u32),
     /// The `ListHandle` of a List Manager list.
     List(u32),
 }
 
 impl Obj {
-    pub fn handle(self) -> u32 { match self { Obj::Control(h) | Obj::Text(h) | Obj::List(h) => h } }
+    pub fn handle(self) -> u32 { match self { Obj::Control(h) | Obj::Text(h) | Obj::TextEdit(h) | Obj::BoundField(h) | Obj::List(h) => h } }
 }
 
 /// What the engine adds to the shared registry's entry: which guest object, in which guest window.
@@ -65,9 +70,18 @@ pub struct Translate {
     live: Projections<Meta>,
     /// `ControlHandle` -> its `procID` (a ControlRecord holds only a CDEF handle, so the id lives host-side).
     pub procs: BTreeMap<u32, u16>,
-    /// A pop-up control's MENU resource ID and its MenuHandle (the CDEF's private data, `PopupPrivateData.mHandle`): the item titles are read
-    /// from the menu each time the control is projected, so items the program appends or a menu it swaps in show.
-    pub popups: BTreeMap<u32, (i16, u32)>,
+    /// A pop-up control's MENU resource ID, its MenuHandle (`PopupPrivateData.mHandle`), and the initial `titleWidth`
+    /// (`maxValue` passed to `NewControl` before `make_popup` replaced `contrlMax` with the item count).
+    pub popups: BTreeMap<u32, (i16, u32, i16)>,
+    /// Port origin `(owner_win, portRect.left, portRect.top)` active when `Draw1Control` painted a view-relative control
+    /// (MacApp/PowerPlant/Toolbox views that call `SetOrigin(-x, -y); Draw1Control(ctl)` with view-local `contrlRect`).
+    pub drawn_origin: BTreeMap<u32, (u32, i16, i16)>,
+    /// `TEHandle`s marked interactive (`TEFeatureFlag(teFOutlineHilite)` or `TEActivate`).
+    pub te_editable: BTreeSet<u32>,
+    /// Live single-line `TEHandle`s projected as native editable fields: `te_handle -> (owner_win, window_pixel_rect)`.
+    pub te_boxes: BTreeMap<u32, (u32, Rect)>,
+    /// Declarative `plane_chrome` bound edit fields: `token -> (owner_win, rect, current_text)`.
+    pub bound_fields: BTreeMap<u32, (u32, heirloom_ui_abi::GuestRect, alloc::string::String)>,
     /// A native gesture waiting for its `TrackControl`: control -> (the part code the user's release is in, the value the drag leaves).
     /// It lives until that call, or until the next input supersedes it ([`Translate::supersede`]).
     pub tracks: BTreeMap<u32, (u16, Option<i16>)>,
@@ -118,7 +132,12 @@ impl<U: GuestUi> Mac<U> {
     }
 
     /// Forget every projection of a window that is going away (the host retires its controls with the window).
-    pub(crate) fn forget_window_projections(&mut self, win: u32) { self.tr.live.forget_where(|p| p.meta.win == win); }
+    pub(crate) fn forget_window_projections(&mut self, win: u32) {
+        self.tr.live.forget_where(|p| p.meta.win == win);
+        self.tr.drawn_origin.retain(|_, &mut (w, _, _)| w != win);
+        self.tr.te_boxes.retain(|_, &mut (w, _)| w != win);
+        self.tr.bound_fields.retain(|_, &mut (w, _, _)| w != win);
+    }
 
     /// A window just got its native window: show every control and item it already holds.
     pub(crate) fn project_window(&mut self, win: u32) -> Result<(), Refusal> {
@@ -132,9 +151,48 @@ impl<U: GuestUi> Mac<U> {
         match obj {
             Obj::Control(h) => self.control_intent(h, intent)?,
             Obj::Text(h) => self.text_intent(h, intent)?,
+            Obj::TextEdit(h) => self.te_intent(h, intent)?,
+            Obj::BoundField(h) => self.bound_field_intent(h, intent)?,
             Obj::List(h) => self.list_intent(h, intent)?,
         }
         Ok(Delivered::Queued)
+    }
+
+    /// Route native edits on a declarative `plane_chrome` bound edit field back to the guest window via click + keystrokes.
+    pub(crate) fn bound_field_intent(&mut self, tok: u32, intent: Intent) -> Result<(), Refusal> {
+        let Some((win, rect, _)) = self.tr.bound_fields.get(&tok).cloned() else {
+            return Err(Refusal(format!("Intent: bound field {tok:#x} is not projected")));
+        };
+        let is_commit = matches!(intent, Intent::CommitText(_));
+        match intent {
+            Intent::Press => {
+                if let Some(w) = self.windows.get(&win).map(|w| w.rect) {
+                    let gv = w.top.wrapping_add((rect.top + rect.height / 2) as i16);
+                    let gh = w.left.wrapping_add((rect.left + rect.width / 2) as i16);
+                    self.mouse_event(crate::events::MOUSE_DOWN, gv, gh, 0)?;
+                    self.mouse_event(crate::events::MOUSE_UP, gv, gh, 0)?;
+                }
+                Ok(())
+            }
+            Intent::Drag(ControlValue::Text(t)) | Intent::CommitText(t) => {
+                if let Some(e) = self.tr.bound_fields.get_mut(&tok) { e.2 = t.clone(); }
+                self.adopt_native_state(Obj::BoundField(tok), &ControlValue::Text(t.clone()));
+                if is_commit {
+                    if let Some(w) = self.windows.get(&win).map(|w| w.rect) {
+                        let gv = w.top.wrapping_add((rect.top + rect.height / 2) as i16);
+                        let gh = w.left.wrapping_add((rect.left + rect.width / 2) as i16);
+                        self.mouse_event(crate::events::MOUSE_DOWN, gv, gh, 0)?;
+                        self.mouse_event(crate::events::MOUSE_UP, gv, gh, 0)?;
+                    }
+                    for ch in t.bytes().filter(|&b| (0x20..0x7F).contains(&b)) {
+                        self.post(crate::events::KEY_DOWN, u32::from(ch), 0, 0);
+                    }
+                    self.post(crate::events::KEY_DOWN, (0x24u32 << 8) | 0x0D, 0, 0);
+                }
+                Ok(())
+            }
+            other => Err(Refusal(format!("Intent {other:?} has no meaning for a bound edit field"))),
+        }
     }
 }
 

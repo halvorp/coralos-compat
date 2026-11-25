@@ -56,7 +56,12 @@ pub(crate) fn draw_on<U: GuestUi>(m: &mut Mac<U>, port: u32, bytes: &[u8], name:
             let (x0, y0) = (i32::from(pen.h) - t.local0.0, i32::from(pen.v) - t.local0.1 - 1 - m.qd.font.baseline as i32);
             let rd = |off: u32| m.mem.read_u16(port.wrapping_add(off)).unwrap_or(0);
             let back = read_port_pat(&m.mem, port, PatSlot::Bk)?;
-            let run = super::plane::Run { text: bytes, box_px: heirloom_raster::Rect::new(x0, y0, x0 + width as i32, y0 + m.qd.font.y_size as i32), font: rd(P_TX_FONT), face, size: rd(P_TX_SIZE), mode: tmode, back: &back };
+            let (fg_rgb, bg_rgb) = port_rgb(&m.mem, port).unwrap_or((crate::cqd::color::Rgb::BLACK, crate::cqd::color::Rgb::WHITE));
+            if let target::Home::Guest { addr, .. } = t.home {
+                let s: alloc::string::String = bytes.iter().map(|&c| crate::macroman::to_char(c)).collect();
+                m.qd.offscreen_text.insert(addr, (x0, y0, width as i32, rd(P_TX_FONT), face, rd(P_TX_SIZE), s));
+            }
+            let run = super::plane::Run { text: bytes, box_px: heirloom_raster::Rect::new(x0, y0, x0 + width as i32, y0 + m.qd.font.y_size as i32), font: rd(P_TX_FONT), face, size: rd(P_TX_SIZE), mode: tmode, back: &back, fg_rgb, bg_rgb };
             super::plane::record_text(&mut m.qd.plane, t, &run, &clip);
             Ok(touched)
         })?;

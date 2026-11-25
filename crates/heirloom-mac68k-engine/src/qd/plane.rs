@@ -115,13 +115,65 @@ pub fn record_pixels(planes: &mut Planes, t: &Target, touched: Rect) {
     if let Some((op, r)) = snapshot(t, touched) { planes.push(t.port, op, r, true); }
 }
 
+/// Classify an RGB colour from a `CGrafPort` into a semantic theme role when it matches standard Mac monochrome or
+/// Platinum UI chrome (black ink, neutral grey bevel/text, Platinum dialog surface, white shine). Chromatic colours
+/// return `None` so artwork and custom-coloured graphics stay on the exact `DrawOp::Pixels` path.
+fn is_neutral(c: crate::cqd::color::Rgb) -> bool {
+    let (r, g, b) = (i32::from(c.r), i32::from(c.g), i32::from(c.b));
+    (r - g).abs() <= 0x0808 && (g - b).abs() <= 0x0808 && (r - b).abs() <= 0x0808
+}
+
+fn color_text_role(fg: crate::cqd::color::Rgb) -> Option<PenRole> {
+    if !is_neutral(fg) { return None; }
+    let v = fg.r.max(fg.g).max(fg.b);
+    if v <= 0x3333 { Some(PenRole::Text) }
+    else if v <= 0xAAAA { Some(PenRole::TextMuted) }
+    else if v >= 0xF000 { Some(PenRole::Surface) }
+    else { None }
+}
+
+fn color_line_role(fg: crate::cqd::color::Rgb) -> Option<PenRole> {
+    if !is_neutral(fg) { return None; }
+    let v = fg.r.max(fg.g).max(fg.b);
+    if v >= 0xF000 { Some(PenRole::Shine) }
+    else if v <= 0x2FFF { Some(PenRole::Text) }
+    else if v <= 0xCCCC { Some(PenRole::Shadow) }
+    else { Some(PenRole::Surface) }
+}
+
 /// A fill of `region` (PIXEL coordinates, already clipped) with (`mode`, `pat`), after the bitmap was drawn.
-pub fn record_fill(planes: &mut Planes, t: &mut Target, region: &Region, mode: u16, pat: &[u8; 8]) {
+pub fn record_fill(planes: &mut Planes, t: &mut Target, region: &Region, mode: u16, pat: &[u8; 8], fg_bg: (crate::cqd::color::Rgb, crate::cqd::color::Rgb)) {
     if !recording(planes, t) { return; }
     t.recorded = true;
     let win = t.port;
-    // a colour window's pens are RGB pixels, not theme roles: only the raw route can say them exactly
-    match if t.bm.depth() > 1 { Ink::Raw } else { ink(mode, pat) } {
+    let chosen = if t.bm.depth() > 1 {
+        let solid_fg = *pat == [0xFF; 8];
+        let solid_bg = *pat == [0; 8];
+        if (mode & 7 == 0 || mode & 7 == 1) && (solid_fg || (mode & 7 == 0 && solid_bg)) {
+            let c = if solid_fg { fg_bg.0 } else { fg_bg.1 };
+            let b = region.bounds();
+            let hairline = (b.x1 - b.x0) <= 1 || (b.y1 - b.y0) <= 1;
+            let v = c.r.max(c.g).max(c.b);
+            if is_neutral(c) && (0xC800..=0xF200).contains(&v) {
+                Ink::Role(PenRole::Surface)
+            } else if solid_bg && is_neutral(c) && v >= 0xF000 && (b.y1 - b.y0) <= 12 {
+                // Single-line text/label background erase (e.g. TEUpdate on a dialog group-box title) paints dialog surface,
+                // never a raw white strip in dark mode; taller white document canvases stay exact Pixels.
+                Ink::Role(PenRole::Surface)
+            } else if hairline && is_neutral(c) {
+                if v >= 0xF000 { Ink::Role(PenRole::Shine) }
+                else if v <= 0xB800 { Ink::Role(PenRole::Shadow) }
+                else { Ink::Role(PenRole::Surface) }
+            } else {
+                Ink::Raw
+            }
+        } else {
+            Ink::Raw
+        }
+    } else {
+        ink(mode, pat)
+    };
+    match chosen {
         Ink::Nothing => {}
         Ink::Role(pen_role) => for r in region.rects() { planes.push(win, DrawOp::Fill { rect: grect(r), pen_role }, *r, true); },
         Ink::Invert => for r in region.rects() {
@@ -134,10 +186,19 @@ pub fn record_fill(planes: &mut Planes, t: &mut Target, region: &Region, mode: u
 }
 
 /// The pen's 1x1 line from `a` to `b` (PIXEL coordinates) when nothing of it was clipped; `false` = the caller records the region.
-pub fn record_line(planes: &mut Planes, t: &mut Target, a: (i32, i32), b: (i32, i32), mode: u16, pat: &[u8; 8]) -> bool {
+pub fn record_line(planes: &mut Planes, t: &mut Target, a: (i32, i32), b: (i32, i32), mode: u16, pat: &[u8; 8], fg_bg: (crate::cqd::color::Rgb, crate::cqd::color::Rgb)) -> bool {
     if !recording(planes, t) { return true; }
-    if t.bm.depth() > 1 { return false; }
-    let Ink::Role(pen_role) = ink(mode, pat) else { return false };
+    let pen_role = if t.bm.depth() > 1 {
+        if *pat == [0xFF; 8] && (mode & 7 == 0 || mode & 7 == 1) {
+            let Some(r) = color_line_role(fg_bg.0) else { return false };
+            r
+        } else {
+            return false;
+        }
+    } else {
+        let Ink::Role(r) = ink(mode, pat) else { return false };
+        r
+    };
     t.recorded = true;
     let bounds = Rect::new(a.0.min(b.0), a.1.min(b.1), a.0.max(b.0) + 1, a.1.max(b.1) + 1);
     planes.push(t.port, DrawOp::Line { a: GuestPoint { x: a.0, y: a.1 }, b: GuestPoint { x: b.0, y: b.1 }, pen_role }, bounds, false);
@@ -154,6 +215,8 @@ pub struct Run<'a> {
     pub size: u16,
     pub mode: u16,
     pub back: &'a [u8; 8],
+    pub fg_rgb: crate::cqd::color::Rgb,
+    pub bg_rgb: crate::cqd::color::Rgb,
 }
 
 /// Mac Roman text through [`crate::macroman`] (the one table); the glyph shapes come from the host's face.
@@ -164,11 +227,21 @@ pub fn record_text(planes: &mut Planes, t: &mut Target, run: &Run, clip: &Region
     if !recording(planes, t) { return; }
     t.recorded = true;
     let (win, b) = (t.port, run.box_px);
-    let inside = clip.rects().iter().any(|r| covers(r, &b)) && t.bm.depth() == 1; // colour text goes raw (its pen is an RGB, not a role)
-    let back = match ink(8, run.back) { Ink::Role(r) => Some(r), _ => None };
-    // (ink role, background role) by text mode: srcCopy paints the box, srcOr only the glyphs, srcBic clears the glyphs,
-    // notSrcCopy is white glyphs on black; every other mode has no role.
-    let roles = match (run.mode & 7, back) { (0, Some(bg)) => Some((PenRole::Text, Some(bg))), (1, _) => Some((PenRole::Text, None)), (3, _) => Some((PenRole::Surface, None)), (4, _) => Some((PenRole::Surface, Some(PenRole::Text))), _ => None };
+    let inside = clip.rects().iter().any(|r| covers(r, &b));
+    let roles = if t.bm.depth() > 1 {
+        let fg_role = color_text_role(run.fg_rgb);
+        let bg_light = is_neutral(run.bg_rgb) && run.bg_rgb.r.min(run.bg_rgb.g).min(run.bg_rgb.b) >= 0xBBBB;
+        match (run.mode & 7, fg_role, bg_light) {
+            (0, Some(r), true) => Some((r, Some(PenRole::Surface))),
+            (1, Some(r), _) => Some((r, None)),
+            _ => None,
+        }
+    } else {
+        let back = match ink(8, run.back) { Ink::Role(r) => Some(r), _ => None };
+        // (ink role, background role) by text mode: srcCopy paints the box, srcOr only the glyphs, srcBic clears the glyphs,
+        // notSrcCopy is white glyphs on black; every other mode has no role.
+        match (run.mode & 7, back) { (0, Some(bg)) => Some((PenRole::Text, Some(bg))), (1, _) => Some((PenRole::Text, None)), (3, _) => Some((PenRole::Surface, None)), (4, _) => Some((PenRole::Surface, Some(PenRole::Text))), _ => None }
+    };
     let (Some((pen_role, bg_role)), true) = (roles, inside) else {
         if let Some((op, r)) = snapshot(t, b) { planes.push(win, op, r, true); }
         return;
@@ -177,6 +250,20 @@ pub fn record_text(planes: &mut Planes, t: &mut Target, run: &Run, clip: &Region
     let font_role = if run.face & 1 != 0 { FontRole::Title } else if MONO_FONTS.contains(&run.font) { FontRole::Mono } else { FontRole::Ui };
     let op = DrawOp::Text { at: GuestPoint { x: b.x0, y: b.y0 }, string: to_string(run.text), font_role, px, width: b.x1 - b.x0, pen_role, bg_role };
     planes.push(win, op, b, bg_role.is_some());
+}
+
+/// Record a small double-buffered single-line label blitted via `CopyBits` from an offscreen BitMap/PixMap onto a
+/// window canvas (e.g. MacApp `TStaticText`) as a theme `Surface` fill + vector `Text` run.
+#[allow(clippy::too_many_arguments)]
+pub fn record_offscreen_label(planes: &mut Planes, t: &mut Target, dst: Rect, x: i32, y: i32, width: i32, font: u16, face: u8, size: u16, string: String) {
+    if !recording(planes, t) { return; }
+    t.recorded = true;
+    let win = t.port;
+    planes.push(win, DrawOp::Fill { rect: grect(&dst), pen_role: PenRole::Surface }, dst, true);
+    let px = if size == 0 { DEFAULT_PX } else { size };
+    let font_role = if face & 1 != 0 { FontRole::Title } else if MONO_FONTS.contains(&font) { FontRole::Mono } else { FontRole::Ui };
+    let tb = Rect::new(x, y, x + width.max(1), y + i32::from(px));
+    planes.push(win, DrawOp::Text { at: GuestPoint { x, y }, string, font_role, px, width, pen_role: PenRole::Text, bg_role: None }, tb, false);
 }
 
 /// A colour window's colour table changed (`SetEntries`, an activated palette): what was recorded as RGB pixels is stale, so
@@ -203,13 +290,43 @@ pub fn flush<U: GuestUi>(m: &mut Mac<U>) {
         if !m.tr.plane_chrome_bindings.is_empty() {
             let canvas_r = m.qd.canvases[&win].rect();
             let win_size = (canvas_r.x1 - canvas_r.x0, canvas_r.y1 - canvas_r.y0);
-            for b in &m.tr.plane_chrome_bindings {
+            let mut bound_edits: Vec<(u32, GuestRect, String, bool)> = Vec::new();
+            for (bi, b) in m.tr.plane_chrome_bindings.iter().enumerate() {
                 let heirloom_bind::PlaneChromeIdentity::Resource { res_type, res_id, length, fnv1a64 } = b.identity;
                 let matched = m.rm.files.iter().rev().find_map(|f| f.fork.find(res_type, res_id).and_then(|e| f.fork.data(e)))
                     .is_some_and(|data| data.len() as u32 == length && heirloom_bind::wdef::fnv1a64(data) == fnv1a64);
                 if matched {
+                    let size_ok = b.window_range.is_none_or(|r| r.matches(win_size.0, win_size.1));
+                    if size_ok {
+                        let guards_ok = b.pixel_guards.iter().all(|g| {
+                            heirloom_bind::plane_chrome::dark_mask_hash(&ops, g.rect, g.dark_luma) == Some(g.fnv1a64)
+                        });
+                        if guards_ok {
+                            for (ri, rule) in b.palette_rules.iter().enumerate() {
+                                if let heirloom_bind::plane_chrome::PaletteRuleKind::EditField { value, enabled } = &rule.kind {
+                                    let tok = 0xBF00_0000u32 | (((bi as u32) & 0xFF) << 8) | ((ri as u32) & 0xFF);
+                                    bound_edits.push((tok, rule.rect, value.clone(), *enabled));
+                                }
+                            }
+                        }
+                    }
                     ops = b.apply(ops, win_size);
                 }
+            }
+            for (tok, rect, default_val, enabled) in bound_edits {
+                let text = m.tr.bound_fields.entry(tok).or_insert((win, rect, default_val)).2.clone();
+                if let Some(entry) = m.tr.bound_fields.get_mut(&tok) {
+                    entry.0 = win;
+                    entry.1 = rect;
+                }
+                let model = heirloom_ui_abi::ControlModel {
+                    kind: heirloom_ui_abi::ControlKind::Field { text, max_len: 32, editable: true, integer: false },
+                    label: String::new(),
+                    rect,
+                    enabled,
+                    token: heirloom_ui_abi::CallbackToken(u64::from(tok)),
+                };
+                let _ = m.sync_projection(win, crate::translate::Obj::BoundField(tok), Some(model));
             }
         }
         match m.ui.present_plane(native, Plane { id: PLANE_ID, rect: grect(&rect), ops }) {

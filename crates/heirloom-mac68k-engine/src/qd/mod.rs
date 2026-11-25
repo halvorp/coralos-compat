@@ -73,11 +73,14 @@ pub struct Qd {
     pub palettes: BTreeMap<u32, alloc::vec::Vec<u32>>,
     /// The frame buffer as last shown (screen.rs).
     pub screen: screen::ScreenSync,
+    /// Last single-line text drawn into an offscreen BitMap/PixMap (`baseAddr -> (x0, y0, width, font, face, size, text)`):
+    /// when `CopyBits` blits a small double-buffered label (`h <= 14`) onto a window canvas, its display list carries vector text.
+    pub offscreen_text: BTreeMap<u32, (i32, i32, i32, u16, u8, u16, String)>,
 }
 
 impl Default for Qd {
     fn default() -> Self {
-        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), rgn_open_edges: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new(), palettes: BTreeMap::new(), screen: Default::default() }
+        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), rgn_open_edges: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new(), palettes: BTreeMap::new(), screen: Default::default(), offscreen_text: BTreeMap::new() }
     }
 }
 

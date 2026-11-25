@@ -164,7 +164,89 @@ impl<U: GuestUi> Mac<U> {
             (true, (a, _)) if r.caret_state == CARET_VIS => Mark::Caret(a),
             _ => Mark::None,
         };
-        draw::paint(self, r.port, &r.geo, &r.text, &r.starts, area, mark, r.style.as_ref().map(|s| &s.1))
+        draw::paint(self, r.port, &r.geo, &r.text, &r.starts, area, mark, r.style.as_ref().map(|s| &s.1))?;
+        // Use the actually-painted box (area ∩ viewRect ∩ port clipRgn) so horizontal scroll slack in viewRect
+        // does not widen the native edit field past its edit-text bevel into neighbouring popup controls.
+        let mut paint_box = crate::qd::port::raster(area).intersect(&crate::qd::port::raster(r.geo.view));
+        if let Ok(ch) = self.mem.read_u32(r.port.wrapping_add(crate::qd::port::P_CLIP)) {
+            if ch != 0 {
+                if let Ok(cr) = self.read_region(ch) {
+                    paint_box = paint_box.intersect(&cr.bounds());
+                }
+            }
+        }
+        let fit = Rect { top: paint_box.y0 as i16, left: paint_box.x0 as i16, bottom: paint_box.y1 as i16, right: paint_box.x1 as i16 };
+        self.sync_te_field(h, r.port, fit, &r.text)
+    }
+
+    /// Project a live single-line editable `TEHandle` (marked via `TEFeatureFlag(teFOutlineHilite)` or `TEActivate`)
+    /// as a native editable `ControlKind::Field` at its window-pixel edit box (`viewRect` expanded by the standard 3 px
+    /// Mac edit-text frame so the kit field cleanly replaces the guest's white box and bevel in light and dark mode).
+    pub(crate) fn sync_te_field(&mut self, h: u32, port: u32, view: Rect, text: &[u8]) -> Result<(), Refusal> {
+        let Some(win) = self.windows.get(&port) else {
+            return Ok(());
+        };
+        let role = win.def_role.map(|(r, _)| r).or_else(|| self.window_role(win.proc_id).ok().map(|(r, _)| r));
+        if !self.tr.te_editable.contains(&h) || role != Some(heirloom_ui_abi::WindowRole::Dialog) {
+            return Ok(());
+        }
+        let vh = i32::from(view.bottom) - i32::from(view.top);
+        let vw = i32::from(view.right) - i32::from(view.left);
+        if !(10..=26).contains(&vh) || vw < 24 {
+            return Ok(());
+        }
+        let pr = read_rect(&self.mem, port + crate::qd::port::P_RECT).unwrap_or(Rect { top: 0, left: 0, bottom: 0, right: 0 });
+        let win_r = Rect {
+            top: view.top.wrapping_sub(pr.top).saturating_sub(3).max(0),
+            left: view.left.wrapping_sub(pr.left).saturating_sub(3).max(0),
+            bottom: view.bottom.wrapping_sub(pr.top).saturating_add(3),
+            right: view.right.wrapping_sub(pr.left).saturating_add(3),
+        };
+        self.tr.te_boxes.insert(h, (port, win_r));
+        let s: alloc::string::String = text.iter().map(|&b| crate::macroman::to_char(b)).collect();
+        let model = heirloom_ui_abi::ControlModel {
+            kind: heirloom_ui_abi::ControlKind::Field { text: s, max_len: 255, editable: true, integer: false },
+            label: alloc::string::String::new(),
+            rect: crate::translate::guest_rect(win_r),
+            enabled: true,
+            token: heirloom_ui_abi::CallbackToken(u64::from(h)),
+        };
+        self.sync_projection(port, crate::translate::Obj::TextEdit(h), Some(model))
+    }
+
+    /// Route native host intents (`Press`, `Drag(Text)`, `CommitText`) on a projected single-line `TEHandle` back into
+    /// guest TextEdit memory and focus.
+    pub(crate) fn te_intent(&mut self, h: u32, intent: heirloom_ui_abi::Intent) -> Result<(), Refusal> {
+        use heirloom_ui_abi::{ControlValue, Intent};
+        let Some(&(win, win_r)) = self.tr.te_boxes.get(&h) else {
+            return Err(Refusal(format!("Intent: TextEdit {h:#x} is not projected")));
+        };
+        let is_commit = matches!(intent, Intent::CommitText(_));
+        match intent {
+            Intent::Press => {
+                if let Some(w) = self.windows.get(&win).map(|w| w.rect) {
+                    let gv = w.top.wrapping_add(((i32::from(win_r.top) + i32::from(win_r.bottom)) / 2) as i16);
+                    let gh = w.left.wrapping_add(((i32::from(win_r.left) + i32::from(win_r.right)) / 2) as i16);
+                    self.mouse_event(crate::events::MOUSE_DOWN, gv, gh, 0)?;
+                    self.mouse_event(crate::events::MOUSE_UP, gv, gh, 0)?;
+                }
+                Ok(())
+            }
+            Intent::Drag(ControlValue::Text(t)) | Intent::CommitText(t) => {
+                let bytes: Vec<u8> = t.chars().map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect();
+                self.te_store_text(h, &bytes)?;
+                self.te_calc(h)?;
+                self.adopt_native_state(crate::translate::Obj::TextEdit(h), &ControlValue::Text(t));
+                if let Ok(r) = self.te_load(h, "te_intent") {
+                    let _ = self.sync_te_field(h, r.port, r.geo.view, &r.text);
+                }
+                if is_commit {
+                    self.post(crate::events::KEY_DOWN, (0x24u32 << 8) | 0x0D, 0, 0);
+                }
+                Ok(())
+            }
+            other => Err(Refusal(format!("Intent {other:?} has no meaning for a TextEdit field"))),
+        }
     }
 
     pub(crate) fn caret_ticks(&self) -> u32 { match self.mem.read_u32(CARET_TIME) { Ok(0) | Err(_) => DEFAULT_TICKS, Ok(t) => t } }
@@ -223,6 +305,10 @@ impl<U: GuestUi> Mac<U> {
 /// `PROCEDURE TEDispose(hTE)`: the record and its text go.
 fn te_dispose<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let h = c.args.get(0);
+    m.tr.te_editable.remove(&h);
+    if let Some((win, _)) = m.tr.te_boxes.remove(&h) {
+        let _ = m.sync_projection(win, crate::translate::Obj::TextEdit(h), None);
+    }
     let p = m.te_ptr(h, "TEDispose")?;
     let ht = m.r32(p, T_HTEXT)?;
     let hid = m.r32(p, view::T_HIDDEN)?;
@@ -232,13 +318,14 @@ fn te_dispose<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
     done(c, &format!(" {h:#x}"))
 }
 
-/// `PROCEDURE TESetText(text: Ptr; length: LONGINT; hTE)`: replaces the text; the selection stays, nothing is recalculated or
-/// drawn (the program calls `TECalText`, then `TEUpdate`).
+/// `PROCEDURE TESetText(text: Ptr; length: LONGINT; hTE)`: replaces the text and recalculates `lineStarts`
+/// (Inside Macintosh: Text, p. 2-74) so a subsequent `TEUpdate` immediately draws the new lines.
 fn te_set_text<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, Refusal> {
     let (src, len, h) = (c.args.get(0), c.args.get(1) as i32, c.args.get(2));
     let n = usize::try_from(len).map_err(|_| Refusal(format!("TESetText: negative length {len}")))?;
     let bytes = m.mem.bytes(m.mem.span(src, n as u32).map_err(Refusal::mem("TESetText text"))?).map_err(Refusal::mem("TESetText text"))?.to_vec();
     m.te_store_text(h, &bytes)?;
+    m.te_calc(h)?;
     let head: alloc::string::String = bytes.iter().take(80).map(|&b| if b == b'\r' { '|' } else { crate::macroman::to_char(b) }).collect();
     done(c, &format!(" {n} bytes {head:?}"))
 }
@@ -288,6 +375,7 @@ fn te_set_select<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Do
 
 fn set_active<U: GuestUi>(m: &mut Mac<U>, c: &Call, on: bool) -> Result<Done, Refusal> {
     let h = c.args.get(0);
+    if on { m.tr.te_editable.insert(h); }
     let p = m.te_ptr(h, c.name)?;
     if (m.r16(p, T_ACTIVE)? != 0) != on {
         m.w16(p, T_ACTIVE, if on { ACTIVE } else { 0 })?;

@@ -80,8 +80,9 @@ fn paint_with<U: GuestUi>(m: &mut Mac<U>, port: u32, region: &Region, mode: u16,
         let mut seen = g.clone();
         seen.and_region(&clip);
         let l0 = t.local0;
-        let as_line = line.is_some_and(|(a, b)| seen.rects() == g.rects() && super::plane::record_line(&mut m.qd.plane, t, (a.0 - l0.0, a.1 - l0.1), (b.0 - l0.0, b.1 - l0.1), mode, pat));
-        if !as_line { super::plane::record_fill(&mut m.qd.plane, t, &seen, mode, pat); }
+        let fg_bg = port_rgb(&m.mem, port).unwrap_or((crate::cqd::color::Rgb::BLACK, crate::cqd::color::Rgb::WHITE));
+        let as_line = line.is_some_and(|(a, b)| seen.rects() == g.rects() && super::plane::record_line(&mut m.qd.plane, t, (a.0 - l0.0, a.1 - l0.1), (b.0 - l0.0, b.1 - l0.1), mode, pat, fg_bg));
+        if !as_line { super::plane::record_fill(&mut m.qd.plane, t, &seen, mode, pat, fg_bg); }
         Ok(touched)
     })
 }

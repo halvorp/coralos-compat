@@ -317,6 +317,21 @@ fn copy_with<U: GuestUi>(m: &mut Mac<U>, name: &str, sb: u32, db: u32, sr: Rect,
             }
         }
     };
+    // If this CopyBits blits a small double-buffered single-line text label (e.g. MacApp TStaticText "Image Size: 532K")
+    // from an offscreen BitMap/PixMap onto a window canvas, record it as theme Surface + vector Text instead of a raw strip.
+    if let (Ok(t_rect), Some(s), super::target::Home::Canvas) = (&touched, &st, &dt.home) {
+        if !t_rect.is_empty() && dr.height() <= 14 && (sr.width(), sr.height()) == (dr.width(), dr.height()) {
+            if let super::target::Home::Guest { addr, .. } = s.home {
+                if let Some((tx, ty, tw, font, face, size, text)) = m.qd.offscreen_text.get(&addr).cloned() {
+                    let sp = s.to_pixels(sr);
+                    let dp = dt.to_pixels(dr);
+                    if tx >= sp.x0 && ty >= sp.y0 && ty < sp.y1 && !text.trim().is_empty() {
+                        super::plane::record_offscreen_label(&mut m.qd.plane, &mut dt, *t_rect, dp.x0 + (tx - sp.x0), dp.y0 + (ty - sp.y0), tw, font, face, size, text);
+                    }
+                }
+            }
+        }
+    }
     if let Some(s) = st { finish(m, s, Rect::default())?; }
     finish(m, dt, *touched.as_ref().unwrap_or(&Rect::default()))?;
     touched?;

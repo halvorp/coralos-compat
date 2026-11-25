@@ -29,6 +29,9 @@ impl<U: GuestUi> Mac<U> {
         Ok(self.mem.read_u32(self.te_hidden(h)? + HIDDEN_FLAGS).map_err(Refusal::mem("TEHidden"))? & bit != 0)
     }
     pub(super) fn te_set_flag(&mut self, h: u32, bit: u32, on: bool) -> Result<(), Refusal> {
+        if bit == OUTLINE_BIT {
+            self.tr.te_editable.insert(h);
+        }
         let at = self.te_hidden(h)? + HIDDEN_FLAGS;
         let f = self.mem.read_u32(at).map_err(Refusal::mem("TEHidden"))?;
         self.mem.write_u32(at, if on { f | bit } else { f & !bit }).map_err(Refusal::mem("TEHidden"))
