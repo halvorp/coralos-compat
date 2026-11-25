@@ -409,11 +409,22 @@ fn a_menustrip_is_built_from_a_newmenu_array_and_make_object_refuses_what_it_doe
     assert_eq!(m.menus.len(), 1);
     assert_eq!(m.menus[0].title, "Project");
     assert_eq!(m.menus[0].items.iter().map(|i| (i.label.as_str(), i.shortcut)).collect::<Vec<_>>(), [("Open", Some('o')), ("Quit", Some('q'))]);
-    let p = a.heap.alloc(4).unwrap();
+    let p = a.heap.alloc(16).unwrap();
     let e = make::make(&mut a, 99, p).unwrap_err().0;
     assert_eq!(e, "MUI_MakeObjectA: object type 99 is not implemented");
-    let e = make::make(&mut a, MUIO_NumericButton, p).unwrap_err().0;
-    assert!(e.contains("type 16 is not implemented"), "{e}");
+
+    // Numericbutton.mui + MUIO_NumericButton + MUIA_Scrollgroup_AutoBars (used by YAM 2.9p1).
+    let fmt = cstr(&mut a, "%ld s");
+    for (i, v) in [0u32, 5, 60, fmt].iter().enumerate() {
+        a.mem.write_u32(p + 4 * i as u32, *v).unwrap();
+    }
+    let nb = made(&mut a, MUIO_NumericButton, &[0, 5, 60, fmt]);
+    assert_eq!(kind_of_obj(&a, nb), ControlKind::Slider { min: 5, max: 60, value: 5 });
+    let nb2 = make(&mut a, "Numericbutton.mui", &[(MUIA_Numeric_Min, 1), (MUIA_Numeric_Max, 10), (MUIA_Numeric_Value, 4)]).unwrap();
+    assert_eq!(get_attr(&mut a, nb2, MUIA_Numeric_Value).unwrap(), 4);
+    let vg = make(&mut a, "Virtgroup.mui", &[]).unwrap();
+    let sg = make(&mut a, "Scrollgroup.mui", &[(MUIA_Scrollgroup_Contents, vg), (0x8042f50e, 1)]).unwrap();
+    assert_eq!(get_attr(&mut a, sg, 0x8042f50e).unwrap(), 1, "MUIA_Scrollgroup_AutoBars stored cleanly");
 }
 
 #[test]

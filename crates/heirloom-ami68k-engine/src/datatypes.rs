@@ -1068,3 +1068,74 @@ fn do_dt_domain<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
     cpu.set_d0(1);
     Ok(format!("[datatypes] DoDTDomainA {obj_addr:#x} -> TRUE"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heirloom_ui_abi::RecordingGuestUi;
+
+    fn make_hunk(code: &[u8]) -> Vec<u8> {
+        let mut h = Vec::new();
+        let longs = (code.len() as u32 + 3) / 4;
+        for w in [0x0000_03F3, 0, 1, 0, 0, longs, 0x0000_03E9, longs] {
+            h.extend_from_slice(&w.to_be_bytes());
+        }
+        h.extend_from_slice(code);
+        while h.len() % 4 != 0 { h.push(0); }
+        h.extend_from_slice(&0x0000_03F2u32.to_be_bytes());
+        h
+    }
+
+    #[test]
+    fn creating_and_disposing_80_picture_dtobjects_does_not_exhaust_sys_heap() {
+        let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+        // Minimal 2x2 24-bit uncompressed BMP so builtin picture decoder succeeds without external host.
+        let mut bmp = vec![0u8; 54 + 16];
+        let bmp_len = bmp.len() as u32;
+        bmp[0..2].copy_from_slice(b"BM");
+        bmp[2..6].copy_from_slice(&bmp_len.to_le_bytes());
+        bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+        bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&2u32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&2u32.to_le_bytes());
+        bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&24u16.to_le_bytes());
+        a.fs.vol.put_file("SYS:icon.bmp", bmp).unwrap();
+
+        // 68k loop: OpenLibrary("datatypes.library", 0), then 80x NewDTObjectA("SYS:icon.bmp", NULL) + DisposeDTObject.
+        let mut c = vec![0u8; 0x200];
+        let base = crate::machine::LOAD_BASE;
+        let lib_str = base + 0x100;
+        let pic_str = base + 0x120;
+        let mut p = 0usize;
+        let emit = |buf: &mut [u8], pos: &mut usize, w: &[u16]| {
+            for &x in w {
+                buf[*pos..*pos + 2].copy_from_slice(&x.to_be_bytes());
+                *pos += 2;
+            }
+        };
+        // movea.l 4.w,a6; lea lib_str,a1; moveq #0,d0; jsr -552(a6); movea.l d0,a6
+        emit(&mut c, &mut p, &[0x2C78, 0x0004]);
+        emit(&mut c, &mut p, &[0x227C, (lib_str >> 16) as u16, lib_str as u16]);
+        emit(&mut c, &mut p, &[0x7000, 0x4EAE, (-552i16) as u16, 0x2C40]);
+        // moveq #79,d7
+        emit(&mut c, &mut p, &[0x7E4F]);
+        let loop_off = p;
+        // move.l #pic_str,d0; suba.l a0,a0; jsr -48(a6) (NewDTObjectA)
+        emit(&mut c, &mut p, &[0x203C, (pic_str >> 16) as u16, pic_str as u16, 0x91C8, 0x4EAE, (-48i16) as u16]);
+        // tst.l d0; beq.s fail; movea.l d0,a0; jsr -54(a6) (DisposeDTObject)
+        emit(&mut c, &mut p, &[0x4A80, 0x6708, 0x2040, 0x4EAE, (-54i16) as u16]);
+        let disp = (loop_off as i16) - (p as i16 + 2);
+        // dbra d7,loop_off; moveq #0,d0; rts
+        emit(&mut c, &mut p, &[0x51CF, disp as u16, 0x7000, 0x4E75]);
+        // fail: moveq #1,d0; rts
+        emit(&mut c, &mut p, &[0x7001, 0x4E75]);
+        c[0x100..0x100 + 18].copy_from_slice(b"datatypes.library\0");
+        c[0x120..0x120 + 13].copy_from_slice(b"SYS:icon.bmp\0");
+
+        let r = a.run_hunk(&make_hunk(&c), 500_000).unwrap();
+        assert_eq!(r.stats.bus_faults, 0);
+        assert!(r.stats.halted);
+        assert!(a.refused.is_empty(), "creating & disposing 80 picture DTObjects must not refuse: {:?}", a.refused);
+    }
+}
