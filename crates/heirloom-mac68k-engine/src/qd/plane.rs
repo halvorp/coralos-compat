@@ -220,11 +220,17 @@ pub fn flush<U: GuestUi>(m: &mut Mac<U>) {
                 m.log.push(format!("[quickdraw] plane window {win:#x}: {n} op(s), repaint {}x{} at {},{}", rect.x1 - rect.x0, rect.y1 - rect.y0, rect.x0, rect.y0));
             }
             Err(UiRefusal::Unsupported(why)) => {
-                m.log.push(format!("[quickdraw] planes not shown: {why}; the canvas route is used"));
-                m.qd.plane.unsupported = true;
-                m.qd.plane.lists.clear();
-                m.qd.plane.dirty.clear();
-                break;
+                if why.contains("frame limit") {
+                    // One oversized pixel-heavy window (e.g. a 526x517 splash > MAX_FRAME) falls back to the
+                    // shared-memory canvas route WITHOUT disabling planes + plane_chrome bindings for other windows.
+                    m.log.push(format!("[quickdraw] plane window {win:#x} exceeded wire frame limit; falling back to canvas for this window"));
+                } else {
+                    m.log.push(format!("[quickdraw] planes not shown: {why}; the canvas route is used"));
+                    m.qd.plane.unsupported = true;
+                    m.qd.plane.lists.clear();
+                    m.qd.plane.dirty.clear();
+                    break;
+                }
             }
             Err(e) => m.refused.push(format!("[quickdraw] present_plane: {e}")),
         }
