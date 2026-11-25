@@ -146,9 +146,213 @@ fn to_lower<U: GuestUi>(_: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
     Ok("[utility] ToLower".into())
 }
 
+/// PackStructureTags(a0 = pack, a1 = packTable, a2 = tagList) -> d0 = count of packed fields.
+/// Facts: AmigaOS 3.0 / AROS `utility/pack.h` (PACK_STARTTABLE, PACK_NEWOFFSET, PACK_ENDTABLE, PKCTRL_*).
+fn pack_structure_tags<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (pack, table, tags) = (cpu.areg(0), cpu.areg(1), cpu.areg(2));
+    let count = pack_or_unpack(a, pack, table, tags, true)?;
+    cpu.set_d0(count);
+    Ok(format!("[utility] PackStructureTags pack={pack:#x} table={table:#x} -> {count}"))
+}
+
+/// UnpackStructureTags(a0 = pack, a1 = packTable, a2 = tagList) -> d0 = count of unpacked fields.
+fn unpack_structure_tags<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let (pack, table, tags) = (cpu.areg(0), cpu.areg(1), cpu.areg(2));
+    let count = pack_or_unpack(a, pack, table, tags, false)?;
+    cpu.set_d0(count);
+    Ok(format!("[utility] UnpackStructureTags pack={pack:#x} table={table:#x} -> {count}"))
+}
+
+fn pack_or_unpack<U: GuestUi>(a: &mut Amiga<U>, pack: u32, table: u32, tags: u32, is_pack: bool) -> Result<u32, Refusal> {
+    if pack == 0 || table == 0 || tags == 0 {
+        return Ok(0);
+    }
+    let m = Refusal::mem("PackStructureTags");
+    let mut ptr = table;
+    let mut tag_base = a.mem.read_u32(ptr).map_err(&m)?;
+    ptr += 4;
+    let mut count = 0u32;
+    for _ in 0..4096 {
+        let entry = a.mem.read_u32(ptr).map_err(&m)?;
+        ptr += 4;
+        if entry == 0 {
+            break;
+        }
+        if entry == 0xFFFF_FFFF {
+            tag_base = a.mem.read_u32(ptr).map_err(&m)?;
+            ptr += 4;
+            continue;
+        }
+        let skip = if is_pack { entry & (1 << 29) != 0 } else { entry & (1 << 30) != 0 };
+        if skip {
+            continue;
+        }
+        let tag = tag_base.wrapping_add((entry >> 16) & 0x3FF);
+        let Some((_, data)) = find(a, tag, tags)? else {
+            continue;
+        };
+        let off = entry & 0x1FFF;
+        let bit = (entry >> 13) & 7;
+        let exists = entry & (1 << 26) != 0;
+        let signed_or_flip = entry & (1 << 31) != 0;
+        let addr = pack.wrapping_add(off);
+        match (entry >> 27) & 3 {
+            0 => {
+                // BYTE / UBYTE
+                if is_pack {
+                    a.mem.write_u8(addr, data as u8).map_err(&m)?;
+                } else if data != 0 {
+                    let b = a.mem.read_u8(addr).map_err(&m)?;
+                    let v = if signed_or_flip { (b as i8) as i32 as u32 } else { u32::from(b) };
+                    a.mem.write_u32(data, v).map_err(&m)?;
+                }
+            }
+            1 => {
+                // WORD / UWORD
+                if is_pack {
+                    a.mem.write_u16(addr, data as u16).map_err(&m)?;
+                } else if data != 0 {
+                    let w = a.mem.read_u16(addr).map_err(&m)?;
+                    let v = if signed_or_flip { (w as i16) as i32 as u32 } else { u32::from(w) };
+                    a.mem.write_u32(data, v).map_err(&m)?;
+                }
+            }
+            2 => {
+                // LONG / ULONG
+                if is_pack {
+                    a.mem.write_u32(addr, data).map_err(&m)?;
+                } else if data != 0 {
+                    let v = a.mem.read_u32(addr).map_err(&m)?;
+                    a.mem.write_u32(data, v).map_err(&m)?;
+                }
+            }
+            _ => {
+                // BIT / FLIPBIT
+                let mask = 1u8 << bit;
+                if is_pack {
+                    let raw = if exists { true } else { data != 0 };
+                    let set = raw ^ signed_or_flip;
+                    let cur = a.mem.read_u8(addr).map_err(&m)?;
+                    let next = if set { cur | mask } else { cur & !mask };
+                    a.mem.write_u8(addr, next).map_err(&m)?;
+                } else if data != 0 {
+                    let cur = a.mem.read_u8(addr).map_err(&m)?;
+                    let set = ((cur & mask) != 0) ^ signed_or_flip;
+                    a.mem.write_u32(data, u32::from(set)).map_err(&m)?;
+                }
+            }
+        }
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// GetUniqueID() -> d0: returns a unique non-zero 32-bit identifier each call (AmigaOS 3.0 utility.library).
+fn get_unique_id<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    a.unique_id = a.unique_id.wrapping_add(1);
+    if a.unique_id == 0 {
+        a.unique_id = 1;
+    }
+    cpu.set_d0(a.unique_id);
+    Ok(format!("[utility] GetUniqueID -> {}", a.unique_id))
+}
+
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
     b.named("FindTagItem", find_tag_item::<U>).named("GetTagData", get_tag_data::<U>).named("NextTagItem", next_tag_item::<U>)
         .named("PackBoolTags", pack_bool_tags::<U>).named("CallHookPkt", call_hook_pkt::<U>)
+        .named("PackStructureTags", pack_structure_tags::<U>).named("UnpackStructureTags", unpack_structure_tags::<U>)
+        .named("GetUniqueID", get_unique_id::<U>)
         .named("SMult32", s_mult32::<U>).named("UMult32", u_mult32::<U>).named("SDivMod32", |_, c| div_mod32::<U>(c, true)).named("UDivMod32", |_, c| div_mod32::<U>(c, false))
         .named("Stricmp", stricmp::<U>).named("Strnicmp", strnicmp::<U>).named("ToUpper", to_upper::<U>).named("ToLower", to_lower::<U>)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heirloom_ui_abi::RecordingGuestUi;
+
+    #[test]
+    fn pack_and_unpack_structure_tags_handle_sizes_signed_bits_and_newoffset() {
+        let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+        let pack = 0x1F000u32;
+        let table = 0x1F100u32;
+        let tags = 0x1F200u32;
+        let out_vals = 0x1F300u32;
+        a.mem.zero(pack, 32).unwrap();
+        let base1 = 0x8000_1000u32;
+        let base2 = 0x8000_2000u32;
+        // Table:
+        //   tag base1+0 -> BYTE at off 0 (PKCTRL_BYTE = 0x8000_0000)
+        //   tag base1+1 -> WORD at off 2 (PKCTRL_UWORD = 0x0800_0000)
+        //   tag base1+2 -> LONG at off 4 (PKCTRL_ULONG = 0x1000_0000)
+        //   tag base1+3 -> BIT 2 at off 8 (PKCTRL_BIT = 0x1800_0000)
+        //   PACK_NEWOFFSET(base2)
+        //   tag base2+1 -> FLIPBIT 5 at off 8 (PKCTRL_FLIPBIT = 0x9800_0000)
+        //   PACK_ENDTABLE (0)
+        let entries = [
+            base1,
+            0x8000_0000 | (0 << 16) | 0,
+            0x0800_0000 | (1 << 16) | 2,
+            0x1000_0000 | (2 << 16) | 4,
+            0x1800_0000 | (3 << 16) | (2 << 13) | 8,
+            0xFFFF_FFFF,
+            base2,
+            0x9800_0000 | (1 << 16) | (5 << 13) | 8,
+            0,
+        ];
+        for (i, &w) in entries.iter().enumerate() {
+            a.mem.write_u32(table + i as u32 * 4, w).unwrap();
+        }
+        let pack_tags = [
+            (base1 + 0, (-5i8) as u8 as u32),
+            (base1 + 1, 0xBEEF),
+            (base1 + 2, 0x1234_5678),
+            (base1 + 3, 1),
+            (base2 + 1, 0), // FLIPBIT with false -> sets bit 5!
+            (TAG_DONE, 0),
+        ];
+        for (i, &(t, d)) in pack_tags.iter().enumerate() {
+            a.mem.write_u32(tags + i as u32 * 8, t).unwrap();
+            a.mem.write_u32(tags + i as u32 * 8 + 4, d).unwrap();
+        }
+        assert_eq!(pack_or_unpack(&mut a, pack, table, tags, true).unwrap(), 5);
+        assert_eq!(a.mem.read_u8(pack).unwrap() as i8, -5);
+        assert_eq!(a.mem.read_u16(pack + 2).unwrap(), 0xBEEF);
+        assert_eq!(a.mem.read_u32(pack + 4).unwrap(), 0x1234_5678);
+        assert_eq!(a.mem.read_u8(pack + 8).unwrap(), (1 << 2) | (1 << 5));
+
+        // Unpack back into out_vals[0..5]
+        let unpack_tags = [
+            (base1 + 0, out_vals),
+            (base1 + 1, out_vals + 4),
+            (base1 + 2, out_vals + 8),
+            (base1 + 3, out_vals + 12),
+            (base2 + 1, out_vals + 16),
+            (TAG_DONE, 0),
+        ];
+        for (i, &(t, d)) in unpack_tags.iter().enumerate() {
+            a.mem.write_u32(tags + i as u32 * 8, t).unwrap();
+            a.mem.write_u32(tags + i as u32 * 8 + 4, d).unwrap();
+        }
+        assert_eq!(pack_or_unpack(&mut a, pack, table, tags, false).unwrap(), 5);
+        assert_eq!(a.mem.read_u32(out_vals).unwrap() as i32, -5, "PKCTRL_BYTE sign-extends on unpack");
+        assert_eq!(a.mem.read_u32(out_vals + 4).unwrap(), 0xBEEF);
+        assert_eq!(a.mem.read_u32(out_vals + 8).unwrap(), 0x1234_5678);
+        assert_eq!(a.mem.read_u32(out_vals + 12).unwrap(), 1);
+        assert_eq!(a.mem.read_u32(out_vals + 16).unwrap(), 0, "PKCTRL_FLIPBIT un-flips on unpack");
+    }
+
+    #[test]
+    fn get_unique_id_returns_strictly_monotonic_nonzero_ids() {
+        let mut a = Amiga::new(RecordingGuestUi::new()).unwrap();
+        // Verify wrap-around skips 0 as required by utility.library/GetUniqueID.
+        a.unique_id = u32::MAX - 1;
+        let mut cpu = crate::cpu::Cpu::detached();
+        let _ = get_unique_id(&mut a, &mut cpu).unwrap();
+        assert_eq!(a.unique_id, u32::MAX);
+        let _ = get_unique_id(&mut a, &mut cpu).unwrap();
+        assert_eq!(a.unique_id, 1, "GetUniqueID must never return 0 on wrap");
+        let _ = get_unique_id(&mut a, &mut cpu).unwrap();
+        assert_eq!(a.unique_id, 2);
+    }
 }
