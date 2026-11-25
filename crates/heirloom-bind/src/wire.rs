@@ -652,6 +652,11 @@ pub fn encode_plane_chrome(pc: &PlaneChromeBinding) -> Result<Vec<u8>, String> {
                     b.extend_from_slice(&default_permille.to_le_bytes());
                     b.push(u8::from(*enabled));
                 }
+                PaletteRuleKind::EditField { value, enabled } => {
+                    b.push(13);
+                    put_str(&mut b, value)?;
+                    b.push(u8::from(*enabled));
+                }
             }
         }
     }
@@ -833,6 +838,11 @@ pub fn decode_plane_chrome(bytes: &[u8]) -> Result<PlaneChromeBinding, String> {
                             let default_permille = r.u16()?;
                             let enabled = r.u8()? != 0;
                             PaletteRuleKind::MiniSlider { track_rect, default_permille, enabled }
+                        }
+                        13 => {
+                            let value = r.str()?;
+                            let enabled = r.u8()? != 0;
+                            PaletteRuleKind::EditField { value, enabled }
                         }
                         t => return Err(format!("plane-chrome wire: bad palette rule tag {t}")),
                     };

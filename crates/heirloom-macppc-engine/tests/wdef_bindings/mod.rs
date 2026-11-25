@@ -313,6 +313,15 @@ pub fn read_plane_chrome(src: &str) -> Result<Vec<PlaneChromeBinding>, String> {
                         kind: PaletteRuleKind::FieldXs { value, unit, numeric_cap, enabled },
                     });
                 }
+                "palette-edit-field" => {
+                    let value = match opt_field(args, "value").and_then(|a| a.first()) { Some(S::Str(s)) => s.clone(), _ => String::new() };
+                    let enabled = opt_field(args, "enabled").map(|_| boolean(args, "enabled")).transpose()?.unwrap_or(true);
+                    palette_rules.push(PaletteRule {
+                        rect: rect4(field(args, "rect")?, "efld rect")?,
+                        clear_rect: opt_field(args, "clear-rect").map(|a| rect4(a, "efld clear")).transpose()?,
+                        kind: PaletteRuleKind::EditField { value, enabled },
+                    });
+                }
                 "palette-mini-slider" => {
                     let track_rect = opt_field(args, "track").map(|a| rect4(a, "ms track")).transpose()?;
                     let default_permille = opt_field(args, "default").map(|_| int(args, "default")).transpose()?.unwrap_or(0) as u16;

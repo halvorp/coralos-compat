@@ -109,6 +109,9 @@ pub enum PaletteRuleKind {
     Check { label: String, probe_rect: Option<GuestRect>, enabled: bool },
     /// Emit `DrawOp::Palette(PalettePart::FieldXs)` (`PART_FIELD_XS` / `PART_NUMERIC_FIELD`).
     FieldXs { value: String, unit: String, numeric_cap: bool, enabled: bool },
+    /// Project a live editable native `ControlKind::Field` (`PART_TEXT_FIELD` / `GadgetSurface` edit field) over this rect,
+    /// routing clicks and commits back into the guest window.
+    EditField { value: String, enabled: bool },
     /// Emit `DrawOp::Palette(PalettePart::MiniSlider)` (`PART_MINI_SLIDER`).
     MiniSlider { track_rect: Option<GuestRect>, default_permille: u16, enabled: bool },
 }
@@ -690,6 +693,8 @@ impl PlaneChromeBinding {
                             },
                         });
                     }
+                    // Projected as a native editable `ControlKind::Field` by the engine (not painted as a static palette op).
+                    PaletteRuleKind::EditField { .. } => {}
                     PaletteRuleKind::MiniSlider { track_rect, default_permille, enabled } => {
                         let permille = match track_rect {
                             Some(tr) => probe_slider_permille(&ops, resolve_rect(*tr, win_w, win_h), *default_permille),
