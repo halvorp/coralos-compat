@@ -283,11 +283,13 @@ fn get_zone<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
     Ok(format!("[mem] GetZone -> {:#x}", r.a0))
 }
 
-fn set_zone<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
-    // there is exactly one zone: SetZone to anything else is a bug in the program
-    if r.a0 != crate::lowmem::ZONE_STUB { return Err(Refusal(format!("SetZone {:#x}: the only zone is {:#x}", r.a0, crate::lowmem::ZONE_STUB))); }
+fn set_zone<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    if r.a0 != crate::lowmem::ZONE_STUB && !m.extra_zones.contains(&r.a0) {
+        return Err(Refusal(format!("SetZone {:#x}: not the main zone ({:#x}) or an InitZone sub-zone", r.a0, crate::lowmem::ZONE_STUB)));
+    }
+    m.mem.write_u32(crate::lowmem::THE_ZONE, r.a0).map_err(Refusal::mem("TheZone"))?;
     r.err(0);
-    Ok("[mem] SetZone (the only zone)".into())
+    Ok(format!("[mem] SetZone {:#x}", r.a0))
 }
 
 fn set_grow_zone<U: GuestUi>(_: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {

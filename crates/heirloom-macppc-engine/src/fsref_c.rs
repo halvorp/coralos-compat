@@ -37,7 +37,13 @@ const P_DIR_ID: u32 = 48;
 const P_NEW_REF: u32 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FsrFn { FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo, FSOpenIterator, FSCloseIterator, FSGetCatalogInfoBulk, PBGetCatalogInfoSync, FSOpenResFile, FSGetVolumeInfo, FSCreateDirectoryUnicode, FSCreateFileUnicode }
+pub enum FsrFn {
+    FSpMakeFSRef, PBMakeFSRefSync, FSMakeFSRefUnicode, FSGetCatalogInfo, FSDeleteObject, FSCompareFSRefs, FSRefMakePath, FSPathMakeRef, FSSetCatalogInfo,
+    FSOpenIterator, FSCloseIterator, FSGetCatalogInfoBulk, PBGetCatalogInfoSync, FSOpenResFile, FSGetVolumeInfo, FSCreateDirectoryUnicode, FSCreateFileUnicode,
+    FSFindFolder, FSGetDataForkName, FSGetResourceForkName, FSOpenFork, FSCloseFork, FSReadFork, FSWriteFork,
+    FSGetForkPosition, FSSetForkPosition, FSGetForkSize, FSSetForkSize, FSFlushFork, FSGetForkCBInfo,
+    FSRenameUnicode, FSMoveObject, FSCreateResFile, FSNewAliasMinimal,
+}
 
 impl FsrFn {
     pub fn by_name(name: &str) -> Option<FsrFn> {
@@ -46,6 +52,11 @@ impl FsrFn {
             "FSpMakeFSRef" => FSpMakeFSRef, "PBMakeFSRefSync" => PBMakeFSRefSync, "FSMakeFSRefUnicode" => FSMakeFSRefUnicode, "FSCreateDirectoryUnicode" => FSCreateDirectoryUnicode, "FSCreateFileUnicode" => FSCreateFileUnicode, "FSGetCatalogInfo" => FSGetCatalogInfo, "PBGetCatalogInfoSync" => PBGetCatalogInfoSync, "FSOpenResFile" => FSOpenResFile,
             "FSDeleteObject" => FSDeleteObject, "FSCompareFSRefs" => FSCompareFSRefs, "FSRefMakePath" => FSRefMakePath, "FSPathMakeRef" => FSPathMakeRef, "FSSetCatalogInfo" => FSSetCatalogInfo,
             "FSOpenIterator" => FSOpenIterator, "FSCloseIterator" => FSCloseIterator, "FSGetCatalogInfoBulk" => FSGetCatalogInfoBulk, "FSGetVolumeInfo" => FSGetVolumeInfo,
+            "FSFindFolder" => FSFindFolder, "FSGetDataForkName" => FSGetDataForkName, "FSGetResourceForkName" => FSGetResourceForkName,
+            "FSOpenFork" => FSOpenFork, "FSCloseFork" => FSCloseFork, "FSReadFork" => FSReadFork, "FSWriteFork" => FSWriteFork,
+            "FSGetForkPosition" => FSGetForkPosition, "FSSetForkPosition" => FSSetForkPosition, "FSGetForkSize" => FSGetForkSize, "FSSetForkSize" => FSSetForkSize,
+            "FSFlushFork" => FSFlushFork, "FSGetForkCBInfo" => FSGetForkCBInfo,
+            "FSRenameUnicode" => FSRenameUnicode, "FSMoveObject" => FSMoveObject, "FSCreateResFile" => FSCreateResFile, "FSNewAliasMinimal" => FSNewAliasMinimal,
             _ => return None,
         })
     }
@@ -367,7 +378,246 @@ impl<U: GuestUi> MacPpc<U> {
                 (Ok(a), Ok(b)) if self.mac.fm.tree.volume_of(a) != self.mac.fm.tree.volume_of(b) => DIFF_ERR,
                 _ => -1420,
             },
+            // FSFindFolder(SInt16 vRefNum, OSType folderType, Boolean createFolder, FSRef *foundRef)
+            FSFindFolder => {
+                let (vref, ty, out_ref) = (args[0] as u16 as i16, args[1].to_be_bytes(), args[3]);
+                match self.mac.fm.find_folder(vref, ty).and_then(|(v, d)| self.fsr_locate(v, d, None)) {
+                    Ok(node) => {
+                        if out_ref != 0 { self.put_fsref(out_ref, node)?; }
+                        0
+                    }
+                    Err(e) => i32::from(e),
+                }
+            }
+            FSGetDataForkName => {
+                if args[0] == 0 { i32::from(PARAM_ERR) } else {
+                    self.mac.mem.write_u16(args[0], 0).map_err(|_| self.fsr_err(&name, args[0]))?;
+                    0
+                }
+            }
+            FSGetResourceForkName => {
+                if args[0] == 0 { i32::from(PARAM_ERR) } else {
+                    const RF: &[u8] = b"RESOURCE_FORK";
+                    let mut u = Vec::with_capacity(2 + 2 * RF.len());
+                    u.extend_from_slice(&(RF.len() as u16).to_be_bytes());
+                    for &c in RF { u.extend_from_slice(&u16::from(c).to_be_bytes()); }
+                    self.mac.mem.write_bytes(args[0], &u).map_err(|_| self.fsr_err(&name, args[0]))?;
+                    0
+                }
+            }
+            // FSOpenFork(const FSRef *ref, UniCharCount forkNameLength, const UniChar *forkName, SInt8 permissions, SInt16 *forkRefNum)
+            FSOpenFork => match self.fsref_node(args[0]) {
+                Err(e) => i32::from(e),
+                Ok(node) => {
+                    let rsrc = args[1] > 0;
+                    let perm = (args[3] & 0xFF) as u8;
+                    let fm = &self.mac.fm;
+                    let loc = Located { vol: fm.tree.volume_of(node), parent: fm.tree.parent(node), leaf: None, node: Some(node) };
+                    match self.mac.fm.open(&loc, rsrc, perm) {
+                        Ok(rn) => {
+                            if args[4] != 0 { self.mac.mem.write_u16(args[4], rn as u16).map_err(|_| self.fsr_err(&name, args[4]))?; }
+                            self.mac.log.push(format!("[file] FSOpenFork node={node} rsrc={rsrc} perm={perm} -> ref={rn}"));
+                            0
+                        }
+                        Err(e) => i32::from(e),
+                    }
+                }
+            },
+            FSCloseFork => match self.mac.fm.close(args[0] as u16 as i16) {
+                Ok(()) => 0,
+                Err(e) => i32::from(e),
+            },
+            // FSReadFork(refNum, posMode, posOffset_hi, posOffset_lo, reqCount, buffer, actualCount)
+            FSReadFork => {
+                let (rn, mode, off64, req, buf, act_p) = (args[0] as u16 as i16, args[1] as u16, ((u64::from(args[2]) << 32) | u64::from(args[3])) as i64, args[4], args[5], args[6]);
+                match self.mac.fm.read(rn, mode, off64 as i32, req) {
+                    Ok(out) => {
+                        if !out.data.is_empty() && buf != 0 {
+                            self.mac.mem.write_bytes(buf, &out.data).map_err(|_| self.fsr_err(&name, buf))?;
+                        }
+                        if act_p != 0 {
+                            self.mac.mem.write_u32(act_p, out.data.len() as u32).map_err(|_| self.fsr_err(&name, act_p))?;
+                        }
+                        i32::from(out.result)
+                    }
+                    Err(e) => i32::from(e),
+                }
+            }
+            // FSWriteFork(refNum, posMode, posOffset_hi, posOffset_lo, reqCount, buffer, actualCount)
+            FSWriteFork => {
+                let (rn, mode, off64, req, buf, act_p) = (args[0] as u16 as i16, args[1] as u16, ((u64::from(args[2]) << 32) | u64::from(args[3])) as i64, args[4], args[5], args[6]);
+                let data = self.mac.mem.span(buf, req).and_then(|s| self.mac.mem.bytes(s).map(<[u8]>::to_vec)).map_err(|_| self.fsr_err(&name, buf))?;
+                match self.mac.fm.write(rn, mode, off64 as i32, &data) {
+                    Ok(n) => {
+                        if act_p != 0 {
+                            self.mac.mem.write_u32(act_p, n).map_err(|_| self.fsr_err(&name, act_p))?;
+                        }
+                        0
+                    }
+                    Err(e) => i32::from(e),
+                }
+            }
+            FSGetForkPosition => match self.mac.fm.mark(args[0] as u16 as i16) {
+                Ok(pos) => {
+                    if args[1] != 0 { self.mac.mem.write_bytes(args[1], &u64::from(pos).to_be_bytes()).map_err(|_| self.fsr_err(&name, args[1]))?; }
+                    0
+                }
+                Err(e) => i32::from(e),
+            },
+            FSSetForkPosition => {
+                let (rn, mode, off64) = (args[0] as u16 as i16, args[1] as u16, ((u64::from(args[2]) << 32) | u64::from(args[3])) as i64);
+                match self.mac.fm.set_mark(rn, mode, off64 as i32) {
+                    Ok(()) => 0,
+                    Err(e) => i32::from(e),
+                }
+            }
+            FSGetForkSize => match self.mac.fm.eof(args[0] as u16 as i16) {
+                Ok(sz) => {
+                    if args[1] != 0 { self.mac.mem.write_bytes(args[1], &u64::from(sz).to_be_bytes()).map_err(|_| self.fsr_err(&name, args[1]))?; }
+                    0
+                }
+                Err(e) => i32::from(e),
+            },
+            FSSetForkSize => {
+                let (rn, mode, off64) = (args[0] as u16 as i16, args[1] as u16, ((u64::from(args[2]) << 32) | u64::from(args[3])) as i64);
+                let base = match mode & 3 {
+                    1 => Ok(0i64),
+                    2 => self.mac.fm.eof(rn).map(i64::from),
+                    3 | 0 => self.mac.fm.mark(rn).map(i64::from),
+                    _ => Err(PARAM_ERR),
+                };
+                match base.and_then(|b| {
+                    let target = b + off64;
+                    if target < 0 || target > i64::from(u32::MAX) { Err(-40i16) } else { self.mac.fm.set_eof(rn, target as u32) }
+                }) {
+                    Ok(()) => 0,
+                    Err(e) => i32::from(e),
+                }
+            }
+            FSFlushFork => match self.mac.fm.fork_node(args[0] as u16 as i16) {
+                Ok(_) => 0,
+                Err(e) => i32::from(e),
+            },
+            // FSGetForkCBInfo(desiredRefNum, volume, iterator, actualRefNum, forkInfo, ref, outForkName)
+            FSGetForkCBInfo => {
+                let (desired, _vol, _iter, actual_p, info_p, ref_p, name_p) = (args[0] as u16 as i16, args[1] as u16 as i16, args[2], args[3], args[4], args[5], args[6]);
+                match self.mac.fm.fork_node(desired) {
+                    Err(e) => i32::from(e),
+                    Ok((node, rsrc)) => {
+                        if actual_p != 0 { self.mac.mem.write_u16(actual_p, desired as u16).map_err(|_| self.fsr_err(&name, actual_p))?; }
+                        if info_p != 0 {
+                            let eof = u64::from(self.mac.fm.eof(desired).unwrap_or(0));
+                            let pos = u64::from(self.mac.fm.mark(desired).unwrap_or(0));
+                            let vref = self.mac.fm.vref_of(self.mac.fm.tree.volume_of(node));
+                            let id = self.mac.fm.cat_info(node).id;
+                            let mut b = [0u8; 40];
+                            b[0..2].copy_from_slice(&vref.to_be_bytes());
+                            b[4..8].copy_from_slice(&id.to_be_bytes());
+                            b[16..24].copy_from_slice(&pos.to_be_bytes());
+                            b[24..32].copy_from_slice(&eof.to_be_bytes());
+                            b[32..40].copy_from_slice(&eof.to_be_bytes());
+                            self.mac.mem.write_bytes(info_p, &b).map_err(|_| self.fsr_err(&name, info_p))?;
+                        }
+                        if ref_p != 0 { self.put_fsref(ref_p, node)?; }
+                        if name_p != 0 {
+                            if rsrc {
+                                const RF: &[u8] = b"RESOURCE_FORK";
+                                let mut u = Vec::with_capacity(2 + 2 * RF.len());
+                                u.extend_from_slice(&(RF.len() as u16).to_be_bytes());
+                                for &c in RF { u.extend_from_slice(&u16::from(c).to_be_bytes()); }
+                                self.mac.mem.write_bytes(name_p, &u).map_err(|_| self.fsr_err(&name, name_p))?;
+                            } else {
+                                self.mac.mem.write_u16(name_p, 0).map_err(|_| self.fsr_err(&name, name_p))?;
+                            }
+                        }
+                        0
+                    }
+                }
+            }
+            // FSRenameUnicode(const FSRef *ref, UniCharCount nameLength, const UniChar *name, TextEncoding hint, FSRef *newRef)
+            FSRenameUnicode => match self.fsref_node(args[0]) {
+                Err(e) => i32::from(e),
+                Ok(node) => {
+                    let leaf = self.unicode_leaf(&name, args[2], args[1])?;
+                    let fm = &self.mac.fm;
+                    let loc = Located { vol: fm.tree.volume_of(node), parent: fm.tree.parent(node), leaf: None, node: Some(node) };
+                    match self.mac.fm.rename(&loc, &leaf) {
+                        Ok(()) => {
+                            if args[4] != 0 { self.put_fsref(args[4], node)?; }
+                            self.mac.log.push(format!("[file] FSRenameUnicode node={node} -> {:?}", String::from_utf8_lossy(&leaf)));
+                            0
+                        }
+                        Err(e) => i32::from(e),
+                    }
+                }
+            },
+            // FSMoveObject(const FSRef *ref, const FSRef *destDirectory, FSRef *newRef)
+            FSMoveObject => match (self.fsref_node(args[0]), self.fsref_node(args[1])) {
+                (Err(e), _) | (_, Err(e)) => i32::from(e),
+                (Ok(node), Ok(dest)) => {
+                    let fm = &self.mac.fm;
+                    let loc = Located { vol: fm.tree.volume_of(node), parent: fm.tree.parent(node), leaf: None, node: Some(node) };
+                    match self.mac.fm.cat_move(&loc, dest) {
+                        Ok(()) => {
+                            if args[2] != 0 { self.put_fsref(args[2], node)?; }
+                            0
+                        }
+                        Err(e) => i32::from(e),
+                    }
+                }
+            },
+            // void FSCreateResFile(parentRef, nameLength, name, whichInfo, catalogInfo, newRef, newSpec) (Resources.h — sets ResErr)
+            FSCreateResFile => match self.fsref_node(args[0]) {
+                Err(e) => { let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::RES_ERR, e as u16); i32::from(e) }
+                Ok(parent) if !self.mac.fm.tree.is_dir(parent) => { let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::RES_ERR, (-120i16) as u16); -120 }
+                Ok(parent) => {
+                    let leaf = self.unicode_leaf(&name, args[2], args[1])?;
+                    let (vref, dir) = (self.mac.fm.vref_of(self.mac.fm.tree.volume_of(parent)), self.mac.fm.dir_id(parent));
+                    let node_res = self.mac.fm.locate(vref, dir, Some(&leaf)).and_then(|loc| {
+                        let node = match loc.node { Some(n) => n, None => self.mac.fm.create_file(&loc)? };
+                        let loc2 = Located { node: Some(node), ..loc };
+                        self.mac.new_res_fork(&loc2).map(|_| node)
+                    });
+                    match node_res {
+                        Err(e) => { let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::RES_ERR, e as u16); i32::from(e) }
+                        Ok(node) => {
+                            let e = if args[3] != 0 && args[4] != 0 { self.fsr_set_cat(node, args[3], args[4])? } else { 0 };
+                            if args[5] != 0 { self.put_fsref(args[5], node)?; }
+                            if args[6] != 0 {
+                                let fm = &self.mac.fm;
+                                let loc = Located { vol: fm.tree.volume_of(node), parent: fm.tree.parent(node), leaf: None, node: Some(node) };
+                                heirloom_mac68k_engine::fm::fsspec::write_spec(&mut self.mac, args[6], &loc).map_err(|e| format!("{name} newSpec: OSErr {e}"))?;
+                            }
+                            let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::RES_ERR, e as i16 as u16);
+                            self.mac.log.push(format!("[file] FSCreateResFile {:?} in dirID {dir} -> node {node}", String::from_utf8_lossy(&leaf)));
+                            e
+                        }
+                    }
+                }
+            },
+            // FSNewAliasMinimal(const FSRef *target, AliasHandle *inAlias)
+            FSNewAliasMinimal => match self.fsref_node(args[0]) {
+                Err(e) => i32::from(e),
+                Ok(node) => {
+                    let spec_buf = self.mac.mm.new_ptr(&mut self.mac.mem, &mut self.mac.heap, FSSPEC_SIZE, true).map_err(|e| format!("{name}: NewPtr {e}"))?;
+                    let fm = &self.mac.fm;
+                    let loc = Located { vol: fm.tree.volume_of(node), parent: fm.tree.parent(node), leaf: None, node: Some(node) };
+                    let wres = heirloom_mac68k_engine::fm::fsspec::write_spec(&mut self.mac, spec_buf, &loc);
+                    let r = match wres {
+                        Err(e) => i32::from(e),
+                        Ok(()) => match heirloom_mac68k_engine::fm::alias::alias_value_call(&mut self.mac, 8, &[spec_buf, args[1]]) {
+                            Ok(e) => i32::from(e),
+                            Err(e) => return Err(format!("{name}: {}", e.0)),
+                        },
+                    };
+                    let _ = self.mac.mm.dispose_ptr(&mut self.mac.heap, spec_buf);
+                    r
+                }
+            },
         };
+        if r != 0 {
+            self.mac.log.push(format!("[file] {name} -> {r}"));
+        }
         cpu.gpr[3] = r as u32;
         Ok(())
     }

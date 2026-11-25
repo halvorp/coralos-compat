@@ -161,6 +161,8 @@ pub struct Mac<U: GuestUi> {
     pub native_datatype_decodes: u64,
     /// Optional host-bridged desktop display size `(width, height)` overriding the default 512x342 / 640x480 screen.
     pub display_size: Option<(i16, i16)>,
+    /// Guest-initialized sub-zones created via `InitZone(pGrowZone, cMoreMasters, limitPtr, startPtr)`.
+    pub extra_zones: Vec<u32>,
 }
 
 /// `Control::Input` name for bridging the host work-area/display dimensions (4 bytes: `w: u16 LE, h: u16 LE`).
@@ -189,7 +191,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![], cursor_devices: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), procs: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT, cross_isa_running: false, cross_isa_returned: None, datatype_host: None, native_datatype_decodes: 0, display_size: None,
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), procs: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT, cross_isa_running: false, cross_isa_returned: None, datatype_host: None, native_datatype_decodes: 0, display_size: None, extra_zones: vec![],
         };
         m.rm.add_system(crate::system_res::system_fork());
         m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start

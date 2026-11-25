@@ -59,6 +59,17 @@ impl FileMgr {
     /// Resolve `name` (None / empty = the start directory itself).
     pub fn locate(&self, vref: i16, dir_id: u32, name: Option<&[u8]>) -> Result<Located, i16> {
         let name = name.filter(|n| !n.is_empty());
+        // Inside Macintosh: Files — an FSSpec for a volume's root directory has parID = fsRtParID (1) and name = volume name.
+        if dir_id == RT_PAR_ID {
+            let vol = self.volume_of_vref(vref)?;
+            if let Some(n) = name {
+                let trimmed = n.strip_suffix(b":").unwrap_or(n);
+                if !trimmed.contains(&b':') && super::name_of(trimmed).eq_ignore_ascii_case(self.tree.name(vol)) {
+                    return Ok(Located { vol, parent: vol, leaf: None, node: Some(vol) });
+                }
+            }
+            return Err(err::DIR_NF_ERR);
+        }
         let Some(name) = name else {
             let (vol, dir) = self.start_dir(vref, dir_id)?;
             return Ok(Located { vol, parent: if dir == vol { vol } else { self.tree.parent(dir) }, leaf: None, node: Some(dir) });
@@ -171,5 +182,16 @@ mod tests {
         assert_eq!(f.locate(0, 0, Some(b":Docs::Top")).unwrap().node.is_some(), true, "'::' goes to the parent");
         f.close_wd(wd).unwrap();
         assert_eq!(f.locate(wd, 0, Some(b"Note")), Err(err::NSV_ERR), "a closed WD is gone");
+    }
+
+    #[test]
+    fn fs_rt_par_id_locates_canonical_volume_root_fsspec() {
+        let f = fm();
+        let loc = f.locate(-1, RT_PAR_ID, Some(b"Macintosh HD")).unwrap();
+        assert_eq!(loc.vol, f.def_vol);
+        assert_eq!(loc.parent, f.def_vol);
+        assert_eq!(loc.node, Some(f.def_vol));
+        // Negative control: wrong name under fsRtParID is dirNFErr
+        assert_eq!(f.locate(-1, RT_PAR_ID, Some(b"WrongVol")), Err(err::DIR_NF_ERR));
     }
 }

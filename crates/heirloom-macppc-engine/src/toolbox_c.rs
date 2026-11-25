@@ -56,22 +56,21 @@ pub enum TbFn {
     /// PowerPC program's stack is a block of its own, not the space between the heap and ApplLimit (the 68k low-memory ApplLimit keeps its 68k
     /// meaning for StackSpace); `SetApplLimit(p)` is noErr and changes nothing (logged). Photoshop 7 checks GetApplLimit() - ApplicationZone()
     /// against the 3 MB it needs.
-    ApplicationZone, SystemZone, HandleZone, SetZone, GetApplLimit, SetApplLimit,
+    ApplicationZone, SystemZone, HandleZone, InitZone, SetZone, GetApplLimit, SetApplLimit, GetEvQHdr,
+    /// Printing Manager (`Printing.h`): `PrOpen`/`PrClose`/`PrError`/`PrSetError`/`PrintDefault`/`PrValidate`/`PrGeneral`.
+    PrOpen, PrClose, PrError, PrSetError, PrintDefault, PrValidate, PrGeneral, PrStlDialog, PrJobDialog,
     /// `SetGrowZone(proc)`: recorded and logged; the Memory Manager here does not call a grow-zone procedure when an allocation fails (the
     /// allocation answers memFullErr as it would after a grow-zone procedure that freed nothing). Named limit.
     SetGrowZone,
     /// `RelString(str1, str2, caseSensitive, diacSensitive)` (Pascal strings): -1 / 0 / 1, the `_RelString` rule (heirloom_mac68k_engine::intl::compare_with).
     RelString,
-    /// Navigation Services' availability queries (Navigation.h): the Mac OS 9.2.1 / CarbonLib 1.4 personality (gestalt_ppc.rs RULING) has
-    /// Navigation Services 1.1, so `NavLibraryVersion` answers 1.1 (a NumVersion) and `NavServicesCanRun()` / `NavServicesAvailable()` TRUE; a Nav
-    /// dialog call this engine does not serve yet (NavGetFile, NavPutFile, NavChooseFolder ...) is a per-call NAMED refusal, as the ruling has
-    /// every missing call (Photoshop 7 refuses to start without Navigation Services).
-    NavLibraryVersion, NavServicesCanRun,
-    /// `NavLoad()` / `NavUnload()` (Navigation.h: preload / release the Navigation Services library): noErr; the Nav calls here are natives, there is
-    /// nothing to load or release.
-    NavLoad,
-    /// Icon Utilities (`Icons.h`): `GetIconSuite(&suite, resID, selector)` and `PlotIconSuite(rect, align, transform, suite)`.
-    GetIconSuite, PlotIconSuite,
+    /// Navigation Services (`Navigation.h`): `NavLibraryVersion`, `NavServicesCanRun`, `NavLoad`/`NavUnload`,
+    /// `NavGetDefaultDialogOptions`, `NavPutFile`, `NavGetFile`, `NavChooseFolder`, `NavCustomControl`, `NavDisposeReply`.
+    NavLibraryVersion, NavServicesCanRun, NavLoad,
+    NavGetDefaultDialogOptions, NavPutFile, NavGetFile, NavChooseFolder, NavCustomControl, NavDisposeReply,
+    /// Icon Utilities (`Icons.h`) / Icon Services (`IconServicesLib`): `GetIconSuite`, `PlotIconSuite`,
+    /// `GetIconFamilyData`, `SetIconFamilyData`, `GetIconRefFromFile`, `PlotIconRef`, `ReleaseIconRef`.
+    GetIconSuite, PlotIconSuite, GetIconFamilyData, SetIconFamilyData, GetIconRefFromFile, PlotIconRef, ReleaseIconRef,
     /// Standard File Package (`StandardFile.h`): `StandardGetFile` and `StandardPutFile` (returns `sfGood = false` when no host file picker is presented).
     StandardGetFile, StandardPutFile,
     /// Help Manager (`Balloons.h`): `HMGetBalloons` (always `false` — Balloon Help is off).
@@ -115,9 +114,14 @@ impl TbFn {
             "AbsoluteToNanoseconds" => AbsoluteToNanoseconds,
             "TEToScrap" => TEToScrap, "TEFromScrap" => TEFromScrap, "UpperString" => UpperString, "GetGrayRgn" => GetGrayRgn,
             "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "LMGetTopMapHndl" => TopMapGet, "LMSetTopMapHndl" => TopMapSet, "LMGetCurMap" => CurMapGet, "LMSetCurMap" => CurMapSet, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "SetPreserveGlyph" => SetPreserveGlyph, "GetPreserveGlyph" => GetPreserveGlyph, "IsMetric" => IsMetric, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
-            "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString,
+            "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "InitZone" => InitZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString, "GetEvQHdr" => GetEvQHdr,
+            "PrOpen" | "PrDrvrOpen" => PrOpen, "PrClose" | "PrDrvrClose" => PrClose, "PrError" => PrError, "PrSetError" => PrSetError, "PrintDefault" => PrintDefault, "PrValidate" => PrValidate, "PrGeneral" => PrGeneral, "PrStlDialog" => PrStlDialog, "PrJobDialog" => PrJobDialog,
             "NavLibraryVersion" => NavLibraryVersion, "NavServicesCanRun" | "NavServicesAvailable" => NavServicesCanRun, "NavLoad" | "NavUnload" => NavLoad,
+            "NavGetDefaultDialogOptions" => NavGetDefaultDialogOptions, "NavPutFile" => NavPutFile, "NavGetFile" => NavGetFile,
+            "NavChooseFolder" => NavChooseFolder, "NavCustomControl" => NavCustomControl, "NavDisposeReply" => NavDisposeReply,
             "GetIconSuite" => GetIconSuite, "PlotIconSuite" => PlotIconSuite, "PlotIconID" => PlotIconID,
+            "GetIconFamilyData" => GetIconFamilyData, "SetIconFamilyData" => SetIconFamilyData,
+            "GetIconRefFromFile" => GetIconRefFromFile, "PlotIconRef" => PlotIconRef, "ReleaseIconRef" => ReleaseIconRef,
             "TruncString" => TruncString, "EmptyHandle" => EmptyHandle, "ReallocateHandle" | "ReallocHandle" => ReallocateHandle, "GetGray" => GetGray,
             "TESetClickLoop" => TESetClickLoop, "TESetWordBreak" => TESetWordBreak,
             "TEScrapHandle" => TEScrapHandle, "TESetScrapLength" => TESetScrapLength,
@@ -230,13 +234,162 @@ impl<U: GuestUi> MacPpc<U> {
             NavLibraryVersion => 0x0110_8000,
             NavServicesCanRun => 1,
             NavLoad => 0,
+            NavGetDefaultDialogOptions => {
+                // OSErr NavGetDefaultDialogOptions(NavDialogOptions *dialogOptions) — 2048-byte struct (Navigation.h, align=mac68k).
+                if a0 == 0 { (-50i16) as i32 as u32 } else {
+                    self.mac.mem.zero(a0, 2048).map_err(|_| format!("{name}: NavDialogOptions {a0:#x} leaves guest RAM"))?;
+                    // version (0) = 0, dialogOptionFlags (+2) = 0x56 (kNavDefaultNavDlogOptions), location (+6) = (-1, -1)
+                    self.mac.mem.write_u16(a0, 0).map_err(|_| format!("{name}: write failed"))?;
+                    self.mac.mem.write_u32(a0 + 2, 0x0000_0056).map_err(|_| format!("{name}: write failed"))?;
+                    self.mac.mem.write_u16(a0 + 6, 0xFFFF).map_err(|_| format!("{name}: write failed"))?;
+                    self.mac.mem.write_u16(a0 + 8, 0xFFFF).map_err(|_| format!("{name}: write failed"))?;
+                    self.mac.log.push(format!("[nav] NavGetDefaultDialogOptions {a0:#x} -> 0"));
+                    0
+                }
+            }
+            NavPutFile => {
+                // OSErr NavPutFile(AEDesc *defaultLocation, NavReplyRecord *reply, NavDialogOptions *dialogOptions,
+                //                  NavEventUPP eventProc, OSType fileType, OSType fileCreator, void *callBackUD)
+                let (reply, opts) = (a1, a2);
+                if reply == 0 {
+                    (-50i16) as i32 as u32
+                } else {
+                    self.mac.mem.zero(reply, 256).map_err(|_| format!("{name}: NavReplyRecord {reply:#x} leaves guest RAM"))?;
+                    // Read savedFileName (Str255 at NavDialogOptions + 1034); default to "Untitled-1.psd" when blank.
+                    let raw_name = if opts != 0 { self.pstr_bytes(opts + 1034, &name).unwrap_or_default() } else { Vec::new() };
+                    let mut fname: Vec<u8> = if raw_name.is_empty() { b"Untitled-1.psd".to_vec() } else { raw_name };
+                    if fname.len() > 63 { fname.truncate(63); }
+                    let vref: i16 = -1;
+                    let par_id: u32 = 2; // root directory of Macintosh HD
+                    // Build 70-byte FSSpec { vRefNum: i16, parID: i32, name: Str63 }
+                    let mut fss = [0u8; 70];
+                    fss[0..2].copy_from_slice(&vref.to_be_bytes());
+                    fss[2..6].copy_from_slice(&par_id.to_be_bytes());
+                    fss[6] = fname.len() as u8;
+                    fss[7..7 + fname.len()].copy_from_slice(&fname);
+                    let list_at = reply + 6; // NavReplyRecord.selection: AEDescList
+                    self.mac.ae_create_list(list_at, false).map_err(|e| format!("{name}: AECreateList {e:?}"))?;
+                    let mut blob = self.mac.ae_blob(list_at).map_err(|e| format!("{name}: ae_blob {e:?}"))?;
+                    blob.items.push(heirloom_mac68k_engine::aedesc::Entry {
+                        key: 0,
+                        ty: heirloom_mac68k_engine::aedesc::fc(b"fss "),
+                        structured: false,
+                        read: false,
+                        data: fss.to_vec(),
+                    });
+                    self.mac.ae_store_blob(list_at, &blob).map_err(|e| format!("{name}: ae_store_blob {e:?}"))?;
+                    self.mac.mem.write_u16(reply, 0).map_err(|_| format!("{name}: write version"))?; // kNavReplyRecordVersion
+                    self.mac.mem.write_u8(reply + 2, 1).map_err(|_| format!("{name}: write validRecord"))?; // validRecord = true
+                    self.mac.mem.write_u8(reply + 3, 0).map_err(|_| format!("{name}: write replacing"))?; // replacing = false
+                    let name_str: alloc::string::String = fname.iter().map(|&b| char::from(b)).collect();
+                    self.mac.log.push(format!("[nav] NavPutFile -> vRef={vref} parID={par_id} name={name_str:?}"));
+                    0
+                }
+            }
+            NavGetFile | NavChooseFolder => {
+                let reply = a1;
+                if reply != 0 {
+                    let _ = self.mac.mem.zero(reply, 256);
+                }
+                self.mac.log.push(format!("[nav] {name} -> userCanceledErr (-128)"));
+                (-128i16) as i32 as u32
+            }
+            NavCustomControl => 0,
+            NavDisposeReply => {
+                if a0 != 0 {
+                    let _ = self.mac.ae_dispose_desc(a0 + 6);
+                    let _ = self.mac.mem.write_u8(a0 + 2, 0);
+                }
+                0
+            }
             ApplicationZone | SystemZone => heirloom_mac68k_engine::lowmem::ZONE_STUB,
             HandleZone => { if self.mac.mm.block(a0).is_none() { self.mac.log.push(format!("[mem] HandleZone {a0:#x}: not a handle (answered the one zone)")); } heirloom_mac68k_engine::lowmem::ZONE_STUB }
+            InitZone => {
+                // void InitZone(GrowZoneUPP pgrowZones, short cmoreMasters, void *limitPtr, void *startPtr)
+                let (grow_proc, more_masters, limit_ptr, start_ptr) = (a0, a1 as u16, a2, a3);
+                if start_ptr == 0 || limit_ptr < start_ptr.wrapping_add(52) {
+                    return Err(format!("InitZone start={start_ptr:#x} limit={limit_ptr:#x}: invalid zone bounds"));
+                }
+                let zeros = [0u8; 52];
+                self.put_bytes(start_ptr, &zeros, &name)?;
+                let free = limit_ptr.wrapping_sub(start_ptr).saturating_sub(52);
+                self.mac.mem.write_u32(start_ptr, limit_ptr).map_err(|_| format!("{name}: bkLim"))?;
+                self.mac.mem.write_u32(start_ptr + 12, free).map_err(|_| format!("{name}: zcbFree"))?;
+                self.mac.mem.write_u32(start_ptr + 16, grow_proc).map_err(|_| format!("{name}: gzProc"))?;
+                self.mac.mem.write_u16(start_ptr + 20, more_masters).map_err(|_| format!("{name}: moreMast"))?;
+                if !self.mac.extra_zones.contains(&start_ptr) {
+                    self.mac.extra_zones.push(start_ptr);
+                }
+                self.mac.mem.write_u32(heirloom_mac68k_engine::lowmem::THE_ZONE, start_ptr).map_err(|_| format!("{name}: TheZone"))?;
+                let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::MEM_ERR, 0);
+                self.mac.log.push(format!("[mem] InitZone start={start_ptr:#x} limit={limit_ptr:#x} masters={more_masters}"));
+                return Ok(());
+            }
             SetZone => {
-                if a0 != heirloom_mac68k_engine::lowmem::ZONE_STUB { return Err(format!("SetZone {a0:#x}: the only heap zone is {:#x}", heirloom_mac68k_engine::lowmem::ZONE_STUB)); }
+                if a0 != heirloom_mac68k_engine::lowmem::ZONE_STUB && !self.mac.extra_zones.contains(&a0) {
+                    return Err(format!("SetZone {a0:#x}: not the main zone ({:#x}) or an InitZone sub-zone", heirloom_mac68k_engine::lowmem::ZONE_STUB));
+                }
+                self.mac.mem.write_u32(heirloom_mac68k_engine::lowmem::THE_ZONE, a0).map_err(|_| format!("{name}: TheZone"))?;
+                let _ = self.mac.mem.write_u16(heirloom_mac68k_engine::lowmem::MEM_ERR, 0);
                 return Ok(());
             }
             GetApplLimit => self.mac.mem.read_u32(heirloom_mac68k_engine::lowmem::MEM_TOP).map_err(|_| format!("{name}: MemTop"))?,
+            GetEvQHdr => 0x014A, // low-memory EventQueue QHdr (Inside Macintosh: Toolbox Event Manager)
+            PrOpen | PrClose => {
+                let _ = self.mac.mem.write_u16(0x0944, 0); // PrintErr = noErr
+                return Ok(());
+            }
+            PrSetError => {
+                let _ = self.mac.mem.write_u16(0x0944, a0 as u16);
+                return Ok(());
+            }
+            PrError => self.mac.mem.read_u16(0x0944).unwrap_or(0) as i16 as i32 as u32,
+            PrintDefault => {
+                // void PrintDefault(THPrint hPrint): populate a standard 120-byte US Letter 72 dpi TPrint record.
+                if let Some(b) = self.mac.mm.block(a0) {
+                    let p = b.ptr;
+                    let len = b.size.min(120);
+                    let mut rec = [0u8; 120];
+                    // iPrVersion = 3
+                    rec[0..2].copy_from_slice(&3i16.to_be_bytes());
+                    // prInfo: iDev=0, iVRes=72, iHRes=72, rPage=(0, 0, 734, 576)
+                    rec[4..6].copy_from_slice(&72i16.to_be_bytes());
+                    rec[6..8].copy_from_slice(&72i16.to_be_bytes());
+                    rec[12..14].copy_from_slice(&734i16.to_be_bytes());
+                    rec[14..16].copy_from_slice(&576i16.to_be_bytes());
+                    // rPaper: (-18, -18, 774, 594)
+                    rec[16..18].copy_from_slice(&(-18i16).to_be_bytes());
+                    rec[18..20].copy_from_slice(&(-18i16).to_be_bytes());
+                    rec[20..22].copy_from_slice(&774i16.to_be_bytes());
+                    rec[22..24].copy_from_slice(&594i16.to_be_bytes());
+                    // prStl: wDev=0, iPageV=1320, iPageH=1020
+                    rec[26..28].copy_from_slice(&1320i16.to_be_bytes());
+                    rec[28..30].copy_from_slice(&1020i16.to_be_bytes());
+                    // prInfoPT (at offset 32): mirror prInfo
+                    let pr_info = rec[2..16].to_vec();
+                    rec[32..46].copy_from_slice(&pr_info);
+                    let _ = self.mac.mem.write_bytes(p, &rec[..len as usize]);
+                }
+                let _ = self.mac.mem.write_u16(0x0944, 0);
+                return Ok(());
+            }
+            PrValidate => {
+                let _ = self.mac.mem.write_u16(0x0944, 0);
+                0 // false: TPrint record is valid and unchanged
+            }
+            PrGeneral => {
+                // void PrGeneral(Ptr pData): TPrGeneralData { iOpCode: i16, iError: i16, lReserved: i32 }.
+                // Answer opNotImpl (-2) in iError so callers fall back cleanly to TPrint defaults.
+                if a0 != 0 {
+                    let _ = self.mac.mem.write_u16(a0.wrapping_add(2), (-2i16) as u16);
+                }
+                let _ = self.mac.mem.write_u16(0x0944, 0);
+                return Ok(());
+            }
+            PrStlDialog | PrJobDialog => {
+                let _ = self.mac.mem.write_u16(0x0944, 0);
+                0 // false (cancelled; no native print dialog yet)
+            }
             SetApplLimit => { self.mac.log.push(format!("[mem] SetApplLimit {a0:#x}: noErr (the one zone is not bounded by a stack limit here)")); 0 }
             LongSecondsToDate => {
                 let secs = (u64::from(self.mac.mem.read_u32(a0).map_err(|_| format!("{name}: the LongDateTime leaves guest RAM"))?) << 32
@@ -357,6 +510,8 @@ impl<U: GuestUi> MacPpc<U> {
                     0
                 }
             }
+            GetIconFamilyData | GetIconRefFromFile => (-2580i16) as i32 as u32, // noSuchIconErr
+            SetIconFamilyData | PlotIconRef | ReleaseIconRef => 0,
             StandardGetFile => {
                 // void StandardGetFile(FileFilterUPP, short numTypes, ConstSFTypeListPtr, StandardFileReply *reply)
                 let reply = a3;

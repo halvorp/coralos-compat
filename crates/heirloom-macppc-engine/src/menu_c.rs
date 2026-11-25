@@ -191,7 +191,23 @@ impl<U: GuestUi> MacPpc<U> {
             SetMenuItemIconHandle => {
                 if let Err(c) = self.mn_check(a0, a1) { c } else { 0 }
             }
-            CalcMenuSize => 0, // host lays out native menus
+            CalcMenuSize => {
+                // Standard MDEF 0 geometry: write menuWidth (+2) and menuHeight (+4) into MenuInfo so callers
+                // (e.g. popupMenuProc / MacApp / Photoshop) that read (**menu).menuWidth to size popup controls get real metrics.
+                if let (Ok(p), Some(b)) = (self.mac.menu_view(a0), self.mac.mm.block(a0)) {
+                    let mut max_w: i32 = 0;
+                    for it in &p.items {
+                        let tw = self.mac.qd.font.text_length(&it.text) as i32;
+                        let cmd = if it.key >= 0x20 { 20 } else { 0 };
+                        max_w = max_w.max(tw + 12 + cmd);
+                    }
+                    let h = (p.items.len() as i32 * 16).min(i32::from(i16::MAX)) as i16;
+                    let w = max_w.min(i32::from(i16::MAX)) as i16;
+                    let _ = self.mac.mem.write_u16(b.ptr + 2, w as u16);
+                    let _ = self.mac.mem.write_u16(b.ptr + 4, h as u16);
+                }
+                0
+            }
         };
         cpu.gpr[3] = r as u32;
         Ok(())
