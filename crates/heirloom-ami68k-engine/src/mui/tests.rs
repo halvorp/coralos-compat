@@ -419,6 +419,7 @@ fn a_menustrip_is_built_from_a_newmenu_array_and_make_object_refuses_what_it_doe
         a.mem.write_u32(p + 4 * i as u32, *v).unwrap();
     }
     let nb = made(&mut a, MUIO_NumericButton, &[0, 5, 60, fmt]);
+    let _ = open_ui(&mut a, &[nb]);
     assert_eq!(kind_of_obj(&a, nb), ControlKind::Slider { min: 5, max: 60, value: 5 });
     let nb2 = make(&mut a, "Numericbutton.mui", &[(MUIA_Numeric_Min, 1), (MUIA_Numeric_Max, 10), (MUIA_Numeric_Value, 4)]).unwrap();
     assert_eq!(get_attr(&mut a, nb2, MUIA_Numeric_Value).unwrap(), 4);

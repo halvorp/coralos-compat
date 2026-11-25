@@ -103,6 +103,10 @@ const GA_HEIGHT: u32 = 0x8003_0007;
 pub struct DtDescriptor {
     pub guest_addr: u32,
     pub header_addr: u32,
+    pub name_addr: u32,
+    pub name_len: u32,
+    pub base_addr: u32,
+    pub base_len: u32,
     pub group_id: u32,
     pub format_id: u32,
     pub name: String,
@@ -114,11 +118,13 @@ pub struct DtObject {
     pub guest_addr: u32,
     pub desc_addr: u32,
     pub name_addr: u32,
+    pub name_len: u32,
     pub group_id: u32,
     pub name: String,
     pub image: Option<DecodedImage>,
     pub text_bytes: Vec<u8>,
     pub text_buf_addr: u32,
+    pub text_buf_len: u32,
     pub bmhd_addr: u32,
     pub bitmap_addr: u32,
     pub cregs_addr: u32,
@@ -197,21 +203,22 @@ fn identify_bytes<U: GuestUi>(a: &Amiga<U>, bytes: &[u8]) -> u32 {
     identify_magic(bytes)
 }
 
-fn alloc_cstr<U: GuestUi>(a: &mut Amiga<U>, s: &str) -> Result<u32, Refusal> {
+fn alloc_cstr<U: GuestUi>(a: &mut Amiga<U>, s: &str) -> Result<(u32, u32), Refusal> {
     let mut bytes = s.as_bytes().to_vec();
     bytes.push(0);
-    let p = a.sys_heap.alloc(bytes.len() as u32).ok_or_else(|| Refusal("datatypes: sys_heap full".into()))?;
+    let len = bytes.len() as u32;
+    let p = a.heap.alloc(len).ok_or_else(|| Refusal("datatypes: guest heap full".into()))?;
     a.mem.write_bytes(p, &bytes).map_err(Refusal::mem("datatypes cstr"))?;
-    Ok(p)
+    Ok((p, len))
 }
 
 /// Allocate a guest `struct DataType` (sizeof ~64) + `struct DataTypeHeader` (sizeof 44).
 fn make_descriptor<U: GuestUi>(a: &mut Amiga<U>, kind: u32) -> Result<u32, Refusal> {
     let (group_id, format_id, name, base_name) = format_meta(kind);
-    let name_p = alloc_cstr(a, name)?;
-    let base_p = alloc_cstr(a, base_name)?;
-    let hdr = a.sys_heap.alloc(44).ok_or_else(|| Refusal("datatypes: sys_heap full (DataTypeHeader)".into()))?;
-    let dt = a.sys_heap.alloc(64).ok_or_else(|| Refusal("datatypes: sys_heap full (DataType)".into()))?;
+    let (name_p, name_len) = alloc_cstr(a, name)?;
+    let (base_p, base_len) = alloc_cstr(a, base_name)?;
+    let hdr = a.heap.alloc(44).ok_or_else(|| Refusal("datatypes: guest heap full (DataTypeHeader)".into()))?;
+    let dt = a.heap.alloc(64).ok_or_else(|| Refusal("datatypes: guest heap full (DataType)".into()))?;
     let m = Refusal::mem("DataTypeHeader");
     a.mem.write_bytes(hdr, &[0u8; 44]).map_err(&m)?;
     // struct DataTypeHeader: 0: dth_Name, 4: dth_BaseName, 8: dth_Pattern, 12: dth_Mask,
@@ -230,6 +237,10 @@ fn make_descriptor<U: GuestUi>(a: &mut Amiga<U>, kind: u32) -> Result<u32, Refus
         DtDescriptor {
             guest_addr: dt,
             header_addr: hdr,
+            name_addr: name_p,
+            name_len,
+            base_addr: base_p,
+            base_len,
             group_id,
             format_id,
             name: String::from(name),
@@ -237,6 +248,30 @@ fn make_descriptor<U: GuestUi>(a: &mut Amiga<U>, kind: u32) -> Result<u32, Refus
         },
     );
     Ok(dt)
+}
+
+fn free_descriptor<U: GuestUi>(a: &mut Amiga<U>, dt: u32) {
+    if let Some(rec) = a.datatypes.descriptors.remove(&dt) {
+        let _ = a.heap.free(rec.name_addr, rec.name_len);
+        let _ = a.heap.free(rec.base_addr, rec.base_len);
+        let _ = a.heap.free(rec.header_addr, 44);
+        let _ = a.heap.free(rec.guest_addr, 64);
+    }
+}
+
+fn free_dt_object<U: GuestUi>(a: &mut Amiga<U>, obj_addr: u32) {
+    if let Some(obj) = a.datatypes.objects.remove(&obj_addr) {
+        if obj.bmhd_addr != 0 { let _ = a.heap.free(obj.bmhd_addr, 24); }
+        if obj.cregs_addr != 0 { let _ = a.heap.free(obj.cregs_addr, 256 * 12); }
+        if obj.color_regs_addr != 0 { let _ = a.heap.free(obj.color_regs_addr, 256 * 3); }
+        if obj.text_buf_addr != 0 && obj.text_buf_len != 0 { let _ = a.heap.free(obj.text_buf_addr, obj.text_buf_len); }
+        if obj.name_addr != 0 && obj.name_len != 0 { let _ = a.heap.free(obj.name_addr, obj.name_len); }
+        if obj.desc_addr != 0 { free_descriptor(a, obj.desc_addr); }
+    }
+    if let Some(rec) = a.classes.objs.remove(&obj_addr) {
+        let _ = crate::iclass::count_object(a, rec.class, false);
+        let _ = a.heap.free(rec.block, rec.size);
+    }
 }
 
 fn read_node_bytes<U: GuestUi>(a: &Amiga<U>, id: crate::volume::NodeId) -> Option<(String, Vec<u8>)> {
@@ -316,10 +351,7 @@ fn obtain_data_type<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<Strin
 
 fn release_data_type<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let dt = cpu.areg(0);
-    if let Some(rec) = a.datatypes.descriptors.remove(&dt) {
-        let _ = a.sys_heap.free(rec.header_addr, 44);
-        let _ = a.sys_heap.free(rec.guest_addr, 64);
-    }
+    free_descriptor(a, dt);
     Ok(format!("[datatypes] ReleaseDataType {dt:#x}"))
 }
 
@@ -417,7 +449,7 @@ fn new_dt_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     }
 
     let desc_addr = make_descriptor(a, kind)?;
-    let name_addr = alloc_cstr(a, &label)?;
+    let (name_addr, name_len) = alloc_cstr(a, &label)?;
     // Allocate as a real BOOPSI `datatypeclass` object so inline `DoMethod(obj, ...)` / `GetAttr` /
     // `SetAttrs` / `DisposeObject` find `OCLASS(obj)` at `obj - 4` and dispatch cleanly into `dispatch_boopsi`.
     let dt_class = crate::iclass::native_addr(crate::iclass::Native::Datatype);
@@ -434,6 +466,7 @@ fn new_dt_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
     let mut color_regs_addr = 0u32;
     let mut num_colors = 0u32;
     let mut text_buf_addr = 0u32;
+    let mut text_buf_len = 0u32;
 
     if let Some(ref img) = decoded_img {
         let (w, h) = (img.width as i32, img.height as i32);
@@ -447,7 +480,7 @@ fn new_dt_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
         // 0: Width (u16), 2: Height (u16), 4: Left (i16), 6: Top (i16), 8: Depth (u8),
         // 9: Masking (u8), 10: Compression (u8), 11: Pad (u8), 12: Transparent (u16),
         // 14: XAspect (u8), 15: YAspect (u8), 16: PageWidth (i16), 18: PageHeight (i16)
-        bmhd_addr = a.sys_heap.alloc(24).ok_or_else(|| Refusal("datatypes: sys_heap full (BitMapHeader)".into()))?;
+        bmhd_addr = a.heap.alloc(24).ok_or_else(|| Refusal("datatypes: guest heap full (BitMapHeader)".into()))?;
         let mut bmhd = [0u8; 24];
         bmhd[0..2].copy_from_slice(&(img.width.min(u16::MAX as u32) as u16).to_be_bytes());
         bmhd[2..4].copy_from_slice(&(img.height.min(u16::MAX as u32) as u16).to_be_bytes());
@@ -475,8 +508,8 @@ fn new_dt_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
 
         // Provide a 256-entry CRegs (3 * u32 per color) + ColorRegister (3 * u8 per color) table
         num_colors = 256;
-        cregs_addr = a.sys_heap.alloc(256 * 12).ok_or_else(|| Refusal("datatypes: sys_heap full (CRegs)".into()))?;
-        color_regs_addr = a.sys_heap.alloc(256 * 3).ok_or_else(|| Refusal("datatypes: sys_heap full (ColorRegs)".into()))?;
+        cregs_addr = a.heap.alloc(256 * 12).ok_or_else(|| Refusal("datatypes: guest heap full (CRegs)".into()))?;
+        color_regs_addr = a.heap.alloc(256 * 3).ok_or_else(|| Refusal("datatypes: guest heap full (ColorRegs)".into()))?;
         let mut cregs = Vec::with_capacity(256 * 12);
         let mut colregs = Vec::with_capacity(256 * 3);
         for &c in &pal {
@@ -492,7 +525,8 @@ fn new_dt_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
         a.mem.write_bytes(color_regs_addr, &colregs).map_err(Refusal::mem("ColorRegs"))?;
     } else if group_id == GID_TEXT {
         let len = raw.len().min(1024 * 1024);
-        text_buf_addr = a.sys_heap.alloc((len + 1) as u32).ok_or_else(|| Refusal("datatypes: sys_heap full (text)".into()))?;
+        text_buf_len = (len + 1) as u32;
+        text_buf_addr = a.heap.alloc(text_buf_len).ok_or_else(|| Refusal("datatypes: guest heap full (text)".into()))?;
         a.mem.write_bytes(text_buf_addr, &raw[..len]).map_err(Refusal::mem("TDTA_Buffer"))?;
         a.mem.write_u8(text_buf_addr + len as u32, 0).map_err(Refusal::mem("TDTA_Buffer"))?;
         let lines = raw[..len].iter().filter(|&&b| b == b'\n').count().max(1) as i32;
@@ -517,11 +551,13 @@ fn new_dt_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
             guest_addr: obj_addr,
             desc_addr,
             name_addr,
+            name_len,
             group_id,
             name: label.clone(),
             image: decoded_img,
             text_bytes: if group_id == GID_TEXT { raw } else { Vec::new() },
             text_buf_addr,
+            text_buf_len,
             bmhd_addr,
             bitmap_addr,
             cregs_addr,
@@ -539,7 +575,7 @@ fn new_dt_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, 
 
 fn dispose_dt_object<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let obj = cpu.areg(0);
-    a.datatypes.objects.remove(&obj);
+    free_dt_object(a, obj);
     Ok(format!("[datatypes] DisposeDTObject {obj:#x}"))
 }
 
@@ -792,7 +828,7 @@ fn do_dt_method<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, R
 }
 
 fn get_dt_methods<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
-    let list = a.sys_heap.alloc(16).ok_or_else(|| Refusal("datatypes: sys_heap full".into()))?;
+    let list = a.heap.alloc(16).ok_or_else(|| Refusal("datatypes: guest heap full".into()))?;
     let m = Refusal::mem("GetDTMethods");
     a.mem.write_u32(list, DTM_PROCLAYOUT).map_err(&m)?;
     a.mem.write_u32(list + 4, PDTM_READPIXELARRAY).map_err(&m)?;
@@ -845,11 +881,7 @@ pub fn dispatch_boopsi<U: GuestUi>(a: &mut Amiga<U>, cl: u32, obj_addr: u32, msg
     let method_id = a.mem.read_u32(msg_ptr).map_err(Refusal::mem("datatypeclass msg"))?;
     match method_id {
         crate::boopsi_ids::OM_DISPOSE => {
-            a.datatypes.objects.remove(&obj_addr);
-            if let Some(rec) = a.classes.objs.remove(&obj_addr) {
-                let _ = crate::iclass::count_object(a, rec.class, false);
-                let _ = a.heap.free(rec.block, rec.size);
-            }
+            free_dt_object(a, obj_addr);
             Ok(0)
         }
         crate::boopsi_ids::OM_GET => {
@@ -971,7 +1003,7 @@ fn read_pixel_array_into_guest<U: GuestUi>(a: &mut Amiga<U>, obj: &DtObject, msg
 
 fn get_dt_string<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let id = cpu.dreg(0);
-    let p = alloc_cstr(a, "Datatype error")?;
+    let (p, _) = alloc_cstr(a, "Datatype error")?;
     cpu.set_d0(p);
     Ok(format!("[datatypes] GetDTString({id}) -> {p:#x}"))
 }

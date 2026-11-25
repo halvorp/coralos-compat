@@ -107,7 +107,7 @@ pub fn leaf(o: &Objects, obj: u32) -> Option<ControlKind> {
         Kind::Cycle => choice(o, obj, ChoiceStyle::Cycle, MUIA_Cycle_Entries, MUIA_Cycle_Active),
         Kind::Radio => choice(o, obj, ChoiceStyle::Radio, MUIA_Radio_Entries, MUIA_Radio_Active),
         Kind::Register => choice(o, obj, ChoiceStyle::Tabs, MUIA_Register_Titles, MUIA_Group_ActivePage),
-        Kind::Slider => ControlKind::Slider { min: o.num_or(obj, MUIA_Numeric_Min, 0) as i32, max: o.num_or(obj, MUIA_Numeric_Max, 100) as i32, value: o.num_or(obj, MUIA_Numeric_Value, 0) as i32 },
+        Kind::Slider | Kind::Numericbutton => ControlKind::Slider { min: o.num_or(obj, MUIA_Numeric_Min, 0) as i32, max: o.num_or(obj, MUIA_Numeric_Max, 100) as i32, value: o.num_or(obj, MUIA_Numeric_Value, 0) as i32 },
         Kind::Gauge => {
             let max = o.num_or(obj, MUIA_Gauge_Max, 100).max(1);
             ControlKind::Gauge { value: o.num_or(obj, MUIA_Gauge_Current, 0).min(max), max }

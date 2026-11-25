@@ -73,7 +73,8 @@ const REGISTER: &[(u32, Ty)] = &[(MUIA_Register_Titles, StrArr), (MUIA_Register_
 const VIRTGROUP: &[(u32, Ty)] = &[(MUIA_Virtgroup_Left, Num), (MUIA_Virtgroup_Top, Num), (MUIA_Virtgroup_Width, Num), (MUIA_Virtgroup_Height, Num),
     (MUIA_Virtgroup_Input, Num)];
 const SCROLLGROUP: &[(u32, Ty)] = &[(MUIA_Scrollgroup_Contents, Adopt), (MUIA_Scrollgroup_FreeHoriz, Num), (MUIA_Scrollgroup_FreeVert, Num),
-    (MUIA_Scrollgroup_HorizBar, Num), (MUIA_Scrollgroup_VertBar, Num), (MUIA_Scrollgroup_UseWinBorder, Num)];
+    (MUIA_Scrollgroup_HorizBar, Num), (MUIA_Scrollgroup_VertBar, Num), (MUIA_Scrollgroup_UseWinBorder, Num),
+    (0x8042f50e, Num), (0x8042cab1, Num), (0x804264c3, Num)]; // AutoBars, NoHorizBar, NoVertBar
 const TEXT: &[(u32, Ty)] = &[(MUIA_Text_Contents, Str), (MUIA_Text_PreParse, Str), (MUIA_Text_SetMax, Num), (MUIA_Text_SetMin, Num),
     (MUIA_Text_SetVMax, Num), (MUIA_Text_HiChar, Num), (MUIA_Text_ControlChar, Num), (MUIA_Text_Copy, Num), (MUIA_Text_HiCharIdx, Num)];
 const STRING: &[(u32, Ty)] = &[(MUIA_String_Contents, Str), (MUIA_String_Accept, Str), (MUIA_String_Reject, Str), (MUIA_String_Acknowledge, Str),
@@ -124,7 +125,7 @@ fn own(kind: Kind) -> &'static [(u32, Ty)] {
         Kind::Menustrip => MENUSTRIP, Kind::Menu => MENU, Kind::Menuitem => MENUITEM, Kind::Area => AREA, Kind::Rectangle => RECTANGLE,
         Kind::Balance => BALANCE, Kind::Image => IMAGE, Kind::Group => GROUP, Kind::Virtgroup => VIRTGROUP, Kind::Scrollgroup => SCROLLGROUP,
         Kind::Register => REGISTER, Kind::Text => TEXT, Kind::String => STRING, Kind::Cycle => CYCLE, Kind::Radio => RADIO,
-        Kind::Numeric => NUMERIC, Kind::Slider => SLIDER, Kind::Gauge => GAUGE, Kind::Prop => PROP, Kind::Scrollbar => SCROLLBAR,
+        Kind::Numeric => NUMERIC, Kind::Slider => SLIDER, Kind::Numericbutton => &[], Kind::Gauge => GAUGE, Kind::Prop => PROP, Kind::Scrollbar => SCROLLBAR,
         Kind::List => LIST, Kind::Listview => LISTVIEW, Kind::Popstring => POPSTRING, Kind::Popasl => POPASL, Kind::Popobject => POPOBJECT,
         Kind::Bitmap => BITMAP, Kind::ChunkyImage => CHUNKYIMAGE, Kind::Bodychunk => BODYCHUNK, Kind::Imagedisplay => IMAGEDISPLAY, Kind::Semaphore => &[], Kind::Dataspace => DATASPACE,
     }

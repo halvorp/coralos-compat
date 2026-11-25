@@ -12,7 +12,7 @@ use alloc::string::String;
 pub enum Kind {
     Notify, Family, Application, Window, Menustrip, Menu, Menuitem,
     Area, Rectangle, Balance, Image, Group, Virtgroup, Scrollgroup, Register, Text, String, Cycle, Radio,
-    Numeric, Slider, Gauge, Prop, Scrollbar, List, Listview, Popstring, Popasl, Popobject,
+    Numeric, Slider, Numericbutton, Gauge, Prop, Scrollbar, List, Listview, Popstring, Popasl, Popobject,
     Bitmap, ChunkyImage, Bodychunk, Imagedisplay,
     Semaphore, Dataspace,
 }
@@ -43,6 +43,7 @@ pub const CLASSES: &[Class] = &[
     c("Radio.mui", Some(Kind::Group), Kind::Radio, false),
     c("Numeric.mui", Some(Kind::Area), Kind::Numeric, true),
     c("Slider.mui", Some(Kind::Numeric), Kind::Slider, false),
+    c("Numericbutton.mui", Some(Kind::Numeric), Kind::Numericbutton, false),
     c("Gauge.mui", Some(Kind::Area), Kind::Gauge, false),
     c("Prop.mui", Some(Kind::Area), Kind::Prop, false),
     c("Scrollbar.mui", Some(Kind::Group), Kind::Scrollbar, false),

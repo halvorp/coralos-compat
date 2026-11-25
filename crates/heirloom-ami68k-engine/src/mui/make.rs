@@ -83,6 +83,12 @@ pub fn make<U: GuestUi>(a: &mut Amiga<U>, ty: u32, params: u32) -> Result<u32, R
         MUIO_Cycle => { let (label, entries) = (p(a, 0)?, p(a, 1)?); control(a, Kind::Cycle, label, alloc::vec![(MUIA_Frame, MUIV_Frame_Button), (MUIA_Cycle_Entries, entries)], true) }
         MUIO_Radio => { let (label, entries) = (p(a, 0)?, p(a, 1)?); control(a, Kind::Radio, label, alloc::vec![(MUIA_Radio_Entries, entries)], false) }
         MUIO_Slider => { let (label, lo, hi) = (p(a, 0)?, p(a, 1)?, p(a, 2)?); control(a, Kind::Slider, label, alloc::vec![(MUIA_Numeric_Min, lo), (MUIA_Numeric_Max, hi)], false) }
+        MUIO_NumericButton => {
+            let (label, lo, hi, fmt) = (p(a, 0)?, p(a, 1)?, p(a, 2)?, p(a, 3)?);
+            let mut tags = alloc::vec![(MUIA_Numeric_Min, lo), (MUIA_Numeric_Max, hi)];
+            if fmt != 0 { tags.push((MUIA_Numeric_Format, fmt)); }
+            control(a, Kind::Numericbutton, label, tags, false)
+        }
         MUIO_String => { let (label, max) = (p(a, 0)?, p(a, 1)?); control(a, Kind::String, label, alloc::vec![(MUIA_Frame, MUIV_Frame_String), (MUIA_String_MaxLen, max)], false) }
         MUIO_PopButton => { let spec = p(a, 0)?; create(a, Kind::Image, &[(MUIA_Frame, MUIV_Frame_ImageButton), (MUIA_Background, MUII_ButtonBack), (MUIA_Image_Spec, spec),
             (MUIA_InputMode, MUIV_InputMode_RelVerify), (MUIA_Image_FreeVert, 1), (MUIA_Image_FreeHoriz, 0)]) }
