@@ -144,6 +144,10 @@ pub struct FbsState {
     pub system_gc: Option<(u32, u32)>,
     /// Bump cursor inside the FBServ shared chunk (`layout::FBS_CHUNK_BASE..layout::STUB_BASE`).
     pub chunk_cursor: u32,
+    /// Single-entry cache of the last MBM archive read from the read-only package/ROM drive so
+    /// loading N sprites from one `.mbm` (e.g. Backgammon Pro V loading 22 sprites from a 1.81 MiB
+    /// streamed `.mbm`) reads the file once instead of N times.
+    pub last_mbm: Option<(alloc::string::String, alloc::vec::Vec<u8>)>,
 }
 
 impl FbsState {
@@ -153,6 +157,22 @@ impl FbsState {
         self.bitmaps.insert(id, bmp);
         id
     }
+}
+
+fn load_mbm_bytes<'a>(p: &'a mut Process, raw_path: &str, priv_dir: &str, path: &str) -> Option<&'a [u8]> {
+    let hit = p.nat.fbs.last_mbm.as_ref().is_some_and(|(k, _)| k.eq_ignore_ascii_case(path));
+    if !hit {
+        let bytes = p.host.drive.as_ref().and_then(|d| {
+            d.read_owned(path).ok()
+                .or_else(|| d.read_owned(&format!("{priv_dir}{}", raw_path.trim_start_matches(['\\', '/']))).ok())
+                .or_else(|| {
+                    let tail = raw_path.rsplit(['\\', '/']).next().unwrap_or(raw_path);
+                    d.read_owned(&format!("{priv_dir}{tail}")).ok()
+                })
+        })?;
+        p.nat.fbs.last_mbm = Some((alloc::string::String::from(path), bytes));
+    }
+    p.nat.fbs.last_mbm.as_ref().map(|(_, b)| b.as_slice())
 }
 
 /// Symbian 256-color palette entry (6x6x6 cube + grays, EColor256).
@@ -249,16 +269,8 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let priv_dir = format!("C:\\private\\{:08x}\\", p.uid3);
             let path = crate::fs::resolve_drive_path(&raw_path, &priv_dir);
             let idx = r2 as usize;
-            let bytes = p.host.drive.as_ref().and_then(|d| {
-                d.read_owned(&path).ok()
-                    .or_else(|| d.read_owned(&format!("{priv_dir}{}", raw_path.trim_start_matches(['\\', '/']))).ok())
-                    .or_else(|| {
-                        // Strip drive letter (e.g. "C:\bdim.mbm") and check private dir fallback
-                        let tail = raw_path.rsplit(['\\', '/']).next().unwrap_or(&raw_path);
-                        d.read_owned(&format!("{priv_dir}{tail}")).ok()
-                    })
-            });
-            let bmp = match bytes.and_then(|b| decode_mbm_mode(&b, idx).ok()) {
+            let decoded = load_mbm_bytes(p, &raw_path, &priv_dir, &path).and_then(|b| decode_mbm_mode(b, idx).ok());
+            let bmp = match decoded {
                 Some((w, h, display_mode, pixels)) => FbsBitmap {
                     width: w, height: h, display_mode, is_gray: matches!(display_mode, 1 | 2 | 3 | 4), pixels, data_addr: None,
                 },
@@ -341,23 +353,14 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let priv_dir = format!("C:\\private\\{:08x}\\", p.uid3);
             let path = crate::fs::resolve_drive_path(&raw_path, &priv_dir);
             let idx = r2 as usize;
-            let bytes = p.host.drive.as_ref().and_then(|d| {
-                d.read_owned(&path).ok()
-                    .or_else(|| {
-                        let tail = raw_path.rsplit(['\\', '/']).next().unwrap_or(&raw_path);
-                        d.read_owned(&format!("{priv_dir}{tail}")).ok()
-                    })
-            });
-            match bytes {
-                Some(b) => match decode_mbm_mode(&b, idx) {
-                    Ok((w, h, display_mode, pixels)) => {
-                        let bmp = FbsBitmap { width: w, height: h, display_mode, is_gray: matches!(display_mode, 1 | 2 | 3 | 4), pixels, data_addr: None };
-                        let handle = p.nat.fbs.insert_bitmap(bmp);
-                        let _ = p.obj_set(r0, HostObj::FbsBitmap(handle));
-                        p.cpu.regs[0] = 0;
-                    }
-                    Err(_) => { p.cpu.regs[0] = (-6i32) as u32; } // KErrCorrupt / KErrArgument
-                },
+            match load_mbm_bytes(p, &raw_path, &priv_dir, &path).map(|b| decode_mbm_mode(b, idx)) {
+                Some(Ok((w, h, display_mode, pixels))) => {
+                    let bmp = FbsBitmap { width: w, height: h, display_mode, is_gray: matches!(display_mode, 1 | 2 | 3 | 4), pixels, data_addr: None };
+                    let handle = p.nat.fbs.insert_bitmap(bmp);
+                    let _ = p.obj_set(r0, HostObj::FbsBitmap(handle));
+                    p.cpu.regs[0] = 0;
+                }
+                Some(Err(_)) => { p.cpu.regs[0] = (-6i32) as u32; } // KErrCorrupt / KErrArgument
                 None => { p.cpu.regs[0] = (-1i32) as u32; } // KErrNotFound
             }
             NativeOutcome::Return

@@ -196,7 +196,9 @@ impl<U: GuestUi> MacPpc<U> {
         ctx.set_reg(heirloom_mac68k_engine::cpu::REG_PC, ret_pc);
         ctx.set_reg(heirloom_mac68k_engine::cpu::REG_A0 + 7, sp_after);
         let saved = Saved::of(cpu, cpu.pc);
-        let ppc_sp = cpu.gpr[1];
+        // Carve the nested PowerPC callback stack BELOW the live 68k stack pointer `a7` so PowerPC frames
+        // (e.g. HyperCard's 832-byte XCmdBlock entryPoint frame) can never grow down into the paused 68k stack.
+        let ppc_sp = cpu.gpr[1].min(a7).wrapping_sub(512) & !0xF;
         self.enter_tvector(cpu, rec.proc_descriptor, &args, ppc_sp)
             .map_err(|e| format!("[HEIRLOOM-MACPPC XISA-68K-AAFE rd={rd_addr:#x}] {e}"))?;
         self.mac.cross_isa_running = false;

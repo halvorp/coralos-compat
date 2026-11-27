@@ -223,6 +223,14 @@ impl<U: GuestUi> MacPpc<U> {
         self.after_run();
         heirloom_mac68k_engine::qd::flush(&mut self.mac);
         if let Some(t) = stats.trap {
+            // Classic Mac OS 8/9's PowerPC alignment exception handler transparently emulates unaligned
+            // `lmw`/`stmw` (e.g. 2-byte aligned 68k-packed struct copies in HyperCard Player) and resumes at pc+4.
+            if let crate::cpu::Trap::Alignment { pc, addr, what } = t {
+                if matches!(what, "lmw" | "stmw") && self.emulate_unaligned_mw(&mut cpu, pc, addr) {
+                    self.rt.cpu = Some(cpu);
+                    return (Step::BudgetSpent, stats);
+                }
+            }
             let mut why = format!("PowerPC fault: {t}");
             #[cfg(feature = "cpu-library")]
             if let Some((found, want)) = self.rt.exec.build_mismatch() { why = format!("{why} [CPU-PPC-LIB REFUSED build={found:#018x} expected={want:#018x}]"); }
@@ -250,6 +258,31 @@ impl<U: GuestUi> MacPpc<U> {
             else if stats.halted { Step::Exited } else if stats.blocked { Step::Blocked } else { Step::BudgetSpent };
         if step != Step::Exited { self.rt.cpu = Some(cpu); }
         (step, stats)
+    }
+
+    /// Mac OS 8/9 PowerPC alignment exception handler for unaligned `lmw` (op 46) / `stmw` (op 47).
+    fn emulate_unaligned_mw(&mut self, cpu: &mut Cpu, pc: u32, addr: u32) -> bool {
+        let Ok(word) = self.mac.mem.read_u32(pc) else { return false };
+        let op = word >> 26;
+        let rt = ((word >> 21) & 31) as usize;
+        let ra = ((word >> 16) & 31) as usize;
+        match op {
+            46 => {
+                if ra != 0 && ra >= rt { return false; }
+                for (i, r) in (rt..32).enumerate() {
+                    let Ok(v) = self.mac.mem.read_u32(addr.wrapping_add(4 * i as u32)) else { return false };
+                    cpu.gpr[r] = v;
+                }
+            }
+            47 => {
+                for (i, r) in (rt..32).enumerate() {
+                    if self.mac.mem.write_u32(addr.wrapping_add(4 * i as u32), cpu.gpr[r]).is_err() { return false; }
+                }
+            }
+            _ => return false,
+        }
+        cpu.set_pc(pc.wrapping_add(4));
+        true
     }
 
     /// The guest-PC profile's run (profile.rs): the budget in pseudo-random chunks, the pc and the chunk's JIT ticks sampled
