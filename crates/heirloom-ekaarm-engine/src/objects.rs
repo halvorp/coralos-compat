@@ -254,6 +254,11 @@ pub struct Objects {
     pub sendas_sessions: BTreeMap<u32, String>,
     pub sendas_drafts: BTreeMap<u32, SendAsDraftState>,
     pub next_sendas_handle: u32,
+    /// Transient `esock` (`RSocketServ`, `RHostResolver`, `RSocket`) handles (`sym_net.rs`, REUSE U18).
+    pub net_sessions: BTreeMap<u32, ()>,
+    pub net_resolvers: BTreeMap<u32, ()>,
+    pub net_sockets: BTreeMap<u32, Option<u32>>,
+    pub next_net_handle: u32,
 }
 
 impl Process {

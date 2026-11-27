@@ -159,6 +159,11 @@ pub trait OsFamily: 'static {
     fn attach_audio(_m: &mut Self::Machine, _host: crate::audio::AudioHost) -> Result<(), String> {
         Err(String::from("attach_audio: this guest machine does not consume host audio"))
     }
+    /// The engine process's own outbound-only `coral-net-server` bridge ([`OsVTable::attach_net`]).
+    /// A family that does not consume it refuses by name.
+    fn attach_net(_m: &mut Self::Machine, _host: crate::net::NetHost) -> Result<(), String> {
+        Err(String::from("attach_net: this guest machine does not consume host networking"))
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -228,12 +233,13 @@ pub struct FamilyHooks<M> {
     pub attach_clipboard: fn(&mut M, crate::clip::ClipHost) -> Result<(), String>,
     pub attach_messages: fn(&mut M, crate::messages::MessagesHost) -> Result<(), String>,
     pub attach_audio: fn(&mut M, crate::audio::AudioHost) -> Result<(), String>,
+    pub attach_net: fn(&mut M, crate::net::NetHost) -> Result<(), String>,
 }
 
 impl<M> FamilyHooks<M> {
     /// The hooks of family `F`.
     pub fn of<F: OsFamily<Machine = M>>() -> Self {
-        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input_with_streams, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach, attach_datatype: F::attach_datatype, attach_prefs: F::attach_prefs, attach_clipboard: F::attach_clipboard, attach_messages: F::attach_messages, attach_audio: F::attach_audio }
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input_with_streams, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach, attach_datatype: F::attach_datatype, attach_prefs: F::attach_prefs, attach_clipboard: F::attach_clipboard, attach_messages: F::attach_messages, attach_audio: F::attach_audio, attach_net: F::attach_net }
     }
 }
 
@@ -404,6 +410,7 @@ trait AnySession {
     fn attach_clipboard(&mut self, host: crate::clip::ClipHost) -> Result<(), String>;
     fn attach_messages(&mut self, host: crate::messages::MessagesHost) -> Result<(), String>;
     fn attach_audio(&mut self, host: crate::audio::AudioHost) -> Result<(), String>;
+    fn attach_net(&mut self, host: crate::net::NetHost) -> Result<(), String>;
 }
 
 impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
@@ -439,6 +446,9 @@ impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
     }
     fn attach_audio(&mut self, host: crate::audio::AudioHost) -> Result<(), String> {
         (self.hooks.attach_audio)(&mut self.machine, host)
+    }
+    fn attach_net(&mut self, host: crate::net::NetHost) -> Result<(), String> {
+        (self.hooks.attach_net)(&mut self.machine, host)
     }
 }
 
@@ -722,6 +732,18 @@ extern "C" fn attach_audio_impl(inst: *mut OsInstance, host: *const crate::audio
     }
 }
 
+extern "C" fn attach_net_impl(inst: *mut OsInstance, host: *const crate::net::NetHost) -> i32 {
+    if inst.is_null() || host.is_null() {
+        return crate::net::NET_ATTACH_REFUSED;
+    }
+    // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed; `host` points to a record the engine filled (copied).
+    let (session, host) = unsafe { (&mut **(inst as *mut Instance), *host) };
+    match session.attach_net(host) {
+        Ok(()) => crate::net::NET_ATTACH_OK,
+        Err(_) => crate::net::NET_ATTACH_REFUSED,
+    }
+}
+
 /// The table for family `F`: `static TABLE: OsVTable = heirloom_os_abi::serve::vtable::<MyFamily>();`.
 pub const fn vtable<F: OsFamily>() -> OsVTable {
     vtable2::<F, F>()
@@ -751,5 +773,6 @@ pub const fn vtable2<F: OsFamily, G: OsFamily>() -> OsVTable {
         attach_clipboard: attach_clipboard_impl,
         attach_messages: attach_messages_impl,
         attach_audio: attach_audio_impl,
+        attach_net: attach_net_impl,
     }
 }

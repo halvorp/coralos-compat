@@ -87,6 +87,10 @@ impl OsFamily for AmiFamily {
         m.clip_host = Some(alloc::boxed::Box::new(host));
         Ok(())
     }
+    fn attach_net(m: &mut Amiga<LibUi>, host: heirloom_os_abi::net::NetHost) -> Result<(), String> {
+        m.net_host = Some(alloc::boxed::Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<AmiFamily>();

@@ -115,6 +115,7 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::fileman::native(proc, name) { return Some(o); }
     if let Some(o) = crate::cenrep::native(proc, name) { return Some(o); }
     if let Some(o) = crate::sym_messages::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::sym_net::native(proc, name) { return Some(o); }
     if let Some(o) = crate::cdl::native(proc, name) { return Some(o); }
     if let Some(o) = crate::navi::native(proc, name) { return Some(o); }
     if let Some(o) = crate::avkonlayout::native(proc, name) { return Some(o); }

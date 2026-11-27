@@ -114,6 +114,8 @@ pub struct Amiga<U: GuestUi> {
     pub prefs_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestPrefs>>,
     /// Native CoralOS `clipboardd` host bridge (`iff.rs` `InitIFFasClip` / `OpenClipboard`, REUSE U8).
     pub clip_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestClipboard>>,
+    /// Native CoralOS `coral-net-server` outbound-only TCP + DNS bridge (REUSE U18).
+    pub net_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestNet>>,
     /// Monotonic counter for `utility.library/GetUniqueID` (never returns 0).
     pub unique_id: u32,
     pub cli_args: Option<String>,
@@ -155,7 +157,7 @@ impl<U: GuestUi> Amiga<U> {
             mem: GuestMem::new(DEFAULT_SIZE), ui, libs: vec![], windows: BTreeMap::new(),
             dispatch: BTreeMap::new(), log: vec![], refused: vec![],
             stop_on_unimplemented: false, next_lib_base: DYNAMIC_LIB_BASES, heap: memory::Heap::new(HEAP_START, HEAP_END), sys_heap: memory::Heap::new(SYS_ARENA_START, SYS_ARENA_END), sched: Default::default(), workbench: Default::default(), notify: Default::default(), task_res: Default::default(), asl: Default::default(), cx: Default::default(), requests: Default::default(), iff: Default::default(), keymap: Default::default(), locale: Default::default(), binds: Default::default(), cache_bits: crate::cache::CACRF_ENABLE_I, console: Default::default(), screen_locks: 0, screen_notifies: Default::default(), req: Default::default(), ibase_locks: 0, pub_list: 0, rdargs: vec![], gadgets: BTreeMap::new(), menu_strips: BTreeMap::new(), menu_allocs: BTreeMap::new(),
-            clock_us: 0, timers: vec![], audio: Default::default(), cyber: Default::default(), datatypes: Default::default(), datatype_host: None, prefs_host: None, clip_host: None, unique_id: 0, cli_args: None, custom_screens: BTreeMap::new(), gameport_pending: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), native_gads: Default::default(), gt_ctls: Default::default(), gfx: graphics::state::State::new(),
+            clock_us: 0, timers: vec![], audio: Default::default(), cyber: Default::default(), datatypes: Default::default(), datatype_host: None, prefs_host: None, clip_host: None, net_host: None, unique_id: 0, cli_args: None, custom_screens: BTreeMap::new(), gameport_pending: vec![], engine_msgs: BTreeMap::new(), pools: BTreeMap::new(), semaphores: BTreeMap::new(), public_semaphores: BTreeMap::new(), objects: Default::default(), classes: Default::default(), input: Default::default(), native_gads: Default::default(), gt_ctls: Default::default(), gfx: graphics::state::State::new(),
             fs: Default::default(), calls: vec![], census_stubs: vec![],
         };
         LibraryBuilder::new("exec.library", EXEC_BASE)

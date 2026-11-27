@@ -20,6 +20,11 @@ pub use messages::{
     GuestRecipient, GuestRecipientKind, MSG_ATTACHMENTS_MAX, MSG_BODY_MAX, MSG_DRAFTS_MAX,
     MSG_ID_MAX, MSG_MIME_MAX, MSG_PATH_MAX, MSG_RECIPIENTS_MAX, MSG_SUBJECT_MAX,
 };
+pub mod net;
+pub use net::{
+    host_ok, FakeConn, FakeNet, GuestNet, NET_EVT_EOF, NET_EVT_READABLE, NET_EVT_RESET,
+    NET_EVT_WRITABLE, NET_HOST_MAX, NET_IO_MAX, NET_MAX_CONNS,
+};
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -497,5 +502,35 @@ mod tests {
         assert_eq!(denied.open_stream(&model), Err(GuestSvcError::NotGranted));
         assert_eq!(denied.queue_pcm(1, &[0x80]), Err(GuestSvcError::NotGranted));
         assert!(denied.streams().is_empty());
+    }
+
+    #[test]
+    fn fake_net_round_trip_and_negative_controls() {
+        let mut net = FakeNet::new();
+        net.add_host("coral.lan", [10, 0, 2, 15]);
+        assert_eq!(net.resolve("coral.lan"), Ok([10, 0, 2, 15]));
+        assert_eq!(net.resolve("127.0.0.1"), Ok([127, 0, 0, 1]));
+        let c = net.connect([10, 0, 2, 15], 22).unwrap();
+        assert_eq!(net.send(c, b"SSH-2.0\r\n"), Ok(9));
+        assert_eq!(net.conns()[&c].tx.as_slice(), b"SSH-2.0\r\n");
+        let mut buf = [0u8; 16];
+        assert_eq!(net.recv(c, &mut buf), Ok(0));
+        net.inject_rx(c, b"OK");
+        assert_eq!(net.poll_events(c).unwrap() & NET_EVT_READABLE, NET_EVT_READABLE);
+        assert_eq!(net.recv(c, &mut buf), Ok(2));
+        assert_eq!(&buf[..2], b"OK");
+        net.inject_eof(c);
+        assert_eq!(net.recv(c, &mut buf), Err(GuestSvcError::Refused("eof")));
+        net.shutdown_write(c).unwrap();
+        net.close(c).unwrap();
+        assert!(net.conns().is_empty());
+
+        // Negative controls: unknown host, bad name, port 0, NotGranted.
+        assert_eq!(net.resolve("missing.invalid"), Err(GuestSvcError::Refused("dns")));
+        assert_eq!(net.resolve("bad host"), Err(GuestSvcError::BadName));
+        assert_eq!(net.connect([10, 0, 0, 1], 0), Err(GuestSvcError::Refused("conn-refused")));
+        let mut denied = FakeNet::not_granted();
+        assert_eq!(denied.resolve("coral.lan"), Err(GuestSvcError::NotGranted));
+        assert_eq!(denied.connect([10, 0, 2, 15], 22), Err(GuestSvcError::NotGranted));
     }
 }

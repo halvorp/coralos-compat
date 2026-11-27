@@ -81,6 +81,10 @@ impl OsFamily for EkaFamily {
         m.set_messages_host(Box::new(host));
         Ok(())
     }
+    fn attach_net(m: &mut EkaArm<LibUi>, host: heirloom_os_abi::net::NetHost) -> Result<(), String> {
+        m.set_net_host(Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<EkaFamily>();
