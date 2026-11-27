@@ -9,6 +9,13 @@
 #![no_std]
 extern crate alloc;
 
+pub mod messages;
+pub use messages::{
+    attachment_ref_ok, FakeMessages, GuestAttachmentRef, GuestConv, GuestDraft, GuestMessages,
+    GuestRecipient, GuestRecipientKind, MSG_ATTACHMENTS_MAX, MSG_BODY_MAX, MSG_DRAFTS_MAX,
+    MSG_ID_MAX, MSG_MIME_MAX, MSG_PATH_MAX, MSG_RECIPIENTS_MAX, MSG_SUBJECT_MAX,
+};
+
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -418,5 +425,35 @@ mod tests {
         assert_eq!(denied.paste(), Err(GuestSvcError::NotGranted));
         assert_eq!(denied.generation(), Err(GuestSvcError::NotGranted));
         assert_eq!(denied.current(), None);
+    }
+
+    #[test]
+    fn fake_messages_round_trip_and_negative_controls() {
+        let mut msg = FakeMessages::new();
+        let accts = msg.accounts().unwrap();
+        assert_eq!(accts, vec![String::from("matrix:@user:coral.lan")]);
+        let acct = &accts[0];
+        let to = vec![GuestRecipient { kind: GuestRecipientKind::To, addr: String::from("@bob:coral.lan") }];
+        let att = vec![GuestAttachmentRef {
+            path: String::from("Users/Default/Documents/notes.txt"),
+            mime: String::from("text/plain"),
+            name: String::from("notes.txt"),
+        }];
+        let id = msg.save_draft(acct, None, None, &to, "Hello", "World", &att).unwrap();
+        assert_eq!(id, 1);
+        assert_eq!(msg.drafts(acct).unwrap().len(), 1);
+        let out_id = msg.send_draft(acct, id).unwrap();
+        assert_eq!(out_id, 1);
+        assert!(msg.drafts(acct).unwrap().is_empty());
+        assert_eq!(msg.sent_drafts().len(), 1);
+
+        // Negative controls: path traversal refused; NotGranted refuses every verb.
+        let bad_att = vec![GuestAttachmentRef { path: String::from("../secret"), mime: String::new(), name: String::new() }];
+        assert_eq!(msg.save_draft(acct, None, None, &to, "S", "B", &bad_att), Err(GuestSvcError::Refused("bad-request")));
+
+        let mut denied = FakeMessages::not_granted();
+        assert_eq!(denied.accounts(), Err(GuestSvcError::NotGranted));
+        assert_eq!(denied.save_draft(acct, None, None, &to, "S", "B", &[]), Err(GuestSvcError::NotGranted));
+        assert_eq!(denied.send_draft(acct, 1), Err(GuestSvcError::NotGranted));
     }
 }

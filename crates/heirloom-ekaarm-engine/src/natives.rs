@@ -114,6 +114,7 @@ fn module_native(proc: &mut Process, name: &str) -> Option<NativeOutcome> {
     if let Some(o) = crate::array::native(proc, name) { return Some(o); }
     if let Some(o) = crate::fileman::native(proc, name) { return Some(o); }
     if let Some(o) = crate::cenrep::native(proc, name) { return Some(o); }
+    if let Some(o) = crate::sym_messages::native(proc, name) { return Some(o); }
     if let Some(o) = crate::cdl::native(proc, name) { return Some(o); }
     if let Some(o) = crate::navi::native(proc, name) { return Some(o); }
     if let Some(o) = crate::avkonlayout::native(proc, name) { return Some(o); }
@@ -630,13 +631,6 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
         | "_ZN18RConnectionMonitor5CloseEv"
         | "_ZN12RHTTPSession5OpenLEv"
         | "_ZN12RHTTPSession5CloseEv" => NativeOutcome::Return,
-        // CMsvSession::OpenAsyncL (msvapi.h): messaging store has no SMS/MMS events on desktop host.
-        "_ZN11CMsvSession10OpenAsyncLER19MMsvSessionObserver" => {
-            match proc.plain_object("CMsvSession", 0x20) {
-                Ok(obj) => { proc.cpu.regs[0] = obj; NativeOutcome::Return }
-                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED msgs {name}: {m}")),
-            }
-        }
         // CAknLongTapDetector::NewL (aknlongtapdetector.h): touch long-tap helper.
         "_ZN19CAknLongTapDetector4NewLEP27MAknLongTapDetectorCallBack" => {
             match proc.plain_object("CAknLongTapDetector", 0x30) {
@@ -717,7 +711,7 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             proc.cpu.regs[0] = r0;
             NativeOutcome::Return
         }
-        "_ZN11CMsvSession18CloseMessageServerEv" => NativeOutcome::Return,
+        // (CMsvSession::CloseMessageServer is handled in sym_messages.rs)
         // void UserSvr::ScreenInfo(TDes8& aInfo) (e32event.h TScreenInfoV01: 24 bytes)
         "_ZN7UserSvr10ScreenInfoER5TDes8" => {
             let (sw, sh) = proc.screen_size();

@@ -149,6 +149,11 @@ pub trait OsFamily: 'static {
     fn attach_clipboard(_m: &mut Self::Machine, _host: crate::clip::ClipHost) -> Result<(), String> {
         Err(String::from("attach_clipboard: this guest machine does not consume host clipboard"))
     }
+    /// The engine process's own `messages.service` reader bridge ([`OsVTable::attach_messages`], loader-admitted).
+    /// A family that does not consume it refuses by name.
+    fn attach_messages(_m: &mut Self::Machine, _host: crate::messages::MessagesHost) -> Result<(), String> {
+        Err(String::from("attach_messages: this guest machine does not consume host messages"))
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -216,12 +221,13 @@ pub struct FamilyHooks<M> {
     pub attach_datatype: fn(&mut M, crate::datatype::DatatypeHost) -> Result<(), String>,
     pub attach_prefs: fn(&mut M, crate::prefs::PrefsHost) -> Result<(), String>,
     pub attach_clipboard: fn(&mut M, crate::clip::ClipHost) -> Result<(), String>,
+    pub attach_messages: fn(&mut M, crate::messages::MessagesHost) -> Result<(), String>,
 }
 
 impl<M> FamilyHooks<M> {
     /// The hooks of family `F`.
     pub fn of<F: OsFamily<Machine = M>>() -> Self {
-        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input_with_streams, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach, attach_datatype: F::attach_datatype, attach_prefs: F::attach_prefs, attach_clipboard: F::attach_clipboard }
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input_with_streams, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach, attach_datatype: F::attach_datatype, attach_prefs: F::attach_prefs, attach_clipboard: F::attach_clipboard, attach_messages: F::attach_messages }
     }
 }
 
@@ -390,6 +396,7 @@ trait AnySession {
     fn attach_datatype(&mut self, host: crate::datatype::DatatypeHost) -> Result<(), String>;
     fn attach_prefs(&mut self, host: crate::prefs::PrefsHost) -> Result<(), String>;
     fn attach_clipboard(&mut self, host: crate::clip::ClipHost) -> Result<(), String>;
+    fn attach_messages(&mut self, host: crate::messages::MessagesHost) -> Result<(), String>;
 }
 
 impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
@@ -419,6 +426,9 @@ impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
     }
     fn attach_clipboard(&mut self, host: crate::clip::ClipHost) -> Result<(), String> {
         (self.hooks.attach_clipboard)(&mut self.machine, host)
+    }
+    fn attach_messages(&mut self, host: crate::messages::MessagesHost) -> Result<(), String> {
+        (self.hooks.attach_messages)(&mut self.machine, host)
     }
 }
 
@@ -678,6 +688,18 @@ extern "C" fn attach_clipboard_impl(inst: *mut OsInstance, host: *const crate::c
     }
 }
 
+extern "C" fn attach_messages_impl(inst: *mut OsInstance, host: *const crate::messages::MessagesHost) -> i32 {
+    if inst.is_null() || host.is_null() {
+        return crate::messages::MSG_ATTACH_REFUSED;
+    }
+    // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed; `host` points to a record the engine filled (copied).
+    let (session, host) = unsafe { (&mut **(inst as *mut Instance), *host) };
+    match session.attach_messages(host) {
+        Ok(()) => crate::messages::MSG_ATTACH_OK,
+        Err(_) => crate::messages::MSG_ATTACH_REFUSED,
+    }
+}
+
 /// The table for family `F`: `static TABLE: OsVTable = heirloom_os_abi::serve::vtable::<MyFamily>();`.
 pub const fn vtable<F: OsFamily>() -> OsVTable {
     vtable2::<F, F>()
@@ -705,5 +727,6 @@ pub const fn vtable2<F: OsFamily, G: OsFamily>() -> OsVTable {
         attach_datatype: attach_datatype_impl,
         attach_prefs: attach_prefs_impl,
         attach_clipboard: attach_clipboard_impl,
+        attach_messages: attach_messages_impl,
     }
 }

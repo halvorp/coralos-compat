@@ -77,6 +77,10 @@ impl OsFamily for EkaFamily {
         m.set_prefs_host(Box::new(host));
         Ok(())
     }
+    fn attach_messages(m: &mut EkaArm<LibUi>, host: heirloom_os_abi::messages::MessagesHost) -> Result<(), String> {
+        m.set_messages_host(Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<EkaFamily>();

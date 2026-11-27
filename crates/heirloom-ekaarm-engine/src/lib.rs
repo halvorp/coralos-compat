@@ -50,6 +50,7 @@ pub mod listkey;
 pub mod tchar;
 pub mod sym_dictstore;
 pub use sym_dictstore as dictstore;
+pub mod sym_messages;
 pub mod dialog;
 pub mod cleanup;
 pub mod fs;

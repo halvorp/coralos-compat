@@ -95,6 +95,27 @@ pub struct ReadStreamState {
     pub pos: usize,
 }
 
+/// Transient in-flight compose handle for an open `RSendAsMessage` (`sym_messages.rs`, REUSE U15).
+/// Flushed to CoralOS `messages.service` on `SaveMessageAndCloseL` / `SendMessageAndCloseL`; never persisted here.
+#[derive(Debug, Clone, Default)]
+pub struct SendAsDraftState {
+    pub mtm_uid: u32,
+    pub to: Vec<guestsvc_abi::GuestRecipient>,
+    pub subject: String,
+    pub body: String,
+    pub attachments: Vec<guestsvc_abi::GuestAttachmentRef>,
+    pub saved_id: Option<u64>,
+}
+
+/// Transient compose payload for a `CMessageData` passed to `CSendUi` (`sym_messages.rs`, REUSE U15).
+#[derive(Debug, Clone, Default)]
+pub struct MessageDataState {
+    pub to: Vec<guestsvc_abi::GuestRecipient>,
+    pub subject: String,
+    pub body: String,
+    pub attachments: Vec<guestsvc_abi::GuestAttachmentRef>,
+}
+
 /// One file server session, keyed by the handle the guest holds in its `RFs` (`RHandleBase::iHandle`): handles are never reused, so
 /// the key carries its own generation, and an `RFs` on the guest stack (no heap allocation to tie to) works the same as a member.
 #[derive(Debug, Clone, Default)]
@@ -195,6 +216,8 @@ pub enum HostObj {
     AudioOut(crate::fbs::AudioOutState),
     /// A `TBidiText` laid-out text run (`fbs.rs`).
     BidiText(String),
+    /// A transient `CMessageData` compose payload (`sym_messages.rs`, REUSE U15).
+    MessageData(MessageDataState),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -227,6 +250,10 @@ pub struct Objects {
     /// Transient open `RDictionaryReadStream` read cursors (`sym_dictstore.rs`).
     pub read_streams: BTreeMap<u32, ReadStreamState>,
     pub next_read_stream_handle: u32,
+    /// Transient `RSendAs` / `RSendAsMessage` compose handles (`sym_messages.rs`, REUSE U15).
+    pub sendas_sessions: BTreeMap<u32, String>,
+    pub sendas_drafts: BTreeMap<u32, SendAsDraftState>,
+    pub next_sendas_handle: u32,
 }
 
 impl Process {

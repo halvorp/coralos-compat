@@ -50,6 +50,8 @@ pub struct Process {
     pub datatype_host: Option<alloc::boxed::Box<dyn heirloom_common::datatype::NativeDatatype>>,
     /// Native CoralOS `prefs.service` host bridge (`sym_cenrep.rs` + `sym_dictstore.rs`, REUSE U6 / C5).
     pub prefs_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestPrefs>>,
+    /// Native CoralOS `messages.service` host bridge (`sym_messages.rs`, REUSE U15).
+    pub messages_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestMessages>>,
     /// Host time zone from `"eka-tz"` launch record (`sym_tz.rs`, REUSE U5).
     pub host_tz: crate::sym_tz::HostTz,
 }
@@ -202,6 +204,7 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         trace: None,
         datatype_host: None,
         prefs_host: None,
+        messages_host: None,
         host_tz: crate::sym_tz::HostTz::default(),
     };
 
@@ -298,6 +301,7 @@ pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
         frames: Vec::new(), slots: crate::appstart::Slots::default(), nat: Default::default(), native_hook: None, log: Vec::new(), host: Default::default(), trace: None,
         datatype_host: None,
         prefs_host: None,
+        messages_host: None,
         host_tz: crate::sym_tz::HostTz::default(),
     })
 }

@@ -45,6 +45,8 @@ pub struct EkaArm<U: GuestUi> {
     datatype_host: Option<Box<dyn heirloom_common::datatype::NativeDatatype>>,
     /// Native CoralOS `prefs.service` host bridge handed in before or after `start_file` (REUSE U6 / C5).
     prefs_host: Option<Box<dyn guestsvc_abi::GuestPrefs>>,
+    /// Native CoralOS `messages.service` host bridge handed in before or after `start_file` (REUSE U15).
+    messages_host: Option<Box<dyn guestsvc_abi::GuestMessages>>,
     /// Host time zone from `"eka-tz"` launch record (REUSE U5).
     host_tz: crate::sym_tz::HostTz,
 }
@@ -61,7 +63,7 @@ impl<U: GuestUi> EkaArm<U> {
         let mut tree = Tree::new(255);
         tree.enable_streams();
         tree.add_volume("Z", true);
-        EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new(), datatype_host: None, prefs_host: None, host_tz: crate::sym_tz::HostTz::default() }
+        EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new(), datatype_host: None, prefs_host: None, messages_host: None, host_tz: crate::sym_tz::HostTz::default() }
     }
     /// Attach the host's native datatype decoder (CoralOS `datatype.library` on target).
     pub fn set_datatype_host(&mut self, host: Box<dyn heirloom_common::datatype::NativeDatatype>) {
@@ -77,6 +79,14 @@ impl<U: GuestUi> EkaArm<U> {
             p.prefs_host = Some(host);
         } else {
             self.prefs_host = Some(host);
+        }
+    }
+    /// Attach the engine process's native `messages.service` reader session (REUSE U15).
+    pub fn set_messages_host(&mut self, host: Box<dyn guestsvc_abi::GuestMessages>) {
+        if let Some(p) = self.process.as_mut() {
+            p.messages_host = Some(host);
+        } else {
+            self.messages_host = Some(host);
         }
     }
     /// Set the host time zone from CoralOS's `"eka-tz"` launch record (REUSE U5).
@@ -138,6 +148,7 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
         p.nat.clock_us = self.clock_us;
         p.datatype_host = self.datatype_host.take();
         p.prefs_host = self.prefs_host.take();
+        p.messages_host = self.messages_host.take();
         p.host_tz = self.host_tz.clone();
         self.process = Some(p);
         self.apply_census();
