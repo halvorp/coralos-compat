@@ -24,6 +24,7 @@ pub use heirloom_cpu_abi as cpu_abi;
 /// The PowerPC CPU contract (CPU ABI v3) a PowerPC family binds.
 pub use heirloom_cpu_abi::ppc;
 
+pub mod apparc; // native CoralOS coral-descriptor + coral-opener bridge (attach_apparc)
 pub mod audio; // native CoralOS Aura.engine bridge (attach_audio): engine-owned audio streams
 pub mod clip; // native CoralOS clipboardd bridge (attach_clipboard): guest copy/paste + C12 Watch generation
 pub mod datatype; // native CoralOS datatype.library bridge (attach_datatype): format identify + native image decode
@@ -31,6 +32,7 @@ pub mod messages; // native CoralOS messages.service bridge (attach_messages): l
 pub mod net; // native CoralOS coral-net-server bridge (attach_net): outbound-only TCP + DNS on EP_NET_LISTEN
 pub mod perf; // the engine's half of the machine's frame ledger (perf_attach): its phase clock and its thread's counters
 pub mod prefs; // native CoralOS prefs.service bridge (attach_prefs): guest adapters' Space::Own preferences session
+pub mod storage; // native CoralOS per-bundle CoralFS persistence bridge (attach_storage)
 #[cfg(any(feature = "serve", test))]
 extern crate alloc;
 #[cfg(feature = "serve")]
@@ -220,6 +222,12 @@ pub struct OsVTable {
     /// process's own outbound-only `coral-net-server` session ([`net::NetHost`], `EP_NET_LISTEN`) so guest socket
     /// adapters (Symbian `esock`, Amiga `bsdsocket.library`) dial TCP + DNS natively.
     pub attach_net: extern "C" fn(inst: *mut OsInstance, host: *const net::NetHost) -> i32,
+    /// APPENDED 2026-11-27 (REUSE U19), present when [`has_attach_apparc`] (the version stays 3): attach CoralOS's
+    /// `coral-descriptor` + `coral-opener` bridge ([`apparc::AppArcHost`]) for `RApaLsSession` type recognition.
+    pub attach_apparc: extern "C" fn(inst: *mut OsInstance, host: *const apparc::AppArcHost) -> i32,
+    /// APPENDED 2026-11-27 (REUSE U19), present when [`has_attach_storage`] (the version stays 3): attach CoralOS's
+    /// per-bundle CoralFS persistence bridge ([`storage::StorageHost`]).
+    pub attach_storage: extern "C" fn(inst: *mut OsInstance, host: *const storage::StorageHost) -> i32,
 }
 
 /// The byte size of a version-1 table (the four header words' entries up to `apply`).
@@ -245,6 +253,10 @@ pub fn has_attach_messages(t: &OsVTable) -> bool { t.size as usize >= core::mem:
 pub fn has_attach_audio(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_audio) + core::mem::size_of::<usize>() }
 /// Whether a table checked by [`check_ptr`] carries [`OsVTable::attach_net`].
 pub fn has_attach_net(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_net) + core::mem::size_of::<usize>() }
+/// Whether a table checked by [`check_ptr`] carries [`OsVTable::attach_apparc`].
+pub fn has_attach_apparc(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_apparc) + core::mem::size_of::<usize>() }
+/// Whether a table checked by [`check_ptr`] carries [`OsVTable::attach_storage`].
+pub fn has_attach_storage(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_storage) + core::mem::size_of::<usize>() }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenRefusal {
@@ -346,9 +358,11 @@ mod tests {
     extern "C" fn attach_messages(_: *mut OsInstance, _: *const messages::MessagesHost) -> i32 { messages::MSG_ATTACH_REFUSED }
     extern "C" fn attach_audio(_: *mut OsInstance, _: *const audio::AudioHost) -> i32 { audio::AUDIO_ATTACH_REFUSED }
     extern "C" fn attach_net(_: *mut OsInstance, _: *const net::NetHost) -> i32 { net::NET_ATTACH_REFUSED }
+    extern "C" fn attach_apparc(_: *mut OsInstance, _: *const apparc::AppArcHost) -> i32 { apparc::APPARC_ATTACH_REFUSED }
+    extern "C" fn attach_storage(_: *mut OsInstance, _: *const storage::StorageHost) -> i32 { storage::STORAGE_ATTACH_REFUSED }
 
     fn table(version: u32, size: u32, family: u32) -> OsVTable {
-        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof, perf_attach, attach_datatype, attach_prefs, attach_clipboard, attach_messages, attach_audio, attach_net }
+        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof, perf_attach, attach_datatype, attach_prefs, attach_clipboard, attach_messages, attach_audio, attach_net, attach_apparc, attach_storage }
     }
 
     /// `cpu_prof` was appended to version 3: a v3 library built before it still opens (its size is OS_TABLE_V3_SIZE) and an
@@ -367,6 +381,10 @@ mod tests {
         assert!(has_attach_messages(&now));
         assert!(has_attach_audio(&now));
         assert!(has_attach_net(&now));
+        assert!(has_attach_apparc(&now));
+        assert!(has_attach_storage(&now));
+        let before_apparc = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_apparc) as u32, FAMILY_MAC68K);
+        assert!(has_attach_net(&before_apparc) && !has_attach_apparc(&before_apparc) && !has_attach_storage(&before_apparc));
         let before_net = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_net) as u32, FAMILY_MAC68K);
         assert!(has_attach_audio(&before_net) && !has_attach_net(&before_net), "a library from before attach_net is never called past its end");
         let before_audio = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_audio) as u32, FAMILY_MAC68K);

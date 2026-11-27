@@ -54,6 +54,10 @@ pub struct Process {
     pub messages_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestMessages>>,
     /// Native CoralOS `coral-net-server` outbound TCP + DNS bridge (`sym_net.rs`, REUSE U18).
     pub net_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestNet>>,
+    /// Native CoralOS `coral-descriptor` + `coral-opener` bridge (`sym_apparc.rs`, REUSE U19).
+    pub apparc_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestAppArc>>,
+    /// Native CoralOS per-bundle CoralFS persistence bridge (REUSE U19).
+    pub storage_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestStorage>>,
     /// Host time zone from `"eka-tz"` launch record (`sym_tz.rs`, REUSE U5).
     pub host_tz: crate::sym_tz::HostTz,
 }
@@ -208,6 +212,8 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         prefs_host: None,
         messages_host: None,
         net_host: None,
+        apparc_host: None,
+        storage_host: None,
         host_tz: crate::sym_tz::HostTz::default(),
     };
 
@@ -306,6 +312,8 @@ pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
         prefs_host: None,
         messages_host: None,
         net_host: None,
+        apparc_host: None,
+        storage_host: None,
         host_tz: crate::sym_tz::HostTz::default(),
     })
 }

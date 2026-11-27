@@ -91,6 +91,10 @@ impl OsFamily for AmiFamily {
         m.net_host = Some(alloc::boxed::Box::new(host));
         Ok(())
     }
+    fn attach_storage(m: &mut Amiga<LibUi>, host: heirloom_os_abi::storage::StorageHost) -> Result<(), String> {
+        m.storage_host = Some(alloc::boxed::Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<AmiFamily>();

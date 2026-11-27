@@ -48,6 +48,8 @@ pub struct EkaArm<U: GuestUi> {
     /// Native CoralOS `messages.service` host bridge handed in before or after `start_file` (REUSE U15).
     messages_host: Option<Box<dyn guestsvc_abi::GuestMessages>>,
     net_host: Option<Box<dyn guestsvc_abi::GuestNet>>,
+    apparc_host: Option<Box<dyn guestsvc_abi::GuestAppArc>>,
+    storage_host: Option<Box<dyn guestsvc_abi::GuestStorage>>,
     /// Host time zone from `"eka-tz"` launch record (REUSE U5).
     host_tz: crate::sym_tz::HostTz,
 }
@@ -64,7 +66,7 @@ impl<U: GuestUi> EkaArm<U> {
         let mut tree = Tree::new(255);
         tree.enable_streams();
         tree.add_volume("Z", true);
-        EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new(), datatype_host: None, prefs_host: None, messages_host: None, net_host: None, host_tz: crate::sym_tz::HostTz::default() }
+        EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new(), datatype_host: None, prefs_host: None, messages_host: None, net_host: None, apparc_host: None, storage_host: None, host_tz: crate::sym_tz::HostTz::default() }
     }
     /// Attach the host's native datatype decoder (CoralOS `datatype.library` on target).
     pub fn set_datatype_host(&mut self, host: Box<dyn heirloom_common::datatype::NativeDatatype>) {
@@ -96,6 +98,22 @@ impl<U: GuestUi> EkaArm<U> {
             p.net_host = Some(host);
         } else {
             self.net_host = Some(host);
+        }
+    }
+
+    pub fn set_apparc_host(&mut self, host: Box<dyn guestsvc_abi::GuestAppArc>) {
+        if let Some(p) = self.process.as_mut() {
+            p.apparc_host = Some(host);
+        } else {
+            self.apparc_host = Some(host);
+        }
+    }
+
+    pub fn set_storage_host(&mut self, host: Box<dyn guestsvc_abi::GuestStorage>) {
+        if let Some(p) = self.process.as_mut() {
+            p.storage_host = Some(host);
+        } else {
+            self.storage_host = Some(host);
         }
     }
     /// Set the host time zone from CoralOS's `"eka-tz"` launch record (REUSE U5).
@@ -159,6 +177,8 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
         p.prefs_host = self.prefs_host.take();
         p.messages_host = self.messages_host.take();
         p.net_host = self.net_host.take();
+        p.apparc_host = self.apparc_host.take();
+        p.storage_host = self.storage_host.take();
         p.host_tz = self.host_tz.clone();
         self.process = Some(p);
         self.apply_census();

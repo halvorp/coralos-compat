@@ -9,6 +9,11 @@
 #![no_std]
 extern crate alloc;
 
+pub mod apparc;
+pub use apparc::{
+    FakeAppArc, GuestAppArc, GuestTypeInfo, APPARC_MIME_MAX, APPARC_NAME_MAX, APPARC_SNIFF_MAX,
+    CONF_CERTAIN, CONF_NOT_RECOGNIZED, CONF_POSSIBLE, CONF_PROBABLE, CONF_UNLIKELY,
+};
 pub mod audio;
 pub use audio::{
     FakeAudio, FakeAudioStream, GuestAudio, GuestAudioFormat, GuestAudioModel, AUDIO_LABEL_MAX,
@@ -24,6 +29,10 @@ pub mod net;
 pub use net::{
     host_ok, FakeConn, FakeNet, GuestNet, NET_EVT_EOF, NET_EVT_READABLE, NET_EVT_RESET,
     NET_EVT_WRITABLE, NET_HOST_MAX, NET_IO_MAX, NET_MAX_CONNS,
+};
+pub mod storage;
+pub use storage::{
+    rel_dir_ok, rel_path_ok, FakeStorage, GuestStorage, STORAGE_FILE_MAX, STORAGE_PATH_MAX,
 };
 
 use alloc::collections::BTreeMap;
@@ -532,5 +541,32 @@ mod tests {
         let mut denied = FakeNet::not_granted();
         assert_eq!(denied.resolve("coral.lan"), Err(GuestSvcError::NotGranted));
         assert_eq!(denied.connect([10, 0, 2, 15], 22), Err(GuestSvcError::NotGranted));
+    }
+
+    #[test]
+    fn fake_apparc_and_storage_round_trip_and_negative_controls() {
+        let mut aa = FakeAppArc::new();
+        aa.add_magic(b"\x89PNG", "image/png", CONF_CERTAIN);
+        aa.add_handler("image/png", "Preview");
+        let r = aa.recognize_data("pic.png", b"\x89PNG\r\n").unwrap();
+        assert_eq!((r.mime.as_str(), r.confidence), ("image/png", CONF_CERTAIN));
+        assert_eq!(aa.handler_for("image/png", "pic.png"), Ok(Some(String::from("Preview"))));
+        assert_eq!(aa.handler_for("application/x-unknown", "x.bin"), Ok(None));
+        let mut denied_aa = FakeAppArc::not_granted();
+        assert_eq!(denied_aa.recognize_data("a", b""), Err(GuestSvcError::NotGranted));
+
+        let mut st = FakeStorage::new();
+        st.write_file("saves/slot1.dat", b"gold=42").unwrap();
+        assert_eq!(st.read_file("saves/slot1.dat"), Ok(Some(b"gold=42".to_vec())));
+        assert_eq!(st.list_files("saves"), Ok(vec![String::from("saves/slot1.dat")]));
+        st.delete_file("saves/slot1.dat").unwrap();
+        assert_eq!(st.read_file("saves/slot1.dat"), Ok(None));
+
+        for bad in ["", "/abs", "../escape", "a/../b", "SYS:foo", "a\\b", "dir/"] {
+            assert_eq!(st.write_file(bad, b"x"), Err(GuestSvcError::BadName), "{bad:?}");
+        }
+        assert_eq!(st.write_file("big.bin", &vec![0u8; STORAGE_FILE_MAX + 1]), Err(GuestSvcError::TooLarge));
+        let mut denied_st = FakeStorage::not_granted();
+        assert_eq!(denied_st.write_file("a.dat", b"x"), Err(GuestSvcError::NotGranted));
     }
 }

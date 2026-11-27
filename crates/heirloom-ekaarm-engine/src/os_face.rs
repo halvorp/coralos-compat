@@ -85,6 +85,14 @@ impl OsFamily for EkaFamily {
         m.set_net_host(Box::new(host));
         Ok(())
     }
+    fn attach_apparc(m: &mut EkaArm<LibUi>, host: heirloom_os_abi::apparc::AppArcHost) -> Result<(), String> {
+        m.set_apparc_host(Box::new(host));
+        Ok(())
+    }
+    fn attach_storage(m: &mut EkaArm<LibUi>, host: heirloom_os_abi::storage::StorageHost) -> Result<(), String> {
+        m.set_storage_host(Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<EkaFamily>();

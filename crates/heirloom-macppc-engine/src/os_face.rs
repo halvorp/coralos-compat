@@ -74,6 +74,10 @@ impl OsFamily for MacPpcFamily {
         m.mac.audio_host = Some(Box::new(host));
         Ok(())
     }
+    fn attach_storage(m: &mut MacPpc<LibUi>, host: heirloom_os_abi::storage::StorageHost) -> Result<(), String> {
+        m.mac.storage_host = Some(Box::new(host));
+        Ok(())
+    }
     /// cpu-ppc.library's counters for the engine's perf line (OsVTable::cpu_prof): where the instructions ran.
     fn cpu_prof(m: &mut MacPpc<LibUi>) -> Option<heirloom_os_abi::ppc::PpcProf> {
         Some(m.exec().tiers)

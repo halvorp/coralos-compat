@@ -164,6 +164,14 @@ pub trait OsFamily: 'static {
     fn attach_net(_m: &mut Self::Machine, _host: crate::net::NetHost) -> Result<(), String> {
         Err(String::from("attach_net: this guest machine does not consume host networking"))
     }
+    /// The engine process's `coral-descriptor` + `coral-opener` bridge ([`OsVTable::attach_apparc`]).
+    fn attach_apparc(_m: &mut Self::Machine, _host: crate::apparc::AppArcHost) -> Result<(), String> {
+        Err(String::from("attach_apparc: this guest machine does not consume host type recognition"))
+    }
+    /// The engine process's per-bundle CoralFS persistence bridge ([`OsVTable::attach_storage`]).
+    fn attach_storage(_m: &mut Self::Machine, _host: crate::storage::StorageHost) -> Result<(), String> {
+        Err(String::from("attach_storage: this guest machine does not consume host storage"))
+    }
 }
 
 /// A blob arriving in chunks (the staged volume snapshot, the program file).
@@ -234,12 +242,14 @@ pub struct FamilyHooks<M> {
     pub attach_messages: fn(&mut M, crate::messages::MessagesHost) -> Result<(), String>,
     pub attach_audio: fn(&mut M, crate::audio::AudioHost) -> Result<(), String>,
     pub attach_net: fn(&mut M, crate::net::NetHost) -> Result<(), String>,
+    pub attach_apparc: fn(&mut M, crate::apparc::AppArcHost) -> Result<(), String>,
+    pub attach_storage: fn(&mut M, crate::storage::StorageHost) -> Result<(), String>,
 }
 
 impl<M> FamilyHooks<M> {
     /// The hooks of family `F`.
     pub fn of<F: OsFamily<Machine = M>>() -> Self {
-        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input_with_streams, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach, attach_datatype: F::attach_datatype, attach_prefs: F::attach_prefs, attach_clipboard: F::attach_clipboard, attach_messages: F::attach_messages, attach_audio: F::attach_audio, attach_net: F::attach_net }
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input_with_streams, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach, attach_datatype: F::attach_datatype, attach_prefs: F::attach_prefs, attach_clipboard: F::attach_clipboard, attach_messages: F::attach_messages, attach_audio: F::attach_audio, attach_net: F::attach_net, attach_apparc: F::attach_apparc, attach_storage: F::attach_storage }
     }
 }
 
@@ -411,6 +421,8 @@ trait AnySession {
     fn attach_messages(&mut self, host: crate::messages::MessagesHost) -> Result<(), String>;
     fn attach_audio(&mut self, host: crate::audio::AudioHost) -> Result<(), String>;
     fn attach_net(&mut self, host: crate::net::NetHost) -> Result<(), String>;
+    fn attach_apparc(&mut self, host: crate::apparc::AppArcHost) -> Result<(), String>;
+    fn attach_storage(&mut self, host: crate::storage::StorageHost) -> Result<(), String>;
 }
 
 impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
@@ -449,6 +461,12 @@ impl<M: GuestMachine<Ui = LibUi>> AnySession for Session<M> {
     }
     fn attach_net(&mut self, host: crate::net::NetHost) -> Result<(), String> {
         (self.hooks.attach_net)(&mut self.machine, host)
+    }
+    fn attach_apparc(&mut self, host: crate::apparc::AppArcHost) -> Result<(), String> {
+        (self.hooks.attach_apparc)(&mut self.machine, host)
+    }
+    fn attach_storage(&mut self, host: crate::storage::StorageHost) -> Result<(), String> {
+        (self.hooks.attach_storage)(&mut self.machine, host)
     }
 }
 
@@ -736,11 +754,32 @@ extern "C" fn attach_net_impl(inst: *mut OsInstance, host: *const crate::net::Ne
     if inst.is_null() || host.is_null() {
         return crate::net::NET_ATTACH_REFUSED;
     }
-    // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed; `host` points to a record the engine filled (copied).
     let (session, host) = unsafe { (&mut **(inst as *mut Instance), *host) };
     match session.attach_net(host) {
         Ok(()) => crate::net::NET_ATTACH_OK,
         Err(_) => crate::net::NET_ATTACH_REFUSED,
+    }
+}
+
+extern "C" fn attach_apparc_impl(inst: *mut OsInstance, host: *const crate::apparc::AppArcHost) -> i32 {
+    if inst.is_null() || host.is_null() {
+        return crate::apparc::APPARC_ATTACH_REFUSED;
+    }
+    let (session, host) = unsafe { (&mut **(inst as *mut Instance), *host) };
+    match session.attach_apparc(host) {
+        Ok(()) => crate::apparc::APPARC_ATTACH_OK,
+        Err(_) => crate::apparc::APPARC_ATTACH_REFUSED,
+    }
+}
+
+extern "C" fn attach_storage_impl(inst: *mut OsInstance, host: *const crate::storage::StorageHost) -> i32 {
+    if inst.is_null() || host.is_null() {
+        return crate::storage::STORAGE_ATTACH_REFUSED;
+    }
+    let (session, host) = unsafe { (&mut **(inst as *mut Instance), *host) };
+    match session.attach_storage(host) {
+        Ok(()) => crate::storage::STORAGE_ATTACH_OK,
+        Err(_) => crate::storage::STORAGE_ATTACH_REFUSED,
     }
 }
 
@@ -774,5 +813,7 @@ pub const fn vtable2<F: OsFamily, G: OsFamily>() -> OsVTable {
         attach_messages: attach_messages_impl,
         attach_audio: attach_audio_impl,
         attach_net: attach_net_impl,
+        attach_apparc: attach_apparc_impl,
+        attach_storage: attach_storage_impl,
     }
 }

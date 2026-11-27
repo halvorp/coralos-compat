@@ -59,6 +59,10 @@ impl OsFamily for MacFamily {
         m.audio_host = Some(alloc::boxed::Box::new(host));
         Ok(())
     }
+    fn attach_storage(m: &mut Mac<LibUi>, host: heirloom_os_abi::storage::StorageHost) -> Result<(), alloc::string::String> {
+        m.storage_host = Some(alloc::boxed::Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<MacFamily>();
