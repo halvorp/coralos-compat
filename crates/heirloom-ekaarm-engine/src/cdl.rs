@@ -16,17 +16,25 @@ use crate::layoutdecode::{self, Instance as DecodeInstance};
 use crate::loader::Process;
 use crate::natives::NativeOutcome;
 
+/// Byte range into [`CdlData::raw`] — eliminates ~130k per-token `String` heap allocations during
+/// `CdlData::parse` on `s60-layout.cdldata` (7 MiB).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextSpan {
+    pub off: u32,
+    pub len: u16,
+}
+
 /// What an instance does for one API id.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
     /// Not implemented here: the layer below answers.
     None,
     /// The function returns this constant (a `TBool`, an int or a `TReal32`'s bits).
     Const(u32),
     /// A decode operation over the instance's byte-coded data (`AknLayoutScalableDecode::<name>`).
-    Decode(String),
+    Decode(TextSpan),
     /// Real code the extractor does not read (an adaptation layer, a font table).
-    Opaque(String),
+    Opaque(TextSpan),
 }
 
 #[derive(Debug, Clone)]
@@ -52,11 +60,13 @@ pub struct Pack {
 
 #[derive(Debug, Default)]
 pub struct CdlData {
+    /// Backing UTF-8 text buffer referenced by [`TextSpan`] in `ops` and `interfaces`.
+    raw: String,
     pub blobs: BTreeMap<String, Vec<u8>>,
     pub instances: Vec<Instance>,
     pub packs: Vec<Pack>,
-    /// Interface UID -> (name, api names in id order).
-    pub interfaces: BTreeMap<u32, (String, Vec<String>)>,
+    /// Interface UID -> (name, api names as spans in id order).
+    pub interfaces: BTreeMap<u32, (String, Vec<TextSpan>)>,
     /// avkon resource ids by name (`R_AVKON_*PANE*`), from the SDK's own avkon.rsg.
     pub rsg: BTreeMap<String, u32>,
 }
@@ -101,82 +111,136 @@ fn parse_f32(s: &str) -> Option<f32> {
     Some(if neg { -(v as f32) } else { v as f32 })
 }
 
+#[inline]
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[inline]
+fn parse_hex_u16(s: &str) -> Option<u16> {
+    let b = s.as_bytes();
+    if b.is_empty() || b.len() > 4 {
+        return None;
+    }
+    let mut v = 0u16;
+    for &c in b {
+        v = (v << 4) | (hex_nibble(c)? as u16);
+    }
+    Some(v)
+}
+
 impl CdlData {
+    #[inline]
+    pub fn text(&self, span: TextSpan) -> &str {
+        let start = span.off as usize;
+        &self.raw[start..start + span.len as usize]
+    }
+
     /// Parse the extractor's file (`examples/gen_cdl_layout.rs`).
     pub fn parse(bytes: &[u8]) -> Result<CdlData, String> {
-        let text = core::str::from_utf8(bytes).map_err(|_| String::from("cdl data: not UTF-8"))?;
-        let mut lines = text.lines();
-        if lines.next() != Some("HEIRLOOM-CDL-LAYOUT 1") {
-            return Err(String::from("cdl data: not a HEIRLOOM-CDL-LAYOUT 1 file"));
-        }
+        let raw = String::from(core::str::from_utf8(bytes).map_err(|_| String::from("cdl data: not UTF-8"))?);
+        let base_ptr = raw.as_ptr() as usize;
+        let span_of = |s: &str| -> Result<TextSpan, String> {
+            let off = (s.as_ptr() as usize)
+                .checked_sub(base_ptr)
+                .and_then(|o| u32::try_from(o).ok())
+                .ok_or_else(|| String::from("cdl data: span out of range"))?;
+            let len = u16::try_from(s.len()).map_err(|_| String::from("cdl data: token too long"))?;
+            Ok(TextSpan { off, len })
+        };
         let mut d = CdlData::default();
-        while let Some(line) = lines.next() {
-            let mut t = line.split_whitespace();
-            match t.next() {
-                Some("blob") => {
-                    let name = t.next().ok_or("cdl data: blob without a name")?;
-                    let hex = lines.next().ok_or("cdl data: blob without data")?.trim();
-                    let mut v = Vec::with_capacity(hex.len() / 2);
-                    for i in (0..hex.len().saturating_sub(1)).step_by(2) {
-                        v.push(u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| String::from("cdl data: bad blob hex"))?);
-                    }
-                    d.blobs.insert(String::from(name), v);
-                }
-                Some("instance") => {
-                    let name = String::from(t.next().ok_or("cdl data: instance without a name")?);
-                    let uid = u32::from_str_radix(t.next().ok_or("cdl data: instance without a uid")?, 16).map_err(|_| String::from("cdl data: bad uid"))?;
-                    d.instances.push(Instance { name, uid, data: None, lookup: Vec::new(), ops: Vec::new() });
-                }
-                Some(k @ ("data" | "lookup" | "impl")) => {
-                    let inst = d.instances.last_mut().ok_or("cdl data: a field before any instance")?;
-                    match k {
-                        "data" => {
-                            let blob = String::from(t.next().ok_or("cdl data: data without a blob")?);
-                            let off = t.next().and_then(|o| o.parse().ok()).ok_or("cdl data: bad data offset")?;
-                            inst.data = Some((blob, off));
+        {
+            let mut lines = raw.lines();
+            if lines.next() != Some("HEIRLOOM-CDL-LAYOUT 1") {
+                return Err(String::from("cdl data: not a HEIRLOOM-CDL-LAYOUT 1 file"));
+            }
+            while let Some(line) = lines.next() {
+                let mut t = line.split_whitespace();
+                match t.next() {
+                    Some("blob") => {
+                        let name = t.next().ok_or("cdl data: blob without a name")?;
+                        let hex = lines.next().ok_or("cdl data: blob without data")?.trim().as_bytes();
+                        let pairs = hex.len() / 2;
+                        let mut v = Vec::with_capacity(pairs);
+                        for chunk in hex.chunks_exact(2) {
+                            let hi = hex_nibble(chunk[0]).ok_or_else(|| String::from("cdl data: bad blob hex"))?;
+                            let lo = hex_nibble(chunk[1]).ok_or_else(|| String::from("cdl data: bad blob hex"))?;
+                            v.push((hi << 4) | lo);
                         }
-                        "lookup" => {
-                            for v in t {
-                                inst.lookup.push(u16::from_str_radix(v, 16).map_err(|_| String::from("cdl data: bad lookup"))?);
+                        d.blobs.insert(String::from(name), v);
+                    }
+                    Some("instance") => {
+                        let name = String::from(t.next().ok_or("cdl data: instance without a name")?);
+                        let uid = u32::from_str_radix(t.next().ok_or("cdl data: instance without a uid")?, 16).map_err(|_| String::from("cdl data: bad uid"))?;
+                        d.instances.push(Instance { name, uid, data: None, lookup: Vec::new(), ops: Vec::new() });
+                    }
+                    Some(k @ ("data" | "lookup" | "impl")) => {
+                        let inst = d.instances.last_mut().ok_or("cdl data: a field before any instance")?;
+                        match k {
+                            "data" => {
+                                let blob = String::from(t.next().ok_or("cdl data: data without a blob")?);
+                                let off = t.next().and_then(|o| o.parse().ok()).ok_or("cdl data: bad data offset")?;
+                                inst.data = Some((blob, off));
+                            }
+                            "lookup" => {
+                                inst.lookup.reserve(line.len() / 5);
+                                for v in t {
+                                    inst.lookup.push(parse_hex_u16(v).ok_or_else(|| String::from("cdl data: bad lookup"))?);
+                                }
+                            }
+                            _ => {
+                                inst.ops.reserve(line.len() / 16);
+                                for tok in t {
+                                    let op = if tok == "-" {
+                                        Op::None
+                                    } else if let Some(rest) = tok.strip_prefix("c:") {
+                                        Op::Const(parse_const(rest).ok_or_else(|| format!("cdl data: bad constant {tok}"))?)
+                                    } else if let Some(rest) = tok.strip_prefix("d:") {
+                                        Op::Decode(span_of(rest)?)
+                                    } else {
+                                        Op::Opaque(span_of(tok.strip_prefix("o:").unwrap_or(tok))?)
+                                    };
+                                    inst.ops.push(op);
+                                }
                             }
                         }
-                        _ => {
-                            for tok in t {
-                                inst.ops.push(match tok {
-                                    "-" => Op::None,
-                                    _ if tok.starts_with("c:") => Op::Const(parse_const(&tok[2..]).ok_or_else(|| format!("cdl data: bad constant {tok}"))?),
-                                    _ if tok.starts_with("d:") => Op::Decode(String::from(&tok[2..])),
-                                    _ => Op::Opaque(String::from(tok.trim_start_matches("o:"))),
-                                });
-                            }
-                        }
                     }
+                    Some("interface") => {
+                        let uid = u32::from_str_radix(t.next().ok_or("cdl data: interface without a uid")?, 16).map_err(|_| String::from("cdl data: bad interface uid"))?;
+                        let name = String::from(t.next().ok_or("cdl data: interface without a name")?);
+                        let mut apis = Vec::with_capacity(line.len() / 24);
+                        for api in t {
+                            apis.push(span_of(api)?);
+                        }
+                        d.interfaces.insert(uid, (name, apis));
+                    }
+                    Some("rsg") => {
+                        let name = String::from(t.next().ok_or("cdl data: rsg without a name")?);
+                        let v = u32::from_str_radix(t.next().ok_or("cdl data: rsg without a value")?, 16).map_err(|_| String::from("cdl data: bad rsg value"))?;
+                        d.rsg.insert(name, v);
+                    }
+                    Some("pack") => {
+                        let name = String::from(t.next().ok_or("cdl data: pack without a name")?);
+                        let mut num = |what: &str| t.next().and_then(|v| v.parse::<i32>().ok()).ok_or_else(|| format!("cdl data: bad pack {what}"));
+                        let (width, height) = (num("width")?, num("height")?);
+                        let layout_id = String::from(t.next().unwrap_or(""));
+                        let zoom = String::from(t.next().unwrap_or(""));
+                        let _hash = t.next();
+                        let priority = t.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                        let contents_line = lines.next().ok_or("cdl data: pack without contents")?;
+                        let contents = contents_line.split_whitespace().skip(1).map(String::from).collect();
+                        d.packs.push(Pack { name, width, height, layout_id, zoom, priority, contents });
+                    }
+                    _ => {}
                 }
-                Some("interface") => {
-                    let uid = u32::from_str_radix(t.next().ok_or("cdl data: interface without a uid")?, 16).map_err(|_| String::from("cdl data: bad interface uid"))?;
-                    let name = String::from(t.next().ok_or("cdl data: interface without a name")?);
-                    d.interfaces.insert(uid, (name, t.map(String::from).collect()));
-                }
-                Some("rsg") => {
-                    let name = String::from(t.next().ok_or("cdl data: rsg without a name")?);
-                    let v = u32::from_str_radix(t.next().ok_or("cdl data: rsg without a value")?, 16).map_err(|_| String::from("cdl data: bad rsg value"))?;
-                    d.rsg.insert(name, v);
-                }
-                Some("pack") => {
-                    let name = String::from(t.next().ok_or("cdl data: pack without a name")?);
-                    let mut num = |what: &str| t.next().and_then(|v| v.parse::<i32>().ok()).ok_or_else(|| format!("cdl data: bad pack {what}"));
-                    let (width, height) = (num("width")?, num("height")?);
-                    let layout_id = String::from(t.next().unwrap_or(""));
-                    let zoom = String::from(t.next().unwrap_or(""));
-                    let _hash = t.next();
-                    let priority = t.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-                    let contents_line = lines.next().ok_or("cdl data: pack without contents")?;
-                    let contents = contents_line.split_whitespace().skip(1).map(String::from).collect();
-                    d.packs.push(Pack { name, width, height, layout_id, zoom, priority, contents });
-                }
-                _ => {}
             }
         }
+        d.raw = raw;
         Ok(d)
     }
 
@@ -321,10 +385,10 @@ impl CdlState {
     pub fn eval(&self, instance: usize, api: usize, a: &Args) -> Result<Out, String> {
         let data = self.data.as_ref().ok_or_else(|| String::from("no CDL layout data"))?;
         let inst = data.instances.get(instance).ok_or_else(|| String::from("no such instance"))?;
-        let op = match inst.ops.get(api).unwrap_or(&Op::None) {
-            Op::Const(v) => return Ok(Out::Scalar(*v)),
-            Op::Decode(op) => op,
-            Op::Opaque(n) => return Err(format!("{}: {n} (code the extractor does not read, or ids it cannot name)", inst.name)),
+        let op = match inst.ops.get(api).copied().unwrap_or(Op::None) {
+            Op::Const(v) => return Ok(Out::Scalar(v)),
+            Op::Decode(span) => data.text(span),
+            Op::Opaque(span) => return Err(format!("{}: {} (code the extractor does not read, or ids it cannot name)", inst.name, data.text(span))),
             Op::None => return Err(String::from("the instance has no implementation of this api")),
         };
         let (kind, _) = parse_op(op).ok_or_else(|| format!("decode operation {op} is not implemented"))?;
@@ -345,7 +409,7 @@ impl CdlState {
     pub fn api_id(&self, uid: u32, name: &str) -> Result<usize, String> {
         let data = self.data.as_ref().ok_or_else(|| String::from("no CDL layout data"))?;
         let (_, names) = data.interfaces.get(&uid).ok_or_else(|| format!("no interface {uid:#x} in the layout data"))?;
-        names.iter().position(|n| n == name).ok_or_else(|| format!("interface {uid:#x} has no api {name}"))
+        names.iter().position(|s| data.text(*s) == name).ok_or_else(|| format!("interface {uid:#x} has no api {name}"))
     }
 
     /// A window component of an interface by api name, e.g. ("main_pane", variety 6): what `AknLayoutScalable_Avkon::main_pane(6)`
@@ -370,9 +434,16 @@ impl CdlState {
 /// pointer in r0, then the arguments in r1..r3 and on the stack; a scalar result in r0 and the arguments from r0).
 fn call_function(p: &mut Process, instance: usize, api: usize) -> NativeOutcome {
     let fail = |m: String| NativeOutcome::Refused(format!("NEXT-NEEDED cdl@{instance}:{api}: {m}"));
-    let Some(op) = p.nat.cdl.data.as_ref().and_then(|d| d.instances.get(instance)).and_then(|i| i.ops.get(api)).cloned() else { return fail(String::from("no such instance or api")) };
-    let letters = match &op {
-        Op::Decode(name) => match parse_op(name) {
+    let Some((op, op_name)) = p.nat.cdl.data.as_ref().and_then(|d| {
+        let op = *d.instances.get(instance)?.ops.get(api)?;
+        let name = match op {
+            Op::Decode(s) => Some(String::from(d.text(s))),
+            _ => None,
+        };
+        Some((op, name))
+    }) else { return fail(String::from("no such instance or api")) };
+    let letters = match (&op, op_name.as_deref()) {
+        (Op::Decode(_), Some(name)) => match parse_op(name) {
             Some((_, l)) => String::from(l),
             None => return fail(format!("decode operation {name} is not implemented")),
         },

@@ -252,45 +252,75 @@ pub fn dso_exports(bytes: &[u8]) -> Result<Vec<DsoExport>, DsoError> {
 
 #[derive(Debug)]
 pub struct OrdinalTable {
-    map: BTreeMap<(String, u16), String>,
+    tsv: String,
+    /// ASCII-lowercase DLL name -> sorted `(ordinal, name_byte_offset, name_byte_len)` slices into `tsv`.
+    /// Stores ~90 unique DLL keys instead of ~22k duplicate `(String, u16) -> String` heap entries.
+    by_dll: BTreeMap<String, Vec<(u16, u32, u16)>>,
 }
 
-fn ascii_lower(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if c.is_ascii_uppercase() {
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
+fn ascii_lower_into(s: &str, out: &mut String) {
+    out.clear();
+    out.reserve(s.len());
+    for b in s.bytes() {
+        out.push(b.to_ascii_lowercase() as char);
     }
-    out
 }
 
 impl OrdinalTable {
     pub fn parse(tsv: &str) -> Result<OrdinalTable, (usize, &'static str)> {
-        let mut map = BTreeMap::new();
-        for (i, line) in tsv.lines().enumerate() {
+        let owned = String::from(tsv);
+        let base_ptr = owned.as_ptr() as usize;
+        let mut by_dll: BTreeMap<String, Vec<(u16, u32, u16)>> = BTreeMap::new();
+        let mut dll_buf = String::with_capacity(64);
+        for (i, line) in owned.lines().enumerate() {
             let lineno = i + 1;
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let fields: Vec<&str> = line.split('\t').collect();
-            if fields.len() != 3 {
+            let mut it = line.split('\t');
+            let (Some(dll), Some(ord_s), Some(name), None) = (it.next(), it.next(), it.next(), it.next()) else {
                 return Err((lineno, "expected 3 fields"));
+            };
+            let ordinal: u16 = ord_s.parse().map_err(|_| (lineno, "bad ordinal"))?;
+            let name_off = (name.as_ptr() as usize)
+                .checked_sub(base_ptr)
+                .and_then(|o| u32::try_from(o).ok())
+                .ok_or((lineno, "bad offset"))?;
+            let name_len = u16::try_from(name.len()).map_err(|_| (lineno, "symbol too long"))?;
+            ascii_lower_into(dll, &mut dll_buf);
+            if let Some(list) = by_dll.get_mut(&dll_buf) {
+                list.push((ordinal, name_off, name_len));
+            } else {
+                let mut list = Vec::with_capacity(64);
+                list.push((ordinal, name_off, name_len));
+                by_dll.insert(dll_buf.clone(), list);
             }
-            let dll = fields[0].to_string();
-            let ordinal: u16 = fields[1].parse().map_err(|_| (lineno, "bad ordinal"))?;
-            let name = fields[2].to_string();
-            let key = (ascii_lower(&dll), ordinal);
-            map.insert(key, name);
         }
-        Ok(OrdinalTable { map })
+        for list in by_dll.values_mut() {
+            // Keep the last entry for duplicate ordinals (matching BTreeMap::insert semantics).
+            list.sort_by_key(|e| e.0);
+            let mut write = 0usize;
+            for read in 0..list.len() {
+                if write > 0 && list[write - 1].0 == list[read].0 {
+                    list[write - 1] = list[read];
+                } else {
+                    list[write] = list[read];
+                    write += 1;
+                }
+            }
+            list.truncate(write);
+        }
+        Ok(OrdinalTable { tsv: owned, by_dll })
     }
 
     pub fn name_of(&self, dll: &str, ordinal: u16) -> Option<&str> {
-        let key = (ascii_lower(dll), ordinal);
-        self.map.get(&key).map(|s| s.as_str())
+        let mut key = String::with_capacity(dll.len());
+        ascii_lower_into(dll, &mut key);
+        let list = self.by_dll.get(&key)?;
+        let idx = list.binary_search_by_key(&ordinal, |e| e.0).ok()?;
+        let (_, off, len) = list[idx];
+        let start = off as usize;
+        self.tsv.get(start..start + len as usize)
     }
 }
