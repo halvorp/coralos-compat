@@ -27,8 +27,8 @@ pub fn registration(drive: &Drive, uid3: u32) -> Result<Registration, String> {
         l.ends_with(".rsc") || l.ends_with(&lang_ext)
     }) {
         let path = format!("{REG_DIR}\\{name}");
-        let bytes = drive.read(&path).map_err(|e| format!("{path}: {e:?}"))?;
-        let reg = RscFile::parse(bytes).map_err(|e| format!("{path}: {e:?}"))?;
+        let bytes = drive.read_owned(&path).map_err(|e| format!("{path}: {e:?}"))?;
+        let reg = RscFile::parse(&bytes).map_err(|e| format!("{path}: {e:?}"))?;
         if reg.uid3 != uid3 {
             continue;
         }
@@ -74,8 +74,8 @@ impl Process {
     pub fn app_resource(&self, id: u32) -> Result<Vec<u8>, String> {
         let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive: the application's resource file cannot be read (run with --drive)"))?;
         let path = app_resource_path(drive, self.uid3)?;
-        let bytes = drive.read(&path).map_err(|e| format!("{path}: {e:?}"))?;
-        let file = RscFile::parse(bytes).map_err(|e| format!("{path}: {e:?}"))?;
+        let bytes = drive.read_owned(&path).map_err(|e| format!("{path}: {e:?}"))?;
+        let file = RscFile::parse(&bytes).map_err(|e| format!("{path}: {e:?}"))?;
         file.resource(id).map_err(|e| format!("{path}: resource {id:#x}: {e:?}"))
     }
 }
@@ -107,6 +107,7 @@ impl Process {
         if self.nat.rom_resources.is_none() {
             let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive"))?;
             let mut index = alloc::collections::BTreeMap::new();
+            index_drive_dir(drive, "\\resource", &mut index);
             index_rom_dir(drive, "\\resource", &mut index);
             self.nat.rom_resources = Some(index);
         }
@@ -121,6 +122,28 @@ impl Process {
 /// (`\resource\uiklaf\eikpriv.r01` owns the Eikon private resources, offset 0x19bd6000): id offset -> the file a device in
 /// [`ROM_LANGUAGE_EXT`] loads. When a ROM ships only the localised `.r01` without its `.rsc` sibling (as staged manifests do),
 /// indexing `.r01` directly still discovers the offset. The first file seen keeps an offset, with `.r01` preferred over `.rsc`.
+fn index_drive_dir(drive: &Drive, dir: &str, index: &mut alloc::collections::BTreeMap<u32, String>) {
+    let lang_ext = format!(".{ROM_LANGUAGE_EXT}");
+    for name in drive.list(dir).unwrap_or_default() {
+        let full = format!("{dir}\\{name}");
+        if drive.list(&full).is_ok() {
+            index_drive_dir(drive, &full, index);
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        if !lower.ends_with(".rsc") && !lower.ends_with(&lang_ext) {
+            continue;
+        }
+        if let Ok(bytes) = drive.read_owned(&full) {
+            if let Ok(f) = RscFile::parse(&bytes) {
+                if f.id_offset != 0 {
+                    index.entry(f.id_offset).or_insert(full);
+                }
+            }
+        }
+    }
+}
+
 fn index_rom_dir(drive: &Drive, dir: &str, index: &mut alloc::collections::BTreeMap<u32, String>) {
     let lang_ext = format!(".{ROM_LANGUAGE_EXT}");
     for name in drive.list_rom(dir).unwrap_or_default() {

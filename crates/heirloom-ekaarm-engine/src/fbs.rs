@@ -50,11 +50,11 @@ impl FbsBitmap {
             data_addr: None,
         }
     }
-    pub fn scanline_bytes(&self) -> usize {
-        let w = self.width.max(0) as usize;
+    pub fn scanline_bytes_for(width: i32, display_mode: u32) -> usize {
+        let w = width.max(0) as usize;
         // Symbian TDisplayMode (gdi.h:287): 1=EGray2, 2=EGray4, 3=EGray16, 4=EGray256,
         // 5=EColor16, 6=EColor256, 7=EColor64K (16bpp), 8=EColor16M (24bpp), 10=EColor4K (12bpp/16bit), 11/12=32bpp.
-        match self.display_mode {
+        match display_mode {
             1 => ((w + 31) / 32) * 4,
             2 => ((w * 2 + 31) / 32) * 4,
             3 | 5 => ((w * 4 + 31) / 32) * 4,
@@ -63,6 +63,9 @@ impl FbsBitmap {
             8 => ((w * 3 + 3) / 4) * 4,
             _ => w * 4, // EColor16MU (11), EColor16MA (12), etc.
         }
+    }
+    pub fn scanline_bytes(&self) -> usize {
+        Self::scanline_bytes_for(self.width, self.display_mode)
     }
     #[inline]
     pub fn get(&self, x: i32, y: i32) -> Option<u32> {
@@ -139,6 +142,8 @@ pub struct FbsState {
     pub bitmaps: BTreeMap<u32, FbsBitmap>,
     /// Shared screen bitmap handle + `CWindowGc` guest address returned by `SystemGc()`.
     pub system_gc: Option<(u32, u32)>,
+    /// Bump cursor inside the FBServ shared chunk (`layout::FBS_CHUNK_BASE..layout::STUB_BASE`).
+    pub chunk_cursor: u32,
 }
 
 impl FbsState {
@@ -279,6 +284,7 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         }
         // CFont basic metrics (matching our 5x7 + 1px gap = 6x12 font)
         "_ZNK5CFont14AscentInPixelsEv" => { p.cpu.regs[0] = 10; NativeOutcome::Return }
+        "_ZNK5CFont15DescentInPixelsEv" => { p.cpu.regs[0] = 2; NativeOutcome::Return }
         "_ZNK5CFont20MaxCharWidthInPixelsEv" | "_ZNK5CFont17CharWidthInPixelsE5TChar" => { p.cpu.regs[0] = 6; NativeOutcome::Return }
         "_ZNK5CFont17TextWidthInPixelsERK7TDesC16" => {
             let len = crate::desc::read16(p, r1).map(|u| u.len() as u32).unwrap_or(0);
@@ -437,13 +443,25 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let total = (stride * h).max(4);
             let addr = match existing {
                 Some(a) => a,
-                None => match p.alloc_zeroed(total as u32) {
-                    Some(a) => {
-                        if let Some(b) = p.nat.fbs.bitmaps.get_mut(&id) { b.data_addr = Some(a); }
-                        a
+                None => {
+                    let size = crate::layout::pru(total as u32);
+                    let base = p.nat.fbs.chunk_cursor.max(crate::layout::FBS_CHUNK_BASE);
+                    let mapped = base.checked_add(size)
+                        .filter(|&end| end <= crate::layout::EXIT_STUB)
+                        .and_then(|end| {
+                            let cid = p.mem.vm.create_chunk(base, size, heirloom_mem_paged32::Prot::RW).ok()?;
+                            p.mem.vm.commit(cid, 0, size).ok()?;
+                            p.nat.fbs.chunk_cursor = end;
+                            Some(base)
+                        });
+                    match mapped {
+                        Some(a) => {
+                            if let Some(b) = p.nat.fbs.bitmaps.get_mut(&id) { b.data_addr = Some(a); }
+                            a
+                        }
+                        None => { p.cpu.regs[0] = 0; return Some(NativeOutcome::Return); }
                     }
-                    None => { p.cpu.regs[0] = 0; return Some(NativeOutcome::Return); }
-                },
+                }
             };
             let mut raw = vec![0u8; stride * h];
             for y in 0..h {
@@ -528,6 +546,121 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                     }
                 }
             }
+            NativeOutcome::Return
+        }
+        // static TInt CFbsBitmap::ScanLineLength(TInt aLength, TDisplayMode aDispMode)
+        "_ZN10CFbsBitmap14ScanLineLengthEi12TDisplayMode" => {
+            p.cpu.regs[0] = FbsBitmap::scanline_bytes_for(r0 as i32, r1) as u32;
+            NativeOutcome::Return
+        }
+        // TBitmapUtil::TBitmapUtil(CFbsBitmap* aBitmap) / Begin / SetPos / GetPixel / SetPixel / Inc/Dec
+        "_ZN11TBitmapUtilC1EP10CFbsBitmap" | "_ZN11TBitmapUtilC2EP10CFbsBitmap" => {
+            let _ = p.wr(r0, r1);
+            let _ = p.wr(r0.wrapping_add(4), 0);
+            let _ = p.wr(r0.wrapping_add(8), 0);
+            p.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        "_ZN11TBitmapUtil5BeginERK6TPoint" | "_ZN11TBitmapUtil5BeginERK6TPointRKS_" => {
+            let (x, y) = p.rd_point(r1).unwrap_or((0, 0));
+            let _ = p.wr(r0.wrapping_add(4), x as u32);
+            let _ = p.wr(r0.wrapping_add(8), y as u32);
+            NativeOutcome::Return
+        }
+        "_ZN11TBitmapUtil6SetPosERK6TPoint" => {
+            let (x, y) = p.rd_point(r1).unwrap_or((0, 0));
+            let _ = p.wr(r0.wrapping_add(4), x as u32);
+            let _ = p.wr(r0.wrapping_add(8), y as u32);
+            NativeOutcome::Return
+        }
+        "_ZNK11TBitmapUtil8GetPixelEv" => {
+            let bmp_ptr = p.rd(r0).unwrap_or(0);
+            let x = p.rd(r0.wrapping_add(4)).unwrap_or(0) as i32;
+            let y = p.rd(r0.wrapping_add(8)).unwrap_or(0) as i32;
+            let val = p.bitmap_handle_of(bmp_ptr)
+                .and_then(|id| p.nat.fbs.bitmaps.get(&id))
+                .map(|b| {
+                    let px = b.get(x, y).unwrap_or(0);
+                    let (r, g, bl) = ((px >> 16) & 0xFF, (px >> 8) & 0xFF, px & 0xFF);
+                    match b.display_mode {
+                        1 => if r > 127 { 1 } else { 0 },
+                        2 => r >> 6,
+                        3 | 5 => r >> 4,
+                        4 | 6 => r,
+                        7 => ((r >> 3) << 11) | ((g >> 2) << 5) | (bl >> 3),
+                        10 => ((r >> 4) << 8) | ((g >> 4) << 4) | (bl >> 4),
+                        _ => px,
+                    }
+                })
+                .unwrap_or(0);
+            p.cpu.regs[0] = val;
+            NativeOutcome::Return
+        }
+        "_ZN11TBitmapUtil8SetPixelEm" => {
+            let bmp_ptr = p.rd(r0).unwrap_or(0);
+            let x = p.rd(r0.wrapping_add(4)).unwrap_or(0) as i32;
+            let y = p.rd(r0.wrapping_add(8)).unwrap_or(0) as i32;
+            if let Some(id) = p.bitmap_handle_of(bmp_ptr) {
+                if let Some(b) = p.nat.fbs.bitmaps.get_mut(&id) {
+                    let px = match b.display_mode {
+                        1 => if (r1 & 1) != 0 { 0x00FF_FFFF } else { 0 },
+                        2 => { let v = (r1 & 3) * 85; (v << 16) | (v << 8) | v }
+                        3 | 5 => { let v = (r1 & 15) * 17; (v << 16) | (v << 8) | v }
+                        4 | 6 => { let v = r1 & 0xFF; (v << 16) | (v << 8) | v }
+                        7 => {
+                            let r = (((r1 >> 11) & 0x1F) * 255) / 31;
+                            let g = (((r1 >> 5) & 0x3F) * 255) / 63;
+                            let bl = ((r1 & 0x1F) * 255) / 31;
+                            (r << 16) | (g << 8) | bl
+                        }
+                        10 => {
+                            let r = ((r1 >> 8) & 0xF) * 17;
+                            let g = ((r1 >> 4) & 0xF) * 17;
+                            let bl = (r1 & 0xF) * 17;
+                            (r << 16) | (g << 8) | bl
+                        }
+                        _ => r1 & 0x00FF_FFFF,
+                    };
+                    if x >= 0 && y >= 0 && x < b.width && y < b.height {
+                        let idx = (y as usize) * (b.width as usize) + (x as usize);
+                        if idx < b.pixels.len() { b.pixels[idx] = px; }
+                    }
+                }
+            }
+            NativeOutcome::Return
+        }
+        "_ZN11TBitmapUtil7IncXPosEv" | "_ZN11TBitmapUtil7DecXPosEv"
+        | "_ZN11TBitmapUtil7IncYPosEv" | "_ZN11TBitmapUtil7DecYPosEv" => {
+            let bmp_ptr = p.rd(r0).unwrap_or(0);
+            let (w, h) = p.bitmap_handle_of(bmp_ptr)
+                .and_then(|id| p.nat.fbs.bitmaps.get(&id))
+                .map(|b| (b.width.max(1), b.height.max(1)))
+                .unwrap_or((1, 1));
+            let mut x = p.rd(r0.wrapping_add(4)).unwrap_or(0) as i32;
+            let mut y = p.rd(r0.wrapping_add(8)).unwrap_or(0) as i32;
+            match name {
+                "_ZN11TBitmapUtil7IncXPosEv" => { x += 1; if x >= w { x = 0; y = (y + 1) % h; } }
+                "_ZN11TBitmapUtil7DecXPosEv" => { x -= 1; if x < 0 { x = w - 1; y = (y + h - 1) % h; } }
+                "_ZN11TBitmapUtil7IncYPosEv" => { y = (y + 1) % h; }
+                _ => { y = (y + h - 1) % h; }
+            }
+            let _ = p.wr(r0.wrapping_add(4), x as u32);
+            let _ = p.wr(r0.wrapping_add(8), y as u32);
+            NativeOutcome::Return
+        }
+        "_ZN11TBitmapUtil3EndEv" => NativeOutcome::Return,
+        // void TRgb::SetRed(TInt) / SetGreen(TInt) / SetBlue(TInt) (gdi.inl: iValue is 0xAARRGGBB)
+        "_ZN4TRgb6SetRedEi" | "_ZN4TRgb8SetGreenEi" | "_ZN4TRgb7SetBlueEi" => {
+            let cur = p.rd(r0).unwrap_or(0xFF00_0000);
+            let c = r1 & 0xFF;
+            let next = if name.contains("SetRed") {
+                (cur & !0x00FF_0000) | (c << 16)
+            } else if name.contains("SetGreen") {
+                (cur & !0x0000_FF00) | (c << 8)
+            } else {
+                (cur & !0x0000_00FF) | c
+            };
+            let _ = p.wr(r0, next);
             NativeOutcome::Return
         }
         // TSize CFbsBitmap::SizeInPixels() const (hidden return pointer in r0, this in r1)
@@ -634,6 +767,11 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
                 Ok((_, gc)) => { p.cpu.regs[0] = gc; NativeOutcome::Return }
                 Err(m) => return refuse(m),
             }
+        }
+        // void CCoeControl::ActivateGc() const / DeactivateGc() const
+        "_ZNK11CCoeControl10ActivateGcEv" | "_ZNK11CCoeControl12DeactivateGcEv" => {
+            let _ = p.ensure_system_gc();
+            NativeOutcome::Return
         }
         // CDirectScreenAccess::NewL(RWsSession&, CWsScreenDevice&, RWindowBase&, MDirectScreenAccess&)
         "_ZN19CDirectScreenAccess4NewLER10RWsSessionR15CWsScreenDeviceR11RWindowBaseR19MDirectScreenAccess" => {

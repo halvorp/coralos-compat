@@ -85,7 +85,7 @@ const REGION_GLOBAL_PORT: u32 = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CxFn {
-    RegisterAppearanceClient, SetThemeCursor,
+    RegisterAppearanceClient, IsThemeInColor, PlotCIconHandle, SetThemeCursor,
     GetControlBounds, SetControlBounds, GetControlOwner, IsControlVisible, SetControlVisibility, ActivateControl, DeactivateControl,
     GetControlProperty, SetControlProperty, GetWindowProperty, SetWindowProperty,
     GetKeyboardFocus, SetKeyboardFocus, ClearKeyboardFocus, CreateRootControl, GetRootControl, EmbedControl, FindControlUnderMouse,
@@ -132,7 +132,7 @@ impl CxFn {
     pub fn by_name(name: &str) -> Option<CxFn> {
         use CxFn::*;
         Some(match name {
-            "RegisterAppearanceClient" => RegisterAppearanceClient, "SetThemeCursor" => SetThemeCursor,
+            "RegisterAppearanceClient" => RegisterAppearanceClient, "IsThemeInColor" => IsThemeInColor, "PlotCIconHandle" => PlotCIconHandle, "SetThemeCursor" => SetThemeCursor,
             "GetControlBounds" => GetControlBounds, "SetControlBounds" => SetControlBounds, "GetControlOwner" => GetControlOwner, "IsControlVisible" => IsControlVisible,
             "SetControlVisibility" => SetControlVisibility, "ActivateControl" => ActivateControl, "DeactivateControl" => DeactivateControl,
             "GetControlProperty" => GetControlProperty, "SetControlProperty" => SetControlProperty, "GetWindowProperty" => GetWindowProperty, "SetWindowProperty" => SetWindowProperty,
@@ -196,6 +196,12 @@ impl<U: GuestUi> MacPpc<U> {
         let (a0, a1, a2, a3) = (arg(self, cpu, 0)?, arg(self, cpu, 1).unwrap_or(0), arg(self, cpu, 2).unwrap_or(0), arg(self, cpu, 3).unwrap_or(0));
         let r: u32 = match f {
             RegisterAppearanceClient => 0,
+            // Boolean IsThemeInColor(SInt16 inDepth, Boolean inIsColorDevice) (Appearance.h): true for color devices >= 4 bpp.
+            IsThemeInColor => u32::from((a1 & 0xFF) != 0 && (a0 as u16 as i16) >= 4),
+            // OSErr PlotCIconHandle(const Rect *theRect, IconAlignmentType align, IconTransformType transform, CIconHandle theCIcon)
+            PlotCIconHandle => {
+                if a0 == 0 || a3 == 0 { (-50i32) as u32 } else { self.cx_trap("PlotCIcon", &[a0, a3])?; 0 }
+            }
             // ThemeCursor (Appearance.h): kThemeArrowCursor 0, CopyArrow 1, AliasArrow 2, ContextualMenuArrow 3, IBeam 4, Cross 5, Plus 6, Watch 7,
             // then the hands (8..13), Spinning 14 and the resize cursors. Arrow is InitCursor; IBeam / Cross / Plus / Watch are the system 'CURS'
             // 1..4 (iBeamCursor, crossCursor, plusCursor, watchCursor).

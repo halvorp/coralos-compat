@@ -177,15 +177,82 @@ fn expand_runs(data: &[u8]) -> Result<Vec<u8>, RscError> {
     Ok(out)
 }
 
-/// SCSU subset: single-byte mode, the default dynamic window 0 (base 0x0080), static ASCII.
+/// UTS #6 static windows 0..7 (for `SQ0`..`SQ7` with byte < 0x80).
+const SCSU_STATIC: [u16; 8] = [0x0000, 0x0080, 0x0100, 0x0300, 0x2000, 0x2080, 0x2100, 0x3000];
+/// UTS #6 initial dynamic windows 0..7 (for byte >= 0x80 or `SQ0`..`SQ7` with byte >= 0x80).
+const SCSU_DYNAMIC_INIT: [u16; 8] = [0x0080, 0x00C0, 0x0400, 0x0600, 0x0900, 0x3040, 0x30A0, 0xFF00];
+
+/// UTS #6 Table 5: decode an 8-bit dynamic window offset index `x` (for `SD0`..`SD7`).
+fn scsu_window_offset(x: u8) -> Option<u32> {
+    match x {
+        0x01..=0x67 => Some(u32::from(x) * 0x80),
+        0x68..=0xA7 => Some(u32::from(x) * 0x80 + 0xAC00),
+        0xF9 => Some(0x00C0),
+        0xFA => Some(0x0250),
+        0xFB => Some(0x0370),
+        0xFC => Some(0x0530),
+        0xFD => Some(0x3040),
+        0xFE => Some(0x30A0),
+        0xFF => Some(0xFF60),
+        _ => None,
+    }
+}
+
+/// SCSU single-byte mode expander (UTS #6): literal ASCII, dynamic windows (`SC0`..`SC7`, `SD0`..`SD7`),
+/// single-character window quotes (`SQ0`..`SQ7`), and single-character BMP quotes (`SQU` 0x0E).
 fn scsu_expand(run: &[u8], out: &mut Vec<u8>) -> Result<(), RscError> {
-    for &b in run {
-        let unit: u16 = match b {
-            0x00 | 0x09 | 0x0A | 0x0D | 0x20..=0x7F => b as u16,
-            0x80..=0xFF => 0x0080 + (b as u16 - 0x80),
+    let mut dyn_win = SCSU_DYNAMIC_INIT;
+    let mut active: usize = 0;
+    let mut i = 0;
+    while i < run.len() {
+        let b = run[i];
+        i += 1;
+        match b {
+            0x00 | 0x09 | 0x0A | 0x0D | 0x20..=0x7F => {
+                out.extend_from_slice(&(b as u16).to_le_bytes());
+            }
+            0x80..=0xFF => {
+                let unit = dyn_win[active].wrapping_add(u16::from(b - 0x80));
+                out.extend_from_slice(&unit.to_le_bytes());
+            }
+            0x01..=0x08 => {
+                // SQ0..SQ7: quote a single character from static (arg < 0x80) or dynamic (arg >= 0x80) window n.
+                let n = (b - 1) as usize;
+                let arg = *run.get(i).ok_or(RscError::BadRuns("SCSU SQn truncated"))?;
+                i += 1;
+                let unit = if arg < 0x80 {
+                    SCSU_STATIC[n].wrapping_add(u16::from(arg))
+                } else {
+                    dyn_win[n].wrapping_add(u16::from(arg - 0x80))
+                };
+                out.extend_from_slice(&unit.to_le_bytes());
+            }
+            0x0E => {
+                // SQU: quote a single 16-bit big-endian BMP code unit.
+                let hi = *run.get(i).ok_or(RscError::BadRuns("SCSU SQU truncated"))?;
+                let lo = *run.get(i + 1).ok_or(RscError::BadRuns("SCSU SQU truncated"))?;
+                i += 2;
+                let unit = u16::from_be_bytes([hi, lo]);
+                out.extend_from_slice(&unit.to_le_bytes());
+            }
+            0x10..=0x17 => {
+                // SC0..SC7: select active dynamic window.
+                active = (b - 0x10) as usize;
+            }
+            0x18..=0x1F => {
+                // SD0..SD7: define and select dynamic window (BMP offsets only).
+                let n = (b - 0x18) as usize;
+                let arg = *run.get(i).ok_or(RscError::BadRuns("SCSU SDn truncated"))?;
+                i += 1;
+                let Some(off) = scsu_window_offset(arg) else {
+                    return Err(RscError::Scsu(b));
+                };
+                if off > 0xFF80 { return Err(RscError::Scsu(b)); }
+                dyn_win[n] = off as u16;
+                active = n;
+            }
             other => return Err(RscError::Scsu(other)),
-        };
-        out.extend_from_slice(&unit.to_le_bytes());
+        }
     }
     Ok(())
 }

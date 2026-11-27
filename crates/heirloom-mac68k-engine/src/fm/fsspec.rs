@@ -99,6 +99,9 @@ fn dispatch<U: GuestUi>(m: &mut Mac<U>, c: &mut Cpu, r: &mut Regs) -> Result<Str
     let args = pascal::read_args(&m.mem, sp, lay)?;
     let res = fsp(m, selector, &|i| args.get(i));
     let (e, value) = match res { Ok(v) => (0, v), Err(e) => (e, 0) };
+    if matches!(selector, sel::OPEN_RES_FILE | sel::CREATE_RES_FILE) {
+        let _ = m.mem.write_u16(crate::lowmem::RES_ERR, e as u16);
+    }
     // FSpOpenResFile returns the refnum (or -1) instead of an OSErr.
     let result = if selector == sel::OPEN_RES_FILE { if e == 0 { value } else { 0xFFFF } } else { e as u16 as u32 };
     let new_sp = pascal::complete(&mut m.mem, sp, lay, if func { Some((Arg::W, result)) } else { None })?;
@@ -217,6 +220,10 @@ impl<U: GuestUi> Mac<U> {
             (self.mem.read_i16(a(0) + FSS_VREF).unwrap_or(0), self.mem.read_u32(a(0) + FSS_PAR_ID).unwrap_or(0))
         } else { (0, 0) };
         let r = fsp(self, selector, &a);
+        if matches!(selector, sel::OPEN_RES_FILE | sel::CREATE_RES_FILE) {
+            let res_err = match r { Ok(_) => 0i16, Err(e) => e };
+            let _ = self.mem.write_u16(crate::lowmem::RES_ERR, res_err as u16);
+        }
         self.log.push(format!("[file] FSp sel={selector} \"{name}\" vRef {vref} dirID {dir} -> {}", match r { Ok(v) => v as i64, Err(e) => i64::from(e) }));
         r
     }

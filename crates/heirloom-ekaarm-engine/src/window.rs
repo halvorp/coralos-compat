@@ -7,6 +7,14 @@ use crate::natives::NativeOutcome;
 
 const IGNORED: &[&str] = &[
     "_ZN11RWindowBase17SetShadowDisabledEi",
+    "_ZN11RWindowBase14SetPointerGrabEi",
+    "_ZN11RWindowBase15SetShadowHeightEi",
+    "_ZN7RWindow10InvalidateEv",
+    "_ZN7RWindow10InvalidateERK5TRect",
+    "_ZN7RWindow11BeginRedrawEv",
+    "_ZN7RWindow11BeginRedrawERK5TRect",
+    "_ZN7RWindow9EndRedrawEv",
+    "_ZN15RWindowTreeNode18SetOrdinalPositionEi",
     "_ZN15RWindowTreeNode27EnableGroupListChangeEventsEv",
     "_ZN15RWindowTreeNode29DisableVisibilityChangeEventsEv",
     "_ZN15RWindowTreeNode24DisableFocusChangeEventsEv",

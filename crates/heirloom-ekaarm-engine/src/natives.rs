@@ -259,6 +259,170 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             proc.cpu.regs[0] = s;
             NativeOutcome::Return
         }
+        // TInt Math::Sqrt(TReal& aTrg, const TReal& aSrc) (e32math.h): IEEE-754 f64 square root.
+        "_ZN4Math4SqrtERdRKd" => {
+            let (Ok(lo), Ok(hi)) = (proc.rd(r1), proc.rd(r1.wrapping_add(4))) else {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: src unreadable"));
+            };
+            let x = f64::from_bits(u64::from(lo) | (u64::from(hi) << 32));
+            if x.is_nan() || x < 0.0 {
+                proc.cpu.regs[0] = (-6i32) as u32; // KErrArgument
+            } else {
+                let mut g = if x == 0.0 { 0.0 } else { f64::from_bits((x.to_bits() >> 1) + (0x3ff0_0000_0000_0000u64 >> 1)) };
+                if x > 0.0 && x.is_finite() {
+                    for _ in 0..8 {
+                        g = 0.5 * (g + x / g);
+                    }
+                } else {
+                    g = x;
+                }
+                let bits = g.to_bits();
+                let _ = proc.wr(r0, bits as u32);
+                let _ = proc.wr(r0.wrapping_add(4), (bits >> 32) as u32);
+                proc.cpu.regs[0] = 0;
+            }
+            NativeOutcome::Return
+        }
+        // TInt Math::Log(TReal& aTrg, const TReal& aSrc) (base-10 log) & Math::Exp(TReal& aTrg, const TReal& aSrc)
+        "_ZN4Math3LogERdRKd" | "_ZN4Math3ExpERdRKd" => {
+            let (Ok(lo), Ok(hi)) = (proc.rd(r1), proc.rd(r1.wrapping_add(4))) else {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: src unreadable"));
+            };
+            let x = f64::from_bits(u64::from(lo) | (u64::from(hi) << 32));
+            let res: Result<f64, i32> = if name.contains("3Log") {
+                if !x.is_finite() || x <= 0.0 {
+                    Err(-6) // KErrArgument
+                } else {
+                    // Range reduction: x = m * 2^e with m in [1, 2), ln(m) via atanh series, log10(x) = ln(x)/ln(10)
+                    let bits = x.to_bits();
+                    let e = ((bits >> 52) & 0x7FF) as i32 - 1023;
+                    let m = f64::from_bits((bits & 0x000F_FFFF_FFFF_FFFF) | 0x3FF0_0000_0000_0000);
+                    let t = (m - 1.0) / (m + 1.0);
+                    let t2 = t * t;
+                    let mut term = t;
+                    let mut sum = 0.0;
+                    for k in 0..10 {
+                        sum += term / (2 * k + 1) as f64;
+                        term *= t2;
+                    }
+                    let ln_x = 2.0 * sum + (e as f64) * core::f64::consts::LN_2;
+                    Ok(ln_x / core::f64::consts::LN_10)
+                }
+            } else {
+                if x.is_nan() {
+                    Err(-6)
+                } else if x > 709.78 {
+                    Err(-9) // KErrOverflow
+                } else if x < -745.0 {
+                    Ok(0.0)
+                } else {
+                    // Range reduction: exp(x) = 2^k * exp(r), |r| <= ln(2)/2
+                    let k = (x / core::f64::consts::LN_2 + if x >= 0.0 { 0.5 } else { -0.5 }) as i32;
+                    let r = x - (k as f64) * core::f64::consts::LN_2;
+                    let mut term = 1.0;
+                    let mut sum = 1.0;
+                    for n in 1..16 {
+                        term *= r / (n as f64);
+                        sum += term;
+                    }
+                    let scale_exp = (k + 1023).clamp(1, 2046) as u64;
+                    Ok(sum * f64::from_bits(scale_exp << 52))
+                }
+            };
+            match res {
+                Ok(v) => {
+                    let bits = v.to_bits();
+                    let _ = proc.wr(r0, bits as u32);
+                    let _ = proc.wr(r0.wrapping_add(4), (bits >> 32) as u32);
+                    proc.cpu.regs[0] = 0;
+                }
+                Err(e) => proc.cpu.regs[0] = e as u32,
+            }
+            NativeOutcome::Return
+        }
+        "_ZN11TDblQueLink5DequeEv" => {
+            if let (Ok(next), Ok(prev)) = (proc.rd(r0), proc.rd(r0.wrapping_add(4))) {
+                if next != 0 && prev != 0 {
+                    let _ = proc.wr(prev, next);
+                    let _ = proc.wr(next.wrapping_add(4), prev);
+                    let _ = proc.wr(r0, 0);
+                    let _ = proc.wr(r0.wrapping_add(4), 0);
+                }
+            }
+            NativeOutcome::Return
+        }
+        // Layout: TDblQueBase { iHead: { iNext: +0, iPrev: +4 }, iOffset: +8 }
+        //         TDblQueIterBase { iOffset: +0, iHead: +4, iNext: +8 }
+        "_ZN11TDblQueBaseC2Ei" | "_ZN11TDblQueBaseC1Ei" => {
+            let _ = proc.wr(r0, r0);
+            let _ = proc.wr(r0.wrapping_add(4), r0);
+            let _ = proc.wr(r0.wrapping_add(8), r1);
+            proc.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        "_ZN11TDblQueBase9DoAddLastEPv" | "_ZN11TDblQueBase10DoAddFirstEPv" | "_ZN11TDblQueBase13DoAddPriorityEPv" => {
+            let off = proc.rd(r0.wrapping_add(8)).unwrap_or(0);
+            let link = r1.wrapping_add(off);
+            let head = r0;
+            if name.contains("DoAddFirst") {
+                let first = proc.rd(head).unwrap_or(head);
+                let _ = proc.wr(link, first);
+                let _ = proc.wr(link.wrapping_add(4), head);
+                let _ = proc.wr(first.wrapping_add(4), link);
+                let _ = proc.wr(head, link);
+            } else if name.contains("DoAddPriority") {
+                // TPriQueLink: iNext (+0), iPrev (+4), iPriority (+8) — insert descending by priority.
+                let prio = proc.rd(link.wrapping_add(8)).unwrap_or(0) as i32;
+                let mut cur = proc.rd(head).unwrap_or(head);
+                let mut steps = 0;
+                while cur != head && cur != 0 && steps < 4096 {
+                    let cp = proc.rd(cur.wrapping_add(8)).unwrap_or(0) as i32;
+                    if prio > cp { break; }
+                    cur = proc.rd(cur).unwrap_or(head);
+                    steps += 1;
+                }
+                let prev = proc.rd(cur.wrapping_add(4)).unwrap_or(head);
+                let _ = proc.wr(link, cur);
+                let _ = proc.wr(link.wrapping_add(4), prev);
+                let _ = proc.wr(prev, link);
+                let _ = proc.wr(cur.wrapping_add(4), link);
+            } else {
+                let last = proc.rd(head.wrapping_add(4)).unwrap_or(head);
+                let _ = proc.wr(link, head);
+                let _ = proc.wr(link.wrapping_add(4), last);
+                let _ = proc.wr(last, link);
+                let _ = proc.wr(head.wrapping_add(4), link);
+            }
+            NativeOutcome::Return
+        }
+        "_ZN15TDblQueIterBaseC2ER11TDblQueBase" | "_ZN15TDblQueIterBaseC1ER11TDblQueBase" => {
+            let off = proc.rd(r1.wrapping_add(8)).unwrap_or(0);
+            let first = proc.rd(r1).unwrap_or(r1);
+            let _ = proc.wr(r0, off);
+            let _ = proc.wr(r0.wrapping_add(4), r1);
+            let _ = proc.wr(r0.wrapping_add(8), first);
+            proc.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        "_ZN15TDblQueIterBase10SetToFirstEv" => {
+            let head = proc.rd(r0.wrapping_add(4)).unwrap_or(0);
+            let first = proc.rd(head).unwrap_or(head);
+            let _ = proc.wr(r0.wrapping_add(8), first);
+            NativeOutcome::Return
+        }
+        "_ZN15TDblQueIterBase9DoPostIncEv" => {
+            let off = proc.rd(r0).unwrap_or(0);
+            let head = proc.rd(r0.wrapping_add(4)).unwrap_or(0);
+            let cur = proc.rd(r0.wrapping_add(8)).unwrap_or(head);
+            if cur == head || cur == 0 {
+                proc.cpu.regs[0] = 0;
+            } else {
+                let next = proc.rd(cur).unwrap_or(head);
+                let _ = proc.wr(r0.wrapping_add(8), next);
+                proc.cpu.regs[0] = cur.wrapping_sub(off);
+            }
+            NativeOutcome::Return
+        }
         // TBool User::QueryVersionSupported(const TVersion& aCurrent, const TVersion& aRequested)
         "_ZN4User21QueryVersionSupportedERK8TVersionS2_" => {
             proc.cpu.regs[0] = 1;

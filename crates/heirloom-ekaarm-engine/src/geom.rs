@@ -11,12 +11,58 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         return Some(if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {this:#x} is unwritable")) });
     }
     let rd = |p: &Process, a: u32| p.mem.vm.read_u32(a).map(|v| v as i32);
+    if name == "_ZN6TPointpLERKS_" || name == "_ZN6TPointmIERKS_" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(ax), Ok(ay), Ok(bx), Ok(by)) = (rd(p, this), rd(p, this + 4), rd(p, r1), rd(p, r1 + 4)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TPoint unreadable")));
+        };
+        let (nx, ny) = if name.contains("mIERKS_") { (ax.wrapping_sub(bx), ay.wrapping_sub(by)) } else { (ax.wrapping_add(bx), ay.wrapping_add(by)) };
+        let ok = p.mem.vm.write_u32(this, nx as u32).is_ok() && p.mem.vm.write_u32(this + 4, ny as u32).is_ok();
+        return Some(if ok { p.cpu.regs[0] = this; NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TPoint unwritable")) });
+    }
+    if name == "_ZNK6TPoint6AsSizeEv" || name == "_ZNK5TSize7AsPointEv" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(x), Ok(y)) = (rd(p, r1), rd(p, r1 + 4)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: arg unreadable")));
+        };
+        let ok = p.mem.vm.write_u32(this, x as u32).is_ok() && p.mem.vm.write_u32(this + 4, y as u32).is_ok();
+        return Some(if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: sret unwritable")) });
+    }
+    if name == "_ZNK6TPointplERKS_" || name == "_ZNK6TPointmiERKS_" {
+        // sret TPoint in r0, this in r1, rhs in r2
+        let (r1, r2) = (p.cpu.regs[1], p.cpu.regs[2]);
+        let (Ok(ax), Ok(ay), Ok(bx), Ok(by)) = (rd(p, r1), rd(p, r1 + 4), rd(p, r2), rd(p, r2 + 4)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TPoint unreadable")));
+        };
+        let (nx, ny) = if name.contains("miERKS_") { (ax.wrapping_sub(bx), ay.wrapping_sub(by)) } else { (ax.wrapping_add(bx), ay.wrapping_add(by)) };
+        let ok = p.mem.vm.write_u32(this, nx as u32).is_ok() && p.mem.vm.write_u32(this + 4, ny as u32).is_ok();
+        return Some(if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: sret unwritable")) });
+    }
+    if name == "_ZN5TRect4MoveERK6TPoint" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(x0), Ok(y0), Ok(x1), Ok(y1), Ok(dx), Ok(dy)) = (rd(p, this), rd(p, this + 4), rd(p, this + 8), rd(p, this + 12), rd(p, r1), rd(p, r1 + 4)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect/TPoint unreadable")));
+        };
+        for (i, v) in [x0.wrapping_add(dx), y0.wrapping_add(dy), x1.wrapping_add(dx), y1.wrapping_add(dy)].iter().enumerate() {
+            let _ = p.mem.vm.write_u32(this + i as u32 * 4, *v as u32);
+        }
+        return Some(NativeOutcome::Return);
+    }
     if name == "_ZNK5TSizeneERKS_" || name == "_ZNK5TSizeeqERKS_" {
         let r1 = p.cpu.regs[1];
         let (Ok(w0), Ok(h0), Ok(w1), Ok(h1)) = (rd(p, this), rd(p, this + 4), rd(p, r1), rd(p, r1 + 4)) else {
             return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TSize unreadable")));
         };
         let eq = w0 == w1 && h0 == h1;
+        p.cpu.regs[0] = u32::from(if name.contains("neERKS_") { !eq } else { eq });
+        return Some(NativeOutcome::Return);
+    }
+    if name == "_ZNK6TPointeqERKS_" || name == "_ZNK6TPointneERKS_" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(x0), Ok(y0), Ok(x1), Ok(y1)) = (rd(p, this), rd(p, this + 4), rd(p, r1), rd(p, r1 + 4)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TPoint unreadable")));
+        };
+        let eq = x0 == x1 && y0 == y1;
         p.cpu.regs[0] = u32::from(if name.contains("neERKS_") { !eq } else { eq });
         return Some(NativeOutcome::Return);
     }

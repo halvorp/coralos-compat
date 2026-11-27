@@ -68,7 +68,11 @@ impl<U: GuestUi> Mac<U> {
             let at = p + CT_TABLE + SPEC * i as u32;
             let value = if flags & DEVICE_TABLE != 0 { i } else { usize::from(self.mem.read_u16(at).map_err(&e)?) };
             let c = read_rgb(&self.mem, at + 2)?;
-            if value < n { t[value] = c; } else { return Err(Refusal(format!("CTabHandle {h:#x}: entry {i} has value {value}, outside its {n}-entry table"))); }
+            if value >= 256 {
+                return Err(Refusal(format!("CTabHandle {h:#x}: entry {i} has value {value}, outside 8-bit indexed range 0..256")));
+            }
+            if value >= t.len() { t.resize(value + 1, Rgb::BLACK); }
+            t[value] = c;
         }
         Ok(t)
     }
@@ -178,4 +182,30 @@ fn real_color<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done,
 
 fn qd_error<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _: &Call) -> Result<Done, Refusal> {
     Ok(Done { result: m.cqd.qd_error as u16 as u32, log: format!("[quickdraw] QDError -> {}", m.cqd.qd_error) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heirloom_ui_abi::RecordingGuestUi;
+
+    #[test]
+    fn sparse_color_table_accepts_pixel_values_up_to_255() {
+        let mut m = Mac::new(RecordingGuestUi::default()).unwrap();
+        let (h, p) = m.alloc_handle(CT_TABLE + SPEC * 2, "ColorTable").unwrap();
+        m.mem.write_u32(p + CT_SEED, 4).unwrap();
+        m.mem.write_u16(p + CT_FLAGS, 0).unwrap();
+        m.mem.write_u16(p + CT_SIZE, 1).unwrap(); // 2 entries
+        let accent = Rgb { r: 0x1212, g: 0x3434, b: 0x5656 };
+        // Entry 0 -> pixel value 0 (white), Entry 1 -> pixel value 15 (accent)
+        m.mem.write_u16(p + CT_TABLE, 0).unwrap();
+        write_rgb(&mut m.mem, p + CT_TABLE + 2, Rgb::WHITE).unwrap();
+        m.mem.write_u16(p + CT_TABLE + SPEC, 15).unwrap();
+        write_rgb(&mut m.mem, p + CT_TABLE + SPEC + 2, accent).unwrap();
+
+        let table = m.read_ctab(h).unwrap();
+        assert_eq!(table.len(), 16);
+        assert_eq!(table[0], Rgb::WHITE);
+        assert_eq!(table[15], accent);
+    }
 }

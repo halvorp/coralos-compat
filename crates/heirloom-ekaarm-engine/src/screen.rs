@@ -35,6 +35,9 @@ const VTABLE_NAMED: &[(usize, &str)] = &[
     (10, "_ZNK15CWsScreenDevice17PaletteAttributesERiS0_"),
     (11, "_ZN15CWsScreenDevice10SetPaletteEP8CPalette"),
     (12, "_ZNK15CWsScreenDevice10GetPaletteERP8CPalette"),
+    (17, "_ZN10CFbsDevice22GetNearestFontInPixelsERP5CFontRK9TFontSpec"),
+    (18, "_ZN10CFbsDevice36GetNearestFontToDesignHeightInPixelsERP5CFontRK9TFontSpec"),
+    (19, "_ZN10CFbsDevice33GetNearestFontToMaxHeightInPixelsERP5CFontRK9TFontSpeci"),
 ];
 
 /// The device's physical size in twips (1/1440 inch), portrait 360x640 pixels (`SCR_WIDTH1/HEIGHT1`, style QHDTOUCH): `SCR_TWIP_WIDTH1 2235`,
@@ -160,6 +163,19 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             } else {
                 NativeOutcome::Refused(format!("NEXT-NEEDED gdi {name}: the font at {f:#x} is not a known CFont"))
             }
+        }
+        // TInt CFont::WidthZeroInPixels() const / MaxNormalCharWidthInPixels() const: proportional advance derived from height.
+        "_ZNK5CFont17WidthZeroInPixelsEv" | "_ZNK5CFont26MaxNormalCharWidthInPixelsEv" => {
+            let f = p.cpu.regs[0];
+            let h = if let Some(HostObj::Font(t)) = p.obj_get(f) {
+                twips_to_pixels(*t).max(8)
+            } else if p.nat.fonts.values().any(|&a| a == f) {
+                14
+            } else {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED gdi {name}: the font at {f:#x} is not a known CFont")));
+            };
+            p.cpu.regs[0] = if name.contains("MaxNormalCharWidth") { h } else { (h * 6 / 10).max(5) };
+            NativeOutcome::Return
         }
         _ => return None,
     })

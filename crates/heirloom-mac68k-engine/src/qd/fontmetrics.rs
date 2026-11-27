@@ -85,3 +85,26 @@ pub(super) fn font_metrics<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) ->
     m.mem.write_u32(rec.wrapping_add(16), h).map_err(&e)?;
     Ok(Done { result: 0, log: format!("[quickdraw] FontMetrics -> ascent {ascent} descent {descent} leading {leading} widMax {wid_max}, width table {h:#x}") })
 }
+
+/// `FUNCTION FMSwapFont(inRec: FMInput): FMOutputPtr` ($A901, Inside Macintosh: Text, "Font Manager"):
+/// fills a 26-byte `FMOutput` record with the stand-in font's metrics (`font_info`) and returns a pointer to it.
+pub(super) fn fm_swap_font<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, _c: &Call) -> Result<Done, Refusal> {
+    const FM_OUT_SIZE: u32 = 26;
+    if m.qd.fm_output == 0 {
+        m.qd.fm_output = m.heap.alloc(FM_OUT_SIZE).ok_or_else(|| Refusal(format!("FMSwapFont: no room for FMOutput")))?;
+    }
+    let ptr = m.qd.fm_output;
+    let [ascent, descent, wid_max, leading] = font_info(&m.qd.font);
+    let mut out = [0u8; FM_OUT_SIZE as usize];
+    // 0..2 errNum=0, 2..6 fontHandle=0, 6..13 style pixels=0, 13..17 ascent/descent/widMax/leading (u8), 17 curStyle=0
+    out[13] = ascent.min(255) as u8;
+    out[14] = descent.min(255) as u8;
+    out[15] = wid_max.min(255) as u8;
+    out[16] = leading.min(255) as u8;
+    // 18..22 numer = Point(1, 1), 22..26 denom = Point(1, 1)
+    for (off, val) in [(18, 1u16), (20, 1), (22, 1), (24, 1)] {
+        out[off..off + 2].copy_from_slice(&val.to_be_bytes());
+    }
+    m.mem.write_bytes(ptr, &out).map_err(Refusal::mem("FMSwapFont"))?;
+    Ok(Done { result: ptr, log: format!("[quickdraw] FMSwapFont -> {ptr:#x} (ascent {ascent} descent {descent} widMax {wid_max})") })
+}

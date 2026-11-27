@@ -57,6 +57,8 @@ pub struct Qd {
     pub font: Font,
     /// The Font Manager's global width table (a guest handle, 0 until `FontMetrics` first builds it; [`fontmetrics`]).
     pub width_table: u32,
+    /// Guest `FMOutPtr` returned by `_FMSwapFont ($A901)` (allocated once per machine, 0 until first call).
+    pub fm_output: u32,
     /// Ports between `OpenRgn` and `CloseRgn`: the region collected so far (local coordinates).
     pub rgn_open: BTreeMap<u32, Region>,
     /// Ports between `OpenRgn` and `CloseRgn`: non-horizontal polygon edges recorded by `Line` / `LineTo`.
@@ -80,7 +82,7 @@ pub struct Qd {
 
 impl Default for Qd {
     fn default() -> Self {
-        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, rgn_open: BTreeMap::new(), rgn_open_edges: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new(), palettes: BTreeMap::new(), screen: Default::default(), offscreen_text: BTreeMap::new() }
+        Qd { canvases: BTreeMap::new(), present: Presenter::default(), font: Font::topaz8(), width_table: 0, fm_output: 0, rgn_open: BTreeMap::new(), rgn_open_edges: BTreeMap::new(), update: BTreeMap::new(), saved_vis: BTreeMap::new(), plane: plane::Planes::default(), pictures: BTreeMap::new(), palettes: BTreeMap::new(), screen: Default::default(), offscreen_text: BTreeMap::new() }
     }
 }
 

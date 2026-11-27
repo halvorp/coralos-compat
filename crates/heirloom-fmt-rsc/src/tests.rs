@@ -139,3 +139,14 @@ fn every_resource_of_file_browsers_rsc_decodes() {
         assert!(d.len() < 4096);
     }
 }
+
+#[test]
+fn scsu_single_byte_quotes_and_windows_decode_unicode() {
+    // SQU (0x0E) quotes U+015E ('Ş'), SQ1 (0x02) + 0x7F quotes static window 1 (0x0080 + 0x7F = 0x00FF 'ÿ'),
+    // SD0 (0x18 0x02 -> 0x0100) + 0x83 -> U+0103 ('ă').
+    let run = [16u8, 0x0E, 0x01, 0x5E, b'a', b'h', b' ', 0x02, 0x7F, b' ', 0x18, 0x02, 0x83, b' ', b'5', 0x01, 0x20];
+    let f = build(&[(&run, true)]);
+    let d = RscFile::parse(&f).unwrap().resource(2).unwrap();
+    let s = Reader::new(&d).rest_utf16().unwrap();
+    assert_eq!(s, "\u{015E}ah \u{00FF} \u{0103} 5 ");
+}

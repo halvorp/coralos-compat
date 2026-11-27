@@ -107,7 +107,18 @@ pub(crate) fn client_rect(p: &Process, whole_window: bool) -> Option<Result<Rect
 fn metrics_rect(p: &Process, param: u32) -> Result<Option<Rect>, String> {
     let cdl = &p.nat.cdl;
     let screen = screen_rect(cdl)?;
-    let layout_id = p.nat.shell.layout.ok_or_else(|| String::from("the app never switched the status pane layout (the initial layout is the application's core resource, which is not read)"))?;
+    let layout_id = match p.nat.shell.layout {
+        Some(id) => id,
+        None => {
+            // App has not switched status pane layout yet: default screen/app/main/control rects from S60 nHD geometry.
+            return Ok(Some(match param {
+                E_SCREEN | E_APPLICATION_WINDOW | E_MAIN_PANE | E_POPUP_PARENT => screen,
+                E_STATUS_PANE | E_NAVI_PANE => Rect { x0: 0, y0: 0, x1: screen.x1, y1: 0 },
+                E_CONTROL_PANE => Rect { x0: 0, y0: screen.y1, x1: screen.x1, y1: screen.y1 },
+                _ => screen,
+            }));
+        }
+    };
     let pane = classify(cdl, layout_id)?;
     let landscape = cdl.meta("IsLandscapeOrientation")?;
     let pen = cdl.meta("IsPenEnabled")?;
@@ -172,6 +183,10 @@ fn metrics_rect(p: &Process, param: u32) -> Result<Option<Rect>, String> {
 
 /// Reads and writes of the guest's `TRect` (iTl, iBr: four ints), `TSize` (two) and `TPoint` (two).
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
+    if name == "_ZN14AknLayoutUtils11CbaLocationEv" {
+        p.cpu.regs[0] = 0; // EAknCbaLocationBottom
+        return Some(NativeOutcome::Return);
+    }
     let (param, out) = (p.cpu.regs[0], p.cpu.regs[1]);
     let write = |p: &mut Process, vals: &[i32]| vals.iter().enumerate().all(|(i, v)| p.mem.vm.write_u32(out.wrapping_add(i as u32 * 4), *v as u32).is_ok());
     let kind = match name {

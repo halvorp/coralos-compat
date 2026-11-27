@@ -63,6 +63,9 @@ pub fn role_of(proc_id: u16) -> Result<(WindowRole, bool), Refusal> {
     match (proc_id >> 4, proc_id & 15) {
         (0, v) => Ok(match v & 7 { 0 => (WindowRole::Document, true), 4 => (WindowRole::Document, false), _ => (WindowRole::Dialog, false) }),
         (1, _) => Ok((WindowRole::Document, false)),
+        // System 7.5+ standard floating window WDEF 124 (MacWindows.h: floatProc 1985, floatGrowProc 1987, floatZoomProc 1989,
+        // floatZoomGrowProc 1991, floatSideProc 1993..floatSideZoomGrowProc 1999; bit 1 = grow box).
+        (124, v) => Ok((WindowRole::Utility, (v & 2) != 0)),
         (id, v) => Err(Refusal(format!("procID {proc_id} selects WDEF {id} variation {v}, the program's own window definition: no native presentation contract [WDEF-UNSUPPORTED]"))),
     }
 }

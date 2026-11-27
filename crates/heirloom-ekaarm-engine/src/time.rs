@@ -31,9 +31,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             }
             Some(NativeOutcome::Return)
         }
-        // TTime& TTime::operator=(const TDateTime&): microseconds since 00:00:00 1 Jan 0 AD (year 0 counted as a leap year, which puts
+        // TTime::TTime(const TDateTime&) / TTime& TTime::operator=(const TDateTime&): microseconds since 00:00:00 1 Jan 0 AD (year 0 counted as a leap year, which puts
         // 1970-01-01 at 62167219200 s). TDateTime's month and day are zero-based. TTime is one 64-bit word pair.
-        "_ZN5TTimeaSERK9TDateTime" => {
+        "_ZN5TTimeaSERK9TDateTime" | "_ZN5TTimeC1ERK9TDateTime" | "_ZN5TTimeC2ERK9TDateTime" => {
             let (this, src) = (p.cpu.regs[0], p.cpu.regs[1]);
             let mut f = [0i64; 7];
             for (i, slot) in f.iter_mut().enumerate() {
@@ -51,6 +51,27 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let micro = (((days * 24 + h) * 60 + mi) * 60 + s) * 1_000_000 + us;
             let ok = p.mem.vm.write_u32(this, micro as u64 as u32).is_ok() && p.mem.vm.write_u32(this + 4, ((micro as u64) >> 32) as u32).is_ok();
             if ok { p.cpu.regs[0] = this; Some(NativeOutcome::Return) } else { Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: the TTime at {this:#x} is unwritable"))) }
+        }
+        // TInt TTime::SecondsFrom(TTime aTime, TTimeIntervalSeconds& aInterval) const (e32std.h):
+        // ARM AAPCS: r0 = this, r2:r3 = aTime (8-byte aligned TInt64), [sp] = &aInterval (or r1 if unaligned; read [sp] first,
+        // falling back to r1 if [sp] is not a valid stack/heap pointer).
+        "_ZNK5TTime11SecondsFromES_R20TTimeIntervalSeconds" => {
+            let this = p.cpu.regs[0];
+            let a_time = (u64::from(p.cpu.regs[2]) | (u64::from(p.cpu.regs[3]) << 32)) as i64;
+            let sp = p.cpu.regs[13];
+            let out_ptr = p.rd(sp).ok().filter(|&a| a >= 0x0400_0000).unwrap_or(p.cpu.regs[1]);
+            let (Ok(lo), Ok(hi)) = (p.rd(this), p.rd(this.wrapping_add(4))) else {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TTime unreadable")));
+            };
+            let cur = (u64::from(lo) | (u64::from(hi) << 32)) as i64;
+            let secs = cur.saturating_sub(a_time) / 1_000_000;
+            if secs < i64::from(i32::MIN) || secs > i64::from(i32::MAX) {
+                p.cpu.regs[0] = (-9i32) as u32; // KErrOverflow
+            } else {
+                let _ = p.wr(out_ptr, secs as i32 as u32);
+                p.cpu.regs[0] = 0;
+            }
+            Some(NativeOutcome::Return)
         }
         // void TTime::FormatL(TDes16& aDes, const TDesC16& aFormat) const
         "_ZNK5TTime7FormatLER6TDes16RK7TDesC16" => {

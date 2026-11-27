@@ -130,6 +130,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     reg(m, 0xA886, "TextWidth", &[Arg::L, Arg::W, Arg::W], Some(Arg::W), text_width::<U>)?;
     reg(m, 0xA88B, "GetFontInfo", &[Arg::L], None, get_font_info::<U>)?;
     reg(m, 0xA835, "FontMetrics", &[Arg::L], None, super::fontmetrics::font_metrics::<U>)?;
+    reg(m, 0xA901, "FMSwapFont", &[Arg::L], Some(Arg::L), super::fontmetrics::fm_swap_font::<U>)?;
     reg(m, 0xA837, "MeasureText", &[Arg::W, Arg::L, Arg::L], None, measure_text::<U>)?;
     reg(m, 0xA88E, "SpaceExtra", &[Arg::L], None, space_extra::<U>)
 }

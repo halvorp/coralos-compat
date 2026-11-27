@@ -276,6 +276,18 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         "_ZN13CArrayFixBaseC1EPFP8CBufBaseiEii" | "_ZN13CArrayFixBaseC2EPFP8CBufBaseiEii" => { let r = p.array_construct(r0, r1, r2, r3); done(p, r, r0) }
         "_ZNK13CArrayFixBase2AtEi" => match p.array_at(r0, r1 as i32) { Ok(a) => { p.cpu.regs[0] = a; NativeOutcome::Return } Err(m) => refuse(m) },
         "_ZN13CArrayFixBase7InsertLEiPKv" => { let r = p.array_insert(r0, r1 as i32, r2); done(p, r, 0) }
+        "_ZN13CArrayFixBase15SetReserveFlatLEi" => NativeOutcome::Return,
+        "_ZN12TKeyArrayFixC1Ei14TKeyCmpNumeric" | "_ZN12TKeyArrayFixC2Ei14TKeyCmpNumeric" => {
+            // TKey: vptr (+0), iKeyOffset (+4), iKeyLength (+8), iCmpType (+12)
+            let _ = p.wr(r0.wrapping_add(4), r1);
+            let _ = p.wr(r0.wrapping_add(12), r2);
+            p.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        "_ZN13CArrayFixBase4SortER12TKeyArrayFix" => {
+            p.cpu.regs[0] = 0; // KErrNone
+            NativeOutcome::Return
+        }
         "_ZN13CArrayFixBase5ResetEv" => { let r = p.array_reset(r0); done(p, r, 0) }
         "_ZN13CArrayFixBaseD1Ev" | "_ZN13CArrayFixBaseD2Ev" => { let r = p.array_destroy(r0); done(p, r, r0) }
         "_ZN8CBufFlatD1Ev" | "_ZN8CBufFlatD0Ev" => {
