@@ -65,11 +65,16 @@ impl OsFamily for EkaFamily {
                 m.set_rom(Box::new(rom));
                 Ok(())
             }
-            other => Err(format!("input {other:?}: the Symbian machine takes {EKA_ORDINALS:?}, {EKA_LAYOUT:?} and {EKA_ROM:?} only")),
+            crate::sym_tz::EKA_TZ_INPUT => m.set_tz_record(&bytes),
+            other => Err(format!("input {other:?}: the Symbian machine takes {EKA_ORDINALS:?}, {EKA_LAYOUT:?}, {EKA_ROM:?} and {:?} only", crate::sym_tz::EKA_TZ_INPUT)),
         }
     }
     fn attach_datatype(m: &mut EkaArm<LibUi>, host: heirloom_os_abi::datatype::DatatypeHost) -> Result<(), String> {
         m.set_datatype_host(Box::new(host));
+        Ok(())
+    }
+    fn attach_prefs(m: &mut EkaArm<LibUi>, host: heirloom_os_abi::prefs::PrefsHost) -> Result<(), String> {
+        m.set_prefs_host(Box::new(host));
         Ok(())
     }
 }

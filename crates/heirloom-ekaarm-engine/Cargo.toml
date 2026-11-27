@@ -6,6 +6,7 @@ license.workspace = true
 description = "Heirloom's Symbian EKA2 (ARM) engine: loads an E32 executable, binds its imports to named native calls and runs it on heirloom-cpu-arm"
 
 [dependencies]
+guestsvc-abi = { path = "../guestsvc-abi" }
 heirloom-cpu-arm = { path = "../heirloom-cpu-arm", optional = true }
 heirloom-cpu-arm-client = { path = "../heirloom-cpu-arm-client", optional = true }
 heirloom-fmt-e32 = { path = "../heirloom-fmt-e32" }

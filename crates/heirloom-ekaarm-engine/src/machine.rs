@@ -43,6 +43,10 @@ pub struct EkaArm<U: GuestUi> {
     refused: Vec<String>,
     /// Native CoralOS `datatype.library` host bridge handed in before or after `start_file`.
     datatype_host: Option<Box<dyn heirloom_common::datatype::NativeDatatype>>,
+    /// Native CoralOS `prefs.service` host bridge handed in before or after `start_file` (REUSE U6 / C5).
+    prefs_host: Option<Box<dyn guestsvc_abi::GuestPrefs>>,
+    /// Host time zone from `"eka-tz"` launch record (REUSE U5).
+    host_tz: crate::sym_tz::HostTz,
 }
 
 impl<U: GuestUi> EkaArm<U> {
@@ -57,7 +61,7 @@ impl<U: GuestUi> EkaArm<U> {
         let mut tree = Tree::new(255);
         tree.enable_streams();
         tree.add_volume("Z", true);
-        EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new(), datatype_host: None }
+        EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new(), datatype_host: None, prefs_host: None, host_tz: crate::sym_tz::HostTz::default() }
     }
     /// Attach the host's native datatype decoder (CoralOS `datatype.library` on target).
     pub fn set_datatype_host(&mut self, host: Box<dyn heirloom_common::datatype::NativeDatatype>) {
@@ -66,6 +70,24 @@ impl<U: GuestUi> EkaArm<U> {
         } else {
             self.datatype_host = Some(host);
         }
+    }
+    /// Attach the engine process's native `prefs.service` session (`Space::Own`, REUSE U6 / C5).
+    pub fn set_prefs_host(&mut self, host: Box<dyn guestsvc_abi::GuestPrefs>) {
+        if let Some(p) = self.process.as_mut() {
+            p.prefs_host = Some(host);
+        } else {
+            self.prefs_host = Some(host);
+        }
+    }
+    /// Set the host time zone from CoralOS's `"eka-tz"` launch record (REUSE U5).
+    pub fn set_tz_record(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let tz = crate::sym_tz::parse_launch_record(bytes)?;
+        if let Some(p) = self.process.as_mut() {
+            p.host_tz = tz;
+        } else {
+            self.host_tz = tz;
+        }
+        Ok(())
     }
     /// The S60 export names the imports are bound by (heirloom-fmt-e32's eka-ordinals.tsv), before `start_file`.
     pub fn set_ordinals(&mut self, ordinals: OrdinalTable) {
@@ -115,6 +137,8 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
         self.log.push(format!("ekaarm: started {name} (UID3 {:#010x})", p.uid3));
         p.nat.clock_us = self.clock_us;
         p.datatype_host = self.datatype_host.take();
+        p.prefs_host = self.prefs_host.take();
+        p.host_tz = self.host_tz.clone();
         self.process = Some(p);
         self.apply_census();
         Ok(())
@@ -165,6 +189,9 @@ impl<U: GuestUi> GuestMachine for EkaArm<U> {
     fn step(&mut self, budget: u64) -> (Step, RunStats) {
         if let Some(d) = &self.done {
             return (d.clone(), RunStats::default());
+        }
+        if self.process.is_none() {
+            return (Step::Fault(String::from("ekaarm: step: no program started (start_file first)")), RunStats::default());
         }
         let (Some(p), Some(ui)) = (self.process.as_mut(), self.ui.take()) else {
             return (Step::Fault(String::from("ekaarm: step: no program started (start_file first)")), RunStats::default());

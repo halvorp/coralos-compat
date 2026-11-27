@@ -71,10 +71,28 @@ pub struct ControlState {
     pub toolbar: Option<ToolbarState>,
 }
 
+/// Stateless handle to a Symbian `CRepository`: holds its UID and immutable ROM/platform defaults only.
+/// All persistent state lives in CoralOS `prefs.service` via `Process::prefs_host` (REUSE U6).
 #[derive(Debug, Clone, Default)]
-pub struct DictState {
+pub struct RepoHandle {
+    pub uid: u32,
+    pub defaults: BTreeMap<u32, crate::sym_cenrep::CenValue>,
+}
+
+/// Stateless handle to a Symbian `CDictionaryFileStore`: holds its normalized store key prefix and
+/// ONLY transient in-flight write-stream staging buffers before `CommitL` flushes them to `prefs.service`.
+#[derive(Debug, Clone, Default)]
+pub struct DictHandle {
+    pub store_id: String,
     pub path: String,
-    pub entries: BTreeMap<u32, Vec<u8>>,
+    pub pending_writes: BTreeMap<u32, Vec<u8>>,
+}
+
+/// Transient cursor for an open `RDictionaryReadStream` (dropped on `RReadStream::Close` / `Release`).
+#[derive(Debug, Clone, Default)]
+pub struct ReadStreamState {
+    pub data: Vec<u8>,
+    pub pos: usize,
 }
 
 /// One file server session, keyed by the handle the guest holds in its `RFs` (`RHandleBase::iHandle`): handles are never reused, so
@@ -132,10 +150,10 @@ pub struct DialogState {
 #[derive(Debug, Clone)]
 pub enum HostObj {
     Control(ControlState),
-    /// A `CRepository`: its parsed keys.
-    Repo(BTreeMap<u32, crate::cenrep::CenValue>),
-    /// A `CDictionaryFileStore`: the file it is the store of and the streams (by UID) it holds.
-    Dict(DictState),
+    /// A `CRepository`: its UID and immutable ROM/platform defaults (persistent values live in `prefs.service`).
+    Repo(RepoHandle),
+    /// A `CDictionaryFileStore`: its normalized store id and transient pre-commit write buffers.
+    Dict(DictHandle),
     AppUi(AppUiState),
     RemCon(RemConSelector),
     View(ViewState),
@@ -206,6 +224,9 @@ pub struct Objects {
     /// Cooperative worker `RThread` handles (`natives.rs` / `schedrun.rs`).
     pub threads: BTreeMap<u32, ThreadEntry>,
     pub next_thread_handle: u32,
+    /// Transient open `RDictionaryReadStream` read cursors (`sym_dictstore.rs`).
+    pub read_streams: BTreeMap<u32, ReadStreamState>,
+    pub next_read_stream_handle: u32,
 }
 
 impl Process {

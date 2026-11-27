@@ -8,10 +8,14 @@ description = "The one C-ABI boundary between a Heirloom family engine process a
 [dependencies]
 heirloom-cpu-abi = { path = "../heirloom-cpu-abi" }
 # `serve`: the library side - the machine session every os-*.library runs behind the table (decode frames, drive the machine, emit).
+guestsvc-abi = { path = "../guestsvc-abi", optional = true }
 heirloom-ui-abi = { path = "../heirloom-ui-abi", optional = true }
 heirloom-common = { path = "../heirloom-common", optional = true }
 heirloom-volume = { path = "../heirloom-volume", optional = true }
 
 [features]
 default = []
-serve = ["dep:heirloom-ui-abi", "dep:heirloom-common", "dep:heirloom-volume"]
+serve = ["dep:guestsvc-abi", "dep:heirloom-ui-abi", "dep:heirloom-common", "dep:heirloom-volume"]
+
+[dev-dependencies]
+guestsvc-abi = { path = "../guestsvc-abi" }

@@ -297,3 +297,34 @@ fn a_cpu_table_of_another_architecture_is_refused() {
     assert_eq!((os_vtable().bind_cpu)(m68k), BIND_REFUSED);
     assert_eq!((os_vtable().bind_cpu)(core::ptr::null()), BIND_REFUSED);
 }
+
+#[test]
+fn attach_prefs_and_eka_tz_input_work_through_the_vtable() {
+    bind();
+    assert!(has_attach_prefs(os_vtable()));
+    let mut remote = Remote::new("").unwrap();
+    let mut fake = guestsvc_abi::FakePrefs::new();
+    // SAFETY: `fake` outlives `remote` in this test.
+    let host = unsafe { heirloom_os_abi::prefs::host_for(&mut fake) };
+    assert_eq!((os_vtable().attach_prefs)(remote.inst, &host), heirloom_os_abi::prefs::PREFS_ATTACH_OK);
+    assert_eq!((os_vtable().attach_prefs)(core::ptr::null_mut(), &host), heirloom_os_abi::prefs::PREFS_ATTACH_REFUSED);
+    assert_eq!((os_vtable().attach_prefs)(remote.inst, core::ptr::null()), heirloom_os_abi::prefs::PREFS_ATTACH_REFUSED);
+
+    // Valid "eka-tz" launch record is accepted; invalid 1-byte probe fails with "eka-tz:" (engine-rt capability probe contract).
+    let mut ok_frames = input("eka-tz", b"v1\tEurope/Oslo\t3600\t0\n");
+    ok_frames.push(control(Control::Step { budget: 0 }));
+    assert_eq!(remote.send(&ok_frames), APPLY_OK);
+    match remote.last_step() {
+        Some(WireStep::Fault(why)) => assert!(why.contains("no program started"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+
+    let mut probe = Remote::new("").unwrap();
+    let mut bad_frames = input("eka-tz", &[0u8]);
+    bad_frames.push(control(Control::Step { budget: 0 }));
+    assert_eq!(probe.send(&bad_frames), APPLY_OK);
+    match probe.last_step() {
+        Some(WireStep::Fault(why)) => assert!(why.contains("eka-tz:"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}

@@ -1,0 +1,8 @@
+[package]
+name = "guestsvc-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Host-trait ABI between Heirloom guest OS adapters (sans-IO state machines) and the engine process's native service sessions (prefs.service first); no_std + alloc with zero CoralOS wire dependency"
+
+[dependencies]

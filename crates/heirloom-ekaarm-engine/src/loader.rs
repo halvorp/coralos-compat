@@ -48,6 +48,10 @@ pub struct Process {
     pub trace: Option<Vec<alloc::string::String>>,
     /// Native CoralOS `datatype.library` host bridge (`imageconv.rs` `CImageDecoder` + `AknIconUtils`).
     pub datatype_host: Option<alloc::boxed::Box<dyn heirloom_common::datatype::NativeDatatype>>,
+    /// Native CoralOS `prefs.service` host bridge (`sym_cenrep.rs` + `sym_dictstore.rs`, REUSE U6 / C5).
+    pub prefs_host: Option<alloc::boxed::Box<dyn guestsvc_abi::GuestPrefs>>,
+    /// Host time zone from `"eka-tz"` launch record (`sym_tz.rs`, REUSE U5).
+    pub host_tz: crate::sym_tz::HostTz,
 }
 
 #[derive(Debug)]
@@ -197,6 +201,8 @@ pub fn load(file: &[u8], table: &OrdinalTable) -> Result<Process, LoadError> {
         host: Default::default(),
         trace: None,
         datatype_host: None,
+        prefs_host: None,
+        host_tz: crate::sym_tz::HostTz::default(),
     };
 
     // EKA2 entry state: kernel places SStdEpocThreadCreateInfo (0x40 bytes)
@@ -291,6 +297,8 @@ pub fn bare(stub_names: &[&str]) -> Result<Process, LoadError> {
         census: None, uid3: 0, code_len: 0,
         frames: Vec::new(), slots: crate::appstart::Slots::default(), nat: Default::default(), native_hook: None, log: Vec::new(), host: Default::default(), trace: None,
         datatype_host: None,
+        prefs_host: None,
+        host_tz: crate::sym_tz::HostTz::default(),
     })
 }
 

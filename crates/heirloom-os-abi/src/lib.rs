@@ -26,6 +26,7 @@ pub use heirloom_cpu_abi::ppc;
 
 pub mod datatype; // native CoralOS datatype.library bridge (attach_datatype): format identify + native image decode
 pub mod perf; // the engine's half of the machine's frame ledger (perf_attach): its phase clock and its thread's counters
+pub mod prefs; // native CoralOS prefs.service bridge (attach_prefs): guest adapters' Space::Own preferences session
 #[cfg(any(feature = "serve", test))]
 extern crate alloc;
 #[cfg(feature = "serve")]
@@ -195,6 +196,10 @@ pub struct OsVTable {
     /// system ([`datatype::DatatypeHost`], backed by CoralOS `datatype.library` / `*.datatype` workers on target) so guest
     /// media APIs (`datatypes.library`, QuickTime `GraphicsImporter`, Symbian `ImageConversion`) decode natively.
     pub attach_datatype: extern "C" fn(inst: *mut OsInstance, host: *const datatype::DatatypeHost) -> i32,
+    /// APPENDED 2026-11-27 (REUSE U6 / C5), present when [`has_attach_prefs`] (the version stays 3): attach the engine
+    /// process's own `prefs.service` session ([`prefs::PrefsHost`], `Space::Own`, admitted by the loader) so guest
+    /// settings adapters (Symbian CenRep / `CDictionaryFileStore`, Amiga `ENV:`/`ENVARC:`) persist natively.
+    pub attach_prefs: extern "C" fn(inst: *mut OsInstance, host: *const prefs::PrefsHost) -> i32,
 }
 
 /// The byte size of a version-1 table (the four header words' entries up to `apply`).
@@ -210,6 +215,8 @@ pub fn has_cpu_prof(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset
 pub fn has_perf_attach(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, perf_attach) + core::mem::size_of::<usize>() }
 /// Whether a table checked by [`check_ptr`] carries [`OsVTable::attach_datatype`].
 pub fn has_attach_datatype(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_datatype) + core::mem::size_of::<usize>() }
+/// Whether a table checked by [`check_ptr`] carries [`OsVTable::attach_prefs`].
+pub fn has_attach_prefs(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_prefs) + core::mem::size_of::<usize>() }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenRefusal {
@@ -306,9 +313,10 @@ mod tests {
     extern "C" fn cpu_prof(_: *mut OsInstance, _: *mut ppc::PpcProf) -> i32 { CPU_PROF_REFUSED }
     extern "C" fn perf_attach(_: *mut OsInstance, _: *const perf::PerfHost) -> i32 { perf::PERF_ATTACH_REFUSED }
     extern "C" fn attach_datatype(_: *mut OsInstance, _: *const datatype::DatatypeHost) -> i32 { datatype::DT_ATTACH_REFUSED }
+    extern "C" fn attach_prefs(_: *mut OsInstance, _: *const prefs::PrefsHost) -> i32 { prefs::PREFS_ATTACH_REFUSED }
 
     fn table(version: u32, size: u32, family: u32) -> OsVTable {
-        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof, perf_attach, attach_datatype }
+        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof, perf_attach, attach_datatype, attach_prefs }
     }
 
     /// `cpu_prof` was appended to version 3: a v3 library built before it still opens (its size is OS_TABLE_V3_SIZE) and an
@@ -322,10 +330,13 @@ mod tests {
         assert!(has_cpu_prof(&now));
         assert!(has_perf_attach(&now));
         assert!(has_attach_datatype(&now));
+        assert!(has_attach_prefs(&now));
         let before_attach = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, perf_attach) as u32, FAMILY_MAC68K);
-        assert!(has_cpu_prof(&before_attach) && !has_perf_attach(&before_attach) && !has_attach_datatype(&before_attach), "a library from before perf_attach is never called past its end");
+        assert!(has_cpu_prof(&before_attach) && !has_perf_attach(&before_attach) && !has_attach_datatype(&before_attach) && !has_attach_prefs(&before_attach), "a library from before perf_attach is never called past its end");
         let before_dt = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_datatype) as u32, FAMILY_MAC68K);
-        assert!(has_perf_attach(&before_dt) && !has_attach_datatype(&before_dt), "a library from before attach_datatype is never called past its end");
+        assert!(has_perf_attach(&before_dt) && !has_attach_datatype(&before_dt) && !has_attach_prefs(&before_dt), "a library from before attach_datatype is never called past its end");
+        let before_prefs = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_prefs) as u32, FAMILY_MAC68K);
+        assert!(has_attach_datatype(&before_prefs) && !has_attach_prefs(&before_prefs), "a library from before attach_prefs is never called past its end");
         let short = table(OS_ABI_VERSION, OS_TABLE_V3_SIZE - 8, FAMILY_MAC68K);
         assert_eq!(unsafe { check_ptr(&short, OS_ABI_VERSION, FAMILY_MACPPC) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V3_SIZE - 8, required: OS_TABLE_V3_SIZE }));
     }
