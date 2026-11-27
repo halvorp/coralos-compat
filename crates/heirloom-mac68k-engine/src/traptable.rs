@@ -23,8 +23,34 @@ use crate::cpu::Cpu;
 /// Toolbox traps' stubs: TOOL_STUBS + 4 * number (10-bit); OS traps': OS_STUBS + 4 * number (8-bit). Free low memory.
 pub const TOOL_STUBS: u32 = 0x4000;
 pub const OS_STUBS: u32 = 0x5000;
+/// Toolbox Trap Dispatch Table (`ToolTable`, Inside Macintosh / TN OV 08): 1024 entries (`0x0E00..0x1E00`) holding each
+/// Toolbox trap's routine address (read directly by PowerPC inline Toolbox glue before `CallUniversalProc`).
+pub const TOOL_TABLE: u32 = 0x0E00;
 const UNIMPLEMENTED_TRAP: u16 = 0xA89F;
 const RTS: u16 = 0x4E75;
+
+/// Populate the 1024-entry Toolbox Trap Dispatch Table at `TOOL_TABLE` (`0x0E00..0x1E00`) and its corresponding stubs at
+/// `TOOL_STUBS`, so PowerPC inline Toolbox glue (`lwz r3, (0x0E00 + 4*n)(0); bl CallUniversalProc`) finds the same stub
+/// address that `GetToolTrapAddress` returns. Must be called after all traps are registered.
+pub fn populate_tool_table<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
+    let e = Refusal::mem("ToolTable");
+    let unimp_at = stub_address(UNIMPLEMENTED_TRAP);
+    m.mem.write_u16(unimp_at, UNIMPLEMENTED_TRAP).map_err(&e)?;
+    m.mem.write_u16(unimp_at + 2, RTS).map_err(&e)?;
+    for n in 0..0x400u16 {
+        let word = 0xA800 | n;
+        let at = if m.table.contains_key(&trap_key(word)) {
+            let stub = stub_address(word);
+            m.mem.write_u16(stub, word).map_err(&e)?;
+            m.mem.write_u16(stub + 2, RTS).map_err(&e)?;
+            stub
+        } else {
+            unimp_at
+        };
+        m.mem.write_u32(TOOL_TABLE + 4 * u32::from(n), at).map_err(&e)?;
+    }
+    Ok(())
+}
 
 /// Is `pc` inside one of the stubs [`get_trap_address`] hands out (so a trap word executing there is a CALL to the
 /// original routine, with the caller's return address on the stack)?
@@ -94,9 +120,16 @@ pub fn patch_trap<U: GuestUi>(m: &mut Mac<U>, opcode: u16, number: u32, to: u32)
     let key = trap_key(word);
     if to == stub_address(word) || (to == stub_address(UNIMPLEMENTED_TRAP) && !m.table.contains_key(&key)) {
         m.patches.remove(&key);
+        if tool {
+            let orig = if m.table.contains_key(&key) { stub_address(word) } else { stub_address(UNIMPLEMENTED_TRAP) };
+            let _ = m.mem.write_u32(TOOL_TABLE + 4 * u32::from(word & 0x03FF), orig);
+        }
         return Ok(format!("[toolbox] SetTrapAddress {} {word:#06x}: back to the original", kind(tool)));
     }
     m.mem.read_u16(to).map_err(Refusal::mem("SetTrapAddress routine"))?; // the routine must be in guest RAM
     m.patches.insert(key, to);
+    if tool {
+        let _ = m.mem.write_u32(TOOL_TABLE + 4 * u32::from(word & 0x03FF), to);
+    }
     Ok(format!("[toolbox] SetTrapAddress {} {word:#06x} -> {to:#x} (a guest routine; it chains to the original through the stub GetTrapAddress gave)", kind(tool)))
 }

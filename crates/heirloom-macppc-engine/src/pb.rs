@@ -19,7 +19,7 @@ use heirloom_mac68k_engine::osconv::Regs;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PbCall { kind: Kind, hfs: bool, async_call: bool }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind { Trap(u8), Selector(u16), NoAccessControl, OpenDeny { rsrc: bool } }
+enum Kind { Trap(u8), Selector(u16), NoAccessControl, NoFileIds, OpenDeny { rsrc: bool } }
 
 /// (C name without `PB`/`H`/`Sync`/`Async`, trap name): the plain traps. The `H` prefix selects the HFS form of the same trap.
 const TRAPS: &[(&str, &str)] = &[
@@ -40,6 +40,13 @@ impl PbCall {
         // (PBHGetVolParms reports vMAttrib 0: bAccessCntl clear, which a program is meant to test): paramErr on a volume that exists, nsvErr else
         if let Some(rest) = name.strip_prefix("PBH").and_then(|r| r.strip_suffix("Sync").map(|c| (c, false)).or_else(|| r.strip_suffix("Async").map(|c| (c, true)))) {
             if matches!(rest.0, "GetDirAccess" | "SetDirAccess") { return Some(PbCall { kind: Kind::NoAccessControl, hfs: true, async_call: rest.1 }); }
+        }
+        // PBCreateFileIDRef / PBDeleteFileIDRef / PBResolveFileIDRef (_HFSDispatch $14/$15/$16): local RAM volumes report vMAttrib=0 (bHasFileIDs clear);
+        // Inside Macintosh: Files specifies wrgVolTypErr (-123) when a volume does not support file IDs.
+        if let Some(rest) = name.strip_prefix("PB").and_then(|r| r.strip_suffix("Sync").map(|c| (c, false)).or_else(|| r.strip_suffix("Async").map(|c| (c, true)))) {
+            if matches!(rest.0, "CreateFileIDRef" | "DeleteFileIDRef" | "ResolveFileIDRef") {
+                return Some(PbCall { kind: Kind::NoFileIds, hfs: true, async_call: rest.1 });
+            }
         }
         // PBHOpenDeny / PBHOpenRFDeny (_HFSDispatch $38 / $39): the HFS Open / OpenRF with the access the block's ioDenyModes asks for
         if let Some((rest, async_call)) = name.strip_prefix("PBH").and_then(|r| r.strip_suffix("Sync").map(|c| (c, false)).or_else(|| r.strip_suffix("Async").map(|c| (c, true)))) {
@@ -105,6 +112,12 @@ impl<U: GuestUi> MacPpc<U> {
                 let e: i16 = if self.mac.fm.volume_of_vref(vref).is_ok() { -50 } else { -35 };
                 let _ = self.mac.mem.write_u16(pb.wrapping_add(heirloom_mac68k_engine::fm::pb::IO_RESULT), e as u16);
                 self.mac.log.push(format!("[file] PBH(Get|Set)DirAccess vRef {vref} -> {e} (no access privileges on a local volume)"));
+                Ok(e)
+            }
+            Kind::NoFileIds => {
+                let e: i16 = -123; // wrgVolTypErr: local volume does not support File IDs (bHasFileIDs clear)
+                let _ = self.mac.mem.write_u16(pb.wrapping_add(heirloom_mac68k_engine::fm::pb::IO_RESULT), e as u16);
+                self.mac.log.push(format!("[file] PB(Create|Delete|Resolve)FileIDRef -> {e} (wrgVolTypErr)"));
                 Ok(e)
             }
             Kind::Selector(s) => match heirloom_mac68k_engine::fm::traps::call_selector(&mut self.mac, s, pb, c.async_call, c.hfs) {

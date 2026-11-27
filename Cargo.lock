@@ -147,6 +147,7 @@ dependencies = [
  "heirloom-os-abi",
  "heirloom-ui-abi",
  "heirloom-volume",
+ "miniz_oxide",
 ]
 
 [[package]]

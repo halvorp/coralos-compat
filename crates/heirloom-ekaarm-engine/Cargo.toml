@@ -14,6 +14,7 @@ heirloom-fmt-rsc = { path = "../heirloom-fmt-rsc" }
 heirloom-volume = { path = "../heirloom-volume" }
 heirloom-ui-abi = { path = "../heirloom-ui-abi" }
 heirloom-common = { path = "../heirloom-common" }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 # `os-library`: the os-eka.library table (src/os_face.rs) - heirloom-os-abi's machine session over this machine.
 heirloom-os-abi = { path = "../heirloom-os-abi", features = ["serve"], optional = true }
 

@@ -58,6 +58,10 @@ pub struct NativeState {
     pub active_leave: Option<crate::ehabi::LeaveState>,
     /// Reusable guest `XLeaveException` object address (`ehabi.rs`).
     pub leave_exc_obj: Option<u32>,
+    /// Open `RResourceFile` buffers keyed by guest object address (`cone.rs`).
+    pub rsc_files: BTreeMap<u32, Vec<u8>>,
+    /// Active thread `RAllocator*` for `User::SwitchAllocator` / `UserHeap::ChunkHeap`.
+    pub current_allocator: u32,
 }
 
 /// A host extension to the natives: asked first with the import's mangled name; `Some` = handled. Used by tests to stand in
@@ -246,6 +250,106 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
         // TLanguage User::Language() (e32const.h): ELangEnglish = 1.
         "_ZN4User8LanguageEv" => {
             proc.cpu.regs[0] = 1;
+            NativeOutcome::Return
+        }
+        // TInt Math::Rand(TInt64& aSeed) (e32math.h): Symbian 64-bit LCG (seed = seed * 0x5DEECE66D + 0xB, return (seed >> 33) & 0x7FFF_FFFF).
+        "_ZN4Math4RandERx" => {
+            let (Ok(lo), Ok(hi)) = (proc.rd(r0), proc.rd(r0.wrapping_add(4))) else {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: seed at {r0:#x} unreadable"));
+            };
+            let seed = (u64::from(lo) | (u64::from(hi) << 32))
+                .wrapping_mul(0x5DEE_CE66_D)
+                .wrapping_add(0xB);
+            let _ = proc.wr(r0, seed as u32);
+            let _ = proc.wr(r0.wrapping_add(4), (seed >> 32) as u32);
+            proc.cpu.regs[0] = ((seed >> 33) & 0x7FFF_FFFF) as u32;
+            NativeOutcome::Return
+        }
+        // RHeap* UserHeap::ChunkHeap(const TDesC* aName, TInt aMinLength, TInt aMaxLength, TInt aGrowBy, TInt aAlign, TBool aSingleThread) (e32std.h):
+        // returns an opaque non-null RAllocator* backed by the process's unified guest heap.
+        "_ZN8UserHeap9ChunkHeapEPK7TDesC16iiiii" => {
+            let Some(alloc_obj) = proc.alloc_zeroed(16) else {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: out of heap"));
+            };
+            proc.cpu.regs[0] = alloc_obj;
+            NativeOutcome::Return
+        }
+        // RAllocator* User::SwitchAllocator(RAllocator* aA) (e32std.h): switches the thread's allocator handle and returns the previous one.
+        "_ZN4User15SwitchAllocatorEP10RAllocator" => {
+            if proc.nat.current_allocator == 0 {
+                if let Some(base) = proc.alloc_zeroed(16) {
+                    proc.nat.current_allocator = base;
+                }
+            }
+            let prev = proc.nat.current_allocator;
+            if r0 != 0 {
+                proc.nat.current_allocator = r0;
+            }
+            proc.cpu.regs[0] = prev;
+            NativeOutcome::Return
+        }
+        // void* __dynamic_cast(const void* sub, const __class_type_info* src, const __class_type_info* dst, ptrdiff_t src2dst_offset):
+        // ARM EABI RTTI downcast; return sub pointer when non-null.
+        "__dynamic_cast" => {
+            proc.cpu.regs[0] = r0;
+            NativeOutcome::Return
+        }
+        // TInt memcompare(const TUint8* aLeft, TInt aLeftLen, const TUint8* aRight, TInt aRightLen) (euser/1952):
+        "memcompare" => {
+            let (lptr, llen, rptr, rlen) = (r0, r1 as i32, proc.cpu.regs[2], proc.cpu.regs[3] as i32);
+            let n = llen.max(0).min(rlen.max(0)) as u32;
+            let mut cmp = 0i32;
+            for i in 0..n {
+                let (Ok(a), Ok(b)) = (proc.mem.vm.read_u8(lptr.wrapping_add(i)), proc.mem.vm.read_u8(rptr.wrapping_add(i))) else {
+                    return NativeOutcome::Refused(format!("NEXT-NEEDED euser memcompare: unreadable at +{i}"));
+                };
+                if a != b {
+                    cmp = i32::from(a) - i32::from(b);
+                    break;
+                }
+            }
+            if cmp == 0 {
+                cmp = llen - rlen;
+            }
+            proc.cpu.regs[0] = cmp as u32;
+            NativeOutcome::Return
+        }
+        // unsigned int sleep(unsigned int seconds) (ESTLIB/238): advance virtual clock and return 0.
+        "sleep" => {
+            proc.nat.clock_us = proc.nat.clock_us.saturating_add(u64::from(r0) * 1_000_000);
+            proc.cpu.regs[0] = 0;
+            NativeOutcome::Return
+        }
+        // int uncompress(Bytef *dest, uLongf *destLen, const Bytef *source, uLong sourceLen) (EZLib/69, RFC 1950 zlib):
+        // Z_OK=0, Z_DATA_ERROR=-3, Z_BUF_ERROR=-5.
+        "uncompress" => {
+            let (dest, dest_len_ptr, src_ptr, src_len) = (r0, r1, proc.cpu.regs[2], proc.cpu.regs[3]);
+            let Ok(max_out) = proc.rd(dest_len_ptr) else {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED ezlib uncompress: destLen at {dest_len_ptr:#x} unreadable"));
+            };
+            if src_len > 16 * 1024 * 1024 {
+                proc.cpu.regs[0] = (-3i32) as u32;
+                return NativeOutcome::Return;
+            }
+            let mut src = alloc::vec![0u8; src_len as usize];
+            if !src.is_empty() && proc.mem.vm.read_bytes(src_ptr, &mut src).is_err() {
+                return NativeOutcome::Refused(format!("NEXT-NEEDED ezlib uncompress: src {src_ptr:#x}..+{src_len} unreadable"));
+            }
+            match miniz_oxide::inflate::decompress_to_vec_zlib(&src) {
+                Ok(out) => {
+                    if out.len() as u32 > max_out {
+                        proc.cpu.regs[0] = (-5i32) as u32; // Z_BUF_ERROR
+                    } else if !out.is_empty() && proc.mem.vm.write_bytes(dest, &out).is_err() {
+                        return NativeOutcome::Refused(format!("NEXT-NEEDED ezlib uncompress: dest {dest:#x} unwritable"));
+                    } else {
+                        let _ = proc.wr(dest_len_ptr, out.len() as u32);
+                        proc.cpu.regs[0] = 0; // Z_OK
+                    }
+                }
+                Err(_) => {
+                    proc.cpu.regs[0] = (-3i32) as u32; // Z_DATA_ERROR
+                }
+            }
             NativeOutcome::Return
         }
         // TUint32 Math::Random() (e32math.h): deterministic PRNG.

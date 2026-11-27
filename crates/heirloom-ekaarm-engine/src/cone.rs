@@ -122,6 +122,109 @@ pub(crate) fn read_resource_reader(p: &Process, reader_addr: u32) -> Result<allo
 /// The natives of this module; `None` = not ours.
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     Some(match name {
+        // RResourceFile::RResourceFile() (barsc.h)
+        "_ZN13RResourceFileC1Ev" | "_ZN13RResourceFileC2Ev" => {
+            p.cpu.regs[0] = p.cpu.regs[0];
+            NativeOutcome::Return
+        }
+        // void RResourceFile::OpenL(RFs& aFs, const TDesC16& aName) (barsc.h)
+        "_ZN13RResourceFile5OpenLER3RFsRK7TDesC16" => {
+            let (this, name_des) = (p.cpu.regs[0], p.cpu.regs[2]);
+            let raw_path = match crate::desc::read16(p, name_des) {
+                Ok(u) => crate::desc::to_utf8(&u),
+                Err(m) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: {m}"))),
+            };
+            let rel = raw_path.strip_prefix("Z:").or_else(|| raw_path.strip_prefix("z:"))
+                .or_else(|| raw_path.strip_prefix("C:")).or_else(|| raw_path.strip_prefix("c:"))
+                .or_else(|| raw_path.strip_prefix("E:")).or_else(|| raw_path.strip_prefix("e:"))
+                .unwrap_or(&raw_path);
+            let bytes = p.host.drive.as_ref().and_then(|d| {
+                d.read_owned(rel).ok().or_else(|| {
+                    let stem = rel.rsplit_once('.').map_or(rel, |(s, _)| s);
+                    let alt = crate::resource::resolve_rsc_path(d, stem);
+                    d.read_owned(&alt).ok()
+                })
+            });
+            match bytes {
+                Some(b) => { p.nat.rsc_files.insert(this, b); NativeOutcome::Return }
+                None => {
+                    p.log.push(format!("[bafl] RResourceFile::OpenL({raw_path:?}) -> KErrNotFound"));
+                    crate::ehabi::leave(p, -1)
+                }
+            }
+        }
+        // void RResourceFile::ConfirmSignatureL(TInt aSignature) / ConfirmSignatureL() (barsc.h)
+        "_ZN13RResourceFile17ConfirmSignatureLEi" | "_ZN13RResourceFile17ConfirmSignatureLEv" => {
+            NativeOutcome::Return
+        }
+        // HBufC8* RResourceFile::AllocReadLC(TInt aResourceId) const / AllocReadL (barsc.h)
+        "_ZNK13RResourceFile11AllocReadLCEi" | "_ZNK13RResourceFile10AllocReadLEi" => {
+            let (this, res_id) = (p.cpu.regs[0], p.cpu.regs[1]);
+            let bytes = match p.nat.rsc_files.get(&this) {
+                Some(raw) => match heirloom_fmt_rsc::RscFile::parse(raw) {
+                    Ok(rf) => match rf.resource(res_id) {
+                        Ok(b) => b,
+                        Err(e) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: res {res_id:#x}: {e:?}"))),
+                    },
+                    Err(e) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: parse: {e:?}"))),
+                },
+                None => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: RResourceFile {this:#x} not open"))),
+            };
+            let len = bytes.len() as u32;
+            let Some(h) = p.alloc_zeroed(4u32.saturating_add(len)) else {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: out of heap")));
+            };
+            let mut ok = p.mem.vm.write_u32(h, (crate::desc::DES_BUF_C << crate::desc::KSHIFT_DES_TYPE) | (len & 0x0FFF_FFFF)).is_ok();
+            if !bytes.is_empty() {
+                ok = ok && p.mem.vm.write_bytes(h.wrapping_add(4), &bytes).is_ok();
+            }
+            if name.contains("AllocReadLC") {
+                p.nat.cleanup.push(crate::cleanup::CleanupItem::Any(h));
+            }
+            p.cpu.regs[0] = h;
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: HBufC8 {h:#x} unwritable")) }
+        }
+        // void RResourceFile::Close() (barsc.h)
+        "_ZN13RResourceFile5CloseEv" => {
+            p.nat.rsc_files.remove(&p.cpu.regs[0]);
+            NativeOutcome::Return
+        }
+        // void TResourceReader::SetBuffer(const TDesC8* aBuffer) (barsread.h): +0 = ptr, +4 = end.
+        "_ZN15TResourceReader9SetBufferEPK6TDesC8" => {
+            let (this, des) = (p.cpu.regs[0], p.cpu.regs[1]);
+            match crate::desc::locate(p, des) {
+                Ok(v) => {
+                    let ok = p.mem.vm.write_u32(this, v.data).is_ok()
+                        && p.mem.vm.write_u32(this.wrapping_add(4), v.data.wrapping_add(v.len)).is_ok();
+                    if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: reader {this:#x} unwritable")) }
+                }
+                Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: {m}")),
+            }
+        }
+        // TPtrC16 TResourceReader::ReadTPtrC16() (barsread.h): ARM EABI sret TPtrC16 in r0, this in r1.
+        // Reads LTEXT16: 1-byte char count, optional padding byte to 2-byte alignment if count > 0 and odd ptr, then count UTF-16LE units.
+        "_ZN15TResourceReader11ReadTPtrC16Ev" => {
+            let (sret, this) = (p.cpu.regs[0], p.cpu.regs[1]);
+            let (Ok(mut cur), Ok(end)) = (p.mem.vm.read_u32(this), p.mem.vm.read_u32(this.wrapping_add(4))) else {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: reader {this:#x} unreadable")));
+            };
+            let count = if cur < end {
+                let c = p.mem.vm.read_u8(cur).unwrap_or(0) as u32;
+                cur = cur.wrapping_add(1);
+                c
+            } else { 0 };
+            if count > 0 && (cur & 1) != 0 && cur < end {
+                cur = cur.wrapping_add(1); // Symbian LTEXT16 alignment pad byte
+            }
+            let ptr = cur;
+            let next = cur.wrapping_add(count * 2).min(end);
+            let actual = (next.saturating_sub(ptr)) / 2;
+            let ok = p.mem.vm.write_u32(this, next).is_ok()
+                && p.mem.vm.write_u32(sret, (crate::desc::DES_PTR_C << crate::desc::KSHIFT_DES_TYPE) | actual).is_ok()
+                && p.mem.vm.write_u32(sret.wrapping_add(4), ptr).is_ok();
+            p.cpu.regs[0] = sret;
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED bafl {name}: sret {sret:#x} unwritable")) }
+        }
         // void CCoeEnv::CreateResourceReaderLC(TResourceReader& aReader, TInt aResourceId) const (coemain.h):
         // allocates a guest buffer with the resource bytes, pushes it on the cleanup stack, and points aReader at it.
         "_ZNK7CCoeEnv22CreateResourceReaderLCER15TResourceReaderi" => {

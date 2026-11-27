@@ -40,6 +40,7 @@ impl<U: GuestUi> Mac<U> {
 
 pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register_os(0xA122, new_handle::<U>)?; // also _NewHandleClear ($A322): bit 9 is read from the opcode
+    m.register_os(0xA166, new_empty_handle::<U>)?;
     m.register_os(0xA11E, new_ptr::<U>)?; // also _NewPtrClear ($A31E)
     m.register_os(0xA023, dispose_handle::<U>)?;
     m.register_os(0xA01F, dispose_ptr::<U>)?;
@@ -56,6 +57,7 @@ pub fn register<U: GuestUi>(m: &mut Mac<U>) -> Result<(), Refusal> {
     m.register_os(0xA02E, block_move_trap::<U>)?;
     m.register_os(0xA036, more_masters::<U>)?;
     m.register_os(0xA01C, free_mem::<U>)?;
+    m.register_os(0xA198, hw_priv::<U>)?;
     m.register_os(0xA055, strip_address::<U>)?;
     m.register_os(0xA063, max_appl_zone::<U>)?;
     m.register_os(0xA040, resrv_mem::<U>)?;
@@ -81,6 +83,14 @@ fn new_handle<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
     match m.mm.new_handle(&mut m.mem, &mut m.heap, size, clear) {
         Ok(h) => { r.a0 = h; m.set_mem_err(0); r.err(0); Ok(format!("[mem] NewHandle{} {size} -> {h:#x}", if clear { "Clear" } else { "" })) }
         Err(e) => { r.a0 = 0; m.set_mem_err(e); r.err(e); Ok(format!("[mem] NewHandle {size} failed ({e})")) }
+    }
+}
+
+/// `_NewEmptyHandle ($A166)`: allocate a master pointer whose block is empty (0 bytes; Inside Macintosh: Memory).
+fn new_empty_handle<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    match m.mm.new_handle(&mut m.mem, &mut m.heap, 0, true) {
+        Ok(h) => { r.a0 = h; m.set_mem_err(0); r.err(0); Ok(format!("[mem] NewEmptyHandle -> {h:#x}")) }
+        Err(e) => { r.a0 = 0; m.set_mem_err(e); r.err(e); Ok(format!("[mem] NewEmptyHandle failed ({e})")) }
     }
 }
 
@@ -194,6 +204,19 @@ fn more_masters<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
 fn free_mem<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
     r.d0 = m.heap.available(false);
     Ok(format!("[mem] FreeMem -> {}", r.d0))
+}
+
+/// `_HWPriv ($A198)`: hardware cache/MMU selector trap (Inside Macintosh: OS Utilities —
+/// FlushInstructionCache=1, FlushDataCache=3, FlushCodeCacheRange=9, SwapInstructionCache=0, SwapDataCache=2).
+/// The emulated 68k CPU has unified coherent memory with no split I/D cache, so flushes succeed immediately (`d0 = 0`)
+/// and swap selectors report the previous cache state as enabled (`a0 = 1`).
+fn hw_priv<U: GuestUi>(_m: &mut Mac<U>, _: &mut Cpu, r: &mut Regs) -> R {
+    let sel = r.d0 & 0xFFFF;
+    if sel == 0 || sel == 2 {
+        r.a0 = 1;
+    }
+    r.d0 = 0;
+    Ok(format!("[os] HWPriv sel={sel} -> 0"))
 }
 
 /// `StripAddress(D0)`: the address as the bus sees it. On a 24-bit machine the top byte (the application's flag bits)

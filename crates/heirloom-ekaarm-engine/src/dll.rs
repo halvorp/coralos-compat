@@ -40,7 +40,7 @@ pub fn resolve_guest_dlls(p: &mut Process, table: &OrdinalTable) -> Result<usize
                 continue;
             }
             let path = format!("sys\\bin\\{key}.dll");
-            let bytes = p.host.drive.as_ref().and_then(|d| d.read(&path).ok()).map(|b| b.to_vec());
+            let bytes = p.host.drive.as_ref().and_then(|d| d.read_owned(&path).ok());
             match bytes {
                 Some(b) => {
                     candidate = Some((key, b));

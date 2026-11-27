@@ -155,6 +155,9 @@ pub struct Mac<U: GuestUi> {
     /// ... and it returned there, with (D0, A7) at its return: the 68k CPU halted and the caller's run loop takes the result. Cleared by
     /// the caller before each call.
     pub cross_isa_returned: Option<(u32, u32)>,
+    /// A 68k routine executing under Mixed Mode hit `_MixedModeMagic` (`$AAFE`) to call a PowerPC routine descriptor:
+    /// `(rd_addr, a7, d0)` saved while the 68k CPU pauses for the PowerPC callback.
+    pub cross_isa_ppc_call: Option<(u32, u32, u32)>,
     /// Native CoralOS `datatype.library` host bridge (PICT `0x8200` CompressedQuickTime + QuickTime `GraphicsImporter`).
     pub datatype_host: Option<alloc::boxed::Box<dyn heirloom_common::datatype::NativeDatatype>>,
     /// Count of images decoded through `datatype_host`.
@@ -191,7 +194,7 @@ impl<U: GuestUi> Mac<U> {
             seg: SegLoader::default(), menus: MenuMgr::default(), ev: EventMgr::default(), tr: Default::default(), qd_globals: 0, qd: qd::Qd::default(), cqd: Default::default(),
             table: BTreeMap::new(), log: vec![], refused: vec![], cursor_devices: vec![],
             stop_on_unimplemented: false, unimplemented_at: vec![], heap: Heap::new(HEAP_START, HEAP_END), ctx: None,
-            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), procs: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT, cross_isa_running: false, cross_isa_returned: None, datatype_host: None, native_datatype_decodes: 0, display_size: None, extra_zones: vec![],
+            fm: crate::fm::FileMgr::new(), scrap: Default::default(), pending_call: None, call_stack: vec![], dcmp_pending: None, pending_user_items: None, pending_modal_filter: None, pending_modal_wait: None, routine_descriptors: Default::default(), in_trap: false, patches: BTreeMap::new(), cursor: Default::default(), clock: Default::default(), vbl: Default::default(), ae: Default::default(), procs: Default::default(), trap_pc: 0, pal: Default::default(), intl: Default::default(), snd: Default::default(), profile: crate::profile::DEFAULT, cross_isa_running: false, cross_isa_returned: None, cross_isa_ppc_call: None, datatype_host: None, native_datatype_decodes: 0, display_size: None, extra_zones: vec![],
         };
         m.rm.add_system(crate::system_res::system_fork());
         m.fm.install_system_folder(); // a real Mac has its System Folder and the folders in it from the start
@@ -243,6 +246,7 @@ impl<U: GuestUi> Mac<U> {
         events::register(&mut m)?;
         crate::traptable::register(&mut m)?;
         crate::translate::register(&mut m)?;
+        crate::traptable::populate_tool_table(&mut m)?;
         m.mem.write_u16(EXIT_STUB, 0xA9F4).map_err(Refusal::mem("exit stub"))?; // _ExitToShell
         Ok(m)
     }
@@ -326,6 +330,12 @@ impl<U: GuestUi> Host for Mac<U> {
 
     fn aline(&mut self, cpu: &mut Cpu, opcode: u16, pc: u32) -> bool {
         let pc = self.mem.strip(pc);
+        // `_MixedModeMagic` ($AAFE): a 68k routine entered from PowerPC is invoking a RoutineDescriptor back into PowerPC.
+        if opcode == 0xAAFE && self.cross_isa_running {
+            self.cross_isa_ppc_call = Some((pc, cpu.areg(7), cpu.dreg(0)));
+            cpu.halt();
+            return true;
+        }
         let via_stub = crate::traptable::in_stub(pc);
         self.trap_pc = pc;
         // A vertical-retrace task that came due runs first; this very trap word then runs again (vbl.rs).
@@ -381,6 +391,13 @@ impl<U: GuestUi> Host for Mac<U> {
                 if let Some((pc, sp)) = self.pending_modal_wait.take() { cpu.set_areg(7, sp); cpu.set_pc(pc); cpu.block(); self.tr.dlg.filter_wait = Some(self.ev.ticks); }
             }
             Conv::Os(handler) => {
+                // Reached through a stub (`JSR` to a GetTrapAddress/ToolTable stub): hide the return address above A7
+                // so D0-dispatched stack-based handlers (e.g. `_Pack8`) see their Pascal frame directly at A7.
+                let stub_ret = if via_stub {
+                    let r = self.mem.read_u32(cpu.areg(7)).ok();
+                    if r.is_some() { cpu.set_areg(7, cpu.areg(7).wrapping_add(4)); }
+                    r
+                } else { None };
                 let mut regs = Regs::read(cpu, opcode);
                 // A0/A1 carry pointers and handles whose high byte a 24-bit application may use for flags: the bus ignores it.
                 regs.a0 = self.mem.strip(regs.a0);
@@ -389,7 +406,20 @@ impl<U: GuestUi> Host for Mac<U> {
                 self.in_trap = true;
                 let outcome = handler(self, cpu, &mut regs);
                 self.in_trap = false;
-                if let Some(d) = self.dcmp_pending.take() { self.enter_decompress(cpu, pc, d); return true; }
+                if let Some(d) = self.dcmp_pending.take() {
+                    if let Some(ret) = stub_ret {
+                        let sp = cpu.areg(7).wrapping_sub(4);
+                        let _ = self.mem.write_u32(sp, ret);
+                        cpu.set_areg(7, sp);
+                    }
+                    self.enter_decompress(cpu, pc, d);
+                    return true;
+                }
+                if let Some(ret) = stub_ret {
+                    let sp = cpu.areg(7).wrapping_sub(4);
+                    let _ = self.mem.write_u32(sp, ret);
+                    cpu.set_areg(7, sp);
+                }
                 self.finish_os(name, outcome, &mut regs);
                 cpu.set_d0(regs.d0);
                 cpu.set_areg(0, regs.a0);

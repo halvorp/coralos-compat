@@ -321,9 +321,18 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             ctor(p, r)
         }
         // TFileName CApaApplication::AppFullName() const: ARM EABI sret TBuf<256> in r0, this in r1.
+        // Resolve the real app executable name from its registration resource (e.g. `C:\sys\bin\AWSolitaire.exe`)
+        // so apps deriving their own resource/data filenames from AppFullName() find their files on the drive.
         "_ZNK15CApaApplication11AppFullNameEv" => {
             let sret = this;
-            let name = "C:\\sys\\bin\\app.exe";
+            let name = p.host.drive.as_ref()
+                .and_then(|d| crate::resource::registration(d, p.uid3).ok())
+                .map(|reg| {
+                    let leaf = reg.app_file.rsplit(['\\', '/']).next().unwrap_or("app");
+                    let stem = leaf.rsplit_once('.').map_or(leaf, |(s, _)| s);
+                    if stem.is_empty() { alloc::string::String::from("C:\\sys\\bin\\app.exe") } else { alloc::format!("C:\\sys\\bin\\{stem}.exe") }
+                })
+                .unwrap_or_else(|| alloc::string::String::from("C:\\sys\\bin\\app.exe"));
             let units: alloc::vec::Vec<u16> = name.encode_utf16().collect();
             let r = (|| -> Result<(), String> {
                 p.wr(sret, (units.len() as u32) | (crate::desc::DES_BUF << crate::desc::KSHIFT_DES_TYPE))?;

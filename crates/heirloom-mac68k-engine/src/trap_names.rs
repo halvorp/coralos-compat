@@ -180,6 +180,7 @@ pub static TRAPS: &[(u16, &str)] = &[
     (0xA322, "NewHandleClear"),
     (0xA346, "GetOSTrapAddress"),
     (0xA3AD, "NewGestalt"),
+    (0xA41C, "FreeMemSys"),
     (0xA456, "UpperText"),
     (0xA458, "InsXTime"),
     (0xA485, "IdleState"),

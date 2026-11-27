@@ -77,7 +77,7 @@ pub enum TbFn {
     HMGetBalloons,
     /// Device Manager / VM helpers (`Devices.h` / `Memory.h`): `GetDCtlEntry`, `OpenDriver`, `Control`/`PBControlSync`/`Status`/`PBStatusSync`, `LockMemory`/`UnlockMemory`/`HoldMemory`/`UnholdMemory`, `MakeITable`, `SndStopFilePlay`, `StackSpace`, `QDDone`, `ResetAlertStage`, `LMGetHiliteRGB`, `GetResourceSizeOnDisk`.
     GetDCtlEntry, OpenDriver, Control, PBControlSync, LockMemory, MakeITable, SndStopFilePlay,
-    StackSpace, QDDone, ResetAlertStage, LMGetHiliteRGB, GetResourceSizeOnDisk, CTabChanged,
+    StackSpace, QDDone, ResetAlertStage, LMGetHiliteRGB, GetResourceSizeOnDisk, CTabChanged, PortChanged, GetSpecificHighLevelEvent, InitDateCache, GetIntlResourceTable, FinderName, DaStrings,
     /// `TruncString(width, Str255, truncWhere)` (TextUtils.h): truncates a Pascal string to fit `width` pixels with Mac Roman ellipsis (0xC9).
     TruncString,
     /// `EmptyHandle(h)` (Memory.h), `PlotIconID(rect, align, transform, resID)` (Icons.h), `GetGray`, TextEdit/String/ColorPicker/Alias glue (`TESetClickLoop`, `TESetWordBreak`, `TEScrapHandle`, `TESetScrapLength`, `NewString`, `SetString`, `SystemEvent`, `IsAliasFile`, `RGB2HSV`, `HSV2RGB`, `RGB2HSL`, `HSL2RGB`), and native-styled no-ops (`ClipAbove`, `SetControlColor`, `SetMCEntries`).
@@ -102,7 +102,7 @@ pub const LOWMEM: &[(&str, u32, u32)] = &[("ResLoad", 0x0A5E, 1), ("MBarHeight",
     ("CurActivate", 0x0A64, 4), ("CurDeactive", 0x0A68, 4), ("CrsrBusy", 0x08CD, 1), ("SysEvtMask", 0x0144, 2), ("WindowList", 0x09D6, 4),
     ("CurStackBase", 0x0908, 4), ("GhostWindow", 0x0A84, 4), ("TheZone", 0x0118, 4), ("GZRootHnd", 0x0328, 4), ("GZMoveHnd", 0x0330, 4),
     ("CurJTOffset", 0x0934, 2), ("LastSPExtra", 0x0B4C, 4), ("GrayRgn", 0x09EE, 4), ("TEScrpLength", 0x0AB0, 2),
-    ("KbdType", 0x021E, 1), ("FSFCBLen", 0x03F6, 2), ("HWCfgFlags", 0x0B22, 2), ("PrintErr", 0x0944, 2), ("Time", 0x020C, 4), ("CurrentA5", 0x0904, 4), ("TheMenu", 0x0A26, 2), ("PaintWhite", 0x09DC, 2)];
+    ("KbdType", 0x021E, 1), ("FSFCBLen", 0x03F6, 2), ("HWCfgFlags", 0x0B22, 2), ("PrintErr", 0x0944, 2), ("Time", 0x020C, 4), ("CurrentA5", 0x0904, 4), ("TheMenu", 0x0A26, 2), ("PaintWhite", 0x09DC, 2), ("ApFontID", 0x0984, 2), ("MenuList", 0x0A1C, 4), ("MenuFlash", 0x0A24, 2), ("MenuDisable", 0x0B54, 4), ("MainDevice", 0x08A4, 4), ("DeviceList", 0x08A8, 4), ("TheGDevice", 0x0CC8, 4), ("MemErr", 0x0220, 2), ("WidthTabHandle", 0x0B2A, 4), ("WidthPtr", 0x0B10, 4), ("WidthListHand", 0x08E4, 4), ("MMU32Bit", 0x0CB2, 1), ("SysMap", 0x0A58, 2), ("ApplZone", 0x02AA, 4), ("FScaleDisable", 0x0A63, 1), ("LastFOND", 0x0BC2, 4)];
 
 impl TbFn {
     pub fn by_name(name: &str) -> Option<TbFn> {
@@ -113,8 +113,8 @@ impl TbFn {
             "FindFolder" => FindFolder, "SetEventMask" => SetEventMask, "GetDateTime" => GetDateTime, "GetDblTime" => GetDblTime, "GetCaretTime" => GetCaretTime, "Microseconds" => Microseconds, "UpTime" => UpTime,
             "AbsoluteToNanoseconds" => AbsoluteToNanoseconds,
             "TEToScrap" => TEToScrap, "TEFromScrap" => TEFromScrap, "UpperString" => UpperString, "GetGrayRgn" => GetGrayRgn,
-            "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "LMGetTopMapHndl" => TopMapGet, "LMSetTopMapHndl" => TopMapSet, "LMGetCurMap" => CurMapGet, "LMSetCurMap" => CurMapSet, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "SetPreserveGlyph" => SetPreserveGlyph, "GetPreserveGlyph" => GetPreserveGlyph, "IsMetric" => IsMetric, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
-            "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "InitZone" => InitZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString, "GetEvQHdr" => GetEvQHdr,
+            "GetParamText" => GetParamText, "LMGetCurApName" => CurApName, "LMGetFinderName" => FinderName, "LMGetDAStrings" => DaStrings, "LMGetTopMapHndl" => TopMapGet, "LMSetTopMapHndl" => TopMapSet, "LMGetCurMap" => CurMapGet, "LMSetCurMap" => CurMapSet, "GetIntlResource" => GetIntlResource, "LMGetBootDrive" => BootDrive, "DateString" => DateString, "TimeString" => TimeString, "LaunchApplication" => LaunchApplication, "SetOutlinePreferred" => SetOutlinePreferred, "GetOutlinePreferred" => GetOutlinePreferred, "SetPreserveGlyph" => SetPreserveGlyph, "GetPreserveGlyph" => GetPreserveGlyph, "IsMetric" => IsMetric, "GetCurrentKeyModifiers" => GetCurrentKeyModifiers, "LongSecondsToDate" => LongSecondsToDate, "LongDateToSeconds" => LongDateToSeconds,
+            "ApplicationZone" => ApplicationZone, "SystemZone" => SystemZone, "HandleZone" => HandleZone, "InitZone" => InitZone, "SetZone" => SetZone, "GetApplLimit" => GetApplLimit, "SetApplLimit" => SetApplLimit, "SetGrowZone" => SetGrowZone, "RelString" => RelString, "GetEvQHdr" | "LMGetEventQueue" => GetEvQHdr,
             "PrOpen" | "PrDrvrOpen" => PrOpen, "PrClose" | "PrDrvrClose" => PrClose, "PrError" => PrError, "PrSetError" => PrSetError, "PrintDefault" => PrintDefault, "PrValidate" => PrValidate, "PrGeneral" => PrGeneral, "PrStlDialog" => PrStlDialog, "PrJobDialog" => PrJobDialog,
             "NavLibraryVersion" => NavLibraryVersion, "NavServicesCanRun" | "NavServicesAvailable" => NavServicesCanRun, "NavLoad" | "NavUnload" => NavLoad,
             "NavGetDefaultDialogOptions" => NavGetDefaultDialogOptions, "NavPutFile" => NavPutFile, "NavGetFile" => NavGetFile,
@@ -139,8 +139,10 @@ impl TbFn {
             "PBControlSync" | "PBStatusSync" => PBControlSync, "LockMemory" | "UnlockMemory" | "HoldMemory" | "UnholdMemory" => LockMemory,
             "MakeITable" => MakeITable, "SndStopFilePlay" => SndStopFilePlay,
             "StackSpace" => StackSpace, "QDDone" => QDDone, "ResetAlertStage" => ResetAlertStage,
-            "LMGetHiliteRGB" => LMGetHiliteRGB, "GetResourceSizeOnDisk" => GetResourceSizeOnDisk,
-            "CTabChanged" | "GDeviceChanged" | "PixPatChanged" => CTabChanged,
+            "LMGetHiliteRGB" => LMGetHiliteRGB, "GetResourceSizeOnDisk" => GetResourceSizeOnDisk, "InitDateCache" => InitDateCache, "GetIntlResourceTable" => GetIntlResourceTable,
+            "PortChanged" => PortChanged,
+            "GetSpecificHighLevelEvent" => GetSpecificHighLevelEvent,
+            "CTabChanged" | "GDeviceChanged" | "PixPatChanged" | "MakeDataExecutable" | "CharByte" | "CharacterByteType" => CTabChanged,
             // GetMBarHeight() / GetSysFont() are the Universal Interfaces' readers of MBarHeight and SysFontFam (Menus.h, Fonts.h)
             "GetMBarHeight" => return TbFn::by_name("LMGetMBarHeight"),
             "GetSysFont" => return TbFn::by_name("LMGetSysFontFam"),
@@ -220,6 +222,37 @@ impl<U: GuestUi> MacPpc<U> {
                 0
             }
             CurApName => heirloom_mac68k_engine::lowmem::CUR_AP_NAME,
+            FinderName => {
+                // Low-memory global FinderName (0x02E0, Str15): Pascal string "Finder".
+                const FINDER_NAME: u32 = 0x02E0;
+                if self.mac.mem.read_u8(FINDER_NAME).unwrap_or(0) == 0 {
+                    let _ = self.mac.mem.write_bytes(FINDER_NAME, b"\x06Finder");
+                }
+                FINDER_NAME
+            }
+            DaStrings => {
+                // StringHandle LMGetDAStrings(SInt16 whichString) (LowMem.h, DAStrings at 0x0AA0..0x0AB0).
+                let idx = (a0 as u16 as i16) as usize;
+                if idx >= 4 { 0 } else {
+                    let slot = 0x0AA0 + 4 * idx as u32;
+                    let s = self.mac.tr.dlg.params[idx].clone();
+                    let n = s.len().min(255);
+                    let mut pstr = alloc::vec![n as u8];
+                    pstr.extend_from_slice(&s[..n]);
+                    let existing = self.mac.mem.read_u32(slot).unwrap_or(0);
+                    let h = if existing != 0 && self.mac.mm.block(existing).is_some() {
+                        let _ = self.mac.mm.set_handle_size(&mut self.mac.mem, &mut self.mac.heap, existing, pstr.len() as u32);
+                        existing
+                    } else {
+                        self.mac.mm.new_handle(&mut self.mac.mem, &mut self.mac.heap, pstr.len() as u32, true).unwrap_or(0)
+                    };
+                    if let Some(b) = self.mac.mm.block(h) {
+                        let _ = self.mac.mem.write_bytes(b.ptr, &pstr);
+                    }
+                    let _ = self.mac.mem.write_u32(slot, h);
+                    h
+                }
+            }
             SetOutlinePreferred => { self.sys.outline_preferred = a0 & 0xFF != 0; 0 }
             GetOutlinePreferred => u32::from(self.sys.outline_preferred),
             SetPreserveGlyph => { self.sys.preserve_glyph = a0 & 0xFF != 0; 0 }
@@ -564,7 +597,28 @@ impl<U: GuestUi> MacPpc<U> {
                 }
                 0
             }
-            LockMemory | MakeITable | SndStopFilePlay | ResetAlertStage | CTabChanged => 0, // flat guest RAM is resident; synchronous QD / alert stage / seed notifications succeed cleanly
+            LockMemory | MakeITable | SndStopFilePlay | ResetAlertStage | CTabChanged | PortChanged => 0, // flat guest RAM is resident; synchronous QD / alert stage / seed notifications succeed cleanly
+            GetSpecificHighLevelEvent => {
+                // Boolean GetSpecificHighLevelEvent(GetSpecificFilterUPP aFilter, void *contextPtr, OSErr *err) (EPPC.h)
+                // High-level events never arrive: write noErr (0) to *err and return false (0).
+                if a2 != 0 { let _ = self.mac.mem.write_u16(a2, 0); }
+                0
+            }
+            InitDateCache => {
+                if a0 != 0 {
+                    for i in 0..512u32 { let _ = self.mac.mem.write_u8(a0.wrapping_add(i), 0); }
+                }
+                0
+            }
+            GetIntlResourceTable => {
+                // void GetIntlResourceTable(ScriptCode script, short tableCode, Handle *itlHandle, long *offset, long *length) (IntlResources.h)
+                let len_p = arg(self, cpu, 4)?;
+                let h = heirloom_mac68k_engine::intl::intl_resource(&mut self.mac, 2).map(|(h, _)| h).unwrap_or(0);
+                if a2 != 0 { let _ = self.mac.mem.write_u32(a2, h); }
+                if a3 != 0 { let _ = self.mac.mem.write_u32(a3, 0); }
+                if len_p != 0 { let _ = self.mac.mem.write_u32(len_p, 0); }
+                0
+            }
             StackSpace => 0x0002_0000, // 128 KiB available stack on PowerPC
             QDDone => 1, // QuickDraw drawing is synchronous, always complete
             LMGetHiliteRGB => {

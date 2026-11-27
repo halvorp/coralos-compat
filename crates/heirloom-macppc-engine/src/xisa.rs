@@ -32,9 +32,17 @@ const M68K_STACK_GAP: u32 = 1024;
 #[derive(Debug, Clone)]
 pub(crate) struct M68kCall { pub(crate) code: u32, call: StackCall, frame: Frame68k, stop_on_unimplemented: bool }
 
-/// The 68k half of the run loop's state: the 68k CPU's context while a routine runs.
+/// A PowerPC routine called from 68k code via `_MixedModeMagic` (`$AAFE`): where its result goes in the paused 68k CPU.
+#[derive(Debug, Clone)]
+pub(crate) struct Resume68k { pub(crate) rd_addr: u32, result_at: u32, call: StackCall }
+
+/// The 68k half of the run loop's state: the 68k CPU's context while a routine runs, plus any paused 68k contexts waiting on a
+/// nested 68k -> PowerPC `_MixedModeMagic` (`$AAFE`) callback.
 #[derive(Default)]
-pub(crate) struct Xisa { pub(crate) ctx: Option<heirloom_mac68k_engine::cpu::CpuContext> }
+pub(crate) struct Xisa {
+    pub(crate) ctx: Option<heirloom_mac68k_engine::cpu::CpuContext>,
+    pub(crate) paused: Vec<heirloom_mac68k_engine::cpu::CpuContext>,
+}
 
 impl core::fmt::Debug for Xisa {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { write!(f, "Xisa {{ running: {} }}", self.ctx.is_some()) }
@@ -55,15 +63,26 @@ impl<U: GuestUi> MacPpc<U> {
         }
         if self.rt.xisa.ctx.is_some() { return Err(String::from("a 68k routine is already running (nesting 68k calls through PowerPC is not built)")); }
         let call = stack_call(proc_info)?;
-        if args.len() < call.params.len() { return Err(format!("procInfo {proc_info:#x} has {} parameters, {} were passed", call.params.len(), args.len())); }
-        let args = &args[..call.params.len()];
+        let (d0_sel, stack_args) = if call.conv == StackConv::D0DispatchedPascal {
+            if args.len() < 1 + call.params.len() {
+                return Err(format!("procInfo {proc_info:#x} has selector + {} parameters, {} were passed", call.params.len(), args.len()));
+            }
+            (Some(args[0]), &args[1..1 + call.params.len()])
+        } else {
+            if args.len() < call.params.len() {
+                return Err(format!("procInfo {proc_info:#x} has {} parameters, {} were passed", call.params.len(), args.len()));
+            }
+            (None, &args[..call.params.len()])
+        };
         let top = cpu.gpr[1].wrapping_sub(M68K_STACK_GAP) & !0xF;
-        let frame = push_frame(&mut self.mac.mem, top, &call, args, CROSS_ISA_RETURN).map_err(|e| format!("the 68k frame below {top:#x}: {e}"))?;
+        let frame = push_frame(&mut self.mac.mem, top, &call, stack_args, CROSS_ISA_RETURN).map_err(|e| format!("the 68k frame below {top:#x}: {e}"))?;
         let a5 = self.mac.mem.read_u32(heirloom_mac68k_engine::lowmem::CURRENT_A5).unwrap_or(0);
         let model = self.mac.profile.cpu;
         // the 68k reset reads its SP and PC from the vectors at 0 and 4 (and leaves 0 written): low memory is the program's, so both go back
         let low = (self.mac.mem.read_u32(0).unwrap_or(0), self.mac.mem.read_u32(4).unwrap_or(0));
-        let ctx = heirloom_mac68k_engine::cpu::start_model(&mut self.mac, code, frame.sp, &[(heirloom_mac68k_engine::cpu::REG_A0 + 5, a5)], model);
+        let mut init_regs = alloc::vec![(heirloom_mac68k_engine::cpu::REG_A0 + 5, a5)];
+        if let Some(sel) = d0_sel { init_regs.push((heirloom_mac68k_engine::cpu::REG_D0, sel)); }
+        let ctx = heirloom_mac68k_engine::cpu::start_model(&mut self.mac, code, frame.sp, &init_regs, model);
         let _ = self.mac.mem.write_u32(0, low.0);
         let _ = self.mac.mem.write_u32(4, low.1);
         let stop_on_unimplemented = core::mem::replace(&mut self.mac.stop_on_unimplemented, true);
@@ -86,6 +105,8 @@ impl<U: GuestUi> MacPpc<U> {
         let code = self.rt.callbacks.last().and_then(|f| if let Continuation::M68k(c) = &f.cont { Some(c.code) } else { None }).unwrap_or(0);
         let outcome = if let Some((d0, a7)) = self.mac.cross_isa_returned.take() {
             self.m68k_returned(cpu, d0, a7)
+        } else if let Some((rd_addr, a7, d0)) = self.mac.cross_isa_ppc_call.take() {
+            self.enter_ppc_from_68k(cpu, ctx, rd_addr, a7, d0)
         } else if s.bus_faults > 0 {
             Err(format!("[HEIRLOOM-MACPPC XISA-68K-FAULT code={code:#x}] the 68k routine called from PowerPC took {} bus fault(s)", s.bus_faults))
         } else if s.halted {
@@ -112,6 +133,110 @@ impl<U: GuestUi> MacPpc<U> {
     fn end_68k(&mut self) {
         self.mac.cross_isa_running = false;
         self.rt.xisa.ctx = None;
+        self.rt.xisa.paused.clear();
+    }
+
+    /// A 68k routine running under Mixed Mode executed `_MixedModeMagic` (`$AAFE`) at `rd_addr` to call a PowerPC routine
+    /// (e.g. a 68k HyperCard XFCN invoking its host's `XCmdBlock.entryPoint` callback). Pause the 68k CPU, marshal its stack
+    /// arguments per the descriptor's `procInfo`, and enter the PowerPC TVector; [`Self::resume_68k_from_ppc`] puts the result
+    /// back and resumes the 68k CPU when PowerPC returns to `$CallbackReturn`.
+    fn enter_ppc_from_68k(
+        &mut self,
+        cpu: &mut Cpu,
+        mut ctx: heirloom_mac68k_engine::cpu::CpuContext,
+        rd_addr: u32,
+        a7: u32,
+        d0: u32,
+    ) -> Result<(), String> {
+        let effective = self.prepare_accelerated_upp(rd_addr)?;
+        let desc = heirloom_mac68k_engine::mixed_mode::parse(&self.mac.mem, effective)
+            .map_err(|e| format!("[HEIRLOOM-MACPPC XISA-68K-AAFE rd={rd_addr:#x}] {e}"))?;
+        let rec = heirloom_mac68k_engine::mixed_mode::ppc_record(&desc)
+            .map_err(|e| format!("[HEIRLOOM-MACPPC XISA-68K-AAFE rd={rd_addr:#x}] {e}"))?;
+        let call = stack_call(rec.proc_info)
+            .map_err(|e| format!("[HEIRLOOM-MACPPC XISA-68K-AAFE rd={rd_addr:#x}] {e}"))?;
+        let ret_pc = self.mac.mem.read_u32(a7)
+            .map_err(|e| format!("[HEIRLOOM-MACPPC XISA-68K-AAFE rd={rd_addr:#x}] 68k return address at {a7:#x}: {e}"))?;
+        let mut p = a7.wrapping_add(4);
+        let mut args = Vec::with_capacity(call.params.len() + 1);
+        let (result_at, sp_after) = match call.conv {
+            StackConv::Pascal | StackConv::D0DispatchedPascal => {
+                // Pascal pushes left-to-right, so the last parameter is nearest A7+4 and the first is deepest.
+                let mut rev_args = Vec::with_capacity(call.params.len());
+                for &size in call.params.iter().rev() {
+                    let v = match size {
+                        1 => u32::from(self.mac.mem.read_u8(p).map_err(|e| format!("68k arg at {p:#x}: {e}"))?),
+                        2 => u32::from(self.mac.mem.read_u16(p).map_err(|e| format!("68k arg at {p:#x}: {e}"))?),
+                        _ => self.mac.mem.read_u32(p).map_err(|e| format!("68k arg at {p:#x}: {e}"))?,
+                    };
+                    rev_args.push(v);
+                    p = p.wrapping_add(if size == 4 { 4 } else { 2 });
+                }
+                if call.conv == StackConv::D0DispatchedPascal { args.push(d0); }
+                rev_args.reverse();
+                args.extend(rev_args);
+                (p, p)
+            }
+            StackConv::C => {
+                for &size in &call.params {
+                    let v = match size {
+                        1 => u32::from(self.mac.mem.read_u16(p).map_err(|e| format!("68k arg at {p:#x}: {e}"))? & 0xFF),
+                        2 => u32::from(self.mac.mem.read_u16(p).map_err(|e| format!("68k arg at {p:#x}: {e}"))?),
+                        _ => self.mac.mem.read_u32(p).map_err(|e| format!("68k arg at {p:#x}: {e}"))?,
+                    };
+                    args.push(v);
+                    p = p.wrapping_add(if size == 4 { 4 } else { 2 });
+                }
+                (0, a7.wrapping_add(4))
+            }
+        };
+        if args.len() > 8 {
+            return Err(format!("[HEIRLOOM-MACPPC XISA-68K-AAFE rd={rd_addr:#x}] PowerPC callback with {} args (> 8) is not built", args.len()));
+        }
+        ctx.set_reg(heirloom_mac68k_engine::cpu::REG_PC, ret_pc);
+        ctx.set_reg(heirloom_mac68k_engine::cpu::REG_A0 + 7, sp_after);
+        let saved = Saved::of(cpu, cpu.pc);
+        let ppc_sp = cpu.gpr[1];
+        self.enter_tvector(cpu, rec.proc_descriptor, &args, ppc_sp)
+            .map_err(|e| format!("[HEIRLOOM-MACPPC XISA-68K-AAFE rd={rd_addr:#x}] {e}"))?;
+        self.mac.cross_isa_running = false;
+        self.rt.xisa.paused.push(ctx);
+        self.rt.callbacks.push(Frame { saved, cont: Continuation::Resume68k(Resume68k { rd_addr, result_at, call }) });
+        self.mac.log.push(format!("[mixedmode] 68k -> PowerPC via $AAFE at {rd_addr:#x} (tv={:#x}, {} arg(s), ret_68k={ret_pc:#x})", rec.proc_descriptor, args.len()));
+        Ok(())
+    }
+
+    /// A PowerPC routine called from 68k via `$AAFE` returned to `$CallbackReturn`: store its result in the paused 68k CPU
+    /// and hand execution back to 68k.
+    pub(crate) fn resume_68k_from_ppc(&mut self, cpu: &mut Cpu, saved: Saved, r: Resume68k) -> Result<(), String> {
+        let Some(mut ctx) = self.rt.xisa.paused.pop() else {
+            return Err(format!("[HEIRLOOM-MACPPC XISA-68K-AAFE rd={:#x}] returned with no paused 68k context", r.rd_addr));
+        };
+        let res = cpu.gpr[3];
+        match (r.call.conv, r.call.result) {
+            (_, 0) => {}
+            (StackConv::C, 1) => ctx.set_reg(heirloom_mac68k_engine::cpu::REG_D0, res & 0xFF),
+            (StackConv::C, 2) => ctx.set_reg(heirloom_mac68k_engine::cpu::REG_D0, res & 0xFFFF),
+            (StackConv::C, _) => ctx.set_reg(heirloom_mac68k_engine::cpu::REG_D0, res),
+            (StackConv::Pascal | StackConv::D0DispatchedPascal, 1) => {
+                self.mac.mem.write_u16(r.result_at, ((res & 0xFF) << 8) as u16)
+                    .map_err(|e| format!("68k Pascal result at {:#x}: {e}", r.result_at))?;
+            }
+            (StackConv::Pascal | StackConv::D0DispatchedPascal, 2) => {
+                self.mac.mem.write_u16(r.result_at, res as u16)
+                    .map_err(|e| format!("68k Pascal result at {:#x}: {e}", r.result_at))?;
+            }
+            (StackConv::Pascal | StackConv::D0DispatchedPascal, _) => {
+                self.mac.mem.write_u32(r.result_at, res)
+                    .map_err(|e| format!("68k Pascal result at {:#x}: {e}", r.result_at))?;
+            }
+        }
+        saved.restore(cpu);
+        self.mac.cross_isa_running = true;
+        self.rt.xisa.ctx = Some(ctx);
+        cpu.block();
+        self.mac.log.push(format!("[mixedmode] PowerPC callback {:#x} returned {res:#x} -> resuming 68k", r.rd_addr));
+        Ok(())
     }
 
     /// The 68k routine returned to `CROSS_ISA_RETURN` with these D0 and A7: check the stack it left, put the PowerPC call back, r3 = the result.

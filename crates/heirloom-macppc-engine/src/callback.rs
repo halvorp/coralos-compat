@@ -85,6 +85,8 @@ pub(crate) enum Continuation {
     /// A 68k routine Mixed Mode called from PowerPC ([`crate::xisa`]): it returns on the 68k CPU (to `CROSS_ISA_RETURN`), never to
     /// `$CallbackReturn`; its result goes back to the caller.
     M68k(crate::xisa::M68kCall),
+    /// A PowerPC routine called from 68k code via `_MixedModeMagic` (`$AAFE`): its result goes back into the paused 68k CPU.
+    Resume68k(crate::xisa::Resume68k),
     /// A bound window definition's message ([`crate::wdef_c`]): the next message, a FindWindow walk's next window, or the call finished.
     WindowDef(crate::wdef_c::WdefRun),
 }
@@ -186,6 +188,7 @@ impl<U: GuestUi> MacPpc<U> {
             Continuation::Invoke(res) => { self.invoke_returned(cpu, frame, res); Ok(()) }
             Continuation::LibInit(ref name) => { let name = name.clone(); self.lib_init_returned(cpu, frame, &name) }
             Continuation::WindowDef(_) => self.wdef_returned(cpu, frame),
+            Continuation::Resume68k(r) => self.resume_68k_from_ppc(cpu, frame.saved, r),
             Continuation::M68k(ref c) => Err(format!("$CallbackReturn reached while the 68k routine at {:#x} runs: PowerPC code returned into a 68k call", c.code)),
         }
     }

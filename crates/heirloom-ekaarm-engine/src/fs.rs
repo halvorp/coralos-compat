@@ -537,12 +537,12 @@ pub fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let full = resolve_drive_path(&raw, &session_prefix);
             let priv_dir = format!("C:\\private\\{:08x}\\", p.uid3);
             let data = p.host.drive.as_ref().and_then(|d| {
-                d.read(&full).ok()
+                d.read_owned(&full).ok()
                     .or_else(|| {
                         let tail = raw.rsplit(['\\', '/']).next().unwrap_or(&raw);
-                        d.read(&format!("{priv_dir}{tail}")).ok()
+                        d.read_owned(&format!("{priv_dir}{tail}")).ok()
                     })
-            }).map(|b| b.to_vec());
+            });
             match data {
                 Some(bytes) => {
                     p.nat.objs.next_file_handle += 1;

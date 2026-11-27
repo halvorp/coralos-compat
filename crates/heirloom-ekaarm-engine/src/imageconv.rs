@@ -106,7 +106,7 @@ fn make_decoder(p: &mut Process, raw: &[u8], label: &str) -> Result<u32, String>
 }
 
 fn read_guest_file(p: &Process, path: &str) -> Option<Vec<u8>> {
-    p.host.drive.as_ref()?.read(path).ok().map(<[u8]>::to_vec)
+    p.host.drive.as_ref()?.read_owned(path).ok()
 }
 
 pub fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {

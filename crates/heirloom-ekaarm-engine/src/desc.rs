@@ -126,6 +126,41 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
                 && p.mem.vm.write_u32(this.wrapping_add(8), buf).is_ok();
             if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: descriptor at {this:#x} is unwritable")) }
         }
+        // TPtr16(TBufCBase16& aLcb, TInt aMaxLength) (e32des16.h): EBufCPtr descriptor wrapping a TBufCBase16.
+        "_ZN6TPtr16C1ER11TBufCBase16i" | "_ZN6TPtr16C2ER11TBufCBase16i" => {
+            let (lcb, max) = (r1, p.cpu.regs[2]);
+            let len = match p.mem.vm.read_u32(lcb) {
+                Ok(w0) => w0 & LENGTH_MASK,
+                Err(_) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TBufCBase16 at {lcb:#x} unreadable"))),
+            };
+            let ok = p.mem.vm.write_u32(this, (DES_BUF_C_PTR << KSHIFT_DES_TYPE) | len).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), max).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(8), lcb).is_ok();
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: descriptor at {this:#x} is unwritable")) }
+        }
+        // TBufCBase16::TBufCBase16() (e32des16.h): empty EBufC descriptor.
+        "_ZN11TBufCBase16C1Ev" | "_ZN11TBufCBase16C2Ev" => {
+            let ok = p.mem.vm.write_u32(this, DES_BUF_C << KSHIFT_DES_TYPE).is_ok();
+            p.cpu.regs[0] = this;
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TBufCBase16 at {this:#x} is unwritable")) }
+        }
+        // void TBufCBase16::Copy(const TUint16* aString, TInt aMaxLength) (e32des16.h): copy NUL-terminated UTF-16 string.
+        "_ZN11TBufCBase164CopyEPKti" => {
+            let (src, max) = (r1, (p.cpu.regs[2] as i32).max(0) as u32);
+            let mut units = Vec::new();
+            for i in 0..max {
+                match p.mem.vm.read_u16(src.wrapping_add(i * 2)) {
+                    Ok(0) => break,
+                    Ok(u) => units.push(u),
+                    Err(_) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: src {src:#x} unreadable"))),
+                }
+            }
+            let mut ok = p.mem.vm.write_u32(this, (DES_BUF_C << KSHIFT_DES_TYPE) | (units.len() as u32 & LENGTH_MASK)).is_ok();
+            for (i, &u) in units.iter().enumerate() {
+                ok = ok && p.mem.vm.write_u16(this.wrapping_add(4 + 2 * i as u32), u).is_ok();
+            }
+            if ok { NativeOutcome::Return } else { NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TBufCBase16 at {this:#x} unwritable")) }
+        }
         // TPtrC16(): empty non-modifiable pointer descriptor.
         "_ZN7TPtrC16C1Ev" | "_ZN7TPtrC16C2Ev" => {
             let ok = p.mem.vm.write_u32(this, DES_PTR_C << KSHIFT_DES_TYPE).is_ok()
@@ -627,9 +662,11 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
                 Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}")),
             }
         }
-        // HBufC16::New/NewL/NewLC(TInt aMaxLength) / HBufC8::New/NewL/NewLC(TInt aMaxLength)
+        // HBufC16::New/NewL/NewLC/NewMax/NewMaxL/NewMaxLC(TInt aMaxLength) & HBufC8 counterparts
         "_ZN7HBufC163NewEi" | "_ZN7HBufC164NewLEi" | "_ZN7HBufC165NewLCEi"
-        | "_ZN6HBufC83NewEi" | "_ZN6HBufC84NewLEi" | "_ZN6HBufC85NewLCEi" => {
+        | "_ZN7HBufC166NewMaxEi" | "_ZN7HBufC167NewMaxLEi" | "_ZN7HBufC168NewMaxLCEi"
+        | "_ZN6HBufC83NewEi" | "_ZN6HBufC84NewLEi" | "_ZN6HBufC85NewLCEi"
+        | "_ZN6HBufC86NewMaxEi" | "_ZN6HBufC87NewMaxLEi" | "_ZN6HBufC88NewMaxLCEi" => {
             let max_len = p.cpu.regs[0] as i32;
             if max_len < 0 {
                 return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: negative max length {max_len}")));
@@ -639,8 +676,9 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<crate::natives::Nati
             let Some(h) = p.alloc_zeroed(total) else {
                 return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: out of heap")));
             };
-            let ok = p.mem.vm.write_u32(h, DES_BUF_C << KSHIFT_DES_TYPE).is_ok();
-            if name.contains("NewLC") {
+            let init_len = if name.contains("NewMax") { (max_len as u32) & LENGTH_MASK } else { 0 };
+            let ok = p.mem.vm.write_u32(h, (DES_BUF_C << KSHIFT_DES_TYPE) | init_len).is_ok();
+            if name.contains("LC") {
                 p.nat.cleanup.push(crate::cleanup::CleanupItem::Any(h));
             }
             p.cpu.regs[0] = h;

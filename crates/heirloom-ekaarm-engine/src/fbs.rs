@@ -250,14 +250,14 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let path = crate::fs::resolve_drive_path(&raw_path, &priv_dir);
             let idx = r2 as usize;
             let bytes = p.host.drive.as_ref().and_then(|d| {
-                d.read(&path).ok()
-                    .or_else(|| d.read(&format!("{priv_dir}{}", raw_path.trim_start_matches(['\\', '/']))).ok())
+                d.read_owned(&path).ok()
+                    .or_else(|| d.read_owned(&format!("{priv_dir}{}", raw_path.trim_start_matches(['\\', '/']))).ok())
                     .or_else(|| {
                         // Strip drive letter (e.g. "C:\bdim.mbm") and check private dir fallback
                         let tail = raw_path.rsplit(['\\', '/']).next().unwrap_or(&raw_path);
-                        d.read(&format!("{priv_dir}{tail}")).ok()
+                        d.read_owned(&format!("{priv_dir}{tail}")).ok()
                     })
-            }).map(|b| b.to_vec());
+            });
             let bmp = match bytes.and_then(|b| decode_mbm_mode(&b, idx).ok()) {
                 Some((w, h, display_mode, pixels)) => FbsBitmap {
                     width: w, height: h, display_mode, is_gray: matches!(display_mode, 1 | 2 | 3 | 4), pixels, data_addr: None,
@@ -342,10 +342,10 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             let path = crate::fs::resolve_drive_path(&raw_path, &priv_dir);
             let idx = r2 as usize;
             let bytes = p.host.drive.as_ref().and_then(|d| {
-                d.read(&path).ok()
+                d.read_owned(&path).ok()
                     .or_else(|| {
                         let tail = raw_path.rsplit(['\\', '/']).next().unwrap_or(&raw_path);
-                        d.read(&format!("{priv_dir}{tail}")).ok()
+                        d.read_owned(&format!("{priv_dir}{tail}")).ok()
                     })
             });
             match bytes {

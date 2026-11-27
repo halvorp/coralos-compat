@@ -57,7 +57,8 @@ impl<U: GuestUi> MacPpc<U> {
         let refuse = |m: &mut Self, e: String| { let why = format!("[HEIRLOOM-MACPPC CallUniversalProc REFUSED upp={upp:#x}] {e}"); m.mac.refused.push(why.clone()); why };
         let effective_upp = self.prepare_accelerated_upp(upp).map_err(|e| refuse(self, e))?;
         let routine = heirloom_mac68k_engine::mixed_mode::resolve(&self.mac.mem, effective_upp).map_err(|e| refuse(self, format!("{e}")))?;
-        let n = param_count(info, if matches!(conv, 8 | 9 | 12) { 8 } else { 6 });
+        let dispatched = matches!(conv, 8 | 9 | 12);
+        let n = param_count(info, if dispatched { 8 } else { 6 }) + usize::from(dispatched);
         let args = crate::xisa::universal_args(&self.mac.mem, cpu, n).map_err(|e| refuse(self, e))?;
         match routine {
             heirloom_mac68k_engine::mixed_mode::Routine::PowerPc(record) => {
@@ -80,7 +81,7 @@ impl<U: GuestUi> MacPpc<U> {
     /// on an accelerated resource) and prepare any PowerPC accelerated resource (`kProcDescriptorIsRelative |
     /// kFragmentNeedsPreparing`) in place, rewriting its RoutineRecord to the prepared fragment's main TVector exactly as
     /// Apple's Mixed Mode Manager does (Inside Macintosh: PowerPC System Software, "Accelerated Resources").
-    fn prepare_accelerated_upp(&mut self, mut addr: u32) -> Result<u32, String> {
+    pub(crate) fn prepare_accelerated_upp(&mut self, mut addr: u32) -> Result<u32, String> {
         use heirloom_mac68k_engine::mixed_mode::{
             parse, FRAGMENT_NEEDS_PREPARING, HEADER_LEN, ISA_M68K, ISA_PPC, PROC_DESCRIPTOR_IS_RELATIVE, RECORD_LEN,
         };

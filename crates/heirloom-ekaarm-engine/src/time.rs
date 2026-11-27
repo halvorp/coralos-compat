@@ -6,6 +6,48 @@ use crate::natives::NativeOutcome;
 
 pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
     match name {
+        // TTime::TTime(const TDesC16& aString) (e32std.h): parses "YYYYMMDD:HHMMSS.MMMMMM" (month & day 0-based in Symbian!).
+        "_ZN5TTimeC1ERK7TDesC16" | "_ZN5TTimeC2ERK7TDesC16" => {
+            let (this, des) = (p.cpu.regs[0], p.cpu.regs[1]);
+            let s = match crate::desc::read16(p, des) {
+                Ok(u) => crate::desc::to_utf8(&u),
+                Err(m) => return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: {m}"))),
+            };
+            let (date_s, time_s) = s.split_once(':').unwrap_or((s.as_str(), ""));
+            let y: i64 = date_s.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(1970);
+            let mo: i64 = date_s.get(4..6).and_then(|x| x.parse().ok()).unwrap_or(0);
+            let d: i64 = date_s.get(6..8).and_then(|x| x.parse().ok()).unwrap_or(0);
+            let (hms, frac) = time_s.split_once('.').unwrap_or((time_s, ""));
+            let h: i64 = hms.get(0..2).and_then(|x| x.parse().ok()).unwrap_or(0);
+            let mi: i64 = hms.get(2..4).and_then(|x| x.parse().ok()).unwrap_or(0);
+            let sec: i64 = hms.get(4..6).and_then(|x| x.parse().ok()).unwrap_or(0);
+            let us: i64 = frac.parse().unwrap_or(0);
+            let leap = |yr: i64| (yr % 4 == 0 && yr % 100 != 0) || yr % 400 == 0;
+            let before_year = 365 * y + (y + 3) / 4 - (y + 99) / 100 + (y + 399) / 400;
+            const DAYS: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            let before_month: i64 = (0..(mo.clamp(0, 11) as usize)).map(|m| DAYS[m] + (m == 1 && leap(y)) as i64).sum();
+            let days = before_year + before_month + d;
+            let micro = (((days * 24 + h) * 60 + mi) * 60 + sec) * 1_000_000 + us;
+            let ok = p.mem.vm.write_u32(this, micro as u64 as u32).is_ok()
+                && p.mem.vm.write_u32(this.wrapping_add(4), ((micro as u64) >> 32) as u32).is_ok();
+            if ok { p.cpu.regs[0] = this; Some(NativeOutcome::Return) } else { Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TTime unwritable"))) }
+        }
+        // TTimeIntervalMicroSeconds TTime::MicroSecondsFrom(TTime aTime) const (e32std.h):
+        // ARM AAPCS: TTimeIntervalMicroSeconds is an 8-byte struct (TInt64), returned in r0:r1 (or via sret? No, 8-byte C++ POD / non-POD:
+        // on Symbian RVCT/GCCE TTimeIntervalMicroSeconds has a constructor so it's returned via sret in r0, this in r1, aTime in r2:r3).
+        "_ZNK5TTime16MicroSecondsFromES_" => {
+            let (sret, this) = (p.cpu.regs[0], p.cpu.regs[1]);
+            let a_time = (u64::from(p.cpu.regs[2]) | (u64::from(p.cpu.regs[3]) << 32)) as i64;
+            let (Ok(lo), Ok(hi)) = (p.rd(this), p.rd(this.wrapping_add(4))) else {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TTime unreadable")));
+            };
+            let cur = (u64::from(lo) | (u64::from(hi) << 32)) as i64;
+            let diff = cur.wrapping_sub(a_time) as u64;
+            let ok = p.mem.vm.write_u32(sret, diff as u32).is_ok()
+                && p.mem.vm.write_u32(sret.wrapping_add(4), (diff >> 32) as u32).is_ok();
+            p.cpu.regs[0] = sret;
+            if ok { Some(NativeOutcome::Return) } else { Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: sret {sret:#x} unwritable"))) }
+        }
         // void TTime::HomeTime(): microseconds since 00:00:00 1 Jan 0 AD (2026-11-22 base + virtual clock).
         "_ZN5TTime8HomeTimeEv" | "_ZN5TTime13UniversalTimeEv" => {
             let this = p.cpu.regs[0];

@@ -30,6 +30,7 @@ pub struct Binding {
 /// The bound definitions.
 pub const BINDINGS: &[Binding] = &[
     Binding { name: "MacPaint 2.1F floating palette", id: 34, len: 724, fnv1a64: 0x9b57_374e_27d9_8836, role: WindowRole::Utility, resizable: false },
+    Binding { name: "HyperCard Player floating palette", id: 128, len: 2380, fnv1a64: 0x915d_e7c5_172e_c916, role: WindowRole::Utility, resizable: false },
 ];
 
 /// FNV-1a, 64 bits.

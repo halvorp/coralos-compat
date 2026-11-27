@@ -17,9 +17,10 @@ use heirloom_mem_flat32::GuestMem;
 
 pub const K_PASCAL_STACK_BASED: u32 = 0;
 pub const K_C_STACK_BASED: u32 = 1;
+pub const K_D0_DISPATCHED_PASCAL_STACK_BASED: u32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StackConv { Pascal, C }
+pub enum StackConv { Pascal, C, D0DispatchedPascal }
 
 /// A stack-based call decoded from a procInfo: the convention, the result's size in bytes (0, 1, 2 or 4), each parameter's size.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,9 +38,11 @@ pub fn stack_call(proc_info: u32) -> Result<StackCall, String> {
     let conv = match proc_info & 0xF {
         K_PASCAL_STACK_BASED => StackConv::Pascal,
         K_C_STACK_BASED => StackConv::C,
+        K_D0_DISPATCHED_PASCAL_STACK_BASED => StackConv::D0DispatchedPascal,
         c => return Err(format!("procInfo {proc_info:#x}: calling convention {c} ({}) is not built for a 68k routine yet", conv_name(c))),
     };
-    let params = (0..13).map(|k| (proc_info >> (6 + 2 * k)) & 3).take_while(|&c| c != 0).map(size_of_code).collect();
+    let (start_bit, max_params) = if conv == StackConv::D0DispatchedPascal { (8, 12) } else { (6, 13) };
+    let params = (0..max_params).map(|k| (proc_info >> (start_bit + 2 * k)) & 3).take_while(|&c| c != 0).map(size_of_code).collect();
     Ok(StackCall { conv, result: size_of_code(proc_info >> 4), params })
 }
 
@@ -65,7 +68,7 @@ pub fn push_frame(mem: &mut GuestMem, sp: u32, call: &StackCall, args: &[u32], r
     let mut sp = sp & !1;
     let byte_hi = |size: u8, v: u32| if size == 1 { (v & 0xFF) << 8 } else { v };
     let result_at = match call.conv {
-        StackConv::Pascal => {
+        StackConv::Pascal | StackConv::D0DispatchedPascal => {
             if call.result != 0 { push(mem, &mut sp, call.result, 0)?; }
             let result_at = sp;
             for (&size, &v) in call.params.iter().zip(args) { push(mem, &mut sp, size, byte_hi(size, v))?; }
@@ -76,7 +79,7 @@ pub fn push_frame(mem: &mut GuestMem, sp: u32, call: &StackCall, args: &[u32], r
             sp
         }
     };
-    let sp_after = match call.conv { StackConv::Pascal => result_at, StackConv::C => sp };
+    let sp_after = match call.conv { StackConv::Pascal | StackConv::D0DispatchedPascal => result_at, StackConv::C => sp };
     push(mem, &mut sp, 4, ret)?;
     Ok(Frame68k { sp, result_at, sp_after })
 }
@@ -86,9 +89,9 @@ pub fn read_result(mem: &GuestMem, call: &StackCall, frame: &Frame68k, d0: u32) 
     let e = |_| MixedModeError::Unreadable(frame.result_at);
     Ok(match (call.conv, call.result) {
         (_, 0) => 0,
-        (StackConv::Pascal, 1) => u32::from(mem.read_u8(frame.result_at).map_err(e)?),
-        (StackConv::Pascal, 2) => u32::from(mem.read_u16(frame.result_at).map_err(e)?),
-        (StackConv::Pascal, _) => mem.read_u32(frame.result_at).map_err(e)?,
+        (StackConv::Pascal | StackConv::D0DispatchedPascal, 1) => u32::from(mem.read_u8(frame.result_at).map_err(e)?),
+        (StackConv::Pascal | StackConv::D0DispatchedPascal, 2) => u32::from(mem.read_u16(frame.result_at).map_err(e)?),
+        (StackConv::Pascal | StackConv::D0DispatchedPascal, _) => mem.read_u32(frame.result_at).map_err(e)?,
         (StackConv::C, 1) => d0 & 0xFF,
         (StackConv::C, 2) => d0 & 0xFFFF,
         (StackConv::C, _) => d0,
@@ -105,8 +108,10 @@ mod tests {
         assert_eq!(stack_call(0x30).unwrap(), StackCall { conv: StackConv::Pascal, result: 4, params: vec![] });
         // C, 2-byte result, params 4, 1, 2
         assert_eq!(stack_call(0x1 | (2 << 4) | (3 << 6) | (1 << 8) | (2 << 10)).unwrap(), StackCall { conv: StackConv::C, result: 2, params: vec![4, 1, 2] });
+        // D0-dispatched Pascal, 2-byte result, 2-byte selector, params 4, 2
+        assert_eq!(stack_call(0x8 | (2 << 4) | (2 << 6) | (3 << 8) | (2 << 10)).unwrap(), StackCall { conv: StackConv::D0DispatchedPascal, result: 2, params: vec![4, 2] });
         assert!(stack_call(0x2).unwrap_err().contains("kRegisterBased"));
-        assert!(stack_call(0x3E8).unwrap_err().contains("kD0DispatchedPascalStackBased"));
+        assert!(stack_call(0xC).unwrap_err().contains("kD1DispatchedPascalStackBased"));
     }
 
     #[test]

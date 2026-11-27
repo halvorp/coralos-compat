@@ -303,6 +303,14 @@ pub fn run_selector<U: GuestUi>(m: &mut Mac<U>, sel: u16, sp: u32) -> Result<(Re
             let all = bits.iter().zip(same).all(|(&bit, s)| mode & bit == 0 || s);
             Ok((Ret::Bool(all), format!("TEContinuousStyle {a}..{b} mode {mode:#x} -> {out:#x}, {all}")))
         }
+        12 => {
+            // TECustomHook(which: INTEGER, VAR addr: UniversalProcPtr, hTE: TEHandle): swap custom hook pointer.
+            let (which, addr_p) = (rd16(m, sp + 10)? as i16, rd32(m, sp + 6)?);
+            if addr_p != 0 {
+                let _ = m.mem.write_u32(addr_p, 0);
+            }
+            Ok((Ret::None, format!("TECustomHook which={which} (recorded)")))
+        }
         13 => {
             let (start, stop) = (rd32(m, sp + 10)? as i32, rd32(m, sp + 6)? as i32);
             let r = m.te_load(h, "TENumStyles")?;
