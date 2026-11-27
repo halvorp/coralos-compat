@@ -79,6 +79,10 @@ impl OsFamily for AmiFamily {
         m.datatype_host = Some(alloc::boxed::Box::new(host));
         Ok(())
     }
+    fn attach_prefs(m: &mut Amiga<LibUi>, host: heirloom_os_abi::prefs::PrefsHost) -> Result<(), String> {
+        m.set_prefs_host(alloc::boxed::Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<AmiFamily>();

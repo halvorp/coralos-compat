@@ -238,21 +238,52 @@ pub fn save<U: GuestUi>(a: &mut Amiga<U>, app: u32, name: u32) -> Result<String,
         items.retain(|(i, _)| *i != id); // Dataspace_Add replaces
         items.push((id, data));
     }
-    // Open(name, MODE_NEWFILE): the directory must exist (a real system has ENV:Zune); it is made here so a fresh volume can keep settings.
-    if let Some((dir, _)) = path.rsplit_once('/') {
-        let cwd = crate::fs::cur_dir(a);
-        if a.fs.vol.resolve(cwd, dir).is_err() { let _ = a.fs.vol.mkdirs(dir); }
-    }
     let n = items.len();
-    let wrote = crate::fs::write_file(a, &path, encode(&items)).is_ok();
+    let encoded = encode(&items);
+    let wrote = if let Some(rel) = path.strip_prefix("ENVARC:").or_else(|| path.strip_prefix("envarc:")) {
+        if a.prefs_host.is_some() {
+            let ok_arc = crate::dos_vars::envarc_save(a, rel, &encoded).is_ok();
+            if ok_arc {
+                let env_path = format!("ENV:{rel}");
+                if let Some((dir, _)) = env_path.rsplit_once('/') {
+                    let cwd = crate::fs::cur_dir(a);
+                    if a.fs.vol.resolve(cwd, dir).is_err() { let _ = a.fs.vol.mkdirs(dir); }
+                }
+                let _ = crate::fs::write_file(a, &env_path, encoded);
+            }
+            ok_arc
+        } else {
+            if let Some((dir, _)) = path.rsplit_once('/') {
+                let cwd = crate::fs::cur_dir(a);
+                if a.fs.vol.resolve(cwd, dir).is_err() { let _ = a.fs.vol.mkdirs(dir); }
+            }
+            crate::fs::write_file(a, &path, encoded).is_ok()
+        }
+    } else {
+        // Open(name, MODE_NEWFILE): the directory must exist (a real system has ENV:Zune); it is made here so a fresh volume can keep settings.
+        if let Some((dir, _)) = path.rsplit_once('/') {
+            let cwd = crate::fs::cur_dir(a);
+            if a.fs.vol.resolve(cwd, dir).is_err() { let _ = a.fs.vol.mkdirs(dir); }
+        }
+        crate::fs::write_file(a, &path, encoded).is_ok()
+    };
     Ok(format!("{n} items -> {path}{}{}", if wrote { "" } else { " (could not be opened: nothing saved)" }, skip_note(a, &skipped)))
 }
 
 /// `MUIM_Application_Load(name)`: read the file (a missing one imports nothing) and import into the windows' objects.
 pub fn load<U: GuestUi>(a: &mut Amiga<U>, app: u32, name: u32) -> Result<String, Refusal> {
     let Some(path) = path(a, app, name)? else { return Ok("no MUIA_Application_Base: nothing loaded".into()) };
-    let cwd = crate::fs::cur_dir(a);
-    let file = a.fs.vol.resolve(cwd, &path).ok().and_then(|n| a.fs.vol.file_data(n).map(<[u8]>::to_vec)).unwrap_or_default();
+    let file = if let Some(rel) = path.strip_prefix("ENVARC:").or_else(|| path.strip_prefix("envarc:")) {
+        if a.prefs_host.is_some() {
+            crate::dos_vars::envarc_load(a, rel).ok().flatten().unwrap_or_default()
+        } else {
+            let cwd = crate::fs::cur_dir(a);
+            a.fs.vol.resolve(cwd, &path).ok().and_then(|n| a.fs.vol.file_data(n).map(<[u8]>::to_vec)).unwrap_or_default()
+        }
+    } else {
+        let cwd = crate::fs::cur_dir(a);
+        a.fs.vol.resolve(cwd, &path).ok().and_then(|n| a.fs.vol.file_data(n).map(<[u8]>::to_vec)).unwrap_or_default()
+    };
     let items = decode(&file);
     let (mut objs, mut skipped) = (Vec::new(), Vec::new());
     for w in windows(a, app) { exporters(a, w, &mut objs, &mut skipped); }

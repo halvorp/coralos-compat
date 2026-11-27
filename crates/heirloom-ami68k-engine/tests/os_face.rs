@@ -278,3 +278,18 @@ fn cli_args_input_sets_machine_cli_args_and_refuses_bad_utf8() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn attach_prefs_accepts_host_and_rejects_null_args_through_vtable() {
+    use guestsvc_abi::GuestPrefs;
+    bind();
+    assert!(has_attach_prefs(os_vtable()));
+    let mut remote = Remote::new("").unwrap();
+    let mut fake = guestsvc_abi::FakePrefs::new();
+    fake.set("envarc/sample", &guestsvc_abi::GuestValue::Bytes(b"hello".to_vec())).unwrap();
+    // SAFETY: `fake` outlives `remote` in this test.
+    let host = unsafe { heirloom_os_abi::prefs::host_for(&mut fake) };
+    assert_eq!((os_vtable().attach_prefs)(remote.inst, &host), heirloom_os_abi::prefs::PREFS_ATTACH_OK);
+    assert_eq!((os_vtable().attach_prefs)(core::ptr::null_mut(), &host), heirloom_os_abi::prefs::PREFS_ATTACH_REFUSED);
+    assert_eq!((os_vtable().attach_prefs)(remote.inst, core::ptr::null()), heirloom_os_abi::prefs::PREFS_ATTACH_REFUSED);
+}

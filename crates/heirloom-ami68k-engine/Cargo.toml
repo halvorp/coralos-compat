@@ -6,6 +6,7 @@ license.workspace = true
 description = "AmigaOS 68k personality: fake ExecBase, LVO trap bridge, Intuition handlers onto GuestUi"
 
 [dependencies]
+guestsvc-abi = { path = "../guestsvc-abi" }
 heirloom-common = { path = "../heirloom-common" }
 heirloom-mem-flat32 = { path = "../heirloom-mem-flat32" }
 heirloom-volume = { path = "../heirloom-volume" }

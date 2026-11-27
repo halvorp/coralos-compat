@@ -1,21 +1,24 @@
-//! AmigaDOS variables: GetVar / SetVar / DeleteVar / FindVar.
+//! AmigaDOS variables: GetVar / SetVar / DeleteVar / FindVar (REUSE U7: `ENV:` / `ENVARC:` backed by `guestsvc_abi::GuestPrefs`).
 //!
 //! LOCAL variables live on the Process's `pr_LocalVars` MinList as real `struct LocalVar` nodes (dos/var.h: a Node
 //! with ln_Type = LV_VAR/LV_ALIAS and ln_Name -> the name, then lv_Flags, lv_Value, lv_Len), kept in alphabetical
-//! order as the header says. The HOST holds the authoritative copy (name, type, value), so a guest that scribbles on a
-//! node cannot change what GetVar answers; the node is a faithful mirror for programs that walk the list or call
-//! FindVar and read lv_Value. GLOBAL variables are files in `ENV:` (a RAM-backed directory), with `ENVARC:` as the
-//! saved copy (GVF_SAVE_VAR writes both). Offsets: m68k gcc -m68020 -mno-align-int over the AROS dos/dosextens.h and
-//! dos/var.h field lists (2026-10-18): Process.pr_LocalVars 208 (a MinList: lh_Head 0, lh_Tail 4, lh_TailPred 8),
-//! LocalVar 24 bytes (ln_Type 8, ln_Name 10, lv_Flags 14, lv_Value 16, lv_Len 20).
+//! order as the header says. Local variables are strictly per-process guest RAM state.
 //!
-//! Text variables end at their first newline unless GVF_BINARY_VAR; the value is NUL-terminated unless
-//! GVF_DONT_NULL_TERM|GVF_BINARY_VAR. A value that does not fit the buffer is truncated and terminated, GetVar returns
-//! -1 and IoErr is ERROR_BUFFER_OVERFLOW (dos.doc as remembered; AROS returns the truncated length instead - not
-//! verified against Kickstart). On success IoErr() is the variable's full length.
+//! GLOBAL variables:
+//! - `ENVARC:` (persistent saved copy, `GVF_SAVE_VAR`) lives in CoralOS `prefs.service` via `Amiga::prefs_host`
+//!   (`Space::Own`, loader-admitted bundle namespace) under `envarc/<normalized_lowercase_path>` (`GuestValue::Bytes`).
+//! - On `Amiga::set_prefs_host`, persisted `envarc/` keys are seeded into the live session's `ENV:` directory
+//!   (authentic AmigaOS boot semantics: `Copy ENVARC: TO ENV: ALL QUIET`).
+//! - When `prefs_host` is attached, `GVF_SAVE_VAR` writes/deletes go straight to `GuestPrefs` (refusing with
+//!   `ERROR_WRITE_PROTECTED` / `ERROR_DELETE_PROTECTED` on `NotGranted`, never falling back to silent RAM `ENVARC:`).
+//!
+//! Offsets: m68k gcc -m68020 -mno-align-int over the AROS dos/dosextens.h and dos/var.h field lists (2026-10-18):
+//! Process.pr_LocalVars 208 (a MinList: lh_Head 0, lh_Tail 4, lh_TailPred 8), LocalVar 24 bytes (ln_Type 8, ln_Name 10,
+//! lv_Flags 14, lv_Value 16, lv_Len 20).
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use guestsvc_abi::{GuestSvcError, GuestValue};
 use crate::dos_err::*;
 use crate::fs::*;
 use crate::guest_str::{read_bytes_z, write_z};
@@ -36,6 +39,9 @@ const ERROR_BAD_NUMBER: DosErr = DosErr(115);
 const ERROR_BUFFER_OVERFLOW: DosErr = DosErr(303);
 const MAX: usize = 0x1_0000;
 
+/// Prefix in `prefs.service` `Space::Own` for persisted Amiga `ENVARC:` entries.
+pub const ENVARC_PREFIX: &str = "envarc/";
+
 pub struct LocalVarRec { pub name: Vec<u8>, pub ty: u8, pub value: Vec<u8>, node: u32, block: u32 }
 
 /// The Process's local variables, sorted by name (case-insensitive), then type.
@@ -47,6 +53,137 @@ pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
 }
 
 fn key(n: &[u8]) -> Vec<u8> { n.to_ascii_lowercase() }
+
+/// Normalize an Amiga variable or `ENVARC:` relative path into a `prefs.service` key `envarc/<lower>`.
+pub fn envarc_key(name: &str) -> Result<String, DosErr> {
+    let trimmed = name
+        .strip_prefix("ENVARC:").or_else(|| name.strip_prefix("envarc:"))
+        .or_else(|| name.strip_prefix("ENV:")).or_else(|| name.strip_prefix("env:"))
+        .unwrap_or(name)
+        .trim_start_matches('/');
+    let lower: String = trimmed.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let full = format!("{ENVARC_PREFIX}{lower}");
+    if !guestsvc_abi::key_ok(&full) {
+        return Err(ERROR_INVALID_COMPONENT_NAME);
+    }
+    Ok(full)
+}
+
+fn map_prefs_err(e: GuestSvcError, for_delete: bool) -> DosErr {
+    match e {
+        GuestSvcError::NotGranted => if for_delete { ERROR_DELETE_PROTECTED } else { ERROR_WRITE_PROTECTED },
+        GuestSvcError::TooLarge => ERROR_LINE_TOO_LONG,
+        GuestSvcError::BadName | GuestSvcError::Refused(_) => ERROR_INVALID_COMPONENT_NAME,
+        GuestSvcError::Lost | GuestSvcError::Stalled | GuestSvcError::Unreadable => ERROR_DEVICE_NOT_MOUNTED,
+    }
+}
+
+/// Write `data` to `ENV:<rel>`, creating intermediate directories (`ENV:Zune`, etc.) if needed.
+fn write_env_file<U: GuestUi>(a: &mut Amiga<U>, rel: &str, data: Vec<u8>) -> Result<(), DosErr> {
+    let path = format!("ENV:{rel}");
+    if let Some((dir, _)) = path.rsplit_once('/') {
+        let cwd = cur_dir(a);
+        if a.fs.vol.resolve(cwd, dir).is_err() {
+            let _ = a.fs.vol.mkdirs(dir);
+        }
+    }
+    write_file(a, &path, data).map(|_| ())
+}
+
+/// Seed the live session's `ENV:` directory from all persisted `envarc/` keys in `prefs_host`
+/// (authentic AmigaOS boot semantics: `Copy ENVARC: TO ENV: ALL QUIET`).
+pub fn seed_env_from_prefs<U: GuestUi>(a: &mut Amiga<U>) {
+    let keys = match a.prefs_host.as_mut() {
+        Some(prefs) => match prefs.keys(ENVARC_PREFIX) {
+            Ok(ks) => ks,
+            Err(_) => return, // NotGranted or unavailable: start with empty ENV:; writes still surface NotGranted
+        },
+        None => return,
+    };
+    let mut pairs: Vec<(String, Vec<u8>)> = Vec::new();
+    if let Some(prefs) = a.prefs_host.as_mut() {
+        for k in keys {
+            let Some(rel) = k.strip_prefix(ENVARC_PREFIX) else { continue };
+            if rel.is_empty() {
+                continue;
+            }
+            if let Ok(Some(val)) = prefs.get(&k) {
+                let bytes = match val {
+                    GuestValue::Bytes(b) => b,
+                    GuestValue::Text(s) => s.into_bytes(),
+                    GuestValue::Int(n) => format!("{n}").into_bytes(),
+                    GuestValue::Bool(b) => (if b { b"1" } else { b"0" }).to_vec(),
+                    GuestValue::Real(r) => format!("{r}").into_bytes(),
+                };
+                pairs.push((String::from(rel), bytes));
+            }
+        }
+    }
+    for (rel, bytes) in pairs {
+        let _ = write_env_file(a, &rel, bytes);
+    }
+}
+
+/// Persist `bytes` to `ENVARC:<rel>` in `prefs.service` (when attached), also mirroring to live `ENV:<rel>` if requested.
+pub fn envarc_save<U: GuestUi>(a: &mut Amiga<U>, rel: &str, bytes: &[u8]) -> Result<(), DosErr> {
+    let k = envarc_key(rel)?;
+    if let Some(prefs) = a.prefs_host.as_mut() {
+        prefs
+            .set(&k, &GuestValue::Bytes(bytes.to_vec()))
+            .map_err(|e| map_prefs_err(e, false))
+    } else {
+        let path = format!("ENVARC:{rel}");
+        if let Some((dir, _)) = path.rsplit_once('/') {
+            let cwd = cur_dir(a);
+            if a.fs.vol.resolve(cwd, dir).is_err() {
+                let _ = a.fs.vol.mkdirs(dir);
+            }
+        }
+        write_file(a, &path, bytes.to_vec()).map(|_| ())
+    }
+}
+
+/// Load `ENVARC:<rel>` from `prefs.service` (when attached), else fall back to legacy in-volume `ENVARC:`.
+pub fn envarc_load<U: GuestUi>(a: &mut Amiga<U>, rel: &str) -> Result<Option<Vec<u8>>, DosErr> {
+    if let Some(prefs) = a.prefs_host.as_mut() {
+        let k = envarc_key(rel)?;
+        match prefs.get(&k) {
+            Ok(Some(GuestValue::Bytes(b))) => Ok(Some(b)),
+            Ok(Some(GuestValue::Text(s))) => Ok(Some(s.into_bytes())),
+            Ok(Some(_)) => Err(ERROR_OBJECT_WRONG_TYPE),
+            Ok(None) => Ok(None),
+            Err(e) => Err(map_prefs_err(e, false)),
+        }
+    } else {
+        let path = format!("ENVARC:{rel}");
+        let cwd = cur_dir(a);
+        Ok(a.fs.vol.resolve(cwd, &path).ok().and_then(|n| a.fs.vol.file_data(n).map(<[u8]>::to_vec)))
+    }
+}
+
+fn envarc_delete<U: GuestUi>(a: &mut Amiga<U>, rel: &str) -> Result<bool, DosErr> {
+    if let Some(prefs) = a.prefs_host.as_mut() {
+        let k = envarc_key(rel)?;
+        let existed = match prefs.get(&k) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(e) => return Err(map_prefs_err(e, true)),
+        };
+        prefs.delete(&k).map_err(|e| map_prefs_err(e, true))?;
+        Ok(existed)
+    } else {
+        let cwd = cur_dir(a);
+        if let Ok(n) = a.fs.vol.resolve(cwd, &format!("ENVARC:{rel}")) {
+            if a.fs.node_in_use(n) {
+                return Err(ERROR_OBJECT_IN_USE);
+            }
+            a.fs.vol.remove(n)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
 
 fn list_ready<U: GuestUi>(a: &mut Amiga<U>) -> Result<u32, Refusal> {
     let l = a.sched.cur + PR_LOCAL_VARS;
@@ -150,9 +287,17 @@ fn set_var<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusa
     if name.is_empty() { return fail(a, cpu, ERROR_OBJECT_NOT_FOUND, 0, what); }
     if flags & GVF_GLOBAL_ONLY != 0 {
         if (flags & 0xFF) as u8 != LV_VAR { return Err(Refusal("SetVar: global aliases are not modelled".into())); }
-        let mut r = write_file(a, &global_path("ENV:", &name), value.clone());
-        if r.is_ok() && flags & GVF_SAVE_VAR != 0 { r = write_file(a, &global_path("ENVARC:", &name), value); }
-        return match r { Ok(_) => ok(a, cpu, DOSTRUE, what), Err(e) => fail(a, cpu, e, 0, what) };
+        let rel = String::from_utf8_lossy(&name).into_owned();
+        if flags & GVF_SAVE_VAR != 0 {
+            // Persist to prefs.service first: if NotGranted/TooLarge/BadName, fail cleanly without mutating ENV:.
+            if let Err(e) = envarc_save(a, &rel, &value) {
+                return fail(a, cpu, e, 0, what);
+            }
+        }
+        return match write_env_file(a, &rel, value) {
+            Ok(_) => ok(a, cpu, DOSTRUE, what),
+            Err(e) => fail(a, cpu, e, 0, what),
+        };
     }
     match set_local(a, &name, (flags & 0xFF) as u8, &value)? {
         true => ok(a, cpu, DOSTRUE, what),
@@ -170,15 +315,27 @@ fn delete_var<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Ref
         if let Ok(i) = position(a, &name, ty) { drop_local(a, i)?; return ok(a, cpu, DOSTRUE, what); }
     }
     if ty == LV_VAR && flags & GVF_LOCAL_ONLY == 0 {
-        let cwd = cur_dir(a);
-        let devs: &[&str] = if flags & GVF_SAVE_VAR != 0 { &["ENV:", "ENVARC:"] } else { &["ENV:"] };
-        let mut r = Err(ERROR_OBJECT_NOT_FOUND);
-        for d in devs {
-            if let Ok(n) = a.fs.vol.resolve(cwd, &global_path(d, &name)) {
-                r = if a.fs.node_in_use(n) { Err(ERROR_OBJECT_IN_USE) } else { a.fs.vol.remove(n) };
+        let rel = String::from_utf8_lossy(&name).into_owned();
+        let mut removed_any = false;
+        if flags & GVF_SAVE_VAR != 0 {
+            match envarc_delete(a, &rel) {
+                Ok(existed) => removed_any |= existed,
+                Err(e) => return fail(a, cpu, e, 0, what),
             }
         }
-        if r != Err(ERROR_OBJECT_NOT_FOUND) { return match r { Ok(()) => ok(a, cpu, DOSTRUE, what), Err(e) => fail(a, cpu, e, 0, what) }; }
+        let cwd = cur_dir(a);
+        if let Ok(n) = a.fs.vol.resolve(cwd, &global_path("ENV:", &name)) {
+            if a.fs.node_in_use(n) {
+                return fail(a, cpu, ERROR_OBJECT_IN_USE, 0, what);
+            }
+            if let Err(e) = a.fs.vol.remove(n) {
+                return fail(a, cpu, e, 0, what);
+            }
+            removed_any = true;
+        }
+        if removed_any {
+            return ok(a, cpu, DOSTRUE, what);
+        }
     }
     fail(a, cpu, ERROR_OBJECT_NOT_FOUND, 0, what)
 }
