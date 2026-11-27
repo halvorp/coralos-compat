@@ -62,6 +62,8 @@ pub struct NativeState {
     pub rsc_files: BTreeMap<u32, Vec<u8>>,
     /// Active thread `RAllocator*` for `User::SwitchAllocator` / `UserHeap::ChunkHeap`.
     pub current_allocator: u32,
+    /// Next virtual base address for `UserHeap::ChunkHeap` regions (`CHUNK_HEAP_BASE..FBS_CHUNK_BASE`).
+    pub chunk_heap_cursor: u32,
 }
 
 /// A host extension to the natives: asked first with the import's mangled name; `Some` = handled. Used by tests to stand in
@@ -266,8 +268,28 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             NativeOutcome::Return
         }
         // RHeap* UserHeap::ChunkHeap(const TDesC* aName, TInt aMinLength, TInt aMaxLength, TInt aGrowBy, TInt aAlign, TBool aSingleThread) (e32std.h):
-        // returns an opaque non-null RAllocator* backed by the process's unified guest heap.
+        // reserves a real RW chunk of `aMaxLength` bytes in `CHUNK_HEAP_BASE..FBS_CHUNK_BASE`, commits `aMinLength`,
+        // adds it to the unified guest heap, and returns a non-null RAllocator* handle.
         "_ZN8UserHeap9ChunkHeapEPK7TDesC16iiiii" => {
+            let min_req = (r1 as i32).max(0) as u32;
+            let max_req = (proc.cpu.regs[2] as i32).max(min_req as i32) as u32;
+            let max_len = crate::layout::pru(max_req.max(crate::layout::PAGE));
+            let min_len = crate::layout::pru(min_req.min(max_len));
+            let base = if proc.nat.chunk_heap_cursor == 0 {
+                crate::layout::CHUNK_HEAP_BASE
+            } else {
+                proc.nat.chunk_heap_cursor
+            };
+            if base.checked_add(max_len).is_some_and(|end| end <= crate::layout::FBS_CHUNK_BASE) {
+                if let Ok(cid) = proc.mem.vm.create_chunk(base, max_len, heirloom_mem_paged32::Prot::RW) {
+                    if min_len == 0 || proc.mem.vm.commit(cid, 0, min_len).is_ok() {
+                        if let Some(h) = proc.heap.as_mut() {
+                            h.add_region(cid, base, max_len, min_len);
+                        }
+                        proc.nat.chunk_heap_cursor = base + max_len;
+                    }
+                }
+            }
             let Some(alloc_obj) = proc.alloc_zeroed(16) else {
                 return NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: out of heap"));
             };
@@ -1063,6 +1085,27 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
                     Ok(()) => { proc.cpu.regs[0] = 0; NativeOutcome::Return }
                     Err(m) => NativeOutcome::Refused(format!("NEXT-NEEDED imut/24 TImCodecB64::Decode: {m}")),
                 }
+            }
+            // PtiEngine (predictive text input engine, ptiengine.dso):
+            // 56 = CPtiEngine::NewL(TBool), 22 = ActivateLanguageL, 36 = CloseCurrentLanguageL,
+            // 21 = ClearCurrentWord, 30 = NumberOfCandidates, 1 = CurrentWord, 11 = AppendKeyPress.
+            (d, 56) if d.eq_ignore_ascii_case("PtiEngine") => {
+                let Some(obj) = proc.alloc_zeroed(16) else {
+                    return NativeOutcome::Refused("NEXT-NEEDED PtiEngine/56 CPtiEngine::NewL: out of heap".into());
+                };
+                proc.cpu.regs[0] = obj;
+                NativeOutcome::Return
+            }
+            (d, 22 | 30) if d.eq_ignore_ascii_case("PtiEngine") => {
+                proc.cpu.regs[0] = 0; // KErrNone / 0 candidates
+                NativeOutcome::Return
+            }
+            (d, 21 | 36) if d.eq_ignore_ascii_case("PtiEngine") => NativeOutcome::Return,
+            (d, 1 | 11) if d.eq_ignore_ascii_case("PtiEngine") => {
+                // TPtrC16 CurrentWord() / AppendKeyPress(TPtiKey) -> empty TPtrC16 (sret in r0)
+                let _ = proc.wr(r0, 0);
+                let _ = proc.wr(r0.wrapping_add(4), 0);
+                NativeOutcome::Return
             }
             _ => NativeOutcome::Refused(format!(
                 "NEXT-NEEDED {}/{} <unnamed-ordinal>", dll_base, ordinal

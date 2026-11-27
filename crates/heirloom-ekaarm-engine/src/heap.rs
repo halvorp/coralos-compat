@@ -2,7 +2,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use crate::cpu::Memory;
-use heirloom_mem_paged32::{ChunkId, VmError};
+use heirloom_mem_paged32::ChunkId;
 use crate::layout;
 use crate::mem::GuestMem;
 
@@ -11,11 +11,16 @@ pub enum HeapError {
     UnknownAddress(u32),
 }
 
-pub struct Heap {
-    heap_id: ChunkId,
+struct HeapRegion {
+    chunk_id: ChunkId,
     base: u32,
     max: u32,
     committed_end: u32,
+}
+
+pub struct Heap {
+    regions: Vec<HeapRegion>,
+    max: u32,
     live: BTreeMap<u32, u32>,
     /// The allocation generation of each live block: a counter that never repeats, so a host side table keyed by address can tell
     /// a block from a later one that reused the address (`generation_of`).
@@ -33,10 +38,13 @@ impl Heap {
             free_list.push((base, max));
         }
         Self {
-            heap_id,
-            base,
+            regions: alloc::vec![HeapRegion {
+                chunk_id: heap_id,
+                base,
+                max,
+                committed_end: base + already_committed,
+            }],
             max,
-            committed_end: base + already_committed,
             live: BTreeMap::new(),
             gens: BTreeMap::new(),
             next_gen: 1,
@@ -44,24 +52,44 @@ impl Heap {
         }
     }
 
+    /// Add another backing `UserHeap::ChunkHeap` region to the unified allocator while keeping
+    /// existing allocations from the initial thread heap valid and freeable.
+    pub fn add_region(&mut self, chunk_id: ChunkId, base: u32, max: u32, already_committed: u32) {
+        if max == 0 {
+            return;
+        }
+        self.regions.push(HeapRegion {
+            chunk_id,
+            base,
+            max,
+            committed_end: base + already_committed,
+        });
+        self.max = self.max.saturating_add(max);
+        self.insert_free(base, max);
+    }
+
     fn align_up(n: u32) -> Option<u32> {
         Some(n.checked_add(Self::ALIGN - 1)? & !(Self::ALIGN - 1))
     }
 
-    fn ensure_committed(&mut self, end: u32, mem: &mut GuestMem) -> Result<(), VmError> {
-        if end <= self.committed_end {
-            return Ok(());
+    fn ensure_committed(&mut self, addr: u32, end: u32, mem: &mut GuestMem) -> Option<()> {
+        let reg = self
+            .regions
+            .iter_mut()
+            .find(|r| addr >= r.base && end <= r.base.saturating_add(r.max))?;
+        if end <= reg.committed_end {
+            return Some(());
         }
-        let reservation = layout::pru(self.max);
-        let target = self.base + layout::pru(end - self.base).min(reservation);
-        if target <= self.committed_end {
-            return Ok(());
+        let reservation = layout::pru(reg.max);
+        let target = reg.base + layout::pru(end - reg.base).min(reservation);
+        if target <= reg.committed_end {
+            return Some(());
         }
-        let offset = self.committed_end - self.base;
-        let len = target - self.committed_end;
-        mem.vm.commit(self.heap_id, offset, len)?;
-        self.committed_end = target;
-        Ok(())
+        let offset = reg.committed_end - reg.base;
+        let len = target - reg.committed_end;
+        mem.vm.commit(reg.chunk_id, offset, len).ok()?;
+        reg.committed_end = target;
+        Some(())
     }
 
     fn insert_free(&mut self, addr: u32, len: u32) {
@@ -107,14 +135,14 @@ impl Heap {
         }
         let idx = found?;
         let (addr, hole_len) = self.free_list[idx];
-        self.ensure_committed(addr.checked_add(len)?, mem).ok()?;
+        self.ensure_committed(addr, addr.checked_add(len)?, mem)?;
         self.live.insert(addr, len);
         self.gens.insert(addr, self.next_gen);
         self.next_gen = self.next_gen.wrapping_add(1).max(1);
         if hole_len > len {
             self.free_list[idx] = (addr + len, hole_len - len);
         } else {
-            self.free_list.swap_remove(idx);
+            self.free_list.remove(idx);
         }
         Some(addr)
     }
@@ -225,5 +253,24 @@ mod tests {
             }
         }
         assert!(total <= max);
+    }
+
+    #[test]
+    fn add_region_extends_capacity_and_preserves_initial_heap() {
+        let (mut h, mut mem) = make_heap(0x10000);
+        let a = h.alloc(0x8000, &mut mem).unwrap();
+        // Second region (ChunkHeap) at CHUNK_HEAP_BASE with 0x40000 bytes.
+        let cid2 = mem.vm.create_chunk(
+            layout::CHUNK_HEAP_BASE,
+            0x40000,
+            heirloom_mem_paged32::Prot::RW,
+        ).unwrap();
+        h.add_region(cid2, layout::CHUNK_HEAP_BASE, 0x40000, 0);
+        let b = h.alloc(0x20000, &mut mem).unwrap();
+        assert!(b >= layout::CHUNK_HEAP_BASE);
+        mem.write_u8(b + 0x1FFFF, 0x5A).unwrap();
+        assert_eq!(mem.read_u8(b + 0x1FFFF).unwrap(), 0x5A);
+        h.free(a).unwrap();
+        h.free(b).unwrap();
     }
 }

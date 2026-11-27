@@ -9,6 +9,8 @@ pub const DATA_BASE: u32 = 0x0400_0000;
 pub const DLL_DATA_BASE: u32 = 0x0600_0000;
 pub const STACK_TOP: u32 = 0x0C00_0000;
 pub const HEAP_BASE: u32 = 0x1000_0000;
+/// Base address for guest `UserHeap::ChunkHeap` regions created at runtime (below `FBS_CHUNK_BASE`).
+pub const CHUNK_HEAP_BASE: u32 = 0x2000_0000;
 /// Base address for the FBServ shared bitmap chunk (Symbian `CFbsBitmap::DataAddress()`), separate from the process `RHeap`.
 pub const FBS_CHUNK_BASE: u32 = 0x5000_0000;
 pub const STUB_BASE: u32 = 0x7000_0000;
