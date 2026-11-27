@@ -102,14 +102,49 @@ impl Process {
         file.resource(id).map_err(|e| format!("{path}: resource {id:#x}: {e:?}"))
     }
 
-    /// The ROM resource file whose id offset is `offset`, found by reading the signature record of each `\resource\*.rsc` once.
+    /// The ROM resource file whose id offset is `offset`. Checks the package's `\resource\` files and the core S60
+    /// framework `.r01`/`.rsc` files first (avoiding ~1,900 streamed ROM reads at launch), falling back to a full
+    /// `\resource\` walk if the requested offset belongs to another ROM resource file.
     fn rom_resource_for(&mut self, offset: u32) -> Result<String, String> {
+        const CORE_ROM_RESOURCES: &[&str] = &[
+            "\\resource\\avkon.r01",
+            "\\resource\\eikcoctl.r01",
+            "\\resource\\eikcore.r01",
+            "\\resource\\uiklaf\\eikpriv.r01",
+            "\\resource\\commondialogs.r01",
+            "\\resource\\aknskinsrv.r01",
+            "\\resource\\avkon.rsc",
+            "\\resource\\eikcoctl.rsc",
+            "\\resource\\eikcore.rsc",
+            "\\resource\\uiklaf\\eikpriv.rsc",
+        ];
         if self.nat.rom_resources.is_none() {
             let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive"))?;
             let mut index = alloc::collections::BTreeMap::new();
             index_drive_dir(drive, "\\resource", &mut index);
-            index_rom_dir(drive, "\\resource", &mut index);
+            for &path in CORE_ROM_RESOURCES {
+                if drive.exists_anywhere(path) {
+                    if let Ok(bytes) = drive.read_owned(path) {
+                        if let Ok(f) = RscFile::parse(&bytes) {
+                            if f.id_offset != 0 {
+                                index.entry(f.id_offset).or_insert_with(|| String::from(path));
+                            }
+                        }
+                    }
+                }
+            }
             self.nat.rom_resources = Some(index);
+        }
+        if let Some(p) = self.nat.rom_resources.as_ref().and_then(|i| i.get(&offset)) {
+            return Ok(p.clone());
+        }
+        // Offset 0 is never a real ROM signature offset; we use key 0 as the sentinel for "full ROM walk already done".
+        let need_full = self.nat.rom_resources.as_ref().map_or(true, |i| !i.contains_key(&0));
+        if need_full {
+            let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive"))?;
+            let index = self.nat.rom_resources.as_mut().unwrap();
+            index_rom_dir(drive, "\\resource", index);
+            index.insert(0, String::new());
         }
         match self.nat.rom_resources.as_ref().and_then(|i| i.get(&offset)) {
             Some(p) => Ok(p.clone()),
