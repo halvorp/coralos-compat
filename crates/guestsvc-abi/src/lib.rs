@@ -19,6 +19,12 @@ pub const KEY_MAX: usize = 128;
 /// Maximum payload byte length of a `Text` or `Bytes` value (matches `coral_prefs_abi::VALUE_MAX`).
 pub const VALUE_MAX: usize = 1024;
 
+/// Maximum UTF-8 byte length of a clipboard MIME type (matches `coral_clip_abi::MIME_MAX`).
+pub const CLIP_MIME_MAX: usize = 64;
+
+/// Maximum payload byte length of a clipboard entry across the guest service seam.
+pub const CLIP_PAYLOAD_MAX: usize = 64 * 1024;
+
 /// A preference value as a guest adapter sees it: the five shapes `prefs.service` stores,
 /// with no wire type in the signature.
 #[derive(Clone, Debug, PartialEq)]
@@ -93,6 +99,117 @@ pub fn key_ok(s: &str) -> bool {
 /// Whether `s` is a valid key prefix: empty (all keys) or a valid key with optional trailing `/`.
 pub fn prefix_ok(s: &str) -> bool {
     s.is_empty() || key_ok(s.strip_suffix('/').unwrap_or(s))
+}
+
+/// Whether `s` is a valid clipboard MIME type: `type/subtype[;param=value]`, ASCII printable, no whitespace, 1..=[`CLIP_MIME_MAX`].
+pub fn mime_ok(s: &str) -> bool {
+    if s.is_empty() || s.len() > CLIP_MIME_MAX {
+        return false;
+    }
+    let Some((ty, rest)) = s.split_once('/') else { return false };
+    !ty.is_empty()
+        && !rest.is_empty()
+        && !rest.starts_with(';')
+        && s.bytes().all(|b| b.is_ascii_graphic())
+}
+
+/// System clipboard for a guest, backed by CoralOS `clipboardd` (with C12 `Watch` + doorbell, zero polling).
+///
+/// Adapters translate guest clipboard formats (Mac `'TEXT'` / `'PICT'`, Amiga IFF `FORM FTXT`) to/from
+/// MIME types + raw bytes and NEVER keep a private guest-only fallback when the service refuses (`NotGranted`).
+pub trait GuestClipboard {
+    /// Publish `(mime, payload)` to the system clipboard; returns the resulting clipboard generation.
+    fn copy(&mut self, mime: &str, payload: &[u8]) -> Result<u64, GuestSvcError>;
+    /// Read the current system clipboard entry as `(mime, payload)`, or `None` when empty.
+    fn paste(&mut self) -> Result<Option<(String, Vec<u8>)>, GuestSvcError>;
+    /// Current clipboard generation (monotonically advances whenever the clipboard changes; non-polling on CoralOS).
+    fn generation(&mut self) -> Result<u64, GuestSvcError>;
+}
+
+/// Deterministic in-memory [`GuestClipboard`] implementor for host oracle tests.
+///
+/// Mirrors CoralOS `clipboardd` MIME/size validation, generation increments on copy (including native copies
+/// via [`FakeClipboard::simulate_native_copy`]), and `(clip)` grant enforcement (`not_granted`).
+#[derive(Clone, Debug, Default)]
+pub struct FakeClipboard {
+    current: Option<(String, Vec<u8>)>,
+    generation: u64,
+    not_granted: bool,
+    injected_error: Option<GuestSvcError>,
+}
+
+impl FakeClipboard {
+    /// An empty granted fake clipboard at generation 0.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A fake clipboard whose engine has no `(clip)` grant: every call returns `Err(GuestSvcError::NotGranted)`.
+    pub fn not_granted() -> Self {
+        Self { current: None, generation: 0, not_granted: true, injected_error: None }
+    }
+
+    /// Toggle whether the engine holds the `(clip)` grant.
+    pub fn set_granted(&mut self, granted: bool) {
+        self.not_granted = !granted;
+    }
+
+    /// Inject a specific error (`Lost`, `Stalled`, etc.) for negative-control tests; `None` clears it.
+    pub fn set_injected_error(&mut self, err: Option<GuestSvcError>) {
+        self.injected_error = err;
+    }
+
+    /// Simulate a native CoralOS app copying `(mime, payload)` to `clipboardd`: replaces the entry and advances generation.
+    pub fn simulate_native_copy(&mut self, mime: &str, payload: &[u8]) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        self.current = Some((String::from(mime), payload.to_vec()));
+        self.generation
+    }
+
+    /// Inspect the stored `(mime, payload)` directly in tests.
+    pub fn current(&self) -> Option<(&str, &[u8])> {
+        self.current.as_ref().map(|(m, d)| (m.as_str(), d.as_slice()))
+    }
+
+    /// Inspect the current generation directly in tests.
+    pub fn current_generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn check_access(&self) -> Result<(), GuestSvcError> {
+        if self.not_granted {
+            return Err(GuestSvcError::NotGranted);
+        }
+        if let Some(err) = self.injected_error {
+            return Err(err);
+        }
+        Ok(())
+    }
+}
+
+impl GuestClipboard for FakeClipboard {
+    fn copy(&mut self, mime: &str, payload: &[u8]) -> Result<u64, GuestSvcError> {
+        if !mime_ok(mime) {
+            return Err(GuestSvcError::BadName);
+        }
+        if payload.len() > CLIP_PAYLOAD_MAX {
+            return Err(GuestSvcError::TooLarge);
+        }
+        self.check_access()?;
+        self.generation = self.generation.wrapping_add(1);
+        self.current = Some((String::from(mime), payload.to_vec()));
+        Ok(self.generation)
+    }
+
+    fn paste(&mut self) -> Result<Option<(String, Vec<u8>)>, GuestSvcError> {
+        self.check_access()?;
+        Ok(self.current.clone())
+    }
+
+    fn generation(&mut self) -> Result<u64, GuestSvcError> {
+        self.check_access()?;
+        Ok(self.generation)
+    }
 }
 
 /// Preferences for a guest, in the engine's own admitted namespace.
@@ -266,5 +383,40 @@ mod tests {
         assert_eq!(GuestSvcError::Stalled.name(), "stalled");
         assert_eq!(GuestSvcError::Unreadable.name(), "unreadable");
         assert_eq!(GuestSvcError::Refused("bad-value").name(), "bad-value");
+    }
+
+    #[test]
+    fn fake_clipboard_round_trip_and_negative_controls() {
+        let mut clip = FakeClipboard::new();
+        assert_eq!(clip.generation(), Ok(0));
+        assert_eq!(clip.paste(), Ok(None));
+
+        let g1 = clip.copy("text/plain;charset=utf-8", b"hello coral").unwrap();
+        assert_eq!(g1, 1);
+        assert_eq!(clip.generation(), Ok(1));
+        assert_eq!(
+            clip.paste(),
+            Ok(Some((String::from("text/plain;charset=utf-8"), b"hello coral".to_vec())))
+        );
+
+        let g2 = clip.simulate_native_copy("text/plain;charset=utf-8", b"from native");
+        assert_eq!(g2, 2);
+        assert_eq!(clip.generation(), Ok(2));
+        assert_eq!(
+            clip.paste(),
+            Ok(Some((String::from("text/plain;charset=utf-8"), b"from native".to_vec())))
+        );
+
+        // Negative controls: bad MIME, oversized payload, NotGranted.
+        for bad in ["", "text", "/plain", "text/", "text/;a=1", "text/plain with space"] {
+            assert_eq!(clip.copy(bad, b"x"), Err(GuestSvcError::BadName), "{bad:?}");
+        }
+        assert_eq!(clip.copy("text/plain", &vec![0u8; CLIP_PAYLOAD_MAX + 1]), Err(GuestSvcError::TooLarge));
+
+        let mut denied = FakeClipboard::not_granted();
+        assert_eq!(denied.copy("text/plain", b"x"), Err(GuestSvcError::NotGranted));
+        assert_eq!(denied.paste(), Err(GuestSvcError::NotGranted));
+        assert_eq!(denied.generation(), Err(GuestSvcError::NotGranted));
+        assert_eq!(denied.current(), None);
     }
 }

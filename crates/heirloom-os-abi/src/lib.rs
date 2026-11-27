@@ -24,6 +24,7 @@ pub use heirloom_cpu_abi as cpu_abi;
 /// The PowerPC CPU contract (CPU ABI v3) a PowerPC family binds.
 pub use heirloom_cpu_abi::ppc;
 
+pub mod clip; // native CoralOS clipboardd bridge (attach_clipboard): guest copy/paste + C12 Watch generation
 pub mod datatype; // native CoralOS datatype.library bridge (attach_datatype): format identify + native image decode
 pub mod perf; // the engine's half of the machine's frame ledger (perf_attach): its phase clock and its thread's counters
 pub mod prefs; // native CoralOS prefs.service bridge (attach_prefs): guest adapters' Space::Own preferences session
@@ -200,6 +201,10 @@ pub struct OsVTable {
     /// process's own `prefs.service` session ([`prefs::PrefsHost`], `Space::Own`, admitted by the loader) so guest
     /// settings adapters (Symbian CenRep / `CDictionaryFileStore`, Amiga `ENV:`/`ENVARC:`) persist natively.
     pub attach_prefs: extern "C" fn(inst: *mut OsInstance, host: *const prefs::PrefsHost) -> i32,
+    /// APPENDED 2026-11-27 (REUSE U8 / C12), present when [`has_attach_clipboard`] (the version stays 3): attach the engine
+    /// process's own `clipboardd` session ([`clip::ClipHost`], backed by C12 `Watch` + doorbell, zero polling) so guest
+    /// clipboard adapters (Mac Scrap Manager / Carbon Scrap, Amiga `iffparse` `InitIFFasClip`) share CoralOS's clipboard.
+    pub attach_clipboard: extern "C" fn(inst: *mut OsInstance, host: *const clip::ClipHost) -> i32,
 }
 
 /// The byte size of a version-1 table (the four header words' entries up to `apply`).
@@ -217,6 +222,8 @@ pub fn has_perf_attach(t: &OsVTable) -> bool { t.size as usize >= core::mem::off
 pub fn has_attach_datatype(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_datatype) + core::mem::size_of::<usize>() }
 /// Whether a table checked by [`check_ptr`] carries [`OsVTable::attach_prefs`].
 pub fn has_attach_prefs(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_prefs) + core::mem::size_of::<usize>() }
+/// Whether a table checked by [`check_ptr`] carries [`OsVTable::attach_clipboard`].
+pub fn has_attach_clipboard(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_clipboard) + core::mem::size_of::<usize>() }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenRefusal {
@@ -314,9 +321,10 @@ mod tests {
     extern "C" fn perf_attach(_: *mut OsInstance, _: *const perf::PerfHost) -> i32 { perf::PERF_ATTACH_REFUSED }
     extern "C" fn attach_datatype(_: *mut OsInstance, _: *const datatype::DatatypeHost) -> i32 { datatype::DT_ATTACH_REFUSED }
     extern "C" fn attach_prefs(_: *mut OsInstance, _: *const prefs::PrefsHost) -> i32 { prefs::PREFS_ATTACH_REFUSED }
+    extern "C" fn attach_clipboard(_: *mut OsInstance, _: *const clip::ClipHost) -> i32 { clip::CLIP_ATTACH_REFUSED }
 
     fn table(version: u32, size: u32, family: u32) -> OsVTable {
-        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof, perf_attach, attach_datatype, attach_prefs }
+        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof, perf_attach, attach_datatype, attach_prefs, attach_clipboard }
     }
 
     /// `cpu_prof` was appended to version 3: a v3 library built before it still opens (its size is OS_TABLE_V3_SIZE) and an
@@ -331,12 +339,15 @@ mod tests {
         assert!(has_perf_attach(&now));
         assert!(has_attach_datatype(&now));
         assert!(has_attach_prefs(&now));
+        assert!(has_attach_clipboard(&now));
         let before_attach = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, perf_attach) as u32, FAMILY_MAC68K);
-        assert!(has_cpu_prof(&before_attach) && !has_perf_attach(&before_attach) && !has_attach_datatype(&before_attach) && !has_attach_prefs(&before_attach), "a library from before perf_attach is never called past its end");
+        assert!(has_cpu_prof(&before_attach) && !has_perf_attach(&before_attach) && !has_attach_datatype(&before_attach) && !has_attach_prefs(&before_attach) && !has_attach_clipboard(&before_attach), "a library from before perf_attach is never called past its end");
         let before_dt = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_datatype) as u32, FAMILY_MAC68K);
-        assert!(has_perf_attach(&before_dt) && !has_attach_datatype(&before_dt) && !has_attach_prefs(&before_dt), "a library from before attach_datatype is never called past its end");
+        assert!(has_perf_attach(&before_dt) && !has_attach_datatype(&before_dt) && !has_attach_prefs(&before_dt) && !has_attach_clipboard(&before_dt), "a library from before attach_datatype is never called past its end");
         let before_prefs = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_prefs) as u32, FAMILY_MAC68K);
-        assert!(has_attach_datatype(&before_prefs) && !has_attach_prefs(&before_prefs), "a library from before attach_prefs is never called past its end");
+        assert!(has_attach_datatype(&before_prefs) && !has_attach_prefs(&before_prefs) && !has_attach_clipboard(&before_prefs), "a library from before attach_prefs is never called past its end");
+        let before_clip = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_clipboard) as u32, FAMILY_MAC68K);
+        assert!(has_attach_prefs(&before_clip) && !has_attach_clipboard(&before_clip), "a library from before attach_clipboard is never called past its end");
         let short = table(OS_ABI_VERSION, OS_TABLE_V3_SIZE - 8, FAMILY_MAC68K);
         assert_eq!(unsafe { check_ptr(&short, OS_ABI_VERSION, FAMILY_MACPPC) }, Err(OpenRefusal::TableTooSmall { found: OS_TABLE_V3_SIZE - 8, required: OS_TABLE_V3_SIZE }));
     }

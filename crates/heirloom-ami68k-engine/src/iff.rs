@@ -85,9 +85,18 @@ pub enum NativeHook { Stop = 0, Prop = 1, Collection = 2, ExitContext = 3, Dos =
 pub struct Cn { pub composite: bool, /// LCI addresses, head (most recently stored) first.
     pub lcis: Vec<u32> }
 
+pub struct ClipBuf {
+    pub data: Vec<u8>,
+    pub pos: usize,
+    pub write: bool,
+}
+
 pub struct Iff {
     /// Context nodes, the default one first, the top of the stack last.
     pub stack: Vec<u32>,
+    /// Transient IFF byte buffer only while an `InitIFFasClip` handle is open (`OpenIFF`..`CloseIFF`);
+    /// never persisted across closes — CoralOS `clipboardd` (`Amiga::clip_host`) owns the clipboard.
+    pub clip_buf: Option<ClipBuf>,
 }
 
 #[derive(Default)]
@@ -190,9 +199,59 @@ pub fn stream_kind<U: GuestUi>(a: &Amiga<U>, iff: u32) -> Result<Stream, Refusal
     Ok(match which_hook(a, h) { Some(NativeHook::Dos) => Stream::Dos, Some(NativeHook::Clip) => Stream::Clip, _ if h == 0 => Stream::None, _ => Stream::Custom(h) })
 }
 
+/// Encode UTF-8 text as an Amiga IFF `FORM FTXT` containing one `CHRS` chunk (with even-byte pad).
+pub fn encode_ftxt(text: &[u8]) -> Vec<u8> {
+    let padded = text.len() + (text.len() & 1);
+    let form_size = (4 + 8 + padded) as u32;
+    let mut out = Vec::with_capacity(8 + form_size as usize);
+    out.extend_from_slice(b"FORM");
+    out.extend_from_slice(&form_size.to_be_bytes());
+    out.extend_from_slice(b"FTXT");
+    out.extend_from_slice(b"CHRS");
+    out.extend_from_slice(&(text.len() as u32).to_be_bytes());
+    out.extend_from_slice(text);
+    if text.len() & 1 == 1 {
+        out.push(0);
+    }
+    out
+}
+
+/// Extract concatenated `CHRS` bytes from an Amiga IFF `FORM FTXT`, or `None` if not a valid `FORM FTXT`.
+pub fn decode_ftxt(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() < 12 || &bytes[0..4] != b"FORM" || &bytes[8..12] != b"FTXT" {
+        return None;
+    }
+    let form_len = u32::from_be_bytes(bytes[4..8].try_into().ok()?) as usize;
+    let end = (8usize.checked_add(form_len)?).min(bytes.len());
+    let mut i = 12usize;
+    let mut text = Vec::new();
+    while i + 8 <= end {
+        let id = &bytes[i..i + 4];
+        let sz = u32::from_be_bytes(bytes[i + 4..i + 8].try_into().ok()?) as usize;
+        let data_end = i.checked_add(8)?.checked_add(sz)?;
+        if data_end > end {
+            break;
+        }
+        if id == b"CHRS" {
+            text.extend_from_slice(&bytes[i + 8..data_end]);
+        }
+        i = data_end + (sz & 1);
+    }
+    Some(text)
+}
+
 /// ReadStream: `n` bytes or an IFFERR code (a short read is IFFERR_READ, as `Read() != NBytes` is in DOSStreamHandler).
 pub fn read_stream<U: GuestUi>(a: &mut Amiga<U>, iff: u32, n: u32) -> Result<Vec<u8>, i32> {
     if n == 0 { return Ok(Vec::new()); }
+    if matches!(stream_kind(a, iff), Ok(Stream::Clip)) {
+        let Some(cb) = a.iff.handles.get_mut(&iff).and_then(|h| h.clip_buf.as_mut()) else { return Err(IFFERR_READ) };
+        if cb.write { return Err(IFFERR_READ); }
+        let start = cb.pos.min(cb.data.len());
+        let end = start.saturating_add(n as usize).min(cb.data.len());
+        let out = cb.data[start..end].to_vec();
+        cb.pos = end;
+        return if out.len() != n as usize { Err(IFFERR_READ) } else { Ok(out) };
+    }
     let Ok(bptr) = rd(a, iff + IH_STREAM) else { return Err(IFFERR_READ) };
     let Some(f) = a.fs.files.get(&(bptr << 2)) else { return Err(IFFERR_READ) };
     let (node, pos, readable) = (f.node, f.pos as usize, f.read);
@@ -207,6 +266,16 @@ pub fn read_stream<U: GuestUi>(a: &mut Amiga<U>, iff: u32, n: u32) -> Result<Vec
 /// WriteStream: all of `bytes` or IFFERR_WRITE.
 pub fn write_stream<U: GuestUi>(a: &mut Amiga<U>, iff: u32, bytes: &[u8]) -> i32 {
     if bytes.is_empty() { return 0; }
+    if matches!(stream_kind(a, iff), Ok(Stream::Clip)) {
+        let Some(cb) = a.iff.handles.get_mut(&iff).and_then(|h| h.clip_buf.as_mut()) else { return IFFERR_WRITE };
+        if !cb.write { return IFFERR_WRITE; }
+        let end = cb.pos.saturating_add(bytes.len());
+        if end > guestsvc_abi::CLIP_PAYLOAD_MAX { return IFFERR_WRITE; }
+        if end > cb.data.len() { cb.data.resize(end, 0); }
+        cb.data[cb.pos..end].copy_from_slice(bytes);
+        cb.pos = end;
+        return 0;
+    }
     let Ok(bptr) = rd(a, iff + IH_STREAM) else { return IFFERR_WRITE };
     if !a.fs.files.contains_key(&(bptr << 2)) { return IFFERR_WRITE; }
     match crate::dos_io::write_bytes_to(a, bptr, bytes) { Ok(true) => 0, _ => IFFERR_WRITE }
@@ -215,6 +284,13 @@ pub fn write_stream<U: GuestUi>(a: &mut Amiga<U>, iff: u32, bytes: &[u8]) -> i32
 /// SeekStream relative to the current position: 0 or IFFERR_SEEK (a position outside the file is a seek error, as Seek() gives).
 pub fn seek_stream<U: GuestUi>(a: &mut Amiga<U>, iff: u32, off: i32) -> i32 {
     if off == 0 { return 0; }
+    if matches!(stream_kind(a, iff), Ok(Stream::Clip)) {
+        let Some(cb) = a.iff.handles.get_mut(&iff).and_then(|h| h.clip_buf.as_mut()) else { return IFFERR_SEEK };
+        let new = cb.pos as i64 + off as i64;
+        if new < 0 || new > cb.data.len() as i64 { return IFFERR_SEEK; }
+        cb.pos = new as usize;
+        return 0;
+    }
     let Ok(bptr) = rd(a, iff + IH_STREAM) else { return IFFERR_SEEK };
     let Some(f) = a.fs.files.get(&(bptr << 2)) else { return IFFERR_SEEK };
     let (node, pos) = (f.node, f.pos as i64);
@@ -245,6 +321,7 @@ pub fn get_chunk_header<U: GuestUi>(a: &mut Amiga<U>, iff: u32) -> Result<i32, R
 pub fn register<U: GuestUi>(b: LibraryBuilder<U>) -> LibraryBuilder<U> {
     b.named("AllocIFF", alloc_iff::<U>).named("FreeIFF", crate::iff_lci::free_iff::<U>).named("OpenIFF", open_iff::<U>).named("CloseIFF", close_iff::<U>)
         .named("InitIFF", init_iff::<U>).named("InitIFFasDOS", init_as_dos::<U>).named("InitIFFasClip", init_as_clip::<U>)
+        .named("OpenClipboard", open_clipboard::<U>).named("CloseClipboard", close_clipboard::<U>)
         .named("GoodID", good_id_lvo::<U>).named("GoodType", good_type_lvo::<U>).named("IDtoStr", id_to_str::<U>)
         .with(crate::iff_chunk::register::<U>).with(crate::iff_lci::register::<U>).with(crate::iff_parse::register::<U>)
 }
@@ -265,7 +342,7 @@ fn alloc_iff<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
     a.mem.zero(h, HANDLE_SIZE).map_err(m("IFFHandle"))?;
     let root = h + IH_DEFAULT_CN;
     a.iff.cns.insert(root, Cn { composite: false, lcis: Vec::new() });
-    a.iff.handles.insert(h, Iff { stack: alloc::vec![root] });
+    a.iff.handles.insert(h, Iff { stack: alloc::vec![root], clip_buf: None });
     relink(a, h)?;
     cpu.set_d0(h);
     Ok(format!("[iffparse] AllocIFF -> {h:#x}"))
@@ -292,21 +369,71 @@ fn init_as(a: &mut Amiga<impl GuestUi>, iff: u32, which: NativeHook, func: &str)
 fn init_as_dos<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { init_as(a, cpu.areg(0), NativeHook::Dos, "InitIFFasDOS") }
 fn init_as_clip<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> { init_as(a, cpu.areg(0), NativeHook::Clip, "InitIFFasClip") }
 
+/// OpenClipboard(d0 = unitNumber) -> ClipboardHandle token (non-zero) when host clipboard is attached & granted, else 0.
+fn open_clipboard<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let unit = cpu.dreg(0);
+    let Some(clip) = a.clip_host.as_mut() else {
+        cpu.set_d0(0);
+        return Ok(format!("[iffparse] OpenClipboard({unit}) -> NULL (no host clipboard)"));
+    };
+    match clip.generation() {
+        Ok(_) => {
+            let tok = 0xC110_0000 | (unit & 0xFFFF) | 1;
+            cpu.set_d0(tok);
+            Ok(format!("[iffparse] OpenClipboard({unit}) -> {tok:#x}"))
+        }
+        Err(e) => {
+            cpu.set_d0(0);
+            a.refused.push(format!("iffparse.library/OpenClipboard: host clipboard {}", e.name()));
+            Ok(format!("[iffparse] OpenClipboard({unit}) REFUSED: {}", e.name()))
+        }
+    }
+}
+
+/// CloseClipboard(a0 = clipHandle): stateless token release.
+fn close_clipboard<U: GuestUi>(_a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
+    let h = cpu.areg(0);
+    Ok(format!("[iffparse] CloseClipboard({h:#x})"))
+}
+
 /// OpenIFF(a0 = iff, d0 = rwMode) -> 0 or an IFFERR code. A read-mode stream must start with a FORM, LIST or CAT header.
 fn open_iff<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let (iff, rw) = (cpu.areg(0), cpu.dreg(0));
     if iff == 0 { cpu.set_d0(IFFERR_NOMEM as u32); return Ok("[iffparse] OpenIFF NULL -> NOMEM".into()); }
     handle(a, "OpenIFF", iff)?;
-    match stream_kind(a, iff)? {
+    let kind = stream_kind(a, iff)?;
+    match kind {
         Stream::None => { cpu.set_d0(IFFERR_NOHOOK as u32); return Ok(format!("[iffparse] OpenIFF {iff:#x} -> NOHOOK (no InitIFF)")); }
-        Stream::Clip => return refuse(a, cpu, "OpenIFF", "InitIFFasClip: the clipboard stream needs clipboard.device, which the engine does not model".into(), IFFERR_NOHOOK),
+        Stream::Clip => {
+            let Some(clip) = a.clip_host.as_mut() else {
+                return refuse(a, cpu, "OpenIFF", "InitIFFasClip: the clipboard stream needs clipboard.device (no host clipboard attached)".into(), IFFERR_NOHOOK);
+            };
+            if rw & IFFF_RWBITS == 0 {
+                let entry = match clip.paste() {
+                    Ok(v) => v,
+                    Err(e) => return refuse(a, cpu, "OpenIFF", format!("InitIFFasClip: host clipboard {}", e.name()), IFFERR_NOHOOK),
+                };
+                let data = match entry {
+                    None => Vec::new(),
+                    Some((mime, payload)) if mime == "application/x-amiga-iff" => payload,
+                    Some((mime, payload)) if mime == "text/plain" || mime.starts_with("text/plain;") => encode_ftxt(&payload),
+                    Some(_) => Vec::new(),
+                };
+                a.iff.handles.get_mut(&iff).expect("handle").clip_buf = Some(ClipBuf { data, pos: 0, write: false });
+            } else {
+                if let Err(e) = clip.generation() {
+                    return refuse(a, cpu, "OpenIFF", format!("InitIFFasClip: host clipboard {}", e.name()), IFFERR_NOHOOK);
+                }
+                a.iff.handles.get_mut(&iff).expect("handle").clip_buf = Some(ClipBuf { data: Vec::new(), pos: 0, write: true });
+            }
+        }
         Stream::Custom(h) => return refuse(a, cpu, "OpenIFF", format!("the stream hook {h:#x} is the program's own; guest stream callbacks are not modelled (InitIFFasDOS is)"), IFFERR_NOHOOK),
         Stream::Dos => {}
     }
     let mut err = 0;
     let stream = rd(a, iff + IH_STREAM)?;
     let fl = flags(a, iff)?;
-    if rw & IFFF_RWBITS == 0 && stream != 0 {
+    if rw & IFFF_RWBITS == 0 && (stream != 0 || kind == Stream::Clip) {
         err = get_chunk_header(a, iff)?;
         if err == 0 {
             set_state(a, iff, PState::Composite)?;
@@ -320,6 +447,9 @@ fn open_iff<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
         } else {
             if err == IFFERR_MANGLED { err = IFFERR_NOTIFF; }
             seek_to_start(a, iff); // IFFCMD_CLEANUP
+            if kind == Stream::Clip {
+                if let Some(h) = a.iff.handles.get_mut(&iff) { h.clip_buf = None; }
+            }
         }
     } else {
         wr(a, iff + IH_FLAGS, (fl & !IFFF_RWBITS) | (rw & IFFF_RWBITS) | IFFF_OPEN | IFFF_NEWFILE)?;
@@ -329,10 +459,14 @@ fn open_iff<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refus
 }
 
 fn seek_to_start<U: GuestUi>(a: &mut Amiga<U>, iff: u32) {
+    if matches!(stream_kind(a, iff), Ok(Stream::Clip)) {
+        if let Some(cb) = a.iff.handles.get_mut(&iff).and_then(|h| h.clip_buf.as_mut()) { cb.pos = 0; }
+        return;
+    }
     if let Ok(bptr) = rd(a, iff + IH_STREAM) { if let Some(f) = a.fs.files.get_mut(&(bptr << 2)) { f.pos = 0; } }
 }
 
-/// CloseIFF(a0 = iff): pops every open chunk (stopping at the first error), then the stream's CLEANUP.
+/// CloseIFF(a0 = iff): pops every open chunk (stopping at the first error), then flushes clip write buffer / CLEANUP.
 fn close_iff<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refusal> {
     let iff = cpu.areg(0);
     if iff == 0 { return Ok("[iffparse] CloseIFF NULL".into()); }
@@ -347,7 +481,24 @@ fn close_iff<U: GuestUi>(a: &mut Amiga<U>, cpu: &mut Cpu) -> Result<String, Refu
         purge.extend(p);
         if err != 0 { break; }
     }
-    seek_to_start(a, iff);
+    if matches!(stream_kind(a, iff), Ok(Stream::Clip)) {
+        if let Some(cb) = a.iff.handles.get_mut(&iff).and_then(|h| h.clip_buf.take()) {
+            if cb.write && !cb.data.is_empty() {
+                if let Some(clip) = a.clip_host.as_mut() {
+                    let res = if let Some(text) = decode_ftxt(&cb.data) {
+                        clip.copy("text/plain;charset=utf-8", &text)
+                    } else {
+                        clip.copy("application/x-amiga-iff", &cb.data)
+                    };
+                    if let Err(e) = res {
+                        a.refused.push(format!("iffparse.library/CloseIFF: host clipboard {}", e.name()));
+                    }
+                }
+            }
+        }
+    } else {
+        seek_to_start(a, iff);
+    }
     let next = crate::iff_lci::purge_chain(a, cpu, purge, alloc::boxed::Box::new(|_, _, _| Ok(crate::guest_call::Next::Return(0))))?;
     crate::guest_call::start(a, cpu, next)?;
     Ok(format!("[iffparse] CloseIFF {iff:#x}"))

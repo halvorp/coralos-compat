@@ -51,6 +51,10 @@ impl OsFamily for MacFamily {
         m.datatype_host = Some(alloc::boxed::Box::new(host));
         Ok(())
     }
+    fn attach_clipboard(m: &mut Mac<LibUi>, host: heirloom_os_abi::clip::ClipHost) -> Result<(), alloc::string::String> {
+        m.clip_host = Some(alloc::boxed::Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<MacFamily>();

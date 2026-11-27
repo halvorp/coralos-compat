@@ -139,7 +139,10 @@ impl<U: GuestUi> Mac<U> {
         let n = self.mem.read_u16(TE_SCRP_LENGTH).map_err(Refusal::mem("TEScrpLength"))? as u32;
         let at = self.mm.block(sh).map(|b| b.ptr).ok_or_else(|| Refusal(format!("TEToScrap: no TextEdit scrap (TEScrpHandle {sh:#x}): the program never called TEInit")))?;
         let bytes = self.mem.bytes(self.mem.span(at, n).map_err(Refusal::mem("TEScrp"))?).map_err(Refusal::mem("TEScrp"))?.to_vec();
-        self.scrap.put(*b"TEXT", bytes);
+        if let Err(e) = self.scrap_put(*b"TEXT", bytes) {
+            self.note_refusal("TEToScrap", format!("host clipboard {}", e.name()));
+            return Ok(crate::scrap::NO_SCRAP_ERR as i16);
+        }
         Ok(0)
     }
 
@@ -147,7 +150,14 @@ impl<U: GuestUi> Mac<U> {
     /// 32000 bytes is teScrapSizeTooLarge (-501), nothing copied; otherwise the TE scrap holds it and `TEScrpLength` is its length. 0.
     pub fn te_from_scrap(&mut self) -> Result<i16, Refusal> {
         self.mem.write_u16(TE_SCRP_LENGTH, 0).map_err(Refusal::mem("TEScrpLength"))?;
-        let Some(text) = self.scrap.get(*b"TEXT").map(<[u8]>::to_vec) else { return Ok(crate::scrap::NO_TYPE_ERR as i16) };
+        let text = match self.scrap_get(*b"TEXT") {
+            Ok(Some(t)) => t,
+            Ok(None) => return Ok(crate::scrap::NO_TYPE_ERR as i16),
+            Err(e) => {
+                self.note_refusal("TEFromScrap", format!("host clipboard {}", e.name()));
+                return Ok(crate::scrap::NO_SCRAP_ERR as i16);
+            }
+        };
         if text.len() > 32000 { return Ok(-501); }
         let sh = self.mem.read_u32(TE_SCRP_HANDLE).map_err(Refusal::mem("TEScrpHandle"))?;
         if self.mm.block(sh).is_none() { return Err(Refusal(format!("TEFromScrap: no TextEdit scrap (TEScrpHandle {sh:#x}): the program never called TEInit"))); }

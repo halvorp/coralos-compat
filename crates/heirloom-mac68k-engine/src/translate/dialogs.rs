@@ -218,13 +218,27 @@ impl<U: GuestUi> Mac<U> {
         let h = self.tr.dlg.dialogs[&win].list[idx].handle;
         let text = self.handle_text(h)?;
         if matches!(op, DialogEdit::Cut | DialogEdit::Copy) {
-            self.scrap.zero();
-            self.scrap.put(*b"TEXT", text.chars().map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect());
+            if let Err(e) = self.scrap_zero() {
+                self.note_refusal("DialogEdit", format!("host clipboard {}", e.name()));
+                return Ok(false);
+            }
+            let bytes: Vec<u8> = text.chars().map(|c| crate::macroman::from_char(c).unwrap_or(b'?')).collect();
+            if let Err(e) = self.scrap_put(*b"TEXT", bytes) {
+                self.note_refusal("DialogEdit", format!("host clipboard {}", e.name()));
+                return Ok(false);
+            }
         }
         let new = match op {
             DialogEdit::Copy => return Ok(true),
             DialogEdit::Cut | DialogEdit::Delete => String::new(),
-            DialogEdit::Paste => match self.scrap.get(*b"TEXT") { Some(t) => t.iter().map(|&b| crate::macroman::to_char(b)).collect(), None => return Ok(false) },
+            DialogEdit::Paste => match self.scrap_get(*b"TEXT") {
+                Ok(Some(t)) => t.iter().map(|&b| crate::macroman::to_char(b)).collect(),
+                Ok(None) => return Ok(false),
+                Err(e) => {
+                    self.note_refusal("DialogPaste", format!("host clipboard {}", e.name()));
+                    return Ok(false);
+                }
+            },
         };
         self.set_handle_text(h, &new)?;
         self.sync_text(win, idx)?;

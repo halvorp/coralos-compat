@@ -83,6 +83,10 @@ impl OsFamily for AmiFamily {
         m.set_prefs_host(alloc::boxed::Box::new(host));
         Ok(())
     }
+    fn attach_clipboard(m: &mut Amiga<LibUi>, host: heirloom_os_abi::clip::ClipHost) -> Result<(), String> {
+        m.clip_host = Some(alloc::boxed::Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<AmiFamily>();

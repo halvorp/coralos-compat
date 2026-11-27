@@ -62,7 +62,8 @@ pub mod stdclib;
 pub mod threads;
 pub mod alias_c;
 pub mod carbon_ctl;
-pub mod scrap_c; // the Carbon Scrap Manager over the one desk scrap
+pub mod mac_scrap_c; // the Carbon Scrap Manager over the host-backed desk scrap (REUSE U8)
+pub use mac_scrap_c as scrap_c;
 pub mod evloop_c; // the Carbon Event Loop: the main loop ref and its timers, fired at safepoints through the callback machine
 pub mod upp_c;
 pub mod xisa;
