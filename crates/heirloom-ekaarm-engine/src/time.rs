@@ -73,6 +73,41 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
             }
             Some(NativeOutcome::Return)
         }
+        // TDateTime TTime::DateTime() const (hidden return pointer in r0, this in r1).
+        "_ZNK5TTime8DateTimeEv" => {
+            let (out_ptr, this) = (p.cpu.regs[0], p.cpu.regs[1]);
+            let (Ok(lo), Ok(hi)) = (p.rd(this), p.rd(this.wrapping_add(4))) else {
+                return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TTime unreadable")));
+            };
+            let us = (u64::from(lo) | (u64::from(hi) << 32)) as i64;
+            let micro = us.rem_euclid(1_000_000) as i32;
+            let total_secs = us.div_euclid(1_000_000);
+            let sec = total_secs.rem_euclid(60) as i32;
+            let total_mins = total_secs.div_euclid(60);
+            let min = total_mins.rem_euclid(60) as i32;
+            let total_hrs = total_mins.div_euclid(60);
+            let hr = total_hrs.rem_euclid(24) as i32;
+            let mut days = total_hrs.div_euclid(24);
+            let leap = |y: i64| (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+            let mut year = 0i64;
+            while days >= if leap(year) { 366 } else { 365 } {
+                days -= if leap(year) { 366 } else { 365 };
+                year += 1;
+            }
+            const DAYS: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            let mut month = 0i32;
+            while (month as usize) < 11 {
+                let md = DAYS[month as usize] + if month == 1 && leap(year) { 1 } else { 0 };
+                if days < md { break; }
+                days -= md;
+                month += 1;
+            }
+            for (i, v) in [year as i32, month, days as i32, hr, min, sec, micro].iter().enumerate() {
+                let _ = p.wr(out_ptr + (i as u32) * 4, *v as u32);
+            }
+            p.cpu.regs[0] = out_ptr;
+            Some(NativeOutcome::Return)
+        }
         // void TTime::FormatL(TDes16& aDes, const TDesC16& aFormat) const
         "_ZNK5TTime7FormatLER6TDes16RK7TDesC16" => {
             let (this, dst, fmt_addr) = (p.cpu.regs[0], p.cpu.regs[1], p.cpu.regs[2]);

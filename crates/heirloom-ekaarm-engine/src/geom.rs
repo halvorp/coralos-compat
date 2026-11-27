@@ -111,6 +111,30 @@ pub(crate) fn native(p: &mut Process, name: &str) -> Option<NativeOutcome> {
         }
         return Some(NativeOutcome::Return);
     }
+    if name == "_ZNK5TRect10IntersectsERKS_" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(ax0), Ok(ay0), Ok(ax1), Ok(ay1)) = (rd(p, this), rd(p, this + 4), rd(p, this + 8), rd(p, this + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect unreadable")));
+        };
+        let (Ok(bx0), Ok(by0), Ok(bx1), Ok(by1)) = (rd(p, r1), rd(p, r1 + 4), rd(p, r1 + 8), rd(p, r1 + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect arg unreadable")));
+        };
+        let hit = ax0 < ax1 && ay0 < ay1 && bx0 < bx1 && by0 < by1
+            && ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1;
+        p.cpu.regs[0] = u32::from(hit);
+        return Some(NativeOutcome::Return);
+    }
+    if name == "_ZNK5TRect8ContainsERK6TPoint" {
+        let r1 = p.cpu.regs[1];
+        let (Ok(ax0), Ok(ay0), Ok(ax1), Ok(ay1)) = (rd(p, this), rd(p, this + 4), rd(p, this + 8), rd(p, this + 12)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TRect unreadable")));
+        };
+        let (Ok(px), Ok(py)) = (rd(p, r1), rd(p, r1 + 4)) else {
+            return Some(NativeOutcome::Refused(format!("NEXT-NEEDED euser {name}: TPoint arg unreadable")));
+        };
+        p.cpu.regs[0] = u32::from(px >= ax0 && px < ax1 && py >= ay0 && py < ay1);
+        return Some(NativeOutcome::Return);
+    }
     if name == "_ZN5TRect12IntersectionERKS_" {
         let r1 = p.cpu.regs[1];
         let (Ok(ax0), Ok(ay0), Ok(ax1), Ok(ay1)) = (rd(p, this), rd(p, this + 4), rd(p, this + 8), rd(p, this + 12)) else {
