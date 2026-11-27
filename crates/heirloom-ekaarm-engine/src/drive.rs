@@ -46,6 +46,7 @@ fn split(path: &str) -> (Option<char>, Vec<&str>) {
 impl Drive {
     pub fn new() -> Self {
         let mut tree = Tree::new(255);
+        tree.enable_streams();
         let vol = tree.add_volume("Z", true);
         Drive { tree, vol, rom: None }
     }
@@ -53,6 +54,7 @@ impl Drive {
     /// The drive over a tree the host filled through `GuestMachine::volume()`: its volume `Z` (the first volume when there is no
     /// `Z`; a volume `Z` is added when the tree has none).
     pub fn from_tree(mut tree: Tree) -> Self {
+        tree.enable_streams();
         let vol = tree.volume("Z").or_else(|| tree.children(heirloom_volume::ROOT).first().copied()).unwrap_or_else(|| tree.add_volume("Z", true));
         Drive { tree, vol, rom: None }
     }
@@ -67,13 +69,24 @@ impl Drive {
         self.rom.is_some()
     }
 
-    /// The file's bytes: the package's, else the ROM's (owned, because a ROM file is read on demand).
+    /// The file's bytes: the package's (in-memory or streamed), else the ROM's (owned, because a ROM or streamed file is read on demand).
     pub fn read_owned(&self, path: &str) -> Result<Vec<u8>, DriveError> {
-        match self.read(path) {
-            Ok(b) => Ok(b.to_vec()),
+        match self.resolve(path) {
+            Ok(id) => {
+                if self.tree.is_dir(id) {
+                    return Err(DriveError::IsDirectory);
+                }
+                self.tree.read_all(id).ok_or(DriveError::NotFound)
+            }
             Err(DriveError::NotFound) => self.rom.as_ref().and_then(|r| r.read(path)).ok_or(DriveError::NotFound),
             Err(e) => Err(e),
         }
+    }
+
+    /// Logical byte length of `path` on the package tree (supports both in-memory and streamed files).
+    pub fn file_len(&self, path: &str) -> Result<u64, DriveError> {
+        let id = self.resolve(path)?;
+        self.tree.file_len(id).ok_or(DriveError::IsDirectory)
     }
 
     /// The names in the ROM directory `path` (None = no ROM or no such directory).
@@ -134,7 +147,7 @@ impl Drive {
         Ok(self.tree.children(id).iter().map(|&c| {
             let name = String::from(self.tree.name(c));
             let is_dir = self.tree.is_dir(c);
-            let size = self.tree.file_data(c).map(|b| b.len() as u32).unwrap_or(0);
+            let size = self.tree.file_len(c).map(|l| u32::try_from(l).unwrap_or(u32::MAX)).unwrap_or(0);
             (name, is_dir, size)
         }).collect())
     }
@@ -180,7 +193,7 @@ impl Drive {
         let mut total = 0u64;
         let mut stack = alloc::vec![self.vol];
         while let Some(n) = stack.pop() {
-            match self.tree.file_data(n) { Some(d) => total += d.len() as u64, None => stack.extend_from_slice(self.tree.children(n)) }
+            match self.tree.file_len(n) { Some(l) => total += l, None => stack.extend_from_slice(self.tree.children(n)) }
         }
         total
     }

@@ -27,11 +27,11 @@ impl FileMgr {
     /// The fork's logical length. A data fork may be a STREAM (heirloom-volume `Kind::Stream`: bytes in the host's storage, read on
     /// demand), so lengths and reads go through the tree, never a slice of the whole fork; a fork over 4 GiB cannot be opened.
     fn fork_len(&self, f: &OpenFork) -> u32 {
-        if f.rsrc { self.tree.get(f.node).rsrc.len() as u32 } else { self.tree.file_len(f.node).map_or(0, |l| l as u32) }
+        if f.rsrc { u32::try_from(self.tree.rsrc_len(f.node)).unwrap_or(u32::MAX) } else { self.tree.file_len(f.node).map_or(0, |l| l as u32) }
     }
-    /// An in-memory fork, for writing. A stream fork is never open for write ([`FileMgr::open`] refuses it), so `None` there.
+    /// An in-memory fork, for writing. A stream data fork is never open for write ([`FileMgr::open`] refuses it), so `None` there.
     fn fork_bytes_mut(&mut self, f: &OpenFork) -> Option<&mut Vec<u8>> {
-        if f.rsrc { Some(&mut self.tree.get_mut(f.node).rsrc) } else { self.tree.file_data_mut(f.node) }
+        if f.rsrc { Some(self.tree.rsrc_mut(f.node)) } else { self.tree.file_data_mut(f.node) }
     }
     fn fork_of(&self, refnum: i16) -> Result<OpenFork, i16> { self.forks.get(&refnum).cloned().ok_or(err::RF_NUM_ERR) }
 
@@ -119,7 +119,9 @@ impl FileMgr {
         let mut out = alloc::vec![0u8; avail];
         let at = start.min(len);
         if f.rsrc {
-            out.copy_from_slice(&self.tree.get(f.node).rsrc[at as usize..at as usize + avail]);
+            if self.tree.read_rsrc_at(f.node, u64::from(at), &mut out) != Some(avail) {
+                return Err(err::IO_ERR);
+            }
         } else if self.tree.read_at(f.node, u64::from(at), &mut out) != Some(avail) {
             return Err(err::IO_ERR); // a stream the host's storage did not deliver in full: an I/O error, never invented bytes
         }

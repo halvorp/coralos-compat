@@ -28,7 +28,7 @@ impl<U: GuestUi> Mac<U> {
     pub fn open_res_file(&mut self, loc: &Located, perm: u8) -> Result<i16, i16> {
         let node = loc.node.ok_or(err::FNF_ERR)?;
         let r = self.fm.open(loc, true, perm)?;
-        let mut bytes = self.fm.tree.get(node).rsrc.clone();
+        let mut bytes = self.fm.tree.read_rsrc_all(node).unwrap_or_default();
         if bytes.is_empty() {
             // Flat data-only volumes (such as CoralOS app bundles) carry resource forks as `<name>.rsrc` sidecars.
             let sidecar_name = format!("{}.rsrc", self.fm.tree.get(node).name);
@@ -63,7 +63,7 @@ impl<U: GuestUi> Mac<U> {
     pub fn new_res_fork(&mut self, loc: &Located) -> Result<(), i16> {
         let node = loc.node.ok_or(err::FNF_ERR)?;
         if !self.fm.tree.is_writable(node) { return Err(err::W_PR_ERR); }
-        if self.fm.tree.get(node).rsrc.is_empty() { self.fm.tree.get_mut(node).rsrc = ForkBuilder::new().build(); }
+        if self.fm.tree.rsrc_len(node) == 0 { self.fm.tree.set_rsrc(node, ForkBuilder::new().build()); }
         Ok(())
     }
 }

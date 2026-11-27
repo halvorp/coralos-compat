@@ -339,7 +339,7 @@ fn alias_call<U: GuestUi>(m: &mut Mac<U>, selector: u16, a: &dyn Fn(usize) -> u3
 impl<U: GuestUi> Mac<U> {
     /// The data of resource `'alis'` 0 in an alias file's resource fork (where the Finder keeps the record).
     fn alias_resource(&self, node: heirloom_volume::NodeId) -> Option<Vec<u8>> {
-        let fork = heirloom_fmt_resfork::ResFork::parse(self.fm.tree.get(node).rsrc.clone()).ok()?;
+        let fork = heirloom_fmt_resfork::ResFork::parse(self.fm.tree.read_rsrc_all(node)?).ok()?;
         fork.find(*b"alis", 0).and_then(|i| fork.data(i)).map(<[u8]>::to_vec)
     }
 

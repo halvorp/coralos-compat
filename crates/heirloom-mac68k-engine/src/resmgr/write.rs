@@ -101,7 +101,7 @@ impl<U: GuestUi> Mac<U> {
         file.dirty = false;
         let bytes = file.fork.to_bytes();
         self.fm.now_secs = self.clock();
-        self.fm.tree.get_mut(node).rsrc = bytes;
+        self.fm.tree.set_rsrc(node, bytes);
         self.fm.touch(node);
         Ok(())
     }

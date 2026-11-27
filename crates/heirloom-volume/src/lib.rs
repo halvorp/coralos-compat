@@ -59,8 +59,10 @@ pub struct Node {
     pub created_ms: i64,
     pub modified_ms: i64,
     pub finfo: FInfo,
-    /// The resource fork of a file (empty when it has none).
+    /// The resource fork of a file (empty when it has none, or when backed by `rsrc_stream`).
     pub rsrc: Vec<u8>,
+    /// Optional on-demand streamed resource fork (read via `Tree::streams` when `rsrc` is empty).
+    rsrc_stream: Option<Stream>,
     writable: bool,
     /// A volume's capacity in bytes as its host declared it ([`Tree::set_capacity`]); 0 = not declared.
     capacity: u64,
@@ -149,6 +151,127 @@ impl Tree {
     /// The locator of stream file `id` (where its source reads it); `None` for any other node.
     pub fn stream_locator(&self, id: NodeId) -> Option<&str> {
         match &self.node(id).kind { Kind::Stream(s) => self.locators.get(s.key as usize).map(String::as_str), _ => None }
+    }
+    /// Read the entire data fork of file `id` (in-memory or streamed). For a stream whose length is `u64::MAX`
+    /// (unknown-length read-to-EOF stream), reads in chunks until the source returns `0`.
+    pub fn read_all(&self, id: NodeId) -> Option<Vec<u8>> {
+        match &self.node(id).kind {
+            Kind::Dir(_) => None,
+            Kind::File(d) => Some(d.clone()),
+            Kind::Stream(s) => {
+                let locator = self.locators.get(s.key as usize)?;
+                let src = self.streams.as_deref()?;
+                if s.len == u64::MAX {
+                    let mut out = Vec::new();
+                    let mut buf = alloc::vec![0u8; 64 * 1024];
+                    let mut off = 0u64;
+                    loop {
+                        let got = src.read_at(locator, off, &mut buf)?;
+                        if got == 0 {
+                            break;
+                        }
+                        out.extend_from_slice(&buf[..got]);
+                        off = off.saturating_add(got as u64);
+                    }
+                    Some(out)
+                } else {
+                    let len = usize::try_from(s.len).ok()?;
+                    let mut out = alloc::vec![0u8; len];
+                    let mut pos = 0usize;
+                    while pos < len {
+                        let got = src.read_at(locator, pos as u64, &mut out[pos..])?;
+                        if got == 0 {
+                            return None;
+                        }
+                        pos += got;
+                    }
+                    Some(out)
+                }
+            }
+        }
+    }
+    /// Host-side: attach a streamed resource fork to file `id` (`len` bytes read on demand from `locator`).
+    /// Refused with [`VolErr::WrongType`] on a directory or when streams are not enabled on this tree.
+    pub fn put_rsrc_stream(&mut self, id: NodeId, len: u64, locator: &str) -> Result<(), VolErr> {
+        if !self.streams_enabled || self.is_dir(id) {
+            return Err(VolErr::WrongType);
+        }
+        let key = u32::try_from(self.locators.len()).map_err(|_| VolErr::InvalidName)?;
+        self.locators.push(String::from(locator));
+        let n = self.node_mut(id);
+        n.rsrc.clear();
+        n.rsrc_stream = Some(Stream { len, key });
+        Ok(())
+    }
+    /// Whether file `id` has an on-demand streamed resource fork.
+    pub fn is_rsrc_stream(&self, id: NodeId) -> bool {
+        self.node(id).rsrc_stream.is_some()
+    }
+    /// The locator of file `id`'s streamed resource fork, or `None` when in-memory / absent.
+    pub fn rsrc_stream_locator(&self, id: NodeId) -> Option<&str> {
+        self.node(id).rsrc_stream.and_then(|s| self.locators.get(s.key as usize).map(String::as_str))
+    }
+    /// Logical length of file `id`'s resource fork (in-memory or streamed).
+    pub fn rsrc_len(&self, id: NodeId) -> u64 {
+        let n = self.node(id);
+        match n.rsrc_stream {
+            Some(s) => s.len,
+            None => n.rsrc.len() as u64,
+        }
+    }
+    /// Read up to `dst.len()` bytes of file `id`'s resource fork from `offset`.
+    pub fn read_rsrc_at(&self, id: NodeId, offset: u64, dst: &mut [u8]) -> Option<usize> {
+        let n = self.node(id);
+        if let Some(s) = n.rsrc_stream {
+            if offset >= s.len {
+                return Some(0);
+            }
+            let want = dst.len().min(usize::try_from(s.len - offset).unwrap_or(usize::MAX));
+            let locator = self.locators.get(s.key as usize)?;
+            let got = self.streams.as_deref()?.read_at(locator, offset, &mut dst[..want])?;
+            Some(got.min(want))
+        } else {
+            let start = usize::try_from(offset).ok().filter(|&o| o < n.rsrc.len()).unwrap_or(n.rsrc.len());
+            let k = dst.len().min(n.rsrc.len() - start);
+            dst[..k].copy_from_slice(&n.rsrc[start..start + k]);
+            Some(k)
+        }
+    }
+    /// Read file `id`'s entire resource fork (cloning in-memory bytes or materialising from `StreamSource`).
+    /// Returns `None` only if the resource fork is a stream whose source is absent or fails.
+    pub fn read_rsrc_all(&self, id: NodeId) -> Option<Vec<u8>> {
+        let n = self.node(id);
+        let Some(s) = n.rsrc_stream else {
+            return Some(n.rsrc.clone());
+        };
+        let len = usize::try_from(s.len).ok()?;
+        let mut out = alloc::vec![0u8; len];
+        let mut pos = 0usize;
+        while pos < len {
+            let got = self.read_rsrc_at(id, pos as u64, &mut out[pos..])?;
+            if got == 0 {
+                return None;
+            }
+            pos += got;
+        }
+        Some(out)
+    }
+    /// Mutable access to file `id`'s resource fork. If it was streamed, materialises it into memory first
+    /// so subsequent writes and `UpdateResFile` work identically to an in-memory fork.
+    pub fn rsrc_mut(&mut self, id: NodeId) -> &mut Vec<u8> {
+        if self.node(id).rsrc_stream.is_some() {
+            let bytes = self.read_rsrc_all(id).unwrap_or_default();
+            let n = self.node_mut(id);
+            n.rsrc = bytes;
+            n.rsrc_stream = None;
+        }
+        &mut self.node_mut(id).rsrc
+    }
+    /// Replace file `id`'s resource fork with in-memory bytes, clearing any stream backing.
+    pub fn set_rsrc(&mut self, id: NodeId, bytes: Vec<u8>) {
+        let n = self.node_mut(id);
+        n.rsrc = bytes;
+        n.rsrc_stream = None;
     }
 
     /// The volume `id` lives on (the root for the root).
@@ -271,7 +394,7 @@ impl Tree {
 
 impl Node {
     fn new(name: String, parent: NodeId, kind: Kind, writable: bool) -> Node {
-        Node { name, parent, kind, attrs: 0, comment: String::new(), created_ms: 0, modified_ms: 0, finfo: FInfo::default(), rsrc: Vec::new(), writable, capacity: 0 }
+        Node { name, parent, kind, attrs: 0, comment: String::new(), created_ms: 0, modified_ms: 0, finfo: FInfo::default(), rsrc: Vec::new(), rsrc_stream: None, writable, capacity: 0 }
     }
 }
 
@@ -437,5 +560,35 @@ mod stream_tests {
         t.enable_streams();
         t.put_stream(v, "Nowhere", 5, "").unwrap();
         assert_eq!(crate::snapshot::decode(&crate::snapshot::encode(&t)).err(), Some(crate::snapshot::SnapErr::Stream { record: 1 }));
+    }
+
+    #[test]
+    fn rsrc_stream_reads_on_demand_crosses_hvs3_snapshot_and_materialises_on_write() {
+        let mut t = Tree::new(31);
+        let v = t.add_volume("Macintosh HD", true);
+        t.enable_streams();
+        let reads = Rc::new(Cell::new(0));
+        t.set_stream_source(alloc::boxed::Box::new(Pattern { len: 1024, reads: reads.clone() }));
+        let f = t.put_stream(v, "Plugin", 100, "k0").unwrap();
+        t.put_rsrc_stream(f, 12, "k5").unwrap();
+        assert_eq!(reads.get(), 0, "staging rsrc_stream reads nothing");
+        assert_eq!((t.is_rsrc_stream(f), t.rsrc_len(f), t.rsrc_stream_locator(f)), (true, 12, Some("k5")));
+        let snap = crate::snapshot::encode(&t);
+        assert_eq!(&snap[..4], b"HVS3", "streamed rsrc emits HVS3");
+        let mut back = crate::snapshot::decode(&snap).unwrap();
+        back.set_stream_source(alloc::boxed::Box::new(Pattern { len: 1024, reads: reads.clone() }));
+        let bf = back.find_child(back.volume("Macintosh HD").unwrap(), "Plugin").unwrap();
+        assert_eq!((back.is_rsrc_stream(bf), back.rsrc_len(bf)), (true, 12));
+        let all = back.read_rsrc_all(bf).unwrap();
+        assert_eq!(all, (5u8..17u8).collect::<Vec<u8>>());
+        assert_eq!(reads.get(), 1);
+        // Materialise on write: rsrc_mut clears rsrc_stream and preserves existing bytes
+        back.rsrc_mut(bf).push(99);
+        assert!(!back.is_rsrc_stream(bf));
+        assert_eq!(back.rsrc_len(bf), 13);
+        assert_eq!(back.read_rsrc_all(bf).unwrap().last(), Some(&99));
+        // Negative control: read_all with u64::MAX reads cleanly to EOF
+        let eof_f = back.put_stream(back.volume("Macintosh HD").unwrap(), "RomFile", u64::MAX, "k2").unwrap();
+        assert_eq!(back.read_all(eof_f).unwrap().len(), 1024);
     }
 }

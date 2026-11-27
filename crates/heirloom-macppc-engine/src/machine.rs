@@ -235,7 +235,7 @@ impl<U: GuestUi> MacPpc<U> {
                 continue;
             }
             // the CFM finds a library by its FRAGMENT name (its 'cfrg' member), not its file name; a file with no 'cfrg' is provided by its file name
-            let rsrc = self.mac.fm.tree.get(node).rsrc.clone();
+            let rsrc = self.mac.fm.tree.read_rsrc_all(node).unwrap_or_default();
             let members = crate::source::library_fragments_of_forks(&rsrc, &bytes);
             if members.is_empty() {
                 self.mac.log.push(alloc::format!("[cfm] shared library \"{name}\" found in the application's folder ({len} bytes; no 'cfrg': provided by its file name)"));

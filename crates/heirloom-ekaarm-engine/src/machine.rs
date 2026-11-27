@@ -55,6 +55,7 @@ impl<U: GuestUi> EkaArm<U> {
     /// `start_file` refuses by name). os-eka.library makes its machines this way: the table is a file the host sends.
     pub fn without_ordinals(ui: U) -> Self {
         let mut tree = Tree::new(255);
+        tree.enable_streams();
         tree.add_volume("Z", true);
         EkaArm { ui: Some(Box::new(ui)), ordinals: None, tree, rom: None, cdl_data: None, process: None, done: None, stop_on_unimplemented: true, clock_us: 0, wall_us_since_0ad: None, log: Vec::new(), refused: Vec::new(), datatype_host: None }
     }

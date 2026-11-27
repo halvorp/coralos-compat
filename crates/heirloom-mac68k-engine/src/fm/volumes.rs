@@ -36,7 +36,7 @@ impl FileMgr {
             Kind::Dir(_) => self.used(c, block),
             Kind::File(_) | Kind::Stream(_) => {
                 let data = self.tree.file_len(c).unwrap_or(0).div_ceil(block);
-                (data + (self.tree.get(c).rsrc.len() as u64).div_ceil(block)) * block
+                (data + self.tree.rsrc_len(c).div_ceil(block)) * block
             }
         }).sum()
     }

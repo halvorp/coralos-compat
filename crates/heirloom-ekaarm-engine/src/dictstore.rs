@@ -38,7 +38,7 @@ impl Process {
         // format. A file that is not there is created, empty: `CDictionaryFileStore::OpenLC` creates the store (s32file.h:427).
         // DELETE WHEN a corpus run opens an existing dictionary file (then read the store format).
         if drive.exists(&path) {
-            let size = drive.read(&path).map(|b| b.len()).unwrap_or(0);
+            let size = drive.file_len(&path).unwrap_or(0) as usize;
             if size != 0 {
                 return Err(format!("{path} exists with {size} bytes: reading an existing dictionary store is not implemented"));
             }

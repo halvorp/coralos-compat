@@ -18,8 +18,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 const MAGIC: &[u8; 4] = b"HVS2";
+/// Format carrying optional streamed resource forks (bit 0x80 on `kind` means the `rsrc` run is `len: u64` + UTF-8 locator).
+const MAGIC_V3: &[u8; 4] = b"HVS3";
 /// The format before volume records carried a capacity.
 const MAGIC_V1: &[u8; 4] = b"HVS1";
+const KIND_RSRC_STREAM_BIT: u8 = 0x80;
 const VOLUME_PARENT: u32 = u32::MAX;
 
 /// Why a snapshot was refused.
@@ -41,10 +44,19 @@ pub enum SnapErr {
 fn put_u32(out: &mut Vec<u8>, v: u32) { out.extend_from_slice(&v.to_le_bytes()); }
 fn put_bytes(out: &mut Vec<u8>, b: &[u8]) { put_u32(out, b.len() as u32); out.extend_from_slice(b); }
 
-/// The whole tree as bytes.
+/// The whole tree as bytes. Uses `"HVS2"` unless any node carries a streamed resource fork, in which case `"HVS3"` is used.
 pub fn encode(tree: &Tree) -> Vec<u8> {
+    let mut has_rsrc_stream = false;
+    let mut check_stack: Vec<NodeId> = tree.children(ROOT).to_vec();
+    while let Some(id) = check_stack.pop() {
+        if tree.is_rsrc_stream(id) {
+            has_rsrc_stream = true;
+            break;
+        }
+        check_stack.extend_from_slice(tree.children(id));
+    }
     let mut out = Vec::new();
-    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(if has_rsrc_stream { MAGIC_V3 } else { MAGIC });
     put_u32(&mut out, tree.max_name as u32);
     let count_at = out.len();
     put_u32(&mut out, 0);
@@ -56,7 +68,9 @@ pub fn encode(tree: &Tree) -> Vec<u8> {
         let me = count;
         count += 1;
         put_u32(&mut out, parent);
-        out.push(match n.kind { Kind::Dir(_) => 0, Kind::File(_) => 1, Kind::Stream(_) => 2 });
+        let base_kind = match n.kind { Kind::Dir(_) => 0, Kind::File(_) => 1, Kind::Stream(_) => 2 };
+        let rsrc_loc = tree.rsrc_stream_locator(id);
+        out.push(if rsrc_loc.is_some() { base_kind | KIND_RSRC_STREAM_BIT } else { base_kind });
         out.push((parent == VOLUME_PARENT && n.writable) as u8);
         if parent == VOLUME_PARENT { out.extend_from_slice(&n.capacity.to_le_bytes()); }
         put_bytes(&mut out, n.name.as_bytes());
@@ -77,7 +91,14 @@ pub fn encode(tree: &Tree) -> Vec<u8> {
             }
             _ => put_bytes(&mut out, tree.file_data(id).unwrap_or(&[])),
         }
-        put_bytes(&mut out, &n.rsrc);
+        if let Some(locator) = rsrc_loc {
+            let rlen = tree.rsrc_len(id);
+            put_u32(&mut out, (8 + locator.len()) as u32);
+            out.extend_from_slice(&rlen.to_le_bytes());
+            out.extend_from_slice(locator.as_bytes());
+        } else {
+            put_bytes(&mut out, &n.rsrc);
+        }
         for &c in tree.children(id).iter().rev() {
             stack.push((c, me));
         }
@@ -113,7 +134,12 @@ impl<'a> Rd<'a> {
 /// A tree from [`encode`]'s bytes. Node ids are the new tree's own; names, kinds, contents and metadata are the snapshot's.
 pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
     let mut r = Rd { b: bytes, at: 0 };
-    let v2 = match r.take(4, "magic")? { m if m == MAGIC => true, m if m == MAGIC_V1 => false, _ => return Err(SnapErr::BadMagic) };
+    let (v2, v3) = match r.take(4, "magic")? {
+        m if m == MAGIC_V3 => (true, true),
+        m if m == MAGIC => (true, false),
+        m if m == MAGIC_V1 => (false, false),
+        _ => return Err(SnapErr::BadMagic),
+    };
     let max_name = r.u32("max_name")? as usize;
     let count = r.u32("count")?;
     // Every record is at least 56 bytes: refuse an impossible count before reserving anything.
@@ -124,7 +150,9 @@ pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
     let mut ids: Vec<NodeId> = Vec::with_capacity(count as usize);
     for record in 0..count {
         let parent = r.u32("parent")?;
-        let kind = r.take(1, "kind")?[0];
+        let raw_kind = r.take(1, "kind")?[0];
+        let rsrc_is_stream = v3 && (raw_kind & KIND_RSRC_STREAM_BIT != 0);
+        let kind = if v3 { raw_kind & !KIND_RSRC_STREAM_BIT } else { raw_kind };
         let writable = r.take(1, "writable")?[0] != 0;
         let capacity = if v2 && parent == VOLUME_PARENT { u64::from_le_bytes(r.arr("capacity")?) } else { 0 };
         let name = r.string("name")?;
@@ -142,8 +170,8 @@ pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
         let data = r.bytes("data")?;
         let rsrc = r.bytes("rsrc")?;
         let id = if parent == VOLUME_PARENT {
-            if kind != 0 || name.is_empty() || tree.volume(&name).is_some() {
-                return Err(if kind != 0 { SnapErr::BadKind { record, kind } } else { SnapErr::Refused { record } });
+            if kind != 0 || rsrc_is_stream || name.is_empty() || tree.volume(&name).is_some() {
+                return Err(if kind != 0 || rsrc_is_stream { SnapErr::BadKind { record, kind: raw_kind } } else { SnapErr::Refused { record } });
             }
             let v = tree.add_volume(&name, writable);
             tree.get_mut(v).capacity = capacity;
@@ -165,7 +193,7 @@ pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
                     tree.enable_streams();
                     tree.put_stream(dir, &name, u64::from_le_bytes(len.try_into().expect("8 bytes")), locator)
                 }
-                _ => return Err(SnapErr::BadKind { record, kind }),
+                _ => return Err(SnapErr::BadKind { record, kind: raw_kind }),
             }
             .map_err(|_| SnapErr::Refused { record })?
         };
@@ -175,7 +203,18 @@ pub fn decode(bytes: &[u8]) -> Result<Tree, SnapErr> {
         n.created_ms = created_ms;
         n.modified_ms = modified_ms;
         n.finfo = finfo;
-        n.rsrc = rsrc.to_vec();
+        if rsrc_is_stream {
+            let (len, locator) = rsrc.split_at_checked(8).ok_or(SnapErr::Stream { record })?;
+            let locator = core::str::from_utf8(locator).map_err(|_| SnapErr::BadUtf8("rsrc stream locator"))?;
+            if locator.is_empty() {
+                return Err(SnapErr::Stream { record });
+            }
+            tree.enable_streams();
+            tree.put_rsrc_stream(id, u64::from_le_bytes(len.try_into().expect("8 bytes")), locator)
+                .map_err(|_| SnapErr::Refused { record })?;
+        } else {
+            n.rsrc = rsrc.to_vec();
+        }
         ids.push(id);
     }
     if r.at != bytes.len() {
@@ -215,7 +254,11 @@ pub fn merge(dst: &mut Tree, src: &Tree) -> Result<(), crate::VolErr> {
         t.created_ms = n.created_ms;
         t.modified_ms = n.modified_ms;
         t.finfo = n.finfo;
-        t.rsrc = n.rsrc.clone();
+        if let Some(locator) = src.rsrc_stream_locator(id) {
+            dst.put_rsrc_stream(target, src.rsrc_len(id), locator)?;
+        } else {
+            dst.set_rsrc(target, n.rsrc.clone());
+        }
         for &c in src.children(id).iter().rev() {
             stack.push((c, target));
         }
@@ -253,6 +296,7 @@ pub fn merge_owned(dst: &mut Tree, mut src: Tree) -> Result<(), crate::VolErr> {
                 (true, Some(_)) => return Err(crate::VolErr::WrongType),
             }
         };
+        let rsrc_stream = src.rsrc_stream_locator(id).map(|loc| (src.rsrc_len(id), String::from(loc)));
         let n = src.get_mut(id);
         let (attrs, comment, created_ms, modified_ms, finfo, rsrc) =
             (n.attrs, core::mem::take(&mut n.comment), n.created_ms, n.modified_ms, n.finfo, core::mem::take(&mut n.rsrc));
@@ -262,7 +306,11 @@ pub fn merge_owned(dst: &mut Tree, mut src: Tree) -> Result<(), crate::VolErr> {
         t.created_ms = created_ms;
         t.modified_ms = modified_ms;
         t.finfo = finfo;
-        t.rsrc = rsrc;
+        if let Some((len, loc)) = rsrc_stream {
+            dst.put_rsrc_stream(target, len, &loc)?;
+        } else {
+            dst.set_rsrc(target, rsrc);
+        }
         for &c in src.children(id).iter().rev() {
             stack.push((c, target));
         }

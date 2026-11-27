@@ -99,6 +99,16 @@ pub trait OsFamily: 'static {
     fn input(_m: &mut Self::Machine, name: &str, _bytes: Vec<u8>) -> Result<(), String> {
         Err(format!("input {name:?}: this guest OS takes no named input"))
     }
+    /// Like [`input`](Self::input), with the engine's `HostStreams` when the session was built with an [`OsHost`],
+    /// so a family whose named input is itself a streamed volume (e.g. Symbian `Rom/`) can attach the engine's storage.
+    fn input_with_streams(
+        m: &mut Self::Machine,
+        name: &str,
+        bytes: Vec<u8>,
+        _streams: Option<Box<dyn heirloom_volume::StreamSource>>,
+    ) -> Result<(), String> {
+        Self::input(m, name, bytes)
+    }
     /// The engine's GL worker for the machine's guest GL ([`OsVTable::attach_gl`], OS ABI v3). A family whose guest OS has no GL
     /// refuses it by name.
     fn gl_attach(_m: &mut Self::Machine, _gl: GlHost) -> Result<(), String> {
@@ -170,6 +180,8 @@ pub struct Session<M: GuestMachine<Ui = LibUi>> {
     machine: M,
     /// The family's own controls (OsFamily::assign / host_profile), captured when the session is made.
     hooks: FamilyHooks<M>,
+    /// The engine host callbacks, kept so named inputs that carry streamed trees (e.g. Symbian ROM) can attach `HostStreams`.
+    host: Option<OsHost>,
     volume: Blob,
     program: Blob,
     staged_program: Option<Vec<u8>>,
@@ -185,7 +197,7 @@ pub struct Session<M: GuestMachine<Ui = LibUi>> {
 pub struct FamilyHooks<M> {
     pub assign: fn(&mut M, &str, &str, bool) -> Result<(), String>,
     pub host_profile: fn(&mut M, &HostProfile) -> Result<(), String>,
-    pub input: fn(&mut M, &str, Vec<u8>) -> Result<(), String>,
+    pub input: fn(&mut M, &str, Vec<u8>, Option<Box<dyn heirloom_volume::StreamSource>>) -> Result<(), String>,
     pub gl_attach: fn(&mut M, GlHost) -> Result<(), String>,
     pub perf: fn(&mut M, u64) -> Result<Option<String>, String>,
     pub set_code_mem: fn(&mut M, ppc::PpcCodeMem) -> Result<(), String>,
@@ -197,13 +209,13 @@ pub struct FamilyHooks<M> {
 impl<M> FamilyHooks<M> {
     /// The hooks of family `F`.
     pub fn of<F: OsFamily<Machine = M>>() -> Self {
-        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach, attach_datatype: F::attach_datatype }
+        FamilyHooks { assign: F::assign, host_profile: F::host_profile, input: F::input_with_streams, gl_attach: F::gl_attach, perf: F::perf, set_code_mem: F::set_code_mem, cpu_prof: F::cpu_prof, perf_attach: F::perf_attach, attach_datatype: F::attach_datatype }
     }
 }
 
 impl<M: GuestMachine<Ui = LibUi>> Session<M> {
     pub fn new(machine: M, hooks: FamilyHooks<M>) -> Self {
-        Session { machine, hooks, volume: Blob::default(), program: Blob::default(), staged_program: None, input: None, fault: None, undelivered: Vec::new(), host_refused: Vec::new() }
+        Session { machine, hooks, host: None, volume: Blob::default(), program: Blob::default(), staged_program: None, input: None, fault: None, undelivered: Vec::new(), host_refused: Vec::new() }
     }
 
     /// The session the table makes: [`Session::new`], and a machine whose file layer reads through its tree (it takes stream
@@ -212,7 +224,9 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
         if machine.volume().streams_enabled() {
             machine.volume().set_stream_source(Box::new(HostStreams::new(host)));
         }
-        Session::new(machine, hooks)
+        let mut s = Session::new(machine, hooks);
+        s.host = Some(host);
+        s
     }
 
     pub fn machine(&mut self) -> &mut M {
@@ -288,7 +302,8 @@ impl<M: GuestMachine<Ui = LibUi>> Session<M> {
                 match blob.take(&format!("input {name:?}"), offset, total, &chunk) {
                     Ok(Some(bytes)) => {
                         self.input = None;
-                        if let Err(e) = (self.hooks.input)(&mut self.machine, &name, bytes) {
+                        let streams = self.host.map(|h| Box::new(HostStreams::new(h)) as Box<dyn heirloom_volume::StreamSource>);
+                        if let Err(e) = (self.hooks.input)(&mut self.machine, &name, bytes, streams) {
                             self.fail(e);
                         }
                     }

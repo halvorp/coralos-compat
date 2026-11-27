@@ -37,6 +37,14 @@ impl OsFamily for EkaFamily {
         Ok(EkaArm::without_ordinals(ui))
     }
     fn input(m: &mut EkaArm<LibUi>, name: &str, bytes: Vec<u8>) -> Result<(), String> {
+        Self::input_with_streams(m, name, bytes, None)
+    }
+    fn input_with_streams(
+        m: &mut EkaArm<LibUi>,
+        name: &str,
+        bytes: Vec<u8>,
+        streams: Option<Box<dyn heirloom_volume::StreamSource>>,
+    ) -> Result<(), String> {
         match name {
             EKA_ORDINALS => {
                 let text = core::str::from_utf8(&bytes).map_err(|_| String::from("input eka-ordinals: the ordinal table is not UTF-8"))?;
@@ -50,7 +58,11 @@ impl OsFamily for EkaFamily {
                 Ok(())
             }
             EKA_ROM => {
-                m.set_rom(Box::new(TreeRom::from_snapshot(&bytes).map_err(|e| format!("input rom: {e}"))?));
+                let mut rom = TreeRom::from_snapshot(&bytes).map_err(|e| format!("input rom: {e}"))?;
+                if let Some(src) = streams {
+                    rom.set_stream_source(src);
+                }
+                m.set_rom(Box::new(rom));
                 Ok(())
             }
             other => Err(format!("input {other:?}: the Symbian machine takes {EKA_ORDINALS:?}, {EKA_LAYOUT:?} and {EKA_ROM:?} only")),

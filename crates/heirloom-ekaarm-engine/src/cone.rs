@@ -38,8 +38,8 @@ pub fn app_caption(drive: &Drive, uid3: u32) -> Result<String, String> {
     }
     let id = reg.localisable_id;
     let loc_path = crate::resource::resolve_rsc_path(drive, &reg.localisable_file);
-    let loc_bytes = drive.read(&loc_path).map_err(|e| format!("localisable resource file {loc_path} (from {}): {e:?}", reg.path))?;
-    let loc = RscFile::parse(loc_bytes).map_err(|e| format!("{loc_path}: {e:?}"))?;
+    let loc_bytes = drive.read_owned(&loc_path).map_err(|e| format!("localisable resource file {loc_path} (from {}): {e:?}", reg.path))?;
+    let loc = RscFile::parse(&loc_bytes).map_err(|e| format!("{loc_path}: {e:?}"))?;
     let info = loc.resource(id).map_err(|e| format!("{loc_path}: resource {id:#x}: {e:?}"))?;
     let mut r = Reader::new(&info);
     let field = |e| format!("{loc_path}: LOCALISABLE_APP_INFO {id:#x}: {e:?}");

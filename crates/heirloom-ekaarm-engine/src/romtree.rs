@@ -22,6 +22,11 @@ impl TreeRom {
         }
     }
 
+    /// Attach the engine's storage source so streamed ROM entries (`Kind::Stream`) are read on demand.
+    pub fn set_stream_source(&mut self, src: alloc::boxed::Box<dyn heirloom_volume::StreamSource>) {
+        self.tree.set_stream_source(src);
+    }
+
     fn resolve(&self, path: &str) -> Option<NodeId> {
         let b = path.as_bytes();
         let rest = if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() { &path[2..] } else { path };
@@ -38,7 +43,7 @@ impl TreeRom {
 
 impl RomSource for TreeRom {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
-        self.tree.file_data(self.resolve(path)?).map(<[u8]>::to_vec)
+        self.tree.read_all(self.resolve(path)?)
     }
     fn exists(&self, path: &str) -> bool {
         self.resolve(path).is_some()
@@ -83,5 +88,30 @@ mod tests {
         two.add_volume("A", false);
         two.add_volume("B", false);
         assert!(TreeRom::from_snapshot(&encode(&two)).err().unwrap().contains("2 volumes"));
+    }
+
+    #[test]
+    fn streamed_rom_entries_read_on_demand_through_stream_source() {
+        struct MemSrc;
+        impl heirloom_volume::StreamSource for MemSrc {
+            fn read_at(&self, locator: &str, offset: u64, dst: &mut [u8]) -> Option<usize> {
+                let data: &[u8] = if locator == "Rom/resource/apps/test.rsc" { b"HELLO-ROM" } else { return None };
+                let off = offset as usize;
+                if off >= data.len() { return Some(0); }
+                let n = dst.len().min(data.len() - off);
+                dst[..n].copy_from_slice(&data[off..off + n]);
+                Some(n)
+            }
+        }
+        let mut t = Tree::new(255);
+        t.enable_streams();
+        let v = t.add_volume("ROM", false);
+        let res = t.mkdirs(v, ["resource", "apps"]).unwrap();
+        t.put_stream(res, "test.rsc", u64::MAX, "Rom/resource/apps/test.rsc").unwrap();
+        let mut rom = TreeRom::from_snapshot(&encode(&t)).unwrap();
+        assert_eq!(rom.read("Z:\\resource\\apps\\test.rsc"), None, "negative control: no stream source yet");
+        rom.set_stream_source(alloc::boxed::Box::new(MemSrc));
+        assert!(rom.exists("z:\\RESOURCE\\Apps\\TEST.RSC"));
+        assert_eq!(rom.read("z:\\RESOURCE\\Apps\\TEST.RSC"), Some(b"HELLO-ROM".to_vec()));
     }
 }

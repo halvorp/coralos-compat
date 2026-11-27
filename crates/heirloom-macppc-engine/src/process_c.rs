@@ -108,7 +108,7 @@ impl<U: GuestUi> MacPpc<U> {
         let len = self.mac.fm.tree.file_len(node).unwrap_or(0) as usize;
         let mut data = alloc::vec![0u8; len];
         if self.mac.fm.tree.read_at(node, 0, &mut data) != Some(len) { return Err(FNF_ERR) }
-        let rsrc = self.mac.fm.tree.get(node).rsrc.clone();
+        let rsrc = self.mac.fm.tree.read_rsrc_all(node).unwrap_or_default();
         let (frag_name, bytes) = match crate::source::fragment_bytes(&rsrc, Some(&data)) {
             Ok(v) => v,
             Err(e) => { self.mac.log.push(format!("[process] LaunchApplication \"{shown}\": not a PowerPC application ({e}) -> paramErr")); return Err(PARAM_ERR) }
