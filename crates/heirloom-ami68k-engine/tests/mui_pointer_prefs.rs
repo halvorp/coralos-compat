@@ -45,3 +45,22 @@ fn the_pointer_preview_reacts_to_a_native_pointer_event_inside_its_plane_and_not
     assert_eq!(a.step(20_000_000).0, Step::Blocked);
     assert_eq!(n(&a, "[muimaster] Handle") - handled, 2);
 }
+
+#[test]
+fn palette_prefs_opens_cleanly_with_or_without_disk_colorwheel_gadget() {
+    // 1. Minimal SYS: without SYS:Classes/Gadgets (matches QEMU staged bundle): built-in V39
+    // `gadgets/colorwheel.gadget` supplies ConvertRGBToHSB/ConvertHSBToRGB so Coloradjust.mui
+    // finishes OM_NEW with 0 bus faults and opens "Palette Preferences".
+    let Some((a, s)) = aros::start("Prefs/Palette", &["SYS:Classes/Gadgets"]) else { return };
+    assert_eq!(s, Step::Blocked, "refused={:?} tail={:?}", a.refused, a.log.iter().rev().take(12).collect::<Vec<_>>());
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+    assert!(a.ui.calls.iter().any(|c| matches!(c, UiCall::OpenWindow(m) if m.title == "Palette Preferences")), "Palette Preferences window must open");
+    assert!(a.ui.controls.values().any(|(_, m)| matches!(&m.kind, ControlKind::List { rows, .. } if rows.len() >= 12)), "pen list populated");
+    assert!(a.log.iter().any(|l| l.contains("[colorwheel] ConvertRGBToHSB")), "built-in colorwheel.gadget served ConvertRGBToHSB");
+
+    // 2. Full mini SYS: with SYS:Classes/Gadgets/colorwheel.gadget present on disk: disk library wins.
+    let Some((b, s2)) = aros::start("Prefs/Palette", &[]) else { return };
+    assert_eq!(s2, Step::Blocked, "{:?}", b.refused);
+    assert!(b.refused.is_empty(), "{:?}", b.refused);
+    assert!(b.log.iter().any(|l| l.contains("loading LIBS:gadgets/colorwheel.gadget from disk")), "disk colorwheel.gadget wins when present");
+}

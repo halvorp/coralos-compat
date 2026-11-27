@@ -19,6 +19,7 @@ pub mod os_face; // os-ami.library: this machine behind heirloom-os-abi's OsVTab
 pub use os_face::os_vtable;
 pub mod asl;
 pub mod audio;
+pub mod colorwheel;
 pub mod cybergraphics;
 pub mod datatypes;
 pub mod gameport;

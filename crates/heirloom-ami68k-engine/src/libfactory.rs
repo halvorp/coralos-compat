@@ -23,6 +23,7 @@ pub fn library<U: GuestUi>(name: &'static str, base: u32) -> LibraryBuilder<U> {
         "aros.library" => crate::aros::register(b), // version 41: posixc.library asks for it
         "cybergraphics.library" => crate::cybergraphics::register(b),
         "datatypes.library" => crate::datatypes::register(b),
+        "gadgets/colorwheel.gadget" => crate::colorwheel::register(b),
         _ => b,
     }
 }

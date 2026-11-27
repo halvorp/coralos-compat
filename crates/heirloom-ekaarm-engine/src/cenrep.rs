@@ -74,14 +74,68 @@ pub fn parse(bytes: &[u8]) -> Result<BTreeMap<u32, CenValue>, String> {
     Ok(out)
 }
 
+/// Symbian S60 `KCRUidProfileEngine` (`ProfileEngineSDKCRKeys.h`): active profile settings
+/// shipped in every S60 ROM at `Z:\private\10202be9\101f8798.txt`.
+pub const KCRUID_PROFILE_ENGINE: u32 = 0x101f_8798;
+
+/// Built-in Symbian S60 platform default Central Repositories when a minimal ROM/drive omits the
+/// corresponding `Z:\private\10202be9\<uid>.txt` file. A file present on the drive or in the ROM
+/// always shadows these defaults.
+fn platform_default_repo(uid: u32) -> Option<BTreeMap<u32, CenValue>> {
+    if uid != KCRUID_PROFILE_ENGINE {
+        return None;
+    }
+    // General profile defaults from S60 SDK `ProfileEngineSDKCRKeys.h` and ROM `101f8798.txt`.
+    let mut m = BTreeMap::new();
+    for (k, v) in [
+        // Active profile read-only SDK keys (`ProfileEngineSDKCRKeys.h`)
+        (0x7E00_0001u32, 0i32), // KProEngActiveProfile = 0 (General)
+        (0x7E00_0002, 0),       // KProEngActiveRingingType = 0 (Ringing)
+        (0x7E00_0004, 1),       // KProEngActiveKeypadVolume = 1
+        (0x7E00_0008, 7),       // KProEngActiveRingingVolume = 7
+        (0x7E00_0019, 2),       // KProEngActiveMediaVolume = 2
+        (0x7E00_001A, 2),       // KProEngActiveTextToSpeech = 2
+        (0x7E00_0020, 1),       // KProEngActiveWarningTones = 1 (On)
+        (0x7E00_0040, 1),       // KProEngActiveMessageAlert = 1 (On)
+        // General profile (id 0) keys from S60 ROM `101f8798.txt`
+        (0x0000_0007, 0),       // ringing type = Ringing
+        (0x0000_0008, 1),       // keypad volume = 1
+        (0x0000_0009, 7),       // ringing volume = 7
+        (0x0000_000A, 0),       // vibrating alert = Off
+        (0x0000_000B, 1),       // warning tones = On
+        (0x0000_0010, 2),       // touch screen tones = 2
+        (0x0000_0011, 7),       // ringing volume (alt) = 7
+        (0x0000_0012, 0),
+        (0x0000_0013, 0),
+        (0x0000_0016, 0),
+        (0x0000_0017, 0),
+        (0x0000_0018, 0),
+        (0x0000_0019, 2),
+        (0x0000_001A, 2),
+        // Global profile engine metadata keys from S60 ROM `101f8798.txt`
+        (0x8000_0003, -1),
+        (0x8000_0004, -1),
+        (0x8000_0005, -1),
+        (0x8000_0100, 1),
+        (0x8000_0101, 0),
+        (0x8000_0102, 0),
+        (0x8000_0103, 0),
+    ] {
+        m.insert(k, CenValue::Int(v));
+    }
+    Some(m)
+}
+
 impl Process {
     fn repo_open(&mut self, uid: u32) -> Result<u32, String> {
         let drive = self.host.drive.as_ref().ok_or_else(|| String::from("no drive"))?;
-        let bytes = [format!("\\private\\10202be9\\{uid:08x}.txt")].iter().find_map(|p| drive.read_owned(p).ok());
-        let Some(bytes) = bytes else {
-            return Err(format!("NEXT-NEEDED leave CRepository::NewL({uid:#010x}): no repository file on the drive or in the ROM leaves KErrNotFound (EHABI unwinding is slice 1b)"));
+        let keys = match [format!("\\private\\10202be9\\{uid:08x}.txt")].iter().find_map(|p| drive.read_owned(p).ok()) {
+            Some(bytes) => parse(&bytes).map_err(|e| format!("repository {uid:#010x}: {e}"))?,
+            None => match platform_default_repo(uid) {
+                Some(default_keys) => default_keys,
+                None => return Err(format!("NEXT-NEEDED leave CRepository::NewL({uid:#010x}): no repository file on the drive or in the ROM leaves KErrNotFound (EHABI unwinding is slice 1b)")),
+            },
         };
-        let keys = parse(&bytes).map_err(|e| format!("repository {uid:#010x}: {e}"))?;
         let obj = self.alloc_zeroed(REPO_BYTES).ok_or_else(|| String::from("no guest heap"))?;
         let vptr = self.build_vtable("CRepository", &slots_with_gaps(3, VTABLE))?;
         self.mem.vm.write_u32(obj, vptr).map_err(|_| String::from("repository object unwritable"))?;

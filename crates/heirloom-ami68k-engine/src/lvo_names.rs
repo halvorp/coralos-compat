@@ -33,4 +33,5 @@ pub static LIBRARIES: &[(&str, &[(i32, &str)])] = &[
     ("gameport.device", &[(-30, "BeginIO"), (-36, "AbortIO")]),
     ("input.device", &[(-30, "BeginIO"), (-36, "AbortIO"), (-42, "PeekQualifier")]),
     ("console.device", &[(-30, "BeginIO"), (-36, "AbortIO"), (-42, "CDInputHandler"), (-48, "RawKeyConvert"), (-54, "GetConSnip"), (-60, "SetConSnip"), (-66, "AddConSnipHook"), (-72, "RemConSnipHook")]),
+    ("gadgets/colorwheel.gadget", &[(-30, "ConvertHSBToRGB"), (-36, "ConvertRGBToHSB")]),
 ];

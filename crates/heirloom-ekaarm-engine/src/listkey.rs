@@ -34,10 +34,19 @@ const ESTD_KEY_YES: u32 = 0xc4;
 /// `TKeyResponse` (w32std.h).
 const EKEY_WAS_NOT_CONSUMED: u32 = 0;
 const EKEY_WAS_CONSUMED: u32 = 1;
-/// The list box construction flags the arrow keys' route depends on (lafpublc.h:122 `EPopout`; eiklbx.h:218 `ELoopScrolling`, :241 `EPageAtOnceScrolling`).
+/// The list box construction flags the arrow/default key routes depend on (lafpublc.h:117 `EIncrementalMatching`,
+/// :122 `EPopout`; eiklbx.h:218 `ELoopScrolling`, :241 `EPageAtOnceScrolling`).
+const FLAG_INCREMENTAL_MATCHING: u32 = 0x0004;
 const FLAG_POPOUT: u32 = 0x0008;
 const FLAG_LOOP_SCROLLING: u32 = 0x1000;
 const FLAG_PAGE_AT_ONCE: u32 = 0x8000;
+
+/// Symbian `TChar::IsPrint()` for `CEikListBox::DoOfferKeyEventL` `default:` (EIKLBX.CPP:3696):
+/// excludes ASCII C0 control characters (`0x00..=0x1f`, e.g. `Ctrl+Q = 0x11`, `Esc = 0x1b`),
+/// DEL (`0x7f`), C1 controls (`0x80..=0x9f`), and Symbian private-use key codes (`0xf800..`).
+fn is_symbian_print(code: u32) -> bool {
+    (0x20..0xf800).contains(&code) && code != 0x7f && !(0x80..=0x9f).contains(&code)
+}
 /// `MCoeControlObserver::EEventStateChanged` (coecobs.h: RequestExit 0, RequestCancel, RequestFocus, PrepareFocusTransition, StateChanged 4).
 const EEVENT_STATE_CHANGED: u32 = 4;
 /// `MCoeControlObserver::HandleControlEventL` is the mixin's first virtual (coecobs.h): slot 0.
@@ -66,7 +75,17 @@ impl Process {
                 return Ok((EKEY_WAS_CONSUMED, None));
             }
             0 => return Ok((EKEY_WAS_CONSUMED, None)), // a key-down / key-up event: the switch's default branch
-            other => return Err(format!("key code {other:#x}: only up/down/Enter/OK are implemented (marking and matching are not)")),
+            other => {
+                // EIKLBX.CPP:3693-3708 + 3796-3804 (`default:` branch of `CEikListBox::DoOfferKeyEventL`):
+                // only printable characters with `EIncrementalMatching` invoke `MatchTypedCharL`; every other
+                // key (control chords like `0x11` Ctrl+Q, Escape, non-cursor keys, or printable keys when
+                // incremental matching is disabled) leaves selection unchanged and returns `EKeyWasNotConsumed`
+                // for `EStdKeyYes` or `EKeyWasConsumed` otherwise.
+                if (flags & FLAG_INCREMENTAL_MATCHING) != 0 && is_symbian_print(other) {
+                    return Err(format!("key code {other:#x}: EIncrementalMatching (MatchTypedCharL) is not implemented"));
+                }
+                return Ok((if scan == ESTD_KEY_YES { EKEY_WAS_NOT_CONSUMED } else { EKEY_WAS_CONSUMED }, None));
+            }
         };
         let old = self.rd(view + VIEW_I_CURRENT)? as i32;
         let new = if flags & FLAG_LOOP_SCROLLING != 0 {

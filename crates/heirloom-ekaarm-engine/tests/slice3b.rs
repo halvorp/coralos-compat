@@ -114,6 +114,37 @@ fn central_repository_text_is_parsed_and_a_missing_one_leaves() {
     assert!(m.contains("leave CRepository::NewL(0x00001234)") && m.contains("KErrNotFound"), "{m}");
 }
 
+#[test]
+fn platform_default_profile_engine_cenrep_loads_and_drive_file_shadows_it() {
+    let (newl, newlc, get) = ("_ZN11CRepository4NewLE4TUid", "_ZN11CRepository5NewLCE4TUid", "_ZN11CRepository3GetEmRi");
+    let mut p = proc(&[newl, newlc, get]);
+    p.set_drive(Drive::new());
+    let out = alloc(&mut p, 4);
+
+    // Without \private\10202be9\101f8798.txt on drive/ROM, S60 platform default ProfileEngine repository opens cleanly.
+    let repo = ok(&mut p, newlc, &[cenrep::KCRUID_PROFILE_ENGINE]);
+    assert_eq!(ok(&mut p, get, &[repo, 0x7E00_0001, out]), 0); // KProEngActiveProfile = 0 (General)
+    assert_eq!(rd(&mut p, out) as i32, 0);
+    assert_eq!(ok(&mut p, get, &[repo, 0x7E00_0008, out]), 0); // KProEngActiveRingingVolume = 7
+    assert_eq!(rd(&mut p, out) as i32, 7);
+    assert_eq!(ok(&mut p, get, &[repo, 0x7E00_0020, out]), 0); // KProEngActiveWarningTones = 1
+    assert_eq!(rd(&mut p, out) as i32, 1);
+
+    // A repository file on the drive or in the ROM always shadows the built-in platform default.
+    let mut d = Drive::new();
+    let custom = "\u{feff}cenrep\r\nversion 1\r\n[Main]\r\n0x7E000001 int 1 0\r\n";
+    let utf16: Vec<u8> = custom.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    d.put_file("\\private\\10202be9\\101f8798.txt", utf16).unwrap();
+    p.set_drive(d);
+    let repo2 = ok(&mut p, newl, &[cenrep::KCRUID_PROFILE_ENGINE]);
+    assert_eq!(ok(&mut p, get, &[repo2, 0x7E00_0001, out]), 0);
+    assert_eq!(rd(&mut p, out) as i32, 1, "drive file shadows platform default");
+
+    // NEGATIVE CONTROL: an unknown repository UID still leaves KErrNotFound (-1).
+    let m = refused(&mut p, newl, &[0x1234]);
+    assert!(m.contains("leave CRepository::NewL(0x00001234)") && m.contains("KErrNotFound"), "{m}");
+}
+
 struct MemRom(Vec<(&'static str, Vec<u8>)>);
 impl RomSource for MemRom {
     fn read(&self, path: &str) -> Option<Vec<u8>> { self.0.iter().find(|(p, _)| p.eq_ignore_ascii_case(path)).map(|(_, b)| b.clone()) }

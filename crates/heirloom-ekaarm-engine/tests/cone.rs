@@ -96,6 +96,38 @@ fn hero_of_sparta_opens_its_window() {
     opens_its_window_and_stops_at_a_named_refusal(HERO);
 }
 
+#[test]
+fn hero_of_sparta_opens_window_without_101f8798_rom_file() {
+    // Minimal ROM without 101f8798.txt (KCRUidProfileEngine): platform default CenRep lets Hero of Sparta
+    // open "HeroOfSparta" instead of leaving uncaught User::Leave(-1) inside CRepository::NewL.
+    struct HideProfileEngine(Box<dyn heirloom_ekaarm_engine::drive::RomSource>);
+    impl heirloom_ekaarm_engine::drive::RomSource for HideProfileEngine {
+        fn read(&self, path: &str) -> Option<Vec<u8>> {
+            if path.to_ascii_lowercase().ends_with("101f8798.txt") { return None; }
+            self.0.read(path)
+        }
+        fn exists(&self, path: &str) -> bool {
+            if path.to_ascii_lowercase().ends_with("101f8798.txt") { return false; }
+            self.0.exists(path)
+        }
+        fn list(&self, dir: &str) -> Option<Vec<String>> { self.0.list(dir) }
+    }
+    let Some(mut p) = load(&HERO) else { return };
+    let dir = format!("{DRIVE}/{}", HERO.tree);
+    if !std::path::Path::new(&dir).is_dir() || !std::path::Path::new(ROM).is_dir() { println!("SKIP: corpus absent"); return; }
+    let mut drive = hostdir::load_dir(std::path::Path::new(&dir)).unwrap().0;
+    let rom = hostdir::DirRom::new(std::path::Path::new(ROM)).unwrap();
+    drive.set_rom(Box::new(HideProfileEngine(Box::new(rom))));
+    p.set_drive(drive);
+    p.set_ui(RecordingGuestUi::new());
+    let outcome = p.run(50_000_000);
+    assert_eq!(windows(&p), vec!["HeroOfSparta@360x640"], "window opens via platform default KCRUidProfileEngine");
+    match outcome {
+        Outcome::Refused(m) => assert!(m.contains("libGLESv1_CM/135"), "expected GLES wall after window, got: {m}"),
+        o => panic!("expected GLES refusal after window, got: {o:?}"),
+    }
+}
+
 /// Run `app` with the given host objects and return the refusal text; no window may have been opened.
 fn refused_without_window(app: App, drive: Option<Drive>, ui: bool) -> Option<String> {
     let mut p = load(&app)?;

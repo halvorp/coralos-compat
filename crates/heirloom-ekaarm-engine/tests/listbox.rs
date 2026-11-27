@@ -160,11 +160,22 @@ fn arrow_keys_move_the_current_item_clamped_and_other_keys_are_refused_by_name()
     assert_eq!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY), Ok(1));
     assert_eq!(offer(&mut p, lb, 0, 0x11, 3), Ok(1));
     assert_eq!((current(&p, lb), selected_sent(&p).len()), (2, sent + 2));
-    // Enter notifies MEikListBoxObserver (no-op when none is set) and is consumed;
-    // unimplemented keys (e.g. incremental matching 'a' = 0x61) stay refused by name.
+    // Enter notifies MEikListBoxObserver (no-op when none is set) and is consumed.
+    // Per EIKLBX.CPP:3693-3804, non-cursor keys (Ctrl+Q 0x11, Escape 0x1b, printable keys when
+    // EIncrementalMatching is clear) leave selection unchanged without faulting; EStdKeyYes (0xc4)
+    // returns EKeyWasNotConsumed (0).
     assert_eq!(offer(&mut p, lb, 0x0d, 0x03, EEVENT_KEY), Ok(1));
+    assert_eq!(offer(&mut p, lb, 0x11, 0x51, EEVENT_KEY), Ok(1), "Ctrl+Q (0x11) must not fault");
+    assert_eq!(offer(&mut p, lb, 0x1b, 0x04, EEVENT_KEY), Ok(1), "Escape (0x1b) must not fault");
+    assert_eq!(offer(&mut p, lb, 0x11, 0xc4, EEVENT_KEY), Ok(0), "EStdKeyYes returns EKeyWasNotConsumed");
+    assert_eq!(offer(&mut p, lb, 0x61, 0x41, EEVENT_KEY), Ok(1), "printable key without EIncrementalMatching does not fault");
+    assert_eq!(current(&p, lb), 2, "unhandled default keys leave current item untouched");
+    // NEGATIVE CONTROL: printable key with EIncrementalMatching (0x0004) set stays refused by name.
+    p.mem.write_u32(lb + heirloom_ekaarm_engine::listbox::LB_I_FLAGS, 0x0004).unwrap();
     let e = offer(&mut p, lb, 0x61, 0x41, EEVENT_KEY).unwrap_err();
-    assert!(e.contains("key code 0x61") && e.contains("only up/down/Enter/OK"), "{e}");
+    assert!(e.contains("key code 0x61") && e.contains("EIncrementalMatching"), "{e}");
+    // Control chords (Ctrl+Q 0x11) are non-printable even with EIncrementalMatching set (EIKLBX.CPP:3696).
+    assert_eq!(offer(&mut p, lb, 0x11, 0x51, EEVENT_KEY), Ok(1));
     // Loop scrolling wraps from last -> 0 and 0 -> last.
     p.mem.write_u32(lb + heirloom_ekaarm_engine::listbox::LB_I_FLAGS, 0x1000).unwrap();
     assert_eq!(offer(&mut p, lb, DOWN, 0x11, EEVENT_KEY), Ok(1));
