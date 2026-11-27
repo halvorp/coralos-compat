@@ -73,6 +73,17 @@ pub type DraftEmitFn = extern "C" fn(
     attachments_len: usize,
 );
 
+/// Synchronous visitor callback invoked once per stored message, oldest first.
+pub type MsgEmitFn = extern "C" fn(
+    cb_ctx: *mut c_void,
+    seq: u64,
+    ts_ms: u64,
+    sender: *const u8,
+    sender_len: usize,
+    body: *const u8,
+    body_len: usize,
+);
+
 /// Host-provided `messages.service` callbacks ([`crate::OsVTable::attach_messages`], copied; `ctx` and fn
 /// pointers must outlive the `OsInstance`).
 #[repr(C)]
@@ -129,6 +140,23 @@ pub struct MessagesHost {
         conv_len: usize,
         seq: u64,
     ) -> i32,
+    /// The newest `limit` stored messages of `conv` (R11-01, appended last).
+    pub read_messages: extern "C" fn(
+        ctx: *mut c_void,
+        account: *const u8,
+        account_len: usize,
+        conv: *const u8,
+        conv_len: usize,
+        limit: usize,
+        emit: MsgEmitFn,
+        cb_ctx: *mut c_void,
+    ) -> i32,
+}
+
+/// Whether a host record of this `size` carries every field up to and including `read_messages` (the last one); an attach with a
+/// shorter record (an engine built before R11-01) is refused by name.
+pub fn host_has_read(size: u32) -> bool {
+    size as usize >= core::mem::size_of::<MessagesHost>()
 }
 
 // SAFETY: MessagesHost holds plain function pointers and an engine-owned ctx pointer accessed on the single engine thread.
@@ -140,7 +168,7 @@ mod bridge {
     use alloc::string::String;
     use alloc::vec::Vec;
     use guestsvc_abi::{
-        GuestAttachmentRef, GuestConv, GuestDraft, GuestMessages, GuestRecipient, GuestRecipientKind, GuestSvcError,
+        GuestAttachmentRef, GuestConv, GuestDraft, GuestMessages, GuestMsg, GuestRecipient, GuestRecipientKind, GuestSvcError,
     };
 
     pub fn err_to_code(e: GuestSvcError) -> i32 {
@@ -209,6 +237,19 @@ mod bridge {
         });
     }
 
+    extern "C" fn collect_msg(cb_ctx: *mut c_void, seq: u64, ts_ms: u64, sender: *const u8, sender_len: usize, body: *const u8, body_len: usize) {
+        if cb_ctx.is_null() {
+            return;
+        }
+        let out = unsafe { &mut *(cb_ctx as *mut Vec<GuestMsg>) };
+        out.push(GuestMsg {
+            seq,
+            sender: String::from(unsafe { slice_str(sender, sender_len) }),
+            ts_ms,
+            body: String::from(unsafe { slice_str(body, body_len) }),
+        });
+    }
+
     extern "C" fn collect_draft(
         cb_ctx: *mut c_void,
         id: u64,
@@ -272,6 +313,21 @@ mod bridge {
                 account.len(),
                 collect_conv,
                 (&mut out as *mut Vec<GuestConv>).cast(),
+            );
+            if rc == MSG_OK { Ok(out) } else { Err(code_to_err(rc)) }
+        }
+
+        fn messages(&mut self, account: &str, conv: &str, limit: usize) -> Result<Vec<GuestMsg>, GuestSvcError> {
+            let mut out = Vec::new();
+            let rc = (self.read_messages)(
+                self.ctx,
+                account.as_ptr(),
+                account.len(),
+                conv.as_ptr(),
+                conv.len(),
+                limit,
+                collect_msg,
+                (&mut out as *mut Vec<GuestMsg>).cast(),
             );
             if rc == MSG_OK { Ok(out) } else { Err(code_to_err(rc)) }
         }

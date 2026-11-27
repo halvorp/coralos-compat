@@ -38,6 +38,9 @@ impl GuestMessages for SharedMessages {
     fn conversations(&mut self, account: &str) -> Result<Vec<GuestConv>, GuestSvcError> {
         self.0.borrow_mut().conversations(account)
     }
+    fn messages(&mut self, account: &str, conv: &str, limit: usize) -> Result<Vec<guestsvc_abi::GuestMsg>, GuestSvcError> {
+        self.0.borrow_mut().messages(account, conv, limit)
+    }
     fn save_draft(
         &mut self,
         account: &str,

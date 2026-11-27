@@ -254,6 +254,8 @@ pub struct Objects {
     pub sendas_sessions: BTreeMap<u32, String>,
     pub sendas_drafts: BTreeMap<u32, SendAsDraftState>,
     pub next_sendas_handle: u32,
+    /// The session's `TMsvId` table for listed messages and drafts (`sym_msv.rs`, R11-01); transient.
+    pub msv: crate::sym_msv::MsvIndex,
     /// Transient `esock` (`RSocketServ`, `RHostResolver`, `RSocket`) handles (`sym_net.rs`, REUSE U18).
     pub net_sessions: BTreeMap<u32, ()>,
     pub net_resolvers: BTreeMap<u32, ()>,

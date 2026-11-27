@@ -22,8 +22,8 @@ pub use audio::{
 pub mod messages;
 pub use messages::{
     attachment_ref_ok, FakeMessages, GuestAttachmentRef, GuestConv, GuestDraft, GuestMessages,
-    GuestRecipient, GuestRecipientKind, MSG_ATTACHMENTS_MAX, MSG_BODY_MAX, MSG_DRAFTS_MAX,
-    MSG_ID_MAX, MSG_MIME_MAX, MSG_PATH_MAX, MSG_RECIPIENTS_MAX, MSG_SUBJECT_MAX,
+    GuestMsg, GuestRecipient, GuestRecipientKind, MSG_ATTACHMENTS_MAX, MSG_BODY_MAX, MSG_DRAFTS_MAX,
+    MSG_ID_MAX, MSG_MIME_MAX, MSG_PATH_MAX, MSG_READ_MAX, MSG_RECIPIENTS_MAX, MSG_SUBJECT_MAX,
 };
 pub mod net;
 pub use net::{
@@ -470,7 +470,20 @@ mod tests {
         let bad_att = vec![GuestAttachmentRef { path: String::from("../secret"), mime: String::new(), name: String::new() }];
         assert_eq!(msg.save_draft(acct, None, None, &to, "S", "B", &bad_att), Err(GuestSvcError::Refused("bad-request")));
 
+        // Read path: newest `limit` oldest-first, a deleted message is gone, bad names refused.
+        let conv = "!room:coral.lan";
+        for seq in 1..=4u64 {
+            msg.add_msg(acct, conv, GuestMsg { seq, sender: String::from("@bob:coral.lan"), ts_ms: seq * 1000, body: alloc::format!("m{seq}") });
+        }
+        let last2 = msg.messages(acct, conv, 2).unwrap();
+        assert_eq!(last2.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![3, 4]);
+        msg.delete_msg(acct, conv, 4).unwrap();
+        assert_eq!(msg.messages(acct, conv, 2).unwrap().last().map(|m| m.body.as_str()), Some("m3"));
+        assert_eq!(msg.messages(acct, "", 2), Err(GuestSvcError::BadName));
+        assert!(msg.messages(acct, "!other:x", 5).unwrap().is_empty());
+
         let mut denied = FakeMessages::not_granted();
+        assert_eq!(denied.messages(acct, conv, 2), Err(GuestSvcError::NotGranted));
         assert_eq!(denied.accounts(), Err(GuestSvcError::NotGranted));
         assert_eq!(denied.save_draft(acct, None, None, &to, "S", "B", &[]), Err(GuestSvcError::NotGranted));
         assert_eq!(denied.send_draft(acct, 1), Err(GuestSvcError::NotGranted));

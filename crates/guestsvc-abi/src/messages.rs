@@ -69,6 +69,18 @@ pub struct GuestConv {
     pub read_seq: u64,
 }
 
+/// One stored message of a conversation, as the service holds it (read-only to a guest).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuestMsg {
+    pub seq: u64,
+    pub sender: String,
+    pub ts_ms: u64,
+    pub body: String,
+}
+
+/// Most messages one `messages` read returns (a guest pages by asking again; the service bounds its own pages).
+pub const MSG_READ_MAX: usize = 32;
+
 /// Validate an attachment reference path (relative CoralFS path, no `..`, no control chars).
 pub fn attachment_ref_ok(a: &GuestAttachmentRef) -> bool {
     if a.path.is_empty() || a.path.len() > MSG_PATH_MAX || a.path.starts_with('/') || a.path.chars().any(char::is_control) {
@@ -87,6 +99,9 @@ pub fn attachment_ref_ok(a: &GuestAttachmentRef) -> bool {
 pub trait GuestMessages {
     fn accounts(&mut self) -> Result<Vec<String>, GuestSvcError>;
     fn conversations(&mut self, account: &str) -> Result<Vec<GuestConv>, GuestSvcError>;
+    /// The newest `limit` (<= [`MSG_READ_MAX`]) stored messages of `conv`, oldest first. Read-only; flags and bodies come as the
+    /// service stores them (plain text, <= `MSG_BODY_MAX`).
+    fn messages(&mut self, account: &str, conv: &str, limit: usize) -> Result<Vec<GuestMsg>, GuestSvcError>;
     fn save_draft(
         &mut self,
         account: &str,
@@ -108,6 +123,7 @@ pub trait GuestMessages {
 pub struct FakeMessages {
     accounts: Vec<String>,
     convs: Vec<(String, GuestConv)>,
+    msgs: Vec<(String, String, GuestMsg)>,
     drafts: Vec<(String, GuestDraft)>,
     sent: Vec<(String, u64, GuestDraft)>,
     deleted_msgs: Vec<(String, String, u64)>,
@@ -150,6 +166,12 @@ impl FakeMessages {
         self.convs.push((String::from(account), conv));
     }
 
+    /// Seed a stored message into `conv` of `account` (a test of the read path; the real service owns the store).
+    pub fn add_msg(&mut self, account: &str, conv: &str, msg: GuestMsg) {
+        self.add_account(account);
+        self.msgs.push((String::from(account), String::from(conv), msg));
+    }
+
     pub fn stored_drafts(&self) -> &[(String, GuestDraft)] {
         &self.drafts
     }
@@ -185,6 +207,23 @@ impl GuestMessages for FakeMessages {
             return Err(GuestSvcError::BadName);
         }
         Ok(self.convs.iter().filter(|(a, _)| a == account).map(|(_, c)| c.clone()).collect())
+    }
+
+    fn messages(&mut self, account: &str, conv: &str, limit: usize) -> Result<Vec<GuestMsg>, GuestSvcError> {
+        self.check_access()?;
+        if account.is_empty() || account.len() > MSG_ID_MAX || conv.is_empty() || conv.len() > MSG_ID_MAX {
+            return Err(GuestSvcError::BadName);
+        }
+        let mut all: Vec<GuestMsg> = self
+            .msgs
+            .iter()
+            .filter(|(a, c, m)| a == account && c == conv && !self.deleted_msgs.iter().any(|(da, dc, ds)| da == a && dc == c && *ds == m.seq))
+            .map(|(_, _, m)| m.clone())
+            .collect();
+        all.sort_by_key(|m| m.seq);
+        let keep = limit.clamp(1, MSG_READ_MAX);
+        let start = all.len().saturating_sub(keep);
+        Ok(all.split_off(start))
     }
 
     fn save_draft(

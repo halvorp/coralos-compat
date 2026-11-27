@@ -49,7 +49,8 @@ pub const fn radio_bearer_name(mtm_uid: u32) -> Option<&'static str> {
     }
 }
 
-fn map_svc_err(err: GuestSvcError) -> i32 {
+/// The guest's error code for a service refusal (shared with `sym_msv.rs`).
+pub(crate) fn map_svc_err(err: GuestSvcError) -> i32 {
     match err {
         GuestSvcError::NotGranted => KERR_PERMISSION_DENIED,
         GuestSvcError::TooLarge => KERR_OVERFLOW,

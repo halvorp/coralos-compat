@@ -730,6 +730,12 @@ extern "C" fn attach_messages_impl(inst: *mut OsInstance, host: *const crate::me
     if inst.is_null() || host.is_null() {
         return crate::messages::MSG_ATTACH_REFUSED;
     }
+    // SAFETY: `host` is non-null and points to a record whose first field is its `size`; read that alone before copying the record.
+    let size = unsafe { core::ptr::addr_of!((*host).size).read() };
+    if !crate::messages::host_has_read(size) {
+        // An engine built before `read_messages` filled a shorter record: copying the full struct would read past it.
+        return crate::messages::MSG_ATTACH_REFUSED;
+    }
     // SAFETY: a non-null instance is one create_impl boxed and not yet destroyed; `host` points to a record the engine filled (copied).
     let (session, host) = unsafe { (&mut **(inst as *mut Instance), *host) };
     match session.attach_messages(host) {
