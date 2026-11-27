@@ -157,6 +157,12 @@ pub trait GuestUi: 'static {
     fn close_request(&mut self, _req: RequestRef) -> Result<(), UiRefusal> {
         Err(UiRefusal::Unsupported("closing a request (no alert part in this host)"))
     }
+    /// Ask the user to pick a file or directory using the host's native file requester (on CoralOS: `coral-filereq`, REUSE U9).
+    /// `win` is the guest window it belongs to, if named. The answer arrives later as `GuestUiEvent::FileRequestAnswered`;
+    /// the ENGINE parks the asking task, not the host. Hosts without a file requester refuse by name (`Unsupported`).
+    fn open_file_request(&mut self, _win: Option<UiObjectRef>, _model: FileRequestModel) -> Result<RequestRef, UiRefusal> {
+        Err(UiRefusal::Unsupported("file requester (no file requester in this host)"))
+    }
     /// AUDIO OUT (see `audio.rs`): open one PCM output stream. Hosts without an audio part refuse by name; the engine then
     /// answers its guest as its OS does with no sound hardware.
     fn open_audio_stream(&mut self, _model: AudioStreamModel) -> Result<AudioStreamRef, UiRefusal> {

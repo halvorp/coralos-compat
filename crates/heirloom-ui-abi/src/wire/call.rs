@@ -1,5 +1,6 @@
 //! Codecs for every UiCall and GuestUiEvent.
 use super::*;
+use crate::{FileRequestMode, FileRequestModel};
 
 pub(super) fn put_intent(out: &mut Vec<u8>, value: &Intent) {
     match value {
@@ -202,6 +203,18 @@ pub(super) fn put_call(out: &mut Vec<u8>, call: &UiCall) {
             out.push(22);
             put_object(out, stream);
         }
+        UiCall::OpenFileRequest(win, model) => {
+            out.push(23);
+            put_option(out, win, put_object);
+            put_string(out, &model.title);
+            out.push(match model.mode {
+                FileRequestMode::Open => 0,
+                FileRequestMode::Save => 1,
+                FileRequestMode::DrawersOnly => 2,
+            });
+            put_string(out, &model.initial_dir);
+            put_string(out, &model.initial_file);
+        }
     }
 }
 
@@ -257,6 +270,19 @@ pub(super) fn get_call(reader: &mut Reader<'_>) -> Result<UiCall, WireError> {
         20 => UiCall::PauseAudio(get_object(reader)?, reader.boolean()?),
         21 => UiCall::SetAudioVolume(get_object(reader)?, reader.u16()?, reader.u16()?),
         22 => UiCall::CloseAudio(get_object(reader)?),
+        23 => {
+            let win = reader.option(get_object)?;
+            let title = reader.string()?;
+            let mode = match reader.u8()? {
+                0 => FileRequestMode::Open,
+                1 => FileRequestMode::Save,
+                2 => FileRequestMode::DrawersOnly,
+                tag => return Err(WireError::UnknownTag { what: "FileRequestMode", tag }),
+            };
+            let initial_dir = reader.string()?;
+            let initial_file = reader.string()?;
+            UiCall::OpenFileRequest(win, FileRequestModel { title, mode, initial_dir, initial_file })
+        }
         _ => return Err(WireError::UnknownTag { what: "UiCall", tag }),
     })
 }
@@ -308,6 +334,11 @@ pub(super) fn put_event(out: &mut Vec<u8>, event: &GuestUiEvent) {
             put_object(out, req);
             put_u32(out, *button);
         }
+        GuestUiEvent::FileRequestAnswered { req, path } => {
+            out.push(7);
+            put_object(out, req);
+            put_option(out, path, |o, s| put_string(o, s));
+        }
     }
 }
 
@@ -351,6 +382,10 @@ pub(super) fn get_event(reader: &mut Reader<'_>) -> Result<GuestUiEvent, WireErr
         6 => GuestUiEvent::RequestAnswered {
             req: get_object(reader)?,
             button: reader.u32()?,
+        },
+        7 => GuestUiEvent::FileRequestAnswered {
+            req: get_object(reader)?,
+            path: reader.option(|r| r.string())?,
         },
         _ => return Err(WireError::UnknownTag { what: "GuestUiEvent", tag }),
     })

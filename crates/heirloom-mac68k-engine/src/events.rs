@@ -116,6 +116,7 @@ impl<U: GuestUi> Mac<U> {
             GuestUiEvent::Pointer { win, x, y, button, phase, clicks } => self.deliver_pointer(win, x, y, button, phase, clicks),
             GuestUiEvent::Key { win, text, modifiers, down, code } => self.deliver_key(win, code, &text, modifiers, down),
             GuestUiEvent::RequestAnswered { req, button } => { self.alert_answered(req, button)?; Ok(Delivered::Queued) }
+            GuestUiEvent::FileRequestAnswered { .. } => Ok(Delivered::Ignored),
         }
     }
 

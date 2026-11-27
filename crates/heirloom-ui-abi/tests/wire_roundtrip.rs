@@ -204,6 +204,33 @@ fn calls() -> Vec<UiCall> {
         UiCall::PresentPlane(object(14), plane()),
         UiCall::Request(Some(object(15)), request()),
         UiCall::CloseRequest(object(16)),
+        UiCall::OpenFileRequest(
+            Some(object(15)),
+            FileRequestModel {
+                title: "Open".into(),
+                mode: FileRequestMode::Open,
+                initial_dir: "Documents".into(),
+                initial_file: "notes.txt".into(),
+            },
+        ),
+        UiCall::OpenFileRequest(
+            None,
+            FileRequestModel {
+                title: "Save As".into(),
+                mode: FileRequestMode::Save,
+                initial_dir: String::new(),
+                initial_file: "out.txt".into(),
+            },
+        ),
+        UiCall::OpenFileRequest(
+            None,
+            FileRequestModel {
+                title: "Select Drawer".into(),
+                mode: FileRequestMode::DrawersOnly,
+                initial_dir: "HOME:Documents".into(),
+                initial_file: String::new(),
+            },
+        ),
         UiCall::OpenAudio(audio(AudioFormat::U8)),
         UiCall::OpenAudio(audio(AudioFormat::S16Le)),
         UiCall::QueueAudio(object(17), 123_456),
@@ -269,6 +296,8 @@ fn events() -> Vec<GuestUiEvent> {
             down: true,
         },
         GuestUiEvent::RequestAnswered { req: object(8), button: 1 },
+        GuestUiEvent::FileRequestAnswered { req: object(9), path: Some("Documents/notes.txt".into()) },
+        GuestUiEvent::FileRequestAnswered { req: object(10), path: None },
     ];
     result.extend(intents.into_iter().map(|intent| GuestUiEvent::Intent {
         win: object(9),

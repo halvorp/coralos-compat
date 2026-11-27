@@ -156,6 +156,10 @@ impl<T: WireTransport + 'static> GuestUi for ProxyUi<T> {
         self.send_call(&UiCall::CloseRequest(req))?;
         Ok(())
     }
+    fn open_file_request(&mut self, win: Option<UiObjectRef>, model: crate::FileRequestModel) -> Result<RequestRef, UiRefusal> {
+        self.send_call(&UiCall::OpenFileRequest(win, model))?;
+        Ok(self.mint_request())
+    }
     fn poll_event(&mut self) -> Option<GuestUiEvent> {
         loop {
             let frame = self.transport.recv()?;

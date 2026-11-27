@@ -27,6 +27,8 @@ pub enum UiCall {
     Request(Option<UiObjectRef>, RequestModel),
     /// `close_request`: an unanswered request the guest withdrew.
     CloseRequest(RequestRef),
+    /// `open_file_request`: the window it belongs to (if any) and the file requester model.
+    OpenFileRequest(Option<UiObjectRef>, FileRequestModel),
     /// `open_audio_stream`: the stream as asked.
     OpenAudio(AudioStreamModel),
     /// `queue_audio`: the stream and the number of bytes (the bytes themselves are in [`RecordingGuestUi::audio`]).
@@ -98,6 +100,12 @@ pub struct RecordingGuestUi {
     pub auto_cancel_requests: bool,
     /// The requests asked and not yet answered or closed: request id -> the question.
     pub requests: BTreeMap<u32, RequestModel>,
+    /// Enable `open_file_request` on this recording host (off by default unless an answer is queued via `file_answers`).
+    pub file_requests_enabled: bool,
+    /// Queued answers for `open_file_request` (`Some(path)` or `None` for Cancel), delivered immediately when popped.
+    pub file_answers: VecDeque<Option<alloc::string::String>>,
+    /// Live open file requests not yet answered: request id -> model.
+    pub file_requests: BTreeMap<u32, FileRequestModel>,
     next_id: u32,
     /// live object id -> generation
     live: BTreeMap<u32, u32>,
@@ -304,10 +312,27 @@ impl GuestUi for RecordingGuestUi {
     }
     fn close_request(&mut self, req: RequestRef) -> Result<(), UiRefusal> {
         self.check(req)?;
-        self.requests.remove(&req.id).ok_or(UiRefusal::UnknownObject(req))?;
+        if self.requests.remove(&req.id).is_none() && self.file_requests.remove(&req.id).is_none() {
+            return Err(UiRefusal::UnknownObject(req));
+        }
         self.retire(req.id);
         self.calls.push(UiCall::CloseRequest(req));
         Ok(())
+    }
+    fn open_file_request(&mut self, win: Option<UiObjectRef>, model: FileRequestModel) -> Result<RequestRef, UiRefusal> {
+        if !self.file_requests_enabled && self.file_answers.is_empty() {
+            return Err(UiRefusal::Unsupported("file requester (no file requester in this host)"));
+        }
+        if let Some(w) = win { self.check(w)?; }
+        self.calls.push(UiCall::OpenFileRequest(win, model.clone()));
+        let req = self.alloc(0, CallbackToken(0));
+        self.file_requests.insert(req.id, model);
+        if let Some(ans) = self.file_answers.pop_front() {
+            self.file_requests.remove(&req.id);
+            self.retire(req.id);
+            self.events.push_back(GuestUiEvent::FileRequestAnswered { req, path: ans });
+        }
+        Ok(req)
     }
     fn open_audio_stream(&mut self, model: AudioStreamModel) -> Result<AudioStreamRef, UiRefusal> {
         if self.refuse_audio { return Err(UiRefusal::Unsupported("audio out (no audio service in this host)")); }

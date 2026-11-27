@@ -47,3 +47,30 @@ impl RequestModel {
 
 /// A live request (same identity-plus-generation rule as every other seam object).
 pub type RequestRef = UiObjectRef;
+
+/// Mode of a guest file requester (`GuestUi::open_file_request`, REUSE U9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileRequestMode {
+    /// Choose an existing file to open.
+    #[default]
+    Open,
+    /// Choose or enter a file name to save.
+    Save,
+    /// Choose a directory / drawer only.
+    DrawersOnly,
+}
+
+/// Generic, pointer-free specification of a guest file requester dialog.
+///
+/// The host renders its own native file requester (on CoralOS: `coral-filereq` + `gadget.library`)
+/// and answers asynchronously with `GuestUiEvent::FileRequestAnswered { req, path }`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FileRequestModel {
+    /// Dialog title (empty = host default, e.g. "Open" / "Save").
+    pub title: String,
+    pub mode: FileRequestMode,
+    /// Initial directory / drawer hint (optional, empty = host default).
+    pub initial_dir: String,
+    /// Initial file name hint (optional, e.g. Save As proposed name).
+    pub initial_file: String,
+}

@@ -17,9 +17,10 @@ PATH="$HOME/.cargo/bin:$PATH"
 command -v "${CARGO:-cargo}" >/dev/null 2>&1 || { echo "RED  seam/deps: cargo not found (PATH=$PATH): the dependency check cannot run"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "RED  seam/deps: jq not found: the dependency check cannot run"; exit 1; }
 ENGINES="heirloom-ami68k-engine heirloom-mac68k-engine heirloom-macppc-engine"
-# Pure crates an engine may use besides heirloom-ui-abi and the heirloom-* libraries: the interpreter cores' soft-float, the engine chain, and libm
+# Pure crates an engine may use besides heirloom-ui-abi and the heirloom-* libraries: guestsvc-abi (the companion host-service
+# trait seam per doc 23 §2.4 / C5, zero CoralOS deps), the interpreter cores' soft-float, the engine chain, and libm
 # (musl's maths as a no_std crate: StdCLib/MathLib natives answer sin/pow/... with it - computation, no host or UI reach).
-ALLOWED_EXTRA="heirloom-mac68k-engine musashi softfloat soft-float rustc_apfloat libm"
+ALLOWED_EXTRA="guestsvc-abi heirloom-mac68k-engine musashi softfloat soft-float rustc_apfloat libm"
 APPS='dopus|directoryopus|igame|amimon|amiagent|finder|executor'
 
 check_deps() { # $1 = root; prints RED lines, returns 1 if any

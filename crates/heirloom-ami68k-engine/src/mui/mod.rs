@@ -77,6 +77,7 @@ pub fn library<U: GuestUi>(base: u32) -> LibraryBuilder<U> {
         .func(LVO_MUI_MAKE_OBJECT_A, "MUI_MakeObjectA", mui_make_object_a::<U>)
         // muimaster.library/MUI_AllocAslRequest(type, tags) is asl.library's AllocAslRequest with the same registers (Zune: mui_allocaslrequest.c).
         .func(LVO_MUI_ALLOC_ASL_REQUEST, "MUI_AllocAslRequest", crate::asl::alloc_request::<U>)
+        .func(-54, "MUI_AslRequest", crate::asl::asl_request::<U>)
         .func(LVO_MUI_FREE_ASL_REQUEST, "MUI_FreeAslRequest", crate::asl::free_request::<U>)
         .func(LVO_MUI_ADD_CLIP_REGION, "MUI_AddClipRegion", surface::add_clip_region::<U>)
         .func(LVO_MUI_REMOVE_CLIP_REGION, "MUI_RemoveClipRegion", surface::remove_clip_region::<U>)
@@ -217,7 +218,7 @@ pub fn try_deliver<U: GuestUi>(a: &mut Amiga<U>, ev: &GuestUiEvent) -> Result<Op
             Some(_) => Ok(Some(Delivered::IgnoredUnsubscribed)),
             None => Ok(None),
         },
-        GuestUiEvent::RequestAnswered { .. } => Ok(None), // a requester's answer is intuition's (requester.rs)
+        GuestUiEvent::RequestAnswered { .. } | GuestUiEvent::FileRequestAnswered { .. } => Ok(None), // a requester's answer is intuition/asl's
     }
 }
 

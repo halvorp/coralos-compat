@@ -66,6 +66,9 @@ pub enum GuestUiEvent {
     /// The user answered a request: `button` is the index into the `RequestModel::buttons` that was asked (Return = its `default`,
     /// Escape / closing = its `cancel`). One answer per request; a later one for the same `req` is stale.
     RequestAnswered { req: RequestRef, button: u32 },
+    /// The user answered a file requester opened via `GuestUi::open_file_request`: `Some(path)` when a file/drawer was
+    /// chosen, `None` when cancelled. One answer per request; a later one for the same `req` is stale.
+    FileRequestAnswered { req: RequestRef, path: Option<String> },
 }
 
 impl GuestUiEvent {

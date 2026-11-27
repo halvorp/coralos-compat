@@ -237,6 +237,15 @@ impl<G: GuestUi> WireHost<G> {
                 let host = self.translate_request(req);
                 if let Err(r) = self.ui.close_request(host) { self.encode_refused(&r); }
             }
+            UiCall::OpenFileRequest(win, model) => {
+                self.request_counter += 1;
+                let engine_id = self.request_counter;
+                let host_win = win.map(|w| self.translate_window(w));
+                match self.ui.open_file_request(host_win, model) {
+                    Ok(host) => { self.request_map.insert(engine_id, host); }
+                    Err(r) => self.encode_refused(&r),
+                }
+            }
             UiCall::OpenAudio(_) | UiCall::QueueAudio(..) | UiCall::QueueAudioLooped(..) | UiCall::FlushAudio(_)
             | UiCall::PauseAudio(..) | UiCall::SetAudioVolume(..) | UiCall::CloseAudio(_) => {
                 self.encode_refused(&UiRefusal::Unsupported("audio on the UI wire (the engine owns its Aura session)"));
@@ -264,6 +273,8 @@ impl<G: GuestUi> WireHost<G> {
                 GuestUiEvent::Key { win: self.rev_window(win), code, text, modifiers, down },
             GuestUiEvent::RequestAnswered { req, button } =>
                 GuestUiEvent::RequestAnswered { req: self.rev_request(req), button },
+            GuestUiEvent::FileRequestAnswered { req, path } =>
+                GuestUiEvent::FileRequestAnswered { req: self.rev_request(req), path },
         }
     }
 }

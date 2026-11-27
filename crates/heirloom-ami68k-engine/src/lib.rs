@@ -17,7 +17,8 @@ pub mod cpu; // the 68k this engine runs on: cpu-68k.library through its table, 
 pub mod os_face; // os-ami.library: this machine behind heirloom-os-abi's OsVTable
 #[cfg(feature = "os-library")]
 pub use os_face::os_vtable;
-pub mod asl;
+pub mod amiga_asl;
+pub use amiga_asl as asl;
 pub mod audio;
 pub mod colorwheel;
 pub mod cybergraphics;

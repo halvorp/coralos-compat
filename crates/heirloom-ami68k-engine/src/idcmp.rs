@@ -186,6 +186,7 @@ pub fn deliver<U: GuestUi>(a: &mut Amiga<U>, ev: GuestUiEvent) -> Result<Deliver
             None => Ok(Delivered::NotForAGuestWindow),
         },
         ev @ GuestUiEvent::RequestAnswered { .. } => { crate::requester::deliver(a, &ev)?; Ok(Delivered::Handled) }
+        ev @ GuestUiEvent::FileRequestAnswered { .. } => { crate::asl::deliver(a, &ev)?; Ok(Delivered::Handled) }
         ev @ GuestUiEvent::Resized { .. } => Err(Refusal(format!("deliver: {ev:?} not bridged yet"))),
     }
 }

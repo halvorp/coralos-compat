@@ -46,6 +46,8 @@ pub enum Waiting {
     Sem { ss: u32, shared: bool },
     /// EasyRequestArgs / AutoRequest / SysReqHandler(WaitInput) on a requester the host has not answered yet (requester.rs).
     Request(u32),
+    /// AslRequest(ASL_FileRequest) parked until the host answers via `GuestUiEvent::FileRequestAnswered` (amiga_asl.rs).
+    FileRequest(u32),
 }
 
 fn m(what: &'static str) -> impl Fn(heirloom_mem_flat32::MemError) -> Refusal { Refusal::mem(what) }
@@ -205,6 +207,7 @@ impl<U: GuestUi> Amiga<U> {
             Waiting::Until(t) => Ok(if self.clock_us >= t { Some(0) } else { None }),
             Waiting::Sem { ss, shared } => crate::semaphores::try_take(self, task, ss, shared, commit),
             Waiting::Request(k) => self.request_done(k, commit),
+            Waiting::FileRequest(k) => self.asl_file_request_done(k, commit),
         }
     }
 }

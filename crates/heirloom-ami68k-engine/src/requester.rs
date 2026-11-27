@@ -159,7 +159,9 @@ fn sys_model<U: GuestUi>(a: &Amiga<U>, win_title: Option<String>, body: u32, pos
 
 impl<U: GuestUi> Amiga<U> {
     /// True while a requester waits for its answer (the driver should then pump the host's events).
-    pub fn requests_pending(&self) -> bool { self.requests.pending.values().any(|p| p.answer.is_none()) }
+    pub fn requests_pending(&self) -> bool {
+        self.requests.pending.values().any(|p| p.answer.is_none()) || self.asl.has_pending_file_request()
+    }
 
     /// Requesters not yet freed or consumed (answered asynchronous ones stay until FreeSysRequest).
     pub fn open_requesters(&self) -> usize { self.requests.pending.len() }
