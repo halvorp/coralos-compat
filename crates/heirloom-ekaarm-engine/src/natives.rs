@@ -806,6 +806,14 @@ pub fn call(proc: &mut Process, stub_index: usize) -> NativeOutcome {
             proc.cpu.regs[0] = (proc.nat.clock_us / 15_625).saturating_add(proc.insns / 50_000) as u32;
             NativeOutcome::Return
         }
+        "_ZN4User10NTickCountEv" => {
+            proc.cpu.regs[0] = (proc.nat.clock_us / 1_000).saturating_add(proc.insns / 3_200) as u32;
+            NativeOutcome::Return
+        }
+        "_ZN4User11FastCounterEv" => {
+            proc.cpu.regs[0] = proc.nat.clock_us.saturating_add(proc.insns) as u32;
+            NativeOutcome::Return
+        }
         "_ZN4User19ResetInactivityTimeEv" => NativeOutcome::Return,
         // RLibrary (e32std.h): dynamic optional plugin loading; absent DLLs return KErrNotFound (-1).
         "_ZN8RLibrary4LoadERK7TDesC16S2_" | "_ZN8RLibrary4LoadERK7TDesC16" => {
