@@ -70,7 +70,8 @@ pub mod xisa;
 pub mod vbl_c; // VInstall / VRemove from PowerPC: the Toolbox's VBL queue, tasks at safepoints
 pub mod wdef_res; // a program's own WDEF RESOURCE in PowerPC code (an accelerated resource): prepared by the CFM, admitted by a binding
 pub mod wdef_c; // a program's own window definition admitted by a binding: run through the callback machine, presented native // cross-ISA calls: 68k routines called from PowerPC, on the 68k CPU through the one callback machine // CallUniversalProc through the one callback machine, and the 68k traps served by value
-pub mod snd_c; // Sound Manager 3.0 dispatch routines by C name
+pub mod mac_snd_c; // Sound Manager 3.0 dispatch routines by C name (REUSE U16)
+pub use mac_snd_c as snd_c;
 pub mod selector_c; // the List Manager and styled TextEdit dispatch by C name, through the 68k selector bodies
 pub mod cf_more;
 pub mod decimal;

@@ -31,7 +31,7 @@ pub fn channel_status<U: GuestUi>(m: &mut Mac<U>, chan: u32, len: i16, status: u
         Some(_) if len < 24 => PARAM_ERR,
         Some(key) => {
             let (streams, paused) = m.snd.chans.get(&key).map(|c| (c.streams.iter().map(|s| s.r).collect::<Vec<_>>(), c.paused)).unwrap_or_default();
-            let busy = streams.iter().any(|s| m.ui.audio_queued_bytes(*s).is_ok_and(|n| n > 0));
+            let busy = streams.iter().any(|s| m.snd_queued_bytes(*s).is_ok_and(|n| n > 0));
             // SCStatus, 24 bytes: scStartTime, scEndTime, scCurrentTime, scChannelBusy, scChannelDisposed, scChannelPaused,
             // scUnused, scChannelAttributes, scCPULoad. The three times are REFUSED BY NAME below: what clock they count and
             // from when is not documented in a source we have, so the engine does not invent one; they read 0.

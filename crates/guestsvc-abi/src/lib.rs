@@ -9,6 +9,11 @@
 #![no_std]
 extern crate alloc;
 
+pub mod audio;
+pub use audio::{
+    FakeAudio, FakeAudioStream, GuestAudio, GuestAudioFormat, GuestAudioModel, AUDIO_LABEL_MAX,
+    AUDIO_MAX_PCM, AUDIO_UNITY,
+};
 pub mod messages;
 pub use messages::{
     attachment_ref_ok, FakeMessages, GuestAttachmentRef, GuestConv, GuestDraft, GuestMessages,
@@ -455,5 +460,42 @@ mod tests {
         assert_eq!(denied.accounts(), Err(GuestSvcError::NotGranted));
         assert_eq!(denied.save_draft(acct, None, None, &to, "S", "B", &[]), Err(GuestSvcError::NotGranted));
         assert_eq!(denied.send_draft(acct, 1), Err(GuestSvcError::NotGranted));
+    }
+
+    #[test]
+    fn fake_audio_round_trip_and_negative_controls() {
+        let mut aud = FakeAudio::new();
+        let model = GuestAudioModel {
+            rate_hz: 22_254,
+            channels: 1,
+            format: GuestAudioFormat::U8,
+            label: String::from("Sound Manager"),
+        };
+        let id = aud.open_stream(&model).unwrap();
+        assert!(id > 0);
+        aud.queue_pcm(id, &[0x80, 0x90, 0xA0, 0x90]).unwrap();
+        assert_eq!(aud.queued_bytes(id), Ok(4));
+        aud.set_volume(id, 0x0080, 0x0100).unwrap();
+        assert_eq!(aud.streams()[&id].volume, (0x0080, 0x0100));
+        aud.pause(id, true).unwrap();
+        assert!(aud.streams()[&id].paused);
+        assert_eq!(aud.play(id, 2), 2);
+        assert_eq!(aud.queued_bytes(id), Ok(2));
+        aud.flush(id).unwrap();
+        assert_eq!(aud.queued_bytes(id), Ok(0));
+        aud.queue_looped(id, &[0x80, 0x90, 0xA0, 0x90], 1, 3).unwrap();
+        assert_eq!(aud.streams()[&id].looped, Some((1, 3)));
+        aud.close_stream(id).unwrap();
+        assert!(aud.streams().is_empty());
+
+        // Negative controls: bad format, unknown stream, bad loop bounds, NotGranted.
+        let bad_model = GuestAudioModel { rate_hz: 0, channels: 1, format: GuestAudioFormat::U8, label: String::new() };
+        assert_eq!(aud.open_stream(&bad_model), Err(GuestSvcError::Refused("bad-format")));
+        assert_eq!(aud.queued_bytes(id), Err(GuestSvcError::Refused("bad-stream")));
+
+        let mut denied = FakeAudio::not_granted();
+        assert_eq!(denied.open_stream(&model), Err(GuestSvcError::NotGranted));
+        assert_eq!(denied.queue_pcm(1, &[0x80]), Err(GuestSvcError::NotGranted));
+        assert!(denied.streams().is_empty());
     }
 }

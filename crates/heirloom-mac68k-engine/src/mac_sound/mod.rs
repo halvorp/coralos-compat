@@ -36,9 +36,21 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use guestsvc_abi::{GuestAudioFormat, GuestAudioModel, GuestSvcError};
 use heirloom_ui_abi::{AudioFormat, AudioStreamModel, AudioStreamRef, GuestUi, UiRefusal, AUDIO_UNITY};
 use crate::cpu::Cpu;
 use snd::Cmd;
+
+fn to_guest_audio_format(f: AudioFormat) -> GuestAudioFormat {
+    match f {
+        AudioFormat::U8 => GuestAudioFormat::U8,
+        AudioFormat::S16Le => GuestAudioFormat::S16Le,
+    }
+}
+
+fn svc_to_ui_refusal(e: GuestSvcError) -> UiRefusal {
+    UiRefusal::Unsupported(e.name())
+}
 
 pub const NO_ERR: i16 = 0;
 pub const NOT_ENOUGH_HARDWARE: i16 = -201;
@@ -100,15 +112,74 @@ impl SoundState {
 
 impl<U: GuestUi> Mac<U> {
     fn snd_open(&mut self, f: Fmt, label: &str) -> Result<AudioStreamRef, UiRefusal> {
+        if let Some(aud) = self.audio_host.as_mut() {
+            let model = GuestAudioModel {
+                rate_hz: f.rate,
+                channels: f.channels,
+                format: to_guest_audio_format(f.format),
+                label: String::from(label),
+            };
+            let id = aud.open_stream(&model).map_err(svc_to_ui_refusal)?;
+            return Ok(AudioStreamRef { id, generation: 1 });
+        }
         self.ui.open_audio_stream(AudioStreamModel { rate_hz: f.rate, channels: f.channels, format: f.format, label: String::from(label) })
+    }
+
+    fn snd_queue(&mut self, s: AudioStreamRef, pcm: &[u8]) -> Result<(), UiRefusal> {
+        if let Some(aud) = self.audio_host.as_mut() {
+            return aud.queue_pcm(s.id, pcm).map_err(svc_to_ui_refusal);
+        }
+        self.ui.queue_audio(s, pcm)
+    }
+
+    fn snd_queue_looped(&mut self, s: AudioStreamRef, pcm: &[u8], a: u32, b: u32) -> Result<(), UiRefusal> {
+        if let Some(aud) = self.audio_host.as_mut() {
+            return aud.queue_looped(s.id, pcm, a, b).map_err(svc_to_ui_refusal);
+        }
+        self.ui.queue_audio_looped(s, pcm, a, b)
+    }
+
+    fn snd_flush(&mut self, s: AudioStreamRef) -> Result<(), UiRefusal> {
+        if let Some(aud) = self.audio_host.as_mut() {
+            return aud.flush(s.id).map_err(svc_to_ui_refusal);
+        }
+        self.ui.flush_audio(s)
+    }
+
+    fn snd_pause(&mut self, s: AudioStreamRef, on: bool) -> Result<(), UiRefusal> {
+        if let Some(aud) = self.audio_host.as_mut() {
+            return aud.pause(s.id, on).map_err(svc_to_ui_refusal);
+        }
+        self.ui.pause_audio(s, on)
+    }
+
+    fn snd_set_volume(&mut self, s: AudioStreamRef, l: u16, r: u16) -> Result<(), UiRefusal> {
+        if let Some(aud) = self.audio_host.as_mut() {
+            return aud.set_volume(s.id, l, r).map_err(svc_to_ui_refusal);
+        }
+        self.ui.set_audio_volume(s, l, r)
+    }
+
+    pub(super) fn snd_queued_bytes(&mut self, s: AudioStreamRef) -> Result<u32, UiRefusal> {
+        if let Some(aud) = self.audio_host.as_mut() {
+            return aud.queued_bytes(s.id).map_err(svc_to_ui_refusal);
+        }
+        self.ui.audio_queued_bytes(s)
+    }
+
+    fn snd_close(&mut self, s: AudioStreamRef) -> Result<(), UiRefusal> {
+        if let Some(aud) = self.audio_host.as_mut() {
+            return aud.close_stream(s.id).map_err(svc_to_ui_refusal);
+        }
+        self.ui.close_audio_stream(s)
     }
 
     /// Close the draining streams the host has finished with.
     fn snd_reap(&mut self) {
         let mut keep = Vec::new();
         for s in core::mem::take(&mut self.snd.draining) {
-            match self.ui.audio_queued_bytes(s) {
-                Ok(0) | Err(_) => { let _ = self.ui.close_audio_stream(s); }
+            match self.snd_queued_bytes(s) {
+                Ok(0) | Err(_) => { let _ = self.snd_close(s); }
                 Ok(_) => keep.push(s),
             }
         }
@@ -123,7 +194,7 @@ impl<U: GuestUi> Mac<U> {
         let gain = |own: u16, m: u32| ((u32::from(own) * (m & 0xFFFF).min(u32::from(AUDIO_UNITY))) / u32::from(AUDIO_UNITY)) as u16;
         let (gl, gr) = (gain(l, master & 0xFFFF), gain(r, master >> 16));
         let streams: Vec<AudioStreamRef> = c.streams.iter().map(|s| s.r).collect();
-        for s in streams { self.ui.set_audio_volume(s, gl, gr)?; }
+        for s in streams { self.snd_set_volume(s, gl, gr)?; }
         Ok(())
     }
 
@@ -133,7 +204,7 @@ impl<U: GuestUi> Mac<U> {
         let existing: Vec<Stream> = self.snd.chans.get(&key).map(|c| c.streams.clone()).unwrap_or_default();
         let mut keep = Vec::new();
         for s in existing {
-            if self.ui.audio_queued_bytes(s.r).map_or(true, |n| n == 0) { let _ = self.ui.close_audio_stream(s.r); } else { keep.push(s); }
+            if self.snd_queued_bytes(s.r).map_or(true, |n| n == 0) { let _ = self.snd_close(s.r); } else { keep.push(s); }
         }
         let r = self.snd_open(f, "Sound Manager channel")?;
         keep.push(Stream { r, fmt: f });
@@ -156,11 +227,11 @@ impl<U: GuestUi> Mac<U> {
         // a looped sound (loopEnd - loopStart > 1) plays up to its loop end and repeats the loop until quietCmd / flushCmd (the seam's looping queue)
         if let Some((a, b)) = s.loop_frames.filter(|&(a, b)| b as usize * frame <= whole && a < b) {
             let end = b as usize * frame;
-            self.ui.queue_audio_looped(stream, &s.pcm[..end], a, b).map_err(|e| Refusal(format!("the host refused a looping sound: {e:?}")))?;
+            self.snd_queue_looped(stream, &s.pcm[..end], a, b).map_err(|e| Refusal(format!("the host refused a looping sound: {e:?}")))?;
             *self.snd.queued_total.entry(stream.id).or_insert(0) += end as u64;
             return Ok((NO_ERR, format!("{} Hz {}ch {:?}, {} bytes queued, LOOPING frames {a}..{b} until quietCmd / flushCmd", rate, s.channels, s.format, end)));
         }
-        self.ui.queue_audio(stream, &s.pcm[..whole]).map_err(|e| Refusal(format!("the host refused queued audio: {e:?}")))?;
+        self.snd_queue(stream, &s.pcm[..whole]).map_err(|e| Refusal(format!("the host refused queued audio: {e:?}")))?;
         *self.snd.queued_total.entry(stream.id).or_insert(0) += whole as u64;
         Ok((NO_ERR, format!("{} Hz {}ch {:?}, {} bytes queued", rate, s.channels, s.format, whole)))
     }
@@ -190,13 +261,13 @@ impl<U: GuestUi> Mac<U> {
         match c.cmd {
             snd::NULL_CMD => Ok((NO_ERR, String::from("nullCmd"))),
             snd::QUIET_CMD | snd::FLUSH_CMD => {
-                for s in streams(self) { self.ui.flush_audio(s).map_err(ui_err)?; }
+                for s in streams(self) { self.snd_flush(s).map_err(ui_err)?; }
                 Ok((NO_ERR, format!("{} (queued sound dropped)", if c.cmd == snd::QUIET_CMD { "quietCmd" } else { "flushCmd" })))
             }
             snd::PAUSE_CMD | snd::RESUME_CMD => {
                 let on = c.cmd == snd::PAUSE_CMD;
                 if let Some(ch) = self.snd.chans.get_mut(&key) { ch.paused = on; }
-                for s in streams(self) { self.ui.pause_audio(s, on).map_err(ui_err)?; }
+                for s in streams(self) { self.snd_pause(s, on).map_err(ui_err)?; }
                 Ok((NO_ERR, String::from(if on { "pauseCmd" } else { "resumeCmd" })))
             }
             snd::RATE_CMD => {
@@ -299,8 +370,8 @@ fn snd_dispose_channel<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Res
     let Some(ch) = m.snd.chans.remove(&p) else { return err_done(BAD_CHANNEL, format!("SndDisposeChannel {p:#x}: not a channel (badChannel)")) };
     let mut draining = 0;
     for s in ch.streams {
-        if quiet { let _ = m.ui.flush_audio(s.r); }
-        if !quiet && m.ui.audio_queued_bytes(s.r).is_ok_and(|n| n > 0) { m.snd.draining.push(s.r); draining += 1; } else { let _ = m.ui.close_audio_stream(s.r); }
+        if quiet { let _ = m.snd_flush(s.r); }
+        if !quiet && m.snd_queued_bytes(s.r).is_ok_and(|n| n > 0) { m.snd.draining.push(s.r); draining += 1; } else { let _ = m.snd_close(s.r); }
     }
     let flags = m.mem.read_u16(p + SC_FLAGS).unwrap_or(0);
     if flags & FLAG_ENGINE_ALLOCATED != 0 { let _ = m.mm.dispose_ptr(&mut m.heap, p); }
@@ -375,8 +446,8 @@ fn sys_beep<U: GuestUi>(m: &mut Mac<U>, _: &mut Cpu, c: &Call) -> Result<Done, R
     };
     let v = m.snd.sys_beep_volume.unwrap_or(FULL_VOLUME);
     let (l, r) = (((v & 0xFFFF) as u16).min(AUDIO_UNITY), ((v >> 16) as u16).min(AUDIO_UNITY));
-    m.ui.set_audio_volume(stream, l, r).map_err(|e| Refusal(format!("SysBeep: {e:?}")))?;
-    m.ui.queue_audio(stream, &snd::beep(800, 150, 22_254)).map_err(|e| Refusal(format!("SysBeep: {e:?}")))?;
+    m.snd_set_volume(stream, l, r).map_err(|e| Refusal(format!("SysBeep: {e:?}")))?;
+    m.snd_queue(stream, &snd::beep(800, 150, 22_254)).map_err(|e| Refusal(format!("SysBeep: {e:?}")))?;
     Ok(Done { result: 0, log: format!("[sound] SysBeep (duration {}: ignored, as a System 7 Mac does) 800 Hz 150 ms", c.args.get(0) as i16) })
 }
 

@@ -55,6 +55,10 @@ impl OsFamily for MacFamily {
         m.clip_host = Some(alloc::boxed::Box::new(host));
         Ok(())
     }
+    fn attach_audio(m: &mut Mac<LibUi>, host: heirloom_os_abi::audio::AudioHost) -> Result<(), alloc::string::String> {
+        m.audio_host = Some(alloc::boxed::Box::new(host));
+        Ok(())
+    }
 }
 
 static TABLE: OsVTable = vtable::<MacFamily>();

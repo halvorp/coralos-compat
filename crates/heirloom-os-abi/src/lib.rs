@@ -24,6 +24,7 @@ pub use heirloom_cpu_abi as cpu_abi;
 /// The PowerPC CPU contract (CPU ABI v3) a PowerPC family binds.
 pub use heirloom_cpu_abi::ppc;
 
+pub mod audio; // native CoralOS Aura.engine bridge (attach_audio): engine-owned audio streams
 pub mod clip; // native CoralOS clipboardd bridge (attach_clipboard): guest copy/paste + C12 Watch generation
 pub mod datatype; // native CoralOS datatype.library bridge (attach_datatype): format identify + native image decode
 pub mod messages; // native CoralOS messages.service bridge (attach_messages): loader-admitted reader session
@@ -210,6 +211,10 @@ pub struct OsVTable {
     /// process's own `messages.service` reader session ([`messages::MessagesHost`], loader-admitted per launch) so guest
     /// messaging adapters (Symbian `msgs`/`sendas2`/`sendui`) use CoralOS's native message store.
     pub attach_messages: extern "C" fn(inst: *mut OsInstance, host: *const messages::MessagesHost) -> i32,
+    /// APPENDED 2026-11-27 (REUSE U16), present when [`has_attach_audio`] (the version stays 3): attach the engine
+    /// process's own `Aura.engine` audio session ([`audio::AudioHost`]) so guest audio adapters (Mac 68k/PPC Sound
+    /// Manager, etc.) play natively through CoralOS Aura without crossing the UI wire.
+    pub attach_audio: extern "C" fn(inst: *mut OsInstance, host: *const audio::AudioHost) -> i32,
 }
 
 /// The byte size of a version-1 table (the four header words' entries up to `apply`).
@@ -231,6 +236,8 @@ pub fn has_attach_prefs(t: &OsVTable) -> bool { t.size as usize >= core::mem::of
 pub fn has_attach_clipboard(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_clipboard) + core::mem::size_of::<usize>() }
 /// Whether a table checked by [`check_ptr`] carries [`OsVTable::attach_messages`].
 pub fn has_attach_messages(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_messages) + core::mem::size_of::<usize>() }
+/// Whether a table checked by [`check_ptr`] carries [`OsVTable::attach_audio`].
+pub fn has_attach_audio(t: &OsVTable) -> bool { t.size as usize >= core::mem::offset_of!(OsVTable, attach_audio) + core::mem::size_of::<usize>() }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenRefusal {
@@ -330,9 +337,10 @@ mod tests {
     extern "C" fn attach_prefs(_: *mut OsInstance, _: *const prefs::PrefsHost) -> i32 { prefs::PREFS_ATTACH_REFUSED }
     extern "C" fn attach_clipboard(_: *mut OsInstance, _: *const clip::ClipHost) -> i32 { clip::CLIP_ATTACH_REFUSED }
     extern "C" fn attach_messages(_: *mut OsInstance, _: *const messages::MessagesHost) -> i32 { messages::MSG_ATTACH_REFUSED }
+    extern "C" fn attach_audio(_: *mut OsInstance, _: *const audio::AudioHost) -> i32 { audio::AUDIO_ATTACH_REFUSED }
 
     fn table(version: u32, size: u32, family: u32) -> OsVTable {
-        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof, perf_attach, attach_datatype, attach_prefs, attach_clipboard, attach_messages }
+        OsVTable { version, size, family, bind_cpu: bind, create, destroy, apply, cpu_abi_for_family: serves_ppc, bind_cpu_ppc: bind_ppc, create_for_family: create_for, attach_gl: attach, perf, set_code_mem: code_mem, cpu_prof, perf_attach, attach_datatype, attach_prefs, attach_clipboard, attach_messages, attach_audio }
     }
 
     /// `cpu_prof` was appended to version 3: a v3 library built before it still opens (its size is OS_TABLE_V3_SIZE) and an
@@ -349,6 +357,9 @@ mod tests {
         assert!(has_attach_prefs(&now));
         assert!(has_attach_clipboard(&now));
         assert!(has_attach_messages(&now));
+        assert!(has_attach_audio(&now));
+        let before_audio = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_audio) as u32, FAMILY_MAC68K);
+        assert!(has_attach_messages(&before_audio) && !has_attach_audio(&before_audio), "a library from before attach_audio is never called past its end");
         let before_msg = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, attach_messages) as u32, FAMILY_MAC68K);
         assert!(has_attach_clipboard(&before_msg) && !has_attach_messages(&before_msg), "a library from before attach_messages is never called past its end");
         let before_attach = table(OS_ABI_VERSION, core::mem::offset_of!(OsVTable, perf_attach) as u32, FAMILY_MAC68K);

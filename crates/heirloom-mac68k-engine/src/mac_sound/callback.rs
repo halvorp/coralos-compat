@@ -28,7 +28,7 @@ impl<U: GuestUi> Mac<U> {
     }
 
     fn snd_played(&mut self, r: UiObjectRef, total_at: u64) -> bool {
-        match self.ui.audio_queued_bytes(r) {
+        match self.snd_queued_bytes(r) {
             Err(_) => true, // the stream is gone: nothing left to wait for
             Ok(unplayed) => self.snd.queued_total.get(&r.id).copied().unwrap_or(0).saturating_sub(u64::from(unplayed)) >= total_at,
         }
